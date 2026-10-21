@@ -169,12 +169,22 @@ pub fn line(index: usize, depth: usize, info: &Info) -> String {
         .actions
         .iter()
         .filter(|action| !matches!(action.as_str(), "AXPress" | "AXScrollToVisible"))
-        .map(|action| action.trim_start_matches("AX"))
+        .map(|action| action_name(action))
         .collect();
     if !secondary.is_empty() {
         let _ = write!(line, ". Secondary actions: {}", secondary.join(", "));
     }
     line
+}
+
+/// How the tree names an action, which `computer_perform_secondary_action` takes: `ShowMenu` for
+/// `AXShowMenu`, and `Copy` for an app's own action, which macOS names
+/// `Name:Copy\nTarget:0x0\nSelector:(null)`.
+pub fn action_name(action: &str) -> &str {
+    match action.strip_prefix("Name:") {
+        Some(custom) => custom.lines().next().unwrap_or(custom),
+        None => action.trim_start_matches("AX"),
+    }
 }
 
 fn one_line(text: &str) -> String {

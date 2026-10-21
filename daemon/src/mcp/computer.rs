@@ -599,12 +599,20 @@ impl Computer {
             }
             Action::Secondary { index, action } => {
                 let element = element(index)?;
-                let action = if action.starts_with("AX") {
-                    action
-                } else {
-                    format!("AX{action}")
-                };
-                Box::new(move || element.perform(&action))
+                Box::new(move || {
+                    // The tree's name for it, such as ShowMenu or an app's own Copy, or the raw
+                    // name macOS gives it.
+                    let wanted = action.trim_start_matches("AX");
+                    let raw = element
+                        .actions()
+                        .into_iter()
+                        .find(|raw| {
+                            raw == &action
+                                || computer::action_name(raw).eq_ignore_ascii_case(wanted)
+                        })
+                        .ok_or_else(|| format!("The element has no action named {action}."))?;
+                    element.perform(&raw)
+                })
             }
             Action::Scroll {
                 target,

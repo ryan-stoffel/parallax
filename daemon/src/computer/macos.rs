@@ -543,27 +543,28 @@ pub fn key(pid: i32, key: u16, flags: u64) {
     }
 }
 
-/// Types `text` in app `pid` as the keyboard would, a few characters per event.
+/// Types `text` in app `pid` as the keyboard would, one character per key press, since many
+/// apps read only the first character of an event that carries several.
 pub fn type_text(pid: i32, text: &str) {
-    let units: Vec<u16> = text.encode_utf16().collect();
-    // Quartz carries at most 20 UTF-16 units in one event.
-    for chunk in units.chunks(20) {
+    let mut units = [0; 2];
+    for c in text.chars() {
+        let units = c.encode_utf16(&mut units);
         for down in [true, false] {
             // SAFETY: a null source is allowed; key 0 is replaced by the string.
             if let Some(event) =
                 Event::new(unsafe { CGEventCreateKeyboardEvent(std::ptr::null(), 0, down) })
             {
-                // SAFETY: the event is valid, and `chunk` holds `chunk.len()` units.
+                // SAFETY: the event is valid, and `units` holds `units.len()` UTF-16 units.
                 unsafe {
                     CGEventKeyboardSetUnicodeString(
                         event.0.as_CFTypeRef(),
-                        chunk.len(),
-                        chunk.as_ptr(),
+                        units.len(),
+                        units.as_ptr(),
                     );
                 }
                 event.post(pid);
             }
         }
-        std::thread::sleep(Duration::from_millis(8));
+        std::thread::sleep(Duration::from_millis(4));
     }
 }

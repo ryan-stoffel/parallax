@@ -1,6 +1,6 @@
 use super::{
-    App, Info, always_allowed, blocked, find, line, parse_apps, parse_key, remember, save_allowed,
-    shown,
+    App, Info, action_name, always_allowed, blocked, find, line, parse_apps, parse_key, remember,
+    save_allowed, shown,
 };
 
 const LSAPPINFO: &str = r#" 1) "loginwindow" ASN:0x0-0x2002:
@@ -87,6 +87,21 @@ fn a_line_names_the_element_its_value_its_state_and_its_other_actions() {
         line(0, 0, &note),
         "0 TextArea, value: \"Groceries\\nmilk \\\"oat\\\"\" (disabled)"
     );
+}
+
+#[test]
+fn an_apps_own_actions_read_by_their_names() {
+    assert_eq!(action_name("AXShowMenu"), "ShowMenu");
+    assert_eq!(
+        action_name("Name:Copy\nTarget:0x0\nSelector:(null)"),
+        "Copy"
+    );
+    let area = Info {
+        role: "AXScrollArea".to_owned(),
+        actions: vec!["Name:Copy\nTarget:0x0\nSelector:(null)".to_owned()],
+        ..Info::default()
+    };
+    assert_eq!(line(3, 0, &area), "3 ScrollArea. Secondary actions: Copy");
 }
 
 #[test]
