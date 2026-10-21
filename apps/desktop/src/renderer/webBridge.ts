@@ -504,6 +504,13 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     createRepo: async () => ({ error: NOT_HERE }),
     cloneRepo: async () => ({ error: NOT_HERE }),
     copyPicture: () => Promise.reject(new Error(NOT_HERE)),
+    // The web client has no webview, so no page asks anything.
+    onBrowser: () => () => {},
+    extensions: () => Promise.resolve([]),
+    installExtension: () => Promise.resolve(NOT_HERE),
+    loadUnpackedExtension: () => Promise.resolve(NOT_HERE),
+    removeExtension: () => Promise.resolve(),
+    selectBrowserTab: () => {},
     updatable: false,
     locale: navigator.language,
     update: async () => NOT_HERE,

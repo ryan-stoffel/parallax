@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
 
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
+  BrowserAction,
   ConnectionState,
   Profile,
   SubscriptionMessage,
@@ -11,6 +12,7 @@ import type {
   WatchParams,
 } from "./bridge";
 import { blurSupported, validLocale } from "./bridge";
+import { injectBrowserAction } from "electron-chrome-extensions/browser-action";
 
 // Subscription and watch listeners by the key this preload gave them.
 type Message = SubscriptionMessage | WatchMessage;
@@ -74,6 +76,16 @@ const bridge: ParallaxBridge = {
   createRepo: (name) => ipcRenderer.invoke("parallax:createRepo", name),
   cloneRepo: (slug, dest) => ipcRenderer.invoke("parallax:cloneRepo", slug, dest),
   copyPicture: (rect) => ipcRenderer.invoke("parallax:copyPicture", rect) as Promise<void>,
+  onBrowser(listener) {
+    const forward = (_event: unknown, id: number, action: BrowserAction) => listener(id, action);
+    ipcRenderer.on("parallax:browser", forward);
+    return () => ipcRenderer.removeListener("parallax:browser", forward);
+  },
+  extensions: () => ipcRenderer.invoke("parallax:extensions"),
+  installExtension: (text) => ipcRenderer.invoke("parallax:installExtension", text),
+  loadUnpackedExtension: () => ipcRenderer.invoke("parallax:loadUnpackedExtension"),
+  removeExtension: (id) => ipcRenderer.invoke("parallax:removeExtension", id),
+  selectBrowserTab: (id) => ipcRenderer.send("parallax:selectBrowserTab", id),
   updatable: process.argv.includes("--parallax-updatable"),
   firstRun: process.argv.includes("--parallax-first-run"),
   locale: validLocale(
@@ -167,3 +179,6 @@ const bridge: ParallaxBridge = {
 };
 
 contextBridge.exposeInMainWorld("parallax", bridge);
+
+// <browser-action-list>, the side panel browser's extension buttons (Extensions.tsx).
+injectBrowserAction();

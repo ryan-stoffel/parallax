@@ -1,8 +1,17 @@
-import { Hand, MousePointer2 } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { Globe, Hand, MousePointer2 } from "lucide-react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type KeyboardEvent,
+  type PointerEvent,
+  type SVGProps,
+} from "react";
 
 import type { PreviewInput, PreviewTab } from "../protocol/generated/protocol";
-import { shortUrl } from "./Browser";
+import { addressBox, addressInput, shortUrl } from "./Browser";
+import { browserFit, fitSize, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 
 /** The DevTools modifier bits of an event: Alt 1, Control 2, Meta 4, Shift 8. */
 const modifiers = (e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) =>
@@ -10,35 +19,63 @@ const modifiers = (e: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shi
 
 const buttons = ["left", "middle", "right"] as const;
 
+/** The agent driving a tab, as its tab shows it: its name and its provider's logo. */
+export interface Driver {
+  name: string;
+  Logo?: ComponentType<SVGProps<SVGSVGElement>>;
+}
+
 /**
  * An agent's browser tab (PLX-639), which runs in the host's headless browser: its screencast,
  * long-polled from plxd, and the user's mouse, wheel, and keys sent back, which take control from
- * the agent until Hand back. The address bar opens a page too, and the size bar fills the panel or
- * fixes the page at a size, drawn centered and scaled down to fit (PLX-810).
+ * the agent until Hand back. The address bar opens a page too. The page is a window in the panel,
+ * as on a monitor (PageFrame), whose corner or size fields fix it at a size (PLX-810, PLX-888),
+ * and a pill on it says whether the agent or the user is driving.
  */
 export function AgentBrowser({
   hostId,
   runId,
   tab,
+  driver,
 }: {
   hostId: string;
   runId: string;
   tab: PreviewTab;
+  driver: Driver;
 }) {
   const [frame, setFrame] = useState<{ data: string; width: number; height: number }>();
   const [state, setState] = useState(tab);
   const [gone, setGone] = useState(false);
   const [address, setAddress] = useState<string>();
-  // The size bar's text while the user edits it.
-  const [draft, setDraft] = useState<{ width: string; height: string }>();
-  // The view's size in CSS pixels, which a fixed size scales down to fit.
-  const [panel, setPanel] = useState({ width: 0, height: 0 });
   const view = useRef<HTMLImageElement>(null);
+  const keys = useRef<HTMLDivElement>(null);
   const lastMove = useRef(0);
   // Whether the view takes up any space: a hidden side panel or view has none. Hidden, it pulls
   // no frames, so plxd tells the agent nobody is watching, and the tab keeps its last size.
   const [shown, setShown] = useState(true);
   const seen = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  // The room the page last had, which the tab's viewport fits while the agent leaves it in fill
+  // mode, as the user's fit says (PageFrame.tsx).
+  const room = useRef<Size>(undefined);
+  const fit = browserFit.use();
+  // The fit as it is now, not as this render saw it, since a timer or a request may call it late.
+  const viewport = () => {
+    if (!room.current) return;
+    const { width, height } = room.current;
+    void request({ kind: "viewport", ...fitSize(width, height, browserFit.get()) });
+  };
+  // Another tab's switch changes the fit too.
+  useEffect(() => {
+    viewport();
+  }, [fit]);
+  // plxd runs requests at once, and a viewport that lands while the tab is still fixed only
+  // notes the room, so the new fit's viewport follows Fill's answer.
+  const refit = (next: Fit) => {
+    browserFit.set(next);
+    void size({ kind: "fill" }).then(viewport);
+  };
 
   useEffect(() => {
     if (!shown) return;
@@ -65,41 +102,19 @@ export function AgentBrowser({
     };
   }, [hostId, runId, tab.tabId, shown]);
 
-  // The tab's viewport follows the space it has here, while the agent leaves it in fill mode.
-  const area = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = area.current;
-    if (!el) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const observer = new ResizeObserver(() => {
-      clearTimeout(timer);
-      const [width, height] = [Math.round(el.clientWidth), Math.round(el.clientHeight)];
-      setShown(width > 0 && height > 0);
-      setPanel({ width, height });
-      if (width === 0 || height === 0) return;
-      timer = setTimeout(() => {
-        const input: PreviewInput = { kind: "viewport", width, height };
-        void window.parallax.request(hostId, "preview/input", { runId, tabId: tab.tabId, input });
-      }, 150);
-    });
-    observer.observe(el);
-    return () => {
-      clearTimeout(timer);
-      observer.disconnect();
-    };
-  }, [hostId, runId, tab.tabId]);
-
+  const request = (input: PreviewInput) =>
+    window.parallax
+      .request(hostId, "preview/input", { runId, tabId: tab.tabId, input })
+      .catch(() => undefined);
   const send = (input: PreviewInput) => {
-    void window.parallax.request(hostId, "preview/input", { runId, tabId: tab.tabId, input });
+    void request(input);
     setState((s) => ({ ...s, human: input.kind !== "control" || input.take }));
   };
-  // The size bar's inputs, which never take control.
+  // Sizing never takes control.
   const size = (input: Extract<PreviewInput, { kind: "fixed" | "fill" }>) => {
-    void window.parallax.request(hostId, "preview/input", { runId, tabId: tab.tabId, input });
     setState((s) => ({ ...s, fixed: input.kind === "fixed" }));
-    setDraft(undefined);
+    return request(input);
   };
-  const scale = frame ? Math.min(1, panel.width / frame.width, panel.height / frame.height) : 1;
   // A point on the image, in the page's CSS pixels.
   const at = (e: { clientX: number; clientY: number }) => {
     const box = view.current!.getBoundingClientRect();
@@ -112,7 +127,7 @@ export function AgentBrowser({
       // Moves only while a button is down or the user already has control, at most every 50 ms.
       if ((!e.buttons && !state.human) || e.timeStamp - lastMove.current < 50) return;
       lastMove.current = e.timeStamp;
-    } else e.currentTarget.parentElement?.focus();
+    } else keys.current?.focus();
     send({
       kind: "mouse",
       event,
@@ -134,120 +149,117 @@ export function AgentBrowser({
     });
   };
 
+  const { Logo } = driver;
+  const logo = Logo ? <Logo aria-hidden className="size-3.5 shrink-0" /> : undefined;
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="relative flex min-h-0 flex-1 flex-col">
       <form
-        className="flex items-center gap-1.5 border-b border-border px-2 pb-1.5"
+        className="flex items-center gap-1 border-b border-border px-2 pb-2"
         onSubmit={(e) => {
           e.preventDefault();
           if (address?.trim()) send({ kind: "navigate", url: address.trim() });
           setAddress(undefined);
         }}
       >
-        <input
-          aria-label="Agent's address"
-          spellCheck={false}
-          value={address ?? shortUrl(state.url)}
-          onChange={(e) => setAddress(e.target.value)}
-          onBlur={() => setAddress(undefined)}
-          className="min-w-0 flex-1 rounded-md bg-selected px-2 py-1 text-[12.5px] focus-visible:outline-2 focus-visible:outline-ring"
-        />
-        {state.human ? (
-          <button
-            type="button"
-            onClick={() => send({ kind: "control", take: false })}
-            className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[12px] text-foreground hover:bg-hover"
-          >
-            <MousePointer2 aria-hidden className="size-3.5" />
-            Hand back
-          </button>
-        ) : (
-          <span className="flex shrink-0 items-center gap-1 px-1 text-[12px] text-muted-foreground">
-            <Hand aria-hidden className="size-3.5" />
-            {state.recording ? "Agent is recording" : "Click to take over"}
-          </span>
-        )}
-      </form>
-      <form
-        className="flex items-center gap-1.5 border-b border-border px-2 py-1 text-[12px]"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const [width, height] = [Number(draft?.width), Number(draft?.height)];
-          if (Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0)
-            size({ kind: "fixed", width, height });
-        }}
-      >
+        <div className={addressBox}>
+          {logo ?? <Globe aria-hidden />}
+          <input
+            aria-label="Agent's address"
+            spellCheck={false}
+            value={address ?? shortUrl(state.url)}
+            onChange={(e) => setAddress(e.target.value)}
+            onBlur={() => setAddress(undefined)}
+            className={addressInput}
+          />
+        </div>
         <button
           type="button"
-          aria-pressed={!state.fixed}
-          onClick={() => size({ kind: "fill" })}
-          className={`rounded-md px-2 py-0.5 hover:bg-hover ${state.fixed ? "text-muted-foreground" : "bg-selected text-foreground"}`}
+          onClick={() => send({ kind: "control", take: !state.human })}
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] text-foreground hover:bg-hover"
         >
-          Fill
+          {state.human ? (
+            <MousePointer2 aria-hidden className="size-3.5" />
+          ) : (
+            <Hand aria-hidden className="size-3.5" />
+          )}
+          {state.human ? `Hand back to ${driver.name}` : "Take over"}
         </button>
-        {(["width", "height"] as const).map((side, i) => (
-          <label key={side} className="flex items-center gap-1.5">
-            {i > 0 && <span className="text-muted-foreground">×</span>}
-            <input
-              aria-label={`Page ${side}`}
-              inputMode="numeric"
-              value={draft?.[side] ?? String(frame?.[side] ?? "")}
-              // The first keystroke starts a draft from the page's size, so the other field keeps it.
-              onChange={(e) =>
-                setDraft((d) => ({
-                  ...(d ?? {
-                    width: String(frame?.width ?? ""),
-                    height: String(frame?.height ?? ""),
-                  }),
-                  [side]: e.target.value,
-                }))
-              }
-              // A form with two fields and no submit button doesn't submit on Enter by itself.
-              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.form?.requestSubmit()}
-              onBlur={(e) => {
-                if (!e.currentTarget.form?.contains(e.relatedTarget)) setDraft(undefined);
-              }}
-              className="w-14 rounded-md bg-selected px-1.5 py-0.5 tabular-nums focus-visible:outline-2 focus-visible:outline-ring"
-            />
-          </label>
-        ))}
-        {frame && scale < 1 && (
-          <span className="ml-auto text-muted-foreground tabular-nums">
-            {Math.round(scale * 100)}%
-          </span>
-        )}
+        <ViewMenu
+          fit={fit}
+          fixed={!!state.fixed}
+          size={frame && { width: frame.width, height: frame.height }}
+          onFit={refit}
+        />
       </form>
-      <div
-        ref={area}
-        tabIndex={0}
-        aria-label="Agent's browser tab"
-        onKeyDown={key(true)}
-        onKeyUp={key(false)}
-        onWheel={(e) =>
-          frame && send({ kind: "wheel", ...at(e), deltaX: e.deltaX, deltaY: e.deltaY })
+      <PageFrame
+        size={frame && { width: frame.width, height: frame.height }}
+        fixed={!!state.fixed}
+        fit={fit}
+        onResize={(next) => size({ kind: "fixed", ...next })}
+        onFit={refit}
+        onArea={(next) => {
+          clearTimeout(timer.current);
+          setShown(next.width > 0 && next.height > 0);
+          if (next.width === 0 || next.height === 0) return;
+          room.current = next;
+          timer.current = setTimeout(viewport, 150);
+        }}
+        className={state.human ? "ring-2 ring-ring" : "ring-2 ring-ring/40"}
+        overlay={
+          <div className="pointer-events-none absolute -top-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-background px-2.5 py-1 text-[11.5px] whitespace-nowrap shadow-sm ring-1 ring-border">
+            {state.human ? (
+              <>
+                <MousePointer2 aria-hidden className="size-3.5" />
+                You're browsing
+              </>
+            ) : (
+              <>
+                {logo}
+                {driver.name} is {state.recording ? "recording" : "browsing"}
+              </>
+            )}
+          </div>
         }
-        className={`relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-background outline-none ${state.human ? "ring-2 ring-ring ring-inset" : ""}`}
       >
-        {frame && (
-          <img
-            ref={view}
-            alt={state.title || "The agent's page"}
-            src={`data:image/jpeg;base64,${frame.data}`}
-            draggable={false}
-            onPointerDown={pointer("down")}
-            onPointerUp={pointer("up")}
-            onPointerMove={pointer("move")}
-            onContextMenu={(e) => e.preventDefault()}
-            style={{ width: frame.width * scale, height: frame.height * scale }}
-            className={`block shrink-0 select-none ${state.fixed ? "shadow-md ring-1 ring-border" : ""}`}
-          />
-        )}
-        {(gone || !frame) && (
-          <p className="absolute inset-0 grid place-items-center text-[12.5px] text-muted-foreground">
-            {gone ? "This tab closed." : "Waiting for the page…"}
-          </p>
-        )}
-      </div>
+        {(scale) =>
+          frame && (
+            <div
+              ref={keys}
+              tabIndex={0}
+              aria-label="Agent's browser tab"
+              onKeyDown={key(true)}
+              onKeyUp={key(false)}
+              onWheel={(e) => send({ kind: "wheel", ...at(e), deltaX: e.deltaX, deltaY: e.deltaY })}
+              className="relative size-full outline-none"
+            >
+              {state.loading && (
+                <div
+                  role="progressbar"
+                  aria-label="Loading"
+                  className="absolute inset-x-0 top-0 h-0.5 animate-pulse bg-ring"
+                />
+              )}
+              <img
+                ref={view}
+                alt={state.title || "The agent's page"}
+                src={`data:image/jpeg;base64,${frame.data}`}
+                draggable={false}
+                onPointerDown={pointer("down")}
+                onPointerUp={pointer("up")}
+                onPointerMove={pointer("move")}
+                onContextMenu={(e) => e.preventDefault()}
+                style={{ width: frame.width * scale, height: frame.height * scale }}
+                className="block select-none"
+              />
+            </div>
+          )
+        }
+      </PageFrame>
+      {(gone || !frame) && (
+        <p className="absolute inset-0 top-10 grid place-items-center text-[12.5px] text-muted-foreground">
+          {gone ? "This tab closed." : "Waiting for the page…"}
+        </p>
+      )}
     </div>
   );
 }

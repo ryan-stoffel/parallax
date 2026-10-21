@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import { browserUrl, searchUrl, shortUrl } from "./Browser";
+import { fitSize } from "./PageFrame";
 
 test("a host without a scheme is https, or http when it's local, and only http and https pages open", () => {
   expect(browserUrl("localhost:5173")).toBe("http://localhost:5173/");
@@ -49,4 +50,14 @@ test("the unfocused address drops the scheme and a lone trailing slash", () => {
   expect(shortUrl("https://example.com/")).toBe("example.com");
   expect(shortUrl("http://localhost:5173/app/")).toBe("localhost:5173/app/");
   expect(shortUrl("https://www.google.com/search?q=x")).toBe("www.google.com/search?q=x");
+});
+
+test("a page fits to a monitor until the panel holds one whole", () => {
+  // A side panel smaller than a monitor shows the monitor, scaled down.
+  expect(fitSize(416, 900)).toEqual({ width: 1280, height: 800 });
+  expect(fitSize(1600, 700)).toEqual({ width: 1280, height: 800 });
+  // A bigger one shows the page at its own size.
+  expect(fitSize(1600, 900)).toEqual({ width: 1600, height: 900 });
+  // The panel fit is the panel, whatever its size.
+  expect(fitSize(416, 900, "panel")).toEqual({ width: 416, height: 900 });
 });

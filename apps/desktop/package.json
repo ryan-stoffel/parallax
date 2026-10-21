@@ -45,6 +45,7 @@
     "@xterm/xterm": "^6.0.0",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
+    "electron-chrome-extensions": "^4.9.0",
     "electron-updater": "^6.8.10",
     "fflate": "^0.8.3",
     "happy-dom": "^20.14.5",

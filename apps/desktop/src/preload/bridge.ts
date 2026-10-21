@@ -177,6 +177,20 @@ export interface ParallaxBridge {
   /** Copies a picture of this window's `rect`, in CSS pixels, to the clipboard. Rejects for an empty or invalid one. */
   copyPicture(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /**
+   * Calls `listener` with what a side panel browser's page asks of the tab that shows it, by its
+   * webview's `getWebContentsId()` (Browser.tsx). Returns the unsubscribe function.
+   */
+  onBrowser(listener: (webContentsId: number, action: BrowserAction) => void): () => void;
+  /** The side panel browser's Chrome extensions (PLX-888). */
+  extensions(): Promise<ExtensionInfo[]>;
+  /** Installs an extension from a Chrome Web Store link or id. Resolves to it or an error. */
+  installExtension(text: string): Promise<ExtensionInfo | string>;
+  /** Asks for an unpacked extension's folder and loads it: it, an error, or undefined if canceled. */
+  loadUnpackedExtension(): Promise<ExtensionInfo | string | undefined>;
+  removeExtension(id: string): Promise<void>;
+  /** Tells extensions which browser tab is shown, by its webview's webContents id. */
+  selectBrowserTab(webContentsId: number): void;
+  /**
    * Whether `update` can run: in a packaged app, which installs releases (PLX-68), or under
    * `pnpm dev`, from a checkout (PLX-204).
    */
@@ -688,3 +702,28 @@ export type ConnectionError = {
   /** The end of attach's stderr, and ssh's for a host, if they wrote any. */
   stderr?: string;
 };
+
+/**
+ * What a side panel browser's page asks of its tab, from main: open a page in a new tab (a popup,
+ * "Open Link in New Tab", or an extension's), show its favicon, as a data url the app's CSP
+ * allows, Cmd/Ctrl+L, T, or W pressed in the page, or be shown or closed for an extension.
+ */
+export type BrowserAction =
+  | { kind: "open"; url: string }
+  | { kind: "icon"; url: string }
+  | { kind: "select" }
+  | { kind: "address" }
+  | { kind: "newTab" }
+  | { kind: "closeTab" };
+
+/**
+ * A Chrome extension in the side panel's browser: its name, its toolbar icon as a data url, and
+ * its popup's page, if it has one.
+ */
+export interface ExtensionInfo {
+  id: string;
+  name: string;
+  version: string;
+  icon?: string;
+  popup?: string;
+}

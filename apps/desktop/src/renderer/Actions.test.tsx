@@ -42,6 +42,7 @@ beforeEach(() => {
     platform: "darwin",
     terminalInput,
     closeTerminal,
+    extensions: () => Promise.resolve([]),
     request: () =>
       Promise.resolve({
         result: { terminals: running.map((terminalId) => ({ threadId: "t3", terminalId })) },
@@ -319,7 +320,13 @@ test("a preview opens the side panel's Browser view at its URL", () => {
   render(panel());
   expect(document.querySelector('input[aria-label="Address"]')).toBeNull();
   render(panel({ url: "localhost:5173" }));
-  expect(document.querySelector('[aria-current="true"]')?.textContent).toBe("Browser");
+  // The Browser view is in front, as its icon, and the page's tab is in the top bar.
+  expect(document.querySelector('[aria-current="true"]')?.getAttribute("aria-label")).toBe(
+    "Browser",
+  );
+  expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe(
+    "localhost:5173",
+  );
   expect(document.querySelector<HTMLInputElement>('input[aria-label="Address"]')!.value).toBe(
     "http://localhost:5173/",
   );

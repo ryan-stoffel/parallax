@@ -48,8 +48,11 @@ const HUMAN: &str = "The user controls this tab now. Wait for them to hand it ba
 const FRAME_WAIT: Duration = Duration::from_secs(10);
 /// How long a tab counts as watched after the app last asked for a frame.
 const WATCHED_FOR: Duration = Duration::from_secs(5);
-/// The viewport of a tab in fill mode until the app shows it, and the screencast's largest frame.
+/// The viewport of a tab in fill mode until the app shows it.
 const FILL: (u32, u32) = (1280, 800);
+/// The longest side of a viewport the app may set, and so of a screencast frame, which is never
+/// downscaled.
+const MAX_SIDE: u32 = 4096;
 const DEFAULT_TIMEOUT_MS: u64 = 15_000;
 const MAX_TIMEOUT_MS: u64 = 60_000;
 /// The most console and network entries a tab keeps, and a snapshot shows.
@@ -568,7 +571,7 @@ async fn add_tab(
     // or records if CPU shows it.
     page.call(
         "Page.startScreencast",
-        json!({"format": "jpeg", "quality": 70, "maxWidth": FILL.0, "maxHeight": FILL.0}),
+        json!({"format": "jpeg", "quality": 70, "maxWidth": MAX_SIDE, "maxHeight": MAX_SIDE}),
     )
     .await?;
     let live = Arc::new(Mutex::new(Live {
@@ -690,7 +693,7 @@ impl Tab {
 
     /// Sizes the viewport to where the app shows the tab, while the tab is in fill mode.
     async fn fill(&self, width: u32, height: u32) -> Result<(), String> {
-        let (width, height) = (width.clamp(200, 4096), height.clamp(200, 4096));
+        let (width, height) = (width.clamp(200, MAX_SIDE), height.clamp(200, MAX_SIDE));
         {
             let mut live = lock(&self.live);
             live.panel = Some((width, height));
@@ -1053,7 +1056,7 @@ impl Tab {
                 let _ = self.page.call("Page.stopScreencast", json!({})).await;
                 let _ = self
                     .page
-                    .call("Page.startScreencast", json!({"format": "jpeg", "quality": 70, "maxWidth": FILL.0, "maxHeight": FILL.0}))
+                    .call("Page.startScreencast", json!({"format": "jpeg", "quality": 70, "maxWidth": MAX_SIDE, "maxHeight": MAX_SIDE}))
                     .await;
                 Ok((
                     json!({"tabId": self.id, "recording": true, "startedAt": now.to_string()}),
