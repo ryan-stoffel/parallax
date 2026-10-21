@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="design/icon/masters/Parallax-dark-legacy-1024.png" alt="Parallax" width="112">
+  <img src="docs/images/readme/logo.svg" alt="Parallax" width="112">
 </p>
 
 <h1 align="center">Parallax</h1>
