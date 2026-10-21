@@ -250,8 +250,10 @@ export class WebHost {
     if (this.state.status !== "connected" || logId === undefined) {
       return Promise.resolve({ error: { code: INTERNAL_ERROR, message: "not connected" } });
     }
-    // An emulator can take minutes to boot, past plxd's own 3 minute wait (PLX-886).
-    const timeout = method === "device/boot" ? 4 * 60_000 : REQUEST_TIMEOUT_MS;
+    // An emulator can take minutes to boot, past plxd's own 3 minute wait, and a cold Mac's
+    // simulators over 30 seconds to list (PLX-886).
+    const timeout =
+      method === "device/boot" || method === "device/state" ? 4 * 60_000 : REQUEST_TIMEOUT_MS;
     return new Promise((resolve) =>
       this.send(
         method,
