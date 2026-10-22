@@ -1,5 +1,5 @@
 import { ArrowUp, LoaderCircle } from "lucide-react";
-import { useState, type CSSProperties } from "react";
+import { useState } from "react";
 
 import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";
 import { runAttention, type Attention } from "./attention";
@@ -253,9 +253,7 @@ function LiveRow({
         onClick={onOpen}
         className="group flex w-full min-w-0 items-start gap-3 rounded-lg px-2.5 py-1.5 text-left hover:bg-hover"
       >
-        <span aria-hidden className="mt-[5px] grid size-2.5 shrink-0 [&_svg]:size-2.5">
-          <Pixel state={waiting ? (failed ? "failed" : "waiting") : "working"} />
-        </span>
+        <Dot state={waiting ? (failed ? "failed" : "waiting") : "working"} className="mt-[7px]" />
         <span className="flex min-w-0 flex-1 flex-col">
           <span data-title className="truncate text-[13.5px] leading-5 text-foreground">
             {plainTitle(row.title)}
@@ -309,9 +307,7 @@ function LogRow({ row, onOpen }: { row: Row; onOpen: () => void }) {
         onClick={onOpen}
         className="group flex w-full min-w-0 items-center gap-3 rounded-lg px-2.5 py-1.5 text-left hover:bg-hover"
       >
-        <span aria-hidden className="grid size-2.5 shrink-0 [&_svg]:size-2.5">
-          <Pixel state={failed ? "failed" : unread ? "done" : "read"} />
-        </span>
+        <Dot state={failed ? "failed" : unread ? "done" : "read"} />
         <span
           data-title
           className={`min-w-0 flex-1 truncate text-[13px] ${unread ? "text-foreground" : "text-muted-foreground"}`}
@@ -340,40 +336,21 @@ function LogRow({ row, onOpen }: { row: Row; onOpen: () => void }) {
   );
 }
 
-const pixelColors = {
-  working: "text-accent",
-  waiting: "text-warning",
-  failed: "text-danger",
-  done: "text-added",
-  read: "text-foreground/30",
+const dotColors = {
+  working: "bg-accent dot-live",
+  waiting: "bg-warning",
+  failed: "bg-danger",
+  done: "bg-added",
+  read: "bg-foreground/20",
 };
 
-/**
- * A state as a 3×3 pixel glyph, like a dot-matrix display: lit in a wave while working, a
- * checkerboard while it waits or failed, and full once done. Screen readers skip it.
- */
-function Pixel({ state }: { state: keyof typeof pixelColors }) {
-  const checker = state === "waiting" || state === "failed";
+/** A row's state as a small dot, which breathes while it works. Screen readers skip it. */
+function Dot({ state, className = "" }: { state: keyof typeof dotColors; className?: string }) {
   return (
-    <svg viewBox="0 0 8 8" className={`pixel pixel-${state} ${pixelColors[state]}`}>
-      {Array.from({ length: 9 }, (_, i) => {
-        const [x, y] = [i % 3, Math.floor(i / 3)];
-        return (
-          <rect
-            key={i}
-            x={x * 3}
-            y={y * 3}
-            width="2"
-            height="2"
-            rx="0.4"
-            fill="currentColor"
-            opacity={checker && i % 2 === 1 ? 0.2 : 1}
-            // The working wave runs corner to corner.
-            style={{ "--i": x + y } as CSSProperties}
-          />
-        );
-      })}
-    </svg>
+    <span
+      aria-hidden
+      className={`size-1.5 shrink-0 rounded-full ${dotColors[state]} ${className}`}
+    />
   );
 }
 
@@ -401,7 +378,7 @@ function QuestionBox({
     else setText("");
   };
   return (
-    <div className="mr-2.5 mb-2 ml-[34px] overflow-hidden rounded-xl border border-border bg-surface">
+    <div className="mr-2.5 mb-2 ml-[28px] overflow-hidden rounded-xl border border-border bg-surface">
       <p className="px-3.5 pt-3 pb-2.5 text-[13px] leading-snug text-foreground">{question}</p>
       <div className="flex flex-col gap-1 px-1.5 pb-1.5">
         {assumption && (

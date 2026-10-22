@@ -2016,20 +2016,15 @@ browser-action-list::part(badge) {
   }
 }
 
-/* The Project tab's pixels (ProjectHome.tsx): a working one lights in a wave, corner to corner. */
-.pixel-working rect {
-  animation: pixel-wave 1.2s ease-in-out infinite;
-  animation-delay: calc(var(--i) * 140ms);
+/* The Project tab's dot for a working child (ProjectHome.tsx) breathes. */
+.dot-live {
+  animation: dot-live 1.6s ease-in-out infinite;
 }
-@keyframes pixel-wave {
-  0%,
-  100% {
-    opacity: 0.25;
-  }
+@keyframes dot-live {
   50% {
-    opacity: 1;
+    opacity: 0.35;
   }
 }
-:root.reduce-motion .pixel-working rect {
+:root.reduce-motion .dot-live {
   animation: none;
 }
