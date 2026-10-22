@@ -1495,7 +1495,12 @@ function Viewer({
           )}
           {turned
             ? control("Face front", <Rotate3d />, faceFront, false)
-            : control("Turn in 3D", <Rotate3d />, () => turnTo({ pitch: 12, yaw: Math.round(orbit.yaw / 360) * 360 - 32 }), false)}
+            : control(
+                "Turn in 3D",
+                <Rotate3d />,
+                () => turnTo({ pitch: 12, yaw: Math.round(orbit.yaw / 360) * 360 - 32 }),
+                false,
+              )}
           {stopping && (
             <LoaderCircle
               aria-label="Powering off"
