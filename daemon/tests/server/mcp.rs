@@ -88,13 +88,17 @@ impl Mcp {
         assert_eq!(initialized["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(initialized["result"]["serverInfo"]["name"], "plxd");
         assert!(initialized["result"]["capabilities"]["tools"].is_object());
-        // Every thread's agent is told to show the documents it makes (PLX-755), and to read and
-        // wait on pull requests through plxd (PLX-837).
+        // Every thread's agent is told to show the documents it makes (PLX-755), to read and wait
+        // on pull requests through plxd (PLX-837), and to open devices only in Parallax (PLX-908).
         let instructions = initialized["result"]["instructions"].as_str().unwrap();
         assert!(instructions.contains("present_files"), "{instructions}");
         assert!(
             instructions.contains("pull_request_status")
                 && instructions.contains("watch_pull_request"),
+            "{instructions}"
+        );
+        assert!(
+            instructions.contains("device_open") && instructions.contains("open -a Simulator"),
             "{instructions}"
         );
         mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))
