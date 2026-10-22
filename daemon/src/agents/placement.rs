@@ -704,6 +704,7 @@ mod tests {
             allow_api_keys,
             checks: None,
             proposed_checks: None,
+            computer: None,
             created_at: now(),
             updated_at: now(),
         };

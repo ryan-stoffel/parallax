@@ -554,7 +554,8 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // table (PLX-413's migration 34), the checks columns (PLX-411's migration 35), the search
     // index (PLX-487's migration 36), the attached-thread cursors (PLX-486's migration 37), the
     // orchestrator's tables (PLX-643's migration 39), delegation's (PLX-648's migrations 42
-    // and 43), or the areas tables (PLX-789's migration 46 and PLX-852's 47).
+    // and 43), the areas tables (PLX-789's migration 46 and PLX-852's 47), or the project computer
+    // column (PLX-909's migration 48).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
@@ -587,6 +588,7 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
              ALTER TABLE projects DROP COLUMN allow_api_keys;
              ALTER TABLE projects DROP COLUMN checks;
              ALTER TABLE projects DROP COLUMN proposed_checks;
+             ALTER TABLE projects DROP COLUMN computer;
              DELETE FROM schema_version WHERE version >= 7;",
         )
         .unwrap();

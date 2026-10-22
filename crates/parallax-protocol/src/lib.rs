@@ -233,13 +233,13 @@ pub use terminal::{
 };
 pub use thread::{
     ForkedFrom, MAX_SPACE_NAME_BYTES, MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult,
-    RepoCloneParams, RepoCloneProgressParams, RepoCloneProgressResult, RepoId, RepoRef,
-    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoUpdateParams,
-    RepoUpdateResult, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
-    Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming, ThreadSearchParams,
-    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult,
+    RepoCloneParams, RepoCloneProgressParams, RepoCloneProgressResult, RepoId, RepoMatchParams,
+    RepoMatchResult, RepoRef, RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult,
+    RepoUpdateParams, RepoUpdateResult, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams,
+    SpaceDeleteResult, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming,
+    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
     AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,
@@ -290,6 +290,7 @@ mod tests {
             max_children: None,
             checks: None,
             proposed_checks: None,
+            computer: None,
         }
     }
 
@@ -473,6 +474,7 @@ mod tests {
                     max_children: None,
                     checks: None,
                     proposed_checks: None,
+                    computer: None,
                 });
             }
         }
@@ -498,6 +500,7 @@ mod tests {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             })
             .unwrap(),
             json!({"project": id}),
@@ -550,6 +553,7 @@ mod tests {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             });
         }
         assert_eq!(
@@ -596,6 +600,7 @@ mod tests {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             });
         }
         assert_eq!(

@@ -131,6 +131,7 @@ pub(crate) async fn lands_automatically(client: &mut Conn, project: ProjectId) {
             allow_api_keys: None,
             checks: None,
             proposed_checks: None,
+            computer: None,
         })
         .await
         .unwrap()

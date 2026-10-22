@@ -377,6 +377,12 @@ export type ParallaxRequests = {
 	 */
 	"repo/remote": { params: RepoRemoteParams, result: RepoRemoteResult },
 	/**
+	 * `repo/match`: the repo entry whose `origin` names the same repository as another
+	 * plxd's (0057). Not behind a capability of its own: a plxd without it answers
+	 * `methodNotFound`.
+	 */
+	"repo/match": { params: RepoMatchParams, result: RepoMatchResult },
+	/**
 	 * `thread/start`: starts a normal thread's agent in a worktree of a repo entry, or in a
 	 * scratch repository of its own when no repo is given. Idempotent on its
 	 * client-generated run id.
@@ -916,6 +922,7 @@ export const REQUEST_METHODS = [
 	"repo/clone",
 	"repo/cloneProgress",
 	"repo/remote",
+	"repo/match",
 	"thread/start",
 	"thread/fork",
 	"thread/importable",
@@ -1549,6 +1556,11 @@ export type Project = {
 	 * confirms it, or another, by setting `checks`. Absent means none.
 	 */
 	proposedChecks?: string,
+	/**
+	 * The Tailscale node ID of the Connect device its children run on (0057), one of the
+	 * tailnet devices `connect/devices` lists. Absent means this plxd.
+	 */
+	computer?: string,
 	/**
 	 * When the project was created, in RFC 3339 UTC.
 	 */
@@ -5632,6 +5644,30 @@ export type RepoRemoteResult = {
 };
 
 /**
+ * Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at
+ * `origin`, for a Project on another plxd whose children run here. Each entry's `origin` and this
+ * one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing slash,
+ * and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
+ */
+export type RepoMatchParams = {
+	/**
+	 * The other plxd's `origin` URL, in any form git takes.
+	 */
+	origin: string,
+};
+
+/**
+ * Result of `repo/match`.
+ */
+export type RepoMatchResult = {
+	/**
+	 * The matching entry, the oldest when several match. Absent when none does, so the
+	 * repository has to be cloned or added here first.
+	 */
+	repo?: Repo,
+};
+
+/**
  * Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
  * starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
  * worker sandbox (0034); without it, it keeps the worker's sandbox (0013).
@@ -6318,7 +6354,8 @@ export type ProjectStartParams = {
  * capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
  * autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
  * (0045), automatic landing, behind `landing` (0045), how its children are placed, behind
- * `projectPlacement` (0046), or its checks, behind `checks` (0045).
+ * `projectPlacement` (0046), its checks, behind `checks` (0045), or the computer its children
+ * run on, behind `projectComputer` (0057).
  *
  * A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
  * `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
@@ -6377,6 +6414,14 @@ export type ProjectUpdateParams = {
 	 * naming it and never runs. Empty clears it. Ignored when `checks` is set too. Absent keeps it.
 	 */
 	proposedChecks?: string,
+	/**
+	 * The Tailscale node ID of the device its children run on, behind `projectComputer` (0057).
+	 * Empty clears it, so they run on this plxd. Absent keeps it. The node has to be one of
+	 * `connect/devices`' tailnet devices, online or not, and the repository needs an `origin`
+	 * for the device to find its copy. A plxd without `projectComputer` refuses it with
+	 * `unsupportedOption`. Children already started keep their computer.
+	 */
+	computer?: string,
 };
 
 /**

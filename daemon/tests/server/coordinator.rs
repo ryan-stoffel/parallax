@@ -564,6 +564,7 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
             max_children: None,
             checks: None,
             proposed_checks: None,
+            computer: None,
         })
         .await
         .unwrap()
@@ -639,6 +640,7 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
             max_children: None,
             checks: None,
             proposed_checks: None,
+            computer: None,
         })
         .await
         .unwrap();

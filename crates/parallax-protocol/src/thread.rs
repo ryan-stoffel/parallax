@@ -342,6 +342,28 @@ pub struct RepoRemoteResult {
     pub url: Option<String>,
 }
 
+/// Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at
+/// `origin`, for a Project on another plxd whose children run here. Each entry's `origin` and this
+/// one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing slash,
+/// and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoMatchParams {
+    /// The other plxd's `origin` URL, in any form git takes.
+    pub origin: String,
+}
+
+/// Result of `repo/match`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoMatchResult {
+    /// The matching entry, the oldest when several match. Absent when none does, so the
+    /// repository has to be cloned or added here first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<Repo>,
+}
+
 /// Params of `thread/start`: starts a normal thread's agent in its own worktree, as `agent/start`
 /// starts a worker. With `approvals`, a Claude thread is full Claude Code in every mode, with no
 /// worker sandbox (0034); without it, it keeps the worker's sandbox (0013).

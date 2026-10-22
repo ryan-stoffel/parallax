@@ -676,6 +676,7 @@ mod tests {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             };
             daemon
                 .store
@@ -874,6 +875,7 @@ mod tests {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             },
         };
         let event = |name: &str| {

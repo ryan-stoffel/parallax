@@ -798,6 +798,7 @@ pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
             allow_api_keys: params.allow_api_keys,
             checks: params.checks,
             proposed_checks: params.proposed_checks,
+            computer: params.computer,
         },
     )
 }
@@ -872,6 +873,7 @@ pub(crate) fn project(
         allow_api_keys: Some(row.allow_api_keys),
         checks: row.checks,
         proposed_checks: row.proposed_checks,
+        computer: row.computer,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
@@ -1196,6 +1198,7 @@ mod tests {
             max_children: 10,
             checks: None,
             proposed_checks: None,
+            computer: None,
         }
     }
 
@@ -1269,6 +1272,7 @@ mod tests {
             max_children: None,
             checks: None,
             proposed_checks: None,
+            computer: None,
         });
         assert_eq!(uuid, Uuid::from(id));
         assert_eq!(edit.name, None);

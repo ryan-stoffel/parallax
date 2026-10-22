@@ -83,6 +83,11 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub proposed_checks: Option<String>,
+    /// The Tailscale node ID of the Connect device its children run on (0057), one of the
+    /// tailnet devices `connect/devices` lists. Absent means this plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub computer: Option<String>,
     /// When the project was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// When the project last changed, in RFC 3339 UTC. `project/update` leaves it as it is, since
@@ -228,7 +233,8 @@ pub struct ProjectCreateResult {
 /// capability (PLX-227, 0032), its permission mode, behind `projectPermission` (0042), its
 /// autonomy level, behind `projectAutonomy` (0043), its base branch, behind `integrationBranch`
 /// (0045), automatic landing, behind `landing` (0045), how its children are placed, behind
-/// `projectPlacement` (0046), or its checks, behind `checks` (0045).
+/// `projectPlacement` (0046), its checks, behind `checks` (0045), or the computer its children
+/// run on, behind `projectComputer` (0057).
 ///
 /// A field that is absent stays as it is, and `icon` replaces the whole icon. `name` follows
 /// `project/create`'s rules, and the repository can't change. A rename, a new icon, a new mode,
@@ -286,6 +292,14 @@ pub struct ProjectUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub proposed_checks: Option<String>,
+    /// The Tailscale node ID of the device its children run on, behind `projectComputer` (0057).
+    /// Empty clears it, so they run on this plxd. Absent keeps it. The node has to be one of
+    /// `connect/devices`' tailnet devices, online or not, and the repository needs an `origin`
+    /// for the device to find its copy. A plxd without `projectComputer` refuses it with
+    /// `unsupportedOption`. Children already started keep their computer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub computer: Option<String>,
 }
 
 /// Result of `project/update`.

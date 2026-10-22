@@ -202,6 +202,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             },
         )
         .expect("a rename");
@@ -229,6 +230,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             },
         )
         .expect("an icon");
@@ -251,6 +253,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             },
         )
         .expect("an icon without a color");
@@ -304,6 +307,7 @@ fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             },
         )
         .expect("an icon without an image");
@@ -541,6 +545,36 @@ fn confirming_checks_clears_the_proposal_and_empty_clears_them() {
     assert_eq!(store.get_project(id).unwrap().unwrap(), cleared);
 }
 
+/// 0057: a Project's computer is stored, read back, and cleared by an empty string.
+#[test]
+fn a_projects_computer_round_trips_and_empty_clears_it() {
+    let (_dir, path) = temp_db_path();
+    let mut store = Store::open(&path).expect("open");
+    let id = Uuid::now_v7();
+    let created = store.create_project(id, &sample_fields()).expect("create");
+    assert_eq!(created.computer, None, "a new Project runs on this plxd");
+    let edit = |computer: &str| ProjectEdit {
+        computer: Some(computer.to_owned()),
+        ..ProjectEdit::default()
+    };
+
+    let (set, changed) = store
+        .update_project(id, &edit("nZi1Lj6Rrb11CNTRL"))
+        .expect("set");
+    assert!(changed);
+    assert_eq!(set.computer.as_deref(), Some("nZi1Lj6Rrb11CNTRL"));
+    assert_eq!(store.get_project(id).unwrap().unwrap(), set);
+    let (_, changed) = store
+        .update_project(id, &edit("nZi1Lj6Rrb11CNTRL"))
+        .expect("the same again");
+    assert!(!changed);
+
+    let (cleared, changed) = store.update_project(id, &edit("")).expect("cleared");
+    assert!(changed);
+    assert_eq!(cleared.computer, None);
+    assert_eq!(store.get_project(id).unwrap().unwrap(), cleared);
+}
+
 #[test]
 fn an_update_that_changes_nothing_reports_no_change() {
     let (_dir, path) = temp_db_path();
@@ -565,6 +599,7 @@ fn an_update_that_changes_nothing_reports_no_change() {
             max_children: None,
             checks: None,
             proposed_checks: None,
+            computer: None,
         },
     ] {
         let (project, changed) = store.update_project(id, &edit).expect("update");
@@ -593,6 +628,7 @@ fn update_of_a_missing_project_fails_with_not_found() {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             },
         )
         .expect_err("update of a missing project should fail");
@@ -896,7 +932,8 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
             "max_children",
             "allow_api_keys",
             "checks",
-            "proposed_checks"
+            "proposed_checks",
+            "computer"
         ]
     );
     let version: i64 = conn
@@ -905,12 +942,12 @@ fn a_version_1_database_migrates_and_keeps_its_projects() {
         })
         .expect("read schema version");
     assert_eq!(
-        version, 47,
+        version, 48,
         "migrations 3 (accounts, #117), 4 (usage, #120), 5 (worktrees, #154), 6 (role \
          defaults, #119), 7 (runs and events, #156), 8 (accepted runs, #157), 9 (threads, \
          #110), 10 (turns, #190), 11 (coordinator threads, #195), 12 (worktree base_dirty, \
          #257), 13 (run options, PLX-97), 14 (wakes, PLX-178), 15 (images, PLX-191), 16 \
-         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), 33 (landing queues, PLX-410), 34 (placement, PLX-413), 35 (checks, PLX-411), 36 (search index, PLX-487), 37 (attached-thread cursors, PLX-486), 38 (command receipts, PLX-482), 39 (orchestrator, PLX-643), 40 (schedules and pull request watches, PLX-649), 41 (thread graph, PLX-644), 42 (delegation, PLX-648), 43 (secret refs, PLX-648), 44 (spaces, PLX-732), 45 (unarchive time, PLX-795), 46 (areas and pins, PLX-789), and 47 (area repos, PLX-852) also apply"
+         (project icons, PLX-227), 17 (approvals, PLX-222), 18 (checkout runs), 19 (thread          attention, PLX-270), 20 (context window and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), 33 (landing queues, PLX-410), 34 (placement, PLX-413), 35 (checks, PLX-411), 36 (search index, PLX-487), 37 (attached-thread cursors, PLX-486), 38 (command receipts, PLX-482), 39 (orchestrator, PLX-643), 40 (schedules and pull request watches, PLX-649), 41 (thread graph, PLX-644), 42 (delegation, PLX-648), 43 (secret refs, PLX-648), 44 (spaces, PLX-732), 45 (unarchive time, PLX-795), 46 (areas and pins, PLX-789), 47 (area repos, PLX-852), and 48 (project computer, PLX-909) also apply"
     );
     let account_columns: Vec<String> = conn
         .prepare("SELECT name FROM pragma_table_info('accounts')")
@@ -962,6 +999,7 @@ fn a_version_15_database_gains_project_icons_and_keeps_its_projects() {
                 max_children: None,
                 checks: None,
                 proposed_checks: None,
+                computer: None,
             },
         )
         .expect("set an icon after migrating");
@@ -1043,12 +1081,12 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
         })
         .expect("read schema version");
     assert_eq!(
-        version, 47,
+        version, 48,
         "migrations 5 (worktrees, #154), 6 (role defaults, #119), 7 (runs and events, #156), \
          8 (accepted runs, #157), 9 (threads, #110), 10 (turns, #190), 11 (coordinator \
          threads, #195), 12 (worktree base_dirty, #257), 13 (run options, PLX-97), 14 (wakes, \
          PLX-178), 15 (images, PLX-191), 16 (project icons, PLX-227), 17 (approvals, \
-         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), 33 (landing queues, PLX-410), 34 (placement, PLX-413), 35 (checks, PLX-411), 36 (search index, PLX-487), 37 (attached-thread cursors, PLX-486), 38 (command receipts, PLX-482), 39 (orchestrator, PLX-643), 40 (schedules and pull request watches, PLX-649), 41 (thread graph, PLX-644), 42 (delegation, PLX-648), 43 (secret refs, PLX-648), 44 (spaces, PLX-732), 45 (unarchive time, PLX-795), 46 (areas and pins, PLX-789), and 47 (area repos, PLX-852) also apply"
+         PLX-222), 18 (checkout runs), 19 (thread attention, PLX-270), 20 (context window          and fast mode), 21 (linked pull requests, PLX-318), 22 (icon images, PLX-339), 23 (thread lineage, PLX-369), 24 (auto-resume, PLX-371), 25 (inbox, PLX-401), 26 (project permission modes, PLX-394), 27 (queued messages, PLX-370), 28 (waking a parent, PLX-380), 29 (integration branches, PLX-409), 30 (questions, PLX-402), 31 (project autonomy, PLX-403), 32 (question delivery, PLX-469), 33 (landing queues, PLX-410), 34 (placement, PLX-413), 35 (checks, PLX-411), 36 (search index, PLX-487), 37 (attached-thread cursors, PLX-486), 38 (command receipts, PLX-482), 39 (orchestrator, PLX-643), 40 (schedules and pull request watches, PLX-649), 41 (thread graph, PLX-644), 42 (delegation, PLX-648), 43 (secret refs, PLX-648), 44 (spaces, PLX-732), 45 (unarchive time, PLX-795), 46 (areas and pins, PLX-789), 47 (area repos, PLX-852), and 48 (project computer, PLX-909) also apply"
     );
 }
 

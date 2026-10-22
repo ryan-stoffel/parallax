@@ -50,6 +50,7 @@ fn update(
         max_children: None,
         checks: None,
         proposed_checks: None,
+        computer: None,
     }
 }
 

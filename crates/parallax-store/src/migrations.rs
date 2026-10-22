@@ -767,6 +767,12 @@ const MIGRATIONS: &[Migration] = &[
         );
         CREATE INDEX area_repos_repo ON area_repos (repo_id);",
     },
+    // The Connect device a Project's children run on (0057, PLX-909): its Tailscale node ID.
+    // NULL is the plxd that has the Project.
+    Migration {
+        version: 48,
+        sql: "ALTER TABLE projects ADD COLUMN computer TEXT;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
