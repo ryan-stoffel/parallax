@@ -2016,15 +2016,10 @@ browser-action-list::part(badge) {
   }
 }
 
-/* The Project tab's dot for a working child (ProjectHome.tsx) breathes. */
-.dot-live {
-  animation: dot-live 1.6s ease-in-out infinite;
+/* The Project tab's working child (ProjectHome.tsx) spins, slower than a loading spinner. */
+.spin-live {
+  animation: spin 1.6s linear infinite;
 }
-@keyframes dot-live {
-  50% {
-    opacity: 0.35;
-  }
-}
-:root.reduce-motion .dot-live {
+:root.reduce-motion .spin-live {
   animation: none;
 }
