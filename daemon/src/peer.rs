@@ -15,11 +15,12 @@
 //! while it waits for events, so [`Plxd::notify`] gives it a channel for `events/event`
 //! notifications, and a connection with an `events/subscribe` on it is never dropped for idling.
 //! A tailnet client sends `host/health` every 30 s on it to keep plxd from closing it, and closes
-//! it when plxd stops answering. [`Peers`] keeps one client per device.
+//! it when plxd stops answering. [`Peers`] keeps one client per device. [`Plxd::receive_bundle`]
+//! and [`Plxd::send_bundle`] move a run's commits to and from a device as git bundles.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
@@ -31,12 +32,13 @@ use parallax_protocol::jsonrpc::{
     CancelRequestParams, ErrorObject, Message, Notification, Request, RequestId, Response,
 };
 use parallax_protocol::methods::{
-    CancelRequest, EventsEvent, EventsSubscribe, HostHealth, Initialize, NotificationMethod,
-    RequestMethod,
+    BundleApply, BundleBegin, BundleDrop, BundlePrepare, BundleRead, BundleWrite, CancelRequest,
+    EventsEvent, EventsSubscribe, HostHealth, Initialize, NotificationMethod, RequestMethod,
 };
 use parallax_protocol::{
-    Capabilities, ClientInfo, EventsEventParams, HostHealthParams, InitializeParams,
-    InitializeResult, ProtocolRange,
+    BundleApplyParams, BundleBeginParams, BundleDropParams, BundlePrepareParams, BundleReadParams,
+    BundleWriteParams, Capabilities, ClientInfo, EventsEventParams, HostHealthParams,
+    InitializeParams, InitializeResult, ProtocolRange, RunId,
 };
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
@@ -44,6 +46,8 @@ use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+use crate::images;
+use crate::methods::host::CHUNK_BYTES;
 use crate::tailnet::Tailnet;
 use crate::transport;
 
@@ -301,6 +305,106 @@ impl Plxd {
             let _ = sender.send(Incoming::Reconnected);
         }
         Ok(connection)
+    }
+
+    /// Reads run `run`'s branch from this plxd into a bundle file at `path`, leaving out the
+    /// history of `exclude`'s commits (0057): `bundle/prepare`, then `bundle/read` 1 MiB at a
+    /// time, then `bundle/drop`, and the file's SHA-256 checked. Returns the tip the bundle holds,
+    /// or `None` when `exclude` already has the branch's tip and nothing was written.
+    ///
+    /// # Errors
+    ///
+    /// plxd's error message, such as for a bundle over 64 MiB, why the connection failed, or a
+    /// bundle whose bytes don't match its SHA-256.
+    pub async fn receive_bundle(
+        &self,
+        run: RunId,
+        exclude: Vec<String>,
+        path: &Path,
+    ) -> Result<Option<String>, String> {
+        let prepared = self
+            .call::<BundlePrepare>(BundlePrepareParams { run, exclude })
+            .await?;
+        let Some(bundle) = prepared.bundle else {
+            return Ok(None);
+        };
+        let read = async {
+            let mut bytes = Vec::new();
+            while (bytes.len() as u64) < bundle.size {
+                let offset = bytes.len() as u64;
+                let chunk = self
+                    .call::<BundleRead>(BundleReadParams {
+                        id: bundle.id,
+                        offset,
+                        length: CHUNK_BYTES.min(bundle.size - offset),
+                    })
+                    .await?;
+                let chunk = images::decode(&chunk.data)
+                    .ok_or_else(|| "plxd sent a chunk that isn't base64".to_owned())?;
+                if chunk.is_empty() {
+                    return Err(format!(
+                        "the bundle ended at {offset} of its {} bytes",
+                        bundle.size
+                    ));
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(bytes)
+        }
+        .await;
+        let _ = self
+            .call::<BundleDrop>(BundleDropParams { id: bundle.id })
+            .await;
+        let bytes = read?;
+        if bytes.len() as u64 != bundle.size || crate::sha256_hex(&bytes) != bundle.sha256 {
+            return Err(
+                "the bundle doesn't match its SHA-256, so it changed on the way".to_owned(),
+            );
+        }
+        tokio::fs::write(path, &bytes)
+            .await
+            .map_err(|error| format!("could not save the bundle: {error}"))?;
+        Ok(Some(prepared.tip))
+    }
+
+    /// Sends the bundle file at `path` to this plxd, for run `run`'s repository (0057):
+    /// `bundle/begin` with its size and SHA-256, `bundle/write` 1 MiB at a time, then
+    /// `bundle/apply`, which points `refs/parallax-sync/<run id>` there at `tip`.
+    ///
+    /// # Errors
+    ///
+    /// plxd's error message, such as for a bundle over 64 MiB, one whose SHA-256 doesn't match,
+    /// or one the repository lacks commits for, why the connection failed, or why `path` couldn't
+    /// be read.
+    pub async fn send_bundle(&self, run: RunId, path: &Path, tip: &str) -> Result<(), String> {
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|error| format!("could not read the bundle: {error}"))?;
+        let id = self
+            .call::<BundleBegin>(BundleBeginParams {
+                run,
+                size: bytes.len() as u64,
+                sha256: crate::sha256_hex(&bytes),
+            })
+            .await?
+            .id;
+        let mut offset = 0;
+        for chunk in bytes.chunks(usize::try_from(CHUNK_BYTES).unwrap_or(usize::MAX)) {
+            let params = BundleWriteParams {
+                id,
+                offset,
+                data: images::encode(chunk),
+            };
+            if let Err(error) = self.call::<BundleWrite>(params).await {
+                let _ = self.call::<BundleDrop>(BundleDropParams { id }).await;
+                return Err(error);
+            }
+            offset += chunk.len() as u64;
+        }
+        let tip = tip.to_owned();
+        self.call::<BundleApply>(BundleApplyParams { id, tip })
+            .await
+            .map(drop)
     }
 }
 

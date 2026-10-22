@@ -156,6 +156,8 @@ pub(crate) fn initialize(
 /// would silently ignore, starting from `HEAD` or the branch the checkout has out.
 /// `repoClone` (PLX-905): `repo/clone`, `repo/cloneProgress`, and `repo/remote`, to clone a
 /// repository onto this host.
+/// `peerGit` (0057): `bundle/*` and `git/startMerge`, for another plxd to move a run's commits
+/// to and from this one.
 /// `contextAndFast`: `agent/start`, `agent/send`, and `thread/start` take `contextWindow` and
 /// `fast`, and `AgentRun` and `agent.updated` report them; an older plxd would silently ignore
 /// them.
@@ -307,6 +309,7 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
         ("memory".to_owned(), serde_json::Map::new()),
         ("openPr".to_owned(), serde_json::Map::new()),
         ("orchestration".to_owned(), serde_json::Map::new()),
+        ("peerGit".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
         ("projectAutonomy".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),

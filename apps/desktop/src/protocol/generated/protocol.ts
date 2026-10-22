@@ -847,6 +847,39 @@ export type ParallaxRequests = {
 	 * `orchestration/getFullThreadDiff`: the diff from a thread's start to a checkpoint.
 	 */
 	"orchestration/getFullThreadDiff": { params: FullThreadDiffParams, result: TurnDiffResult },
+	/**
+	 * `bundle/prepare`: bundles a run's branch, pinned to its tip, for the home plxd to read
+	 * (0057). Gated on the `peerGit` capability, like every `bundle/*` method and
+	 * `git/startMerge`. Fails with `bundleTooLarge` over 64 MiB.
+	 */
+	"bundle/prepare": { params: BundlePrepareParams, result: BundlePrepareResult },
+	/**
+	 * `bundle/read`: a chunk of a bundle `bundle/prepare` made.
+	 */
+	"bundle/read": { params: BundleReadParams, result: BundleReadResult },
+	/**
+	 * `bundle/drop`: removes a bundle file.
+	 */
+	"bundle/drop": { params: BundleDropParams, result: BundleOkResult },
+	/**
+	 * `bundle/begin`: opens a bundle file for the home plxd to write into a run's repository.
+	 * Fails with `bundleTooLarge` over 64 MiB.
+	 */
+	"bundle/begin": { params: BundleBeginParams, result: BundleBeginResult },
+	/**
+	 * `bundle/write`: appends a chunk to a bundle `bundle/begin` opened.
+	 */
+	"bundle/write": { params: BundleWriteParams, result: BundleOkResult },
+	/**
+	 * `bundle/apply`: checks a written bundle and fetches it into `refs/parallax-sync/<run
+	 * id>`. Fails with `bundleFailed` when its hash, its tip, or `git bundle verify` fails.
+	 */
+	"bundle/apply": { params: BundleApplyParams, result: BundleOkResult },
+	/**
+	 * `git/startMerge`: starts a conflict merge in a run's worktree. Fails with `runBusy`
+	 * while the run is starting or running.
+	 */
+	"git/startMerge": { params: GitStartMergeParams, result: BundleOkResult },
 };
 
 /** Every request method, in `ParallaxRequests`' order. */
@@ -1016,6 +1049,13 @@ export const REQUEST_METHODS = [
 	"orchestration/threadRuns",
 	"orchestration/getTurnDiff",
 	"orchestration/getFullThreadDiff",
+	"bundle/prepare",
+	"bundle/read",
+	"bundle/drop",
+	"bundle/begin",
+	"bundle/write",
+	"bundle/apply",
+	"git/startMerge",
 ] as const;
 
 /** Notifications, which get no response, by method. */
@@ -9476,6 +9516,183 @@ export type FullThreadDiffParams = {
 };
 
 /**
+ * Params of `bundle/prepare`.
+ */
+export type BundlePrepareParams = {
+	/**
+	 * The run whose branch to bundle. It must have a worktree.
+	 */
+	run: RunId,
+	/**
+	 * Commits the receiver already has, as full hex object ids, left out of the bundle. At most
+	 * 256. Each must be in the run's repository.
+	 */
+	exclude: Array<string>,
+};
+
+/**
+ * Result of `bundle/prepare`.
+ */
+export type BundlePrepareResult = {
+	/**
+	 * The branch's tip when the bundle was made. A branch that moves later doesn't change it.
+	 */
+	tip: string,
+	/**
+	 * The bundle, or absent when `exclude` already has `tip`, so there is nothing to send.
+	 */
+	bundle?: BundleFile,
+};
+
+/**
+ * A bundle file `bundle/prepare` made. It is removed by `bundle/drop`, or 10 minutes after it
+ * was last read.
+ */
+export type BundleFile = {
+	/**
+	 * Its id, for `bundle/read` and `bundle/drop`.
+	 */
+	id: BundleId,
+	/**
+	 * Its size in bytes.
+	 */
+	size: number,
+	/**
+	 * The SHA-256 of its bytes, in lowercase hex.
+	 */
+	sha256: string,
+};
+
+/**
+ * A bundle file's id on the plxd that holds it: a version 7 UUID that `bundle/prepare` or
+ * `bundle/begin` generates.
+ */
+export type BundleId = string;
+
+/**
+ * Params of `bundle/read`.
+ */
+export type BundleReadParams = {
+	/**
+	 * The bundle.
+	 */
+	id: BundleId,
+	/**
+	 * Where to start reading, in bytes.
+	 */
+	offset: number,
+	/**
+	 * How many bytes to read, at most 1 MiB.
+	 */
+	length: number,
+};
+
+/**
+ * Result of `bundle/read`.
+ */
+export type BundleReadResult = {
+	/**
+	 * The bytes, in standard base64 with padding. Past the end is empty.
+	 */
+	data: string,
+};
+
+/**
+ * Params of `bundle/drop`: removes a bundle file of either direction. An unknown id changes
+ * nothing.
+ */
+export type BundleDropParams = {
+	/**
+	 * The bundle.
+	 */
+	id: BundleId,
+};
+
+/**
+ * The empty result of `bundle/drop`, `bundle/write`, `bundle/apply`, and `git/startMerge`.
+ */
+export type BundleOkResult = Record<symbol, never>;
+
+/**
+ * Params of `bundle/begin`: opens an empty bundle file for `bundle/write` to fill.
+ */
+export type BundleBeginParams = {
+	/**
+	 * The run whose repository the bundle goes into. It must have a worktree.
+	 */
+	run: RunId,
+	/**
+	 * The bundle's size in bytes, at most 64 MiB.
+	 */
+	size: number,
+	/**
+	 * The SHA-256 of its bytes, in lowercase hex, which `bundle/apply` checks.
+	 */
+	sha256: string,
+};
+
+/**
+ * Result of `bundle/begin`.
+ */
+export type BundleBeginResult = {
+	/**
+	 * The new file's id, for `bundle/write` and `bundle/apply`. A file that isn't written to for
+	 * 10 minutes is removed.
+	 */
+	id: BundleId,
+};
+
+/**
+ * Params of `bundle/write`: appends a chunk to a file `bundle/begin` opened.
+ */
+export type BundleWriteParams = {
+	/**
+	 * The bundle.
+	 */
+	id: BundleId,
+	/**
+	 * Where the chunk starts, which must be the length written so far.
+	 */
+	offset: number,
+	/**
+	 * The chunk, at most 1 MiB, in standard base64 with padding.
+	 */
+	data: string,
+};
+
+/**
+ * Params of `bundle/apply`: checks a written bundle and fetches its one ref into the run's
+ * repository as `refs/parallax-sync/<run id>`, the only ref it writes. The file is removed
+ * either way.
+ */
+export type BundleApplyParams = {
+	/**
+	 * The bundle, fully written.
+	 */
+	id: BundleId,
+	/**
+	 * The commit its ref must point at, as a full hex object id.
+	 */
+	tip: string,
+};
+
+/**
+ * Params of `git/startMerge`: starts merging `tip` into the run's worktree, leaving conflict
+ * markers for the run to resolve, as a landing conflict does for a local child (0045). Refused
+ * with `runBusy` while the run is starting or running.
+ */
+export type GitStartMergeParams = {
+	/**
+	 * The run.
+	 */
+	run: RunId,
+	/**
+	 * The commit to merge, as a full hex object id, already in the run's repository.
+	 */
+	tip: string,
+};
+
+/**
  * Params of `$/cancelRequest`.
  */
 export type CancelRequestParams = {
@@ -9674,7 +9891,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "areaNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "revertRefused" | "cloneFailed";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "areaNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

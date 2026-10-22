@@ -15,11 +15,13 @@
 //! `getFullThreadDiff` in `crate::checkpoints`; PLX-648 `delegation`: `task/delegate`,
 //! `task/status`, and `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`:
 //! `secret/request` and `secret/answer` in `crate::secrets`; PLX-746 `providerUpdates`:
-//! `provider_updates.rs`), and `host.rs` advertises the
+//! `provider_updates.rs`; 0057 `peerGit`: `bundle/*` and `git/startMerge` in `bundle.rs`), and
+//! `host.rs` advertises the
 //! capability in `initialize`.
 
 mod accounts;
 mod agent;
+pub(crate) mod bundle;
 mod composer;
 mod connect;
 pub(crate) mod context;
@@ -362,6 +364,13 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         OrchestrationThreadRuns => |p| crate::checkpoints::thread_runs(daemon, p),
         OrchestrationGetTurnDiff => |p| crate::checkpoints::turn_diff(daemon, p),
         OrchestrationGetFullThreadDiff => |p| crate::checkpoints::full_thread_diff(daemon, p),
+        BundlePrepare => |p| bundle::prepare(daemon, p),
+        BundleRead => |p| bundle::read(daemon, p),
+        BundleDrop => |p| ready(Ok(bundle::drop_bundle(daemon, &p))),
+        BundleBegin => |p| bundle::begin(daemon, p),
+        BundleWrite => |p| bundle::write(daemon, p),
+        BundleApply => |p| bundle::apply(daemon, p),
+        GitStartMerge => |p| bundle::start_merge(daemon, p),
         TerminalList => |p| ready(Ok(TerminalListResult {
             terminals: daemon.terminals.list(p.thread_id.as_deref()),
         })),
