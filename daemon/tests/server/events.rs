@@ -118,6 +118,7 @@ async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
         max_children: None,
         checks: None,
         proposed_checks: None,
+        computer: None,
     };
     let updated = editor
         .call::<ProjectUpdate>(edit.clone())

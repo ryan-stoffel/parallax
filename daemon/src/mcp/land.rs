@@ -94,6 +94,7 @@ pub(super) async fn propose(
             auto_land: None,
             checks: None,
             proposed_checks: Some(command),
+            computer: None,
             max_children: None,
             allow_api_keys: None,
         })

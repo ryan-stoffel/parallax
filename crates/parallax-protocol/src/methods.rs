@@ -73,24 +73,24 @@ use crate::{
     RelayRegisterParams, RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
     RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
     RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
-    RepoGitStatusParams, RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult,
-    RepoSaveScriptsParams, RepoScriptsParams, RepoScriptsResult, RepoUpdateParams,
-    RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams, ScheduleListParams,
-    ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams, SecretAnswerResult,
-    SecretRequestParams, SecretRequestResult, SpaceCreateParams, SpaceCreateResult,
-    SpaceDeleteParams, SpaceDeleteResult, SubscribeShellParams, SubscribeShellResult,
-    SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams, TaskStatusParams,
-    TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult, TerminalOpenParams,
-    TerminalOutputParams, TerminalResizeParams, TerminalResult, TerminalWriteParams,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
-    ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult, ThreadImportChatParams,
-    ThreadImportParams, ThreadImportableParams, ThreadImportableResult, ThreadImportedChatsParams,
-    ThreadImportedChatsResult, ThreadListParams, ThreadListResult, ThreadMergeBackParams,
-    ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult, ThreadSearchParams,
-    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
-    UsageLimitsResult,
+    RepoGitStatusParams, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
+    RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
+    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
+    ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
+    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SpaceCreateParams,
+    SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult, SubscribeShellParams,
+    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
+    TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
+    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
+    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult,
+    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
+    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams, ThreadListResult,
+    ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult,
+    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams,
+    UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
+    UsageLimitsParams, UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -375,6 +375,10 @@ method_table! {
         RepoCloneProgress = "repo/cloneProgress": RepoCloneProgressParams => RepoCloneProgressResult;
         /// `repo/remote`: the URL of a repo entry's `origin` remote, for cloning it elsewhere.
         RepoRemote = "repo/remote": RepoRemoteParams => RepoRemoteResult;
+        /// `repo/match`: the repo entry whose `origin` names the same repository as another
+        /// plxd's (0057). Not behind a capability of its own: a plxd without it answers
+        /// `methodNotFound`.
+        RepoMatch = "repo/match": RepoMatchParams => RepoMatchResult;
         /// `thread/start`: starts a normal thread's agent in a worktree of a repo entry, or in a
         /// scratch repository of its own when no repo is given. Idempotent on its
         /// client-generated run id.
@@ -788,6 +792,7 @@ mod tests {
                 "repo/clone",
                 "repo/cloneProgress",
                 "repo/remote",
+                "repo/match",
                 "thread/start",
                 "thread/fork",
                 "thread/importable",

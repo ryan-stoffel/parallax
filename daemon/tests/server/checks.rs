@@ -31,6 +31,7 @@ async fn set_checks(client: &mut Conn, project: ProjectId) {
             auto_land: None,
             checks: Some(format!("  {CHECKS}\n")),
             proposed_checks: None,
+            computer: None,
             max_children: None,
             allow_api_keys: None,
         })
@@ -164,6 +165,7 @@ async fn the_branch_moves_only_once_the_checks_pass() {
             auto_land: Some(true),
             checks: Some(command),
             proposed_checks: None,
+            computer: None,
             max_children: None,
             allow_api_keys: None,
         })

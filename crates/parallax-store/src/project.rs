@@ -85,6 +85,9 @@ pub struct ProjectEdit {
     pub checks: Option<String>,
     /// The checks command its coordinator proposed (PLX-411). Empty clears it.
     pub proposed_checks: Option<String>,
+    /// The Tailscale node ID of the device its children run on (decision record 0057). Empty
+    /// clears it.
+    pub computer: Option<String>,
 }
 
 /// A project row.
@@ -109,6 +112,9 @@ pub struct Project {
     pub checks: Option<String>,
     /// The checks command its coordinator proposed, which never runs until the user confirms it.
     pub proposed_checks: Option<String>,
+    /// The Tailscale node ID of the device its children run on (decision record 0057), or `None`
+    /// for this plxd.
+    pub computer: Option<String>,
     pub created_at: Timestamp,
     pub updated_at: Timestamp,
 }
@@ -129,6 +135,7 @@ struct RawProject {
     allow_api_keys: bool,
     checks: Option<String>,
     proposed_checks: Option<String>,
+    computer: Option<String>,
     created_at: String,
     updated_at: String,
 }
@@ -149,6 +156,7 @@ impl RawProject {
             allow_api_keys: row.get(15)?,
             checks: row.get(16)?,
             proposed_checks: row.get(17)?,
+            computer: row.get(18)?,
             created_at: row.get(3)?,
             updated_at: row.get(4)?,
         })
@@ -178,6 +186,7 @@ impl RawProject {
             allow_api_keys: self.allow_api_keys,
             checks: self.checks,
             proposed_checks: self.proposed_checks,
+            computer: self.computer,
             created_at: timestamp::parse(&self.created_at)?,
             updated_at: timestamp::parse(&self.updated_at)?,
         })
@@ -190,7 +199,7 @@ fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawProject>, Sto
             &format!(
                 "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
                      integration_branch, autonomy, auto_land, {ICON_COLUMNS}, max_children,
-                     allow_api_keys, checks, proposed_checks
+                     allow_api_keys, checks, proposed_checks, computer
                  FROM projects WHERE id = ?1"
             ),
             params![id_text],
@@ -291,7 +300,7 @@ impl Store {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
                      integration_branch, autonomy, auto_land, {ICON_COLUMNS}, max_children,
-                     allow_api_keys, checks, proposed_checks
+                     allow_api_keys, checks, proposed_checks, computer
              FROM projects
              ORDER BY created_at ASC, id ASC"
         ))?;
@@ -305,8 +314,8 @@ impl Store {
     }
 
     /// Renames project `id`, or sets its icon, permission mode, autonomy level, base branch,
-    /// automatic landing, placement settings, or checks, as `edit` says, and returns the project
-    /// with whether anything changed. When nothing would change, it writes nothing.
+    /// automatic landing, placement settings, checks, or computer, as `edit` says, and returns the
+    /// project with whether anything changed. When nothing would change, it writes nothing.
     ///
     /// `repo_path` never changes, and `updated_at` stays as it is: a rename,
     /// a new icon, a new mode, or a new level is not activity (decision record 0032).
@@ -383,6 +392,13 @@ impl Store {
                 changed = true;
             }
         }
+        if let Some(computer) = &edit.computer {
+            let computer = (!computer.is_empty()).then(|| computer.clone());
+            if computer != raw.computer {
+                raw.computer = computer;
+                changed = true;
+            }
+        }
 
         if changed {
             let (icon_name, icon_color, image_type, image_data) = icon_columns(raw.icon.as_ref());
@@ -390,7 +406,7 @@ impl Store {
                 "UPDATE projects SET name = ?2, icon_name = ?3, icon_color = ?4,
                      icon_image_type = ?5, icon_image_data = ?6, permission = ?7,
                      base_branch = ?8, autonomy = ?9, auto_land = ?10, max_children = ?11,
-                     allow_api_keys = ?12, checks = ?13, proposed_checks = ?14
+                     allow_api_keys = ?12, checks = ?13, proposed_checks = ?14, computer = ?15
                  WHERE id = ?1",
                 params![
                     id_text,
@@ -406,7 +422,8 @@ impl Store {
                     raw.max_children,
                     raw.allow_api_keys,
                     raw.checks,
-                    raw.proposed_checks
+                    raw.proposed_checks,
+                    raw.computer
                 ],
             )?;
             tx.commit()?;

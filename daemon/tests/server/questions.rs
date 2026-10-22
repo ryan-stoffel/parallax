@@ -689,6 +689,7 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
             max_children: None,
             checks: None,
             proposed_checks: None,
+            computer: None,
         })
         .await
         .unwrap()

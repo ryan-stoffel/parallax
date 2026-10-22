@@ -141,6 +141,10 @@ pub struct Config {
     pub keys: Option<Arc<dyn KeyStore>>,
     /// Parallax Relay's URL (PLX-652). `PLXD_RELAY_URL` when set, else relay.parallx.dev.
     pub relay_url: String,
+    /// Whether `project/update` takes `computer` and plxd advertises `projectComputer` (0057).
+    /// Off until a Project's child can start, be followed, and land on another computer; tests
+    /// turn it on.
+    pub project_computer: bool,
 }
 
 impl Config {
@@ -180,6 +184,7 @@ impl Config {
                 }),
             keys: None,
             relay_url: crate::relay::url(),
+            project_computer: false,
         }
     }
 }
@@ -318,6 +323,8 @@ pub(crate) struct Daemon {
     pub self_update: crate::self_update::SelfUpdate,
     /// `request_secret`'s requests and its refs' expiry timer (0063).
     pub secrets: crate::secrets::Secrets,
+    /// [`Config::project_computer`].
+    pub project_computer: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -480,6 +487,7 @@ impl Server {
             merged: tokio::sync::Notify::new(),
             self_update: crate::self_update::SelfUpdate::new(launcher.clone()),
             secrets: crate::secrets::Secrets::default(),
+            project_computer: config.project_computer,
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -881,6 +889,7 @@ impl Daemon {
             merged: tokio::sync::Notify::new(),
             self_update: crate::self_update::SelfUpdate::new(launcher),
             secrets: crate::secrets::Secrets::default(),
+            project_computer: false,
         })
     }
 }

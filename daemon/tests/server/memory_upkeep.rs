@@ -79,6 +79,7 @@ async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_mi
         allow_api_keys: None,
         checks: None,
         proposed_checks: None,
+        computer: None,
     };
     client.call::<ProjectUpdate>(auto_land).await.unwrap();
     let repo = client

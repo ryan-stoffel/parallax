@@ -76,7 +76,7 @@ pub(crate) fn initialize(
         protocol: version,
         plxd: crate::version().to_owned(),
         log_id: daemon.log.id(),
-        capabilities: capabilities_advertised(),
+        capabilities: capabilities_advertised(daemon.project_computer),
         max_frame_bytes: u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX),
     };
     let session = Session {
@@ -245,8 +245,11 @@ pub(crate) fn initialize(
 /// `devices` (PLX-886): every `device/*` method and notification.
 /// `computerUse` (PLX-897, 0077), on macOS only: `computer/ask`, `computer/status`, and
 /// `computer/forget`.
+/// `projectComputer` (0057), only with [`Config::project_computer`](crate::server::Config): the
+/// `computer` a Project's children run on, on `Project` and `project/update`, which a plxd
+/// without it refuses.
 #[expect(clippy::too_many_lines, reason = "one line per capability")]
-fn capabilities_advertised() -> Capabilities {
+fn capabilities_advertised(project_computer: bool) -> Capabilities {
     let prompt_images = serde_json::Map::from_iter([
         ("maxImages".to_owned(), images::MAX_IMAGES.into()),
         ("maxImageBytes".to_owned(), images::MAX_IMAGE_BYTES.into()),
@@ -353,6 +356,11 @@ fn capabilities_advertised() -> Capabilities {
         capabilities
             .0
             .insert("computerUse".to_owned(), serde_json::Map::new());
+    }
+    if project_computer {
+        capabilities
+            .0
+            .insert("projectComputer".to_owned(), serde_json::Map::new());
     }
     capabilities
 }

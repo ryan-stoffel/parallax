@@ -1,6 +1,7 @@
 //! `repo/clone`, `repo/cloneProgress`, and `repo/remote` (PLX-905): cloning a repository onto
 //! this host, for New Thread on a computer that lacks the repository it picked, and for Clone from
-//! GitHub. git never waits on a prompt here: one it would show fails the clone instead.
+//! GitHub. git never waits on a prompt here: one it would show fails the clone instead. And
+//! `repo/match` (0057): the repo entry that is this host's copy of another plxd's repository.
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -11,8 +12,10 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ErrorKind, RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
-    RepoCloneProgressResult, RepoId, RepoRemoteParams, RepoRemoteResult,
+    RepoCloneProgressResult, RepoId, RepoMatchParams, RepoMatchResult, RepoRemoteParams,
+    RepoRemoteResult,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::backend::process::{Output, ProcessSpec};
@@ -149,6 +152,37 @@ pub(crate) async fn remote(
     Ok(RepoRemoteResult { url })
 }
 
+/// `repo/match` (0057): the oldest repo entry whose `origin` names the same repository as
+/// `params.origin`, as [`repo_key`] compares them. Spaces and the scratch entry have none.
+pub(crate) async fn matching(
+    daemon: &Arc<Daemon>,
+    params: RepoMatchParams,
+) -> Result<RepoMatchResult, ErrorObject> {
+    check_url(&params.origin)?;
+    let wanted = repo_key(&params.origin);
+    let entries = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.list_repos()
+                .map_err(|error| threads::store_error(&error))
+        })
+        .await?;
+    // ponytail: one `git config` per entry, one at a time; fine for a host's handful of repos.
+    for entry in entries
+        .into_iter()
+        .filter(|entry| !entry.fields.scratch && !entry.fields.space)
+    {
+        if origin(daemon, Path::new(&entry.fields.path))
+            .await
+            .is_some_and(|url| repo_key(&url) == wanted)
+        {
+            let repo = threads::repo_entry(entry)?;
+            return Ok(RepoMatchResult { repo: Some(repo) });
+        }
+    }
+    Ok(RepoMatchResult { repo: None })
+}
+
 /// Clone `id`'s entry in [`PROGRESS`], removed when it drops.
 struct Progress(RepoId);
 
@@ -253,7 +287,7 @@ fn failure(line: &str) -> Option<&str> {
 }
 
 /// The URL of `repo`'s `origin` remote, if it has one.
-async fn origin(daemon: &Daemon, repo: &Path) -> Option<String> {
+pub(crate) async fn origin(daemon: &Daemon, repo: &Path) -> Option<String> {
     let spec = git_spec(
         daemon,
         vec![
@@ -367,6 +401,14 @@ mod tests {
         assert_eq!(repo_key("https://github.com/ryan-stoffel/parallax/"), key);
         assert_eq!(
             repo_key("ssh://git@github.com:22/ryan-stoffel/parallax"),
+            key
+        );
+        assert_eq!(
+            repo_key("https://me:token@GitHub.com/ryan-stoffel/parallax.git"),
+            key
+        );
+        assert_eq!(
+            repo_key("http://github.com/ryan-stoffel/parallax.git/"),
             key
         );
         assert_ne!(repo_key("https://github.com/ryan-stoffel/photon"), key);

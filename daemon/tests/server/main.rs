@@ -29,6 +29,7 @@ mod memory_upkeep;
 mod open_pr;
 mod orchestration;
 mod peer;
+mod project_computer;
 mod projects;
 mod pull_requests;
 mod questions;

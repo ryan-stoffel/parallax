@@ -222,6 +222,7 @@ fn placement_update(
         allow_api_keys,
         checks: None,
         proposed_checks: None,
+        computer: None,
     }
 }
 

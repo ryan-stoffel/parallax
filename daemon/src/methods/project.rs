@@ -3,7 +3,8 @@
 //! icon behind the `projectEdit` capability (PLX-227, 0032), its permission mode behind
 //! `projectPermission` (0042), its autonomy level behind `projectAutonomy` (0043), its base
 //! branch behind `integrationBranch` (0045), how its children are placed behind
-//! `projectPlacement` (0046), or its checks behind `checks` (PLX-411, 0045),
+//! `projectPlacement` (0046), its checks behind `checks` (PLX-411, 0045), or the computer its
+//! children run on behind `projectComputer` (0057),
 //! `project/delete`, behind `projectDelete` (PLX-338), and `project/fromThreads`, behind
 //! `projectFromThreads` (0042).
 
@@ -312,10 +313,10 @@ async fn threads_repo(
 }
 
 /// Renames a project or sets its icon, permission mode, autonomy level, base branch, automatic
-/// landing, placement settings, or checks, and appends `project.updated` when that changed
-/// anything. Runs pick up a new mode when they next start a CLI process (0042), questions a new
-/// level when they are next asked (0043), and waiting children new placement settings at once
-/// (0046). A new proposal for its checks adds a `needsYou` item for the user to confirm it
+/// landing, placement settings, checks, or computer, and appends `project.updated` when that
+/// changed anything. Runs pick up a new mode when they next start a CLI process (0042), questions
+/// a new level when they are next asked (0043), and waiting children new placement settings at
+/// once (0046). A new proposal for its checks adds a `needsYou` item for the user to confirm it
 /// (PLX-411). Ask me also sends the questions already open to Needs you (PLX-474).
 ///
 /// `project.updated` and the escalated questions' `inbox.added` events are staged in their
@@ -350,6 +351,9 @@ pub(crate) async fn update(
         if let Some(command) = checks {
             *command = check_checks(name, command)?;
         }
+    }
+    if let Some(computer) = &params.computer {
+        check_computer(context, params.project, computer).await?;
     }
     let proposal = params
         .proposed_checks
@@ -425,6 +429,54 @@ fn check_checks(name: &str, command: &str) -> Result<String, ErrorObject> {
 
 /// The longest checks command `project/update` takes.
 const MAX_CHECKS_BYTES: usize = 4096;
+
+/// `project/update`'s `computer` (0057). Refused with `unsupportedOption` while plxd doesn't
+/// follow it ([`Daemon::project_computer`]). Otherwise empty, which clears it, or a node 0056's
+/// device filter admits, on a Project whose repository has an `origin` for the device to find its
+/// copy by. Whether the device is online isn't checked, so the user can pick it ahead of time.
+async fn check_computer(
+    context: &Context,
+    project: ProjectId,
+    computer: &str,
+) -> Result<(), ErrorObject> {
+    let daemon = &context.daemon;
+    if !daemon.project_computer {
+        return Err(ErrorObject::parallax(
+            ErrorKind::UnsupportedOption,
+            "computer needs the projectComputer capability, which this plxd doesn't have",
+        ));
+    }
+    if computer.is_empty() {
+        return Ok(());
+    }
+    let id = project.into();
+    let row = daemon
+        .reader
+        .run(&context.cancel, move |db| {
+            db.get_project(id)
+                .map_err(|error| store_error(&error))?
+                .ok_or_else(|| store_error(&parallax_store::StoreError::NotFound { id }))
+        })
+        .await?;
+    let status =
+        daemon.connect.tailnet.status().await.map_err(|error| {
+            ErrorObject::invalid_params(format!("Can't check {computer}: {error}"))
+        })?;
+    if status.own_peer(computer).is_none() {
+        return Err(ErrorObject::invalid_params(format!(
+            "{computer} isn't one of this computer's devices"
+        )));
+    }
+    if crate::repo_clone::origin(daemon, Path::new(&row.repo_path))
+        .await
+        .is_none()
+    {
+        return Err(ErrorObject::invalid_params(
+            "This repository has no origin, so another computer can't find it.",
+        ));
+    }
+    Ok(())
+}
 
 /// Deletes a project (PLX-338), detached from the request as `thread/delete` is, so a dropped
 /// connection never leaves it half deleted.

@@ -104,7 +104,7 @@ Deleting a Project deletes its remote children the same way and is refused while
 
 ### 4. Finding the repository
 
-- The home plxd reads the Project repository's `origin` URL and normalizes it to `host/path`: drop the scheme, user info, `.git`, and a trailing slash, lowercase the host, and turn `git@host:org/repo` into `host/org/repo`. `worktree/pull_request.rs` already drops user info.
+- The home plxd reads the Project repository's `origin` URL and normalizes it to `host/path`: drop the scheme, user info, a port, `.git`, and a trailing slash, lowercase it, and turn `git@host:org/repo` into `host/org/repo`. This is `repo_clone::repo_key`, which PLX-905 added (amended 2026-10-22, PLX-909: the whole key is lowercased, not only the host, since GitHub's paths ignore case).
 - A new device method, `repo/match { origin }`, normalizes the `origin` of each repo entry on that plxd and returns the one that matches. Two matches go to the oldest entry. plxd can't register a repository on the device, because it doesn't know a path there, so the repository has to be added there already.
 - No match: the launch fails with "{name} has no repository for github.com/org/repo. Clone it there and add it in Parallax." No `origin` on the home repository: `project/update` refuses `computer` with "This repository has no origin, so another computer can't find it."
 
