@@ -95,6 +95,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "pullRequests",
     "queue",
     "questions",
+    "repoClone",
     "repoRefs",
     "runOptions",
     "schedules",
@@ -1405,9 +1406,10 @@ const tailnet: (TailnetDevice & {
     parallax: false,
     name: "Mac mini",
     threads: ["Tahoe icon variants"],
-    // A repository only the Mac mini has, so New Thread lists it under the Mac mini.
+    // A repository only the Mac mini has, so New Thread lists it under the Mac mini. It lacks
+    // acme-web, which picking it clones at the same path (PLX-905).
     repos: (here) => [
-      ...here,
+      ...here.filter((r) => r.name !== "acme-web"),
       {
         id: "0199a6f0-0000-7000-8000-mini0homelab",
         name: "homelab",
@@ -1426,7 +1428,8 @@ const tailnet: (TailnetDevice & {
     parallax: false,
     name: "Gaming PC",
     threads: ["Compare SSE vs WebSocket for plxd attach"],
-    // No docs-site, so the Computer menu says so with docs-site picked.
+    // No docs-site, so the Computer menu says so with docs-site picked. It's Windows, with no
+    // /Users, so picking it asks where to clone docs-site (PLX-905).
     repos: (here) => here.filter((r) => r.name !== "docs-site"),
   },
   {
@@ -1529,7 +1532,10 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
   switch (method) {
     case "thread/list":
       return {
-        repos: device.repos?.(db.repos) ?? db.repos,
+        repos: [
+          ...(device.repos?.(db.repos) ?? db.repos),
+          ...db.repos.filter((r) => cloned.has(`${hostId}:${r.path}`)),
+        ],
         threads: db.threads.filter((t) => own(t.id)),
         seq,
       };
@@ -1648,6 +1654,66 @@ const terminalListeners = new Map<string, (message: TerminalMessage) => void>();
 
 // ---- The bridge --------------------------------------------------------------------------------
 
+// ---- Cloning onto a computer (PLX-905) ------------------------------------------------------------
+
+/** How long a clone takes in the preview. */
+const CLONE_MS = 6000;
+/** Each clone under way's start, by id. */
+const clones = new Map<string, number>();
+/** The repositories cloned onto a device, as `<host id>:<path>`. */
+const cloned = new Set<string>();
+
+/**
+ * `repo/clone`, `repo/cloneProgress`, `repo/remote`, and a device's `repo/add` and `host/folders`
+ * where its repository or folder isn't there: a device lacks the repositories its `repos` leaves
+ * out until they're cloned there, and Windows has no /Users.
+ */
+function cloneRequest(hostId: string, method: string, params: Record<string, unknown>) {
+  const device = hostId === LOCAL ? undefined : deviceOf(hostId);
+  const path = typeof params["path"] === "string" ? expand(params["path"]) : "";
+  switch (method) {
+    case "repo/remote": {
+      const repo = db.repos.find((r) => r.id === params["repo"]);
+      return { result: { url: `git@github.com:ryan-stoffel/${repo?.name}.git` } };
+    }
+    case "repo/cloneProgress": {
+      const started = clones.get(String(params["id"]));
+      if (started === undefined) return { result: {} };
+      const done = Math.min(1, (Date.now() - started) / CLONE_MS);
+      const objects = Math.round(done * 4812);
+      return {
+        result: {
+          progress: `Receiving objects:  ${Math.round(done * 100)}% (${objects}/4812), ${(done * 38.6).toFixed(2)} MiB | 6.20 MiB/s`,
+        },
+      };
+    }
+    case "repo/clone": {
+      const id = String(params["id"]);
+      clones.set(id, Date.now());
+      cloned.add(`${hostId}:${path}`);
+      setTimeout(() => clones.delete(id), CLONE_MS);
+      const repo = db.repos.find((r) => r.path === path) ?? {
+        id,
+        name: path.split("/").at(-1)!,
+        path,
+        createdAt: now(),
+      };
+      return { result: { repo }, ms: CLONE_MS };
+    }
+    case "repo/add":
+      return device?.repos &&
+        !device.repos(db.repos).some((r) => r.path === path) &&
+        !cloned.has(`${hostId}:${path}`)
+        ? { error: fail(`${path} doesn't exist on this host.`, "notARepository") }
+        : undefined;
+    case "host/folders":
+      return device?.os === "windows" && String(params["path"]).startsWith("/")
+        ? { error: fail(`Can't open ${path}: The system cannot find the path specified.`) }
+        : undefined;
+  }
+  return undefined;
+}
+
 const delay = <T>(value: T, ms = 40) =>
   new Promise<T>((resolve) => setTimeout(() => resolve(value), ms));
 const noop = () => {};
@@ -1705,7 +1771,6 @@ export const mockBridge: ParallaxBridge = {
   pickFolder: () => delay(`${HOME}/Developer/personal/new-repo`),
   listFolders: (input) => delay(listing(input)),
   createRepo: (name) => delay({ path: `${HOME}/.parallax/projects/${name}` }, 400),
-  cloneRepo: (_slug, dest) => delay({ path: expand(dest) }, 1200),
   copyPicture: () => delay(undefined),
   onBrowser: () => () => {},
   extensions: () => delay([]),
@@ -1735,6 +1800,14 @@ export const mockBridge: ParallaxBridge = {
       } as unknown as HostResponse<Result<M>>);
     if (hostId !== LOCAL && !deviceOf(hostId)?.parallax)
       return delay({ error: fail(`no host has id ${hostId}`) } as HostResponse<Result<M>>);
+    const clone = cloneRequest(hostId, method, params as Record<string, unknown>);
+    if (clone)
+      return delay(
+        ("error" in clone
+          ? { error: clone.error }
+          : { result: structuredClone(clone.result), logId: LOG_ID }) as HostResponse<Result<M>>,
+        "ms" in clone ? clone.ms : 40,
+      );
     if (hostId !== LOCAL) {
       const own = deviceRequest(hostId, method, params as Record<string, unknown>);
       if (own)

@@ -146,7 +146,7 @@ const COORDINATORS_DIR: &str = "coordinators";
 /// [`crate::backend::process::ALWAYS_SCRUBBED`]: anything that could redirect git to a different
 /// repository or config, prompt for credentials, or override the commit identity we want to come
 /// from the repo's own configuration.
-const GIT_SCRUBBED: &[&str] = &[
+pub(crate) const GIT_SCRUBBED: &[&str] = &[
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_INDEX_FILE",

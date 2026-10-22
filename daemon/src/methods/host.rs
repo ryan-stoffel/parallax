@@ -154,6 +154,8 @@ pub(crate) fn initialize(
 /// new worktree, and `AgentRun` reports it; an older plxd would silently make a worktree.
 /// `repoRefs`: `repo/refs`, and `thread/start` takes `base` and `checkoutRef`, which an older plxd
 /// would silently ignore, starting from `HEAD` or the branch the checkout has out.
+/// `repoClone` (PLX-905): `repo/clone`, `repo/cloneProgress`, and `repo/remote`, to clone a
+/// repository onto this host.
 /// `contextAndFast`: `agent/start`, `agent/send`, and `thread/start` take `contextWindow` and
 /// `fast`, and `AgentRun` and `agent.updated` report them; an older plxd would silently ignore
 /// them.
@@ -320,6 +322,7 @@ fn capabilities_advertised() -> Capabilities {
         ("remote".to_owned(), serde_json::Map::new()),
         ("remoteWeb".to_owned(), serde_json::Map::new()),
         ("relay".to_owned(), serde_json::Map::new()),
+        ("repoClone".to_owned(), serde_json::Map::new()),
         ("repoRefs".to_owned(), serde_json::Map::new()),
         ("runOptions".to_owned(), serde_json::Map::new()),
         ("schedules".to_owned(), serde_json::Map::new()),
@@ -366,20 +369,7 @@ pub(crate) async fn folders(
 /// The folders in `input`, which may start with `~` for `home`, sorted by name ignoring case. A
 /// symbolic link counts when it points at a folder.
 fn list_folders(input: &str, home: Option<&Path>) -> Result<HostFoldersResult, ErrorObject> {
-    let tilde = input
-        .strip_prefix("~/")
-        .or_else(|| input.strip_prefix("~\\"))
-        .or((input == "~").then_some(""));
-    let dir: PathBuf = match (tilde, home) {
-        (Some(rest), Some(home)) => home.join(rest),
-        (Some(_), None) => return Err(ErrorObject::invalid_params("the home folder is unknown")),
-        (None, _) if Path::new(input).is_absolute() => PathBuf::from(input),
-        (None, _) => {
-            return Err(ErrorObject::invalid_params(format!(
-                "{input} is not an absolute path"
-            )));
-        }
-    };
+    let dir = expand_home(input, home)?;
     let cant =
         |error: std::io::Error| ErrorObject::invalid_params(format!("Can't open {input}: {error}"));
     let mut folders: Vec<HostFolder> = fs::read_dir(&dir)
@@ -399,6 +389,22 @@ fn list_folders(input: &str, home: Option<&Path>) -> Result<HostFoldersResult, E
         path: dir.to_string_lossy().into_owned(),
         folders,
     })
+}
+
+/// `input`, an absolute path or `~` or a path under it, with `~` replaced by `home`.
+pub(crate) fn expand_home(input: &str, home: Option<&Path>) -> Result<PathBuf, ErrorObject> {
+    let tilde = input
+        .strip_prefix("~/")
+        .or_else(|| input.strip_prefix("~\\"))
+        .or((input == "~").then_some(""));
+    match (tilde, home) {
+        (Some(rest), Some(home)) => Ok(home.join(rest)),
+        (Some(_), None) => Err(ErrorObject::invalid_params("the home folder is unknown")),
+        (None, _) if Path::new(input).is_absolute() => Ok(PathBuf::from(input)),
+        (None, _) => Err(ErrorObject::invalid_params(format!(
+            "{input} is not an absolute path"
+        ))),
+    }
 }
 
 /// The longest an uploaded file's `data` may be, in bytes of base64, about 4.5 MiB of file: what

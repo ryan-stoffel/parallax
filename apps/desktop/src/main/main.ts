@@ -73,7 +73,7 @@ import {
   mayNavigate,
 } from "./links";
 import { appDataDir, dataDir } from "./plxd";
-import { cloneRepo, createRepo, listFolders } from "./repos";
+import { createRepo, listFolders } from "./repos";
 import {
   detectTerminalApps,
   readTerminalApp,
@@ -376,14 +376,12 @@ ipcMain.handle("parallax:pickFolder", async (event) => {
   return canceled ? null : (filePaths[0] ?? null);
 });
 
-// The add palette's folder browser, New repository, and Clone from GitHub (repos.ts).
+// The add palette's folder browser and New repository (repos.ts). Clone from GitHub is plxd's
+// `repo/clone` (PLX-905).
 ipcMain.handle("parallax:listFolders", (_event, input: unknown) =>
   listFolders(typeof input === "string" ? input : "~"),
 );
 ipcMain.handle("parallax:createRepo", (_event, name: unknown) => createRepo(String(name)));
-ipcMain.handle("parallax:cloneRepo", (_event, slug: unknown, dest: unknown) =>
-  typeof dest === "string" ? cloneRepo(String(slug), dest) : { error: "No folder to clone into" },
-);
 
 // The Account dialog's Share: a picture of part of the asking window, onto the clipboard.
 ipcMain.handle("parallax:copyPicture", async (event, rect: unknown) => {

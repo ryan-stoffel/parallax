@@ -170,11 +170,6 @@ export interface ParallaxBridge {
    * its path, or an error for people.
    */
   createRepo(name: string): Promise<{ path: string } | { error: string }>;
-  /**
-   * Clones GitHub's `owner/name` into `dest`, which may start with `~` and must not exist.
-   * Resolves to its path, or an error for people.
-   */
-  cloneRepo(slug: string, dest: string): Promise<{ path: string } | { error: string }>;
   /** Copies a picture of this window's `rect`, in CSS pixels, to the clipboard. Rejects for an empty or invalid one. */
   copyPicture(rect: { x: number; y: number; width: number; height: number }): Promise<void>;
   /**

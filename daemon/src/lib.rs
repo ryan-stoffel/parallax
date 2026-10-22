@@ -84,6 +84,7 @@ mod public_proxy;
 pub mod relay;
 pub mod remote;
 mod repo;
+mod repo_clone;
 pub mod routing;
 mod schedules;
 mod secrets;

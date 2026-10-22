@@ -71,24 +71,26 @@ use crate::{
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
     QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
     RelayRegisterParams, RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
-    RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoFilesParams,
-    RepoFilesResult, RepoGitStatusParams, RepoRefsParams, RepoRefsResult, RepoSaveScriptsParams,
-    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
-    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
-    SecretAnswerParams, SecretAnswerResult, SecretRequestParams, SecretRequestResult,
-    SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
-    SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
-    TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
-    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
-    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
-    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
-    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
-    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams,
-    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams,
-    UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
-    UsageLimitsParams, UsageLimitsResult,
+    RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
+    RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
+    RepoGitStatusParams, RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult,
+    RepoSaveScriptsParams, RepoScriptsParams, RepoScriptsResult, RepoUpdateParams,
+    RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams, ScheduleListParams,
+    ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams, SecretAnswerResult,
+    SecretRequestParams, SecretRequestResult, SpaceCreateParams, SpaceCreateResult,
+    SpaceDeleteParams, SpaceDeleteResult, SubscribeShellParams, SubscribeShellResult,
+    SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams, TaskStatusParams,
+    TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult, TerminalOpenParams,
+    TerminalOutputParams, TerminalResizeParams, TerminalResult, TerminalWriteParams,
+    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult, ThreadImportChatParams,
+    ThreadImportParams, ThreadImportableParams, ThreadImportableResult, ThreadImportedChatsParams,
+    ThreadImportedChatsResult, ThreadListParams, ThreadListResult, ThreadMergeBackParams,
+    ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult, ThreadSearchParams,
+    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
+    UsageLimitsResult,
 };
 
 /// A method that is called with a request and answered with a response.
@@ -366,6 +368,13 @@ method_table! {
         /// `repo/add`: registers a repository on the host for normal threads, idempotent on its
         /// client-generated id and on its path.
         RepoAdd = "repo/add": RepoAddParams => RepoAddResult;
+        /// `repo/clone`: clones a repository onto the host and registers it (PLX-905). Gated on
+        /// the `repoClone` capability, like `repo/cloneProgress` and `repo/remote`.
+        RepoClone = "repo/clone": RepoCloneParams => RepoAddResult;
+        /// `repo/cloneProgress`: git's latest progress line for a `repo/clone` under way.
+        RepoCloneProgress = "repo/cloneProgress": RepoCloneProgressParams => RepoCloneProgressResult;
+        /// `repo/remote`: the URL of a repo entry's `origin` remote, for cloning it elsewhere.
+        RepoRemote = "repo/remote": RepoRemoteParams => RepoRemoteResult;
         /// `thread/start`: starts a normal thread's agent in a worktree of a repo entry, or in a
         /// scratch repository of its own when no repo is given. Idempotent on its
         /// client-generated run id.
@@ -776,6 +785,9 @@ mod tests {
                 "agent/approve",
                 "thread/list",
                 "repo/add",
+                "repo/clone",
+                "repo/cloneProgress",
+                "repo/remote",
                 "thread/start",
                 "thread/fork",
                 "thread/importable",

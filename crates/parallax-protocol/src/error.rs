@@ -133,6 +133,9 @@ pub enum ErrorKind {
     /// rewind its conversation, or `restoreFiles` was asked of a folder that isn't the thread's
     /// own worktree. The message says which.
     RevertRefused,
+    /// `repo/clone`'s git failed or stopped making progress (PLX-905). The message is git's
+    /// reason, for people, such as a repository that doesn't exist or needs a sign-in.
+    CloneFailed,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -248,6 +251,7 @@ mod tests {
             (ErrorKind::CommitFailed, "commitFailed"),
             (ErrorKind::GithubSetupFailed, "githubSetupFailed"),
             (ErrorKind::HostUpdateFailed, "hostUpdateFailed"),
+            (ErrorKind::CloneFailed, "cloneFailed"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

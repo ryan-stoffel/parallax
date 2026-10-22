@@ -1,4 +1,4 @@
-//! `thread/list`, `repo/add`, `thread/start`, `thread/archive`, and `thread/delete` (#110),
+//! `thread/list`, `repo/add`, `repo/clone` (PLX-905, behind `repoClone`), `thread/start`, `thread/archive`, and `thread/delete` (#110),
 //! behind the `threads` capability, `thread/fork` (0050), behind `threadFork`, `thread/update`
 //! and `repo/update` (0033), behind `threadAttention` (and `threadLineage` for its title and
 //! settled flag, 0041), `repo/refs`, behind `repoRefs`, and `thread/search` (PLX-372), behind
@@ -11,8 +11,9 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    SpaceDeleteParams, SpaceDeleteResult, ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams,
-    ThreadImportChatParams, ThreadImportParams, ThreadStartParams, ThreadStartResult,
+    RepoAddResult, RepoCloneParams, SpaceDeleteParams, SpaceDeleteResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadImportChatParams, ThreadImportParams,
+    ThreadStartParams, ThreadStartResult,
 };
 
 use super::Context;
@@ -32,6 +33,19 @@ pub(super) async fn start(
         .daemon
         .agents
         .detached(threads::start(daemon, params))
+        .await
+}
+
+/// `repo/clone` (PLX-905), run detached so a dropped connection never leaves a clone half done.
+pub(super) async fn clone(
+    context: &Context,
+    params: RepoCloneParams,
+) -> Result<RepoAddResult, ErrorObject> {
+    let daemon = Arc::clone(&context.daemon);
+    context
+        .daemon
+        .agents
+        .detached(crate::repo_clone::clone(daemon, params))
         .await
 }
 

@@ -144,6 +144,7 @@ const openRowMenus = () =>
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
 const heading = () => document.querySelector("h1")?.textContent;
+const status = () => document.querySelector('main [role="status"]')?.textContent;
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 
@@ -831,7 +832,40 @@ test("A computer without the repository at that path keeps New Thread here, sayi
   expect(heading()).toBe("What should we build in parallax?");
 });
 
-test("While the picked computer adds the repository, Send is off, and picking this computer again drops the add (PLX-849)", async () => {
+test("A send while the picked computer adds the repository waits, then starts the thread there (PLX-905)", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  const added: Repo = { ...parallax, id: "r-mini-parallax" };
+  let finish: (answer: RpcResponse<unknown>) => void = () => {};
+  request.mockImplementation(async (host, method, params) => {
+    if (host === "ssh-mini" && method === "thread/list")
+      return { result: { repos: [], threads: [], seq: 1 } };
+    if (host === "ssh-mini" && method === "repo/add")
+      return new Promise((resolve) => (finish = resolve));
+    const answer = answers[method];
+    return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  });
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Fix it"),
+    },
+  });
+  await renderApp();
+  await choose("Runs on", "mac miniSSH · minino parallax");
+  expect(status()).toBe("Adding parallax on mac mini…");
+  await send("Fix it");
+  // Not on the computer being left.
+  expect(calls("thread/start")).toEqual([]);
+  await act(async () => finish({ result: { repo: added } }));
+  await settle();
+  expect(request).toHaveBeenCalledWith(
+    "ssh-mini",
+    "thread/start",
+    expect.objectContaining({ prompt: "Fix it", repo: added.id }),
+  );
+});
+
+test("Picking this computer again while the picked one adds the repository drops the add (PLX-849)", async () => {
   window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
   let finish: (answer: RpcResponse<unknown>) => void = () => {};
   request.mockImplementation(async (host, method, params) => {
@@ -844,14 +878,132 @@ test("While the picked computer adds the repository, Send is off, and picking th
   });
   await renderApp();
   await choose("Runs on", "mac miniSSH · minino parallax");
-  // A thread sent now would start on the computer being left.
-  await send("Fix it");
-  expect(calls("thread/start")).toEqual([]);
-  expect(composer().textContent).toBe("Fix it");
   await choose("Runs on", "This MacThis computer");
   await act(async () => finish({ result: { repo: { ...parallax, id: "r-mini-parallax" } } }));
   await settle();
   expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
+});
+
+/**
+ * mac mini without parallax, which it clones: `repo/add` fails there until `repo/clone` answers,
+ * and `folders` answers its `host/folders`. Resolves `repo/clone` itself, or holds it for `hold`.
+ */
+function cloneOntoMini(
+  folders: (path: string) => RpcResponse<unknown>,
+  hold?: (finish: () => void) => void,
+) {
+  capabilities = { repoClone: {} };
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  let there: Repo | undefined;
+  request.mockImplementation(async (host, method, params) => {
+    if (host === "ssh-mini") {
+      if (method === "thread/list") return { result: { repos: [], threads: [], seq: 1 } };
+      if (method === "repo/add")
+        return there && params["path"] === there.path
+          ? { result: { repo: there } }
+          : {
+              error: {
+                code: -32000,
+                message: `${String(params["path"])} doesn't exist on this host.`,
+                data: { kind: "notARepository" },
+              },
+            };
+      if (method === "host/folders") return folders(String(params["path"]));
+      if (method === "repo/clone") {
+        const repo = { ...parallax, id: "r-mini-parallax", path: String(params["path"]) };
+        if (!hold) {
+          there = repo;
+          return { result: { repo } };
+        }
+        return new Promise((resolve) =>
+          hold(() => {
+            there = repo;
+            resolve({ result: { repo } });
+          }),
+        );
+      }
+    }
+    if (method === "repo/remote")
+      return { result: { url: "git@github.com:ryan-stoffel/parallax.git" } };
+    if (method === "host/folders") return { result: { path: "/Users/me", folders: [] } };
+    const answer = answers[method];
+    return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  });
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Fix it"),
+    },
+  });
+}
+
+test("A computer without the repository clones its origin at the same path, and a send waits for it (PLX-905)", async () => {
+  let finish = () => {};
+  cloneOntoMini(
+    () => ({ result: { path: "/src", folders: [] } }),
+    (f) => (finish = f),
+  );
+  await renderApp();
+  await choose("Runs on", "mac miniSSH · minino parallax");
+  await settle();
+  expect(calls("repo/clone")).toEqual([
+    {
+      id: expect.any(String),
+      url: "git@github.com:ryan-stoffel/parallax.git",
+      path: parallax.path,
+    },
+  ]);
+  expect(status()).toBe("Cloning parallax on mac mini…");
+  await send("Fix it");
+  expect(calls("thread/start")).toEqual([]);
+  await act(async () => finish());
+  await settle();
+  expect(request).toHaveBeenCalledWith(
+    "ssh-mini",
+    "thread/start",
+    expect.objectContaining({ prompt: "Fix it", repo: "r-mini-parallax" }),
+  );
+});
+
+test("A computer where the repository's folder is missing asks where to clone it, then starts there (PLX-905)", async () => {
+  cloneOntoMini((path) =>
+    path.startsWith("~")
+      ? { result: { path: "/Users/ryan", folders: [] } }
+      : { error: { code: -32602, message: `Can't open ${path}: No such file or directory` } },
+  );
+  await renderApp();
+  await choose("Runs on", "mac miniSSH · minino parallax");
+  await settle();
+  const dialog = document.querySelector<HTMLDialogElement>(
+    'dialog[aria-label="Clone parallax on mac mini"]',
+  )!;
+  expect(dialog.open).toBe(true);
+  expect(dialog.textContent).toContain("Select where to clone on mac mini");
+  expect(dialog.textContent).toContain("git@github.com:ryan-stoffel/parallax.git");
+  // /src/parallax isn't under this computer's home, so it starts at its name.
+  expect(dialog.querySelector<HTMLInputElement>('input[aria-label="Clone into"]')!.value).toBe(
+    "~/parallax",
+  );
+  expect(calls("repo/clone")).toEqual([]);
+  const clone = [...dialog.querySelectorAll("button")].find((b) =>
+    b.textContent?.startsWith("Clone"),
+  )!;
+  await act(async () => clone.click());
+  await settle();
+  expect(calls("repo/clone")).toEqual([
+    {
+      id: expect.any(String),
+      url: "git@github.com:ryan-stoffel/parallax.git",
+      path: "~/parallax",
+    },
+  ]);
+  expect(heading()).toBe("What should we build in parallax on mac mini?");
+  await send("Fix it");
+  expect(request).toHaveBeenCalledWith(
+    "ssh-mini",
+    "thread/start",
+    expect.objectContaining({ prompt: "Fix it", repo: "r-mini-parallax" }),
+  );
 });
 
 test("No Repo picks only the computer, and starts the thread there (PLX-849)", async () => {
