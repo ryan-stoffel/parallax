@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { githubSlug, isFolderName, type FolderListing } from "../preload/bridge";
+import { isFolderName, type FolderListing } from "../preload/bridge";
 
 const run = promisify(execFile);
 
@@ -53,7 +53,7 @@ const gitError = (error: unknown) =>
     .split("\n")
     .at(-1);
 
-// Never waits on a username prompt: a clone that needs one fails instead.
+// Never waits on a prompt.
 const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
 
 /**
@@ -90,32 +90,5 @@ export async function createRepo(
   } catch (error) {
     await rm(dir, { recursive: true, force: true });
     return { error: gitError(error) ?? "git failed" };
-  }
-}
-
-/**
- * Clone from GitHub: `git clone https://github.com/<slug>.git` into `dest`, which must not exist.
- * Private repositories use git's credential helper, which Parallax's GitHub setup installs.
- * Resolves to its path, or an error for people.
- */
-export async function cloneRepo(
-  slug: string,
-  dest: string,
-): Promise<{ path: string } | { error: string }> {
-  const repo = githubSlug(slug);
-  if (!repo) return { error: "Type a repository as owner/name" };
-  const dir = expandHome(dest);
-  if (
-    await stat(dir).then(
-      () => true,
-      () => false,
-    )
-  )
-    return { error: `${dest} already exists` };
-  try {
-    await run("git", ["clone", "-q", `https://github.com/${repo}.git`, dir], { env: gitEnv() });
-    return { path: dir };
-  } catch (error) {
-    return { error: gitError(error) ?? "git clone failed" };
   }
 }

@@ -84,6 +84,7 @@ import {
   type ForkChoice,
   type ThreadsView,
 } from "./threads";
+import { cloneOnto, type CloneAsk } from "./clone";
 import { isRunning } from "./transcript";
 import { fileStarted, folderPath, pinLayout, startIn } from "./pins";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
@@ -634,39 +635,59 @@ export function App() {
   const draft = selection.kind === "new" ? selection.draft : undefined;
   // Runs New Thread on another computer: opens that host, keeping the repository if it lists one
   // of the same name (each host's entries have their own ids). A host whose list is in but lacks
-  // it adds the repository at the same path first. When that fails, New Thread stays on this host
-  // and it resolves to plxd's error, for people. A host whose list hasn't loaded yet gets New
-  // Thread's first repository. An add that finishes after another pick, or once anything else is
-  // open, changes nothing.
+  // it adds the repository at the same path first, or `at`, where New Thread's clone dialog put
+  // it. A host without it at that path clones its origin there (PLX-905), sending git's progress
+  // to `onProgress`, or, when that path won't do there, resolves to where to ask to clone it. Once
+  // it added or cloned the repository there, it resolves to its entry there. When
+  // that fails, New Thread stays on this host and it resolves to plxd's error, for people. A host
+  // whose list hasn't loaded yet gets New Thread's first repository. An add that finishes after
+  // another pick, or once anything else is open, changes nothing.
   const picks = useRef(0);
   const shown = useRef({ hostId: host.id, selection });
   useEffect(() => {
     shown.current = { hostId: host.id, selection };
   });
-  const pickHost = async (id: string): Promise<string | undefined> => {
+  const pickHost = async (
+    id: string,
+    { at, onProgress }: { at?: string; onProgress?: (line: string) => void } = {},
+  ): Promise<string | CloneAsk | Repo | undefined> => {
     // Picking this computer again is a pick too, so it drops an add still under way.
     const pick = ++picks.current;
     if (id === host.id) return undefined;
     const before = shown.current;
+    const stale = () =>
+      pick !== picks.current ||
+      shown.current.hostId !== before.hostId ||
+      shown.current.selection !== before.selection;
     const view = views[id] ?? idleThreads;
     let groupId = groupThreads(view.state).groups.find((g) => g.name === group.name)?.id;
-    const path = threads.state.repos.find((r) => r.id === group.id)?.path;
-    if (!repoless(group) && path && lacksRepo(view, group.name)) {
-      const added = await view.addRepo(path);
+    const source = threads.state.repos.find((r) => r.id === group.id);
+    let moved: Repo | undefined;
+    if (!repoless(group) && source && (at || lacksRepo(view, group.name))) {
+      let added = await view.addRepo(at ?? source.path);
+      if (stale()) return undefined;
       if (
-        pick !== picks.current ||
-        shown.current.hostId !== before.hostId ||
-        shown.current.selection !== before.selection
-      )
-        return undefined;
+        typeof added === "string" &&
+        !at &&
+        "repoClone" in threads.capabilities &&
+        "repoClone" in view.capabilities
+      ) {
+        const cloned = await cloneOnto(host.id, source, id, (line) => onProgress?.(line));
+        if (stale()) return undefined;
+        if (typeof cloned === "object" && "url" in cloned) return cloned;
+        // Its own add, so the entry is in the host's list before New Thread opens there.
+        added = typeof cloned === "string" ? cloned : await view.addRepo(cloned.path);
+        if (stale()) return undefined;
+      }
       if (typeof added === "string")
         return `${hosts.find((h) => h.id === id)?.name ?? "That computer"}: ${added}`;
       groupId = added.id;
+      moved = added;
     }
     setHostId(id);
     setOpening(undefined);
     setSelection({ kind: "new", groupId, draft });
-    return undefined;
+    return moved;
   };
 
   // Opens New Thread on another computer with one of its repositories.

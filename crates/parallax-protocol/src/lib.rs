@@ -233,9 +233,10 @@ pub use terminal::{
 };
 pub use thread::{
     ForkedFrom, MAX_SPACE_NAME_BYTES, MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult,
-    RepoId, RepoRef, RepoRefsParams, RepoRefsResult, RepoUpdateParams, RepoUpdateResult,
-    SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult, Thread,
-    ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    RepoCloneParams, RepoCloneProgressParams, RepoCloneProgressResult, RepoId, RepoRef,
+    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoUpdateParams,
+    RepoUpdateResult, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
+    Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
     ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming, ThreadSearchParams,
     ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
     ThreadUpdateResult,

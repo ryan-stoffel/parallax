@@ -2,7 +2,10 @@ import { ChevronDown, Folder, House, LoaderCircle, MessagesSquare, Plus } from "
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
+import { CloneDialog } from "./AddDialog";
+import { CloneProgress } from "./CloneProgress";
 import { TranscriptView } from "./AgentChat";
+import type { CloneAsk } from "./clone";
 import { Composer, tabItem } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { drafts, isEmpty, type ComposerContents } from "./drafts";
@@ -37,10 +40,15 @@ interface NewThreadProps {
   /** The computers a thread can run on. */
   hosts: Host[];
   /**
-   * Called when the user picks another computer to run the thread on. Resolves to why New Thread
-   * couldn't move there, for people, such as the repository not being a repository there.
+   * Called when the user picks another computer to run the thread on, which may clone the
+   * repository there (PLX-905), sending git's progress to `onProgress`, or add it `at` the path
+   * the clone dialog put it. Resolves to why New Thread couldn't move there, for people, to where
+   * to ask to clone the repository there, or to its entry there once it added or cloned it.
    */
-  onHostChange: (hostId: string) => Promise<string | undefined>;
+  onHostChange: (
+    hostId: string,
+    how?: { at?: string; onProgress?: (line: string) => void },
+  ) => Promise<string | CloneAsk | Repo | undefined>;
   /** Repositories and No Repo, as the sidebar groups them. */
   groups: ThreadGroup[];
   groupId: string;
@@ -289,7 +297,17 @@ export function NewThread({
     images: PromptImage[],
     threads: string[],
     background: boolean,
-  ) => {
+  ): Promise<string | undefined> => {
+    if (moving || asking) {
+      // One held send at a time: a second, as after Cmd/Ctrl+Enter, goes back in the box.
+      if (held)
+        return `Waiting for ${group.name} to be ready on ${hostName((moving ?? asking)!.hostId)}`;
+      if (!background) setStarting({ prompt, images, threads });
+      opening.current = !background;
+      return new Promise((done) =>
+        setHeld({ send: [prompt, options, images, threads, background], done }),
+      );
+    }
     setChoices(undefined);
     const last = failed.current;
     // plxd refuses a run id reused with other options, so changing one starts afresh. It doesn't
@@ -341,18 +359,58 @@ export function NewThread({
     }
   };
 
-  // The computer picked while it adds the repository, during which Send is off, so a thread
-  // can't start on the computer being left.
-  const [moving, setMoving] = useState<string>();
-  const pickHost = async (id: string) => {
+  // The computer picked while it adds or clones the repository (PLX-905), with git's progress
+  // once it clones. A send meanwhile is held, so it starts there once the move is done, rather
+  // than on the computer being left, and fails if the move does.
+  const [moving, setMoving] = useState<{ hostId: string; progress?: string }>();
+  // Where to clone the repository on the computer picked, when its path won't do there.
+  const [asking, setAsking] = useState<{ hostId: string; ask: CloneAsk }>();
+  // The entry the move added or cloned, which a held send waits to see in `groups`.
+  const [arriving, setArriving] = useState<string>();
+  const [held, setHeld] = useState<{
+    send: Parameters<typeof send>;
+    done: (error: string | undefined) => void;
+  }>();
+  const pickHost = async (id: string, at?: string) => {
     setRepoError(undefined);
     // Its accounts are this computer's, and its Continue would start the thread here.
     setChoices(undefined);
-    setMoving(id);
-    const error = await onHostChange(id);
-    setMoving((m) => (m === id ? undefined : m));
-    if (error) setRepoError(error);
+    setMoving({ hostId: id });
+    const result = await onHostChange(id, {
+      at,
+      onProgress: (progress) => setMoving((m) => (m?.hostId === id ? { hostId: id, progress } : m)),
+    });
+    setMoving((m) => (m?.hostId === id ? undefined : m));
+    if (typeof result === "string") setRepoError(result);
+    else if (result && "url" in result) setAsking({ hostId: id, ask: result });
+    else setArriving(result?.id);
   };
+  const hostName = (id: string) => hosts.find((h) => h.id === id)?.name ?? "that computer";
+  // The move under way, as a card: above the box until a send, then in the thread it starts.
+  const moveCard = moving && (
+    <CloneProgress
+      title={
+        moving.progress === undefined
+          ? `Adding ${group.name} on ${hostName(moving.hostId)}…`
+          : `Cloning ${group.name} on ${hostName(moving.hostId)}`
+      }
+      line={moving.progress}
+      cloning={moving.progress !== undefined}
+    />
+  );
+  // A held send goes once the move is over, from this render's props: the new computer's.
+  useEffect(() => {
+    if (!held || moving || asking) return;
+    if (arriving && !groups.some((g) => g.id === arriving)) return;
+    setHeld(undefined);
+    setArriving(undefined);
+    if (repoError) {
+      // The alert under the box says why.
+      setStarting(undefined);
+      opening.current = false;
+      held.done("");
+    } else void send(...held.send).then(held.done);
+  });
 
   const pickRepository = async () => {
     setRepoError(undefined);
@@ -389,6 +447,9 @@ export function NewThread({
             ]}
             sent={new Map()}
             live={false}
+            // Nothing works on it until the clone is done: the card says what's going.
+            stalled={!!moveCard}
+            end={moveCard && <div className="mt-3">{moveCard}</div>}
           />
         </ThreadLinksContext>
       )}
@@ -526,6 +587,7 @@ export function NewThread({
             />
           </>
         )}
+        {starting === undefined && moveCard && <div className="mb-3">{moveCard}</div>}
         <Composer
           newThread
           initial={draft}
@@ -544,13 +606,7 @@ export function NewThread({
           contextAndFast={
             connection?.status === "connected" && "contextAndFast" in connection.capabilities
           }
-          disabledReason={
-            starting !== undefined
-              ? "Starting thread…"
-              : moving
-                ? `Adding ${group.name} on ${hosts.find((h) => h.id === moving)?.name}…`
-                : disabledReason
-          }
+          disabledReason={starting !== undefined ? "Starting thread…" : disabledReason}
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
           menus={
@@ -602,6 +658,24 @@ export function NewThread({
           }
           footer={
             <div>
+              {asking && (
+                <CloneDialog
+                  hostId={asking.hostId}
+                  hostName={hostName(asking.hostId)}
+                  ask={asking.ask}
+                  onDone={(repo) => {
+                    setAsking(undefined);
+                    if (repo) void pickHost(asking.hostId, repo.path);
+                    // Closed first: a held send goes back to the box.
+                    else if (held) {
+                      setHeld(undefined);
+                      setStarting(undefined);
+                      opening.current = false;
+                      held.done("");
+                    }
+                  }}
+                />
+              )}
               {repoError && (
                 <p role="alert" className="px-2 pt-1.5 text-[12.5px] text-danger">
                   {repoError}

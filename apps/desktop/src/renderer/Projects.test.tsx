@@ -78,7 +78,6 @@ const request = vi.fn(async (host: string, method: string, params: Record<string
 const pickFolder = vi.fn<() => Promise<string | null>>();
 const listFolders = vi.fn<ParallaxBridge["listFolders"]>();
 const createRepo = vi.fn<ParallaxBridge["createRepo"]>();
-const cloneRepo = vi.fn<ParallaxBridge["cloneRepo"]>();
 // Every subscription gets every event; each keeps what's its own.
 let listeners: Set<(message: SubscriptionMessage) => void>;
 const deliver = (message: SubscriptionMessage) => listeners.forEach((l) => l(message));
@@ -137,7 +136,6 @@ beforeEach(() => {
     pickFolder,
     listFolders,
     createRepo,
-    cloneRepo,
     hosts: async () => sshHosts,
     onHosts: () => () => {},
     onConnect: () => () => {},
@@ -527,7 +525,11 @@ test("New repository creates it in ~/.parallax/projects and registers it, and a 
 test("a clone that finishes after its palette closed is registered but leaves a palette opened since alone", async () => {
   listFolders.mockImplementation(listTree);
   const clone = Promise.withResolvers<{ path: string }>();
-  cloneRepo.mockReturnValue(clone.promise);
+  answers["repo/clone"] = async () => ({
+    result: {
+      repo: { ...parallax, id: "r-photon", name: "photon", path: (await clone.promise).path },
+    },
+  });
   answers["repo/add"] = (p) => ({
     result: { repo: { ...parallax, id: "r-photon", name: "photon", path: p["path"] } },
   });
@@ -550,7 +552,11 @@ test("a clone that finishes after its palette closed is registered but leaves a 
 
 test("Create Project's Workspace can be cloned from GitHub in the palette, which comes back to the form with it chosen", async () => {
   listFolders.mockImplementation(listTree);
-  cloneRepo.mockResolvedValue({ path: "/Users/me/Developer/photon" });
+  answers["repo/clone"] = () => ({
+    result: {
+      repo: { ...parallax, id: "r-photon", name: "photon", path: "/Users/me/Developer/photon" },
+    },
+  });
   answers["repo/add"] = (p) => ({
     result: { repo: { ...parallax, id: "r-photon", name: "photon", path: p["path"] } },
   });
@@ -579,7 +585,14 @@ test("Create Project's Workspace can be cloned from GitHub in the palette, which
   typeInto(field(), "~/Developer/photon");
   await settle();
   await click(action("Clone"));
-  expect(cloneRepo.mock.calls).toEqual([["ryan-stoffel/photon", "~/Developer/photon"]]);
+  // plxd clones it, over HTTPS, into the path as typed (PLX-905).
+  expect(calls("repo/clone")).toEqual([
+    {
+      id: expect.any(String),
+      url: "https://github.com/ryan-stoffel/photon.git",
+      path: "~/Developer/photon",
+    },
+  ]);
   expect(calls("repo/add")).toEqual([
     { id: expect.any(String), path: "/Users/me/Developer/photon" },
   ]);

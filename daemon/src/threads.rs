@@ -246,7 +246,7 @@ pub(crate) async fn list(daemon: &Arc<Daemon>) -> Result<ThreadListResult, Error
     })
 }
 
-fn check_path(path: &str) -> Result<(), ErrorObject> {
+pub(crate) fn check_path(path: &str) -> Result<(), ErrorObject> {
     if path.len() > MAX_PATH_BYTES {
         return Err(ErrorObject::invalid_params(format!(
             "path must be at most {MAX_PATH_BYTES} bytes"

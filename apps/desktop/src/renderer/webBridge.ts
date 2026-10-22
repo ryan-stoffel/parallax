@@ -556,7 +556,6 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     pickFolder: async () => null,
     listFolders: async () => ({ error: NOT_HERE }),
     createRepo: async () => ({ error: NOT_HERE }),
-    cloneRepo: async () => ({ error: NOT_HERE }),
     copyPicture: () => Promise.reject(new Error(NOT_HERE)),
     // The web client has no webview, so no page asks anything.
     onBrowser: () => () => {},

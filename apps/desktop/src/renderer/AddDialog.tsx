@@ -22,6 +22,8 @@ import { flushSync } from "react-dom";
 
 import { githubSlug, isFolderName, type FolderListing } from "../preload/bridge";
 import type { Project, Repo } from "../protocol/generated/protocol";
+import { cloneOn, type CloneAsk } from "./clone";
+import { CloneProgress } from "./CloneProgress";
 import { describeError } from "./errors";
 import { localId, type Host } from "./hosts";
 
@@ -40,6 +42,12 @@ type Step =
   | { kind: "menu" | "create" | "clone" | "computer" | "project" }
   | { kind: "browse"; hostId?: string }
   | { kind: "cloneTo"; slug: string };
+
+/**
+ * What the folder step clones: its URL, the name it shows, and its GitHub `owner/name` when it came
+ * from Clone from GitHub.
+ */
+type Cloning = { url: string; name: string; slug?: string };
 
 /** Opens the palette, at its menu or straight at Create Project. */
 export type AddDialogHandle = { open: (start?: "project") => void };
@@ -117,7 +125,7 @@ export function AddDialog({
         setWorkspace(undefined);
         setSession((n) => n + 1);
       }}
-      className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
+      className={palette}
     >
       {step.kind === "menu" && (
         <MenuStep
@@ -153,7 +161,17 @@ export function AddDialog({
       {step.kind === "clone" && (
         <CloneStep onBack={back} onNext={(slug) => push({ kind: "cloneTo", slug })} />
       )}
-      {step.kind === "cloneTo" && <FolderStep {...steps} hostId={localId} slug={step.slug} />}
+      {step.kind === "cloneTo" && (
+        <FolderStep
+          {...steps}
+          hostId={localId}
+          clone={{
+            url: `https://github.com/${step.slug}.git`,
+            name: step.slug.split("/")[1]!,
+            slug: step.slug,
+          }}
+        />
+      )}
       {/* Kept while its Workspace's step is open, so what's typed in it stays. */}
       {stack.some((s) => s.kind === "project") && (
         <div hidden={step.kind !== "project"}>
@@ -171,6 +189,54 @@ export function AddDialog({
           />
         </div>
       )}
+    </dialog>
+  );
+}
+
+/** The palette's dialog. */
+const palette =
+  "mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50";
+
+/**
+ * Asks where to clone a repository on `hostId`, then clones it there and registers it, as Clone
+ * from GitHub's last step does, in a dialog of its own: New Thread's, when the computer it picked
+ * lacks the repository and its path won't do there (PLX-905). `onDone` gets the entry, or nothing
+ * when it's closed first.
+ */
+export function CloneDialog({
+  hostId,
+  hostName,
+  ask,
+  onDone,
+}: {
+  hostId: string;
+  hostName: string;
+  ask: CloneAsk;
+  onDone: (repo?: Repo) => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const done = useRef(false);
+  const finish = (repo?: Repo) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(repo);
+  };
+  useEffect(() => dialog.current?.showModal(), []);
+  return (
+    <dialog
+      ref={dialog}
+      aria-label={`Clone ${ask.name} on ${hostName}`}
+      onClose={() => finish()}
+      className={palette}
+    >
+      <FolderStep
+        hostId={hostId}
+        hostName={hostName}
+        clone={{ url: ask.url, name: ask.name }}
+        start={ask.path}
+        onBack={() => dialog.current?.close()}
+        onAdded={(_, repo) => finish(repo)}
+      />
     </dialog>
   );
 }
@@ -433,8 +499,9 @@ function CloneStep({ onBack, onNext }: { onBack: () => void; onNext: (slug: stri
 }
 
 /**
- * Local folder on `hostId`, or with `slug`, where Clone from GitHub clones it on this computer.
- * Another computer's folders come from its plxd (`host/folders`). The field is a path from `~/`;
+ * Local folder on `hostId`, or with `clone`, where to clone it there with its plxd (`repo/clone`,
+ * PLX-905), showing git's progress. Another computer's folders come from its plxd
+ * (`host/folders`). The field is a path from `~/`, starting at `start` when given;
  * the list is its folder's folders, filtered by what's typed after its last `/` (but not when
  * cloning, where that's the clone's own name). Enter opens the highlighted folder, Backspace at a
  * folder's end goes up, and Mod+Enter adds the folder, or clones into the path.
@@ -444,10 +511,12 @@ function FolderStep({
   onAdded,
   hostId,
   hostName,
-  slug,
-}: StepProps & { hostId: string; hostName?: string; slug?: string }) {
-  const repoName = slug?.split("/")[1];
-  const [text, setText] = useState(repoName ? `~/${repoName}` : "~/");
+  clone,
+  start,
+}: StepProps & { hostId: string; hostName?: string; clone?: Cloning; start?: string }) {
+  const repoName = clone?.name;
+  const [text, setText] = useState(start ?? (repoName ? `~/${repoName}` : "~/"));
+  const [progress, setProgress] = useState<string>();
   const cut = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\")) + 1;
   const dir = text.slice(0, cut);
   const leaf = text.slice(cut);
@@ -465,7 +534,7 @@ function FolderStep({
     };
   }, [hostId, dir]);
   const current = listing?.dir === dir ? listing.result : undefined;
-  const filter = slug ? "" : leaf.toLowerCase();
+  const filter = clone ? "" : leaf.toLowerCase();
   const folders = (current && "folders" in current ? current.folders : []).filter(
     (f) =>
       (filter.startsWith(".") || !f.name.startsWith(".")) && f.name.toLowerCase().includes(filter),
@@ -482,17 +551,21 @@ function FolderStep({
   // Cloning goes to the path as typed. Adding takes the open folder, or the highlighted one once
   // something's typed after it.
   let target: string | undefined;
-  if (slug) target = leaf ? text : undefined;
+  if (clone) target = leaf ? text : undefined;
   else if (!leaf) target = current && "path" in current ? current.path : undefined;
   else target = highlighted?.path;
   const submit = () => {
     if (!target) return;
-    if (slug) {
+    if (clone) {
       const dest = target;
-      void add.run(`clone:${slug}:${dest}`, () => window.parallax.cloneRepo(slug, dest));
+      setProgress(undefined);
+      void add.run(`clone:${clone.url}:${dest}`, async () => {
+        const repo = await cloneOn(hostId, clone.url, dest, setProgress);
+        return typeof repo === "string" ? { error: repo } : { path: repo.path };
+      });
     } else void add.run(`add:${target}`, async () => ({ path: target }));
   };
-  const busyLabel = slug ? "Cloning…" : "Adding…";
+  const busyLabel = clone ? "Cloning…" : "Adding…";
 
   return (
     <>
@@ -500,7 +573,7 @@ function FolderStep({
         onBack={onBack}
         action={
           <Action
-            label={add.busy ? busyLabel : slug ? "Clone" : "Add"}
+            label={add.busy ? busyLabel : clone ? "Clone" : "Add"}
             keys={`${mod()} Enter`}
             disabled={!target || add.busy}
             onClick={submit}
@@ -510,7 +583,7 @@ function FolderStep({
         <input
           ref={autofocus}
           {...list.input}
-          aria-label={slug ? "Clone into" : "Folder"}
+          aria-label={clone ? "Clone into" : "Folder"}
           value={text}
           spellCheck={false}
           autoComplete="off"
@@ -522,7 +595,7 @@ function FolderStep({
             if (e.key === "Enter") e.preventDefault();
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
             else if (e.key === "Enter" && highlighted)
-              go(`${dir}${highlighted.name}/${slug ? leaf : ""}`);
+              go(`${dir}${highlighted.name}/${clone ? leaf : ""}`);
             else if (e.key === "Backspace" && atEnd && leaf === (repoName ?? "")) {
               const up = parent(dir);
               if (up === undefined) return;
@@ -534,20 +607,35 @@ function FolderStep({
         />
       </Header>
       <Body>
-        {slug && (
+        {clone && (
           <>
             <Heading>Repository</Heading>
-            <GithubRepo slug={slug} />
+            {clone.slug ? (
+              <GithubRepo slug={clone.slug} />
+            ) : (
+              <CloneSource name={clone.name} url={clone.url} />
+            )}
+            {add.busy && (
+              <div className="px-2.5 pt-1 pb-2">
+                <CloneProgress title={`Cloning ${clone.name}`} line={progress} />
+              </div>
+            )}
           </>
         )}
         <Heading>
-          {slug ? "Select where to clone" : hostName ? `Folders on ${hostName}` : "Folders"}
+          {clone
+            ? hostName
+              ? `Select where to clone on ${hostName}`
+              : "Select where to clone"
+            : hostName
+              ? `Folders on ${hostName}`
+              : "Folders"}
         </Heading>
         <Options
           list={list}
           label="Folders"
           options={folders.map((f) => ({ id: f.path, name: f.name, icon: <Folder /> }))}
-          onPick={(o) => go(`${dir}${o.name}/${slug ? leaf : ""}`)}
+          onPick={(o) => go(`${dir}${o.name}/${clone ? leaf : ""}`)}
         />
         {current && "error" in current && <Note>{current.error}</Note>}
         {current && "folders" in current && folders.length === 0 && (
@@ -561,7 +649,7 @@ function FolderStep({
             type="button"
             onClick={async () => {
               const picked = await window.parallax.pickFolder();
-              if (picked) go(`${picked}/${slug ? leaf : ""}`);
+              if (picked) go(`${picked}/${clone ? leaf : ""}`);
             }}
             className="ml-auto rounded-md px-1.5 py-0.5 hover:bg-hover hover:text-foreground"
           >
@@ -702,6 +790,19 @@ function Options({
           </span>
         </button>
       ))}
+    </div>
+  );
+}
+
+/** A repository cloned from another computer's `origin`, by name and URL. */
+function CloneSource({ name, url }: { name: string; url: string }) {
+  return (
+    <div className="flex items-center gap-3 px-2.5 py-2">
+      <FolderGit2 className="size-5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0">
+        <span className="block truncate text-[14px]">{name}</span>
+        <span className="block truncate text-[12.5px] text-muted-foreground">{url}</span>
+      </span>
     </div>
   );
 }

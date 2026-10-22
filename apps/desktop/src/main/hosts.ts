@@ -113,6 +113,12 @@ const DEVICE_TIMEOUT_MS = 4 * 60_000;
 const PROBE_TIMEOUT_MS = 2 * 60_000;
 
 /**
+ * How long `repo/clone` may take (PLX-905). plxd stops a clone git makes no progress on for 5
+ * minutes, so this only cuts off a huge repository on a slow link.
+ */
+const CLONE_TIMEOUT_MS = 60 * 60_000;
+
+/**
  * Every host's connection, by host id: `local`, each saved SSH host, each Connect device, and each
  * LAN computer.
  */
@@ -234,7 +240,8 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       if (!isObject(params)) return invalid(ErrorCodes.InvalidParams, "params must be an object");
       // A provider's own update downloads it, which can take minutes (PLX-746), and an emulator
       // can take minutes to boot, or a cold Mac's simulators to list (PLX-886). A list or save
-      // probes agents, each in steps of up to 20 s, which can pass the usual 30 s.
+      // probes agents, each in steps of up to 20 s, which can pass the usual 30 s. A clone runs
+      // until git is done.
       const timeout =
         method === "providers/upgrade"
           ? UPDATE_TIMEOUT_MS
@@ -242,7 +249,9 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
             ? DEVICE_TIMEOUT_MS
             : method === "providers/list" || method === "providers/save"
               ? PROBE_TIMEOUT_MS
-              : undefined;
+              : method === "repo/clone"
+                ? CLONE_TIMEOUT_MS
+                : undefined;
       return host.request(method as RendererMethod, params as never, timeout);
     },
   );

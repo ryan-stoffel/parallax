@@ -342,6 +342,9 @@ pub struct ProcessSpec {
     /// with stdout's, for a CLI that prints what plxd reads there, such as `gh auth login`'s
     /// one-time code. They still go into [`Exit::stderr_tail`] too.
     pub stderr_lines: bool,
+    /// Whether a `\r` ends a stderr line too, for a CLI that redraws a progress line, such as
+    /// `git clone --progress` (PLX-905). Only with `stderr_lines`; empty lines are dropped.
+    pub stderr_progress: bool,
     /// Output limits.
     pub limits: OutputLimits,
     /// The name a recording of this process's session goes under when plxd records CLI
@@ -360,6 +363,7 @@ impl ProcessSpec {
             inject: Environment::empty(),
             stdin: StdinMode::Null,
             stderr_lines: false,
+            stderr_progress: false,
             limits: OutputLimits::default(),
             record: None,
         }
@@ -521,9 +525,13 @@ impl Launcher {
 
         let tail = Arc::new(Mutex::new(Tail::new(spec.limits.stderr_tail_bytes)));
         let (output_tx, output) = mpsc::channel(64);
-        let lines = spec
-            .stderr_lines
-            .then(|| (output_tx.clone(), spec.limits.max_line_bytes));
+        let lines = spec.stderr_lines.then(|| {
+            (
+                output_tx.clone(),
+                spec.limits.max_line_bytes,
+                spec.stderr_progress,
+            )
+        });
         let stderr_task = tokio::spawn(read_stderr(stderr, Arc::clone(&tail), lines));
         tokio::spawn(pump(
             LineReader::new(stdout, spec.limits.max_line_bytes),
@@ -1206,7 +1214,7 @@ fn record_stdin(recorder: Recorder, mut child: StdinPipe) -> io::Result<StdinPip
 async fn read_stderr<R: AsyncRead + Unpin>(
     mut stderr: R,
     tail: Arc<Mutex<Tail>>,
-    lines: Option<(mpsc::Sender<Output>, usize)>,
+    lines: Option<(mpsc::Sender<Output>, usize, bool)>,
 ) {
     let mut chunk = vec![0; 8192];
     let mut line = Vec::new();
@@ -1218,16 +1226,22 @@ async fn read_stderr<R: AsyncRead + Unpin>(
         tail.lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(&chunk[..n]);
-        let Some((output, max)) = &lines else {
+        let Some((output, max, progress)) = &lines else {
             continue;
         };
         line.extend_from_slice(&chunk[..n]);
-        while let Some(end) = line.iter().position(|&b| b == b'\n') {
+        while let Some(end) = line
+            .iter()
+            .position(|&b| b == b'\n' || (*progress && b == b'\r'))
+        {
             let rest = line.split_off(end + 1);
             let mut done = std::mem::replace(&mut line, rest);
             done.pop();
             if done.last() == Some(&b'\r') {
                 done.pop();
+            }
+            if *progress && done.is_empty() {
+                continue;
             }
             if done.len() <= *max && output.send(Output::Line(done)).await.is_err() {
                 return;
@@ -1237,7 +1251,7 @@ async fn read_stderr<R: AsyncRead + Unpin>(
             line.clear();
         }
     }
-    if let Some((output, _)) = lines
+    if let Some((output, _, _)) = lines
         && !line.is_empty()
     {
         let _ = output.send(Output::Line(line)).await;
@@ -1636,6 +1650,24 @@ mod tests {
             ]
         );
         assert_eq!(exit.stderr_tail, "code\r\nlast");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_carriage_return_ends_a_progress_line() {
+        let mut spec = sh("printf 'one 1%%\\rone 2%%\\r\\ndone\\n' >&2");
+        spec.stderr_lines = true;
+        spec.stderr_progress = true;
+        let mut process = launcher(base()).spawn(&spec).unwrap();
+        let (lines, _) = collect(&mut process).await;
+        assert_eq!(
+            lines,
+            [
+                Output::Line(b"one 1%".to_vec()),
+                Output::Line(b"one 2%".to_vec()),
+                Output::Line(b"done".to_vec())
+            ]
+        );
     }
 
     #[cfg(unix)]

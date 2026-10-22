@@ -83,7 +83,6 @@ const bridge: ParallaxBridge = {
   pickFolder: () => ipcRenderer.invoke("parallax:pickFolder") as Promise<string | null>,
   listFolders: (path) => ipcRenderer.invoke("parallax:listFolders", path),
   createRepo: (name) => ipcRenderer.invoke("parallax:createRepo", name),
-  cloneRepo: (slug, dest) => ipcRenderer.invoke("parallax:cloneRepo", slug, dest),
   copyPicture: (rect) => ipcRenderer.invoke("parallax:copyPicture", rect) as Promise<void>,
   onBrowser(listener) {
     const forward = (_event: unknown, id: number, action: BrowserAction) => listener(id, action);

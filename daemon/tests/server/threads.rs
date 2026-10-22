@@ -10,16 +10,18 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification, RequestId};
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentEvents, AgentList, AgentSend, EventsEvent, EventsSubscribe,
-    HostHealth, NotificationMethod, RepoAdd, RepoRefs, RepoUpdate, RequestMethod, SpaceCreate,
-    SpaceDelete, ThreadArchive, ThreadDelete, ThreadList, ThreadStart, ThreadUpdate,
+    HostHealth, NotificationMethod, RepoAdd, RepoClone, RepoRefs, RepoRemote, RepoUpdate,
+    RequestMethod, SpaceCreate, SpaceDelete, ThreadArchive, ThreadDelete, ThreadList, ThreadStart,
+    ThreadUpdate,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentCancelParams, AgentEffort, AgentEventsParams,
     AgentListParams, AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
     EventsSubscribeParams, HostHealthParams, ImageMediaType, ParallaxEvent, ProjectIcon, ProjectId,
-    PromptImage, Provider, Repo, RepoAddParams, RepoId, RepoRefsParams, RepoUpdateParams, RunId,
-    SpaceCreateParams, SpaceDeleteParams, ThreadArchiveParams, ThreadDeleteParams,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadUpdateParams, TurnId,
+    PromptImage, Provider, Repo, RepoAddParams, RepoCloneParams, RepoId, RepoRefsParams,
+    RepoRemoteParams, RepoUpdateParams, RunId, SpaceCreateParams, SpaceDeleteParams,
+    ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ThreadUpdateParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -840,6 +842,73 @@ async fn a_retried_start_on_a_taken_run_id_makes_no_scratch_repository() {
             .join(params.run_id.to_string())
             .exists()
     );
+}
+
+#[tokio::test]
+async fn a_clone_is_registered_and_a_retry_finds_it() {
+    let host = Host::start(fake(editing()));
+    let mut client = host.client().await;
+    let source = real_repo(host.work.path(), "app");
+    let url = format!("file://{}", source.display());
+    // Folders above it that don't exist yet are made.
+    let dest = host.work.path().join("clones/nested/app");
+    let params = RepoCloneParams {
+        id: RepoId::generate(),
+        url: url.clone(),
+        path: dest.to_str().unwrap().to_owned(),
+    };
+    let repo = client.call::<RepoClone>(params.clone()).await.unwrap().repo;
+    assert_eq!(Path::new(&repo.path), dest.canonicalize().unwrap());
+    assert_eq!(git(&dest, &["log", "--format=%s"]), "init");
+    // git cloned beside it and the finished clone was moved in, leaving nothing else there.
+    let beside: Vec<_> = std::fs::read_dir(dest.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(beside, ["app"]);
+    // A retry whose answer was lost returns the same entry rather than failing on the folder.
+    let again = client.call::<RepoClone>(params).await.unwrap().repo;
+    assert_eq!(again.id, repo.id);
+    let remote = client
+        .call::<RepoRemote>(RepoRemoteParams { repo: repo.id })
+        .await
+        .unwrap();
+    assert_eq!(remote.url, Some(url));
+
+    // Another repository's folder isn't cloned over.
+    let other = client
+        .call::<RepoClone>(RepoCloneParams {
+            id: RepoId::generate(),
+            url: "file:///elsewhere/other".to_owned(),
+            path: dest.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(other.code, INVALID_PARAMS, "{other:?}");
+
+    // A clone git can't make fails with git's reason and leaves nothing behind.
+    let missing = host.work.path().join("clones/missing");
+    let error = client
+        .call::<RepoClone>(RepoCloneParams {
+            id: RepoId::generate(),
+            url: format!("file://{}", host.work.path().join("nowhere").display()),
+            path: missing.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&error), ErrorKind::CloneFailed, "{error:?}");
+    assert!(
+        error
+            .message
+            .contains("does not appear to be a git repository"),
+        "{error:?}"
+    );
+    assert!(!missing.exists());
+    let left: Vec<_> = std::fs::read_dir(host.work.path().join("clones"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(left, ["nested"], "no clone folder is left behind");
 }
 
 #[tokio::test]
