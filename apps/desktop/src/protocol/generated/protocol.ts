@@ -872,7 +872,8 @@ export type ParallaxRequests = {
 	"bundle/write": { params: BundleWriteParams, result: BundleOkResult },
 	/**
 	 * `bundle/apply`: checks a written bundle and fetches it into `refs/parallax-sync/<run
-	 * id>`. Fails with `bundleFailed` when its hash, its tip, or `git bundle verify` fails.
+	 * id>`. Fails with `bundleMissingCommits` when the repository lacks a commit it needs,
+	 * and `bundleFailed` when its hash, its tip, or `git bundle verify` fails.
 	 */
 	"bundle/apply": { params: BundleApplyParams, result: BundleOkResult },
 	/**
@@ -9891,7 +9892,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "areaNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "areaNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

@@ -310,17 +310,19 @@ impl Plxd {
     /// Reads run `run`'s branch from this plxd into a bundle file at `path`, leaving out the
     /// history of `exclude`'s commits (0057): `bundle/prepare`, then `bundle/read` 1 MiB at a
     /// time, then `bundle/drop`, and the file's SHA-256 checked. Returns the tip the bundle holds,
-    /// or `None` when `exclude` already has the branch's tip and nothing was written.
+    /// or `None` when `exclude` already has the branch's tip and nothing was written. A bundle
+    /// over `max_bytes`, this plxd's own cap, is refused before any of it is read.
     ///
     /// # Errors
     ///
-    /// plxd's error message, such as for a bundle over 64 MiB, why the connection failed, or a
-    /// bundle whose bytes don't match its SHA-256.
+    /// plxd's error message, such as for a bundle over its cap, a bundle over `max_bytes`, why
+    /// the connection failed, or a bundle whose bytes don't match its SHA-256.
     pub async fn receive_bundle(
         &self,
         run: RunId,
         exclude: Vec<String>,
         path: &Path,
+        max_bytes: u64,
     ) -> Result<Option<String>, String> {
         let prepared = self
             .call::<BundlePrepare>(BundlePrepareParams { run, exclude })
@@ -329,21 +331,26 @@ impl Plxd {
             return Ok(None);
         };
         let read = async {
+            if bundle.size > max_bytes {
+                return Err(crate::methods::bundle::too_large(bundle.size, max_bytes));
+            }
             let mut bytes = Vec::new();
             while (bytes.len() as u64) < bundle.size {
                 let offset = bytes.len() as u64;
+                let length = CHUNK_BYTES.min(bundle.size - offset);
                 let chunk = self
                     .call::<BundleRead>(BundleReadParams {
                         id: bundle.id,
                         offset,
-                        length: CHUNK_BYTES.min(bundle.size - offset),
+                        length,
                     })
                     .await?;
                 let chunk = images::decode(&chunk.data)
                     .ok_or_else(|| "plxd sent a chunk that isn't base64".to_owned())?;
-                if chunk.is_empty() {
+                if chunk.is_empty() || chunk.len() as u64 > length {
                     return Err(format!(
-                        "the bundle ended at {offset} of its {} bytes",
+                        "plxd sent {} bytes at {offset} of the bundle's {}, where {length} were asked for",
+                        chunk.len(),
                         bundle.size
                     ));
                 }

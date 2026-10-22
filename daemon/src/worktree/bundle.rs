@@ -9,6 +9,8 @@
 use std::path::Path;
 use std::time::Duration;
 
+use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, BufReader};
+
 use super::{WorktreeError, WorktreeManager, describe_failure};
 
 /// How long creating or unbundling a bundle may take: up to 64 MiB of objects.
@@ -62,14 +64,15 @@ impl WorktreeManager {
         })
     }
 
-    /// Checks the bundle at `file` with `git bundle verify`, so a repository lacking a commit it
-    /// needs refuses it, checks that its one ref points at `tip`, a commit, and adds its objects
-    /// to `repo_path`'s repository with `target`, a full ref name, pointing at `tip`. `target` is
-    /// the only ref written.
+    /// Checks that `repo_path`'s repository has every commit the bundle at `file` needs, then the
+    /// bundle with `git bundle verify`, and that its one ref points at `tip`, a commit, and adds
+    /// its objects to the repository with `target`, a full ref name, pointing at `tip`. `target`
+    /// is the only ref written.
     ///
     /// # Errors
     ///
-    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::BadBundle`] when verifying fails or the
+    /// [`WorktreeError::NotAGitRepo`], [`WorktreeError::MissingCommits`] when the repository
+    /// lacks a commit the bundle needs, [`WorktreeError::BadBundle`] when verifying fails or the
     /// bundle holds anything but one ref at `tip`, or another git failure.
     pub async fn apply_bundle(
         &self,
@@ -80,6 +83,18 @@ impl WorktreeManager {
     ) -> Result<(), WorktreeError> {
         let repo_root = self.repo_root(repo_path).await?;
         let file_arg = file.to_string_lossy();
+        // Read from the header, so a missing commit is told apart without git's localized text.
+        let mut missing = Vec::new();
+        for commit in prerequisites(file).await? {
+            let object = format!("{commit}^{{commit}}");
+            let args = ["cat-file", "-e", &object];
+            if !self.run_git(&repo_root, &args).await?.success() {
+                missing.push(commit);
+            }
+        }
+        if !missing.is_empty() {
+            return Err(WorktreeError::MissingCommits(missing));
+        }
         let verified = self
             .run_git(&repo_root, &["bundle", "verify", &file_arg])
             .await?;
@@ -124,5 +139,44 @@ impl WorktreeManager {
                 tips.len()
             ))),
         }
+    }
+}
+
+/// The most header a bundle may have: its prerequisite and ref lines, about 80 bytes each.
+const MAX_HEADER_BYTES: u64 = 1024 * 1024;
+
+/// The commits the bundle at `file` needs a repository to have: the `-<object id>` lines of its
+/// header, which ends at the first empty line.
+async fn prerequisites(file: &Path) -> Result<Vec<String>, WorktreeError> {
+    let io = |source| WorktreeError::Io {
+        path: file.to_owned(),
+        source,
+    };
+    let opened = tokio::fs::File::open(file).await.map_err(io)?;
+    let mut header = BufReader::new(opened.take(MAX_HEADER_BYTES));
+    let mut commits = Vec::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        header.read_until(b'\n', &mut line).await.map_err(io)?;
+        let Some(text) = line.strip_suffix(b"\n") else {
+            return Err(WorktreeError::BadBundle(
+                "the bundle's header doesn't end".to_owned(),
+            ));
+        };
+        if text.is_empty() {
+            return Ok(commits);
+        }
+        let Some(rest) = text.strip_prefix(b"-") else {
+            continue;
+        };
+        let commit = rest.split(|&b| b == b' ').next().unwrap_or_default();
+        let hex = commit.iter().all(u8::is_ascii_hexdigit);
+        if !hex || !matches!(commit.len(), 40 | 64) {
+            return Err(WorktreeError::BadBundle(
+                "the bundle names a prerequisite that isn't an object id".to_owned(),
+            ));
+        }
+        commits.push(String::from_utf8_lossy(commit).to_ascii_lowercase());
     }
 }

@@ -143,9 +143,13 @@ pub enum ErrorKind {
     /// Nothing was kept.
     BundleTooLarge,
     /// A `bundle/*` call failed (0057): the bundle is gone or expired, its SHA-256 or tip isn't
-    /// what was promised, or `git bundle verify` failed, as when the repository lacks commits it
-    /// needs. The message says which. The repository's refs didn't change.
+    /// what was promised, or `git bundle verify` failed. The message says which. The
+    /// repository's refs didn't change.
     BundleFailed,
+    /// `bundle/apply` refused a bundle that needs commits the run's repository doesn't have
+    /// (0057). The message names them. Fetching the repository there gets them. The
+    /// repository's refs didn't change.
+    BundleMissingCommits,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -265,6 +269,7 @@ mod tests {
             (ErrorKind::RunBusy, "runBusy"),
             (ErrorKind::BundleTooLarge, "bundleTooLarge"),
             (ErrorKind::BundleFailed, "bundleFailed"),
+            (ErrorKind::BundleMissingCommits, "bundleMissingCommits"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

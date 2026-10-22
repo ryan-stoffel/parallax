@@ -316,6 +316,9 @@ pub enum WorktreeError {
     /// A bundle doesn't hold what its sender said (0057): one ref, at the commit given.
     #[error("{0}")]
     BadBundle(String),
+    /// The repository lacks these commits, which a bundle needs to apply (0057).
+    #[error("the repository is missing commits the bundle needs: {}", .0.join(", "))]
+    MissingCommits(Vec<String>),
     /// A filesystem operation other than running git failed.
     #[error("could not use {}: {source}", .path.display())]
     Io {

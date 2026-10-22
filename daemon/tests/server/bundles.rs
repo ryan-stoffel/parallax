@@ -4,13 +4,13 @@
 
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::jsonrpc::INVALID_PARAMS;
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::methods::{
     AgentStart, BundleApply, BundleBegin, BundlePrepare, BundleRead, BundleWrite, GitStartMerge,
 };
 use parallax_protocol::{
-    AgentStatus, BundleApplyParams, BundleBeginParams, BundlePrepareParams, BundleReadParams,
-    BundleWriteParams, ErrorKind, GitStartMergeParams, RunId,
+    AgentStatus, BundleApplyParams, BundleBeginParams, BundleId, BundlePrepareParams,
+    BundleReadParams, BundleWriteParams, ErrorKind, GitStartMergeParams, RunId,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, Launcher};
@@ -26,6 +26,12 @@ use crate::agents::{
 use crate::support::{InProcess, kind, temp_dir};
 
 const MIB: u64 = 1024 * 1024;
+
+/// The cap plxd gives a bundle.
+const CAP: u64 = 64 * MIB;
+
+/// How much the chunk test reads at a time, so a small bundle spans several chunks.
+const CHUNK: u64 = 4096;
 
 /// A device with a Project child that ran `steps`, and the child's run id, repository, and
 /// worktree, once it is `status`.
@@ -121,7 +127,7 @@ async fn commits_cross_both_ways_and_start_a_merge() {
     let child = commit(&device.worktree, "child.txt", b"child\n");
     let file = work.path().join("child.bundle");
     let tip = peer
-        .receive_bundle(device.run, vec![base.clone()], &file)
+        .receive_bundle(device.run, vec![base.clone()], &file, CAP)
         .await
         .unwrap();
     assert_eq!(tip.as_deref(), Some(child.as_str()));
@@ -133,7 +139,7 @@ async fn commits_cross_both_ways_and_start_a_merge() {
     assert_eq!(git(&home_repo, &["rev-parse", &remote]), child);
     // Nothing new since.
     assert_eq!(
-        peer.receive_bundle(device.run, vec![child.clone()], &file)
+        peer.receive_bundle(device.run, vec![child.clone()], &file, CAP)
             .await
             .unwrap(),
         None
@@ -170,64 +176,80 @@ async fn commits_cross_both_ways_and_start_a_merge() {
     device.host.server.stop().await;
 }
 
+/// `bundle/begin` with `bytes`' size and `sha256`, one `bundle/write` of them, and
+/// `bundle/apply`'s error for `tip`, with the bundle's id.
+async fn refused(
+    device: &mut Device,
+    bytes: &[u8],
+    sha256: String,
+    tip: String,
+) -> (BundleId, ErrorObject) {
+    let client = &mut device.client;
+    let id = client
+        .call::<BundleBegin>(BundleBeginParams {
+            run: device.run,
+            size: bytes.len() as u64,
+            sha256,
+        })
+        .await
+        .unwrap()
+        .id;
+    let data = data_encoding::BASE64.encode(bytes);
+    let write = BundleWriteParams {
+        id,
+        offset: 0,
+        data,
+    };
+    client.call::<BundleWrite>(write).await.unwrap();
+    let error = client
+        .call::<BundleApply>(BundleApplyParams { id, tip })
+        .await
+        .unwrap_err();
+    (id, error)
+}
+
+/// The bytes of a bundle of home's `main` without `exclude`'s history.
+async fn home_bundle(home_git: &WorktreeManager, home_repo: &Path, exclude: String) -> Vec<u8> {
+    let file = home_repo.with_extension("bundle");
+    home_git
+        .create_bundle(home_repo, "refs/heads/main", &[exclude], &file)
+        .await
+        .unwrap();
+    std::fs::read(&file).unwrap()
+}
+
 #[tokio::test]
-async fn a_bundle_is_refused_for_missing_commits_a_wrong_hash_or_a_wrong_tip() {
+async fn a_bundle_needing_commits_the_device_lacks_is_refused_as_missing_commits() {
     let mut device = device(finishing(), AgentStatus::Completed).await;
     let work = TempDir::new().unwrap();
     let (home_repo, home_git) = home(work.path(), &device.repo);
-    let peer = peer(&device);
-    let sync = format!("refs/parallax-sync/{}", device.run);
-    let base = git(&home_repo, &["rev-parse", "HEAD"]);
-
-    // Its prerequisite is a commit the device never got.
     let first = commit(&home_repo, "one.txt", b"one\n");
     let second = commit(&home_repo, "two.txt", b"two\n");
-    let file = work.path().join("two.bundle");
-    home_git
-        .create_bundle(&home_repo, "refs/heads/main", &[first], &file)
-        .await
-        .unwrap();
-    let missing = peer
-        .send_bundle(device.run, &file, &second)
-        .await
-        .unwrap_err();
-    assert!(
-        missing.contains("lacks these prerequisite commits"),
-        "{missing}"
-    );
+
+    // Its prerequisite is a commit the device never got.
+    let bytes = home_bundle(&home_git, &home_repo, first.clone()).await;
+    let (_, error) = refused(&mut device, &bytes, sha256(&bytes), second).await;
+    assert_eq!(kind(&error), ErrorKind::BundleMissingCommits);
+    assert!(error.message.contains(&first), "{}", error.message);
+    device.host.server.stop().await;
+}
+
+#[tokio::test]
+async fn a_bundle_is_refused_for_a_wrong_hash_or_a_wrong_tip() {
+    let mut device = device(finishing(), AgentStatus::Completed).await;
+    let work = TempDir::new().unwrap();
+    let (home_repo, home_git) = home(work.path(), &device.repo);
+    let sync = format!("refs/parallax-sync/{}", device.run);
+    let base = git(&home_repo, &["rev-parse", "HEAD"]);
+    let second = commit(&home_repo, "two.txt", b"two\n");
 
     // A bundle the device could take, under another hash, then with another tip.
-    home_git
-        .create_bundle(&home_repo, "refs/heads/main", &[base], &file)
-        .await
-        .unwrap();
-    let bytes = std::fs::read(&file).unwrap();
+    let bytes = home_bundle(&home_git, &home_repo, base).await;
     for (sha256, tip, says) in [
         (sha256(b"other"), second.clone(), "SHA-256"),
         (sha256(&bytes), "0".repeat(40), "not 0000"),
     ] {
-        let id = device
-            .client
-            .call::<BundleBegin>(BundleBeginParams {
-                run: device.run,
-                size: bytes.len() as u64,
-                sha256,
-            })
-            .await
-            .unwrap()
-            .id;
-        let data = data_encoding::BASE64.encode(&bytes);
-        let write = BundleWriteParams {
-            id,
-            offset: 0,
-            data,
-        };
-        device.client.call::<BundleWrite>(write).await.unwrap();
-        let error = device
-            .client
-            .call::<BundleApply>(BundleApplyParams { id, tip })
-            .await
-            .unwrap_err();
+        let (id, error) = refused(&mut device, &bytes, sha256, tip).await;
         assert_eq!(kind(&error), ErrorKind::BundleFailed);
         assert!(error.message.contains(says), "{}", error.message);
         // Applied or not, it's gone.
@@ -253,12 +275,12 @@ async fn a_bundle_is_refused_for_missing_commits_a_wrong_hash_or_a_wrong_tip() {
 }
 
 #[tokio::test]
-async fn chunks_split_at_one_mib_and_the_tip_stays_pinned() {
+async fn chunks_split_anywhere_up_to_one_mib_and_the_tip_stays_pinned() {
     let mut device = device(finishing(), AgentStatus::Completed).await;
     let work = TempDir::new().unwrap();
     let (home_repo, home_git) = home(work.path(), &device.repo);
     let base = git(&home_repo, &["rev-parse", "HEAD"]);
-    let pinned = commit(&device.worktree, "noise.bin", &noise(MIB + MIB / 2));
+    let pinned = commit(&device.worktree, "noise.bin", &noise(3 * CHUNK));
 
     let prepared = device
         .client
@@ -270,7 +292,7 @@ async fn chunks_split_at_one_mib_and_the_tip_stays_pinned() {
         .unwrap();
     assert_eq!(prepared.tip, pinned);
     let bundle = prepared.bundle.unwrap();
-    assert!(bundle.size > MIB, "{}", bundle.size);
+    assert!(bundle.size > 2 * CHUNK, "{}", bundle.size);
     let read = |offset: u64, length: u64| BundleReadParams {
         id: bundle.id,
         offset,
@@ -284,14 +306,14 @@ async fn chunks_split_at_one_mib_and_the_tip_stays_pinned() {
     assert_eq!(too_long.code, INVALID_PARAMS);
 
     let mut bytes = Vec::new();
-    for offset in [0, MIB] {
+    for offset in (0..bundle.size).step_by(usize::try_from(CHUNK).unwrap()) {
         let chunk = device
             .client
-            .call::<BundleRead>(read(offset, MIB))
+            .call::<BundleRead>(read(offset, CHUNK))
             .await
             .unwrap();
         bytes.extend(data_encoding::BASE64.decode(chunk.data.as_bytes()).unwrap());
-        assert_eq!(bytes.len() as u64, (offset + MIB).min(bundle.size));
+        assert_eq!(bytes.len() as u64, (offset + CHUNK).min(bundle.size));
         // The branch moves between chunks.
         commit(&device.worktree, &format!("more-{offset}.txt"), b"more\n");
     }
@@ -321,10 +343,23 @@ async fn a_bundle_over_the_cap_is_refused_and_not_kept() {
     let dir = temp_dir();
     let mut config = InProcess::config(dir.path());
     config.backends = Some(fake(vec![init("s"), end_turn("Done.")]));
-    config.max_bundle_bytes = 64;
+    config.max_bundle_bytes = 2048;
     let server = InProcess::start(config);
     let mut device = device(Host { dir, server }, AgentStatus::Completed).await;
     let base = git(&device.repo, &["rev-parse", "HEAD"]);
+    let bundles = device.host.dir.path().join("tmp").join("bundles");
+
+    // Under the device's cap but over the home's, so the home refuses it and drops it there.
+    commit(&device.worktree, "small.txt", b"small\n");
+    let file = device.host.dir.path().join("small.bundle");
+    let home = peer(&device)
+        .receive_bundle(device.run, vec![base.clone()], &file, 64)
+        .await
+        .unwrap_err();
+    assert!(home.contains("over the"), "{home}");
+    assert!(!file.exists());
+    assert_eq!(std::fs::read_dir(&bundles).unwrap().count(), 0);
+
     commit(&device.worktree, "big.txt", &noise(4096));
 
     let prepare = device
@@ -340,13 +375,12 @@ async fn a_bundle_over_the_cap_is_refused_and_not_kept() {
         .client
         .call::<BundleBegin>(BundleBeginParams {
             run: device.run,
-            size: 65,
+            size: 2049,
             sha256: sha256(b""),
         })
         .await
         .unwrap_err();
     assert_eq!(kind(&begin), ErrorKind::BundleTooLarge);
-    let bundles = device.host.dir.path().join("tmp").join("bundles");
     assert_eq!(std::fs::read_dir(bundles).unwrap().count(), 0);
     device.host.server.stop().await;
 }

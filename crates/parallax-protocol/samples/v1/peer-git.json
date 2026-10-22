@@ -121,6 +121,24 @@
   },
   {
     "jsonrpc": "2.0",
+    "id": 11,
+    "method": "bundle/apply",
+    "params": {
+      "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e13",
+      "tip": "8f2e4c1a9b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "error": {
+      "code": -32000,
+      "message": "the repository is missing commits the bundle needs: 3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+      "data": { "kind": "bundleMissingCommits" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": 8,
     "method": "git/startMerge",
     "params": {

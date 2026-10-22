@@ -101,13 +101,7 @@ impl Bundles {
     }
 
     fn too_large(&self, size: u64) -> ErrorObject {
-        ErrorObject::parallax(
-            ErrorKind::BundleTooLarge,
-            format!(
-                "The commits are {size} bytes as a bundle, over the {} MiB limit.",
-                self.max_bytes / 1024 / 1024
-            ),
-        )
+        ErrorObject::parallax(ErrorKind::BundleTooLarge, too_large(size, self.max_bytes))
     }
 
     /// Removes bundle `id` and its file.
@@ -116,6 +110,14 @@ impl Bundles {
             let _ = std::fs::remove_file(&bundle.path);
         }
     }
+}
+
+/// `bundleTooLarge`'s message, which the home plxd also gives a bundle over its own cap.
+pub(crate) fn too_large(size: u64, max_bytes: u64) -> String {
+    format!(
+        "The commits are {size} bytes as a bundle, over the {} MiB limit.",
+        max_bytes / 1024 / 1024
+    )
 }
 
 fn bundle_failed(message: impl Into<String>) -> ErrorObject {
@@ -406,7 +408,12 @@ async fn apply_file(
         .worktrees()
         .apply_bundle(row.repo_path.as_ref(), &bundle.path, &target, tip)
         .await
-        .map_err(|error| bundle_failed(error.to_string()))
+        .map_err(|error| match error {
+            WorktreeError::MissingCommits(_) => {
+                ErrorObject::parallax(ErrorKind::BundleMissingCommits, error.to_string())
+            }
+            error => bundle_failed(error.to_string()),
+        })
 }
 
 /// `git/startMerge`: starts merging `tip` into run `run`'s worktree, unless the run is working.

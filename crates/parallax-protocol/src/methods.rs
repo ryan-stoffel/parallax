@@ -677,7 +677,8 @@ method_table! {
         /// `bundle/write`: appends a chunk to a bundle `bundle/begin` opened.
         BundleWrite = "bundle/write": BundleWriteParams => BundleOkResult;
         /// `bundle/apply`: checks a written bundle and fetches it into `refs/parallax-sync/<run
-        /// id>`. Fails with `bundleFailed` when its hash, its tip, or `git bundle verify` fails.
+        /// id>`. Fails with `bundleMissingCommits` when the repository lacks a commit it needs,
+        /// and `bundleFailed` when its hash, its tip, or `git bundle verify` fails.
         BundleApply = "bundle/apply": BundleApplyParams => BundleOkResult;
         /// `git/startMerge`: starts a conflict merge in a run's worktree. Fails with `runBusy`
         /// while the run is starting or running.
