@@ -21,6 +21,10 @@ test("a log day is Today, Yesterday, or its date", () => {
   expect(dayLabel(Date.parse("2026-10-22T08:00:00"), now)).toBe("Today");
   expect(dayLabel(Date.parse("2026-10-21T23:59:00"), now)).toBe("Yesterday");
   expect(dayLabel(Date.parse("2026-10-20T12:00:00"), now)).toMatch(/Oct 20/);
+  // A daylight-saving day's 25 hours still make one Yesterday, whatever the zone.
+  const sunday = Date.parse("2026-11-02T10:00:00");
+  expect(dayLabel(Date.parse("2026-11-01T00:30:00"), sunday)).toBe("Yesterday");
+  expect(dayLabel(Date.parse("2026-10-31T23:30:00"), sunday)).toMatch(/Oct 31/);
 });
 
 test("a title loses its Conventional Commit prefix, and keeps anything else", () => {

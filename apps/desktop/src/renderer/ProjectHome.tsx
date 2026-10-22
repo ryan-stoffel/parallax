@@ -136,9 +136,13 @@ function daysOf(rows: readonly Row[]): { label: string; rows: Row[] }[] {
 
 /** Today, Yesterday, or the date, such as "Mon, Oct 20", of `at`. */
 export function dayLabel(at: number, now = Date.now()): string {
-  const start = new Date(now).setHours(0, 0, 0, 0);
-  if (at >= start) return "Today";
-  if (at >= start - dayMs) return "Yesterday";
+  // Local midnights, by the calendar, so a daylight-saving day's 23 or 25 hours still count.
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  if (at >= today.getTime()) return "Today";
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  if (at >= yesterday.getTime()) return "Yesterday";
   return new Date(at).toLocaleDateString(locale(), {
     weekday: "short",
     month: "short",
@@ -159,8 +163,9 @@ export const plainTitle = (title: string) =>
   )?.[1] ?? title;
 
 /**
- * Each child of `project` once, newest first, with its group on the Project tab: Waiting on you
- * (a question, an approval, or an unread failure), Working, Done (unread news), or Resolved.
+ * Each child of `project` once, newest first, with its group: waiting on the user (a question, an
+ * approval, or an unread failure) or working, which the Project tab shows in Now; or finished,
+ * ready while its news is unread and resolved once read, which it shows in the log.
  */
 function rowsOf(
   project: Project,
@@ -255,6 +260,7 @@ function LiveRow({
           <span data-title className="truncate text-[13.5px] leading-5 text-foreground">
             {plainTitle(row.title)}
           </span>
+          <span className="sr-only">{waiting ? (failed ? "Failed" : "Needs you") : "Working"}</span>
           {said && (
             <span className="line-clamp-2 text-[12px] leading-snug text-faint-foreground">
               {said}
@@ -263,6 +269,7 @@ function LiveRow({
         </span>
         <span className="relative shrink-0 pt-0.5 text-[11px]">
           <span
+            aria-hidden
             className={`transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0 ${waiting ? (failed ? "text-danger" : "text-warning") : "font-mono text-faint-foreground tabular-nums"}`}
           >
             {waiting
