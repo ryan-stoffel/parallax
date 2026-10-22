@@ -3,6 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
 import { CloneDialog } from "./AddDialog";
+import { CloneProgress } from "./CloneProgress";
 import { TranscriptView } from "./AgentChat";
 import type { CloneAsk } from "./clone";
 import { Composer, tabItem } from "./Composer";
@@ -298,6 +299,9 @@ export function NewThread({
     background: boolean,
   ): Promise<string | undefined> => {
     if (moving || asking) {
+      // One held send at a time: a second, as after Cmd/Ctrl+Enter, goes back in the box.
+      if (held)
+        return `Waiting for ${group.name} to be ready on ${hostName((moving ?? asking)!.hostId)}`;
       if (!background) setStarting({ prompt, images, threads });
       opening.current = !background;
       return new Promise((done) =>
@@ -382,6 +386,18 @@ export function NewThread({
     else setArriving(result?.id);
   };
   const hostName = (id: string) => hosts.find((h) => h.id === id)?.name ?? "that computer";
+  // The move under way, as a card: above the box until a send, then in the thread it starts.
+  const moveCard = moving && (
+    <CloneProgress
+      title={
+        moving.progress === undefined
+          ? `Adding ${group.name} on ${hostName(moving.hostId)}…`
+          : `Cloning ${group.name} on ${hostName(moving.hostId)}`
+      }
+      line={moving.progress}
+      cloning={moving.progress !== undefined}
+    />
+  );
   // A held send goes once the move is over, from this render's props: the new computer's.
   useEffect(() => {
     if (!held || moving || asking) return;
@@ -431,6 +447,9 @@ export function NewThread({
             ]}
             sent={new Map()}
             live={false}
+            // Nothing works on it until the clone is done: the card says what's going.
+            stalled={!!moveCard}
+            end={moveCard && <div className="mt-3">{moveCard}</div>}
           />
         </ThreadLinksContext>
       )}
@@ -568,6 +587,7 @@ export function NewThread({
             />
           </>
         )}
+        {starting === undefined && moveCard && <div className="mb-3">{moveCard}</div>}
         <Composer
           newThread
           initial={draft}
@@ -638,19 +658,6 @@ export function NewThread({
           }
           footer={
             <div>
-              {moving && (
-                <p
-                  role="status"
-                  className="flex items-center gap-1.5 px-2 pt-1.5 text-[12.5px] text-muted-foreground"
-                >
-                  <LoaderCircle aria-hidden className="size-3.5 shrink-0 animate-spin" />
-                  <span className="truncate">
-                    {moving.progress === undefined
-                      ? `Adding ${group.name} on ${hostName(moving.hostId)}…`
-                      : `Cloning ${group.name} on ${hostName(moving.hostId)}${moving.progress ? ` · ${moving.progress}` : "…"}`}
-                  </span>
-                </p>
-              )}
               {asking && (
                 <CloneDialog
                   hostId={asking.hostId}

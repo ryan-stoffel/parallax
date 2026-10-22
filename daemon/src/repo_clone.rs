@@ -55,12 +55,9 @@ pub(crate) async fn clone(
         )
         .await
     };
+    // A retry after the answer was lost finds its own clone there.
     if dest.symlink_metadata().is_ok() {
-        // A retry after the answer was lost finds its own clone there.
-        let same = origin(&daemon, &dest)
-            .await
-            .is_some_and(|origin| repo_key(&origin) == repo_key(&url));
-        return if same {
+        return if same_repo(&daemon, &dest, &url).await {
             register(daemon).await
         } else {
             Err(ErrorObject::invalid_params(format!(
@@ -68,26 +65,63 @@ pub(crate) async fn clone(
             )))
         };
     }
+    let (Some(parent), Some(name)) = (dest.parent(), dest.file_name()) else {
+        return Err(ErrorObject::invalid_params(format!(
+            "{path} has no folder to go in"
+        )));
+    };
+    std::fs::create_dir_all(parent).map_err(|error| {
+        ErrorObject::invalid_params(format!("Can't create {}: {error}", parent.display()))
+    })?;
     let Some(_progress) = Progress::start(id) else {
         return Err(ErrorObject::invalid_params(format!(
             "{path} is being cloned already"
         )));
     };
+    // git writes HEAD and the origin before it fetches anything, so it clones into a folder of
+    // this clone's own beside the path, and only a finished clone is renamed into the path. Only
+    // that folder is ever removed.
+    // ponytail: plxd stopped mid-clone leaves the hidden folder behind; sweep `.*.cloning-*` if
+    // they pile up.
+    let staging = parent.join(format!(".{}.cloning-{id}", name.to_string_lossy()));
     let mut reason = String::new();
     for candidate in std::iter::once(url.clone()).chain(https_fallback(&url)) {
-        match run(&daemon, id, &candidate, &dest).await {
-            Ok(()) => {
-                info!(repo = %id, path = %dest.display(), "cloned a repository");
-                return register(daemon).await;
-            }
-            Err(error) => reason = error,
+        let cloned = run(&daemon, id, &candidate, &staging).await;
+        if let Err(error) = cloned {
+            reason = error;
+            let _ = std::fs::remove_dir_all(&staging);
+            continue;
         }
-        // git removes a folder it made when it fails, but not when it's killed.
+        info!(repo = %id, path = %dest.display(), "cloned a repository");
+        // Another clone of the same path, such as one started by picking the computer again,
+        // may have finished first.
         if dest.symlink_metadata().is_ok() {
-            let _ = std::fs::remove_dir_all(&dest);
+            let _ = std::fs::remove_dir_all(&staging);
+            return if same_repo(&daemon, &dest, &url).await {
+                register(daemon).await
+            } else {
+                Err(ErrorObject::invalid_params(format!(
+                    "{path} already exists"
+                )))
+            };
         }
+        if let Err(error) = std::fs::rename(&staging, &dest) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(ErrorObject::parallax(
+                ErrorKind::CloneFailed,
+                format!("Can't move the clone into {path}: {error}"),
+            ));
+        }
+        return register(daemon).await;
     }
     Err(ErrorObject::parallax(ErrorKind::CloneFailed, reason))
+}
+
+/// Whether `dest` is a clone of the repository `url` names.
+async fn same_repo(daemon: &Daemon, dest: &Path, url: &str) -> bool {
+    origin(daemon, dest)
+        .await
+        .is_some_and(|origin| repo_key(&origin) == repo_key(url))
 }
 
 /// `repo/cloneProgress`: git's latest progress line for clone `id`, while it runs.

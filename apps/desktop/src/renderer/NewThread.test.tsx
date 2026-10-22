@@ -953,9 +953,13 @@ test("A computer without the repository clones its origin at the same path, and 
       path: parallax.path,
     },
   ]);
-  expect(status()).toBe("Cloning parallax on mac mini…");
+  expect(status()).toBe("Cloning parallax on mac miniConnecting…");
   await send("Fix it");
   expect(calls("thread/start")).toEqual([]);
+  // The clone shows in the thread it's starting, under the prompt, not under the box.
+  expect(document.querySelector('main [role="log"] [role="status"]')?.textContent).toContain(
+    "Cloning parallax on mac mini",
+  );
   await act(async () => finish());
   await settle();
   expect(request).toHaveBeenCalledWith(

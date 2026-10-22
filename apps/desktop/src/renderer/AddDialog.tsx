@@ -23,6 +23,7 @@ import { flushSync } from "react-dom";
 import { githubSlug, isFolderName, type FolderListing } from "../preload/bridge";
 import type { Project, Repo } from "../protocol/generated/protocol";
 import { cloneOn, type CloneAsk } from "./clone";
+import { CloneProgress } from "./CloneProgress";
 import { describeError } from "./errors";
 import { localId, type Host } from "./hosts";
 
@@ -614,7 +615,11 @@ function FolderStep({
             ) : (
               <CloneSource name={clone.name} url={clone.url} />
             )}
-            {add.busy && progress && <Note>{progress}</Note>}
+            {add.busy && (
+              <div className="px-2.5 pt-1 pb-2">
+                <CloneProgress title={`Cloning ${clone.name}`} line={progress} />
+              </div>
+            )}
           </>
         )}
         <Heading>

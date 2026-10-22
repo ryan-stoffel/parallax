@@ -860,6 +860,12 @@ async fn a_clone_is_registered_and_a_retry_finds_it() {
     let repo = client.call::<RepoClone>(params.clone()).await.unwrap().repo;
     assert_eq!(Path::new(&repo.path), dest.canonicalize().unwrap());
     assert_eq!(git(&dest, &["log", "--format=%s"]), "init");
+    // git cloned beside it and the finished clone was moved in, leaving nothing else there.
+    let beside: Vec<_> = std::fs::read_dir(dest.parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(beside, ["app"]);
     // A retry whose answer was lost returns the same entry rather than failing on the folder.
     let again = client.call::<RepoClone>(params).await.unwrap().repo;
     assert_eq!(again.id, repo.id);
@@ -898,6 +904,11 @@ async fn a_clone_is_registered_and_a_retry_finds_it() {
         "{error:?}"
     );
     assert!(!missing.exists());
+    let left: Vec<_> = std::fs::read_dir(host.work.path().join("clones"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(left, ["nested"], "no clone folder is left behind");
 }
 
 #[tokio::test]

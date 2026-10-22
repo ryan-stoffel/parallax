@@ -69,7 +69,7 @@ export async function cloneOnto(
   const root = "result" in home ? home.result.path.replace(/[\\/]+$/, "") : undefined;
   const under =
     root !== undefined && /^[\\/]/.test(repo.path.slice(root.length)) && repo.path.startsWith(root)
-      ? repo.path.slice(root.length + 1)
+      ? repo.path.slice(root.length + 1).replaceAll("\\", "/")
       : undefined;
   return { url, name: repo.name, path: `~/${under || repo.name}` };
 }
