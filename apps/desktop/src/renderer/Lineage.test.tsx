@@ -359,17 +359,20 @@ test("a Project's children never show in the main sidebar, only in its own view 
   await click(
     document.querySelector('#sidebar [aria-label="Favorites"] button[aria-label="ember"]'),
   );
-  const titles = (group: string) =>
-    [...document.querySelectorAll(`#side-panel section[aria-label="${group}"] li > button`)].map(
-      (b) => b.querySelector("span span")?.textContent,
+  const titles = () =>
+    [...document.querySelectorAll("#side-panel li > button [data-title]")].map(
+      (t) => t.textContent,
     );
-  expect(titles("Working")).toEqual(["Check the links"]);
-  await click(document.querySelector('#side-panel section[aria-label="Resolved"] h3 button'));
-  expect(titles("Resolved")).toEqual(["Write the docs"]);
+  const now = document.querySelector('#side-panel section[aria-label="Now"]')!;
+  expect([...now.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual([
+    "Check the links",
+  ]);
+  expect(titles()).toEqual(["Check the links", "Write the docs"]);
   // With nothing reported, a finished child says Done, as a thread does.
-  expect(
-    document.querySelector('#side-panel section[aria-label="Resolved"] li > button')!.textContent,
-  ).toContain("Done");
+  const done = [...document.querySelectorAll("#side-panel li > button")].find(
+    (b) => b.querySelector("[data-title]")?.textContent === "Write the docs",
+  )!;
+  expect(done.textContent).toContain("Done");
 });
 
 test("without threadLineage, children aren't nested and there are no chips", async () => {

@@ -2015,3 +2015,21 @@ browser-action-list::part(badge) {
     transform: scale(0.97);
   }
 }
+
+/* The Project tab's pixels (ProjectHome.tsx): a working one lights in a wave, corner to corner. */
+.pixel-working rect {
+  animation: pixel-wave 1.2s ease-in-out infinite;
+  animation-delay: calc(var(--i) * 140ms);
+}
+@keyframes pixel-wave {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+:root.reduce-motion .pixel-working rect {
+  animation: none;
+}

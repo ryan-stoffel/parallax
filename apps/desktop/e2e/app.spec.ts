@@ -389,7 +389,8 @@ test("shows the project's tasks over its composer and on its Project tab, opens 
     "aria-current",
     "true",
   );
-  await expect(panel).toContainText("Nothing is waiting on you.");
+  // Nothing waits on the user.
+  await expect(panel.locator("header p").first()).toHaveText(/^(All quiet|\d+ agents? working)\./);
 
   const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
     result: { projects: { id: string; coordinator: string }[] };
@@ -407,7 +408,7 @@ test("shows the project's tasks over its composer and on its Project tab, opens 
   const bar = page.getByRole("region", { name: "Agents" });
   await expect(bar).toContainText("Write the changelog");
   await expect(bar).toContainText("1 working");
-  const working = panel.getByRole("region", { name: "Working" });
+  const working = panel.getByRole("region", { name: "Now" });
   await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
 
   // One the coordinator started, as `plxd mcp`'s spawn_agent does (0019): it arrives by event.
