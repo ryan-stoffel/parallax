@@ -937,13 +937,14 @@ function Viewer({
   // A phone is about 6% as thick as it is tall.
   const depth = chrome ? Math.max(chrome.width, chrome.height) * k * 0.058 : 0;
   const turn: Turn = { pitch: orbit.pitch, yaw: orbit.yaw, roll };
-  const turned = orbit.pitch !== 0 || orbit.yaw !== 0;
+  // Facing front after a whole turn is no turn.
+  const turned = orbit.pitch !== 0 || orbit.yaw % 360 !== 0;
 
   // An Android phone's model depends on its screen's shape, so it's chosen again if that changes.
   const pixelAspect = ios ? 0 : short / long;
   const modelUrl = ios ? appleModel(device.name) : pixelModel(device.name, pixelAspect);
   const ready = streaming && status.status === "streaming";
-  const load3d = !!modelUrl && (ready || duo);
+  const load3d = !!modelUrl && (streaming || duo);
   useEffect(() => {
     if (!load3d || !modelUrl || !gl || !canvas) return;
     let live = true;
@@ -980,7 +981,8 @@ function Viewer({
     if (gl) model.current?.resize(gl.clientWidth, gl.clientHeight, window.devicePixelRatio);
   }, [box, gl, modelShown]);
 
-  // The model stands in for the artwork once the stream is live: until then the artwork shows
+  // The model, loaded while the device streams, stands in for the artwork once the stream is
+  // live: until then the artwork shows
   // what the device is waiting on, and its buttons, such as Try again. Facing front, the two match,
   // so a drag starts on the model with no jump.
   const modelOn = !!modelShown && ready && (turned || dragging || duo);
@@ -1040,18 +1042,21 @@ function Viewer({
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; t: number }>(null);
   const glide = useRef(0);
   const pose = useRef(orbit);
+  // The device's size on screen and orientation as last drawn, for a glide that outlives a render.
+  const view = useRef({ across: 1, down: 1, roll });
+  useLayoutEffect(() => {
+    view.current = { across: Math.max(1, across * k), down: Math.max(1, down * k), roll };
+  });
   const turnBy = (dx: number, dy: number) => {
-    const across3d = Math.max(1, across * k);
-    const down3d = Math.max(1, down * k);
     const o = pose.current;
     turnTo3d({
-      yaw: o.yaw + (dx * 180) / across3d,
-      pitch: Math.max(-65, Math.min(65, o.pitch - (dy * 180) / down3d)),
+      yaw: o.yaw + (dx * 180) / view.current.across,
+      pitch: Math.max(-65, Math.min(65, o.pitch - (dy * 180) / view.current.down)),
     });
   };
   const turnTo3d = (next: { pitch: number; yaw: number }) => {
     pose.current = next;
-    model.current?.setPose(next.pitch, next.yaw, roll);
+    model.current?.setPose(next.pitch, next.yaw, view.current.roll);
     setOrbit(next);
   };
   // In the 3D model, a touch is wherever the pointer meets its screen. It ends where it last did,
@@ -1133,7 +1138,8 @@ function Viewer({
     };
     glide.current = requestAnimationFrame(step);
   };
-  // Turns the device to `to`.
+  // Turns the device to `to`. Facing front, at a whole number of turns, the flat artwork shows
+  // again, at that yaw, so it doesn't ease back around.
   const turnTo = (to: { pitch: number; yaw: number }) => {
     cancelAnimationFrame(glide.current);
     const from = orbit;
@@ -1141,13 +1147,15 @@ function Viewer({
     const step = () => {
       const t = Math.min(1, (performance.now() - start) / 450);
       const eased = 1 - (1 - t) ** 3;
-      turnTo3d({
-        pitch: from.pitch + (to.pitch - from.pitch) * eased,
-        yaw: from.yaw + (to.yaw - from.yaw) * eased,
-      });
-      // Facing front, it's at no turn: the flat artwork shows again.
+      turnTo3d(
+        t < 1
+          ? {
+              pitch: from.pitch + (to.pitch - from.pitch) * eased,
+              yaw: from.yaw + (to.yaw - from.yaw) * eased,
+            }
+          : to,
+      );
       if (t < 1) glide.current = requestAnimationFrame(step);
-      else if (to.pitch === 0 && to.yaw % 360 === 0) turnTo3d({ pitch: 0, yaw: 0 });
     };
     glide.current = requestAnimationFrame(step);
   };
@@ -1487,7 +1495,7 @@ function Viewer({
           )}
           {turned
             ? control("Face front", <Rotate3d />, faceFront, false)
-            : control("Turn in 3D", <Rotate3d />, () => turnTo({ pitch: 12, yaw: -32 }), false)}
+            : control("Turn in 3D", <Rotate3d />, () => turnTo({ pitch: 12, yaw: Math.round(orbit.yaw / 360) * 360 - 32 }), false)}
           {stopping && (
             <LoaderCircle
               aria-label="Powering off"
