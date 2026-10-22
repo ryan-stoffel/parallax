@@ -92,6 +92,11 @@ use crate::{
     UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
     UsageLimitsParams, UsageLimitsResult,
 };
+use crate::{
+    BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
+    BundlePrepareParams, BundlePrepareResult, BundleReadParams, BundleReadResult,
+    BundleWriteParams, GitStartMergeParams,
+};
 
 /// A method that is called with a request and answered with a response.
 pub trait RequestMethod {
@@ -658,6 +663,26 @@ method_table! {
         OrchestrationGetTurnDiff = "orchestration/getTurnDiff": TurnDiffParams => TurnDiffResult;
         /// `orchestration/getFullThreadDiff`: the diff from a thread's start to a checkpoint.
         OrchestrationGetFullThreadDiff = "orchestration/getFullThreadDiff": FullThreadDiffParams => TurnDiffResult;
+        /// `bundle/prepare`: bundles a run's branch, pinned to its tip, for the home plxd to read
+        /// (0057). Gated on the `peerGit` capability, like every `bundle/*` method and
+        /// `git/startMerge`. Fails with `bundleTooLarge` over 64 MiB.
+        BundlePrepare = "bundle/prepare": BundlePrepareParams => BundlePrepareResult;
+        /// `bundle/read`: a chunk of a bundle `bundle/prepare` made.
+        BundleRead = "bundle/read": BundleReadParams => BundleReadResult;
+        /// `bundle/drop`: removes a bundle file.
+        BundleDrop = "bundle/drop": BundleDropParams => BundleOkResult;
+        /// `bundle/begin`: opens a bundle file for the home plxd to write into a run's repository.
+        /// Fails with `bundleTooLarge` over 64 MiB.
+        BundleBegin = "bundle/begin": BundleBeginParams => BundleBeginResult;
+        /// `bundle/write`: appends a chunk to a bundle `bundle/begin` opened.
+        BundleWrite = "bundle/write": BundleWriteParams => BundleOkResult;
+        /// `bundle/apply`: checks a written bundle and fetches it into `refs/parallax-sync/<run
+        /// id>`. Fails with `bundleMissingCommits` when the repository lacks a commit it needs,
+        /// and `bundleFailed` when its hash, its tip, or `git bundle verify` fails.
+        BundleApply = "bundle/apply": BundleApplyParams => BundleOkResult;
+        /// `git/startMerge`: starts a conflict merge in a run's worktree. Fails with `runBusy`
+        /// while the run is starting or running.
+        GitStartMerge = "git/startMerge": GitStartMergeParams => BundleOkResult;
     }
     notifications {
         /// `$/cancelRequest`: cancels a request, which still gets exactly one response. Either
@@ -886,6 +911,13 @@ mod tests {
                 "orchestration/threadRuns",
                 "orchestration/getTurnDiff",
                 "orchestration/getFullThreadDiff",
+                "bundle/prepare",
+                "bundle/read",
+                "bundle/drop",
+                "bundle/begin",
+                "bundle/write",
+                "bundle/apply",
+                "git/startMerge",
                 "$/cancelRequest",
                 "events/event",
                 "events/resync",

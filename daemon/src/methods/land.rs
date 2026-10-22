@@ -776,7 +776,7 @@ async fn send_conflict(
 }
 
 /// Whether `run_id`'s CLI is starting or running, as the store has it now.
-async fn working(daemon: &Arc<Daemon>, run_id: RunId) -> Result<bool, ErrorObject> {
+pub(crate) async fn working(daemon: &Arc<Daemon>, run_id: RunId) -> Result<bool, ErrorObject> {
     daemon
         .store
         .run(&CancellationToken::new(), move |store| {

@@ -62,6 +62,7 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
         let recheck = count.is_multiple_of(RECHECK_EVERY);
         if recheck {
             crate::methods::host::sweep_uploads(&daemon).await;
+            daemon.bundles.sweep();
         }
         // The merge that woke this sweep may be of a pull request known closed, since reopened.
         if recheck || woken {

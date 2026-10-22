@@ -1,0 +1,172 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "bundle/prepare",
+    "params": {
+      "run": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e10",
+      "exclude": ["8f2e4c1a9b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "tip": "3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+      "bundle": {
+        "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e11",
+        "size": 1536,
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "bundle/read",
+    "params": { "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e11", "offset": 0, "length": 1536 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": { "data": "IyB2MiBnaXQgYnVuZGxlCg==" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "bundle/drop",
+    "params": { "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e11" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "bundle/prepare",
+    "params": { "run": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e10", "exclude": [] }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "error": {
+      "code": -32000,
+      "message": "The commits are 70254592 bytes as a bundle, over the 64 MiB limit.",
+      "data": { "kind": "bundleTooLarge" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "bundle/begin",
+    "params": {
+      "run": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e10",
+      "size": 16,
+      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": { "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e12" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "bundle/write",
+    "params": {
+      "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e12",
+      "offset": 0,
+      "data": "IyB2MiBnaXQgYnVuZGxlCg=="
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "bundle/apply",
+    "params": {
+      "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e12",
+      "tip": "8f2e4c1a9b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "method": "bundle/apply",
+    "params": {
+      "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e12",
+      "tip": "8f2e4c1a9b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 10,
+    "error": {
+      "code": -32000,
+      "message": "No bundle has id 01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e12: it expired or was dropped.",
+      "data": { "kind": "bundleFailed" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "method": "bundle/apply",
+    "params": {
+      "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e13",
+      "tip": "8f2e4c1a9b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 11,
+    "error": {
+      "code": -32000,
+      "message": "the repository is missing commits the bundle needs: 3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d",
+      "data": { "kind": "bundleMissingCommits" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "git/startMerge",
+    "params": {
+      "run": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e10",
+      "tip": "8f2e4c1a9b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "error": {
+      "code": -32000,
+      "message": "Run 01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e10 is working, so plxd won't start a merge in its worktree.",
+      "data": { "kind": "runBusy" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "method": "git/startMerge",
+    "params": {
+      "run": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e10",
+      "tip": "8f2e4c1a9b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 9,
+    "result": {}
+  }
+]

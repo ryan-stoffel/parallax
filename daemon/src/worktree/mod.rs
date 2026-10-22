@@ -20,7 +20,8 @@
 //! `folder` has the git calls a run's Git menu makes, in its worktree or checkout (PLX-298).
 //! `integration` keeps each Project's integration branch and its worktree (PLX-409, 0045),
 //! `coordinator` its coordinator's detached worktree at that branch's tip (PLX-397, 0042), and
-//! `landing` merges its children onto it (PLX-410).
+//! `landing` merges its children onto it (PLX-410). `bundle` makes and applies the bundles that
+//! move a run's commits between two plxds (0057).
 //!
 //! # Layout and naming
 //!
@@ -86,6 +87,7 @@
 //! repository's git folder — so this needs an unusual repository configuration to matter; #175
 //! tracks closing it.
 
+mod bundle;
 mod checkpoint;
 mod checks;
 mod coordinator;
@@ -101,6 +103,7 @@ mod tests;
 #[cfg(all(test, windows))]
 mod windows_tests;
 
+pub use bundle::Bundled;
 pub use checkpoint::{DiffFormat, parse_numstat_z};
 pub use checks::{CHECKS_TIMEOUT, Checked};
 pub use folder::RunFolder;
@@ -310,6 +313,12 @@ pub enum WorktreeError {
     /// git, or another program a worktree runs, could not be started.
     #[error(transparent)]
     Spawn(SpawnError),
+    /// A bundle doesn't hold what its sender said (0057): one ref, at the commit given.
+    #[error("{0}")]
+    BadBundle(String),
+    /// The repository lacks these commits, which a bundle needs to apply (0057).
+    #[error("the repository is missing commits the bundle needs: {}", .0.join(", "))]
+    MissingCommits(Vec<String>),
     /// A filesystem operation other than running git failed.
     #[error("could not use {}: {source}", .path.display())]
     Io {

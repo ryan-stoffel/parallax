@@ -136,6 +136,20 @@ pub enum ErrorKind {
     /// `repo/clone`'s git failed or stopped making progress (PLX-905). The message is git's
     /// reason, for people, such as a repository that doesn't exist or needs a sign-in.
     CloneFailed,
+    /// `git/startMerge` refused because the run is starting or running, so plxd won't change its
+    /// worktree under it (0057).
+    RunBusy,
+    /// A bundle would be over the 64 MiB cap of `bundle/prepare` or `bundle/begin` (0057).
+    /// Nothing was kept.
+    BundleTooLarge,
+    /// A `bundle/*` call failed (0057): the bundle is gone or expired, its SHA-256 or tip isn't
+    /// what was promised, or `git bundle verify` failed. The message says which. The
+    /// repository's refs didn't change.
+    BundleFailed,
+    /// `bundle/apply` refused a bundle that needs commits the run's repository doesn't have
+    /// (0057). The message names them. Fetching the repository there gets them. The
+    /// repository's refs didn't change.
+    BundleMissingCommits,
     /// A kind this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -252,6 +266,10 @@ mod tests {
             (ErrorKind::GithubSetupFailed, "githubSetupFailed"),
             (ErrorKind::HostUpdateFailed, "hostUpdateFailed"),
             (ErrorKind::CloneFailed, "cloneFailed"),
+            (ErrorKind::RunBusy, "runBusy"),
+            (ErrorKind::BundleTooLarge, "bundleTooLarge"),
+            (ErrorKind::BundleFailed, "bundleFailed"),
+            (ErrorKind::BundleMissingCommits, "bundleMissingCommits"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), json!(name));
             assert_eq!(

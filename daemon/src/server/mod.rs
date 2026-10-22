@@ -145,6 +145,9 @@ pub struct Config {
     /// Off until a Project's child can start, be followed, and land on another computer; tests
     /// turn it on.
     pub project_computer: bool,
+    /// The largest bundle `bundle/prepare` and `bundle/begin` take (0057). 64 MiB by default;
+    /// tests shrink it.
+    pub max_bundle_bytes: u64,
 }
 
 impl Config {
@@ -185,6 +188,7 @@ impl Config {
             keys: None,
             relay_url: crate::relay::url(),
             project_computer: false,
+            max_bundle_bytes: crate::methods::bundle::MAX_BYTES,
         }
     }
 }
@@ -325,6 +329,8 @@ pub(crate) struct Daemon {
     pub secrets: crate::secrets::Secrets,
     /// [`Config::project_computer`].
     pub project_computer: bool,
+    /// The bundle files `bundle/*` holds (0057).
+    pub bundles: crate::methods::bundle::Bundles,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -488,6 +494,10 @@ impl Server {
             self_update: crate::self_update::SelfUpdate::new(launcher.clone()),
             secrets: crate::secrets::Secrets::default(),
             project_computer: config.project_computer,
+            bundles: crate::methods::bundle::Bundles::new(
+                data_dir.temp_dir().join("bundles"),
+                config.max_bundle_bytes,
+            ),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -890,6 +900,10 @@ impl Daemon {
             self_update: crate::self_update::SelfUpdate::new(launcher),
             secrets: crate::secrets::Secrets::default(),
             project_computer: false,
+            bundles: crate::methods::bundle::Bundles::new(
+                DataDir::new(dir).unwrap().temp_dir().join("bundles"),
+                crate::methods::bundle::MAX_BYTES,
+            ),
         })
     }
 }
