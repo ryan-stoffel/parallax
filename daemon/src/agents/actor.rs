@@ -236,8 +236,9 @@ pub(super) enum Command {
     },
     /// A child of this run finished, or a run started in this coordinator's Project, as
     /// [`wake::summary`] and [`wake::started`] tell it (PLX-42, PLX-380), with the ids of the
-    /// questions it names (PLX-469), and the task it delegated that ended, if any (0063).
-    Wake(String, Vec<Uuid>, Option<Uuid>),
+    /// questions it names (PLX-469), the task it delegated that ended, if any (0063), and the
+    /// newest stored end of a child it names (PLX-936).
+    Wake(String, Vec<Uuid>, Option<Uuid>, Option<jiff::Timestamp>),
     /// `agent/resumeNow` (PLX-371).
     ResumeNow {
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
@@ -1093,8 +1094,17 @@ impl Actor {
                 }
                 let _ = reply.send(answer);
             }
-            Command::Wake(summary, questions, task) => {
-                self.wakes.push(summary, questions, task, Instant::now());
+            Command::Wake(summary, questions, task, ended) => {
+                // ponytail: a late end's mark moves back in a store job of its own, after the end
+                // was stored and routed here, so a crash or a `project/start` between them can
+                // miss it (PLX-936); fold the mark into the job that routes the end if that
+                // matters.
+                if self
+                    .wakes
+                    .push(summary, questions, task, ended, Instant::now())
+                {
+                    self.save_wakes().await;
+                }
             }
             Command::StopTask { task_id, reply } => {
                 let stopped = match &self.live {
@@ -1289,7 +1299,8 @@ impl Actor {
     /// Sends what is waiting as the run's next turn, through the same resume as `agent/send`
     /// (PLX-42, PLX-380). Pauses wake-ups at the cap, or when this fails, keeping what is
     /// waiting. Only a project's current coordinator wakes: a replaced one drops them, so a
-    /// project never has two live (0024).
+    /// project never has two live (0024). `project/start` caught the new one up on them, start
+    /// lines aside, and `wake::send` sends later ones to it (PLX-936).
     async fn wake(&mut self) {
         // A shared thread's wake-up waits in line for a slot, and [`Self::slotted`] sends it.
         if !self.slot_ready().await {
@@ -3915,7 +3926,7 @@ impl Actor {
         if let Some(parent) = self.row.fields.parent
             && self.row.fields.notify_parent
         {
-            wake::child_ended(&self.daemon, parent, &run, &outcome);
+            wake::child_ended(&self.daemon, parent, &run, &outcome, self.row.updated_at);
         }
         // A child sent back from landing goes back in its Project's queue once a turn completes
         // (PLX-410).
@@ -4831,6 +4842,7 @@ mod tests {
         actor.wakes.push(
             "A task finished.".into(),
             Vec::new(),
+            None,
             None,
             tokio::time::Instant::now() - Duration::from_secs(5),
         );

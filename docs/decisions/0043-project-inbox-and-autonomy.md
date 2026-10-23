@@ -50,6 +50,7 @@ A Project has an autonomy level, Routine by default:
 ### Wake-ups
 
 - 0025 applies to a Project's coordinator as to any parent (0041). A child's end, a child's start ([0042](0042-project-children-are-threads.md#dispatch)), and an `ask` wake it, all batched into one turn as 0025 batches. Memory proposals and other news ride along with the next wake-up and don't wake it on their own.
+- Amended 2026-10-23 (PLX-936): these wake the Project's current coordinator, not the run that launched the child, so a Start over orphans no child. The new coordinator's first wake-up catches it up on what the one it replaced hadn't delivered ([0025](0025-coordinator-wake-ups.md#the-cap-and-other-pauses)).
 - The cap is 100 wake-up turns in a row instead of 10. Reaching it pauses wake-ups as 0025 does, adds a Needs you item, and the user's next message to the coordinator lets them through.
 
 ### Away

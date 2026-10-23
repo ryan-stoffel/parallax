@@ -1034,6 +1034,314 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
     host.server.stop().await;
 }
 
+/// Steers `text` into `run`'s running turn.
+async fn steer(client: &mut Conn, run: RunId, text: &str) {
+    client
+        .call::<AgentSend>(AgentSendParams {
+            delivery: Some(AgentDelivery::Steer),
+            ..send_params(run, TurnId::generate(), text)
+        })
+        .await
+        .unwrap();
+}
+
+/// Ends worker `run`, waiting on a follow-up, and waits for its run to complete.
+async fn finish(client: &mut Conn, run: RunId) {
+    steer(client, run, "Finish.").await;
+    until(client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+            if *run_id == run && state.status == AgentStatus::Completed)
+    })
+    .await;
+}
+
+/// Stops idle coordinator `run`, which pauses its wake-ups.
+async fn pause(client: &mut Conn, run: RunId) {
+    client
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: run,
+            from: None,
+        })
+        .await
+        .unwrap();
+    until(client, |event| {
+        matches!(event.event, ParallaxEvent::AgentWakeupsPaused { .. })
+    })
+    .await;
+}
+
+/// Asserts `prompt` names each of `runs`, completed, exactly once.
+fn names_once(prompt: &str, runs: &[(RunId, &str)]) {
+    for (run, task) in runs {
+        assert_eq!(
+            prompt
+                .matches(&format!("- Run {run} ({task}): completed"))
+                .count(),
+            1,
+            "{prompt}"
+        );
+    }
+}
+
+/// PLX-936: a Start over orphans no child. One ends while the old coordinator's wake-ups are
+/// paused, and another after the new coordinator replaced it; the new one's single catch-up
+/// wake-up names each once, and the old one never runs again.
+#[tokio::test]
+async fn children_of_a_replaced_coordinator_wake_the_one_that_replaced_it() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let worker = vec![init("worker-1"), Step::AwaitFollowUp, end_turn("Added it.")];
+    let coordinators = vec![
+        vec![init("coordinator-1"), end_turn("Planned.")],
+        vec![
+            init("coordinator-2"),
+            Step::AwaitFollowUp,
+            end_turn("Started over."),
+        ],
+        vec![init("coordinator-2"), end_turn("Reviewed.")],
+    ];
+    let host = Host::start(temp_dir(), roles(worker, coordinators, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let old = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let before = spawn(&mut client, &old, "Add a README.").await;
+    let after = spawn(&mut client, &old, "Add a license.").await;
+    sessions(&mut client, &[before, after]).await;
+    pause(&mut client, old.id).await;
+
+    // Its end waits on the old coordinator, paused.
+    finish(&mut client, before).await;
+    let new = client
+        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .await
+        .unwrap()
+        .run;
+    finish(&mut client, after).await;
+    // The new coordinator's first turn ends, and the catch-up follows it.
+    steer(&mut client, new.id, "Go on.").await;
+
+    let wake = nth_launch(&seen, 2).await;
+    assert_eq!(
+        wake.resume.map(|resume| resume.session_id).as_deref(),
+        Some("coordinator-2"),
+        "the new coordinator wakes"
+    );
+    names_once(
+        &wake.prompt,
+        &[(before, "Add a README."), (after, "Add a license.")],
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(coordinator_launches(&seen).len(), 3, "one wake-up");
+    host.server.stop().await;
+}
+
+/// PLX-936: two Start overs in a row. A child of the first coordinator ends while the second is
+/// current and paused, so its end waits in the second's queue; the third coordinator, which
+/// replaces the second, is caught up on it.
+#[tokio::test]
+async fn a_second_start_over_keeps_a_wake_up_the_replaced_one_held() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let worker = vec![init("worker-1"), Step::AwaitFollowUp, end_turn("Added it.")];
+    let turn = |session: &str, result: &str| vec![init(session), end_turn(result)];
+    let coordinators = vec![
+        turn("coordinator-1", "Planned."),
+        turn("coordinator-2", "Started over."),
+        vec![
+            init("coordinator-3"),
+            Step::AwaitFollowUp,
+            end_turn("Started over again."),
+        ],
+        turn("coordinator-3", "Reviewed."),
+    ];
+    let host = Host::start(temp_dir(), roles(worker, coordinators, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let first = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let child = spawn(&mut client, &first, "Add a README.").await;
+    sessions(&mut client, &[child]).await;
+    let second = client
+        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+            if *run_id == second.id && state.status == AgentStatus::Completed)
+    })
+    .await;
+    pause(&mut client, second.id).await;
+
+    // Its end goes to the second coordinator, paused.
+    finish(&mut client, child).await;
+    let third = client
+        .call::<ProjectStart>(start_params(project.id, "Start over again."))
+        .await
+        .unwrap()
+        .run;
+    steer(&mut client, third.id, "Go on.").await;
+
+    let wake = nth_launch(&seen, 3).await;
+    assert_eq!(
+        wake.resume.map(|resume| resume.session_id).as_deref(),
+        Some("coordinator-3"),
+        "the third coordinator wakes"
+    );
+    names_once(&wake.prompt, &[(child, "Add a README.")]);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(coordinator_launches(&seen).len(), 4, "one wake-up");
+    host.server.stop().await;
+}
+
+/// PLX-936: Start over, Stop the new coordinator's first turn before its catch-up goes out, and
+/// Start over again. The third coordinator is still caught up on an end the first one held.
+#[tokio::test]
+async fn a_catch_up_that_never_went_out_passes_to_the_next_coordinator() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let worker = vec![init("worker-1"), Step::AwaitFollowUp, end_turn("Added it.")];
+    let coordinators = vec![
+        vec![init("coordinator-1"), end_turn("Planned.")],
+        vec![init("coordinator-2"), Step::Hang],
+        vec![
+            init("coordinator-3"),
+            Step::AwaitFollowUp,
+            end_turn("Started over again."),
+        ],
+        vec![init("coordinator-3"), end_turn("Reviewed.")],
+    ];
+    let host = Host::start(temp_dir(), roles(worker, coordinators, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let first = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let child = spawn(&mut client, &first, "Add a README.").await;
+    sessions(&mut client, &[child]).await;
+    pause(&mut client, first.id).await;
+    // Its end waits on the first coordinator, paused.
+    finish(&mut client, child).await;
+
+    let second = client
+        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .await
+        .unwrap()
+        .run;
+    sessions(&mut client, &[second.id]).await;
+    // Stopped mid-turn, so its catch-up never goes out.
+    pause(&mut client, second.id).await;
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+            if *run_id == second.id
+                && !matches!(state.status, AgentStatus::Starting | AgentStatus::Running))
+    })
+    .await;
+    let third = client
+        .call::<ProjectStart>(start_params(project.id, "Start over again."))
+        .await
+        .unwrap()
+        .run;
+    steer(&mut client, third.id, "Go on.").await;
+
+    let wake = nth_launch(&seen, 3).await;
+    assert_eq!(
+        wake.resume.map(|resume| resume.session_id).as_deref(),
+        Some("coordinator-3"),
+        "the third coordinator wakes"
+    );
+    names_once(&wake.prompt, &[(child, "Add a README.")]);
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(coordinator_launches(&seen).len(), 4, "one wake-up");
+    host.server.stop().await;
+}
+
+/// PLX-936: the user sends a new coordinator two messages before its catch-up goes out, and plxd
+/// restarts. The catch-up comes back after the restart, naming the end once.
+#[tokio::test]
+async fn a_catch_up_the_users_messages_held_up_survives_a_restart() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let worker = || vec![init("worker-1"), Step::AwaitFollowUp, end_turn("Added it.")];
+    let coordinators = vec![
+        vec![init("coordinator-1"), end_turn("Planned.")],
+        vec![
+            init("coordinator-2"),
+            Step::AwaitFollowUp,
+            Step::AwaitFollowUp,
+            Step::Hang,
+        ],
+    ];
+    let host = Host::start(temp_dir(), roles(worker(), coordinators, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let first = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let child = spawn(&mut client, &first, "Add a README.").await;
+    sessions(&mut client, &[child]).await;
+    pause(&mut client, first.id).await;
+    finish(&mut client, child).await;
+
+    let second = client
+        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .await
+        .unwrap()
+        .run;
+    sessions(&mut client, &[second.id]).await;
+    let mut left = vec!["First.", "Second."];
+    for text in left.clone() {
+        steer(&mut client, second.id, text).await;
+    }
+    until(&mut client, |event| {
+        if let ParallaxEvent::AgentOutput { run_id, items, .. } = &event.event
+            && *run_id == second.id
+        {
+            for item in items {
+                if let AgentOutputItem::TurnStarted {
+                    text: Some(text), ..
+                } = item
+                {
+                    left.retain(|sent| sent != text);
+                }
+            }
+        }
+        left.is_empty()
+    })
+    .await;
+
+    let later = vec![vec![init("coordinator-2"), end_turn("Caught up.")]];
+    let host = host.restart(roles(worker(), later, &seen)).await;
+    let wake = nth_launch(&seen, 2).await;
+    assert_eq!(
+        wake.resume.map(|resume| resume.session_id).as_deref(),
+        Some("coordinator-2"),
+        "the new coordinator wakes"
+    );
+    assert!(
+        wake.prompt.starts_with("Parallax, not the user"),
+        "{}",
+        wake.prompt
+    );
+    names_once(&wake.prompt, &[(child, "Add a README.")]);
+    host.server.stop().await;
+}
+
 /// PLX-380 (0025): only the user's own message ends a pause. A child's message to its parent
 /// (`thread_send`, with `from`) reaches it but leaves its wake-ups paused, so a loop between them
 /// can't get past the cap.
