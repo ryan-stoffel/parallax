@@ -665,6 +665,25 @@ impl ClaudeBackend {
         self
     }
 
+    /// Writes `request`'s [`appended_prompt`], if any, with [`write_prompt_file`] and passes it
+    /// to `spec` as `--append-system-prompt-file`. The run keeps the file until it ends.
+    fn prompt_file(
+        &self,
+        request: &RunRequest,
+        spec: &mut ProcessSpec,
+    ) -> Result<Option<TempPath>, StartError> {
+        let Some(text) = appended_prompt(request) else {
+            return Ok(None);
+        };
+        let dir = self.launcher.data_dir().temp_dir();
+        let file = write_prompt_file(&dir, &text).map_err(SpawnError::Io)?;
+        spec.args.extend([
+            "--append-system-prompt-file".into(),
+            file.as_os_str().into(),
+        ]);
+        Ok(Some(file))
+    }
+
     /// What every run and the command list start from: the program in `cwd`, inherited
     /// credentials [`scrubbed`] and `credential`'s injected ([`apply_credential`], whose
     /// `apiKeySource` it returns), [`ALWAYS_SET`], stdin piped, and the backend's output limits.
@@ -1218,18 +1237,7 @@ impl Backend for ClaudeBackend {
             }
             _ => None,
         };
-        let prompt_file = match appended_prompt(&request) {
-            Some(text) => {
-                let dir = self.launcher.data_dir().temp_dir();
-                let file = write_prompt_file(&dir, &text).map_err(SpawnError::Io)?;
-                spec.args.extend([
-                    "--append-system-prompt-file".into(),
-                    file.as_os_str().into(),
-                ]);
-                Some(file)
-            }
-            None => None,
-        };
+        let prompt_file = self.prompt_file(&request, &mut spec)?;
 
         let query = Query::open(&self.launcher, &spec, request.run_id)?;
         let switch = CancelSwitch::new();
