@@ -175,7 +175,7 @@ import {
   type PinFolder,
 } from "./pins";
 import { Favorites, type FavoriteAction } from "./Favorites";
-import { Fold, PinSummary, quietFor, shownRows, Tick, TodayDivider } from "./SidebarParts";
+import { Fold, quietFor, shownRows, Tick, TodayDivider } from "./SidebarParts";
 import { PinList, type Pin as PinData } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 
@@ -1640,49 +1640,45 @@ export function ThreadList({
       };
     }),
   ].sort((a, b) => favRank(a.key) - favRank(b.key) || 0);
-  // Folding needs something above to fold.
+  // Folding hides the favorites and pins, so Today's threads have the sidebar; it needs something
+  // above to fold.
   const folded = topCollapsed.use() && (favorites.length > 0 || pins.length > 0);
   const list = (
     <>
-      <Favorites
-        folded={folded}
-        items={favorites}
-        onReorder={
-          words.length
-            ? undefined
-            : (keys) =>
-                favoriteOrder.set([
-                  ...keys,
-                  ...favoriteOrder.get().filter((k) => !keys.includes(k)),
-                ])
-        }
-        onRest={(key, el) => {
-          const item = byKey.get(key);
-          if (item) restCard(item)(el);
-        }}
-        onLeave={hideCard}
-        onOpen={(key) => {
-          const item = byKey.get(key);
-          if (item) openItem(item);
-        }}
-        onAdd={(key) => {
-          forgetPin(key);
-          pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key]);
-        }}
-        onPinRow={(hostId, threadId) => {
-          const item = byKey.get(`${hostId}/${threadId}`);
-          if (item?.kind !== "thread" || item.thread.parent) return;
-          if (!item.thread.pinned) void pin(item);
-          pinFavorites.set([...pinFavorites.get().filter((k) => k !== item.key), item.key]);
-        }}
-        onRemove={unfavorite}
-      />
-      <Fold open={!folded || words.length > 0}>{pinList}</Fold>
-      <Fold open={folded && !words.length && pins.length > 0}>
-        <PinSummary
-          attention={pins.map((p) => p.attention)}
-          onUnfold={() => topCollapsed.set(false)}
+      <Fold open={!folded || words.length > 0}>
+        <Favorites
+          items={favorites}
+          onReorder={
+            words.length
+              ? undefined
+              : (keys) =>
+                  favoriteOrder.set([
+                    ...keys,
+                    ...favoriteOrder.get().filter((k) => !keys.includes(k)),
+                  ])
+          }
+          onRest={(key, el) => {
+            const item = byKey.get(key);
+            if (item) restCard(item)(el);
+          }}
+          onLeave={hideCard}
+          onOpen={(key) => {
+            const item = byKey.get(key);
+            if (item) openItem(item);
+          }}
+          onAdd={(key) => {
+            forgetPin(key);
+            pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key]);
+          }}
+          onPinRow={(hostId, threadId) => {
+            const item = byKey.get(`${hostId}/${threadId}`);
+            if (item?.kind !== "thread" || item.thread.parent) return;
+            if (!item.thread.pinned) void pin(item);
+            pinFavorites.set([...pinFavorites.get().filter((k) => k !== item.key), item.key]);
+          }}
+          onRemove={unfavorite}
         />
+        {pinList}
       </Fold>
       <TodayDivider
         folded={folded}

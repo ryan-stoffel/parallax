@@ -9,6 +9,7 @@ import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
 import { autoClear, pinFavorites } from "./pins";
 import { sectionsStore } from "./Sidebar";
+import { shownRows } from "./SidebarParts";
 import { flushToasts } from "./undo";
 
 // Today's Clear, auto-archive, and keys (0075).
@@ -199,7 +200,7 @@ test("auto-archive waits for quiet since the last prompt or run, skips usage lim
   expect(archived()).toEqual(["quiet"]);
 });
 
-test("E on Today's first row moves focus to the next row shown, past the folded pins' summary", async () => {
+test("E on Today's first row moves focus to the next row shown, past the pins", async () => {
   threads = [thread("pinned", 40, { pinned: true }), thread("second", 30), thread("first", 20)];
   runs = [
     run("pinned", "completed", 40),
@@ -215,6 +216,33 @@ test("E on Today's first row moves focus to the next row shown, past the folded 
   await waitForArchives(1);
   await settle();
   expect(document.activeElement).toBe(row("second"));
+});
+
+test("folding hides the Projects and pins, leaving Today's threads", async () => {
+  answers["project/list"] = () => ({
+    result: {
+      projects: [
+        {
+          id: "p-ember",
+          name: "ember",
+          repoPath: "/src/ember",
+          createdAt: ago(60),
+          updatedAt: ago(60),
+        },
+      ],
+      seq: 7,
+    },
+  });
+  threads = [thread("pinned", 40, { pinned: true }), thread("today", 20)];
+  runs = [run("pinned", "completed", 40), run("today", "completed", 20)];
+  await renderApp();
+  expect(shownRows().some((r) => r.getAttribute("aria-label") === "ember")).toBe(true);
+
+  await act(async () =>
+    document.querySelector<HTMLElement>('[aria-label="Fold favorites and pins"]')!.click(),
+  );
+  await settle();
+  expect(shownRows()).toEqual([row("today")]);
 });
 
 test("moving on before plxd answers leaves focus where the user went", async () => {
