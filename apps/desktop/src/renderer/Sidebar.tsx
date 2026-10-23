@@ -2890,7 +2890,7 @@ function ThreadRow({
   // A rename's input can't sit in a button, so the row is a plain box while it's open.
   const Main = renaming ? "div" : "button";
   // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887), and
-  // spaces it off its neighbors whether or not it's selected, so selecting it doesn't move the list.
+  // spaces it off its neighbors. An open thread holds its own draft, so neither shows while it's open.
   const rowLook = picked
     ? "bg-accent/14 ring-1 ring-accent/38 ring-inset"
     : selected
