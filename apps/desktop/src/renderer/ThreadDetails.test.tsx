@@ -51,8 +51,8 @@ beforeEach(() => {
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
-function Harness({ row = true }: { row?: boolean }) {
-  const { mode, toggle, ref } = useThreadDetails();
+function Harness({ row = true, thread = "a" }: { row?: boolean; thread?: string }) {
+  const { mode, toggle, ref } = useThreadDetails(thread);
   const details = (
     <ThreadDetails mode={mode} host={{ id: "local", name: "macbook" }} folder="/repo" />
   );
@@ -69,13 +69,14 @@ function Harness({ row = true }: { row?: boolean }) {
     </>
   );
 }
-let rerender = async (_row: boolean) => {};
+let rerender = async (_row: boolean, _thread?: string) => {};
 async function render() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   unmount = () => root.unmount();
-  rerender = (row) => act(async () => root.render(<Harness row={row} />));
+  rerender = (row, thread) => act(async () => root.render(<Harness row={row} thread={thread} />));
   await rerender(true);
 }
+const kept = () => JSON.parse(localStorage.getItem(THREAD_DETAILS_KEY) ?? "null");
 const panel = () => document.querySelector<HTMLElement>("aside[aria-label='Thread details']")!;
 const button = () => document.querySelector<HTMLButtonElement>("button[aria-controls]")!;
 const resize = (to: number) =>
@@ -102,7 +103,7 @@ test("with room, the button docks the panel until pressed again, and a restart k
   expect(panel().dataset["mode"]).toBe("docked");
   expect(panel().textContent).toContain("macbook");
   expect(button().getAttribute("aria-pressed")).toBe("true");
-  expect(localStorage.getItem(THREAD_DETAILS_KEY)).toBe("open");
+  expect(kept()).toEqual(["a"]);
   // A click elsewhere leaves it docked.
   await act(async () => document.body.click());
   expect(panel().hidden).toBe(false);
@@ -113,11 +114,11 @@ test("with room, the button docks the panel until pressed again, and a restart k
 
   await act(async () => button().click());
   expect(panel().hidden).toBe(true);
-  expect(localStorage.getItem(THREAD_DETAILS_KEY)).toBe("closed");
+  expect(kept()).toEqual([]);
 });
 
 test("without room it starts collapsed, and the button floats it over the thread", async () => {
-  localStorage.setItem(THREAD_DETAILS_KEY, "open");
+  localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(["a"]));
   width = 600;
   await render();
   expect(panel().hidden).toBe(true);
@@ -126,7 +127,7 @@ test("without room it starts collapsed, and the button floats it over the thread
   expect(panel().dataset["mode"]).toBe("floating");
   expect(button().getAttribute("aria-pressed")).toBe("true");
   // Floating leaves the kept choice alone.
-  expect(localStorage.getItem(THREAD_DETAILS_KEY)).toBe("open");
+  expect(kept()).toEqual(["a"]);
   await act(async () => button().click());
   expect(panel().hidden).toBe(true);
 
@@ -143,8 +144,27 @@ test("without room it starts collapsed, and the button floats it over the thread
   expect(panel().hidden).toBe(true);
 });
 
+test("each thread keeps its own choice, and switching threads closes a floating card", async () => {
+  await render();
+  await act(async () => button().click());
+  expect(panel().dataset["mode"]).toBe("docked");
+
+  await rerender(true, "b");
+  expect(panel().hidden).toBe(true);
+  expect(button().getAttribute("aria-pressed")).toBe("false");
+  await rerender(true, "a");
+  expect(panel().dataset["mode"]).toBe("docked");
+
+  await resize(600);
+  await act(async () => button().click());
+  expect(panel().dataset["mode"]).toBe("floating");
+  await rerender(true, "b");
+  expect(panel().hidden).toBe(true);
+  expect(kept()).toEqual(["a"]);
+});
+
 test("a row that unmounts and returns narrower is measured again", async () => {
-  localStorage.setItem(THREAD_DETAILS_KEY, "open");
+  localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(["a"]));
   await render();
   expect(panel().dataset["mode"]).toBe("docked");
   // The Pull requests page replaces the thread; the window narrows meanwhile.
