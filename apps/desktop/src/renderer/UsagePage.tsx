@@ -26,7 +26,7 @@ import { describeError } from "./errors";
 import type { Host } from "./hosts";
 import { locale } from "./locale";
 import { dayKey, dayOf } from "./profile";
-import { kinds, type Kind } from "./providers";
+import { kinds, useProviders, type Kind } from "./providers";
 import { IconButton, Segmented } from "./ui";
 import { limitDetails, limitMeter, usd, type LimitTone } from "./Usage";
 import { clockOptions } from "./prefs";
@@ -358,8 +358,8 @@ type Track = <T>(request: Promise<T>) => Promise<T>;
 /**
  * Settings > Usage, also opened by the sidebar's Usage button. The header always has the view, the
  * range (disabled on Limits, which is always now), and Refresh, which spins while any request is
- * in flight. Cost and Tokens sum `usage/daily` across every host; Limits shows each host's
- * subscriptions' windows from `usage/limits`.
+ * in flight. Cost and Tokens sum `usage/daily` across every host; Limits shows each provider set
+ * up in Settings > Providers once, with its windows from `usage/limits`.
  */
 export function UsagePage({ hosts }: { hosts: Host[] }) {
   const [view, setView] = useState<View>("cost");
@@ -393,9 +393,7 @@ export function UsagePage({ hosts }: { hosts: Host[] }) {
       {/* A container, so the layout follows the pane's width rather than the window's. */}
       <div className="@container">
         {view === "limits" ? (
-          hosts.map((h) => (
-            <HostLimits key={h.id} host={h} named={hosts.length > 1} refresh={now} track={track} />
-          ))
+          <Limits hosts={hosts} refresh={now} track={track} />
         ) : (
           <History hosts={hosts} view={view} range={range} now={now} track={track} />
         )}
@@ -1432,50 +1430,91 @@ function useLimits(
   return { limits, error };
 }
 
+/** An account's windows, with the backend, name, and logo Limits shows it under. */
+interface Account extends AccountLimits {
+  backend?: Backend;
+  name: string;
+  Logo?: Kind["Logo"];
+}
+
+/** One host's part of Limits: its accounts once it answers, or why it has none. */
+type HostAnswer = { accounts: Account[] } | { problem: string };
+
 /**
- * One host's subscriptions' limit windows, read live from their CLIs, under the host's name when
- * there are several: a section per account, a row per window.
+ * Asks one host for its limits and hands `onLoad` the accounts of the providers enabled in its
+ * Settings > Providers (every account on a plxd without `providers`), or why it has none, or
+ * undefined while its answer is on its way. Shows nothing itself.
  */
-function HostLimits({
+function HostLimitsLoader({
   host,
-  named,
   refresh,
   track,
+  onLoad,
 }: {
   host: Host;
-  named: boolean;
   refresh: number;
   track: Track;
+  onLoad: (hostId: string, answer?: HostAnswer) => void;
 }) {
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
   const { limits, error } = useLimits(host.id, connected, refresh, track);
   const keys = useKeys(host.id, connected, refresh);
-
-  // A host that isn't connected shows its status, not its last answer, whose resets are stale.
+  const providers = useProviders(host.id)?.providers;
+  // A host that isn't connected gives its status, not its last answer, whose resets are stale.
   const status = hostStatus(connection);
-  const accounts = (!status && limits ? limits : []).map((a) => {
-    const backend = backendOf(a.accountId, keys);
-    const info = backend && backends[backend];
-    return { ...a, backend, name: info?.name ?? a.accountId, Logo: info?.Logo };
-  });
-  accounts.sort((a, b) => a.name.localeCompare(b.name, locale()));
+  const answer = useMemo<HostAnswer | undefined>(() => {
+    if (status) return { problem: status };
+    if (!limits) return error && { problem: usageError(error) };
+    const enabled = (id: string) =>
+      !providers || providers.some((p) => p.instance.id === id && p.instance.enabled);
+    const accounts = limits
+      .filter((a) => enabled(a.accountId))
+      .map((a) => {
+        const backend = backendOf(a.accountId, keys);
+        const info = backend && backends[backend];
+        return { ...a, backend, name: info?.name ?? a.accountId, Logo: info?.Logo };
+      });
+    return { accounts };
+  }, [status, limits, error, keys, providers]);
+  useEffect(() => onLoad(host.id, answer), [host.id, answer, onLoad]);
+  return null;
+}
+
+/**
+ * Every host's subscriptions' limit windows, read live from their CLIs: a section per provider set
+ * up in Settings, a row per window. A subscription's limits are its account's, not a computer's,
+ * so each provider shows once, from the first host (this computer first) that read its windows.
+ */
+function Limits({ hosts, refresh, track }: { hosts: Host[]; refresh: number; track: Track }) {
+  const [answers, setAnswers] = useState<Record<string, HostAnswer | undefined>>({});
+  const onLoad = useCallback((hostId: string, answer?: HostAnswer) => {
+    setAnswers((all) => ({ ...all, [hostId]: answer }));
+  }, []);
+
+  const byId = new Map<string, Account>();
+  for (const h of hosts) {
+    const answer = answers[h.id];
+    for (const a of answer && "accounts" in answer ? answer.accounts : []) {
+      const seen = byId.get(a.accountId);
+      if (!seen || (seen.limits.length === 0 && a.limits.length > 0)) byId.set(a.accountId, a);
+    }
+  }
+  const accounts = [...byId.values()].sort((a, b) => a.name.localeCompare(b.name, locale()));
+  const waiting = hosts.some((h) => !answers[h.id]);
+  const answered = hosts.some((h) => answers[h.id] && "accounts" in answers[h.id]!);
   const now = Date.now();
 
   return (
-    <section aria-label={host.name} className="mb-10">
-      {named && <h2 className="mb-4 text-[13px] font-medium text-muted-foreground">{host.name}</h2>}
+    <>
+      {hosts.map((h) => (
+        <HostLimitsLoader key={h.id} host={h} refresh={refresh} track={track} onLoad={onLoad} />
+      ))}
       {/* Always there, so a screen reader hears its text change. */}
       <p role="status" className="sr-only">
-        {!status && !limits && !error ? "Loading…" : ""}
+        {waiting && accounts.length === 0 ? "Loading…" : ""}
       </p>
-      {status || (!limits && error) ? (
-        <p className="text-[13px] text-muted-foreground">{status ?? usageError(error!)}</p>
-      ) : !limits ? (
-        <LimitsSkeleton />
-      ) : accounts.length === 0 ? (
-        <Empty title="No subscriptions">Limits show here for Claude Code and Codex.</Empty>
-      ) : (
+      {accounts.length > 0 ? (
         <div className="flex flex-col gap-8">
           {accounts.map(({ accountId, limits, problem, backend, name, Logo }) => (
             <section key={accountId} aria-label={name}>
@@ -1497,8 +1536,25 @@ function HostLimits({
             </section>
           ))}
         </div>
+      ) : waiting ? (
+        <LimitsSkeleton />
+      ) : answered ? (
+        <Empty title="No subscriptions">
+          Limits show here for Claude Code and Codex once they're set up in Settings &gt; Providers.
+        </Empty>
+      ) : (
+        // No host answered: each one's reason, named when there are several.
+        hosts.map((h) => {
+          const answer = answers[h.id];
+          return (
+            <p key={h.id} className="text-[13px] text-muted-foreground">
+              {hosts.length > 1 && `${h.name}: `}
+              {answer && "problem" in answer && answer.problem}
+            </p>
+          );
+        })
       )}
-    </section>
+    </>
   );
 }
 
@@ -1603,7 +1659,7 @@ function LimitMeter({
   );
 }
 
-/** An account's shape while its host's first answer is on its way. */
+/** An account's shape while the hosts' first answers are on their way. */
 function LimitsSkeleton() {
   const block = "rounded-md bg-selected";
   return (
