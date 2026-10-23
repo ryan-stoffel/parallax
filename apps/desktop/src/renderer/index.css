@@ -935,6 +935,28 @@ body {
 .context-doc .markdown > .contains-task-list {
   padding-left: 0;
 }
+/* The status board on the Project tab (ContextBody), set like a project page: small headings, and
+   each item a bold lead and its detail, a little apart. */
+.context-board .markdown {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted-foreground);
+}
+.context-board .markdown h2 {
+  margin: 1.6em 0.25em 0.6em;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint-foreground);
+}
+.context-board .markdown li + li {
+  margin-top: 0.6em;
+}
+.context-board .markdown strong {
+  font-weight: 600;
+  color: var(--foreground);
+}
 
 /* The Usage page (UsagePage.tsx): bars rise from the baseline, --delay apart, and meters fill
    from the left, as they appear. Under reduced motion they are simply there. */

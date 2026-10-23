@@ -1,5 +1,7 @@
 import {
   ArrowUp,
+  BookOpen,
+  ChevronLeft,
   CircleAlert,
   CircleCheck,
   LoaderCircle,
@@ -10,6 +12,7 @@ import { useState, type ReactNode } from "react";
 import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";
 import { runAttention, type Attention } from "./attention";
 import { WorkingMark } from "./AttentionMark";
+import { AllFiles, board, ContextBody, ContextReader, type ProjectContext } from "./ContextPanel";
 import { questionOf, type InboxView } from "./Inbox";
 import { locale } from "./locale";
 import { notify } from "./notifications";
@@ -18,6 +21,7 @@ import { clockOptions } from "./prefs";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { age, ProjectIcon } from "./Sidebar";
 import { titleOf } from "./threads";
+import { IconButton } from "./ui";
 import type { Approval } from "./transcript";
 
 type Group = "waiting" | "working" | "ready" | "resolved";
@@ -37,14 +41,18 @@ interface Row {
 const dayMs = 24 * 60 * 60 * 1000;
 
 /**
- * A Project's home in the side panel, read like a log in grouped lists. Its head is the Project's
- * icon, name, and how many of its threads are open, then a chip for each open state. Under it, Now:
+ * A Project's home in the side panel, set like Cursor's project page. Its head is the Project's
+ * icon, name, and how many of its threads are open, a chip for each open state, and a book that
+ * opens All files, its context folder as a tree. Then where it stands: the coordinator's status
+ * board, its tasks as circles and its pull requests, issues, and other files linked. Then Running:
  * the children working or waiting on the user, each with what it last said, a question taking its
  * answer in place. Then the log: each finished child once, newest first, under its day, with its
  * diff and the time it finished. A finish is bright until it's opened, which marks what it reported
  * read (0043).
  */
 export function ProjectHome({
+  hostId,
+  context,
   project,
   agents,
   titles = {},
@@ -52,6 +60,9 @@ export function ProjectHome({
   answerable,
   onOpen,
 }: {
+  hostId: string;
+  /** The Project's context files: its status board, and all of them behind the book. */
+  context: ProjectContext;
   project: Project;
   agents: ProjectAgentsView;
   titles?: Readonly<Record<string, string>>;
@@ -59,6 +70,8 @@ export function ProjectHome({
   answerable: boolean;
   onOpen: (runId: string) => void;
 }) {
+  const [openPath, setOpenPath] = useState<string>();
+  const [browsing, setBrowsing] = useState(false);
   const rows = rowsOf(project, agents, inbox, answerable, titles);
   const live = rows.filter((r) => r.group === "working" || r.group === "waiting");
   const log = rows.filter((r) => r.group === "ready" || r.group === "resolved");
@@ -76,6 +89,38 @@ export function ProjectHome({
         )
       : Promise.resolve(undefined);
 
+  const { files, error } = context;
+  const opened = files.find((f) => f.path === openPath);
+  const notes = files.find((f) => f.path === board);
+
+  if (opened)
+    return (
+      <ContextReader
+        hostId={hostId}
+        project={project.id}
+        files={files}
+        file={opened}
+        onOpen={setOpenPath}
+        onBack={() => setOpenPath(undefined)}
+      />
+    );
+  if (browsing)
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <button
+          type="button"
+          onClick={() => setBrowsing(false)}
+          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+        >
+          <ChevronLeft aria-hidden className="size-4 shrink-0" />
+          <span className="truncate">{project.name}</span>
+        </button>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2">
+          <h3 className={`${sectionHeading} px-2.5`}>All files</h3>
+          <AllFiles files={files} onOpen={setOpenPath} />
+        </div>
+      </div>
+    );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
       <header className="flex items-center gap-3 px-1 pt-5">
@@ -88,11 +133,38 @@ export function ProjectHome({
           </h2>
           <p className="mt-0.5 text-[12.5px] text-muted-foreground">{openLine(rows)}</p>
         </div>
+        {files.length > 0 && (
+          <span className="ml-auto self-start">
+            <IconButton label="All files" onClick={() => setBrowsing(true)}>
+              <BookOpen />
+            </IconButton>
+          </span>
+        )}
       </header>
       <OpenCounts rows={rows} />
+      <section aria-label="Where it stands" className="px-1">
+        {notes ? (
+          <ContextBody
+            hostId={hostId}
+            project={project.id}
+            files={files}
+            file={notes}
+            onOpen={setOpenPath}
+          />
+        ) : (
+          <p className="pt-5 text-[12.5px] text-muted-foreground">
+            The coordinator keeps a status board here once it starts on the work.
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="pt-1.5 text-[12.5px] text-danger">
+            {error}
+          </p>
+        )}
+      </section>
       {live.length > 0 && (
-        <section aria-label="Now">
-          <h3 className={sectionHeading}>Now</h3>
+        <section aria-label="Running">
+          <h3 className={sectionHeading}>Running</h3>
           <ul className={group}>
             {live.map((row) => (
               <LiveRow key={row.run.id} row={row} onOpen={() => open(row)} onAnswer={answer(row)} />

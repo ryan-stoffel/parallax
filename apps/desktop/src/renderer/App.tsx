@@ -38,6 +38,7 @@ import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
 import { ThreadDetails, ThreadDetailsButton, useThreadDetails } from "./ThreadDetails";
 import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
+import { useProjectContext } from "./ContextPanel";
 import { ProjectChat } from "./ProjectChat";
 import { ProjectHome, waitingCount } from "./ProjectHome";
 import {
@@ -370,6 +371,8 @@ export function App() {
     connected && !!project && "inbox" in connection.capabilities,
     answerable,
   );
+  // The Project's context files, which both its side panel tabs read.
+  const context = useProjectContext(host.id, project?.id ?? "", connected && !!project);
   const needs = useMemo(
     () => new Set(inbox.items.filter((i) => !i.seenAt && i.kind === "needsYou").map((i) => i.run)),
     [inbox.items],
@@ -1436,6 +1439,8 @@ export function App() {
             waiting: waitingCount(project, agents, inbox),
             home: (
               <ProjectHome
+                hostId={host.id}
+                context={context}
                 project={project}
                 agents={agents}
                 titles={threads.state.titles}
@@ -1540,12 +1545,9 @@ export function App() {
                   ? agents.runs.find((r) => r.id === project.coordinator)
                   : undefined
               }
-              connected={connected}
+              context={context}
               memory={!!memory}
               inbox={project ? inbox : undefined}
-              working={agents.runs.some(
-                (r) => r.id !== project?.coordinator && isRunning(r.status),
-              )}
               expanded={panelExpanded}
             />
           )

@@ -1,10 +1,12 @@
-import { ChevronLeft, Circle, CircleCheck, GitMerge } from "lucide-react";
+import { ChevronLeft, Circle, CircleCheck, FileText, Folder, GitMerge } from "lucide-react";
 import { useEffect, useState, type SVGProps } from "react";
 import type { Components } from "react-markdown";
 
 import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { describeError } from "./errors";
+import { locale } from "./locale";
+import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
 
 /** The status board the coordinator keeps (coordinator.md), which the view opens on. */
@@ -17,11 +19,18 @@ function applyContextEvent(files: ContextFile[], event: ParallaxEvent): ContextF
   return [...rest, event.file].sort((a, b) => (a.path < b.path ? -1 : 1));
 }
 
+/** A Project's context files, as `useProjectContext` keeps them, and why they didn't load. */
+export type ProjectContext = { files: ContextFile[]; error?: string };
+
 /**
  * A Project's shared context files (0005), by path, kept live: `context/list`, then the Project's
  * `context.changed` events, starting over on `resync`. Loads only while `connected`.
  */
-export function useProjectContext(hostId: string, project: string, connected: boolean) {
+export function useProjectContext(
+  hostId: string,
+  project: string,
+  connected: boolean,
+): ProjectContext {
   const [files, setFiles] = useState<ContextFile[]>([]);
   const [error, setError] = useState<string>();
 
@@ -114,6 +123,127 @@ function ContextDoc({
   );
 }
 
+/**
+ * A context file's Markdown inside another view's scroll, as the Project tab shows the status
+ * board: tasks as circles, pull requests and issues with their icons, and links to other context
+ * files that open them with `onOpen`.
+ */
+export function ContextBody({
+  hostId,
+  project,
+  files,
+  file,
+  onOpen,
+}: {
+  hostId: string;
+  project: string;
+  files: ContextFile[];
+  file: ContextFile;
+  onOpen: (path: string) => void;
+}) {
+  const { content, error } = useContent(hostId, project, file);
+  return (
+    <div aria-label={file.path} className="context-doc context-board">
+      {error ? (
+        <p role="alert" className="text-[12.5px] text-danger">
+          {error}
+        </p>
+      ) : (
+        content !== undefined && (
+          <MarkdownText text={content} components={contextComponents(files, onOpen)} />
+        )
+      )}
+    </div>
+  );
+}
+
+/** "Today at 8:49 AM", "Yesterday at…", or "Oct 20 at…": when `at` was. */
+export function when(at: string, now = Date.now()): string {
+  const day = new Date(at);
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const date =
+    day >= today
+      ? "Today"
+      : day >= yesterday
+        ? "Yesterday"
+        : day.toLocaleDateString(locale(), { month: "short", day: "numeric" });
+  return `${date} at ${day.toLocaleTimeString(locale(), clockOptions())}`;
+}
+
+/** A Project's context files as a tree: each folder once, above its files, by path. */
+export function fileTree(files: readonly ContextFile[]) {
+  const rows: { name: string; depth: number; at: string; path?: string }[] = [];
+  const folders = new Map<string, (typeof rows)[number]>();
+  for (const f of files.toSorted((a, b) => a.path.localeCompare(b.path, locale()))) {
+    const parts = f.path.split("/");
+    parts.slice(0, -1).forEach((name, depth) => {
+      const key = parts.slice(0, depth + 1).join("/");
+      const folder = folders.get(key);
+      // A folder shows when anything in it last changed.
+      if (folder) folder.at = f.modifiedAt > folder.at ? f.modifiedAt : folder.at;
+      else {
+        const row = { name, depth, at: f.modifiedAt };
+        folders.set(key, row);
+        rows.push(row);
+      }
+    });
+    rows.push({ name: parts.at(-1)!, depth: parts.length - 1, at: f.modifiedAt, path: f.path });
+  }
+  return rows;
+}
+
+/**
+ * All of a Project's context files, as a tree of folders and files, each with when it last
+ * changed. A file opens with `onOpen`.
+ */
+export function AllFiles({
+  files,
+  onOpen,
+}: {
+  files: readonly ContextFile[];
+  onOpen: (path: string) => void;
+}) {
+  return (
+    <ul aria-label="All files" className="pb-4">
+      {fileTree(files).map((row) => {
+        const inner = (
+          <>
+            {row.path ? (
+              <FileText aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+            ) : (
+              <Folder aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
+            )}
+            <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{row.name}</span>
+            <span className="shrink-0 text-[11.5px] text-faint-foreground">{when(row.at)}</span>
+          </>
+        );
+        const indent = { paddingLeft: 10 + row.depth * 16 };
+        return (
+          <li key={row.path ?? `${row.depth}/${row.name}`}>
+            {row.path ? (
+              <button
+                type="button"
+                onClick={() => onOpen(row.path!)}
+                style={indent}
+                className="flex w-full items-center gap-2.5 rounded-lg py-1.5 pr-2.5 text-left hover:bg-hover"
+              >
+                {inner}
+              </button>
+            ) : (
+              <div style={indent} className="flex items-center gap-2.5 py-1.5 pr-2.5">
+                {inner}
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 const pullRequest = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/;
 const issue = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+/;
 // Another file in the flat context folder, such as `archived.md` or `./archived.md`.
@@ -173,7 +303,7 @@ function MarkdownMark(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-/** A context file opened from the Knowledge view, with a way back and its links to other files. */
+/** A context file opened from the Project tab, with a way back and its links to other files. */
 export function ContextReader({
   hostId,
   project,

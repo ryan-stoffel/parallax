@@ -2672,7 +2672,7 @@ const home = () => document.querySelector<HTMLElement>("#side-panel")!;
 const titlesIn = (root: ParentNode | null) =>
   [...(root?.querySelectorAll("li > button [data-title]") ?? [])].map((t) => t.textContent);
 /** The children in the Project tab's Now, and in its log of finished ones. */
-const nowTitles = () => titlesIn(home().querySelector('section[aria-label="Now"]'));
+const nowTitles = () => titlesIn(home().querySelector('section[aria-label="Running"]'));
 const logTitles = () => titlesIn(home()).filter((t) => !nowTitles().includes(t));
 const childButton = (title: string) =>
   [...home().querySelectorAll("li > button")].find(

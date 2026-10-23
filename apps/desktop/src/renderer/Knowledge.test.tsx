@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
@@ -11,6 +11,7 @@ import type {
   MemoryFile,
   ProviderInfo,
 } from "../protocol/generated/protocol";
+import { AllFiles, ContextBody, ContextReader, useProjectContext } from "./ContextPanel";
 import type { InboxView } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
 import { changeMessage } from "./MemoryPanel";
@@ -144,24 +145,61 @@ const click = async (element: Element | null | undefined) => {
   await settle();
 };
 
-/** Renders a Project's Knowledge view on `host`, with its agents `working` or not. */
-async function render(host: string, working = false, expanded = false) {
+/** The Knowledge view, with the Project's context read as App reads it. */
+function Knowledge({ host, expanded }: { host: string; expanded: boolean }) {
+  const context = useProjectContext(host, "p-1", true);
+  return (
+    <KnowledgePanel
+      hostId={host}
+      project="p-1"
+      repo="r-1"
+      coordinator={coordinator}
+      context={context}
+      memory
+      inbox={inbox}
+      expanded={expanded}
+    />
+  );
+}
+
+/**
+ * The Project tab's context, as ProjectHome shows it: the status board, All files under it, and a
+ * file opened in place with a way back.
+ */
+function Context({ host }: { host: string }) {
+  const { files } = useProjectContext(host, "p-1", true);
+  const [open, setOpen] = useState<string>();
+  const opened = files.find((f) => f.path === open);
+  if (opened)
+    return (
+      <ContextReader
+        hostId={host}
+        project="p-1"
+        files={files}
+        file={opened}
+        onOpen={setOpen}
+        onBack={() => setOpen(undefined)}
+      />
+    );
+  const notes = files.find((f) => f.path === "notes.md");
+  return (
+    <>
+      {notes && (
+        <ContextBody hostId={host} project="p-1" files={files} file={notes} onOpen={setOpen} />
+      )}
+      <AllFiles files={files} onOpen={setOpen} />
+    </>
+  );
+}
+
+/** Renders a Project's Knowledge view on `host`, or with `context`, its board and files. */
+async function render(host: string, { context = false, expanded = false } = {}) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root.render(
       <>
         <Notifications />
-        <KnowledgePanel
-          hostId={host}
-          project="p-1"
-          repo="r-1"
-          coordinator={coordinator}
-          connected
-          memory
-          inbox={inbox}
-          working={working}
-          expanded={expanded}
-        />
+        {context ? <Context host={host} /> : <Knowledge host={host} expanded={expanded} />}
       </>,
     ),
   );
@@ -174,33 +212,34 @@ async function render(host: string, working = false, expanded = false) {
 
 const section = (label: string) =>
   document.querySelector<HTMLElement>(`section[aria-label="${label}"]`)!;
-/** Each item of a board section: its lead and its detail line. */
-const items = (label: string) =>
-  [...section(label).querySelectorAll("li")].map((li) =>
-    [...li.querySelectorAll(":scope > span:last-child > span:not(.sr-only)")].map(
-      (s) => s.textContent,
-    ),
+/** The marks of a rendered Markdown file's tasks, Open or Done, in order. */
+const tasks = (root: Element) =>
+  [...root.querySelectorAll("li > svg[aria-label]")].map((m) => m.getAttribute("aria-label"));
+/** The context files All files lists, in order. */
+const listed = () =>
+  [...document.querySelectorAll('[aria-label="All files"] button .font-mono')].map(
+    (f) => f.textContent,
   );
 
-test("Where it stands is the status board as checklists: a lead and a detail per item, Now working, Risks warned", async () => {
-  await render("h-board", true);
-  expect(section("Where it stands").textContent).toContain("updated 1h");
-  expect(section("Now").querySelector("h4")!.textContent).toBe("Now1 of 2 done");
-  expect(items("Now")).toEqual([
-    ["Search command", "one subagent adds it, with tests"],
-    ["Fix the login bug", "landed"],
+test("the status board reads as a project page: tasks as circles, bold leads, and its other files", async () => {
+  await render("h-board", { context: true });
+  const shown = document.querySelector('[aria-label="notes.md"]')!;
+  expect(tasks(shown)).toEqual(["Open", "Done", "Open", "Open"]);
+  expect([...shown.querySelectorAll("strong")].map((b) => b.textContent)).toEqual([
+    "Search command",
+    "Fix the login bug",
+    "Flaky CI",
   ]);
-  expect(items("Next")).toEqual([["Write the docs"]]);
-  // An open Now item moves while agents work, a done one is checked, and a risk is warned.
-  const marks = (label: string) =>
-    [...section(label).querySelectorAll("li > span:first-child > *")].map(
-      (m) => m.getAttribute("class")?.split(" ")[0],
-    );
-  expect(marks("Now")).toEqual(["loader", "text-added"]);
-  expect(marks("Next")).toEqual(["lucide"]);
-  expect(section("Risks").querySelector("svg")!.classList).toContain("lucide-triangle-alert");
-  // Lines that aren't items aren't shown.
-  expect(section("Where it stands").textContent).not.toContain("Older items");
+  expect([...shown.querySelectorAll("h2")].map((h) => h.textContent)).toEqual([
+    "Now",
+    "Next",
+    "Risks",
+  ]);
+  // Its link to the archive is off until that file exists.
+  const archive = [...shown.querySelectorAll<HTMLButtonElement>("button")].find(
+    (b) => b.textContent === "archived",
+  )!;
+  expect(archive.disabled).toBe(true);
 });
 
 test("context and memory follow their folders' events without the runs' output", async () => {
@@ -216,16 +255,10 @@ test("context and memory follow their folders' events without the runs' output",
   expect(params.every((p) => p.shell === true && p.after === 1)).toBe(true);
 });
 
-test("idle agents leave Now as open circles", async () => {
-  await render("h-idle");
-  expect(section("Now").querySelector("li svg")!.classList).toContain("lucide-circle");
-});
-
-test("the book opens Project files, the board first, and a file opens in place", async () => {
-  await render("h-files");
-  await click(document.querySelector('button[aria-label="Project files"]'));
-  const files = [...document.querySelectorAll("li button .font-mono")].map((f) => f.textContent);
-  expect(files).toEqual(["notes.md", "plan.md"]);
+test("All files lists the Project's context files with when each changed, and a file opens in place", async () => {
+  await render("h-files", { context: true });
+  expect(listed()).toEqual(["notes.md", "plan.md"]);
+  expect(document.querySelector('[aria-label="All files"]')!.textContent).toContain("Today at");
   await click(
     [...document.querySelectorAll("li button")].find((b) => b.textContent?.startsWith("plan.md")),
   );
@@ -234,8 +267,7 @@ test("the book opens Project files, the board first, and a file opens in place",
     path: "plan.md",
   });
   await click([...document.querySelectorAll("button")].find((b) => b.textContent === "plan.md"));
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Knowledge"));
-  expect(section("Where it stands")).not.toBeNull();
+  expect(listed()).toEqual(["notes.md", "plan.md"]);
 });
 
 const plan = `# Plan
@@ -249,8 +281,7 @@ const doc = (path: string) => document.querySelector(`article[aria-label="${path
 test("a context file shows tasks as circles, GitHub links with their icons, opens other context files in place, and follows agents' writes", async () => {
   files = [file("notes.md"), file("plan.md"), file("archived.md")];
   contents = { "notes.md": board, "plan.md": plan, "archived.md": "- [x] Old work" };
-  await render("h-links");
-  await click(document.querySelector('button[aria-label="Project files"]'));
+  await render("h-links", { context: true });
   await click(
     [...document.querySelectorAll("li button")].find((b) => b.textContent?.startsWith("plan.md")),
   );
@@ -286,12 +317,7 @@ test("a context file shows tasks as circles, GitHub links with their icons, open
     [...document.querySelectorAll("button")].find((b) => b.textContent === "archived.md"),
   );
   expect(doc("archived.md")).toBeNull();
-  expect([...document.querySelectorAll("li button .font-mono")].map((f) => f.textContent)).toEqual([
-    "notes.md",
-    "archived.md",
-    "plan.md",
-    "research.md",
-  ]);
+  expect(listed()).toEqual(["archived.md", "notes.md", "plan.md", "research.md"]);
 });
 
 test("What it knows counts what's known and new today, lists the latest learned, and the brief starts folded", async () => {
@@ -381,7 +407,7 @@ test("without sendAccount, the mini prompt offers only the coordinator's own pro
 });
 
 test("full screen centers Knowledge with the larger prompt", async () => {
-  await render("h-full", false, true);
+  await render("h-full", { expanded: true });
   const box = document.querySelector<HTMLTextAreaElement>(
     'textarea[aria-label="Change knowledge"]',
   )!;
