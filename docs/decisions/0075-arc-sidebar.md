@@ -16,7 +16,7 @@ The sidebar (0033, PLX-789, 0073, PLX-852) asked the user to manage threads, Pro
 - **Working** keeps working threads in its drawer above Snoozed and Archived, folded until opened.
 - **Rows** show the branch, commits not pushed and uncommitted lines (`agent/gitStatus`), and the open pull requests' checks as one mark.
 - **Threads another thread started** (0041), subagents' among them, don't list; opening one marks the row of the thread at the top of its family, which also says when one of them needs the user, waking it from a snooze, or failed since that row was last read.
-- **Folding the top** shrinks the favorites and turns the pins into one line of how many there are and what finished or failed.
+- **Folding the top** hides the favorites and pins, leaving Today, and Mod+1 to Mod+9 skip the hidden Projects (PLX-922).
 - **Areas and Spaces** no longer show in the app, and neither do inline approvals in rows; plxd keeps areas, Spaces, and their methods.
 - Folders, their order, the favorites' order, pin icons, folds, and Today's settings live in the app's localStorage.
 

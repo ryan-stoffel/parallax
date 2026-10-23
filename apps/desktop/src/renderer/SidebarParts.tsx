@@ -84,9 +84,9 @@ function Segmented<T extends string | number | boolean | null>({
 }
 
 /**
- * The line between what you keep and today's threads: Fold, which shrinks the favorites and pins
- * above it to a strip and a line, Clear, for what's finished, and View, for how today's threads
- * group, how tall their rows are, and when finished ones archive themselves.
+ * The line between what you keep and today's threads: Fold, which hides the favorites and pins
+ * above it, Clear, for what's finished, and View, for how today's threads group, how tall their
+ * rows are, and when finished ones archive themselves.
  */
 export function TodayDivider({
   clearable,

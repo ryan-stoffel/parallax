@@ -829,8 +829,13 @@ export function ThreadList({
           .filter((i) => !isFolded(groupKey(i)))
           .sort((a, b) => groupPlace.get(groupKey(a))! - groupPlace.get(groupKey(b))!);
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // favorites' Projects, then Today's threads, then Working's, while it's open.
-  const listed = [...projects, ...todayRows, ...(sections.working ? workingTops : [])];
+  // favorites' Projects, unless folded away, then Today's threads, then Working's, while it's open.
+  const topFolded = topCollapsed.use();
+  const listed = [
+    ...(topFolded && !words.length ? [] : projects),
+    ...todayRows,
+    ...(sections.working ? workingTops : []),
+  ];
   const modHeld = useModHeld();
   const openItem = (item: Item) =>
     onSelect(
@@ -1642,7 +1647,7 @@ export function ThreadList({
   ].sort((a, b) => favRank(a.key) - favRank(b.key) || 0);
   // Folding hides the favorites and pins, so Today's threads have the sidebar; it needs something
   // above to fold.
-  const folded = topCollapsed.use() && (favorites.length > 0 || pins.length > 0);
+  const folded = topFolded && (favorites.length > 0 || pins.length > 0);
   const list = (
     <>
       <Fold open={!folded || words.length > 0}>
