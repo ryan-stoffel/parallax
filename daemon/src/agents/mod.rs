@@ -70,10 +70,10 @@ use parallax_protocol::{
     AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentApproveParams, AgentApproveResult,
     AgentAttachParams, AgentAttachResult, AgentBackgroundTask, AgentDelivery, AgentEffort,
     AgentFailureKind, AgentImageParams, AgentOpenPrResult, AgentOutcome, AgentOutputItem,
-    AgentPermission, AgentRun, AgentSendParams, AgentStartParams, ApprovalId, CoordinatorThreadId,
-    ErrorKind, GitStatus, ImageId, ImageMediaType, ParallaxEvent, PrActParams, PrDiffResult,
-    PrState, PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest, QueueResult,
-    Role, RunId, TurnId,
+    AgentPermission, AgentRun, AgentSendParams, AgentStartParams, ApprovalId, CliKind,
+    CoordinatorThreadId, ErrorKind, GitStatus, ImageId, ImageMediaType, ParallaxEvent, PrActParams,
+    PrDiffResult, PrState, PrViewParams, ProjectId, ProjectPermission, PromptImage, PullRequest,
+    QueueResult, Role, RunId, TurnId,
 };
 use parallax_store::{RunFields, RunState, StoreError, ThreadFields, WorktreeFields};
 use tokio::sync::{mpsc, oneshot};
@@ -330,17 +330,30 @@ fn requested_account(account: Option<&AccountChoice>) -> Option<String> {
     account.and_then(|account| serde_json::to_string(account).ok())
 }
 
+/// Whether the worker run `fields` describe is full Claude Code if it runs on Claude, with no
+/// worker sandbox ([`crate::backend::claude::unsandboxed`]). Every worker run is a thread to its
+/// backend.
+pub(super) fn full_claude_code(fields: &RunFields) -> bool {
+    crate::backend::claude::runs_unsandboxed(
+        true,
+        fields.approvals,
+        fields.permission.as_deref().and_then(option_value),
+    )
+}
+
 /// The project's repository, the routing inputs, and the paths run `run` of `project` needs,
 /// checked: everything that can refuse a worker, or a coordinator when `role` is one, before
-/// anything is created. For a run that exists already, or one that isn't a thread.
+/// anything is created. `full_claude` is [`full_claude_code`] of the run's fields. For a run that
+/// exists already, or one that isn't a thread.
 pub(super) async fn prepare(
     daemon: &Arc<Daemon>,
     project: ProjectId,
     run: RunId,
     requested: Option<AccountChoice>,
     role: Role,
+    full_claude: bool,
 ) -> Result<(Prepared, String), ErrorObject> {
-    prepare_run(daemon, project, run, requested, role, false).await
+    prepare_run(daemon, project, run, requested, role, full_claude, false).await
 }
 
 /// [`prepare`], where `new_thread` says the run being created is a normal thread's
@@ -351,6 +364,7 @@ async fn prepare_run(
     run: RunId,
     requested: Option<AccountChoice>,
     role: Role,
+    full_claude: bool,
     new_thread: bool,
 ) -> Result<(Prepared, String), ErrorObject> {
     let (repo_path, context_scope, project_row, thread_run, defaults, mut accounts) =
@@ -417,10 +431,11 @@ async fn prepare_run(
         };
         return Ok((prepared, repo_path));
     }
-    // A Codex or Cursor thread is full Codex or Cursor Agent, with no worker sandbox to check
-    // (0035, 0036). Any other run on them is refused, even one on a repo entry: they run nothing
-    // else.
-    if !(thread_run && resolved.backend().full_thread()) {
+    // A Codex or Cursor thread is full Codex or Cursor Agent, and they run nothing else, even on a
+    // repo entry. A Claude run with approvals or in Bypass is full Claude Code. None has a worker
+    // sandbox to check, on any OS (0035, 0036, 0034, 0027, PLX-959).
+    let full_claude = full_claude && resolved.backend().cli() == Some(CliKind::Claude);
+    if !(full_claude || thread_run && resolved.backend().full_thread()) {
         worker::check_backend(resolved.backend())?;
     }
     if let Some(cli) = worker::cli_of(resolved.backend()) {
@@ -432,7 +447,7 @@ async fn prepare_run(
             worker::check_version(cli, Some(&detected))?;
         }
         #[cfg(target_os = "linux")]
-        if cli == parallax_protocol::CliKind::Claude {
+        if cli == CliKind::Claude && !full_claude {
             worker::check_linux_sandbox(&daemon.cli_detector, Some(&detected)).await?;
         }
     }
@@ -1167,6 +1182,7 @@ pub(crate) async fn create_started(
         run_id,
         account,
         Role::Worker,
+        full_claude_code(&fields),
         thread.is_some(),
     )
     .await?;

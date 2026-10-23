@@ -2711,22 +2711,30 @@ impl Actor {
         } else {
             Role::Worker
         };
-        let (prepared, repo_path) =
-            match prepare(&self.daemon, self.project, self.id, Some(account), role).await {
-                Ok(prepared) => prepared,
-                Err(error)
-                    if !moving
-                        && error
-                            .parallax_data()
-                            .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
-                {
-                    return Err(not_resumable(format!(
-                        "its session's account {} no longer exists",
-                        self.row.state.account_id
-                    )));
-                }
-                Err(error) => return Err(error),
-            };
+        let (prepared, repo_path) = match prepare(
+            &self.daemon,
+            self.project,
+            self.id,
+            Some(account),
+            role,
+            super::full_claude_code(&self.row.fields),
+        )
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error)
+                if !moving
+                    && error
+                        .parallax_data()
+                        .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
+            {
+                return Err(not_resumable(format!(
+                    "its session's account {} no longer exists",
+                    self.row.state.account_id
+                )));
+            }
+            Err(error) => return Err(error),
+        };
         let backend = prepared.resolved.backend().name();
         let from = self.row.fields.backend.clone();
         if backend != from && !moving {

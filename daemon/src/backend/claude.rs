@@ -53,13 +53,14 @@
 //!   [`WORKER_MIN_VERSION`], or reports a permission mode other than the one it asked for
 //!   ([`permission_mode`]), fails with [`FailureKind::PolicyViolation`].
 //!
-//!   Only macOS and Linux run workers, with the same settings. On Linux,
+//!   Only macOS and Linux run sandboxed workers, with the same settings. On Linux,
 //!   `linux_sandbox::check_host` checks before each worker that the sandbox works, seccomp
 //!   filter included, because `failIfUnavailable` doesn't cover the filter (0013). It also
 //!   refuses a worker when Claude Code runs with [`SCRUB_ENV`] on, which managed settings can
 //!   set (PLX-112). That check runs in a separate process, so the permission mode check, which
 //!   the flag fails, backs it up from inside the worker's own (PLX-118). Elsewhere the backend
-//!   reports no `worker_sandbox` and refuses a workspace-write run.
+//!   reports no `worker_sandbox` and refuses a sandboxed run. Full Claude Code needs no sandbox,
+//!   so it runs the same on macOS, Linux, and Windows, with no sandbox check (PLX-959).
 //!
 //! # A worker's temp folder
 //!
@@ -867,7 +868,18 @@ fn strings<'a>(paths: impl Iterator<Item = &'a Path>) -> Vec<String> {
 #[must_use]
 pub fn unsandboxed(request: &RunRequest) -> bool {
     request.policy == ToolPolicy::WorkspaceWrite
-        && (full_thread(request) || request.permission == Some(AgentPermission::Bypass))
+        && runs_unsandboxed(request.thread, request.approvals, request.permission)
+}
+
+/// [`unsandboxed`] for a workspace-write run, from its parts, for a caller that has no
+/// [`RunRequest`] yet: plxd checks no worker sandbox before such a run, on any OS (PLX-959).
+#[must_use]
+pub fn runs_unsandboxed(
+    thread: bool,
+    approvals: bool,
+    permission: Option<AgentPermission>,
+) -> bool {
+    (thread && approvals) || permission == Some(AgentPermission::Bypass)
 }
 
 /// Whether `request` is a normal thread that runs as full Claude Code (0034): one whose client
@@ -1134,7 +1146,10 @@ impl Backend for ClaudeBackend {
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
-        if request.policy != ToolPolicy::NoWrite && !self.capabilities().worker_sandbox {
+        if request.policy != ToolPolicy::NoWrite
+            && !unsandboxed(&request)
+            && !self.capabilities().worker_sandbox
+        {
             return Err(StartError::Unsupported(
                 "plxd can't check Claude Code's worker sandbox on this OS yet (decision 0023)"
                     .into(),
@@ -1149,7 +1164,13 @@ impl Backend for ClaudeBackend {
         let plan_exit = hands_over_plans(&request);
         let full = full_thread(&request);
         if let Some(sandbox) = worker_sandbox(&request)? {
-            spec.inject.set(TEMP_ENV, worker_temp(&sandbox.temp)?);
+            // Only sandboxed commands can't use the shared folder Claude Code falls back to, so
+            // full Claude Code keeps a longer path, as every one on Windows is (PLX-959).
+            let temp = match worker_temp(&sandbox.temp) {
+                Err(_) if unsandboxed(&request) => sandbox.temp.clone(),
+                temp => temp?,
+            };
+            spec.inject.set(TEMP_ENV, temp);
         }
         if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
             spec.inject.set(SCRUB_ENV, "1");

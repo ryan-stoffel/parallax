@@ -633,6 +633,30 @@ fn a_worker_s_temp_folder_must_leave_claude_code_room() {
     }
 }
 
+/// Full Claude Code starts with a temp folder too long for a sandboxed worker, as every one on
+/// Windows is, since only sandboxed commands can't use the shared folder (PLX-959).
+#[tokio::test]
+async fn full_claude_code_keeps_a_temp_folder_too_long_for_a_sandbox() {
+    let fake = Fake::new("read-only");
+    let long = format!("/tmp/{}", "x".repeat(super::MAX_COMMAND_TEMP_BYTES));
+    let mut thread = request(&fake.root());
+    thread.policy = ToolPolicy::WorkspaceWrite;
+    thread.thread = true;
+    thread.sandbox = Some(WorkerSandbox {
+        temp: long.clone().into(),
+        ..worker_sandbox(&fake.root())
+    });
+    match fake.backend.start(thread.clone()) {
+        Err(StartError::Invalid(message)) => assert!(message.contains("every session shares")),
+        Err(other) => panic!("expected Invalid, got {other:?}"),
+        Ok(_) => panic!("a sandboxed thread started"),
+    }
+    thread.approvals = true;
+    run(&fake, thread).await;
+    let temp = format!("CLAUDE_CODE_TMPDIR={long}");
+    assert!(fake.env().contains(&temp), "{:?}", fake.env());
+}
+
 /// A worker gets a script that keeps the CLI's `PATH` in its Bash commands (PLX-126), in the data
 /// folder, and it's gone once the run has ended.
 #[tokio::test]

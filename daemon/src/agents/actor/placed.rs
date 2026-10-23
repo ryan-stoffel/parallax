@@ -7,7 +7,7 @@ use parallax_protocol::{AccountChoice, AgentRun, ErrorKind, Role};
 use super::Actor;
 use crate::agents::convert::WAITING;
 use crate::agents::placement::Pending;
-use crate::agents::{RunOptions, first_prompt, prepare};
+use crate::agents::{RunOptions, first_prompt, full_claude_code, prepare};
 
 impl Actor {
     /// Starts the waiting child on `account` with `pending`, its first message. A child that no
@@ -40,6 +40,7 @@ impl Actor {
             self.id,
             Some(account),
             Role::Worker,
+            full_claude_code(&self.row.fields),
         )
         .await?;
         // Another instance of the same kind serves the same model, so the model goes with it.

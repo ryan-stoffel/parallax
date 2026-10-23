@@ -82,7 +82,7 @@ pub(crate) async fn start(
         return Ok(run);
     }
     let (prepared, repo_path) =
-        prepare(&daemon, project, run_id, account, Role::Coordinator).await?;
+        prepare(&daemon, project, run_id, account, Role::Coordinator, false).await?;
     if let Some(mode) = mode {
         super::in_mode(prepared.resolved.backend(), mode)?;
     }
