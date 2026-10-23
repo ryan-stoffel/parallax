@@ -29,9 +29,10 @@
 //! A run checks that the server is `OpenCode` 1.x's (`GET /global/health`), creates a session
 //! (`POST /session`) or checks the one it resumes (`GET /session/<id>`), and opens its event
 //! stream before the first prompt. Each message is a `POST /session/<id>/prompt_async`, with its
-//! images as `data:` file parts before its text, the model as `providerID/modelID`, and Plan's
-//! `plan` agent; a turn ends when the session goes idle after it went busy for the prompt, or
-//! with a `session.error`, which fails the run. A follow-up sent during a turn waits for it. A
+//! images as `data:` file parts before its text, the model as `providerID/modelID`, Plan's
+//! `plan` agent, and a coordinator's instructions as `system` (0078); a turn ends when the
+//! session goes idle after it went busy for the prompt, or with a `session.error`, which fails
+//! the run. A follow-up sent during a turn waits for it. A
 //! steer (PLX-370) aborts the turn (`POST /session/<id>/abort`) and then goes as the next
 //! prompt, as ACP agents take one. Once no turn is in flight, nothing waits, and plxd holds no
 //! message for it ([`Run::hold`]), the run ends; a later message resumes the session.
@@ -724,6 +725,7 @@ impl Backend for OpencodeBackend {
             agent: (permission == AgentPermission::Plan).then_some("plan"),
             model_name: request.model.clone(),
             model,
+            system: request.instructions,
             mcp,
             session: String::new(),
             prompts: VecDeque::from([Prompt::new(
@@ -837,6 +839,9 @@ struct Driver {
     rules: Value,
     agent: Option<&'static str>,
     model: Option<Value>,
+    /// [`RunRequest::instructions`], every message's `system`, which `OpenCode` adds to its own
+    /// system prompt for that message (0078).
+    system: Option<String>,
     model_name: Option<String>,
     /// The thread's MCP server, for `POST /mcp`.
     mcp: Option<Value>,
@@ -1105,6 +1110,9 @@ impl Driver {
         }
         if let Some(model) = &self.model {
             body["model"] = model.clone();
+        }
+        if let Some(system) = &self.system {
+            body["system"] = system.as_str().into();
         }
         self.translator.busy = false;
         self.in_flight = Some(InFlight(prompt.turn_id));

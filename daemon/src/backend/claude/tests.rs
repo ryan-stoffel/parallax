@@ -233,6 +233,7 @@ fn request(cwd: &Path) -> RunRequest {
         thread_tools: None,
         approvals: false,
         thread: false,
+        instructions: None,
     }
 }
 
@@ -2676,6 +2677,47 @@ fn a_thread_is_told_to_write_math_as_latex() {
         !super::arguments(&thread)
             .unwrap()
             .contains(&"--append-system-prompt".into())
+    );
+}
+
+/// 0078: a coordinator's instructions are its `--append-system-prompt` on a fresh start and on a
+/// resume alike, joined with the math format for a thread that gets both, since the CLI keeps one.
+#[test]
+fn instructions_are_appended_to_the_system_prompt_on_a_start_and_a_resume() {
+    let cwd = Path::new("/repo");
+    let appended = |request: &RunRequest| {
+        let args = super::arguments(request).unwrap();
+        let at = args
+            .iter()
+            .position(|arg| arg == "--append-system-prompt")
+            .unwrap();
+        assert_eq!(
+            args.iter()
+                .filter(|arg| *arg == "--append-system-prompt")
+                .count(),
+            1
+        );
+        args[at + 1].clone()
+    };
+    let mut fresh = coordinator(cwd);
+    fresh.policy = ToolPolicy::NoWrite;
+    fresh.instructions = Some("Never edit files.".into());
+    assert_eq!(appended(&fresh), "Never edit files.");
+    let resumed = RunRequest {
+        resume: Some(Resume::new("s-1")),
+        ..fresh
+    };
+    assert_eq!(appended(&resumed), "Never edit files.");
+
+    let mut thread = request(cwd);
+    thread.policy = ToolPolicy::WorkspaceWrite;
+    thread.sandbox = Some(worker_sandbox(cwd));
+    thread.approvals = true;
+    thread.thread = true;
+    thread.instructions = Some("Never edit files.".into());
+    assert_eq!(
+        appended(&thread),
+        &*format!("{}\n\nNever edit files.", crate::backend::MATH_FORMAT)
     );
 }
 

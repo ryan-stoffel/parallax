@@ -140,12 +140,10 @@ async fn a_coordinator_runs_in_its_worktree_and_resumes_there_after_a_restart() 
     assert!(first.sandbox.is_none());
     // A thread's tools, bound to its own run (PLX-380).
     assert_eq!(first.coordinator_tools.map(|tools| tools.run), Some(run.id));
-    assert!(first.prompt.contains("thread_launch"), "{}", first.prompt);
-    assert!(
-        first.prompt.ends_with("Plan the README."),
-        "{}",
-        first.prompt
-    );
+    // Its instructions are pinned to the system prompt, and the message is the user's own (0078).
+    let instructions = first.instructions.clone().unwrap_or_default();
+    assert!(instructions.contains("thread_launch"), "{instructions}");
+    assert_eq!(first.prompt, "Plan the README.");
     assert_eq!(
         git(&repo, &["rev-parse", "HEAD"]),
         before,
@@ -189,6 +187,7 @@ async fn a_coordinator_runs_in_its_worktree_and_resumes_there_after_a_restart() 
         "a message resumes the session"
     );
     assert_eq!(resumed.prompt, "Go on.");
+    assert_eq!(resumed.instructions, first.instructions, "pinned again");
     assert_eq!(resumed.cwd, first.cwd, "it resumes where it started");
     assert_eq!(resumed.policy, ToolPolicy::NoWrite);
     assert!(resumed.coordinator_tools.is_some());

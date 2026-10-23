@@ -757,8 +757,15 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             args.extend(["--add-dir".into(), dir.into()]);
         }
     }
-    if unsandboxed {
-        args.extend(["--append-system-prompt".into(), super::MATH_FORMAT.into()]);
+    // The CLI keeps one `--append-system-prompt`, so the math format and a coordinator's
+    // instructions (0078) share it.
+    let append: Vec<&str> = unsandboxed
+        .then_some(super::MATH_FORMAT)
+        .into_iter()
+        .chain(request.instructions.as_deref())
+        .collect();
+    if !append.is_empty() {
+        args.extend(["--append-system-prompt".into(), append.join("\n\n").into()]);
     }
     if coordinator || unsandboxed {
         // Full Claude Code loads the user's and the project's settings, whose `env` could share

@@ -140,6 +140,7 @@ fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
         thread_tools: None,
         approvals: true,
         thread: false,
+        instructions: None,
     }
 }
 
@@ -771,6 +772,7 @@ fn plain(folders: &Folders, resume: Option<Resume>) -> RunRequest {
         thread_tools: None,
         approvals: false,
         thread: false,
+        instructions: None,
     }
 }
 

@@ -10,7 +10,8 @@
 //! (`thread/fork` for a fork's first run, 0050), with the model, the context window as
 //! `model_context_window`, the thread's `plxd mcp --thread` server as dotted `mcp_servers.plxd.*`
 //! overrides that join the user's servers, its tools approved without asking (0041), fast mode as
-//! the `priority` service tier, and the mode's approval policy and sandbox ([`mode`]). The prompt
+//! the `priority` service tier, the mode's approval policy and sandbox ([`mode`]), and a
+//! coordinator's instructions as `developerInstructions` (0078). The prompt
 //! is the first `turn/start`, as written, with its images as `localImage` files ([`write_images`])
 //! and the effort. If `thread/resume` fails, the thread sends `thread/start` once instead, with
 //! [`Resume::fallback`](super::super::Resume::fallback) as the prompt (T3 Code, PLX-728). A turn
@@ -247,7 +248,8 @@ pub(super) fn initialize_params() -> Value {
 
 /// `thread/start`, `thread/resume` for a run that resumes a thread, or `thread/fork` for a fork's
 /// first run, and its params: the cwd,
-/// the mode ([`mode`]), the model, the context window, the Parallax MCP server, and fast mode.
+/// the mode ([`mode`]), the model, the context window, the Parallax MCP server, fast mode, and
+/// [`RunRequest::instructions`] as developer instructions.
 fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartError> {
     let (approval_policy, sandbox, reviewer) = policy(request.permission, request.approvals)?;
     if let Some(model) = &request.model {
@@ -298,6 +300,10 @@ fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartErr
     }
     if !config.is_empty() {
         thread["config"] = config.into();
+    }
+    // Sent on every start, resume, and fork, so a resumed thread gets them again (0078).
+    if let Some(instructions) = &request.instructions {
+        thread["developerInstructions"] = instructions.as_str().into();
     }
     if let Some(fast) = request.fast {
         // The catalog's tier named "Fast" is `priority`.

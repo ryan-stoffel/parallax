@@ -315,6 +315,7 @@ fn request(cwd: PathBuf) -> RunRequest {
         thread_tools: None,
         approvals: true,
         thread: true,
+        instructions: None,
     }
 }
 
@@ -368,7 +369,9 @@ async fn a_thread_at_a_server_url_streams_asks_and_finishes() {
     let dir = tempfile::tempdir().unwrap();
     let (launcher, cwd) = launcher(&dir, "/usr/bin:/bin");
     let backend = OpencodeBackend::new(launcher, opencode(Some(&server.url), Some("hunter2")));
-    let started = backend.start(request(cwd.clone())).unwrap();
+    let mut fresh = request(cwd.clone());
+    fresh.instructions = Some("Never edit files.".into());
+    let started = backend.start(fresh).unwrap();
     let mut events = started.events;
 
     let seen = until(&mut events, |e| matches!(e, Event::ApprovalRequested(_))).await;
@@ -461,6 +464,7 @@ async fn a_thread_at_a_server_url_streams_asks_and_finishes() {
         json!({
             "parts": [{"type": "text", "text": "Run cat a.txt"}],
             "model": {"providerID": "opencode", "modelID": "big-pickle"},
+            "system": "Never edit files.",
         })
     );
     let answer = server.find("POST", "/permission/per_1/reply").unwrap();
@@ -491,6 +495,7 @@ async fn a_resumed_plan_run_appends_its_rules_and_an_interrupting_denial_aborts(
     request.resume = Some(Resume::new("ses_1"));
     request.permission = Some(AgentPermission::Plan);
     request.model = None;
+    request.instructions = Some("Never edit files.".into());
     let started = backend.start(request).unwrap();
     let mut events = started.events;
 
@@ -540,6 +545,10 @@ async fn a_resumed_plan_run_appends_its_rules_and_an_interrupting_denial_aborts(
     );
     let prompt = server.find("POST", "/session/ses_1/prompt_async").unwrap();
     assert_eq!(prompt.body["agent"], "plan");
+    assert_eq!(
+        prompt.body["system"], "Never edit files.",
+        "a resume pins it too (0078)"
+    );
     let denied = server.find("POST", "/permission/per_1/reply").unwrap();
     assert_eq!(
         denied.body,

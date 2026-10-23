@@ -27,7 +27,7 @@ use super::{RunOptions, existing, prepare, requested_account, stage_started, sto
 use crate::methods::question::level;
 use crate::server::Daemon;
 
-/// The coordinator's instructions, sent ahead of the user's first message.
+/// The coordinator's instructions, pinned to its system prompt ([`instructions`]).
 const INSTRUCTIONS: &str = include_str!("coordinator.md");
 
 /// `project/start`: see the module documentation. Idempotent on the run id, and refused while the
@@ -81,7 +81,7 @@ pub(crate) async fn start(
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
         return Ok(run);
     }
-    let (prepared, repo_path) =
+    let (prepared, _) =
         prepare(&daemon, project, run_id, account, Role::Coordinator, false).await?;
     if let Some(mode) = mode {
         super::in_mode(prepared.resolved.backend(), mode)?;
@@ -94,8 +94,8 @@ pub(crate) async fn start(
         ..RunState::default()
     };
     // One store job, so two starts with different run ids can't both find no live coordinator.
-    let (row, autonomy, replaced, handed) = store(&daemon, move |db| {
-        let Some(project_row) = db
+    let (row, replaced, handed) = store(&daemon, move |db| {
+        let Some(_) = db
             .get_project(project.into())
             .map_err(|e| store_error(&e))?
         else {
@@ -121,11 +121,10 @@ pub(crate) async fn start(
             .create_run(run_id.into(), &fields, &state)
             .map_err(|e| store_error(&e))?;
         stage_started(db, &row, None)?;
-        let autonomy = crate::store::project_autonomy(&project_row.autonomy);
         // In the job that makes the row, so no child's end is both handed over and sent to it
         // (PLX-936).
         let handed = super::wake::handed(db, project.into(), row.id);
-        Ok((row, autonomy, current.map(|current| current.id), handed))
+        Ok((row, current.map(|current| current.id), handed))
     })
     .await?;
     // The coordinator it replaces may have an idle session in the same worktree: it ends, so two
@@ -136,9 +135,8 @@ pub(crate) async fn start(
     info!(run = %run_id, project = %project, backend = %row.fields.backend, "created a project's coordinator");
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());
-    let message = first_message(&prompt, &repo_path, autonomy);
     actor
-        .launch(prepared, message, images, None, None, None)
+        .launch(prepared, prompt, images, None, None, None)
         .await;
     // The actor owns a live CLI from here on, so it is spawned whatever the snapshot says.
     let run = actor.snapshot();
@@ -191,16 +189,16 @@ pub(crate) fn from_threads_prompt(threads: &[RunId]) -> String {
     )
 }
 
-/// The coordinator's first message: its instructions, where it is, the Project's autonomy level
-/// (0043), then the user's message.
-pub(super) fn first_message(message: &str, repo: &str, autonomy: ProjectAutonomy) -> String {
+/// The coordinator's instructions, where it is, and the Project's autonomy level (0043), which
+/// every CLI process of its run gets in its system prompt, so compaction never drops them and a
+/// new level applies from the next process (0078).
+pub(super) fn instructions(repo: &str, autonomy: ProjectAutonomy) -> String {
     format!(
         "{INSTRUCTIONS}\nThe project's repository is {repo}, the user's own checkout: leave it \
          alone. Read the code in your working directory instead, a copy of the integration \
          branch's latest commit that Parallax resets each time it starts you, so it doesn't have \
          the user's uncommitted changes, and nothing written there is kept.\n\n{} Each question \
-         Parallax wakes you with names the level as it is then, since the user can change \
-         it.\n\nThe user's message:\n{message}",
+         Parallax wakes you with names the level as it is then, since the user can change it.",
         level(autonomy)
     )
 }

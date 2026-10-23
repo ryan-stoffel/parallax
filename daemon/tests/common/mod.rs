@@ -53,6 +53,7 @@ pub fn worker_request(
         thread_tools: None,
         approvals: false,
         thread: false,
+        instructions: None,
     };
     (request, temp)
 }

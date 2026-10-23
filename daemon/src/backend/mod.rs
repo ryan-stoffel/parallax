@@ -325,9 +325,25 @@ pub struct RunRequest {
     /// With [`Self::approvals`], Claude Code runs it as full Claude Code in every mode, with no
     /// worker sandbox (0034); without, it keeps the sandbox.
     pub thread: bool,
+    /// Text added to the agent's system prompt on this CLI process, resumes included, so
+    /// compaction never drops it: a coordinator's instructions (0078). Claude Code takes it as
+    /// `--append-system-prompt`, Codex as developer instructions, and `OpenCode` as each
+    /// message's `system`. ACP agents and Cursor have no channel that adds to their own prompt,
+    /// so they get it ahead of the process's first message ([`Self::first_prompt`]).
+    pub instructions: Option<String>,
 }
 
 impl RunRequest {
+    /// The first message for a backend with no system-prompt channel: [`Self::instructions`],
+    /// if any, then the prompt.
+    #[must_use]
+    pub fn first_prompt(&self) -> String {
+        match &self.instructions {
+            Some(instructions) => format!("{instructions}\n\n{}", self.prompt),
+            None => self.prompt.clone(),
+        }
+    }
+
     /// Whether a backend that runs only full agents, Codex and ACP agents, takes it: a thread, or
     /// a coordinator, which runs there as a thread does (0042).
     #[must_use]

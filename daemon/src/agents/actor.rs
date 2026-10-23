@@ -499,6 +499,7 @@ struct Setup {
     tools: Option<ThreadTools>,
     thread_tools: Option<ThreadTools>,
     thread: bool,
+    instructions: Option<String>,
 }
 
 #[derive(Default)]
@@ -2947,7 +2948,7 @@ impl Actor {
         };
         if rewound == Some(revert::Rewound::Restart) {
             info!(run = %self.id, "starting a new session for a thread reverted to its start");
-            let prompt = self.first_message(&text, &prepared.place).await?;
+            let prompt = Self::first_message(&text, &prepared.place)?;
             return Ok((prompt, None, None));
         }
         if let Some(session_id) = session_id {
@@ -3094,26 +3095,15 @@ impl Actor {
                 cap: handoff::HANDOFF_BYTES,
             },
         );
-        self.first_message(&handoff_message(from, &conversation, text), place)
-            .await
+        Self::first_message(&handoff_message(from, &conversation, text), place)
     }
 
-    /// `message` as a new session's first message: after what the run's first message says about
-    /// where the agent is and what it may do, if anything.
-    async fn first_message(&self, message: &str, place: &Place) -> Result<String, ErrorObject> {
+    /// `message` as a new session's first message: after what a worker's first message says
+    /// about where it is and what it may do. A coordinator's instructions go in its system
+    /// prompt instead (0078).
+    fn first_message(message: &str, place: &Place) -> Result<String, ErrorObject> {
         match place {
-            Place::Coordinator { repo } => {
-                let project = self.project.into();
-                let autonomy = store(&self.daemon, move |db| {
-                    crate::methods::question::autonomy_of(db, project)
-                })
-                .await?;
-                Ok(super::coordinator::first_message(
-                    message,
-                    &repo.to_string_lossy(),
-                    autonomy,
-                ))
-            }
+            Place::Coordinator { .. } => Ok(message.to_owned()),
             Place::Worker { .. } => super::first_prompt(message, place),
         }
     }
@@ -3299,6 +3289,7 @@ impl Actor {
             tools,
             thread_tools,
             thread,
+            instructions,
         } = match setup {
             Ok(setup) => setup,
             Err(message) => {
@@ -3329,6 +3320,7 @@ impl Actor {
             thread_tools,
             approvals: self.row.fields.approvals,
             thread,
+            instructions,
         };
         match routing::start(Arc::clone(&self.daemon.keys), &accounts, resolved, request) {
             Ok(started) => {
@@ -3386,13 +3378,21 @@ impl Actor {
             tools: None,
             thread_tools: Some(thread_tools),
             thread: true,
+            instructions: None,
         })
     }
 
     /// A coordinator runs in its detached worktree, moved to the integration branch's tip first,
     /// and cut with the branch if either is missing (0042, 0045), with a thread's Parallax tools
-    /// bound to its own run (0041, PLX-380).
+    /// bound to its own run (0041, PLX-380), and its instructions with the Project's autonomy as
+    /// it is now, pinned to this CLI's system prompt (0078).
     async fn coordinator_setup(&mut self, repo: &Path) -> Result<Setup, String> {
+        let project = self.project.into();
+        let autonomy = store(&self.daemon, move |db| {
+            crate::methods::question::autonomy_of(db, project)
+        })
+        .await
+        .map_err(|error| error.message)?;
         let branch = super::integration(&self.daemon, self.project)
             .await
             .map_err(|error| error.message)?
@@ -3417,6 +3417,10 @@ impl Actor {
             tools: Some(tools),
             thread_tools: None,
             thread: false,
+            instructions: Some(super::coordinator::instructions(
+                &repo.to_string_lossy(),
+                autonomy,
+            )),
         })
     }
 
