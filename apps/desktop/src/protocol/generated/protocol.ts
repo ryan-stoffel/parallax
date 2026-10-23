@@ -654,6 +654,24 @@ export type ParallaxRequests = {
 	 */
 	"question/list": { params: QuestionListParams, result: QuestionListResult },
 	/**
+	 * `board/list`: a Project's status board items, oldest first (PLX-940). Gated on the
+	 * `board` capability.
+	 */
+	"board/list": { params: BoardListParams, result: BoardListResult },
+	/**
+	 * `board/add`: adds an item to a Project's status board and renders `notes.md`
+	 * (PLX-940). Gated on the `board` capability.
+	 */
+	"board/add": { params: BoardAddParams, result: BoardItemResult },
+	/**
+	 * `board/update`: changes one board item (PLX-940). Gated on the `board` capability.
+	 */
+	"board/update": { params: BoardUpdateParams, result: BoardItemResult },
+	/**
+	 * `board/remove`: removes one board item (PLX-940). Gated on the `board` capability.
+	 */
+	"board/remove": { params: BoardRemoveParams, result: BoardRemoveResult },
+	/**
 	 * `memory/list`: a scope's brief, memory entries, knowledge, and proposals, with each
 	 * entry's header (PLX-405, 0044). Gated on the `memory` capability, like every
 	 * `memory/*` method.
@@ -1011,6 +1029,10 @@ export const REQUEST_METHODS = [
 	"question/answer",
 	"question/escalate",
 	"question/list",
+	"board/list",
+	"board/add",
+	"board/update",
+	"board/remove",
 	"memory/list",
 	"memory/read",
 	"memory/write",
@@ -7763,6 +7785,190 @@ export type QuestionListResult = {
 	 * Every question, oldest first.
 	 */
 	questions: Array<Question>,
+};
+
+/**
+ * Params of `board/list`. Fails with `projectNotFound` for an unknown Project.
+ */
+export type BoardListParams = {
+	/**
+	 * The Project.
+	 */
+	project: ProjectId,
+};
+
+/**
+ * Result of `board/list`.
+ */
+export type BoardListResult = {
+	/**
+	 * Every item, archived ones included, oldest first.
+	 */
+	items: Array<BoardItem>,
+};
+
+/**
+ * One item on a Project's status board.
+ */
+export type BoardItem = {
+	/**
+	 * The item's id, unique on the host. plxd assigns it.
+	 */
+	id: number,
+	/**
+	 * One line of Markdown, such as `**Search command**: one subagent adds it`.
+	 */
+	text: string,
+	/**
+	 * Whether it is still to do.
+	 */
+	status: BoardStatus,
+	/**
+	 * Its section.
+	 */
+	section: BoardSection,
+	/**
+	 * What it links to.
+	 */
+	links: BoardLinks,
+	/**
+	 * When it was added, in RFC 3339 UTC.
+	 */
+	createdAt: string,
+	/**
+	 * When it last changed, in RFC 3339 UTC.
+	 */
+	updatedAt: string,
+	/**
+	 * When it was marked done, while it is. Seven days later it moves to `archived.md`.
+	 */
+	doneAt?: string,
+};
+
+/**
+ * What a board item links to.
+ */
+export type BoardLinks = {
+	/**
+	 * Threads doing or tracking the work, by run id.
+	 */
+	threads?: Array<RunId>,
+	/**
+	 * The item's pull request, an `https://` URL.
+	 */
+	pullRequest?: string,
+	/**
+	 * Files it concerns: repository paths or shared context files.
+	 */
+	files?: Array<string>,
+};
+
+/**
+ * The board section an item is in, in the order the board shows them.
+ *
+ * A newer plxd may send a section this version does not know; treat it as `risks`.
+ */
+export type BoardSection = "now" | "next" | "risks";
+
+/**
+ * Whether a board item is still to do.
+ *
+ * A newer plxd may send a status this version does not know; treat it as open.
+ */
+export type BoardStatus = "open" | "done";
+
+/**
+ * Params of `board/add`: adds an item. Not idempotent: a retry adds a second item. Fails with
+ * `projectNotFound` for an unknown Project, and `invalidParams` for empty or multi-line text
+ * over 2 KiB, or links that aren't valid.
+ */
+export type BoardAddParams = {
+	/**
+	 * The Project.
+	 */
+	project: ProjectId,
+	/**
+	 * One line of Markdown.
+	 */
+	text: string,
+	/**
+	 * Its section.
+	 */
+	section: BoardSection,
+	/**
+	 * Its status. Absent means `open`.
+	 */
+	status?: BoardStatus,
+	/**
+	 * What it links to.
+	 */
+	links?: BoardLinks,
+};
+
+/**
+ * Result of `board/add` and `board/update`.
+ */
+export type BoardItemResult = {
+	/**
+	 * The item as it stands.
+	 */
+	item: BoardItem,
+};
+
+/**
+ * Params of `board/update`: changes what it names of one item, replacing `links` whole. Fails
+ * with `invalidParams` for an item the Project doesn't have, or a value `board/add` refuses.
+ */
+export type BoardUpdateParams = {
+	/**
+	 * The Project.
+	 */
+	project: ProjectId,
+	/**
+	 * The item.
+	 */
+	id: number,
+	/**
+	 * Its new text.
+	 */
+	text?: string,
+	/**
+	 * Its new section.
+	 */
+	section?: BoardSection,
+	/**
+	 * Its new status.
+	 */
+	status?: BoardStatus,
+	/**
+	 * Its new links, replacing the old ones.
+	 */
+	links?: BoardLinks,
+};
+
+/**
+ * Params of `board/remove`: removes one item. Removing one the Project doesn't have succeeds
+ * with `removed` false.
+ */
+export type BoardRemoveParams = {
+	/**
+	 * The Project.
+	 */
+	project: ProjectId,
+	/**
+	 * The item.
+	 */
+	id: number,
+};
+
+/**
+ * Result of `board/remove`.
+ */
+export type BoardRemoveResult = {
+	/**
+	 * Whether the item existed.
+	 */
+	removed: boolean,
 };
 
 /**

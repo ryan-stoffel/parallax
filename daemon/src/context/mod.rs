@@ -339,11 +339,13 @@ pub(crate) fn delete_file(dir: &Path, name: &str) -> io::Result<()> {
 
 /// The total size of a project's shared context, in bytes, apart from `except`'s own current
 /// size, if it exists. Used to check the per-project cap before a write, without counting the
-/// file the write is about to replace against itself.
+/// file the write is about to replace against itself. plxd's copies of a hand-written board
+/// ([`crate::board::LEGACY`]) don't count, so keeping them can't fail on the cap or crowd out
+/// other files.
 pub(crate) fn other_files_total(dir: &Path, except: &str) -> io::Result<u64> {
     let mut total = 0_u64;
     for (name, metadata) in list_files(dir)? {
-        if name != except {
+        if name != except && !crate::board::LEGACY.contains(&name.as_str()) {
             total += metadata.len();
         }
     }

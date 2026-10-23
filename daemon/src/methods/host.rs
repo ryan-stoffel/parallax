@@ -135,6 +135,8 @@ pub(crate) fn initialize(
 /// `areas` (PLX-789, 0073): `area/create`, `area/update`, `area/delete`, `areas.changed`, and
 /// `areas` on `thread/list` and the shell snapshot; `pinned` on `Thread` and `thread/update`; and
 /// `snippets` on `thread/search`, which an older plxd would silently drop.
+/// `board` (PLX-940, 0081): `board/list`, `board/add`, `board/update`, and `board/remove`, and
+/// `notes.md` and `archived.md` rendered from the items, which `context/write` refuses.
 /// `spaces` (PLX-732, 0069): `space/create`, `space/delete`, `repo.removed`, `name` on
 /// `repo/update`, and `space` on `Repo`.
 /// `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
@@ -267,6 +269,7 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
         ("areaRepos".to_owned(), serde_json::Map::new()),
         ("areas".to_owned(), serde_json::Map::new()),
         ("autoResume".to_owned(), serde_json::Map::new()),
+        ("board".to_owned(), serde_json::Map::new()),
         ("chatImport".to_owned(), serde_json::Map::new()),
         ("checkpoints".to_owned(), serde_json::Map::new()),
         ("checks".to_owned(), serde_json::Map::new()),

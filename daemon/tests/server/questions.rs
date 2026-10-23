@@ -19,7 +19,7 @@ use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
 use plxd::mcp::question::{CHILD_TOOLS, COORDINATOR_TOOLS};
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
-use plxd::mcp::{delegation, device, files, html, land, preview, triggers};
+use plxd::mcp::{board, delegation, device, files, html, land, preview, triggers};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use serde_json::json;
@@ -150,7 +150,8 @@ async fn a_childs_question_wakes_the_coordinator_whose_different_answer_reaches_
     let child_tools = [TOOLS, CONTEXT_TOOLS, CHILD_TOOLS, child_memory].concat();
     assert_eq!(tool_names(&mut asker).await, child_tools);
     let memory: &[&str] = &["memory_read", "memory_propose", "memory_write"];
-    let tools = [TOOLS, CONTEXT_TOOLS, COORDINATOR_TOOLS, land::TOOLS, memory].concat();
+    let own = [COORDINATOR_TOOLS, land::TOOLS, board::TOOLS].concat();
+    let tools = [TOOLS, CONTEXT_TOOLS, &own, memory].concat();
     assert_eq!(tool_names(&mut boss).await, tools);
 
     let (said, is_error) = asker

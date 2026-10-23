@@ -107,7 +107,9 @@ pub(crate) fn write_context_file(
         Existing::New => {}
     }
     let other_total = context::other_files_total(&dir, name).map_err(io_error(name))?;
-    if other_total + content.len() as u64 > context::MAX_PROJECT_BYTES {
+    if !crate::board::LEGACY.contains(&name)
+        && other_total + content.len() as u64 > context::MAX_PROJECT_BYTES
+    {
         return Err(ErrorObject::parallax(
             ErrorKind::ContextTooLarge,
             format!("{name} would be over the shared context size cap"),
@@ -149,11 +151,24 @@ pub(crate) async fn write(
     // 0044's folders hold memory, which only `memory/*` and the memory tools write, so a child
     // can't skip `memory_propose` and a coordinator's write always adds its `learned` item. The
     // brief is the user's, written or approved by them, so it goes through `memory/*` too.
-    if name.contains('/') || name == "brief.md" {
+    if name.contains('/') || name.eq_ignore_ascii_case("brief.md") {
         return Err(ErrorObject::invalid_params(
             "context/write takes one file name other than brief.md; the brief, memory, \
              knowledge, history, and proposals are written through memory/*",
         ));
+    }
+    // plxd renders the board from its items (0081), so a write here would be lost at the next
+    // render, and rewriting it whole is what dropped items before. Its legacy copies are plxd's
+    // and skip the size cap. Ignoring case, since macOS's and Windows' file systems do.
+    if [crate::board::NOTES, crate::board::ARCHIVED]
+        .iter()
+        .chain(&crate::board::LEGACY)
+        .any(|board| name.eq_ignore_ascii_case(board))
+    {
+        return Err(ErrorObject::invalid_params(format!(
+            "Parallax keeps {name} for the status board, from its items; change the board with \
+             board_add, board_update, and board_remove instead"
+        )));
     }
     // A fast, redundant check: `write_context_file` enforces this cap too, but failing here skips
     // a project lookup and a trip to the blocking pool for a request that is invalid regardless.

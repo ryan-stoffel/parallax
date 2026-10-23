@@ -34,6 +34,7 @@ use tokio_util::codec::{FramedRead, FramedWrite};
 
 use crate::peer::Plxd;
 
+pub mod board;
 #[cfg(target_os = "macos")]
 pub mod computer;
 pub mod delegation;

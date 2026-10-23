@@ -53,6 +53,7 @@ mod agents;
 mod areas;
 pub mod attach;
 pub mod backend;
+mod board;
 mod browser;
 mod checkpoints;
 mod commands;

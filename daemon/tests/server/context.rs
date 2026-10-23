@@ -6,10 +6,11 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::{INVALID_PARAMS, Message, Notification};
 use parallax_protocol::methods::{
-    ContextList, ContextRead, ContextWrite, EventsEvent, EventsSubscribe, NotificationMethod,
-    ProjectCreate,
+    BoardAdd, BoardRemove, BoardUpdate, ContextList, ContextRead, ContextWrite, EventsEvent,
+    EventsSubscribe, NotificationMethod, ProjectCreate,
 };
 use parallax_protocol::{
+    BoardAddParams, BoardRemoveParams, BoardSection, BoardStatus, BoardUpdateParams,
     ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams, ErrorKind,
     EventsEventParams, EventsSubscribeParams, ParallaxEvent, Project, ProjectId,
 };
@@ -59,20 +60,20 @@ async fn write_read_and_list_round_trip() {
     let written = client
         .call::<ContextWrite>(write_params(
             project.id,
-            "notes.md",
+            "plan.md",
             "# Notes",
             Some("editor"),
         ))
         .await
         .unwrap();
-    assert_eq!(written.file.path, "notes.md");
+    assert_eq!(written.file.path, "plan.md");
     assert_eq!(written.file.size, "# Notes".len() as u64);
     assert_eq!(written.file.last_writer.as_deref(), Some("editor"));
 
     let read = client
         .call::<ContextRead>(ContextReadParams {
             project: project.id,
-            path: "notes.md".to_owned(),
+            path: "plan.md".to_owned(),
         })
         .await
         .unwrap();
@@ -97,8 +98,8 @@ async fn traversal_absolute_hidden_nested_and_bad_extension_paths_are_refused() 
 
     for path in [
         "../escape.md",
-        "/etc/notes.md",
-        "sub/notes.md",
+        "/etc/plan.md",
+        "sub/plan.md",
         ".hidden.md",
         "notes.png",
         "notes",
@@ -127,6 +128,80 @@ async fn traversal_absolute_hidden_nested_and_bad_extension_paths_are_refused() 
         .await
         .unwrap();
     assert!(listed.files.is_empty(), "nothing invalid was ever written");
+}
+
+/// plxd renders the board from its items (0081): `board/*` changes `notes.md`, and
+/// `context/write` refuses it and `archived.md`, pointing at the tools.
+#[tokio::test]
+async fn the_board_files_are_rendered_from_items_and_refused_to_writers() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    let project = project(&mut client, dir.path()).await;
+    let notes = async |client: &mut Client| {
+        client
+            .call::<ContextRead>(ContextReadParams {
+                project: project.id,
+                path: "notes.md".to_owned(),
+            })
+            .await
+            .unwrap()
+            .content
+    };
+
+    let item = client
+        .call::<BoardAdd>(BoardAddParams {
+            project: project.id,
+            text: "**Search**: adds it".to_owned(),
+            section: BoardSection::Now,
+            status: None,
+            links: None,
+        })
+        .await
+        .unwrap()
+        .item;
+    let line = format!("- [ ] **Search**: adds it (id {})", item.id);
+    assert_eq!(notes(&mut client).await, format!("## Now\n\n{line}\n"));
+
+    let done = client
+        .call::<BoardUpdate>(BoardUpdateParams {
+            project: project.id,
+            id: item.id,
+            text: None,
+            section: None,
+            status: Some(BoardStatus::Done),
+            links: None,
+        })
+        .await
+        .unwrap()
+        .item;
+    assert!(done.done_at.is_some());
+    assert!(notes(&mut client).await.contains("- [x] **Search**"));
+
+    for path in [
+        "notes.md",
+        "archived.md",
+        "Notes.md",
+        "ARCHIVED.md",
+        "notes.legacy.md",
+    ] {
+        let refused = client
+            .call::<ContextWrite>(write_params(project.id, path, "x", Some("coordinator")))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.code, INVALID_PARAMS, "{path}");
+        assert!(refused.message.contains("board_add"), "{}", refused.message);
+    }
+
+    let removed = client
+        .call::<BoardRemove>(BoardRemoveParams {
+            project: project.id,
+            id: item.id,
+        })
+        .await
+        .unwrap();
+    assert!(removed.removed);
+    assert_eq!(notes(&mut client).await, "");
 }
 
 #[tokio::test]
@@ -160,7 +235,7 @@ async fn context_methods_for_an_unknown_project_are_project_not_found() {
     assert_eq!(kind(&error), ErrorKind::ProjectNotFound);
 
     let error = client
-        .call::<ContextWrite>(write_params(missing, "notes.md", "x", None))
+        .call::<ContextWrite>(write_params(missing, "plan.md", "x", None))
         .await
         .unwrap_err();
     assert_eq!(kind(&error), ErrorKind::ProjectNotFound);
@@ -183,10 +258,10 @@ async fn a_pre_existing_symlink_is_refused_for_read_and_write_and_left_untouched
     let outside = dir.path().join("outside.md");
     std::fs::write(&outside, "secret").unwrap();
     let context_dir = dir.path().join("context").join(project.id.to_string());
-    symlink(&outside, context_dir.join("notes.md")).unwrap();
+    symlink(&outside, context_dir.join("plan.md")).unwrap();
 
     let write_error = client
-        .call::<ContextWrite>(write_params(project.id, "notes.md", "clobbered", None))
+        .call::<ContextWrite>(write_params(project.id, "plan.md", "clobbered", None))
         .await
         .unwrap_err();
     assert_eq!(write_error.code, INVALID_PARAMS);
@@ -195,7 +270,7 @@ async fn a_pre_existing_symlink_is_refused_for_read_and_write_and_left_untouched
     let read_error = client
         .call::<ContextRead>(ContextReadParams {
             project: project.id,
-            path: "notes.md".to_owned(),
+            path: "plan.md".to_owned(),
         })
         .await
         .unwrap_err();
@@ -212,8 +287,8 @@ async fn concurrent_writes_to_one_path_leave_a_consistent_last_writer() {
     let mut a = Client::ready(&plxd.socket).await;
     let mut b = Client::ready(&plxd.socket).await;
     let (result_a, result_b) = tokio::join!(
-        a.call::<ContextWrite>(write_params(project.id, "notes.md", "from a", Some("a"))),
-        b.call::<ContextWrite>(write_params(project.id, "notes.md", "from b", Some("b"))),
+        a.call::<ContextWrite>(write_params(project.id, "plan.md", "from a", Some("a"))),
+        b.call::<ContextWrite>(write_params(project.id, "plan.md", "from b", Some("b"))),
     );
     result_a.unwrap();
     result_b.unwrap();
@@ -221,7 +296,7 @@ async fn concurrent_writes_to_one_path_leave_a_consistent_last_writer() {
     let read = client
         .call::<ContextRead>(ContextReadParams {
             project: project.id,
-            path: "notes.md".to_owned(),
+            path: "plan.md".to_owned(),
         })
         .await
         .unwrap();
@@ -257,19 +332,14 @@ async fn a_write_emits_exactly_one_context_changed_event_and_an_agents_own_write
         .unwrap();
 
     client
-        .call::<ContextWrite>(write_params(
-            project.id,
-            "notes.md",
-            "hello",
-            Some("editor"),
-        ))
+        .call::<ContextWrite>(write_params(project.id, "plan.md", "hello", Some("editor")))
         .await
         .unwrap();
     let event = next_event(&mut watcher).await;
     assert_eq!(event.project, Some(project.id));
     match event.event {
         ParallaxEvent::ContextChanged { file } => {
-            assert_eq!(file.path, "notes.md");
+            assert_eq!(file.path, "plan.md");
             assert_eq!(file.last_writer.as_deref(), Some("editor"));
         }
         other => panic!("expected context.changed, got {other:?}"),
