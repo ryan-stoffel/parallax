@@ -32,12 +32,16 @@ test("an agent opening a device shows the Device view", async () => {
     "aria-current",
     "true",
   );
-  // The fake device isn't on this host, so the view lists what is. A cold Mac runner's first
-  // simctl listing can take a while.
-  // Or, on a host that can run none, what it's missing.
-  const missing = panel.getByText(/needs a Mac|Get Android Studio/).first();
-  await expect(panel.getByRole("list", { name: "Devices" }).or(missing)).toBeVisible({
-    timeout: 60_000,
-  });
+  // The fake device isn't on this host, so the view lists what is, or, with one simulator
+  // running, opens it. A cold Mac runner's first simctl listing can take a while.
+  // Or, on a host that can run none, what it's missing: a runner whose simctl fails gets Get Xcode
+  // (PLX-919).
+  const missing = panel.getByText(/needs a Mac|Get Xcode|Get Android Studio/).first();
+  const shown = panel
+    .getByRole("list", { name: "Devices" })
+    .or(panel.getByRole("toolbar", { name: "Device controls" }))
+    .or(missing)
+    .first();
+  await expect(shown).toBeVisible({ timeout: 60_000 });
   await page.screenshot({ path: test.info().outputPath("device-view.png") });
 });

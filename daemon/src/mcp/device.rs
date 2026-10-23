@@ -634,17 +634,17 @@ fn quick_start(device: &Device) -> String {
     lines.join("\n")
 }
 
-/// Runs `program` with `args` and returns its stdout, or why it failed.
-// ponytail: a command that runs past `limit` is left running; kill it if a hung adb ever piles up.
+/// Runs `program` with `args` and returns its stdout, or why it failed. A command that runs past
+/// `limit`, or whose caller goes away, as a request does when plxd shuts down, is killed: one left
+/// running on a blocking thread kept plxd from exiting until it ended (PLX-919).
 pub(crate) async fn run(program: &Path, args: &[&str], limit: Duration) -> Result<Vec<u8>, String> {
     let name = program.file_stem().unwrap_or_default().to_string_lossy();
     let shown = format!("{name} {}", args.join(" "));
-    let mut command = Command::new(program);
-    command.args(args).stdin(Stdio::null());
-    let output = timeout(limit, tokio::task::spawn_blocking(move || command.output()))
+    let mut command = tokio::process::Command::new(program);
+    command.args(args).stdin(Stdio::null()).kill_on_drop(true);
+    let output = timeout(limit, command.output())
         .await
         .map_err(|_| format!("`{shown}` did not finish in {} s.", limit.as_secs()))?
-        .map_err(|error| error.to_string())?
         .map_err(|error| format!("could not run `{shown}`: {error}"))?;
     if output.status.success() {
         return Ok(output.stdout);

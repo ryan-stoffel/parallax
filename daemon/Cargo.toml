@@ -31,7 +31,9 @@ serde_json = { workspace = true, features = ["raw_value"] }
 sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+# `process` runs the device tools' commands, killed when they run out of time (PLX-919), and on
+# Windows the agent CLIs.
+tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { workspace = true, features = ["codec", "rt"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["fmt", "std"] }
@@ -73,10 +75,8 @@ unicode-width = "0.2.2"
 nix = { workspace = true, features = ["net", "process", "signal"] }
 rustix = { workspace = true, features = ["fs", "process", "system"] }
 
-# Agent CLIs run through tokio's process support, and every Win32 call plxd makes is in
-# `src/windows.rs` (0023).
+# Every Win32 call plxd makes is in `src/windows.rs` (0023).
 [target.'cfg(windows)'.dependencies]
-tokio = { workspace = true, features = ["process"] }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",

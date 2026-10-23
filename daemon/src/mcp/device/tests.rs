@@ -327,3 +327,36 @@ fn a_png_has_its_size_and_anything_else_has_none() {
     assert_eq!(png_size(b"GIF89a"), None);
     assert_eq!(png_size(&PNG[..20]), None);
 }
+
+#[tokio::test]
+async fn a_command_past_its_limit_is_killed() {
+    let dir = TempDir::new().unwrap();
+    let pid = dir.path().join("pid");
+    let slow = script(
+        dir.path(),
+        "slow",
+        &format!("echo $$ > '{}'; exec sleep 30", pid.display()),
+    );
+    let started = std::time::Instant::now();
+    let error = super::run(&slow, &[], std::time::Duration::from_millis(500))
+        .await
+        .unwrap_err();
+    assert!(error.contains("did not finish"), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    // Its process is gone, so it can't keep plxd from exiting (PLX-919).
+    let pid = std::fs::read_to_string(&pid).unwrap();
+    let mut gone = false;
+    for _ in 0..50 {
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .status()
+            .unwrap()
+            .success();
+        if !alive {
+            gone = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(gone, "the slow command is still running");
+}
