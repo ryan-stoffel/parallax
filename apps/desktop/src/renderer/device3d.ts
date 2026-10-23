@@ -32,14 +32,7 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
-import type { DevicePlatform } from "../protocol/generated/protocol";
 import { createDuo, type Duo } from "./deviceDuo";
-
-const models = import.meta.glob<string>("./assets/devices/*.glb", {
-  query: "?url",
-  import: "default",
-  eager: true,
-});
 
 /** A model's screen height, in scene units. */
 const SCREEN_HEIGHT = 2.2;
@@ -63,40 +56,6 @@ export interface Device3d {
   /** iPhone Duo: its live display, 1 the cover and 3 the inside, and its hinge, 0 to 180 degrees. */
   fold(display: number, angle: number): void;
   dispose(): void;
-}
-
-/**
- * Apple's model of an iOS device, by its name, such as "iPhone 17 Pro" or "iPad Air 13-inch (M3)".
- * Undefined for a device Apple has none of, or a renamed one: it turns as flat artwork instead.
- */
-export function appleModel(name: string): string | undefined {
-  const n = name.toLowerCase();
-  // An 11-inch iPad's screen is narrower than the 13-inch one in each of these models.
-  const ipad = /^ipad (pro|air) 13-inch \((m\d)\)/.exec(n);
-  // The M3 iPad Air is the M4's body.
-  const id = ipad
-    ? `ipad-${ipad[1]}-${ipad[2]}`.replace("ipad-air-m3", "ipad-air-m4")
-    : n === "ipad (a16)"
-      ? "ipad-a16"
-      : n === "iphone se (3rd generation)"
-        ? "iphone-se-3"
-        : n.replaceAll(" ", "-");
-  return models[`./assets/devices/${id}.glb`];
-}
-
-/**
- * Google's model of an Android phone, by its name, such as "Pixel 9 Pro" or an AVD's "Pixel_9a":
- * its own Pixel's, or for another phone, the Pixel 9's. The stream fills the model's screen, so a
- * phone whose screen, `aspect` wide for its height, isn't a Pixel's shape, or a foldable or tablet,
- * gets none and turns as its flat artwork.
- */
-export function pixelModel(name: string, aspect: number): string | undefined {
-  const n = name.toLowerCase().replaceAll("_", " ");
-  if (/fold|tablet/.test(n) || Math.abs(aspect - 1080 / 2424) > 0.02) return undefined;
-  // A Pro XL is its Pro's design, larger.
-  const pixel = /pixel (\d+a?)( pro)?/.exec(n);
-  const own = pixel && models[`./assets/devices/pixel-${pixel[1]}${pixel[2] ? "-pro" : ""}.glb`];
-  return own ?? models["./assets/devices/pixel-9.glb"];
 }
 
 /**
@@ -134,15 +93,14 @@ function release(root: Object3D, keep: Texture) {
 }
 
 /**
- * Renders `platform` device `name` in 3D on `canvas`, its screen drawn from `source`. An Android
- * phone's screen is `aspect` wide for its height.
+ * Renders the model at `url` (deviceModels.ts) in 3D on `canvas`, its screen drawn from `source`.
+ * `duo` is the folding iPhone Duo's model.
  */
 export function createDevice3d(options: {
   canvas: HTMLCanvasElement;
   source: HTMLCanvasElement;
-  platform: DevicePlatform;
-  name: string;
-  aspect: number;
+  url: string;
+  duo: boolean;
 }): Device3d {
   const renderer = new WebGLRenderer({ canvas: options.canvas, alpha: true, antialias: true });
   renderer.outputColorSpace = SRGBColorSpace;
@@ -191,16 +149,17 @@ export function createDevice3d(options: {
   // Inset from the canvas as the flat view's artwork is, in CSS pixels: sides, top, and bottom.
   const inset = { side: 24, top: 24, bottom: 16 };
   const corner = new Vector3();
-  // Framed as close as the turned device fits: each corner of its box, at (x, y, z) from its center,
-  // fits when the camera is at least z + |x| / across and z + |y| / down away, those the tangents of
-  // half the view inside the inset.
+  // Framed as close as the device fits facing front, turned only to its orientation, so it keeps its
+  // size while the user turns it: each corner of its box, at (x, y, z) from its center, fits when
+  // the camera is at least z + |x| / across and z + |y| / down away, those the tangents of half the
+  // view inside the inset.
   const fit = () => {
     if (!viewport.width || !viewport.height || !extent) return;
     camera.aspect = viewport.width / viewport.height;
     const tan = Math.tan((FOV * Math.PI) / 360);
     const down = (tan * (viewport.height - inset.top - inset.bottom)) / viewport.height;
     const across = (tan * camera.aspect * (viewport.width - inset.side * 2)) / viewport.width;
-    root.updateMatrixWorld(true);
+    orientation.updateMatrix();
     let distance = 0;
     for (let i = 0; i < 8; i++) {
       corner
@@ -209,7 +168,7 @@ export function createDevice3d(options: {
           i & 2 ? extent.max.y : extent.min.y,
           i & 4 ? extent.max.z : extent.min.z,
         )
-        .applyMatrix4(orientation.matrixWorld);
+        .applyMatrix4(orientation.matrix);
       distance = Math.max(
         distance,
         corner.z + Math.abs(corner.x) / across,
@@ -276,18 +235,13 @@ export function createDevice3d(options: {
     invalidate();
   };
   const ready = (async () => {
-    const url =
-      options.platform === "android"
-        ? pixelModel(options.name, options.aspect)
-        : appleModel(options.name);
-    if (!url) throw new Error("There's no model of this device.");
-    const response = await fetch(url);
+    const response = await fetch(options.url);
     if (!response.ok) throw new Error(`The device model didn't load (${response.status}).`);
     const gltf = await new GLTFLoader()
       .setMeshoptDecoder(MeshoptDecoder)
       .parseAsync(await response.arrayBuffer(), "");
     if (disposed) return release(gltf.scene, texture);
-    if (/^iphone duo$/i.test(options.name)) duo = createDuo(gltf.scene);
+    if (options.duo) duo = createDuo(gltf.scene);
     install(gltf.scene);
   })();
 
@@ -298,8 +252,11 @@ export function createDevice3d(options: {
     ready,
     setPose(pitch, yaw, roll) {
       root.rotation.set((pitch * Math.PI) / 180, (yaw * Math.PI) / 180, 0, "XYZ");
-      orientation.rotation.z = (-roll * Math.PI) / 180;
-      fit();
+      const z = (-roll * Math.PI) / 180;
+      if (orientation.rotation.z !== z) {
+        orientation.rotation.z = z;
+        fit();
+      }
       invalidate();
     },
     frame() {

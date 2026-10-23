@@ -21,6 +21,9 @@ are set to white glass (not metallic, roughness 0.38, clearcoat 0.6), and its lo
 A device with no model here, such as an 11-inch iPad or a Pro Max Apple only made the Pro's file
 for, turns as its flat artwork.
 
+`stills/` holds a WebP still of each model but the Duo, which `scripts/device-stills.mjs` renders
+for the Device panel's gallery (PLX-908).
+
 The Pixels are the same script's work from Google's files, after decoding their Draco meshes with
 glTF-Transform and keeping their darkest color (`KHR_materials_variants`); the Pixel 10 Pro's
 meshes are also simplified (`simplify --error 0.0001`). Another Android phone whose screen is a

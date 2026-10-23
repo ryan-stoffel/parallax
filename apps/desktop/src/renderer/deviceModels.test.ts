@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { appleModel, pixelModel } from "./device3d";
+import { appleModel, deviceStill, pixelModel } from "./deviceModels";
 
 test("each iOS device gets Apple's model of it, and one Apple has none of gets none", () => {
   for (const [name, file] of [
@@ -31,4 +31,21 @@ test("each Pixel gets Google's model of it, another phone a Pixel's shape the Pi
   }
   expect(pixelModel("Pixel 9 Pro Fold", pixel)).toBeUndefined();
   expect(pixelModel("Small Phone", 720 / 1280)).toBeUndefined();
+});
+
+test("a device with a model of its own gets its still, and another its artwork", () => {
+  expect(deviceStill("ios", "iPhone 17 Pro Max")).toBe(
+    "/src/renderer/assets/devices/stills/iphone-17-pro-max.webp",
+  );
+  expect(deviceStill("android", "Pixel_9a")).toBe(
+    "/src/renderer/assets/devices/stills/pixel-9a.webp",
+  );
+  for (const [platform, name] of [
+    ["ios", "iPhone Duo"],
+    ["ios", "iPhone Xs"],
+    ["android", "Medium Phone"],
+    ["android", "Pixel 9 Pro Fold"],
+  ] as const) {
+    expect(deviceStill(platform, name)).toBeUndefined();
+  }
 });

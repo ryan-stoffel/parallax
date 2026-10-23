@@ -25,6 +25,7 @@ import type {
   DeviceStateResult,
 } from "../protocol/generated/protocol";
 import type { Device3d } from "./device3d";
+import { appleModel, deviceStill, pixelModel } from "./deviceModels";
 import { plainChrome, unproject, type Turn } from "./deviceSpace";
 import {
   ORIENTATIONS,
@@ -431,19 +432,32 @@ function Gallery({
             aria-label="Devices"
             className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-2 p-4"
           >
-            {state.devices.map((d) => (
-              <li key={d.id}>
-                <Card
-                  label={named(d)}
-                  title={`${nameOf(d)}, ${d.version}${d.booted ? ", running" : ""}`}
-                  running={d.booted}
-                  busy={!!busy[d.id]}
-                  onClick={() => onOpen(d)}
-                >
-                  <Thumbnail hostId={hostId} device={d} />
-                </Card>
-              </li>
-            ))}
+            {state.devices.map((d) => {
+              const still = deviceStill(d.platform, d.name);
+              return (
+                <li key={d.id}>
+                  <Card
+                    label={named(d)}
+                    title={`${nameOf(d)}, ${d.version}${d.booted ? ", running" : ""}`}
+                    running={d.booted}
+                    busy={!!busy[d.id]}
+                    turned={!!still}
+                    onClick={() => onOpen(d)}
+                  >
+                    {still ? (
+                      <img
+                        alt=""
+                        draggable={false}
+                        src={still}
+                        className="h-[180px] w-auto max-w-none select-none"
+                      />
+                    ) : (
+                      <Thumbnail hostId={hostId} device={d} />
+                    )}
+                  </Card>
+                </li>
+              );
+            })}
             {makes.map((p) => (
               <li key={`new:${p}`}>
                 <Card
@@ -548,12 +562,16 @@ function Warning({ text }: { text: string }) {
   );
 }
 
-/** One gallery card: a device's picture, and its name, with a dot while it runs. */
+/**
+ * One gallery card: a device's picture, and its name, with a dot while it runs. A picture that's
+ * flat is turned a little, and faces front on hover; one already `turned`, a model's still, lifts.
+ */
 function Card({
   label,
   title,
   running,
   busy,
+  turned,
   onClick,
   children,
 }: {
@@ -561,6 +579,7 @@ function Card({
   title?: string;
   running?: boolean;
   busy: boolean;
+  turned?: boolean;
   onClick: () => void;
   children: ReactNode;
 }) {
@@ -573,7 +592,9 @@ function Card({
       className="group flex w-full flex-col items-center gap-3 rounded-2xl px-2 pt-4 pb-3 outline-none transition-colors hover:bg-hover focus-visible:bg-hover disabled:pointer-events-none"
     >
       <div className="relative grid h-[196px] place-items-center [perspective:900px]">
-        <div className="[transform:rotateY(-24deg)_rotateX(6deg)] transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)] [transform-style:preserve-3d] group-hover:[transform:rotateY(0deg)_rotateX(0deg)_translateY(-3px)]">
+        <div
+          className={`transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)] [transform-style:preserve-3d] ${turned ? "group-hover:-translate-y-[3px]" : "[transform:rotateY(-24deg)_rotateX(6deg)] group-hover:[transform:rotateY(0deg)_rotateX(0deg)_translateY(-3px)]"}`}
+        >
           {children}
         </div>
         {busy && (
@@ -592,7 +613,7 @@ function Card({
   );
 }
 
-/** A device's own artwork, small, with its screen dark. */
+/** A device's own artwork, small, with its screen dark, for a device with no model's still. */
 function Thumbnail({ hostId, device }: { hostId: string; device: DeviceInfo }) {
   const chrome = useChrome(hostId, device);
   if (chrome === undefined) {
@@ -860,11 +881,10 @@ function Viewer({
   const [facing, setFacing] = useState<DeviceOrientation>("portrait");
   const [orbit, setOrbit] = useState({ pitch: 0, yaw: 0 });
   const [dragging, setDragging] = useState(false);
-  // The 3D model: wanted once the device is turned, shown once it has loaded. Until then, and if
-  // it can't load, the flat artwork turns instead. The folding iPhone Duo is always 3D: its
-  // artwork is only its cover.
+  // The 3D model: loaded once the stream is live, so it's ready before the first turn, and shown
+  // while the device is turned or dragged. Facing front, and with no model, the flat artwork shows
+  // and turns instead. The folding iPhone Duo is always 3D: its artwork is only its cover.
   const duo = /^iphone duo$/i.test(device.name);
-  const [want3d, setWant3d] = useState(duo);
   const [gl, setGl] = useState<HTMLCanvasElement | null>(null);
   const model = useRef<Device3d>(null);
   // The model on screen, once it has loaded: a rebuilt one is new, so it gets the turn again.
@@ -880,7 +900,7 @@ function Viewer({
       {
         onStatus: (next, detail) => setStatus({ status: next, detail }),
         onScreen: setScreen,
-        onFrame: () => model.current?.frame(),
+        onFrame: () => modelVisible.current && model.current?.frame(),
         onInput: () => {},
       },
     );
@@ -917,24 +937,22 @@ function Viewer({
   // A phone is about 6% as thick as it is tall.
   const depth = chrome ? Math.max(chrome.width, chrome.height) * k * 0.058 : 0;
   const turn: Turn = { pitch: orbit.pitch, yaw: orbit.yaw, roll };
-  const turned = orbit.pitch !== 0 || orbit.yaw !== 0;
+  // Facing front after a whole turn is no turn.
+  const turned = orbit.pitch !== 0 || orbit.yaw % 360 !== 0;
 
   // An Android phone's model depends on its screen's shape, so it's chosen again if that changes.
   const pixelAspect = ios ? 0 : short / long;
+  const modelUrl = ios ? appleModel(device.name) : pixelModel(device.name, pixelAspect);
+  const ready = streaming && status.status === "streaming";
+  const load3d = !!modelUrl && (streaming || duo);
   useEffect(() => {
-    if (!want3d || !gl || !canvas) return;
+    if (!load3d || !modelUrl || !gl || !canvas) return;
     let live = true;
     let made: Device3d | undefined;
     void import("./device3d").then(({ createDevice3d }) => {
       if (!live) return;
       try {
-        made = createDevice3d({
-          canvas: gl,
-          source: canvas,
-          platform: device.platform,
-          name: device.name,
-          aspect: pixelAspect,
-        });
+        made = createDevice3d({ canvas: gl, source: canvas, url: modelUrl, duo });
       } catch {
         return;
       }
@@ -952,10 +970,8 @@ function Viewer({
       model.current = null;
       setModelShown(null);
     };
-    // The Android model's shape is read here, not a dependency: a new shape keys a new canvas, `gl`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [want3d, gl, canvas, device.platform, device.name]);
-  useEffect(() => {
+  }, [load3d, modelUrl, duo, gl, canvas]);
+  useLayoutEffect(() => {
     model.current?.setPose(orbit.pitch, orbit.yaw, roll);
   }, [orbit, roll, modelShown]);
   useEffect(() => {
@@ -965,10 +981,17 @@ function Viewer({
     if (gl) model.current?.resize(gl.clientWidth, gl.clientHeight, window.devicePixelRatio);
   }, [box, gl, modelShown]);
 
-  const ready = streaming && status.status === "streaming";
-  // The model stands in for the artwork once the stream is live: until then the artwork shows
-  // what the device is waiting on, and its buttons, such as Try again.
-  const modelOn = !!modelShown && ready;
+  // The model, loaded while the device streams, stands in for the artwork once the stream is
+  // live: until then the artwork shows
+  // what the device is waiting on, and its buttons, such as Try again. Facing front, the two match,
+  // so a drag starts on the model with no jump.
+  const modelOn = !!modelShown && ready && (turned || dragging || duo);
+  // The hidden model draws no frames; shown, it catches up on the latest.
+  const modelVisible = useRef(false);
+  useLayoutEffect(() => {
+    modelVisible.current = modelOn;
+    if (modelOn) model.current?.frame();
+  }, [modelOn]);
   // The touch on the flat artwork's screen, where it last was: it ends there if let go where the
   // screen can't be traced back.
   const touching = useRef<{ x: number; y: number }>(null);
@@ -1013,9 +1036,29 @@ function Viewer({
       stream.current?.touchRaw(phase, point.x, point.y);
     };
 
-  // Dragging around the device turns it, with a little momentum after letting go.
+  // Dragging turns the device as if held by the point under the pointer: across its width is half a
+  // turn around, and down its height half a turn back, so its edge follows the pointer. Each move
+  // turns the model at once, and letting go glides on at the pointer's last speed.
   const drag = useRef<{ x: number; y: number; vx: number; vy: number; t: number }>(null);
   const glide = useRef(0);
+  const pose = useRef(orbit);
+  // The device's size on screen and orientation as last drawn, for a glide that outlives a render.
+  const view = useRef({ across: 1, down: 1, roll });
+  useLayoutEffect(() => {
+    view.current = { across: Math.max(1, across * k), down: Math.max(1, down * k), roll };
+  });
+  const turnBy = (dx: number, dy: number) => {
+    const o = pose.current;
+    turnTo3d({
+      yaw: o.yaw + (dx * 180) / view.current.across,
+      pitch: Math.max(-65, Math.min(65, o.pitch - (dy * 180) / view.current.down)),
+    });
+  };
+  const turnTo3d = (next: { pitch: number; yaw: number }) => {
+    pose.current = next;
+    model.current?.setPose(next.pitch, next.yaw, view.current.roll);
+    setOrbit(next);
+  };
   // In the 3D model, a touch is wherever the pointer meets its screen. It ends where it last did,
   // when let go off the screen.
   const touching3d = useRef<{ x: number; y: number }>(null);
@@ -1039,7 +1082,7 @@ function Viewer({
       stream.current?.touchRaw("begin", hit.x, hit.y);
       return;
     }
-    setWant3d(true);
+    pose.current = orbit;
     drag.current = { x: event.clientX, y: event.clientY, vx: 0, vy: 0, t: performance.now() };
     setDragging(true);
   };
@@ -1058,11 +1101,15 @@ function Viewer({
     const dx = event.clientX - d.x;
     const dy = event.clientY - d.y;
     const dt = Math.max(1, now - d.t);
-    drag.current = { x: event.clientX, y: event.clientY, vx: dx / dt, vy: dy / dt, t: now };
-    setOrbit((o) => ({
-      yaw: o.yaw + dx * 0.45,
-      pitch: Math.max(-65, Math.min(65, o.pitch - dy * 0.35)),
-    }));
+    // The speed, smoothed over the last few moves, so one uneven move doesn't fling it.
+    drag.current = {
+      x: event.clientX,
+      y: event.clientY,
+      vx: d.vx * 0.5 + (dx / dt) * 0.5,
+      vy: d.vy * 0.5 + (dy / dt) * 0.5,
+      t: now,
+    };
+    turnBy(dx, dy);
   };
   const onStageUp = (event: React.PointerEvent<HTMLDivElement>) => {
     if (touching3d.current) {
@@ -1074,39 +1121,41 @@ function Viewer({
     const d = drag.current;
     drag.current = null;
     setDragging(false);
-    if (!d || performance.now() - d.t > 80) return;
+    // A pointer held still before letting go doesn't glide.
+    if (!d || performance.now() - d.t > 60) return;
     let { vx, vy } = d;
-    const step = () => {
-      vx *= 0.93;
-      vy *= 0.93;
-      if (Math.abs(vx) + Math.abs(vy) < 0.01) return;
-      setOrbit((o) => ({
-        yaw: o.yaw + vx * 16 * 0.45,
-        pitch: Math.max(-65, Math.min(65, o.pitch - vy * 16 * 0.35)),
-      }));
+    let last = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(50, now - last);
+      last = now;
+      // Slows by about a tenth each 16ms frame, whatever the display's frame rate.
+      const slow = 0.9 ** (dt / 16);
+      vx *= slow;
+      vy *= slow;
+      if (Math.abs(vx) + Math.abs(vy) < 0.02) return;
+      turnBy(vx * dt, vy * dt);
       glide.current = requestAnimationFrame(step);
     };
     glide.current = requestAnimationFrame(step);
   };
-  // Turns the device to `to`. Facing front again, it shows the flat artwork.
+  // Turns the device to `to`. Facing front, at a whole number of turns, the flat artwork shows
+  // again, at that yaw, so it doesn't ease back around.
   const turnTo = (to: { pitch: number; yaw: number }) => {
     cancelAnimationFrame(glide.current);
     const from = orbit;
-    const front = to.pitch === 0 && to.yaw % 360 === 0;
-    if (!front) setWant3d(true);
     const start = performance.now();
     const step = () => {
       const t = Math.min(1, (performance.now() - start) / 450);
       const eased = 1 - (1 - t) ** 3;
-      setOrbit({
-        pitch: from.pitch + (to.pitch - from.pitch) * eased,
-        yaw: from.yaw + (to.yaw - from.yaw) * eased,
-      });
+      turnTo3d(
+        t < 1
+          ? {
+              pitch: from.pitch + (to.pitch - from.pitch) * eased,
+              yaw: from.yaw + (to.yaw - from.yaw) * eased,
+            }
+          : to,
+      );
       if (t < 1) glide.current = requestAnimationFrame(step);
-      else if (front) {
-        setOrbit({ pitch: 0, yaw: 0 });
-        setWant3d(duo);
-      }
     };
     glide.current = requestAnimationFrame(step);
   };
@@ -1237,13 +1286,13 @@ function Viewer({
         onDoubleClick={faceFront}
         className={`relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden px-6 pt-6 pb-20 select-none ${dragging ? "cursor-grabbing" : "cursor-grab"}`}
       >
-        {want3d && (
+        {load3d && (
           <canvas
             // A new model takes a new canvas: the last one's context is gone with it.
             key={pixelAspect}
             ref={setGl}
             aria-hidden
-            className={`absolute inset-x-0 top-0 bottom-16 size-auto transition-opacity duration-200 ${modelOn ? "opacity-100" : "opacity-0"}`}
+            className={`absolute inset-x-0 top-0 bottom-16 size-auto ${modelOn ? "" : "opacity-0"}`}
             style={{ width: "100%", height: "calc(100% - 4rem)" }}
           />
         )}
@@ -1263,7 +1312,8 @@ function Viewer({
                 transform: `rotateX(${turn.pitch}deg) rotateY(${turn.yaw}deg) rotateZ(${roll}deg)`,
                 transformStyle: "preserve-3d",
               }}
-              className={`absolute outline-none ${dragging ? "" : "transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]"}`}
+              // Eased only for a new orientation: a drag, glide, or turn already moves it each frame.
+              className={`absolute outline-none ${dragging || turned ? "" : "transition-transform duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]"}`}
             >
               {/* The device's shadow on the stage, under its face. */}
               <div
@@ -1445,7 +1495,12 @@ function Viewer({
           )}
           {turned
             ? control("Face front", <Rotate3d />, faceFront, false)
-            : control("Turn in 3D", <Rotate3d />, () => turnTo({ pitch: 12, yaw: -32 }), false)}
+            : control(
+                "Turn in 3D",
+                <Rotate3d />,
+                () => turnTo({ pitch: 12, yaw: Math.round(orbit.yaw / 360) * 360 - 32 }),
+                false,
+              )}
           {stopping && (
             <LoaderCircle
               aria-label="Powering off"

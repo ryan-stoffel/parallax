@@ -22,6 +22,10 @@ use tokio::time::{Instant, sleep, timeout};
 
 use super::{Reply, parse, pretty};
 
+/// What every agent with these tools is told (PLX-908): agents testing an app would otherwise boot
+/// a device themselves and open Simulator, Device Hub, or an emulator's window over Parallax.
+pub const INSTRUCTIONS: &str = "Parallax shows iOS Simulators and Android Emulators in its Device panel. To run or test an app on one, open it with device_open, which boots it headless and shows it there, then install, launch, and drive it with xcrun simctl or adb, and see it with device_screenshot. Never open Simulator, Device Hub, or an emulator window yourself, such as with `open -a Simulator` or `emulator -avd` without `-no-window`: the Device panel is the device's only window.";
+
 /// Every device tool, as [`definitions`] lists them.
 pub const TOOLS: &[&str] = &[
     "device_list",
