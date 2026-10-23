@@ -105,15 +105,17 @@ pub(super) async fn read(
         let (bytes, mut metadata) = context::read_file(&dir, &path).map_err(io_error(&path))?;
         let mut text = String::from_utf8(bytes)
             .map_err(|_| ErrorObject::internal_error(format!("{path} is not valid UTF-8 text")))?;
-        // An agent's read of an entry is a use of it (PLX-943), stamped at most once a day. A
+        // An agent's read of an entry is a use of it (PLX-943), stamped at most once a day. The
+        // stamp keeps the file's modified time, so the app doesn't show a read as an edit. A
         // failed stamp still reads.
         // ponytail: a write to the entry between this read and the stamp is lost; serialize
         // writes per folder if that race ever shows up.
         if agent
             && place(&path) == Place::Entry
             && let Some(stamped) = memory::used(&text, &today())
+            && let Ok(modified) = metadata.modified()
         {
-            match context::write_file(&dir, &path, stamped.as_bytes()) {
+            match context::write_file_keeping(&dir, &path, stamped.as_bytes(), modified) {
                 Ok(written) => (text, metadata) = (stamped, written),
                 Err(error) => tracing::warn!(path, %error, "could not record a memory entry's use"),
             }

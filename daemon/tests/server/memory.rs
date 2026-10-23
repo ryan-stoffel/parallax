@@ -218,6 +218,18 @@ async fn an_agents_read_records_an_entrys_last_use_and_the_users_doesnt() {
         .unwrap()
         .file;
 
+    // An hour back, so a stamp that bumped the time would show.
+    let file = host
+        .dir
+        .path()
+        .join("context")
+        .join(project.id.to_string())
+        .join(path);
+    let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+    let opened = std::fs::File::options().write(true).open(&file).unwrap();
+    opened.set_modified(hour_ago).unwrap();
+    drop(opened);
+
     let entry = read(&mut client, scope, path).await.unwrap();
     assert_eq!(entry.file.last_used, None);
     assert!(!entry.file.unused);
@@ -234,6 +246,13 @@ async fn an_agents_read_records_an_entrys_last_use_and_the_users_doesnt() {
     let listed = files(&mut client, scope).await;
     let listed = listed.iter().find(|file| file.path == path).unwrap();
     assert_eq!(listed.last_used, written.date);
+    // The stamp isn't an edit: the modified time stays where it was.
+    assert_eq!(used.file.modified_at, entry.file.modified_at);
+    assert_eq!(listed.modified_at, entry.file.modified_at);
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().modified().unwrap(),
+        hour_ago
+    );
     host.server.stop().await;
 }
 
