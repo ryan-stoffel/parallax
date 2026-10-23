@@ -3,7 +3,6 @@ import { useId, useState, type ComponentType, type SVGProps } from "react";
 
 import { DoneMark } from "./AttentionMark";
 import { childOrder, runAttention, type Attention } from "./attention";
-import { Loader } from "./Loader";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { OpenHint } from "./OpenHint";
 import { instanceLogo, instanceName } from "./providers";
@@ -89,16 +88,13 @@ export function AgentsBar({
   const extra = going.length - 3;
 
   return (
-    <section
-      aria-label={label}
-      className="rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
-    >
+    <section aria-label={label}>
       <button
         type="button"
         popoverTarget={id}
         aria-expanded={open}
         title={open ? `Hide the ${label.toLowerCase()}` : `Show the ${label.toLowerCase()}`}
-        className="flex w-full min-w-0 items-center gap-2.5 rounded-t-3xl py-1.5 pr-3.5 pl-2 text-left text-[13px] hover:bg-hover"
+        className="flex w-full min-w-0 items-center gap-2.5 py-1.5 pr-3.5 pl-2 text-left text-[13px] hover:bg-hover"
       >
         {/* The providers at work, as one quiet group. */}
         <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2 [&_svg]:size-3.5">
@@ -124,7 +120,7 @@ export function AgentsBar({
         <span className="flex min-w-0 flex-1 items-center gap-2">
           <span className="truncate">{lead.title}</span>
         </span>
-        <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11.5px] text-faint-foreground tabular-nums">
+        <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-muted-foreground tabular-nums">
           {waiting > 0 ? (
             <>
               <span aria-hidden className="size-1.5 rounded-full bg-warning" />
@@ -132,7 +128,7 @@ export function AgentsBar({
             </>
           ) : (
             <>
-              <Loader kind="matrix" variant="ripple" size={11} />
+              <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-working" />
               {going.length} working
             </>
           )}
@@ -242,7 +238,7 @@ function State({ attention }: { attention: Attention }) {
   if (attention === "working")
     return (
       <span className="flex shrink-0 items-center gap-1.5 text-working">
-        <Loader kind="matrix" variant="scan" size={11} />
+        <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-working" />
         Working
       </span>
     );

@@ -526,17 +526,13 @@ export function PlanStrip({
   const now = items.find((s) => s.status === "inProgress");
   const next = now ?? items.find((s) => s.status !== "completed");
   return (
-    <section
-      ref={section}
-      aria-label="Plan"
-      className="plan-strip rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
-    >
+    <section ref={section} aria-label="Plan" className="plan-strip">
       <button
         type="button"
         popoverTarget={id}
         aria-expanded={open}
         title={open ? "Hide the plan" : "Show the plan"}
-        className="flex w-full min-w-0 items-center gap-2.5 rounded-t-3xl py-2 pr-3.5 pl-4 text-left text-[13px] hover:bg-hover"
+        className="flex w-full min-w-0 items-center gap-2.5 py-1.5 pr-3.5 pl-4 text-left text-[13px] hover:bg-hover"
       >
         <span className="grid size-4 shrink-0 place-items-center">
           <Marker state={now ? "now" : next ? "todo" : "done"} />

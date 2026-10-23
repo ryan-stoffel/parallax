@@ -66,6 +66,24 @@ test("names what the thread waits on as T3 Code does", () => {
   });
 });
 
+test("leaves out the subagents the tab over it lists, unless they're all it waits on", () => {
+  const review = task("agent", "Review src/math.ts");
+  expect(presentWaiting([review], [], true)?.title).toBe("Waiting on a subagent");
+  expect(presentWaiting([review, task("agent", "Lint")], [], true)).toMatchObject({
+    title: "Waiting on 2 subagents",
+    labels: "",
+  });
+  expect(presentWaiting([review, task("monitor", "Watching CI")], [url], true)).toEqual({
+    title: "Waiting on 1 monitor and 1 pull request",
+    labels: "Watching CI, #750",
+    items: [
+      { kind: "subagent", label: "Review src/math.ts" },
+      { kind: "monitor", label: "Watching CI" },
+      { kind: "pull request", label: "#750" },
+    ],
+  });
+});
+
 test("Stop ends every task and watch through plxd, and shows why one couldn't", async () => {
   const request = vi.fn(async (_host: string, method: string) =>
     method === "pr/unwatch"

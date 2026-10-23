@@ -36,26 +36,31 @@ const joinWithAnd = (parts: string[]) =>
 /**
  * What a settled thread still waits on, as T3 Code's `presentPendingBackgroundWork` names it
  * (PLX-777): its agent's background tasks and the pull requests plxd watches, which read as
- * Monitoring. Undefined for nothing.
+ * Monitoring. With `agentsShown`, the subagents tab over it already lists its subagents, so the
+ * title leaves them out, or only counts them when they're all it waits on. The details name every
+ * item. Undefined for nothing.
  */
 export function presentWaiting(
   background: AgentBackgroundTask[],
   watching: string[],
+  agentsShown = false,
 ): WaitingPresentation | undefined {
-  const items: Item[] = [
+  const all: Item[] = [
     ...background.map((task) => {
       const kind = task.kind in kinds ? task.kind : "command";
       return { kind, label: task.description.trim() || kinds[kind].singular };
     }),
     ...watching.map((url) => ({ kind: "pullRequest" as const, label: `#${numberOf(url)}` })),
   ].toSorted((a, b) => kinds[a.kind].order - kinds[b.kind].order);
-  if (items.length === 0) return undefined;
+  if (all.length === 0) return undefined;
+  const details = all.map((item) => ({ kind: kinds[item.kind].singular, label: item.label }));
+  const unnamed = (item: Item) => agentsShown && item.kind === "agent";
+  const items = all.every(unnamed) ? all : all.filter((item) => !unnamed(item));
   const waiting = items.some((item) => item.kind !== "command");
-  const details = items.map((item) => ({ kind: kinds[item.kind].singular, label: item.label }));
   const [only] = items;
   if (items.length === 1 && only) {
     const noun = kinds[only.kind].singular;
-    const named = only.label !== noun;
+    const named = only.label !== noun && !unnamed(only);
     const title =
       only.kind === "pullRequest"
         ? `Monitoring pull request ${only.label}`
@@ -82,7 +87,10 @@ export function presentWaiting(
       : "Running";
   return {
     title: `${verb} ${joinWithAnd(groups)}`,
-    labels: items.map((item) => item.label).join(", "),
+    labels: items
+      .filter((item) => !unnamed(item))
+      .map((item) => item.label)
+      .join(", "),
     items: details,
   };
 }
@@ -97,15 +105,18 @@ export function WaitingBar({
   runId,
   background,
   watching,
+  agentsShown,
 }: {
   hostId: string;
   runId: string;
   background: AgentBackgroundTask[];
   watching: string[];
+  /** Whether the subagents tab shows over it, naming its subagents. */
+  agentsShown?: boolean;
 }) {
   const [stopping, setStopping] = useState(false);
   const id = useId();
-  const shown = presentWaiting(background, watching);
+  const shown = presentWaiting(background, watching, agentsShown);
   if (!shown) return null;
 
   async function stop() {
@@ -125,11 +136,8 @@ export function WaitingBar({
   }
 
   return (
-    <section
-      aria-label="Waiting on"
-      className="rounded-t-3xl border border-b-0 border-border bg-surface pt-1 pb-5 text-[13px]"
-    >
-      <div className="flex min-w-0 items-center gap-2.5 py-1 pr-3 pl-4">
+    <section aria-label="Waiting on" className="text-[13px]">
+      <div className="flex min-w-0 items-center gap-2.5 py-1 pr-2.5 pl-4">
         <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground" />
         <span className="min-w-0 truncate font-medium">{shown.title}</span>
         <span className="min-w-0 flex-1 truncate text-muted-foreground">{shown.labels}</span>

@@ -71,10 +71,7 @@ export function QueueStrip({
 
   if (!messages.length) return null;
   return (
-    <section
-      aria-label="Queued messages"
-      className="overflow-hidden rounded-t-3xl border border-b-0 border-border bg-surface pb-4 text-[12.5px]"
-    >
+    <section aria-label="Queued messages" className="text-[12.5px]">
       <div className="flex items-center justify-between py-2 pr-3.5 pl-4 text-faint-foreground">
         <span>
           Queued{" "}

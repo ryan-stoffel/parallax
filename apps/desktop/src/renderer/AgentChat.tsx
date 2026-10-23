@@ -821,7 +821,8 @@ export function AgentChat({
   const tabs: ComposerTab[] = [];
   if (strip) tabs.push(strip);
   const subagentTabRows = nativeRows(transcript.subagents, live, backgroundSubagents);
-  if (subagents && subagentTabRows.some(isGoing))
+  const subagentsShown = !!subagents && subagentTabRows.some(isGoing);
+  if (subagentsShown)
     tabs.push({
       key: "subagents",
       label: "Subagents",
@@ -833,7 +834,13 @@ export function AgentChat({
       key: "waiting",
       label: "Waiting",
       node: (
-        <WaitingBar hostId={hostId} runId={runId} background={background} watching={watching} />
+        <WaitingBar
+          hostId={hostId}
+          runId={runId}
+          background={background}
+          watching={watching}
+          agentsShown={subagentsShown}
+        />
       ),
     });
   if (goal && running && !stalled)
