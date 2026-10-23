@@ -10,8 +10,8 @@ import { hostIcon } from "./RunTargetMenu";
 import type { Host } from "./hosts";
 import { IconButton } from "./ui";
 
-/** Where whether Thread details is shown is kept, for every thread. */
-export const THREAD_DETAILS_KEY = "parallax.threadDetails";
+/** Where the keys of the threads that show Thread details are kept, as a JSON array. */
+export const THREAD_DETAILS_KEY = "parallax.threadDetails.open";
 export const THREAD_DETAILS_ID = "thread-details";
 
 /** The docked card's width, `w-64`, with its right gap. */
@@ -25,22 +25,34 @@ export const tooNarrowToDock = (width: number) =>
 
 export type ThreadDetailsMode = "docked" | "floating" | "hidden";
 
+/** The keys of the threads kept showing Thread details. */
+function readOpen(): string[] {
+  try {
+    const kept: unknown = JSON.parse(localStorage.getItem(THREAD_DETAILS_KEY) ?? "[]");
+    return Array.isArray(kept) ? kept.filter((key) => typeof key === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Where Thread details shows, for the thread row `ref` is set on, which may unmount and return
- * (behind the Pull requests page) and is measured again each time. With room it docks while the kept choice
- * says shown. Without room (the thread would keep less than `THREAD_MIN_SHARE` of the row) it
- * starts hidden, and the button floats it over the thread until pressed again; the kept choice is
- * left alone. Crossing the line either way closes a floating card.
+ * Where Thread details shows for the thread `key` names, in the thread row `ref` is set on, which
+ * may unmount and return (behind the Pull requests page) and is measured again each time. Each
+ * thread keeps its own choice, hidden until shown there. With room it docks while that choice says
+ * shown. Without room (the thread would keep less than `THREAD_MIN_SHARE` of the row) it starts
+ * hidden, and the button floats it over the thread until pressed again; the kept choice is left
+ * alone. Crossing the line either way, or switching threads, closes a floating card.
  */
-export function useThreadDetails() {
+export function useThreadDetails(key: string) {
   const [element, ref] = useState<HTMLElement | null>(null);
-  const [docked, setDocked] = useState(() => localStorage.getItem(THREAD_DETAILS_KEY) === "open");
+  const [open, setOpen] = useState(readOpen);
   const [floating, setFloating] = useState(false);
   const [narrow, setNarrow] = useState(false);
-  // Crossing the line closes a floating card, adjusted while rendering rather than in an updater.
-  const [measured, setMeasured] = useState(narrow);
-  if (measured !== narrow) {
-    setMeasured(narrow);
+  // Crossing the line or switching threads closes a floating card, adjusted while rendering
+  // rather than in an updater.
+  const [measured, setMeasured] = useState({ narrow, key });
+  if (measured.narrow !== narrow || measured.key !== key) {
+    setMeasured({ narrow, key });
     setFloating(false);
   }
   useLayoutEffect(() => {
@@ -54,11 +66,13 @@ export function useThreadDetails() {
   }, [element]);
   const toggle = () => {
     if (narrow) return setFloating((was) => !was);
-    setDocked((was) => {
-      localStorage.setItem(THREAD_DETAILS_KEY, was ? "closed" : "open");
-      return !was;
+    setOpen((was) => {
+      const next = was.includes(key) ? was.filter((other) => other !== key) : [...was, key];
+      localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(next));
+      return next;
     });
   };
+  const docked = open.includes(key);
   const mode: ThreadDetailsMode = narrow
     ? floating
       ? "floating"

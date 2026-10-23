@@ -191,8 +191,6 @@ export function App() {
   const panelExpanded = expandedPanels[panelKey] ?? false;
   const setPanelExpanded = (next: boolean) =>
     setExpandedPanels((panels) => ({ ...panels, [panelKey]: next }));
-  // Thread details, docked at the thread's right, or floating over it when the row is narrow.
-  const details = useThreadDetails();
   // The folders whose terminal drawer is open, by key (ThreadTerminal.tsx).
   const [drawers, setDrawers] = useState<ReadonlySet<string>>(new Set());
   // A request to open the Changes view, perhaps on a thread's turn, scrolled to a file.
@@ -519,6 +517,14 @@ export function App() {
     "threadLineage" in threads.capabilities && openThread
       ? lineageOf(threads.state, openThread)
       : undefined;
+  // Thread details, docked at the thread's right, or floating over it when the row is narrow.
+  // Shown or hidden per thread, which its children and parent share, so opening one from
+  // Lineage keeps it open.
+  const details = useThreadDetails(
+    openThread
+      ? JSON.stringify([host.id, "thread", rootOf(threads.state, openThread).id])
+      : panelKey,
+  );
   // Each open thread's agent's own subagents, as its chat reports them (PLX-382).
   const [native, setNative] = useState<Readonly<Record<string, NativeSubagent[]>>>({});
   const reportNative = useCallback(
