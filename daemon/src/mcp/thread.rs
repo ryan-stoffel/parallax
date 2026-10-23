@@ -435,7 +435,7 @@ fn definitions(project: bool) -> Value {
         let context = [
             tool(
                 "read_context",
-                "Read your Project's shared context: one file's content by path, or the list of files without a path. It holds top-level files such as plan.md, memory/<preference|convention|decision|gotcha>/, knowledge/, proposals/, history/<thread>.md, and artifacts/<thread>/, the files children presented. Only text files can be read here.",
+                "Read your Project's shared context: one file's content by path, or the list of files without a path. It holds top-level files such as plan.md, memory/<preference|convention|decision|gotcha>/, knowledge/, proposals/, history/<thread>.md, and artifacts/<thread>/, the files children presented, which are listed but can't be read here.",
                 object(
                     json!({
                         "path": {"type": "string", "description": "A path from the list, such as plan.md or knowledge/auth.md. Omit it to list the files."},
@@ -758,6 +758,11 @@ async fn context_tool(
             return Ok(pretty(&json!({"files": files})));
         };
         check_text("path", &path, MAX_PATH_BYTES)?;
+        if path.starts_with("artifacts/") {
+            return Err(format!(
+                "{path} is an artifact, a file shown to the reader, which read_context can't read"
+            ));
+        }
         let read = plxd
             .call::<ContextRead>(ContextReadParams { project, path })
             .await?;

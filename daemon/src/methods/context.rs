@@ -47,6 +47,12 @@ pub(crate) async fn read(
     params: ContextReadParams,
 ) -> Result<ContextReadResult, ErrorObject> {
     let name = context::validate_relative_path(&params.path)?.to_owned();
+    // An artifact can be hundreds of MiB and is rarely text.
+    if name.starts_with("artifacts/") {
+        return Err(ErrorObject::invalid_params(format!(
+            "{name} is an artifact; read it in slices with context/readBytes"
+        )));
+    }
     let project = params.project;
     ensure_project_exists(context, project).await?;
     let daemon = Arc::clone(&context.daemon);
@@ -93,7 +99,7 @@ pub(crate) async fn read_bytes(
 const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
 
 /// `context/saveArtifact`: copies `path` from a Project child's working folder into the Project's
-/// `artifacts/<run id>/`, deleting the oldest artifacts first when the bulk folders would pass
+/// `artifacts/<run id>/<path>`, deleting the oldest artifacts first when the bulk folders would pass
 /// their cap, with a `needsYou` inbox item saying so.
 pub(crate) async fn save_artifact(
     context: &Context,
@@ -101,14 +107,13 @@ pub(crate) async fn save_artifact(
 ) -> Result<ContextWriteResult, ErrorObject> {
     let ContextSaveArtifactParams { run_id, path } = params;
     crate::worktree::validate_repo_path(&path).map_err(ErrorObject::invalid_params)?;
-    let file_name = path.rsplit('/').next().unwrap_or(&path);
-    let name = format!("artifacts/{run_id}/{file_name}");
+    let name = format!("artifacts/{run_id}/{path}");
     context::validate_relative_path(&name)?;
     let project = project_of(context, run_id).await?;
     let daemon = Arc::clone(&context.daemon);
     let (root, _) = crate::agents::review::run_folder(&daemon, run_id).await?;
-    let (file, pruned) = run_blocking(move || {
-        let (mut source, metadata) = context::open_file(&root, &path).map_err(|error| {
+    let (pruned, saved) = run_blocking(move || {
+        let (source, metadata) = context::open_file(&root, &path).map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 ErrorObject::invalid_params(format!("{path} isn't a file in run {run_id}'s folder"))
             } else {
@@ -128,19 +133,32 @@ pub(crate) async fn save_artifact(
         let pruned = context::make_room(&dir, &name, metadata.len())
             .map_err(io_error(&name))?
             .ok_or_else(too_large)?;
-        let metadata = context::copy_file(&dir, &name, &mut source).map_err(io_error(&name))?;
-        let file = context::context_file(&name, &metadata, None);
-        let seq = daemon.store.append_blocking(
-            jiff::Timestamp::now(),
-            Some(project),
-            ParallaxEvent::ContextChanged { file: file.clone() },
-        );
-        info!(project = %project, path = name, seq, "saved an artifact");
-        Ok((file, pruned))
+        // Never more than was counted above, so a file growing meanwhile can't pass the caps.
+        let saved = match context::copy_file(&dir, &name, source, metadata.len()) {
+            Ok(metadata) => {
+                let file = context::context_file(&name, &metadata, None);
+                let seq = daemon.store.append_blocking(
+                    jiff::Timestamp::now(),
+                    Some(project),
+                    ParallaxEvent::ContextChanged { file: file.clone() },
+                );
+                info!(project = %project, path = name, seq, "saved an artifact");
+                Ok(file)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                Err(ErrorObject::parallax(
+                    ErrorKind::ContextTooLarge,
+                    format!("{path} grew while it was copied"),
+                ))
+            }
+            Err(error) => Err(context::io_error(&name, &error)),
+        };
+        Ok((pruned, saved))
     })
     .await?;
+    // Reported whether or not the copy then worked: the deletions happened either way.
     pruned_item(&context.daemon, project, run_id, &pruned).await;
-    Ok(ContextWriteResult { file })
+    Ok(ContextWriteResult { file: saved? })
 }
 
 /// The Project `run` is a child of, or `invalidParams` for a run in a repo entry.

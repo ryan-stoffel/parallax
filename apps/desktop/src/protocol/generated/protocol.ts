@@ -2867,7 +2867,7 @@ export type ContextReadBytesResult = {
 
 /**
  * Params of `context/saveArtifact`, behind `projectArtifacts` (PLX-941): copies a file from a
- * Project child's working folder into its Project's `artifacts/<run id>/`, under its own name,
+ * Project child's working folder into its Project's `artifacts/<run id>/`, at the same path,
  * replacing an earlier copy. When the Project's `history/`, `artifacts/`, and `.versions/` would
  * pass 2 GiB, plxd deletes its oldest artifacts first and adds a `needsYou` inbox item. Fails
  * with `invalidParams` for a run outside a Project or a path that isn't a file, and

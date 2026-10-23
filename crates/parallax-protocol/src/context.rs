@@ -6,8 +6,9 @@
 //! hidden (dot) name. A path must end in `.md`, `.markdown`, or `.txt`, except in
 //! `artifacts/<thread>/`, which holds files of any type (PLX-941). `context/write` takes exactly
 //! one file name. `context/list` and `context/read` also reach memory's folders (0044, PLX-405),
-//! such as `memory/decision/x.md`, which only `memory/*` writes, and, behind `projectArtifacts`,
-//! `artifacts/`, which only `context/saveArtifact` writes and `context/readBytes` reads.
+//! such as `memory/decision/x.md`, which only `memory/*` writes. Behind `projectArtifacts`,
+//! `context/list` also lists `artifacts/`, which only `context/saveArtifact` writes and only
+//! `context/readBytes` reads.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -140,7 +141,7 @@ pub struct ContextReadBytesResult {
 }
 
 /// Params of `context/saveArtifact`, behind `projectArtifacts` (PLX-941): copies a file from a
-/// Project child's working folder into its Project's `artifacts/<run id>/`, under its own name,
+/// Project child's working folder into its Project's `artifacts/<run id>/`, at the same path,
 /// replacing an earlier copy. When the Project's `history/`, `artifacts/`, and `.versions/` would
 /// pass 2 GiB, plxd deletes its oldest artifacts first and adds a `needsYou` inbox item. Fails
 /// with `invalidParams` for a run outside a Project or a path that isn't a file, and

@@ -5,10 +5,11 @@
 //! entry, and [`you_dir`] for the user's own memory. A path is relative to that folder: one file
 //! name, or a file in one of 0044's [`FOLDERS`], `memory/<kind>/`, `knowledge/`, `history/`, and
 //! `proposals/` (a plain thread's memory proposals, waiting for the user), or a file of any type
-//! in `artifacts/<thread>/` (PLX-941), which plxd copies there from a child's `present_files`.
-//! Every component is a normal, non-hidden name with no `..`, `\`, `:`, or leading `/`, and
-//! outside `artifacts/` the file ends in `.md`, `.markdown`, or `.txt`. Nothing else nests, so the
-//! folders stay a fixed, shallow set.
+//! under `artifacts/<thread>/` (PLX-941), at its path in the child's folder, which plxd copies
+//! there from a child's `present_files`. Every component is a normal name with no `..`, `\`, `:`,
+//! or leading `/`, and none is hidden but an artifact's own folders, such as `.screenshots/`.
+//! Outside `artifacts/` the file ends in `.md`, `.markdown`, or `.txt`, and nothing else nests, so
+//! those folders stay a fixed, shallow set.
 //!
 //! Two caps hold: Markdown and text total at most [`MAX_PROJECT_BYTES`], and the bulk folders,
 //! `history/`, `artifacts/`, and `.versions/`, at most [`MAX_BULK_BYTES`] apart from that, the
@@ -117,7 +118,7 @@ const FOLDERS: [&[&str]; 7] = [
 ];
 
 /// Rejects `path` unless it is one normal, non-hidden file name ending in `.md`, `.markdown`, or
-/// `.txt`, alone or under one of [`FOLDERS`], or a file of any type in `artifacts/<thread>/`,
+/// `.txt`, alone or under one of [`FOLDERS`], or a file of any type under `artifacts/<thread>/`,
 /// separated by `/`. This alone rejects `..`, a leading `/`, and any other folder, since each
 /// component must be a [`Component::Normal`] name.
 ///
@@ -129,7 +130,7 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
             "path must be a relative file name ending in .md, .markdown, or .txt, alone or under \
              memory/<preference|convention|decision|gotcha>/, knowledge/, history/, or \
              proposals/, or any file under artifacts/<thread>/, with no \"..\", no leading \"/\", \
-             and no hidden (dot) name",
+             and no hidden (dot) name but an artifact's folders",
         )
     };
     // Control characters and line separators would let a file name break a line where plxd
@@ -142,7 +143,7 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
     let Some((name, folders)) = parts.split_last() else {
         return Err(invalid());
     };
-    let artifact = matches!(folders, ["artifacts", _]);
+    let artifact = matches!(folders, ["artifacts", _, ..]);
     if !folders.is_empty() && !artifact && !FOLDERS.contains(&folders) {
         return Err(invalid());
     }
@@ -152,9 +153,12 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
         let mut components = Path::new(part).components();
         matches!(components.next(), Some(Component::Normal(one)) if one.to_str() == Some(part))
             && components.next().is_none()
-            && !part.starts_with('.')
     };
-    if !parts.iter().all(|part| normal(part)) {
+    // An artifact keeps its folders from the child's folder, which may be hidden, such as
+    // `.screenshots/`. Its thread and file name may not be.
+    let may_hide = |index: usize| artifact && index >= 2 && index < folders.len();
+    let hidden = |(index, part): (usize, &&str)| part.starts_with('.') && !may_hide(index);
+    if !parts.iter().all(|part| normal(part)) || parts.iter().enumerate().any(hidden) {
         return Err(invalid());
     }
     let extension = Path::new(name).extension().and_then(|ext| ext.to_str());
@@ -365,8 +369,8 @@ fn write(
     file.metadata()
 }
 
-/// Lists the shared context files in `dir`, and in the [`FOLDERS`] and `artifacts/<thread>/`
-/// under it, ordered by path.
+/// Lists the shared context files in `dir`, and in the [`FOLDERS`] and `artifacts/` under it,
+/// ordered by path.
 ///
 /// A hidden (dot) entry (including plxd's own temporary files while a write is in progress), a
 /// symlink, or a name with a disallowed extension or in another folder is skipped rather than
@@ -380,7 +384,7 @@ pub(crate) fn list_files(dir: &Path) -> io::Result<Vec<(String, std::fs::Metadat
 }
 
 /// Adds the files in `dir`'s folder `folder` (`""` for `dir` itself) to `files`, and walks those
-/// of its folders that lead to one of [`FOLDERS`] or to `artifacts/<thread>/`.
+/// of its folders that lead to one of [`FOLDERS`] or are in `artifacts/`.
 fn walk(dir: &Path, folder: &str, files: &mut Vec<(String, std::fs::Metadata)>) -> io::Result<()> {
     let entries = match std::fs::read_dir(dir.join(folder)) {
         Ok(entries) => entries,
@@ -400,7 +404,7 @@ fn walk(dir: &Path, folder: &str, files: &mut Vec<(String, std::fs::Metadata)>) 
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
             let prefix: Vec<&str> = path.split('/').collect();
-            let artifacts = matches!(prefix[..], ["artifacts"] | ["artifacts", _]);
+            let artifacts = matches!(prefix[..], ["artifacts", ..]);
             if artifacts || FOLDERS.iter().any(|allowed| allowed.starts_with(&prefix)) {
                 walk(dir, &path, files)?;
             }
@@ -482,13 +486,22 @@ fn make_room_under(
         if total <= cap {
             break;
         }
-        delete_file(dir, &path)?;
-        // Drops the thread's folder once it's empty; a folder still holding files stays.
-        if let Some((folder, _)) = path.rsplit_once('/') {
-            let _ = std::fs::remove_dir(dir.join(folder));
+        match delete_file(dir, &path) {
+            Ok(()) => pruned.push(path.clone()),
+            // Another save racing this one deleted it, and reports it: the space is free all the
+            // same.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        // Drops its folders up to the thread's once they're empty; one still holding files stays.
+        let mut folder = path.as_str();
+        while let Some((parent, _)) = folder.rsplit_once('/')
+            && parent.contains('/')
+            && std::fs::remove_dir(dir.join(parent)).is_ok()
+        {
+            folder = parent;
         }
         total -= size;
-        pruned.push(path);
     }
     Ok(Some(pruned))
 }
@@ -726,6 +739,8 @@ mod tests {
             "proposals/idea.md",
             "artifacts/0190a1b2/shot.png",
             "artifacts/0190a1b2/report",
+            "artifacts/0190a1b2/out/deeper/shot.png",
+            "artifacts/0190a1b2/.screenshots/shot.png",
         ] {
             assert_eq!(validate_relative_path(good), Ok(good), "{good}");
         }
@@ -757,10 +772,13 @@ mod tests {
             "knowledge/a\u{2028}b.md",
             "knowledge/a\u{85}b.md",
             "artifacts/shot.png",
-            "artifacts/run/deeper/shot.png",
             "artifacts/.run/shot.png",
             "artifacts/run/.shot.png",
+            "artifacts/run/out/.shot.png",
             "artifacts/../shot.png",
+            "artifacts/run/../shot.png",
+            "artifacts/run/./shot.png",
+            ".artifacts/run/shot.png",
         ] {
             let error = validate_relative_path(bad).unwrap_err();
             assert_eq!(error.code, INVALID_PARAMS, "{bad}");
@@ -927,6 +945,16 @@ mod tests {
         assert_eq!(other_files_total(dir.path(), "a.md").unwrap(), 50);
         assert_eq!(other_files_total(dir.path(), "b.md").unwrap(), 100);
         assert_eq!(other_files_total(dir.path(), "c.md").unwrap(), 150);
+    }
+
+    #[test]
+    fn a_copy_past_its_limit_leaves_the_target_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "artifacts/run/shot.png", b"old").unwrap();
+        let error = super::copy_file(dir.path(), "artifacts/run/shot.png", &b"grown"[..], 4);
+        assert_eq!(error.unwrap_err().kind(), std::io::ErrorKind::FileTooLarge);
+        let (content, _) = read_file(dir.path(), "artifacts/run/shot.png").unwrap();
+        assert_eq!(content, b"old");
     }
 
     #[test]

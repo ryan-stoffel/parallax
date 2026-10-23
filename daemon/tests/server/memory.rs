@@ -390,6 +390,22 @@ async fn only_the_coordinator_writes_and_its_write_adds_a_learned_item() {
     host.server.stop().await;
 }
 
+/// `run`'s worktree, once it has one.
+async fn child_folder(client: &mut Conn, run: RunId) -> std::path::PathBuf {
+    loop {
+        let runs = client
+            .call::<AgentList>(AgentListParams { project: None })
+            .await
+            .unwrap()
+            .runs;
+        let found = runs.into_iter().find(|found| found.id == run).unwrap();
+        if let Some(path) = found.worktree_path {
+            return std::path::PathBuf::from(path);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 /// PLX-941: a Project child's `present_files` also saves each file in the Project's
 /// `artifacts/<thread>/`, which `context/list` lists and `context/readBytes` reads in slices. A
 /// run outside a Project has no artifacts.
@@ -398,18 +414,7 @@ async fn a_childs_presented_files_are_saved_in_the_projects_artifacts() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let (host, mut client, project, coordinator) = project_with_coordinator(&seen).await;
     let child = spawn(&mut client, &coordinator, "Take a screenshot.").await;
-    let folder = loop {
-        let runs = client
-            .call::<AgentList>(AgentListParams { project: None })
-            .await
-            .unwrap()
-            .runs;
-        let run = runs.into_iter().find(|run| run.id == child).unwrap();
-        if let Some(path) = run.worktree_path {
-            break std::path::PathBuf::from(path);
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
+    let folder = child_folder(&mut client, child).await;
     std::fs::write(folder.join("shot.png"), b"0123456789").unwrap();
     let mut mcp = tools(&host, child).await;
     let shown = mcp
@@ -441,6 +446,14 @@ async fn a_childs_presented_files_are_saved_in_the_projects_artifacts() {
         .unwrap();
     assert_eq!(read.file.size, 10);
     assert_eq!(read.content, "MjM0", "base64 of 234");
+    let whole = parallax_protocol::ContextReadParams {
+        project: project.id,
+        path: format!("artifacts/{child}/shot.png"),
+    };
+    let refused = client
+        .call::<parallax_protocol::methods::ContextRead>(whole)
+        .await;
+    assert!(refused.unwrap_err().message.contains("context/readBytes"));
 
     let save = |run_id, path: &str| ContextSaveArtifactParams {
         run_id,
@@ -460,6 +473,83 @@ async fn a_childs_presented_files_are_saved_in_the_projects_artifacts() {
         .call::<ContextSaveArtifact>(save(outside, "shot.png"))
         .await;
     assert_eq!(refused.unwrap_err().code, INVALID_PARAMS);
+    host.server.stop().await;
+}
+
+/// PLX-941: a save that passes the Project's 2 GiB of history and artifacts deletes the oldest
+/// artifact first and adds a Needs you item about the child.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_save_over_the_cap_deletes_the_oldest_artifact_with_a_needs_you_item() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, mut client, project, coordinator) = project_with_coordinator(&seen).await;
+    let child = spawn(&mut client, &coordinator, "Take a screenshot.").await;
+    let folder = child_folder(&mut client, child).await;
+    std::fs::write(folder.join("shot.png"), b"0123456789").unwrap();
+    // A sparse file the size of the whole cap, so it costs no disk.
+    let context = host.dir.path().join("context").join(project.id.to_string());
+    let old = context.join("artifacts/earlier/old.bin");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    let file = std::fs::File::create(&old).unwrap();
+    file.set_len(2 * 1024 * 1024 * 1024).unwrap();
+    drop(file);
+
+    let save = ContextSaveArtifactParams {
+        run_id: child,
+        path: "shot.png".to_owned(),
+    };
+    client.call::<ContextSaveArtifact>(save).await.unwrap();
+    assert!(!old.exists());
+    assert!(!context.join("artifacts/earlier").exists());
+    let inbox = client
+        .call::<InboxList>(InboxListParams {
+            project: project.id,
+        })
+        .await
+        .unwrap()
+        .items;
+    let item = inbox
+        .iter()
+        .find(|item| item.kind == InboxKind::NeedsYou)
+        .expect("a needs you item");
+    assert_eq!(item.run, child);
+    assert!(item.text.contains("Deleted the 1 oldest"), "{}", item.text);
+    host.server.stop().await;
+}
+
+/// PLX-941: a symlink in the child's folder is never followed, so it can't copy a file from
+/// outside into the Project.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_symlinked_source_is_never_saved_as_an_artifact() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, mut client, project, coordinator) = project_with_coordinator(&seen).await;
+    let child = spawn(&mut client, &coordinator, "Take a screenshot.").await;
+    let folder = child_folder(&mut client, child).await;
+    let outside = temp_dir();
+    std::fs::write(outside.path().join("secret.png"), b"secret").unwrap();
+    std::os::unix::fs::symlink(outside.path().join("secret.png"), folder.join("link.png")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), folder.join("linked")).unwrap();
+
+    for path in ["link.png", "linked/secret.png"] {
+        let save = ContextSaveArtifactParams {
+            run_id: child,
+            path: path.to_owned(),
+        };
+        let refused = client.call::<ContextSaveArtifact>(save).await;
+        assert_eq!(refused.unwrap_err().code, INVALID_PARAMS, "{path}");
+    }
+    let listed = client
+        .call::<ContextList>(ContextListParams {
+            project: project.id,
+        })
+        .await
+        .unwrap()
+        .files;
+    assert!(
+        listed
+            .iter()
+            .all(|file| !file.path.starts_with("artifacts/")),
+        "{listed:?}"
+    );
     host.server.stop().await;
 }
 
