@@ -937,10 +937,17 @@ body {
 }
 /* The status board on the Project tab (ContextBody), set like a project page: small headings, and
    each item a bold lead and its detail, a little apart. */
+.context-board {
+  padding-top: 1.25rem;
+}
 .context-board .markdown {
   font-size: 13px;
   line-height: 1.55;
   color: var(--muted-foreground);
+}
+.context-board .markdown h1 {
+  font-size: 14px;
+  color: var(--foreground);
 }
 .context-board .markdown h2 {
   margin: 1.6em 0.25em 0.6em;
