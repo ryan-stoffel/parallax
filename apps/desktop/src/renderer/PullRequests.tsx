@@ -770,7 +770,7 @@ function CommentCard({
         <span className="text-faint-foreground">{ago(c.createdAt)}</span>
       </p>
       <div
-        className={`mt-2 select-text ${folded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}
+        className={`mt-2 ${folded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}
       >
         <MarkdownText text={githubText(c.body)} components={githubMarkdown} />
       </div>
