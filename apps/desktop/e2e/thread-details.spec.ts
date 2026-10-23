@@ -85,7 +85,9 @@ test("checkout counts before starting and concise errors after a worktree is rem
       });
     });
     const deviceIcon = details.locator('[aria-label="Workspace"] > div[title] > span svg');
-    await expect(deviceIcon.locator("path")).toHaveAttribute("d", "M6 13h.01");
+    // Mini's own path, since the laptop icon shows until the event lands, and its two paths would
+    // fail a plain `path` locator at once instead of waiting (PLX-919).
+    await expect(deviceIcon.locator('path[d="M6 13h.01"]')).toHaveCount(1);
     await expect(deviceIcon.locator("rect")).toHaveAttribute("height", "10");
     expect(await details.innerText()).not.toContain(registeredPath);
     await details
