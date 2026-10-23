@@ -255,27 +255,18 @@
 }
 
 /* A nightly build (main.tsx sets .nightly): a sky at the top of the sidebar, with stars and
-   cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons. The
-   row's text turns white over it in every theme and mode.
+   cartoon clouds in its top row (NightSky.tsx), and the same night sky on the send buttons.
 
    The sky is the sidebar's own background, so it sits behind all of the sidebar's content, and
    it blends into the sidebar's color in oklab, so it merges cleanly into any theme's. Dark mode
-   is night, deepening into the sidebar behind the Search row. Light mode is twilight: indigo
-   behind the top row's white text, brightening to a lavender that runs on past the Search row,
-   light enough for its dark text, with white clouds. */
+   is night, deepening into the sidebar behind the Search row, and the top row's text turns white
+   over it. Light mode is dawn: periwinkle with a rose glow, paling into the sidebar by the Search
+   row's bottom, with faint indigo stars, white clouds, and the theme's own dark text. */
 
 :root.nightly .night-sky-host {
   background:
-    linear-gradient(
-        in oklab,
-        #15124a,
-        #2e2a8c 19%,
-        #6a64d6 33%,
-        #e6e4fe 44%,
-        #eae8fe 70%,
-        var(--sidebar)
-      )
-      top / 100% 120px no-repeat,
+    linear-gradient(in oklab, #c3c9fb, #d9d6fb 35%, #ebe7fb 65%, var(--sidebar)) top / 100% 104px
+      no-repeat,
     var(--pane-sidebar);
 }
 :root.nightly.dark .night-sky-host {
@@ -292,17 +283,20 @@
 :root.nightly .night-sky-host .sky-search:is(:hover, :focus-within) {
   background-color: color-mix(in oklab, var(--sidebar), var(--foreground) 4.5%);
 }
-/* The clouds' bodies and lit tops, far to near. */
+/* The stars, the glow behind them, and the clouds' bodies and lit tops, far to near. */
 :root.nightly .night-sky {
-  /* Dark enough that the top row's white text reads over the far ones. */
-  --cloud-far: #5751c4;
-  --cloud-far-lit: #6660d0;
-  --cloud-mid: #bdb9f3;
-  --cloud-mid-lit: #d6d4f9;
-  --cloud-near: #ebeafd;
+  --star: #4f46e5;
+  --sky-glow: #ec4899;
+  --cloud-far: #d3d4fa;
+  --cloud-far-lit: #e2e2fc;
+  --cloud-mid: #e6e4fc;
+  --cloud-mid-lit: #f3f2fe;
+  --cloud-near: #f1effd;
   --cloud-near-lit: #ffffff;
 }
 :root.nightly.dark .night-sky {
+  --star: #ffffff;
+  --sky-glow: #7c3aed;
   --cloud-far: #2c2a6e;
   --cloud-far-lit: #3c3a8c;
   --cloud-mid: #43409a;
@@ -325,7 +319,7 @@
   width: 100%;
   height: 56px;
 }
-:root.nightly .night-sky-text {
+:root.nightly.dark .night-sky-text {
   --foreground: #ffffff;
   --muted-foreground: rgb(255 255 255 / 75%);
   --hover: rgb(255 255 255 / 12%);
@@ -560,8 +554,8 @@ body {
 /* A nightly's sky fades into the glass rather than into the sidebar's solid color. */
 :root.nightly.translucent .night-sky-host {
   background:
-    linear-gradient(in oklab, #15124a, #2e2a8c 19%, #6a64d6 33%, transparent) top / 100% 120px
-      no-repeat,
+    linear-gradient(in oklab, rgb(195 201 251 / 90%), rgb(217 214 251 / 60%) 40%, transparent) top /
+      100% 104px no-repeat,
     var(--pane-sidebar);
 }
 :root.nightly.dark.translucent .night-sky-host {
