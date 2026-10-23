@@ -528,3 +528,76 @@ test("Limits show what's left of each live window, in amber and then red near it
     "Couldn't read its limits: it exited before answering",
   );
 });
+
+test("Limits show each provider set up in Settings once, whichever hosts report it", async () => {
+  const limit = (usedPercent: number) => ({
+    window: "five_hour",
+    usedPercent,
+    resetsAt: new Date(Date.now() + 2 * HOUR).toISOString(),
+    capturedAt: new Date().toISOString(),
+  });
+  const instance = (id: string, enabled: boolean) => ({
+    instance: { id, kind: id, name: id, enabled },
+    installed: true,
+  });
+  // Cursor is off on this computer, which fails to read its Codex. The Mac mini reports Claude
+  // too, and reads its Codex.
+  const answers: Record<string, Record<string, unknown>> = {
+    local: {
+      "providers/list": {
+        providers: [instance("claude", true), instance("codex", true), instance("cursor", false)],
+      },
+      "usage/limits": {
+        accounts: [
+          { accountId: "claude", limits: [limit(14)] },
+          { accountId: "codex", limits: [], problem: "it exited before answering" },
+          { accountId: "cursor", limits: [limit(0)] },
+        ],
+      },
+    },
+    mini: {
+      "providers/list": { providers: [instance("claude", true), instance("codex", true)] },
+      "usage/limits": {
+        accounts: [
+          { accountId: "claude", limits: [limit(50)] },
+          { accountId: "codex", limits: [limit(30)] },
+        ],
+      },
+    },
+  };
+  window.parallax = {
+    platform: "darwin",
+    connectionState: async () => ({
+      status: "connected",
+      plxd: "0.9.0",
+      protocol: 1,
+      capabilities: { providers: {} },
+    }),
+    onConnectionState: () => () => {},
+    request: async (host: string, method: string) => {
+      const answer = method === "accounts/keys/list" ? { accounts: [] } : answers[host]![method];
+      return answer
+        ? { result: answer, logId: "log" }
+        : { error: { code: -32601, message: `no ${method}` } };
+    },
+  } as unknown as ParallaxBridge;
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  const hosts = [
+    { id: "local", name: "This Mac" },
+    { id: "mini", name: "Mac mini" },
+  ];
+  await act(async () => root.render(<UsagePage hosts={hosts} />));
+  unmount = () => root.unmount();
+  act(() => document.querySelector<HTMLInputElement>('input[value="limits"]')!.click());
+  await settle();
+  await settle();
+
+  expect(
+    [...document.querySelectorAll("section[aria-label]")].map((s) => s.getAttribute("aria-label")),
+  ).toEqual(["Claude Code", "Codex"]);
+  // This computer's Claude, the Mac mini's Codex, and no host's name.
+  expect(
+    [...document.querySelectorAll('[role="meter"]')].map((m) => m.getAttribute("aria-valuenow")),
+  ).toEqual(["86", "70"]);
+  expect(document.body.textContent).not.toContain("Mac mini");
+});
