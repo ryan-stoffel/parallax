@@ -2484,7 +2484,7 @@ mod tests {
         assert!(!agents.retire(id, &commands), "a command holds a sender");
         assert!(
             racing
-                .try_send(Command::Wake(String::new(), Vec::new(), None))
+                .try_send(Command::Wake(String::new(), Vec::new(), None, None))
                 .is_ok()
         );
         drop(racing);

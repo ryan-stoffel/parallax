@@ -236,8 +236,9 @@ pub(super) enum Command {
     },
     /// A child of this run finished, or a run started in this coordinator's Project, as
     /// [`wake::summary`] and [`wake::started`] tell it (PLX-42, PLX-380), with the ids of the
-    /// questions it names (PLX-469), and the task it delegated that ended, if any (0063).
-    Wake(String, Vec<Uuid>, Option<Uuid>),
+    /// questions it names (PLX-469), the task it delegated that ended, if any (0063), and the
+    /// newest stored end of a child it names (PLX-936).
+    Wake(String, Vec<Uuid>, Option<Uuid>, Option<jiff::Timestamp>),
     /// `agent/resumeNow` (PLX-371).
     ResumeNow {
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
@@ -1093,8 +1094,17 @@ impl Actor {
                 }
                 let _ = reply.send(answer);
             }
-            Command::Wake(summary, questions, task) => {
-                self.wakes.push(summary, questions, task, Instant::now());
+            Command::Wake(summary, questions, task, ended) => {
+                // ponytail: a late end's mark moves back in a store job of its own, after the end
+                // was stored and routed here, so a crash or a `project/start` between them can
+                // miss it (PLX-936); fold the mark into the job that routes the end if that
+                // matters.
+                if self
+                    .wakes
+                    .push(summary, questions, task, ended, Instant::now())
+                {
+                    self.save_wakes().await;
+                }
             }
             Command::StopTask { task_id, reply } => {
                 let stopped = match &self.live {
@@ -4824,6 +4834,7 @@ mod tests {
         actor.wakes.push(
             "A task finished.".into(),
             Vec::new(),
+            None,
             None,
             tokio::time::Instant::now() - Duration::from_secs(5),
         );

@@ -124,7 +124,7 @@ pub(crate) async fn start(
         let autonomy = crate::store::project_autonomy(&project_row.autonomy);
         // In the job that makes the row, so no child's end is both handed over and sent to it
         // (PLX-936).
-        let handed = super::wake::handed(db, project.into(), row.id, current.as_ref());
+        let handed = super::wake::handed(db, project.into(), row.id);
         Ok((row, autonomy, current.map(|current| current.id), handed))
     })
     .await?;

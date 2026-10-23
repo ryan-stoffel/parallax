@@ -794,6 +794,22 @@ const MIGRATIONS: &[Migration] = &[
         INSERT INTO host_settings (key, value)
             SELECT 'board_migration:' || id, 'pending' FROM projects;",
     },
+    // The newest child end a coordinator's wake-up turn delivered (PLX-936, decision 0025), from
+    // which a Start over or a restart rebuilds what its coordinators never delivered. An existing
+    // coordinator starts from its newest turn, or its creation, the cursor plxd used before.
+    Migration {
+        version: 50,
+        sql: "ALTER TABLE wakes ADD COLUMN woken_at TEXT;
+        INSERT INTO wakes (run_id, in_a_row, paused)
+            SELECT id, 0, 0 FROM runs
+            WHERE policy = 'noWrite' AND id NOT IN (SELECT run_id FROM wakes);
+        UPDATE wakes SET woken_at = (
+            SELECT COALESCE(MAX(turns.created_at), runs.created_at)
+            FROM runs LEFT JOIN turns ON turns.run_id = runs.id
+            WHERE runs.id = wakes.run_id
+        )
+        WHERE run_id IN (SELECT id FROM runs WHERE policy = 'noWrite');",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

@@ -316,6 +316,7 @@ async fn the_wake_up_after_the_hundredth_in_a_row_pauses_and_adds_needs_you() {
     let state = WakeState {
         in_a_row: 99,
         paused: false,
+        ..store.wake_state(coordinator.id.into()).unwrap()
     };
     store.set_wake_state(coordinator.id.into(), state).unwrap();
     drop(store);

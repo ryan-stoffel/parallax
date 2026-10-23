@@ -502,6 +502,7 @@ fn deleting_a_run_removes_its_worktree_events_turns_images_wakes_and_attached_se
         let wakes = WakeState {
             in_a_row: 2,
             paused: true,
+            woken: None,
         };
         store.set_wake_state(id, wakes).unwrap();
     }
@@ -621,4 +622,46 @@ fn deleting_a_long_turn_does_not_exceed_sqlite_variable_limit() {
     assert!(!more);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].seq, 33_000);
+}
+
+/// PLX-936: migration 50 starts each existing coordinator's delivered-end cursor where plxd's old
+/// one was, its newest turn or else its creation, and leaves other runs without one.
+#[test]
+fn a_version_49_database_starts_each_coordinators_cursor_at_its_newest_turn() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().join("parallax.sqlite3");
+    let store = Store::open(&path).expect("open");
+    let project = Uuid::now_v7();
+    let coordinator = |prompt: &str| RunFields {
+        policy: "noWrite".to_owned(),
+        prompt: prompt.to_owned(),
+        ..fields(project)
+    };
+    let (talked, quiet, worker) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    store
+        .create_run(talked, &coordinator("Plan."), &starting())
+        .unwrap();
+    store
+        .create_run(quiet, &coordinator("Start over."), &starting())
+        .unwrap();
+    store
+        .create_run(worker, &fields(project), &starting())
+        .unwrap();
+    store.record_turn(talked, Uuid::now_v7(), "Go on.").unwrap();
+    drop(store);
+    let conn = Connection::open(&path).expect("open raw connection");
+    conn.execute_batch(
+        "ALTER TABLE wakes DROP COLUMN woken_at;
+         DELETE FROM schema_version WHERE version = 50;",
+    )
+    .expect("roll the database back to version 49");
+    drop(conn);
+
+    let store = Store::open(&path).expect("open should apply migration 50");
+    let turned = store.last_turn_at(talked).unwrap();
+    assert!(turned.is_some());
+    assert_eq!(store.wake_state(talked).unwrap().woken, turned);
+    let made = store.get_run(quiet).unwrap().unwrap().created_at;
+    assert_eq!(store.wake_state(quiet).unwrap().woken, Some(made));
+    assert_eq!(store.wake_state(worker).unwrap(), WakeState::default());
 }
