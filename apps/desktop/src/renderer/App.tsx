@@ -709,14 +709,15 @@ export function App() {
   };
 
   // A plain New thread, so not in the folder a folder's New thread put it in. It opens on the
-  // computer new threads start on, in the repository of the same name there, if it has one.
+  // computer new threads start on, in the repository of the same name there, or No Repo when it
+  // has none.
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
     startIn.set(null);
     if (start.id !== host.id) {
       const name = groups.find((g) => g.id === groupId)?.name;
       return openOnHost(start.id, {
         kind: "new",
-        groupId: startGroups.find((g) => g.name === name)?.id,
+        groupId: groupId && (startGroups.find((g) => g.name === name)?.id ?? noRepo),
       });
     }
     setSettings(null);

@@ -1146,6 +1146,29 @@ test("New thread opens on the default computer, in its repository of the same na
   expect(heading()).toBe("What should we build in parallax on mac mini?");
 });
 
+test("New thread on a default computer without the open repository starts in No Repo there (PLX-950)", async () => {
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  const dotfiles: Repo = { ...parallax, id: "r-dotfiles", name: "dotfiles", path: "/Users/me/dot" };
+  request.mockImplementation(async (host, method, params) => {
+    if (host === "ssh-mini" && method === "thread/list")
+      return { result: { repos: [dotfiles], threads: [], seq: 1 } };
+    const answer = answers[method];
+    return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
+  });
+  newThreadPrefs.set({ ...newThreadDefaults, host: "ssh-mini" });
+  await renderApp();
+  expect(heading()).toBe("What should we build in parallax?");
+  // The sidebar's title is a plain New thread, from parallax on This Mac.
+  await act(async () =>
+    [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")]
+      .find((b) => b.textContent === "Parallax")!
+      .click(),
+  );
+  await settle();
+  expect(heading()).toBe("What should we work on without a repo?");
+  expect(control("Runs on: mac mini")).not.toBeNull();
+});
+
 test("New thread stays on the open computer while the default one isn't connected (PLX-950)", async () => {
   window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
   window.parallax.connectionState = async (host) =>
