@@ -52,14 +52,15 @@ export function RefMenu({
   const [query, setQuery] = useState("");
   const key = `${hostId}/${repo}`;
   const refs = known.get(key);
-  // The host and repository whose refs this picker has asked for and put in `known`.
-  const [fresh, setFresh] = useState<string>();
+  // The host and repository of this picker's last answer in `known`: a new object each time, so
+  // every answer renders.
+  const [fresh, setFresh] = useState<{ key: string }>();
 
   const load = useCallback(async () => {
     const answer = await window.parallax.request(hostId, "repo/refs", { repo });
     const refs = "error" in answer ? describeError(answer.error) : answer.result.refs;
     known.set(`${hostId}/${repo}`, refs);
-    setFresh(`${hostId}/${repo}`);
+    setFresh({ key: `${hostId}/${repo}` });
   }, [hostId, repo]);
   // On mount too, for a new worktree's default base.
   useEffect(() => void load(), [load]);
@@ -70,7 +71,7 @@ export function RefMenu({
   const shown = matches.slice(0, maxRows);
   const base = checkout ? undefined : baseOrder.find((name) => list.some((r) => r.name === name));
   useEffect(() => {
-    if (value === undefined && base && fresh === key) onChange(base);
+    if (value === undefined && base && fresh?.key === key) onChange(base);
   }, [value, base, fresh, key]);
   const [last, setLast] = useState<string>();
   const label =

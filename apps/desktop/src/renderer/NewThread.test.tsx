@@ -1303,6 +1303,19 @@ describe("the ref picker", () => {
     ]);
   });
 
+  test("reopening the menu lists refs made since it last opened", async () => {
+    capabilities = { repoRefs: {} };
+    await renderApp();
+    answers["repo/refs"] = () => ({
+      result: { refs: [{ name: "origin/develop", remote: true }, { name: "fresh-branch" }] },
+    });
+    const menu = document.querySelector<HTMLElement>('main [role="menu"][aria-label="Ref"]')!;
+    const opened = Object.assign(new Event("toggle"), { newState: "open" });
+    await act(async () => void menu.dispatchEvent(opened));
+    await settle();
+    expect(menu.textContent).toContain("fresh-branch");
+  });
+
   test("a new worktree starts from main without develop, not the checkout's branch", async () => {
     capabilities = { repoRefs: {} };
     answers["repo/refs"] = () => ({

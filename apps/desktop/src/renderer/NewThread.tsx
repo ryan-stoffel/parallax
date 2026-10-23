@@ -448,6 +448,8 @@ export function NewThread({
     else onGroupChange(repo.id);
   };
 
+  const hold = starting !== undefined || (runOptions && !workerBackends.has(hostId));
+
   // While starting, laid out as AgentChat is, so opening the thread doesn't move anything. The
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.
   // Before it starts, it's anchored by its bottom about where centering it a little above the
@@ -621,12 +623,13 @@ export function NewThread({
           newThread
           initial={draft}
           contents={contents}
-          // The box looks the same while a start is under way, so a send meanwhile stays in it.
+          // The box looks the same while a start is under way, or while another computer's backend
+          // stands in for this one's, so a send meanwhile stays in it.
           onSend={(prompt, options, images, threads) =>
-            starting ? Promise.resolve("") : send(prompt, options, images, threads, false)
+            hold ? Promise.resolve("") : send(prompt, options, images, threads, false)
           }
           onSendInBackground={(prompt, options, images, threads) =>
-            starting ? Promise.resolve("") : send(prompt, options, images, threads, true)
+            hold ? Promise.resolve("") : send(prompt, options, images, threads, true)
           }
           attach={attachThreads(connection, threadLinks)}
           backend={runOptions ? backend : undefined}
