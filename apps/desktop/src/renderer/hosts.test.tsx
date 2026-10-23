@@ -83,7 +83,14 @@ beforeEach(() => {
 });
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
+  act(() => unmount());
+});
 
 async function renderApp() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -210,7 +217,7 @@ test("Connections' Add host opens the dialog, which shows the main process's err
   expect(form.querySelector('[role="alert"]')!.textContent).toContain("can't start with “-”");
 });
 
-test("a failed remove shows the main process's message", async () => {
+test("a failed remove shows the main process's message in a notification", async () => {
   window.parallax.removeHost = async () => "Parallax couldn't save its settings: EACCES";
   await renderApp();
   await act(async () => {
@@ -222,8 +229,10 @@ test("a failed remove shows the main process's message", async () => {
   expect(document.querySelector('form[aria-label="Add host"]')).toBeNull();
 
   await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Remove")!);
-  const alert = document.querySelector('[role="alert"]')!.textContent;
-  expect(alert).toBe("Parallax couldn't save its settings: EACCES");
+  const notice = document.querySelector('[aria-label="Notifications"] [role="alert"]')!;
+  expect(notice.querySelector("p")!.textContent).toBe(
+    "Parallax couldn't save its settings: EACCES",
+  );
 });
 
 const openConnections = async () => {

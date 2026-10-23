@@ -19,6 +19,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. `openRowMenus` sends the rows' menus the event a browser sends as one
 // opens, which renders their items.
 HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.showPopover = () => {};
 // The composer's image reads, so a test can wait for them: happy-dom reads a file on two chained
 // timers, which a fixed wait races when the event loop stalls (PLX-277).
 const reads = vi.hoisted(() => [] as Promise<unknown>[]);
@@ -110,6 +111,11 @@ beforeEach(() => {
 
 let unmount = () => {};
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => unmount());
   vi.useRealTimers();
 });
@@ -145,6 +151,11 @@ const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
 const heading = () => document.querySelector("h1")?.textContent;
 const status = () => document.querySelector('main [role="status"]')?.textContent;
+/** The newest notification's title and body. */
+const notice = () => {
+  const toast = document.querySelector('[aria-label="Notifications"] > div');
+  return toast && [toast.querySelector("span")?.textContent, toast.querySelector("p")?.textContent];
+};
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 
@@ -206,7 +217,7 @@ test("New Thread adds a picked folder, starts there, and reuses its run id on a 
   // The first try fails, the retry with the same prompt succeeds.
   answers["thread/start"] = () => ({ error: { code: -32000, message: "plxd is busy" } });
   await send("Tidy the README");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("plxd is busy");
+  expect(notice()?.[1]).toBe("plxd is busy");
   answers["thread/start"] = (p) => ({
     result: {
       thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
@@ -251,7 +262,7 @@ test("Send shows the prompt at once while plxd starts the thread, and a failure 
   await settle();
   expect(heading()).toBe("What should we build in parallax?");
   expect(composer().textContent).toBe("Tidy the README");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("plxd is busy");
+  expect(notice()?.[1]).toBe("plxd is busy");
   expect(document.querySelector("[data-status=running]")).toBeNull();
 });
 
@@ -625,9 +636,7 @@ describe("with plxd's run options", () => {
       });
     effort("4");
     await send("Plan the settings split");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-      "the claude backend can't run with effort max",
-    );
+    expect(notice()?.[1]).toBe("the claude backend can't run with effort max");
     effort("3");
     await send("Plan the settings split");
 
@@ -791,7 +800,7 @@ test("Picking a computer that doesn't list the repository adds it there at the s
     },
   });
   await renderApp();
-  await choose("Runs on", "mac miniSSH · minino parallax");
+  await choose("Runs on", "mac miniSSH · miniClones parallax");
   expect(request).toHaveBeenCalledWith(
     "ssh-mini",
     "repo/add",
@@ -824,10 +833,11 @@ test("A computer without the repository at that path keeps New Thread here, sayi
     return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
   });
   await renderApp();
-  await choose("Runs on", "mac miniSSH · minino parallax");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
-    "mac mini: /src/parallax is not the top folder of a git repository: it doesn't exist.",
-  );
+  await choose("Runs on", "mac miniSSH · miniClones parallax");
+  expect(notice()).toEqual([
+    "Couldn't set up parallax on mac mini",
+    "/src/parallax is not the top folder of a git repository: it doesn't exist.",
+  ]);
   expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
   expect(heading()).toBe("What should we build in parallax?");
 });
@@ -851,8 +861,9 @@ test("A send while the picked computer adds the repository waits, then starts th
     },
   });
   await renderApp();
-  await choose("Runs on", "mac miniSSH · minino parallax");
-  expect(status()).toBe("Adding parallax on mac mini…");
+  await choose("Runs on", "mac miniSSH · miniClones parallax");
+  // Picked at once, with a spinner while it's set up.
+  expect(control("Runs on: mac mini, New worktree")?.getAttribute("aria-busy")).toBe("true");
   await send("Fix it");
   // Not on the computer being left.
   expect(calls("thread/start")).toEqual([]);
@@ -877,7 +888,7 @@ test("Picking this computer again while the picked one adds the repository drops
     return answer ? answer(params) : { error: { code: -32601, message: `${method} isn't faked` } };
   });
   await renderApp();
-  await choose("Runs on", "mac miniSSH · minino parallax");
+  await choose("Runs on", "mac miniSSH · miniClones parallax");
   await choose("Runs on", "This MacThis computer");
   await act(async () => finish({ result: { repo: { ...parallax, id: "r-mini-parallax" } } }));
   await settle();
@@ -944,7 +955,7 @@ test("A computer without the repository clones its origin at the same path, and 
     (f) => (finish = f),
   );
   await renderApp();
-  await choose("Runs on", "mac miniSSH · minino parallax");
+  await choose("Runs on", "mac miniSSH · miniClones parallax");
   await settle();
   expect(calls("repo/clone")).toEqual([
     {
@@ -953,15 +964,19 @@ test("A computer without the repository clones its origin at the same path, and 
       path: parallax.path,
     },
   ]);
-  expect(status()).toBe("Cloning parallax on mac miniConnecting…");
+  // The clone's progress is a notification, not a card in the window.
+  expect(notice()).toEqual(["Cloning parallax onto mac mini", "Connecting…"]);
+  expect(status()).toBeUndefined();
   await send("Fix it");
   expect(calls("thread/start")).toEqual([]);
-  // The clone shows in the thread it's starting, under the prompt, not under the box.
-  expect(document.querySelector('main [role="log"] [role="status"]')?.textContent).toContain(
-    "Cloning parallax on mac mini",
-  );
   await act(async () => finish());
   await settle();
+  // The opened thread's chat may notify on top of it, as this fake doesn't answer it there.
+  expect(
+    [...document.querySelectorAll('[aria-label="Notifications"] > div span')].map(
+      (t) => t.textContent,
+    ),
+  ).toContain("parallax is ready on mac mini");
   expect(request).toHaveBeenCalledWith(
     "ssh-mini",
     "thread/start",
@@ -969,31 +984,17 @@ test("A computer without the repository clones its origin at the same path, and 
   );
 });
 
-test("A computer where the repository's folder is missing asks where to clone it, then starts there (PLX-905)", async () => {
+test("A computer where the repository's folder is missing clones it under its home folder without asking (PLX-930)", async () => {
   cloneOntoMini((path) =>
     path.startsWith("~")
       ? { result: { path: "/Users/ryan", folders: [] } }
       : { error: { code: -32602, message: `Can't open ${path}: No such file or directory` } },
   );
   await renderApp();
-  await choose("Runs on", "mac miniSSH · minino parallax");
+  await choose("Runs on", "mac miniSSH · miniClones parallax");
   await settle();
-  const dialog = document.querySelector<HTMLDialogElement>(
-    'dialog[aria-label="Clone parallax on mac mini"]',
-  )!;
-  expect(dialog.open).toBe(true);
-  expect(dialog.textContent).toContain("Select where to clone on mac mini");
-  expect(dialog.textContent).toContain("git@github.com:ryan-stoffel/parallax.git");
-  // /src/parallax isn't under this computer's home, so it starts at its name.
-  expect(dialog.querySelector<HTMLInputElement>('input[aria-label="Clone into"]')!.value).toBe(
-    "~/parallax",
-  );
-  expect(calls("repo/clone")).toEqual([]);
-  const clone = [...dialog.querySelectorAll("button")].find((b) =>
-    b.textContent?.startsWith("Clone"),
-  )!;
-  await act(async () => clone.click());
-  await settle();
+  expect(document.querySelector("dialog[open]")).toBeNull();
+  // /src/parallax isn't under this computer's home, so it goes at its name.
   expect(calls("repo/clone")).toEqual([
     {
       id: expect.any(String),
@@ -1008,6 +1009,37 @@ test("A computer where the repository's folder is missing asks where to clone it
     "thread/start",
     expect.objectContaining({ prompt: "Fix it", repo: "r-mini-parallax" }),
   );
+});
+
+test("A computer with something else where the repository would go asks where to clone it (PLX-905)", async () => {
+  cloneOntoMini((path) =>
+    path.startsWith("~")
+      ? {
+          result: {
+            path: "/Users/ryan",
+            folders: [{ name: "parallax", path: "/Users/ryan/parallax" }],
+          },
+        }
+      : { error: { code: -32602, message: `Can't open ${path}: No such file or directory` } },
+  );
+  const fake = request.getMockImplementation()!;
+  request.mockImplementation(async (host, method, params) =>
+    host === "ssh-mini" && method === "repo/clone" && params["path"] === "~/parallax"
+      ? { error: { code: -32602, message: "~/parallax already exists" } }
+      : fake(host, method, params),
+  );
+  await renderApp();
+  await choose("Runs on", "mac miniSSH · miniClones parallax");
+  await settle();
+  const dialog = document.querySelector<HTMLDialogElement>(
+    'dialog[aria-label="Clone parallax on mac mini"]',
+  )!;
+  expect(dialog.open).toBe(true);
+  expect(dialog.querySelector<HTMLInputElement>('input[aria-label="Clone into"]')!.value).toBe(
+    "~/parallax",
+  );
+  // Nothing in progress while it asks.
+  expect(notice()).toBeNull();
 });
 
 test("No Repo picks only the computer, and starts the thread there (PLX-849)", async () => {
@@ -1076,7 +1108,7 @@ test("New Thread lists another computer's repositories, and picking one opens it
   expect(heading()).toBe("What should we build in dotfiles?");
   expect(control("Runs on: mac mini, New worktree")).not.toBeNull();
   expect(options("Computer")).toEqual([
-    "This MacThis computerno dotfiles",
+    "This MacThis computerClones dotfiles",
     "mac miniSSH · mini",
     "devboxSSH · devbox",
   ]);
@@ -1286,7 +1318,7 @@ test("a thread can start with an image alone, titled Image, and nothing to name 
   vi.unstubAllGlobals();
 });
 
-test("a folder that isn't a repository says so under the composer", async () => {
+test("a folder that isn't a repository says so in a notification", async () => {
   pickFolder.mockResolvedValue("/tmp/notes");
   answers["repo/add"] = () => ({
     error: {
@@ -1297,9 +1329,10 @@ test("a folder that isn't a repository says so under the composer", async () => 
   });
   await renderApp();
   await choose("Repository", "Add repository…");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+  expect(notice()).toEqual([
+    "Couldn't add the repository",
     "/tmp/notes is not the top folder of a git repository: it has no .git.",
-  );
+  ]);
   expect(heading()).toBe("What should we build in parallax?");
 });
 
@@ -1450,7 +1483,7 @@ describe("a host with no usable default account for threads", () => {
     await renderApp();
     await send("Tidy the README");
     expect(button("Continue")).toBeDefined();
-    await choose("Runs on", "mac miniSSH · minino parallax");
+    await choose("Runs on", "mac miniSSH · miniClones parallax");
     expect(button("Continue")).toBeUndefined();
   });
 
@@ -1495,14 +1528,14 @@ describe("a host with no usable default account for threads", () => {
     answers["accounts/list"] = () => ({ error: { code: -32601, message: "Method not found" } });
     await renderApp();
     await send("Hi");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe("Method not found");
+    expect(notice()?.[1]).toBe("Method not found");
   });
 
   test("says how to add one when there is none", async () => {
     accounts([cli("claude", false)]);
     await renderApp();
     await send("Hi");
-    expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+    expect(notice()?.[1]).toBe(
       "No account can run this thread yet. Sign in to Claude Code, or add an API key, then try again.",
     );
     expect(calls("accounts/defaults/set")).toEqual([]);
@@ -1510,7 +1543,7 @@ describe("a host with no usable default account for threads", () => {
 });
 
 test("known error kinds read plainly, and unknown ones show plxd's message", async () => {
-  const alert = () => document.querySelector('[role="alert"]')?.textContent;
+  const alert = () => notice()?.[1];
   answers["thread/start"] = () => ({
     error: { code: -32000, message: "no repo entry has id r-9", data: { kind: "repoNotFound" } },
   });

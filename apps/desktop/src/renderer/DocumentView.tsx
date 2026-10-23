@@ -18,7 +18,7 @@ import {
   useObjectUrl,
   type DocRef,
 } from "./documents";
-import { drawPage, pageSize } from "./FileCards";
+import { downloadFailed, drawPage, pageSize } from "./FileCards";
 import { useSaveWhole, useStreamUrl } from "./mediaUrl";
 import { isVideo } from "./transcript";
 import { cellAt, colName, splitRef, type Xlsx } from "./xlsx";
@@ -91,25 +91,26 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
 /** A video its host streams (PLX-836), whose Download reads it whole only when clicked. */
 function StreamedView({ hostId, doc, src }: { hostId: string; doc: DocRef; src?: string }) {
   const { busy, error, save } = useSaveWhole(hostId, doc);
+  useEffect(() => {
+    if (error) downloadFailed(doc.name, error);
+  }, [error, doc.name]);
   return (
-    <Framed doc={doc} disabled={!src || busy} onDownload={save} problem={error}>
+    <Framed doc={doc} disabled={!src || busy} onDownload={save}>
       <Media doc={doc} src={src} />
     </Framed>
   );
 }
 
-/** A file's title and type over `children`, with Download, and why it failed when it did. */
+/** A file's title and type over `children`, with Download. */
 function Framed({
   doc,
   disabled,
   onDownload,
-  problem,
   children,
 }: {
   doc: DocRef;
   disabled: boolean;
   onDownload: () => void;
-  problem?: string;
   children: ReactNode;
 }) {
   const type = typeOf(doc);
@@ -120,11 +121,6 @@ function Framed({
           {titleOf(doc.name)}
           <span className="text-muted-foreground"> · {type}</span>
         </p>
-        {problem && (
-          <span role="alert" className="truncate text-[12.5px] text-danger">
-            {problem}
-          </span>
-        )}
         <button
           type="button"
           disabled={disabled}

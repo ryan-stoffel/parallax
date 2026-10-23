@@ -43,6 +43,7 @@ import { MarkdownText } from "./AgentChat";
 import { diffBand, diffLook } from "./Approval";
 import { tabItem } from "./Composer";
 import { describeError, githubProblem } from "./errors";
+import { dismiss, notify } from "./notifications";
 import { Lightbox } from "./Lightbox";
 import { locale } from "./locale";
 import { behaviorPrefs } from "./prefs";
@@ -1040,7 +1041,6 @@ export function PullRequestView({
   const view = useRef<HTMLDivElement>(null);
   const closeDialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<RpcError>();
   const [tab, setTab] = useState<"summary" | "timeline" | "code">("summary");
   const [shots, setShots] = useState<{ images: { src: string; name: string }[]; index: number }>();
   const [description, setDescription] = useState(true);
@@ -1073,14 +1073,23 @@ export function PullRequestView({
     };
   }, [tab, readDiff, url, updatedAt, diff?.for]);
 
-  // Runs `fn` from the menus, which close first; its error shows over the Summary.
+  // Runs `fn` from the menus, which close first; its error shows in a notification, with Set up
+  // GitHub when `gh` is missing or signed out, until one works.
   const run = async (fn: () => Promise<RpcError | undefined | void>) => {
     menu.current?.hidePopover();
     mergeMenu.current?.hidePopover();
     setBusy(true);
-    setError(undefined);
-    setError((await fn()) ?? undefined);
+    const failed = await fn();
     setBusy(false);
+    if (!failed) return dismiss(`pr/${url}`);
+    const short = onSetUpGithub && githubProblem(failed);
+    notify({
+      key: `pr/${url}`,
+      tone: "error",
+      title: "Couldn't update the pull request",
+      body: short || describeError(failed),
+      action: short ? { label: "Set up GitHub", run: onSetUpGithub } : undefined,
+    });
   };
   const act = (action: PrAction) => void run(() => prs.act(url, action));
   const refresh = () => void run(() => prs.refresh(url));
@@ -1106,8 +1115,9 @@ export function PullRequestView({
       index: all.indexOf(shot),
     });
   };
-  const failed = error ?? linked?.error;
-  // `gh` missing or signed out: a short line by Set up GitHub, in place of plxd's message.
+  // Why it couldn't be read. `gh` missing or signed out: a short line by Set up GitHub, in place
+  // of plxd's message.
+  const failed = linked?.error;
   const github = onSetUpGithub && githubProblem(failed);
   const failure = failed && (github || describeError(failed));
   const setUp = github && <SetUpGithub onClick={onSetUpGithub!} />;

@@ -14,8 +14,11 @@ import type {
 import type { InboxView } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
 import { changeMessage } from "./MemoryPanel";
+import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers.
+HTMLElement.prototype.showPopover = () => {};
 // happy-dom has no popovers.
 HTMLElement.prototype.hidePopover = () => {};
 
@@ -124,6 +127,11 @@ beforeEach(() => {
 
 let unmount = () => {};
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => unmount());
   vi.useRealTimers();
 });
@@ -141,17 +149,20 @@ async function render(host: string, working = false, expanded = false) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root.render(
-      <KnowledgePanel
-        hostId={host}
-        project="p-1"
-        repo="r-1"
-        coordinator={coordinator}
-        connected
-        memory
-        inbox={inbox}
-        working={working}
-        expanded={expanded}
-      />,
+      <>
+        <Notifications />
+        <KnowledgePanel
+          hostId={host}
+          project="p-1"
+          repo="r-1"
+          coordinator={coordinator}
+          connected
+          memory
+          inbox={inbox}
+          working={working}
+          expanded={expanded}
+        />
+      </>,
     ),
   );
   unmount = () => {
@@ -332,8 +343,8 @@ test("the mini prompt sends a change to the coordinator, and a model on another 
       text: changeMessage("We moved off Jest, use Vitest"),
     },
   ]);
-  expect(document.querySelector('[role="status"]')!.textContent).toBe(
-    "Sent. The coordinator's rewrite shows up as a proposal.",
+  expect(document.querySelector('[aria-label="Notifications"] p')!.textContent).toBe(
+    "The coordinator's rewrite shows up as a proposal.",
   );
 
   // The picker shows the coordinator's providers as a row of logos.

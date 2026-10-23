@@ -28,32 +28,30 @@ const actions: { action: GitAction; label: string; busy: string; Icon: LucideIco
 
 /**
  * What the Git menu offers a run whose folder is in `status`: why each action can't run (absent
- * when it can), the main one (Commit with changes, else Push with unpushed commits, else Create
- * PR), and a note under the actions, as for a detached HEAD.
+ * when it can) and the main one (Commit with changes, else Push with unpushed commits, else Create
+ * PR).
  */
 export function gitActions(
   run: AgentRun,
   status: GitStatus | undefined,
   canOpenPr: boolean,
-): { why: Partial<Record<GitAction, string>>; main: GitAction; note?: string } {
+): { why: Partial<Record<GitAction, string>>; main: GitAction } {
   const all = (reason: string) => ({ commit: reason, push: reason, pr: reason });
   if (isRunning(run.status)) return { why: all("Wait for the turn to end"), main: "commit" };
   if (!status) return { why: all("Loading…"), main: "commit" };
   const why: Partial<Record<GitAction, string>> = {};
-  let note: string | undefined;
   if (status.changes === 0) why.commit = "No changes";
   if (!status.origin) why.push = why.pr = "No origin remote";
-  else if (!status.branch) {
-    why.push = why.pr = "Detached HEAD";
-    note = "Detached HEAD: check out a branch to push or open a pull request.";
-  } else {
+  // The branch row says Detached HEAD, so this says what to do about it.
+  else if (!status.branch) why.push = why.pr = "Check out a branch";
+  else {
     if (status.ahead === 0) why.push = "Nothing to push";
     if (!canOpenPr) why.pr = "This host's plxd can't open pull requests";
     // A worktree's pull request is of the run's commits.
     else if (!run.checkout && !run.diff) why.pr = "No commits yet";
   }
   const main = !why.commit ? "commit" : !why.push ? "push" : "pr";
-  return { why, main, note };
+  return { why, main };
 }
 
 /**
@@ -96,7 +94,7 @@ export function GitMenu({
   const able =
     !!capabilities && (run ? "git" in capabilities : !!repo && "repoGitStatus" in capabilities);
   const [status, setStatus] = useState<GitStatus>();
-  // Why the status couldn't load, or the commit failed.
+  // Why the status couldn't load, which the branch row says.
   const [error, setError] = useState<string>();
   const [diagnostic, setDiagnostic] = useState<string>();
   const [busy, setBusy] = useState<GitAction>();
@@ -141,7 +139,7 @@ export function GitMenu({
   }, [able, load, runStatus, commit]);
 
   if (!able) return null;
-  const { why, main, note } = run
+  const { why, main } = run
     ? gitActions(run, status, "openPr" in capabilities!)
     : {
         why: {
@@ -150,15 +148,13 @@ export function GitMenu({
           pr: "Start the thread to open a PR",
         },
         main: "commit" as const,
-        note: undefined,
       };
   const primary = actions.find((a) => a.action === main)!;
 
-  // Runs `action`. Its result is a notification, but a failed commit says so in its dialog.
+  // Runs `action`. Its result is a notification. A failed commit leaves its dialog open to retry.
   const perform = async (action: GitAction) => {
     if (!run || !status) return;
     setBusy(action);
-    setError(undefined);
     let failed: RpcError | undefined;
     let done: Notice | undefined;
     if (action === "pr") {
@@ -197,10 +193,10 @@ export function GitMenu({
     setBusy(undefined);
     const key = `git/${hostId}/${run.id}`;
     if (done) notify({ ...done, key });
-    if (action === "commit") {
-      if (failed) setError(describeError(failed));
-      else dialog.current?.close();
-    } else if (failed) {
+    if (action === "commit" && !failed) dialog.current?.close();
+    else if (action === "commit" && failed)
+      notify({ key, tone: "error", title: "Couldn't commit", body: describeError(failed) });
+    else if (failed) {
       const short = onSetUpGithub && githubProblem(failed);
       notify({
         key,
@@ -214,7 +210,6 @@ export function GitMenu({
   const start = (action: GitAction) => {
     menu.current?.hidePopover();
     if (action !== "commit") return void perform(action);
-    setError(undefined);
     if (!run || !status) return;
     setMessage(title ?? titleOf(run));
     dialog.current?.showModal();
@@ -222,14 +217,14 @@ export function GitMenu({
 
   return (
     <>
-      <div className={menuItem} title={status?.branch ?? diagnostic}>
+      <div
+        role={status || !error ? undefined : "alert"}
+        className={menuItem}
+        title={status?.branch ?? diagnostic}
+      >
         <GitBranch aria-hidden className="text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate">
-          {status
-            ? (status.branch ?? "Detached HEAD")
-            : error
-              ? "Branch unavailable"
-              : "Loading branch…"}
+          {status ? (status.branch ?? "Detached HEAD") : (error ?? "Loading branch…")}
         </span>
         {!!status?.ahead && (
           <span className="shrink-0 text-[11.5px] text-faint-foreground">{status.ahead} ahead</span>
@@ -296,12 +291,6 @@ export function GitMenu({
           )}
         </span>
       </button>
-      {note && <p className="px-2 py-1 text-[12px] text-amber-500">{note}</p>}
-      {error && !busy && (
-        <p role="alert" title={diagnostic} className="px-2 py-1 text-[12px] text-danger">
-          {error}
-        </p>
-      )}
       <dialog
         ref={dialog}
         aria-labelledby={`${id}-commit`}
@@ -332,11 +321,6 @@ export function GitMenu({
             />
           </div>
           <div className="flex items-center gap-3 border-t border-border px-5 py-3">
-            {error && (
-              <p role="alert" className="min-w-0 text-[12px] text-danger">
-                {error}
-              </p>
-            )}
             <button
               type="button"
               onClick={() => dialog.current?.close()}

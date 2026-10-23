@@ -5,11 +5,19 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import type { QueuedMessage } from "../protocol/generated/protocol";
+import { Notifications } from "./notifications";
 import { QueueStrip } from "./QueueStrip";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers.
+HTMLElement.prototype.showPopover = () => {};
 let root: Root | undefined;
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
@@ -23,7 +31,10 @@ function render(list = messages, running = true, held = false) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root!.render(
-      <QueueStrip hostId="local" runId="run" messages={list} held={held} running={running} />,
+      <>
+        <QueueStrip hostId="local" runId="run" messages={list} held={held} running={running} />
+        <Notifications />
+      </>,
     ),
   );
 }
@@ -33,6 +44,11 @@ function setup() {
   render();
   return request;
 }
+/** The newest notification's title and body. */
+const notice = () => {
+  const n = document.querySelector('[aria-label="Notifications"] > div');
+  return n && [n.querySelector("span")?.textContent, n.querySelector("p")?.textContent];
+};
 const button = (label: string) =>
   document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 
@@ -102,7 +118,7 @@ test("shows rejected changes without losing the queued message", async () => {
   const request = setup();
   request.mockResolvedValueOnce({ error: { code: -32000, message: "Already delivered" } } as never);
   await act(async () => button("Cancel queued message 1").click());
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("Already delivered");
+  expect(notice()).toEqual(["Couldn't change the queue", "Already delivered"]);
   expect(document.body.textContent).toContain("Add tests");
 });
 

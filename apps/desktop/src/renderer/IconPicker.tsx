@@ -3,6 +3,7 @@ import { useId, useRef, useState, type KeyboardEvent, type Ref, type ToggleEvent
 
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
 import { imageUrl, readIcon } from "./images";
+import { notify } from "./notifications";
 import { defaultIcon, iconColors, iconLook, projectIcons } from "./projectIcons";
 import { menuPanel } from "./ui";
 
@@ -52,7 +53,6 @@ export function IconPicker({
   const [pick, setPick] = useState(value ?? defaultIcon);
   const [query, setQuery] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
-  const [uploadError, setUploadError] = useState<string>();
 
   const q = query.trim().toLowerCase();
   const shown = q
@@ -62,7 +62,6 @@ export function IconPicker({
   const tabStop = shown.find((i) => i.name === pick.name) ?? shown[0];
 
   const choose = (next: ProjectIconValue) => {
-    setUploadError(undefined);
     setPick(next);
     onPick(next);
   };
@@ -72,7 +71,8 @@ export function IconPicker({
   // An image keeps the glyph and color under it, for an app that doesn't draw images (0038).
   const upload = async (file: File) => {
     const image = await readIcon(file, maxImageBytes!);
-    if (typeof image === "string") setUploadError(image);
+    if (typeof image === "string")
+      notify({ key: "project-icon", tone: "error", title: "Couldn't use that image", body: image });
     else choose({ ...withColor(pick.color), image });
   };
 
@@ -98,7 +98,6 @@ export function IconPicker({
         if (e.newState !== "open") return;
         setPick(value ?? defaultIcon);
         setQuery("");
-        setUploadError(undefined);
         setOpen(true);
       }}
       onToggle={(e: ToggleEvent<HTMLDivElement>) => {
@@ -168,11 +167,6 @@ export function IconPicker({
               </>
             )}
           </label>
-          {uploadError && (
-            <p role="alert" className="px-3 pt-2 text-[12.5px] text-danger">
-              {uploadError}
-            </p>
-          )}
           <fieldset aria-label="Color" className="flex justify-between px-3 pt-3 pb-1">
             {iconColors.map((c) => {
               // An image has no color of its own.

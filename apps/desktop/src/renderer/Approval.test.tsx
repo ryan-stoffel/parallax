@@ -23,8 +23,11 @@ import {
 } from "./Approval";
 import type { Approval, ApprovalRequest, ApprovalResolution, Item } from "./transcript";
 import { fakeWatch } from "./fakeWatch";
+import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers.
+HTMLElement.prototype.showPopover = () => {};
 // happy-dom lays nothing out: a tall transcript and short rows, so the virtualized list renders all.
 Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
   get(this: HTMLElement) {
@@ -119,7 +122,14 @@ beforeEach(() => {
 });
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
+  act(() => unmount());
+});
 
 function render(node: ReactNode) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -135,7 +145,12 @@ const settle = async () => {
   for (let i = 0; i < 20; i++) await act(async () => {});
 };
 async function renderChat() {
-  render(<AgentChat hostId="local" runId={runId} />);
+  render(
+    <>
+      <AgentChat hostId="local" runId={runId} />
+      <Notifications />
+    </>,
+  );
   await settle();
 }
 
@@ -336,14 +351,14 @@ test("Deny asks for an optional note, which goes as the message; Escape goes bac
   expect(details.textContent).toContain("Your note: Use the CI logs instead.");
 });
 
-test("an answer that fails says why, and can be sent again", async () => {
+test("an answer that fails says why in a notification, and can be sent again", async () => {
   output(asked("a1"));
   approve = () => ({ error: { code: -32000, message: "plxd is busy" } });
   await renderChat();
   await click(inCard("Approve"));
-  expect(pinned()!.querySelector('[role="alert"]')!.textContent).toBe(
-    "Your answer didn't reach the agent: plxd is busy",
-  );
+  const notice = document.querySelector('[aria-label="Notifications"] > div')!;
+  expect(notice.querySelector("span")!.textContent).toBe("Your answer didn't reach the agent");
+  expect(notice.querySelector("p")!.textContent).toBe("plxd is busy");
   expect(buttons().every((b) => !b.disabled)).toBe(true);
 
   approve = () => ({ result: { decision: "allowed", by: "user" } });
@@ -537,7 +552,7 @@ test("an open chat's Supervised says its requests are denied when its run starte
   );
 });
 
-test("a long preview scrolls inside its bound, with the header, a problem, and the buttons outside it", async () => {
+test("a long preview scrolls inside its bound, with the header and the buttons outside it", async () => {
   const content = Array.from({ length: 300 }, (_, i) => `line ${i + 1}`).join("\n");
   output(asked("a1", { toolName: "Write", input: { file_path: "/repo/notes.txt", content } }));
   approve = () => ({ error: { code: -32000, message: "plxd is busy" } });
@@ -553,8 +568,7 @@ test("a long preview scrolls inside its bound, with the header, a problem, and t
   expect(bounded.querySelector('[aria-label^="Diff"]')!.children).toHaveLength(300);
   await click(inCard("Approve"));
   const title = document.getElementById(card()!.getAttribute("aria-labelledby")!)!;
-  for (const outside of [title, pinned()!.querySelector('[role="alert"]')!, inCard("Approve")!])
-    expect(bounded.contains(outside)).toBe(false);
+  for (const outside of [title, inCard("Approve")!]) expect(bounded.contains(outside)).toBe(false);
 });
 
 test("a pinned plan opened in full scrolls inside the same bound", async () => {
@@ -840,7 +854,7 @@ test("the card on screen stays first for as long as it waits: requests that come
   expect(inCard("Approving…")).toBeDefined();
   rerender(queue(all, new Map([["b1", { state: "failed", choice: "allow", error: "busy" }]])));
   expect(card()!.textContent).toContain("pnpm test b1");
-  expect(pinned()!.querySelector('[role="alert"]')).not.toBeNull();
+  expect(buttons().every((b) => !b.disabled)).toBe(true);
 
   // Once it's answered, the oldest of the rest takes its place.
   const answered = new Map<string, AnswerState>([

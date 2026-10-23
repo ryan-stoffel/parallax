@@ -11,8 +11,9 @@ import { statusLabel, useConnection } from "../ConnectionStatus";
 import { ConnectWizard } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
 import { localId, useConnect, useHosts } from "../hosts";
+import { notify } from "../notifications";
 import { menuItem, menuPanel } from "../ui";
-import { primaryButton, quietButton, RenameForm, Row, Section, settingRow, Switch } from "./parts";
+import { primaryButton, quietButton, RenameForm, Row, Section, Switch } from "./parts";
 
 /**
  * Settings > Connections' Parallax Connect section (0056): a switch turns Connect on, which opens
@@ -26,14 +27,18 @@ export function ConnectSettings() {
   const hosts = useHosts();
   const [devices, setDevices] = useState<DeviceHost[]>([]);
   const [adding, setAdding] = useState(false);
-  const [error, setError] = useState<string>();
   useEffect(() => window.parallax.onDevices(setDevices), []);
   const local = hosts.find((h) => h.id === localId)!;
 
   const toggle = async (on: boolean) => {
     const failed = await window.parallax.setConnect(on);
-    setError(failed);
-    if (!failed && on) setAdding(true);
+    if (failed)
+      notify({
+        tone: "error",
+        title: `Couldn't turn Parallax Connect ${on ? "on" : "off"}`,
+        body: failed,
+      });
+    else if (on) setAdding(true);
   };
 
   return (
@@ -54,11 +59,6 @@ export function ConnectSettings() {
             <span className="text-[12.5px] text-muted-foreground">Checking…</span>
           )}
         </Row>
-        {error && (
-          <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
-            {error}
-          </p>
-        )}
       </Section>
       {connect?.on && (
         <section aria-label="Computers" className="mb-8">
@@ -174,7 +174,6 @@ function DeviceCard({
   const connected = enabled && state?.status === "connected";
   const health = useHealth(device.id, connected);
   const [renaming, setRenaming] = useState(false);
-  const [error, setError] = useState<string>();
   const menuId = useId();
   const iconsId = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -186,8 +185,13 @@ function DeviceCard({
       local && look.name !== undefined
         ? await window.parallax.renameLocal(look.name)
         : await window.parallax.saveDevice(device.id, look);
-    setError(failed);
-    if (!failed) setRenaming(false);
+    if (failed)
+      notify({
+        tone: "error",
+        title: `Couldn't ${look.name === undefined ? "change" : "rename"} ${device.name}`,
+        body: failed,
+      });
+    else setRenaming(false);
   };
   const choose = (action: () => void) => () => {
     icons.current?.hidePopover();
@@ -252,11 +256,6 @@ function DeviceCard({
         )}
         {enabled && state?.status === "failed" && (
           <p className="text-[12px] text-faint-foreground">{state.error.message}</p>
-        )}
-        {error && (
-          <p role="alert" className="text-[12.5px] text-danger">
-            {error}
-          </p>
         )}
       </div>
       {!local && (

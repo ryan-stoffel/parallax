@@ -3,6 +3,7 @@ import {
   CircleAlert,
   CircleCheck,
   Info,
+  LoaderCircle,
   MessageCircleQuestion,
   X,
 } from "lucide-react";
@@ -11,20 +12,32 @@ import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } fro
 import { behaviorPrefs } from "./prefs";
 
 // Every notification the app shows (PLX-507): one stack of toasts in the window's top right, in
-// the update toast's look. Anything can call `notify`; App draws the stack once.
+// the update toast's look. Anything can call `notify`; App draws the stack once. A message about
+// what an action did goes here, not in a line under the control that ran it (PLX-930).
 
 /** A notice's color and icon: done, waiting on the user, gone wrong, or just news. */
 export type Tone = "success" | "attention" | "error" | "info";
 
 export type Notice = {
-  /** A notice with the same key replaces this one, as a reconnect replaces a lost connection. */
+  /**
+   * A notice with the same key replaces this one, as a reconnect replaces a lost connection, in
+   * the same toast, so a notice can update as work goes on.
+   */
   key?: string;
   tone: Tone;
   title: string;
   body?: string;
   /** The underlined link after the body: a page to open, or something to do in the app. */
   action?: { label: string; href: string } | { label: string; run: () => void };
-  /** Stays until closed. Defaults to true for attention and error, which ask something of the user. */
+  /**
+   * Work under way: a spinner, and a bar at `percent`, or pulsing without one. `update` it by its
+   * key as it goes, and replace it with another or `dismiss` it once it's done.
+   */
+  progress?: { percent?: number };
+  /**
+   * Stays until closed. Defaults to true for attention, error, and work under way, which ask
+   * something of the user or aren't done.
+   */
   sticky?: boolean;
   /** Also an OS notification while the window isn't focused. Clicking it runs `action`. */
   system?: boolean;
@@ -62,9 +75,24 @@ export function notify(notice: Notice) {
     };
   }
   if (notice.system && !inAppNotifications) return;
-  const id = nextId++;
-  const kept = shown.filter((n) => notice.key === undefined || n.key !== notice.key);
-  set([{ ...notice, id }, ...kept].slice(0, MAX_SHOWN));
+  // The notice it replaces keeps its toast, which only moves to the top.
+  const replaced = notice.key === undefined ? undefined : shown.find((n) => n.key === notice.key);
+  const kept = shown.filter((n) => n !== replaced);
+  set([{ ...notice, id: replaced?.id ?? nextId++ }, ...kept].slice(0, MAX_SHOWN));
+}
+
+/**
+ * Replaces the notice with `notice`'s key in place, while it's shown: work that goes on updates its
+ * notice without bringing back one the user closed.
+ */
+export function update(notice: Notice & { key: string }) {
+  const replaced = shown.find((n) => n.key === notice.key);
+  if (replaced) set(shown.map((n) => (n === replaced ? { ...notice, id: replaced.id } : n)));
+}
+
+/** Closes the notice with `key`, if one is shown, as when the work it followed is done. */
+export function dismiss(key: string) {
+  set(shown.filter((n) => n.key !== key));
 }
 
 const close = (id: number) => set(shown.filter((n) => n.id !== id));
@@ -107,8 +135,8 @@ export function Notifications() {
  * focus last left it.
  */
 function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
-  const { tone, title, body, action } = notice;
-  const sticky = notice.sticky ?? (tone === "attention" || tone === "error");
+  const { tone, title, body, action, progress } = notice;
+  const sticky = notice.sticky ?? (tone === "attention" || tone === "error" || !!progress);
   const [held, setHeld] = useState(false);
   const close = useRef(onClose);
   useEffect(() => {
@@ -118,7 +146,8 @@ function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
     if (sticky || held) return;
     const timer = window.setTimeout(() => close.current(), NOTICE_MS);
     return () => window.clearTimeout(timer);
-  }, [sticky, held]);
+    // A notice that replaces this one gets its own time.
+  }, [sticky, held, notice]);
   return (
     <div
       role={tone === "error" ? "alert" : "status"}
@@ -131,11 +160,31 @@ function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
       className="toast-in relative rounded-xl border border-border bg-surface py-3 pr-9 pl-3.5 text-foreground shadow-composer"
     >
       <div className="flex items-center gap-2 text-[13.5px] font-medium">
-        {icons[tone]}
-        <span className="truncate">{title}</span>
+        {progress ? (
+          <LoaderCircle
+            aria-hidden
+            className="size-4 shrink-0 animate-spin text-muted-foreground"
+          />
+        ) : (
+          icons[tone]
+        )}
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {progress?.percent !== undefined && (
+          <span className="text-[12.5px] font-normal text-muted-foreground tabular-nums">
+            {progress.percent}%
+          </span>
+        )}
       </div>
       {body && (
         <p className="mt-1 line-clamp-3 text-[12.5px] break-words text-muted-foreground">{body}</p>
+      )}
+      {progress && (
+        <div className="mt-2 h-1 overflow-hidden rounded-full bg-hover">
+          <div
+            className={`h-full rounded-full bg-accent transition-[width] duration-500 ${progress.percent === undefined ? "w-1/4 animate-pulse" : ""}`}
+            style={progress.percent === undefined ? undefined : { width: `${progress.percent}%` }}
+          />
+        </div>
       )}
       {action && (
         <div className="mt-1 text-[12.5px] text-muted-foreground">

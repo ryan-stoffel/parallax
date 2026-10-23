@@ -10,6 +10,7 @@ import { defaultUrlTransform } from "react-markdown";
 
 import { failure, useDocument, useObjectUrl, type DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
+import { notify } from "./notifications";
 import { isMedia, isVideo, kindOf } from "./transcript";
 
 /**
@@ -124,34 +125,27 @@ export const outsideFolder =
 /**
  * A link to a file in a transcript: opens it in the side panel, as a presented file's card does,
  * where it shows as a document, an image or video, or a file to download. A file outside the
- * thread's folder, or a folder that can't be read, says so beside the link. Outside a transcript,
- * only its text.
+ * thread's folder, or a folder that can't be read, says so in a notification. Outside a
+ * transcript, only its text.
  */
 export function FileLink({ path, children }: { path: string; children: ReactNode }) {
   const run = useContext(FileRunContext);
   const open = useContext(OpenDocumentContext);
-  const [said, setSaid] = useState<string>();
   if (!run || !open) return <a>{children}</a>;
+  const fail = (body: string) =>
+    notify({ key: `file/${path}`, tone: "error", title: "Couldn't open the file", body });
   const follow = (e: MouseEvent) => {
     e.preventDefault();
-    setSaid(undefined);
     linkedFile(run.hostId, run.runId, path).then(
-      (doc) => (doc ? open(doc) : setSaid(outsideFolder)),
-      (error: unknown) => setSaid(error instanceof Error ? error.message : String(error)),
+      (doc) => (doc ? open(doc) : fail(outsideFolder)),
+      (error: unknown) => fail(error instanceof Error ? error.message : String(error)),
     );
   };
+  // "#", so the agent's path never becomes an address the page could go to.
   return (
-    <>
-      {/* "#", so the agent's path never becomes an address the page could go to. */}
-      <a href="#" title={path} onClick={follow}>
-        {children}
-      </a>
-      {said && (
-        <span role="alert" className="ml-1.5 text-[12.5px] text-danger">
-          ({said})
-        </span>
-      )}
-    </>
+    <a href="#" title={path} onClick={follow}>
+      {children}
+    </a>
   );
 }
 

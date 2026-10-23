@@ -7,8 +7,11 @@ import type { ParallaxBridge } from "../preload/bridge";
 import type { DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
 import { FileLink, FileRunContext, inFolder, keepFiles, linkedPath } from "./FileLink";
+import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers.
+HTMLElement.prototype.showPopover = () => {};
 
 test("only paths and file: URLs name files; every other scheme stays a web link", () => {
   for (const href of [
@@ -81,7 +84,14 @@ beforeEach(() => {
     connectionState: async () => ({ status: "connected", plxd: "", protocol: 1, capabilities: {} }),
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
+  act(() => unmount());
+});
 
 async function click(path: string) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -91,6 +101,7 @@ async function click(path: string) {
         <OpenDocumentContext value={open}>
           <FileLink path={path}>the file</FileLink>
         </OpenDocumentContext>
+        <Notifications />
       </FileRunContext>,
     ),
   );
@@ -124,7 +135,8 @@ test("an absolute link is checked against the folder agent/files names", async (
 
   await click("/etc/passwd");
   expect(open).toHaveBeenCalledTimes(1);
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe(
-    "(This file is outside the thread's folder, so it can't be opened here.)",
+  const notice = document.querySelector('[aria-label="Notifications"] > div')!;
+  expect(notice.querySelector("p")!.textContent).toBe(
+    "This file is outside the thread's folder, so it can't be opened here.",
   );
 });

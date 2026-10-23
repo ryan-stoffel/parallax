@@ -31,6 +31,7 @@ import {
 
 import type { JsonValue } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
+import { dismiss as dismissNotice, notify } from "./notifications";
 import { ProposedPlan } from "./Plan";
 import {
   field,
@@ -105,8 +106,8 @@ const put = (approvalId: string, state: AnswerState) => (prev: ReadonlyMap<strin
 /**
  * This window's answers to permission requests, by approval id, and `answer`, which sends one with
  * `agent/approve`. A denial carries the user's note, if any. No answer edits the request's input,
- * so an `ExitPlanMode` answer never changes its `planFilePath` (0031). `dismiss` puts away a
- * request that's gone.
+ * so an `ExitPlanMode` answer never changes its `planFilePath` (0031). One that fails says why in a
+ * notification. `dismiss` puts away a request that's gone.
  */
 export function useAnswers(hostId: string) {
   const [answers, setAnswers] = useState<ReadonlyMap<string, AnswerState>>(new Map());
@@ -123,10 +124,20 @@ export function useAnswers(hostId: string) {
       ...decision,
     });
     let next: AnswerState;
-    if ("result" in reply)
+    // An answer that takes closes the last one's failure.
+    if ("result" in reply) {
       next = { state: "answered", resolved: { ...reply.result, at: new Date().toISOString() } };
-    else if (reply.error.data?.kind === "approvalNotFound") next = { state: "gone" };
-    else next = { state: "failed", choice, error: describeError(reply.error) };
+      dismissNotice(`approval/${approvalId}`);
+    } else if (reply.error.data?.kind === "approvalNotFound") next = { state: "gone" };
+    else {
+      next = { state: "failed", choice, error: describeError(reply.error) };
+      notify({
+        key: `approval/${approvalId}`,
+        tone: "error",
+        title: "Your answer didn't reach the agent",
+        body: next.error,
+      });
+    }
     setAnswers(put(approvalId, next));
   }
   function dismiss(asked: Asked) {
@@ -760,14 +771,8 @@ function statusText(state: AnswerState | undefined, count: number, plan = false)
   return count > 1 ? `Needs approval · 1 of ${count}` : "Needs approval";
 }
 
-/** Why an answer didn't go, or what became of a request that's gone. */
+/** What became of a request that's gone. */
 function Problem({ state }: { state?: AnswerState }) {
-  if (state?.state === "failed")
-    return (
-      <p role="alert" className="text-[12.5px] text-danger">
-        Your answer didn't reach the agent: {state.error}
-      </p>
-    );
   if (state?.state === "gone")
     return (
       <p className="text-[12.5px] text-muted-foreground">
@@ -980,11 +985,7 @@ function PlanApprovalCard({
           <>
             {/* At the foot, by the buttons, where the fold can't hide it. */}
             <span id={statusId} className="mr-auto min-w-0 text-[12px] text-muted-foreground">
-              {state?.state === "failed" ? (
-                <span role="alert" className="text-danger">
-                  Your answer didn't reach the agent: {state.error}
-                </span>
-              ) : state?.state === "gone" ? (
+              {state?.state === "gone" ? (
                 "No longer waiting: it ended."
               ) : (
                 <span className="tabular-nums">{statusText(state, count, true)}</span>

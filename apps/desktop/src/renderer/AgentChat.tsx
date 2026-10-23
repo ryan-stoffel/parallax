@@ -83,6 +83,7 @@ import { Composer, listCommands, tabItem, type ComposerProps, type Unanswered } 
 import { offlineReason, useConnection } from "./ConnectionStatus";
 import { isEmpty, threadDrafts, type ComposerContents } from "./drafts";
 import { describeError, githubProblem } from "./errors";
+import { dismiss as dismissNotice, notify } from "./notifications";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
 import { download, readAttachment } from "./documents";
@@ -170,7 +171,6 @@ import {
   type Work,
 } from "./transcript";
 import { TurnChanges, TurnChangesContext, type TurnChangesTarget } from "./TurnChanges";
-import { SetUpGithub } from "./ui";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
 import { presentWaiting, WaitingBar } from "./WaitingBar";
 import { clockOptions } from "./prefs";
@@ -248,7 +248,6 @@ export function AgentChat({
   host,
   runId,
   title,
-  notice,
   prompt,
   going,
   noRepo,
@@ -277,8 +276,6 @@ export function AgentChat({
   runId: string;
   /** The thread's title, which Open PR names the pull request after. Else, its run's. */
   title?: string;
-  /** A quiet note shown over the composer. */
-  notice?: string;
   /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
   prompt?: string;
   /**
@@ -387,17 +384,28 @@ export function AgentChat({
       if (box && !isEmpty(box)) threadDrafts.put(draftKey, box);
     };
   }, [draftKey]);
-  const [resendError, setResendError] = useState<string>();
-  const [prError, setPrError] = useState<RpcError>();
-  // Open PR's failure for `gh` missing or signed out, as a short line by Set up GitHub.
-  const prGithub = onSetUpGithub && githubProblem(prError);
+  // A failed Send again, edit, or composed send, in a notification.
+  const sendFailed = useCallback(
+    (body?: string) => body && notify({ tone: "error", title: "Couldn't send the message", body }),
+    [],
+  );
+  // Open PR's failure, with Set up GitHub when `gh` is missing or signed out.
+  const prFailed = (error: RpcError) => {
+    const short = onSetUpGithub && githubProblem(error);
+    notify({
+      tone: "error",
+      title: "Couldn't create the pull request",
+      body: short || describeError(error),
+      action: short ? { label: "Set up GitHub", run: onSetUpGithub } : undefined,
+    });
+  };
   // Dropped follow-ups already sent again, so their Send again goes away (back on failure).
   const [resent, setResent] = useState<ReadonlySet<string>>(new Set());
   const resend = useCallback(
     (turnId: string, message: SentMessage) => {
       setResent((prev) => new Set(prev).add(turnId));
       void send(message.text, undefined, message.images, message.threads).then((failed) => {
-        setResendError(failed?.message);
+        sendFailed(failed?.message);
         if (failed)
           setResent((prev) => {
             const next = new Set(prev);
@@ -406,13 +414,13 @@ export function AgentChat({
           });
       });
     },
-    [send],
+    [send, sendFailed],
   );
   useEffect(() => {
     if (!compose) return;
-    if (compose.send) void send(compose.text).then((failed) => setResendError(failed?.message));
+    if (compose.send) void send(compose.text).then((failed) => sendFailed(failed?.message));
     onComposed?.();
-  }, [compose, send, onComposed]);
+  }, [compose, send, sendFailed, onComposed]);
   // Queued messages the user cancelled from here, whose followUpDropped notice is left out.
   const [cancelled, setCancelled] = useState<ReadonlySet<string>>(new Set());
   // The sent message being edited in place, with its row, which it hides.
@@ -594,8 +602,7 @@ export function AgentChat({
     if (!back?.row) return;
     const images = back.images();
     const failed = await drop();
-    if (failed) return setResendError(failed);
-    setResendError(undefined);
+    if (failed) return notify({ tone: "error", title: "Couldn't stop the thread", body: failed });
     if (back.row.turnId) setCancelled((prev) => new Set(prev).add(back.row!.turnId!));
     setEditing({ row: back.row, text: back.text, images: await images, threads: back.threads });
   };
@@ -622,13 +629,27 @@ export function AgentChat({
             was.images.map((image, i) => encodedImage(image, i + 1)),
           )
         : [];
-      if (typeof images === "string") return setEditing({ ...was, ready: false, error: images });
+      if (typeof images === "string") {
+        notify({ tone: "error", title: "Couldn't upload the images", body: images });
+        return setEditing({ ...was, ready: false });
+      }
       const text = withFiles(was.text, images);
       const failed = await sendText(text, {}, was.images, [...(was.threads ?? [])]);
-      if (failed !== undefined) setEditing({ ...was, ready: false, error: failed || undefined });
+      if (failed === undefined) return;
+      sendFailed(failed);
+      setEditing({ ...was, ready: false });
     })();
   }, [editing, stopped]);
 
+  // A loaded transcript that stopped updating says why in a notification, gone once it updates
+  // again or the thread closes. One that couldn't load says so in its place.
+  const stoppedUpdating = rows.length > 0 ? error : undefined;
+  useEffect(() => {
+    if (!stoppedUpdating) return;
+    const key = `chat/${hostId}/${runId}`;
+    notify({ key, tone: "error", title: "This chat isn't updating", body: stoppedUpdating });
+    return () => dismissNotice(key);
+  }, [stoppedUpdating, hostId, runId]);
   // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
   const stalled = error !== undefined || (connection !== undefined && !connected);
   const live = isRunning(run?.status) && !stalled;
@@ -903,18 +924,6 @@ export function AgentChat({
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
         {/* Requests waiting on the user, pinned so they can't scroll away. */}
         {pinned}
-        {/* A loaded transcript that stopped updating, a failed Send again, or Open PR. */}
-        {(error ?? resendError ?? prError) && rows.length > 0 && (
-          <p role="alert" className="flex items-center gap-2 px-2 pb-2 text-[12.5px] text-danger">
-            {error ?? resendError ?? (prGithub || describeError(prError!))}
-            {!error && !resendError && prGithub && <SetUpGithub onClick={onSetUpGithub!} />}
-          </p>
-        )}
-        {notice && (
-          <p role="status" className="px-2 pb-2 text-[12.5px] text-muted-foreground">
-            {notice}
-          </p>
-        )}
         {stuck && (
           <p role="alert" className="px-2 pb-2 text-[12.5px] text-danger">
             This chat can't continue: {stuck.why}{" "}
@@ -953,7 +962,7 @@ export function AgentChat({
                       hostId={hostId}
                       run={run}
                       title={title ?? titleOf(run)}
-                      onError={setPrError}
+                      onError={prFailed}
                       onOpened={onPrOpened}
                     />
                   ))}
@@ -3036,7 +3045,6 @@ interface Editing {
   text: string;
   images: PromptImage[];
   threads?: readonly string[];
-  error?: string;
   /** Sent, and waiting for the run to stop. */
   ready?: boolean;
 }
@@ -3105,11 +3113,6 @@ function EditMessage({
         }}
         className="w-full resize-none rounded-2xl border border-border bg-selected px-3.5 py-2 text-[14px] leading-relaxed outline-none focus:border-accent"
       />
-      {editing.error && (
-        <p role="alert" className="text-[12.5px] text-danger">
-          {editing.error}
-        </p>
-      )}
       <div className="flex items-center gap-3 text-[12.5px]">
         <button type="button" onClick={onCancel} className="text-muted-foreground">
           Cancel
@@ -3266,7 +3269,7 @@ function OpenPr({
   hostId: string;
   run: AgentRun;
   title: string;
-  onError: (error?: RpcError) => void;
+  onError: (error: RpcError) => void;
   onOpened?: (url: string) => void;
 }) {
   const [url, setUrl] = useState<string>();
@@ -3288,7 +3291,6 @@ function OpenPr({
   }
   const open = async () => {
     setOpening(true);
-    onError(undefined);
     const answer = await window.parallax.request(hostId, "agent/openPr", {
       runId: run.id,
       title,

@@ -21,12 +21,17 @@ import {
   RUNNING_POLL_MS,
   usePullRequests,
 } from "./PullRequests";
+import { Notifications } from "./notifications";
 import { setBehaviorPrefs } from "./prefs";
 import { SidePanel } from "./SidePanel";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The menus are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.showPopover = () => {};
+// The notifications, outside the body, which a test's cleanup clears.
+const notices = document.documentElement.appendChild(document.createElement("div"));
+createRoot(notices).render(<Notifications />);
 
 // The sample's pull request: open, two checks with one pending, and one comment.
 const sample = (samples as { id?: number; result?: PullRequest }[]).find(
@@ -70,6 +75,9 @@ beforeEach(() => {
 
 let root: Root | undefined;
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of notices.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]'))
+    act(() => close.click());
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
@@ -430,7 +438,9 @@ test("the menu acts on the pull request, shows what GitHub has after, and says w
   await click(item("Enable auto-merge"));
   expect(button("Auto-merge (merge)")).toBeDefined();
   await click(item("Squash and merge"));
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("not mergeable");
+  const notice = notices.querySelector('[aria-label="Notifications"] > div')!;
+  expect(notice.querySelector("span")!.textContent).toBe("Couldn't update the pull request");
+  expect(notice.querySelector("p")!.textContent).toBe("not mergeable");
 
   read[url(42)] = prOf(42, { title: "Renamed" });
   await click(item("Refresh"));

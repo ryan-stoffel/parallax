@@ -5,11 +5,19 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
+import { Notifications } from "./notifications";
 import { ResumeCard, resumeTime } from "./ResumeCard";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers.
+HTMLElement.prototype.showPopover = () => {};
 let root: Root | undefined;
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
@@ -21,8 +29,20 @@ const run = (over: Partial<AgentRun> = {}): AgentRun =>
   ({ id: "run", status: "waiting", resumeAt: at, ...over }) as AgentRun;
 function render(r: AgentRun, disabledReason?: string) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root!.render(<ResumeCard hostId="local" run={r} disabledReason={disabledReason} />));
+  act(() =>
+    root!.render(
+      <>
+        <ResumeCard hostId="local" run={r} disabledReason={disabledReason} />
+        <Notifications />
+      </>,
+    ),
+  );
 }
+/** The newest notification's title and body. */
+const notice = () => {
+  const n = document.querySelector('[aria-label="Notifications"] > div');
+  return n && [n.querySelector("span")?.textContent, n.querySelector("p")?.textContent];
+};
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === name)!;
 
@@ -63,16 +83,17 @@ test("Resume now and Cancel send their requests, and stay disabled while one is 
   expect(request).toHaveBeenLastCalledWith("local", "agent/cancel", { runId: "run" });
 });
 
-test("plxd's refusal shows on the card, and a lost connection disables both buttons", async () => {
+test("plxd's refusal shows in a notification, and a lost connection disables both buttons", async () => {
   const request = vi.fn(async () => ({
     error: { code: -32000, message: "run run isn't waiting for a usage limit to reset" },
   }));
   window.parallax = { request } as Partial<ParallaxBridge> as ParallaxBridge;
   render(run());
   await act(async () => button("Resume now").click());
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+  expect(notice()).toEqual([
+    "Couldn't resume the thread",
     "run run isn't waiting for a usage limit to reset",
-  );
+  ]);
   render(run(), "Disconnected from plxd");
   expect(button("Resume now").disabled).toBe(true);
   expect(button("Cancel").disabled).toBe(true);

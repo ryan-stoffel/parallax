@@ -4,6 +4,7 @@ import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/
 import { MarkdownText } from "./AgentChat";
 import { outlineButton, quietButton } from "./Approval";
 import { describeError } from "./errors";
+import { dismiss, notify } from "./notifications";
 
 /**
  * A memory file with the scope it was listed from. `stale` is PLX-407's review mark, read when
@@ -377,6 +378,7 @@ function MemoryRow({
   const [content, setContent] = useState<string>();
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  // Why the file couldn't be read, shown in its place.
   const [error, setError] = useState<string>();
   // A Promote or Save waiting on Replace, since its target is taken.
   const [replacing, setReplacing] = useState<{ to: Target; done: string }>();
@@ -400,11 +402,12 @@ function MemoryRow({
     setBusy(true);
     const failed = await run();
     setBusy(false);
-    setError(failed);
+    if (failed) changeFailed(failed);
+    else dismiss("memory");
     onChanged();
   };
   const move = (to: Target | undefined, done: string) => {
-    if (!to) return setError("This proposal has no kind.");
+    if (!to) return changeFailed("This proposal has no kind.");
     if (taken(to)) return setReplacing({ to, done });
     void act(() => calls.move(file, to, done));
   };
@@ -556,7 +559,11 @@ function MemoryRow({
   );
 }
 
-/** A text box with Save and Cancel, showing why when the save fails. */
+/** Says why a change to a memory file failed. */
+const changeFailed = (body: string) =>
+  notify({ key: "memory", tone: "error", title: "Couldn't change the memory", body });
+
+/** A text box with Save and Cancel, saying why in a notification when the save fails. */
 function Editor({
   label,
   initial,
@@ -570,7 +577,6 @@ function Editor({
 }) {
   const [text, setText] = useState(initial);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
   return (
     <form
       onSubmit={async (e) => {
@@ -578,7 +584,9 @@ function Editor({
         setBusy(true);
         const failed = await onSave(text);
         setBusy(false);
-        setError(failed);
+        if (failed)
+          notify({ key: "memory", tone: "error", title: `Couldn't save ${label}`, body: failed });
+        else dismiss("memory");
       }}
     >
       <textarea
@@ -598,11 +606,6 @@ function Editor({
           Save
         </button>
       </div>
-      {error && (
-        <p role="alert" className="mt-1 text-[12px] text-danger">
-          {error}
-        </p>
-      )}
     </form>
   );
 }

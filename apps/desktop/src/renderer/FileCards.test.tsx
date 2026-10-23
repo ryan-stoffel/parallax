@@ -6,8 +6,11 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import { pieceBytes, readAttachment } from "./documents";
 import { DownloadButton, FileCards } from "./FileCards";
+import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers.
+HTMLElement.prototype.showPopover = () => {};
 
 let connection: ConnectionState["status"] = "connected";
 let capabilities: Record<string, unknown> = {};
@@ -63,6 +66,11 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => unmount());
   vi.restoreAllMocks();
 });
@@ -101,15 +109,20 @@ test("a presented file of a kind the app doesn't know is a card with its size, r
   expect(saved.map((s) => [s.name, s.blob.size])).toEqual([["data.parquet", 1536]]);
 });
 
-test("a Download that can't read its bytes says the host is offline, beside it", async () => {
+test("a Download that can't read its bytes says the host is offline in a notification", async () => {
   connection = "failed";
   await render(
-    <DownloadButton name="Recording.webm" read={() => readAttachment("box", "run-1", "rec-1")} />,
+    <>
+      <DownloadButton name="Recording.webm" read={() => readAttachment("box", "run-1", "rec-1")} />
+      <Notifications />
+    </>,
   );
   await act(async () => download().click());
   await settle();
   expect(request).toHaveBeenCalledWith("box", "agent/image", { runId: "run-1", imageId: "rec-1" });
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("The host is offline.");
+  const notice = document.querySelector('[aria-label="Notifications"] > div')!;
+  expect(notice.querySelector("span")!.textContent).toBe("Couldn't download Recording.webm");
+  expect(notice.querySelector("p")!.textContent).toBe("The host is offline.");
   expect(saved).toEqual([]);
 });
 

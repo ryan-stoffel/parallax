@@ -1,4 +1,13 @@
-import { Check, ChevronDown, Folder, FolderGit2, Laptop, Search, Server } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Folder,
+  FolderGit2,
+  Laptop,
+  LoaderCircle,
+  Search,
+  Server,
+} from "lucide-react";
 
 import { useId, useState } from "react";
 
@@ -97,8 +106,11 @@ function HostOption({
         <span className="shrink-[4] truncate text-[12px] text-faint-foreground">{note}</span>
       </span>
       {missing && (
-        <span className="shrink-0 rounded-[5px] bg-warning/12 px-1.5 text-[11.5px] leading-5 text-warning">
-          no {missing}
+        <span
+          title={`Picking it clones ${missing} there`}
+          className="shrink-0 text-[12px] text-faint-foreground"
+        >
+          Clones {missing}
         </span>
       )}
       <span className={`grid h-5 place-items-center ${checked ? "" : "invisible"}`}>
@@ -114,8 +126,9 @@ function HostOption({
  * starts the thread on that computer with that workspace; with no `workspace`, as for a thread with
  * no repo, it picks only the computer. `checkoutUnavailable`, when set, says why Local checkout
  * can't be picked. `missing` names the computers, by id, that lack the picked
- * repository, which say so. Each computer shows whether it's connected, the list scrolls, and past
- * a handful of computers a search box filters them.
+ * repository, which say picking them clones it. `busy` while the picked computer is set up, which
+ * the button shows with a spinner. Each computer shows whether it's connected, the list scrolls,
+ * and past a handful of computers a search box filters them.
  */
 export function RunTargetMenu({
   hosts,
@@ -125,6 +138,7 @@ export function RunTargetMenu({
   onWorkspaceChange,
   checkoutUnavailable,
   missing,
+  busy,
 }: {
   hosts: Host[];
   hostId: string;
@@ -133,6 +147,7 @@ export function RunTargetMenu({
   onWorkspaceChange?: (workspace: Workspace) => void;
   checkoutUnavailable?: string;
   missing?: { repo: string; hostIds: ReadonlySet<string> };
+  busy?: boolean;
 }) {
   const id = useId();
   const [query, setQuery] = useState("");
@@ -148,9 +163,10 @@ export function RunTargetMenu({
         popoverTarget={id}
         aria-haspopup="menu"
         aria-label={`Runs on: ${host.name}${workspace ? `, ${workspace.label}` : ""}`}
+        aria-busy={busy}
         className={menuButton}
       >
-        {hostIcon(host)}
+        {busy ? <LoaderCircle aria-hidden className="animate-spin" /> : hostIcon(host)}
         {host.name}
         {workspace && (
           <>

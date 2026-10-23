@@ -4,9 +4,11 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge, SavedHost } from "../../preload/bridge";
+import { Notifications } from "../notifications";
 import { LanSettings } from "./LanSettings";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+HTMLElement.prototype.showPopover = () => {};
 
 const connected: ConnectionState = {
   status: "connected",
@@ -92,7 +94,14 @@ beforeEach(() => {
 });
 
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
+  act(() => unmount());
+});
 
 const settle = async () => {
   for (let i = 0; i < 10; i++) await act(async () => {});
@@ -157,7 +166,14 @@ test("the switch turns pairing on, Pair a device shows a code, and Add computer 
 test("Reach from anywhere registers this computer with the relay before turning it on", async () => {
   remote = true;
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<LanSettings />));
+  act(() =>
+    root.render(
+      <>
+        <LanSettings />
+        <Notifications />
+      </>,
+    ),
+  );
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
@@ -166,11 +182,13 @@ test("Reach from anywhere registers this computer with the relay before turning 
   const toggle = document.querySelector('[role="switch"][aria-label="Reach from anywhere"]')!;
   expect(toggle.getAttribute("aria-checked")).toBe("false");
 
-  // Signed out: nothing changes, and the switch says why.
+  // Signed out: nothing changes, and a notification says why.
   registerRelay.mockResolvedValueOnce("Sign in to Parallax from Profile in the sidebar first.");
   await click(toggle);
   expect(request).not.toHaveBeenCalledWith("local", "host/settings/set", { relay: true });
-  expect(document.querySelector('[role="alert"]')?.textContent).toContain("Sign in");
+  expect(document.querySelector('[aria-label="Notifications"]')?.textContent).toBe(
+    "Couldn't turn Reach from anywhere onSign in to Parallax from Profile in the sidebar first.",
+  );
 
   await click(toggle);
   expect(registerRelay).toHaveBeenCalledTimes(2);

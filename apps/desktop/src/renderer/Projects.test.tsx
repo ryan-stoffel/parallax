@@ -154,9 +154,20 @@ beforeEach(() => {
 
 let unmount = () => {};
 afterEach(() => {
+  // The app keeps its notifications between tests, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] [aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => unmount());
   vi.useRealTimers();
 });
+
+/** The newest notification's title and body. */
+const notice = () => {
+  const toast = document.querySelector('[aria-label="Notifications"] > div');
+  return toast && [toast.querySelector("span")!.textContent, toast.querySelector("p")?.textContent];
+};
 
 async function renderApp() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -856,7 +867,7 @@ test("a rename left as it opened sends nothing, even after another client rename
   expect(projectRows()).toEqual(["ember (renamed elsewhere)", "photon"]);
 });
 
-test("a rename plxd refuses keeps the name and shows plxd's error over the list", async () => {
+test("a rename plxd refuses keeps the name and says plxd's error in a notification", async () => {
   capabilities = { projectEdit: {} };
   answers["project/update"] = () => ({
     error: { code: -32602, message: "Invalid params: name must be at most 256 bytes" },
@@ -866,9 +877,10 @@ test("a rename plxd refuses keeps the name and shows plxd's error over the list"
   typeInto(nameEditor()!, "a very long name");
   await submitIn(renameDialog());
   expect(projectRows()).toEqual(["ember", "photon"]);
-  expect(document.querySelector('#sidebar [role="alert"]')?.textContent).toBe(
+  expect(notice()).toEqual([
+    "Couldn't change the Project",
     "Invalid params: name must be at most 256 bytes",
-  );
+  ]);
 });
 
 test("Change icon… opens the picker under the Project's square, and each pick saves the glyph and color together at once", async () => {
@@ -1640,9 +1652,10 @@ test("the Agents view starts a subagent by hand, reusing its id to retry", async
   });
   const start = document.querySelector('#side-panel button[aria-label="Start subagent"]');
   await click(start);
-  expect(
-    [...document.querySelectorAll('#side-panel [role="alert"]')].map((a) => a.textContent),
-  ).toContain("Choose an account to run threads on this host.");
+  expect(notice()).toEqual([
+    "Couldn't start the subagent",
+    "Choose an account to run threads on this host.",
+  ]);
 
   fail = false;
   await click(start);
@@ -2778,9 +2791,7 @@ test("a question on the Project tab offers the child's pick as choice 1 and a fr
   typeInto(free, "theme.dark");
   await act(async () => free.form!.requestSubmit());
   await settle();
-  expect(row().querySelector('[role="alert"]')!.textContent).toBe(
-    "the question was already answered",
-  );
+  expect(notice()).toEqual(["Couldn't send your answer", "the question was already answered"]);
   fail = false;
   await click(pick);
   expect(calls("question/answer")).toEqual([

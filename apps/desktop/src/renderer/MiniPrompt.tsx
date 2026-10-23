@@ -6,6 +6,7 @@ import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { changeMessage } from "./MemoryPanel";
 import { useCatalog, type Instance, type Model } from "./models";
+import { notify } from "./notifications";
 import { kindOf, logoOf } from "./providers";
 import { uuidv7 } from "./uuidv7";
 import { behaviorPrefs } from "./prefs";
@@ -35,7 +36,6 @@ export function MiniPrompt({
   const catalog = useCatalog(hostId);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState<{ error: boolean; text: string }>();
   const [picked, setPicked] = useState<Model>();
   const box = useRef<HTMLTextAreaElement>(null);
   const providers = catalog.instances.filter(
@@ -55,7 +55,6 @@ export function MiniPrompt({
   const send = async () => {
     if (!canSend || !coordinator) return;
     setBusy(true);
-    setNote(undefined);
     const answer = await window.parallax.request(hostId, "agent/send", {
       runId: coordinator.id,
       turnId: uuidv7(),
@@ -68,22 +67,25 @@ export function MiniPrompt({
         }),
     });
     setBusy(false);
-    if ("error" in answer) return setNote({ error: true, text: describeError(answer.error) });
+    if ("error" in answer)
+      return notify({
+        key: "knowledge",
+        tone: "error",
+        title: "Couldn't send the change",
+        body: describeError(answer.error),
+      });
     setText("");
-    setNote({ error: false, text: "Sent. The coordinator's rewrite shows up as a proposal." });
+    notify({
+      key: "knowledge",
+      tone: "info",
+      title: "Sent",
+      body: "The coordinator's rewrite shows up as a proposal.",
+    });
     box.current?.focus();
   };
 
   return (
     <div className={large ? "mx-auto w-full max-w-2xl px-6 pb-6" : "px-3 pb-3"}>
-      {note && (
-        <p
-          role={note.error ? "alert" : "status"}
-          className={`px-3 pb-1.5 text-[12px] ${note.error ? "text-danger" : "text-muted-foreground"}`}
-        >
-          {note.text}
-        </p>
-      )}
       <form
         onSubmit={(e) => {
           e.preventDefault();

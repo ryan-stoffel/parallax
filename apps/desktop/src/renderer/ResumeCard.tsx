@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";
 import { locale } from "./locale";
+import { notify } from "./notifications";
 import { clockOptions } from "./prefs";
 
 /**
@@ -31,15 +32,21 @@ export function ResumeCard({
   disabledReason?: string;
 }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
 
   // The run's next agent.updated takes the card away, so only a failure needs handling here.
   const act = async (method: "agent/resumeNow" | "agent/cancel") => {
     setBusy(true);
-    setError(undefined);
     const answer = await window.parallax.request(hostId, method, { runId: run.id });
     setBusy(false);
-    if ("error" in answer) setError(answer.error.message);
+    if ("error" in answer)
+      notify({
+        tone: "error",
+        title:
+          method === "agent/resumeNow"
+            ? "Couldn't resume the thread"
+            : "Couldn't cancel the thread",
+        body: answer.error.message,
+      });
   };
   const disabled = busy || !!disabledReason;
   const button =
@@ -55,11 +62,6 @@ export function ResumeCard({
           Usage limit reached.{" "}
           {run.resumeAt ? `Resumes at ${resumeTime(run.resumeAt)}` : "It resumes once it resets."}
         </p>
-        {error && (
-          <p role="alert" className="mt-0.5 text-danger">
-            {error}
-          </p>
-        )}
       </div>
       <button
         type="button"

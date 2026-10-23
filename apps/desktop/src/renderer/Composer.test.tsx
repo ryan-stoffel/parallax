@@ -9,6 +9,7 @@ import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
 import { Composer, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
 import { setCliEnabled } from "./models";
+import { Notifications } from "./notifications";
 import {
   behaviorDefaults,
   newThreadDefaults,
@@ -23,6 +24,10 @@ import { emptyThreads } from "./threads";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The model menu's items are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.showPopover = () => {};
+// The notifications, outside the body, which a test's unmount clears.
+const notices = document.documentElement.appendChild(document.createElement("div"));
+createRoot(notices).render(<Notifications />);
 // happy-dom decodes no images. Every image is small enough to send as it is.
 vi.stubGlobal("createImageBitmap", async () => ({ width: 64, height: 48, close() {} }));
 // The composer's image reads, so a test can wait for them: happy-dom reads a file on two chained
@@ -42,6 +47,9 @@ vi.mock(import("./images"), async (importOriginal) => {
 
 let unmount = () => {};
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of notices.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]'))
+    act(() => close.click());
   act(() => unmount());
   newThreadPrefs.set(newThreadDefaults);
   setBehaviorPrefs(behaviorDefaults);
@@ -109,7 +117,8 @@ const pngFile = (name = "image.png") =>
 const sentPng: PromptImage = { mediaType: "image/png", data: png };
 const thumbnails = () =>
   [...document.querySelectorAll("form img")].map((img) => img.getAttribute("alt"));
-const alert = () => document.querySelector('[role="alert"]')?.textContent;
+/** The newest notification's body. */
+const alert = () => notices.querySelector('[aria-label="Notifications"] > div p')?.textContent;
 
 test("Supervised says its requests are denied when they can't come to the chat, and why (PLX-196)", () => {
   const manual = () =>
@@ -652,7 +661,7 @@ test("a piece that fails three times marks its file's chip and keeps the message
   );
   expect(upload).toHaveBeenCalledTimes(4);
   expect(onSend).not.toHaveBeenCalled();
-  expect(document.body.textContent).toContain("paper.pdf couldn't be sent: timed out");
+  expect(alert()).toBe("paper.pdf couldn't be sent: timed out");
 });
 
 test("Up and Down recall the thread's earlier prompts until one is edited (PLX-325)", async () => {

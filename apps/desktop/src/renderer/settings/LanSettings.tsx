@@ -8,6 +8,7 @@ import type {
 } from "../../protocol/generated/protocol";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { localId, useHosts, type Host } from "../hosts";
+import { dismiss, notify } from "../notifications";
 import {
   dangerButton,
   primaryButton,
@@ -52,7 +53,10 @@ export function LanSettings() {
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [status, setStatus] = useState<RemoteSessionsResult>();
   const [adding, setAdding] = useState(false);
-  const [error, setError] = useState<string>();
+  // What a switch or button here couldn't do. One replaces the last, and trying again closes it.
+  const failed = (title: string, body: string) =>
+    notify({ key: "same-network", tone: "error", title, body });
+  const retry = () => dismiss("same-network");
   const sessions = status?.sessions ?? [];
 
   const readSessions = async () => {
@@ -88,46 +92,51 @@ export function LanSettings() {
   }, [polling]);
 
   const toggle = async (next: boolean) => {
+    retry();
     const answer = await window.parallax.request(localId, "host/settings/set", { remote: next });
-    if ("error" in answer) return setError(answer.error.message);
-    setError(undefined);
+    if ("error" in answer)
+      return failed(`Couldn't turn pairing ${next ? "on" : "off"}`, answer.error.message);
     setOn(answer.result.remote);
     setCode(undefined);
     void readSessions();
   };
   const toggleWeb = async (next: boolean) => {
+    retry();
     const answer = await window.parallax.request(localId, "host/settings/set", { remoteWeb: next });
-    if ("error" in answer) return setError(answer.error.message);
-    setError(undefined);
+    if ("error" in answer)
+      return failed(`Couldn't turn Open in a browser ${next ? "on" : "off"}`, answer.error.message);
     setWeb(answer.result.remoteWeb);
   };
   // On, it registers this computer under the signed-in account first: main sends the token to plxd.
   const toggleRelay = async (next: boolean) => {
-    const failed = next ? await window.parallax.registerRelay() : undefined;
-    if (failed) return setError(failed);
+    retry();
+    const title = `Couldn't turn Reach from anywhere ${next ? "on" : "off"}`;
+    const registered = next ? await window.parallax.registerRelay() : undefined;
+    if (registered) return failed(title, registered);
     const answer = await window.parallax.request(localId, "host/settings/set", { relay: next });
-    if ("error" in answer) return setError(answer.error.message);
-    setError(undefined);
+    if ("error" in answer) return failed(title, answer.error.message);
     setRelay(answer.result.relay);
     void readSessions();
   };
   const removeRelayHost = async (hostId: string) => {
+    retry();
     setConfirmingRelay(undefined);
     const hosts = await window.parallax.removeRelayHost(hostId);
-    if (typeof hosts === "string") return setError(hosts);
-    setError(undefined);
+    if (typeof hosts === "string")
+      return failed("Couldn't remove the computer from the relay", hosts);
     setRelayHosts(hosts);
   };
   const pair = async () => {
+    retry();
     const answer = await window.parallax.request(localId, "remote/pair", {});
-    if ("error" in answer) return setError(answer.error.message);
-    setError(undefined);
+    if ("error" in answer) return failed("Couldn't make a pairing code", answer.error.message);
     setCode({ ...answer.result, before: sessions.length });
     void readSessions();
   };
   const revoke = async (id: string) => {
+    retry();
     const answer = await window.parallax.request(localId, "remote/revoke", { id });
-    if ("error" in answer) return setError(answer.error.message);
+    if ("error" in answer) return failed("Couldn't revoke the computer", answer.error.message);
     setStatus(answer.result);
   };
 
@@ -290,11 +299,6 @@ export function LanSettings() {
             </button>
           </Row>
         ))}
-        {error && (
-          <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
-            {error}
-          </p>
-        )}
       </Section>
 
       <Section
@@ -448,7 +452,10 @@ function PairForm({ onDone }: { onDone: () => void }) {
 /** A computer this app paired with: its connection, its routes in order, and Remove. */
 function LanComputer({ computer }: { computer: Host }) {
   const state = useConnection(computer.id);
-  const [error, setError] = useState<string>();
+  const remove = async () => {
+    const failed = await window.parallax.removeHost(computer.id);
+    if (failed) notify({ tone: "error", title: `Couldn't remove ${computer.name}`, body: failed });
+  };
   const tone = state?.status === "connected" ? "on" : state?.status === "failed" ? "warn" : "off";
   return (
     <div className={settingRow}>
@@ -465,17 +472,8 @@ function LanComputer({ computer }: { computer: Host }) {
         {state?.status === "failed" && (
           <span className="block text-[12.5px] text-muted-foreground">{state.error.message}</span>
         )}
-        {error && (
-          <span role="alert" className="block text-[12.5px] text-danger">
-            {error}
-          </span>
-        )}
       </div>
-      <button
-        type="button"
-        className={quietButton}
-        onClick={() => void window.parallax.removeHost(computer.id).then(setError)}
-      >
+      <button type="button" className={quietButton} onClick={() => void remove()}>
         Remove
       </button>
     </div>

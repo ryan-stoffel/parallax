@@ -32,6 +32,7 @@ import { describeError } from "./errors";
 import { localId, useHosts } from "./hosts";
 import { bindingsOf, formatKeybinding, type Command } from "./keybindings";
 import { ClaudeLogo, CursorLogo, OpenAILogo, OpenCodeLogo, ParallaxMark } from "./logos";
+import { dismiss, notify } from "./notifications";
 import { agents, finishOnboarding, infoOf, ready, setUpAgents, type Agent } from "./firstRun";
 import { Avatar, useProfile } from "./profile";
 import { kindOf, loadProviders, useProviders } from "./providers";
@@ -323,6 +324,15 @@ function Heading({ id, title, children }: { id: string; title: string; children:
 }
 
 /**
+ * Says why setting up, installing, or signing in to an agent failed, when it did, and closes that
+ * once one works.
+ */
+function agentFailed(title: string, error: string | undefined) {
+  if (error) notify({ key: "onboarding-agent", tone: "error", title, body: error });
+  else dismiss("onboarding-agent");
+}
+
+/**
  * Step two: this computer's agents (`agents`), set up as they're found (`setUpAgents`). Each
  * installed and signed in is on without a click; one signed out offers Sign in, and one that
  * isn't installed offers Install, after which it's set up again.
@@ -332,7 +342,6 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
   const providers = useProviders(localId)?.providers;
   // Until the first setup ends, a row plxd hasn't probed yet is still looking.
   const [scanned, setScanned] = useState(false);
-  const [error, setError] = useState<string>();
   // The agent installing in the background (npm, Cursor's SDK), if any.
   const [working, setWorking] = useState<string>();
   // The one terminal, as main runs one sign-in terminal per window: a sign-in, or an install.
@@ -342,7 +351,7 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
   // setUpAgents runs one at a time, so a sign-in's never races the first.
   const setUp = useCallback((refresh: boolean) => {
     void setUpAgents(localId, refresh).then((failed) => {
-      setError(failed);
+      agentFailed("Couldn't set up your agents", failed);
       setScanned(true);
     });
   }, []);
@@ -375,12 +384,11 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
       setUp(false);
     } else if (cursor?.signInError) {
       setCursorWaiting(false);
-      setError(cursor.signInError);
+      agentFailed("Couldn't sign in to Cursor", cursor.signInError);
     }
   }, [cursorWaiting, cursor, setUp]);
 
   const install = async (agent: Agent) => {
-    setError(undefined);
     const background = agent.kind === "cursor" || NPM_INSTALLS[agent.kind];
     if (!background) return setTerminal({ agent, install: true });
     setWorking(agent.id);
@@ -390,18 +398,18 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
       if ("error" in answer) failed = describeError(answer.error);
     } else failed = await window.parallax.install(localId, agent.kind);
     setWorking(undefined);
-    if (failed) setError(failed);
+    if (failed) agentFailed(`Couldn't install ${agent.name}`, failed);
     else setUp(true);
   };
   const signIn = async (agent: Agent, info: ProviderInfo) => {
-    setError(undefined);
     // Cursor signs in in the browser, unless the instance runs on its own CURSOR_API_KEY.
     if (agent.kind !== "cursor" || info.instance.env.some((v) => v.name === "CURSOR_API_KEY"))
       return setTerminal({ agent, install: false });
     const answer = await window.parallax.request(localId, "cursor/signIn", {
       instance: info.instance.id,
     });
-    if ("error" in answer) return setError(describeError(answer.error));
+    if ("error" in answer)
+      return agentFailed(`Couldn't sign in to ${agent.name}`, describeError(answer.error));
     window.open(answer.result.url, "_blank");
     setCursorWaiting(true);
   };
@@ -512,11 +520,6 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
             );
           })}
         </ul>
-      )}
-      {error && (
-        <p role="alert" className="mt-3 text-[12.5px] text-danger">
-          {error}
-        </p>
       )}
       {terminal && (
         <div className="mt-4 overflow-hidden rounded-xl border border-border bg-surface">

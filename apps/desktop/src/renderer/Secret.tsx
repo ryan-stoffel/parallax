@@ -8,6 +8,7 @@ import { useId, useState, type FormEvent } from "react";
 
 import { quietButton } from "./Approval";
 import { describeError } from "./errors";
+import { notify } from "./notifications";
 import type { Item } from "./transcript";
 
 type SecretItem = Extract<Item, { kind: "secret" }>;
@@ -31,12 +32,10 @@ export function SecretCard({
   const titleId = useId();
   const inputId = useId();
   const [busy, setBusy] = useState<"save" | "decline">();
-  const [error, setError] = useState<string>();
   const off = !!disabledReason || !!busy;
 
   async function send(answer: { type: "save"; secret: string } | { type: "decline" }) {
     setBusy(answer.type);
-    setError(undefined);
     const reply = await window.parallax.request(hostId, "secret/answer", {
       runId,
       requestId: request.requestId,
@@ -44,7 +43,11 @@ export function SecretCard({
     });
     // On success the card goes once plxd logs the answer.
     if ("error" in reply) {
-      setError(describeError(reply.error));
+      notify({
+        tone: "error",
+        title: answer.type === "save" ? "Couldn't save the secret" : "Couldn't decline the secret",
+        body: describeError(reply.error),
+      });
       setBusy(undefined);
     }
   }
@@ -90,11 +93,6 @@ export function SecretCard({
             className="h-8 w-full rounded-md border border-border bg-background px-2.5 font-mono text-[12.5px] placeholder:font-sans placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
           />
         </div>
-        {error && (
-          <p role="alert" className="px-4 pt-2 text-[12.5px] text-danger">
-            {error}
-          </p>
-        )}
         <div className="flex items-center justify-end gap-2 px-4 pt-3 pb-3">
           <p className="mr-auto text-[12px] text-faint-foreground">
             Kept in this host's keychain. The agent gets a one-time reference, never the value.

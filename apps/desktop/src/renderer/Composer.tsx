@@ -67,6 +67,7 @@ import { imageUrl, readImage, type ImageCaps } from "./images";
 import { Lightbox } from "./Lightbox";
 import { encodedImage, uploadFiles, withFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
+import { dismiss, notify } from "./notifications";
 import { behaviorPrefs, newThreadPrefs, usageView } from "./prefs";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
@@ -306,6 +307,8 @@ const maxFiles = 50;
 
 /** The most threads the `@` menu shows. */
 const maxThreadRows = 5;
+// The notification of why something wasn't attached, which the next one replaces.
+const attachKey = "composer/attach";
 
 /**
  * `paths` matching `query`: those whose file name starts with it, then those that contain it,
@@ -385,8 +388,8 @@ export interface ComposerProps {
   newThread?: boolean;
   /**
    * Sends the text, images, and attached threads' run ids, with the chosen run options (empty
-   * without `backend`). Resolves to an error message, which puts them back; `""` puts them back
-   * with no message. Absent: Send stays off.
+   * without `backend`). Resolves to an error message, which puts them back and shows in a
+   * notification; `""` puts them back with no message. Absent: Send stays off.
    */
   onSend?: (
     text: string,
@@ -399,7 +402,8 @@ export interface ComposerProps {
   /** Cmd/Ctrl+Enter sends into the active turn instead of its queue. */
   onSteer?: ComposerProps["onSend"];
   /**
-   * While set, an empty box shows Stop instead of Send. Resolves to an error message.
+   * While set, an empty box shows Stop instead of Send. Resolves to an error message, which shows
+   * in a notification.
    * Stop stays pending until the caller drops `onStop`, when the run stops. Esc in the box stops
    * too.
    */
@@ -543,7 +547,6 @@ export function Composer({
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState(initial?.text ?? "");
-  const [error, setError] = useState<string>();
   const [stopping, setStopping] = useState(false);
   // Files that aren't images, shown as chips, and uploaded on send where the host takes them.
   const [files, setFiles] = useState<File[]>(initial?.files ?? []);
@@ -564,8 +567,11 @@ export function Composer({
     setThreadsHost(host);
     setThreads([]);
   }
-  // Why an image or thread wasn't added, shown by the thumbnails.
-  const [attachError, setAttachError] = useState<string>();
+  // Why an image, file, or thread wasn't added, in a notification an add that takes clears.
+  const setAttachError = (why?: string) =>
+    why
+      ? notify({ key: attachKey, tone: "error", title: "Couldn't attach that", body: why })
+      : dismiss(attachKey);
   // Whether a sidebar row is dragged over the box, which outlines it.
   const [threadOver, setThreadOver] = useState(false);
   const filePicker = useRef<HTMLInputElement>(null);
@@ -915,14 +921,14 @@ export function Composer({
       setSending((s) =>
         typeof paths === "string" && s && s.share < 1 ? { ...s, failed: true } : undefined,
       );
-      if (typeof paths === "string") return setError(paths);
+      if (typeof paths === "string")
+        return notify({ tone: "error", title: "Couldn't upload the files", body: paths });
       sentText = withFiles(text, paths);
     }
     editor.commands.clearContent();
     // Only what's sent: images and threads added during an upload stay.
     setImages((all) => all.filter((i) => !sentImages.includes(i)));
     setThreads((all) => all.filter((t) => !sentThreads.includes(t)));
-    setError(undefined);
     setAttachError(undefined);
     const failed = await (steer ? onSteer! : background ? onSendInBackground! : onSend)(
       sentText,
@@ -937,7 +943,7 @@ export function Composer({
       editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });
       setImages((added) => [...sentImages, ...added].slice(0, imageCaps?.maxImages));
       putBackThreads(sentThreads);
-      setError(failed);
+      if (failed) notify({ tone: "error", title: "Couldn't send the message", body: failed });
     }
   };
 
@@ -948,11 +954,10 @@ export function Composer({
   const stop = async () => {
     const back = unanswered;
     setStopping(true);
-    setError(undefined);
     const failed = await onStop?.();
     if (failed) {
       setStopping(false);
-      setError(failed);
+      notify({ tone: "error", title: "Couldn't stop the thread", body: failed });
     } else if (back && !editor.isDestroyed) {
       // Back ahead of anything typed meanwhile, as plain lines: they send as the same Markdown.
       // ponytail: its formatting shows as typed Markdown, until the box parses Markdown.
@@ -1251,7 +1256,7 @@ export function Composer({
             )}
           </div>
         )}
-        {(images.length > 0 || threads.length > 0 || files.length > 0 || attachError) && (
+        {(images.length > 0 || threads.length > 0 || files.length > 0) && (
           <fieldset
             // Locked while files upload: what's there now is what's sent.
             disabled={uploading}
@@ -1299,11 +1304,6 @@ export function Composer({
             ))}
             {files.length > 0 && !canUpload && (
               <span className="text-[12px] text-faint-foreground">Not sent to the agent yet</span>
-            )}
-            {attachError && (
-              <p role="alert" className="text-[12.5px] text-danger">
-                {attachError}
-              </p>
             )}
           </fieldset>
         )}
@@ -1435,11 +1435,6 @@ export function Composer({
         <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-3xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
           {tab}
         </div>
-      )}
-      {error && (
-        <p role="alert" className="px-2 pt-2 text-[13px] text-danger">
-          {error}
-        </p>
       )}
       {footer}
     </div>

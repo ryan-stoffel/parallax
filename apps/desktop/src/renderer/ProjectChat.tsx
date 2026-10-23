@@ -13,6 +13,7 @@ import { describeError } from "./errors";
 import { imageCaps } from "./images";
 import { uploadBytes } from "./uploads";
 import type { RunOptions } from "./models";
+import { notify } from "./notifications";
 import { accountOptions, defaultBackend } from "./NewThread";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { RefMenu } from "./RefMenu";
@@ -73,8 +74,6 @@ export function ProjectChat({
   const [starting, setStarting] = useState<{ text: string; images: PromptImage[] }[]>();
   // The first message's start, which messages sent meanwhile wait on.
   const starts = useRef<Promise<string | undefined>>(undefined);
-  // Why a message sent while it started didn't reach the coordinator.
-  const [heldError, setHeldError] = useState<string>();
   // The coordinator run this chat last started, set before it does so its chat opens as starting.
   const [started, setStarted] = useState<string>();
   // The coordinator default's backend, whose models and efforts the first message offers.
@@ -91,8 +90,6 @@ export function ProjectChat({
     };
   }, [hostId, connected]);
 
-  // Why the base branch couldn't change.
-  const [branchError, setBranchError] = useState<string>();
   // On a plxd with an integration branch, the picker sets the base branch new children's work is
   // cut from (0045). The coordinator's checkout keeps its branch: nothing switches it yet.
   const pickBase =
@@ -113,14 +110,18 @@ export function ProjectChat({
             checkout
             value={branch}
             onChange={(baseBranch) =>
-              void updateProject(project.id, { baseBranch }).then(setBranchError)
+              void updateProject(project.id, { baseBranch }).then(
+                (error) =>
+                  error &&
+                  notify({
+                    key: `base-branch/${project.id}`,
+                    tone: "error",
+                    title: "Couldn't change the base branch",
+                    body: error,
+                  }),
+              )
             }
           />
-          {branchError && (
-            <span role="alert" className="truncate text-[12px] text-danger">
-              {branchError}
-            </span>
-          )}
         </>
       ) : (
         branch && (
@@ -174,7 +175,6 @@ export function ProjectChat({
           runId={project.coordinator}
           prompt={prompt}
           going={started === project.coordinator}
-          notice={heldError}
           tab={tab}
           strip={bar}
           // A new coordinator replaces one that can't take messages (0024).
@@ -211,7 +211,12 @@ export function ProjectChat({
       ...(images.length > 0 && { images }),
       dispatchMode: { type: "queue_after_active" },
     });
-    if ("error" in sent) setHeldError(`"${text}" wasn't sent: ${describeError(sent.error)}`);
+    if ("error" in sent)
+      notify({
+        tone: "error",
+        title: "Couldn't send a message",
+        body: `"${text}" wasn't sent: ${describeError(sent.error)}`,
+      });
     return undefined;
   };
 

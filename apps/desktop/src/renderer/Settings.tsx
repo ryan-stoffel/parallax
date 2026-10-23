@@ -35,7 +35,7 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { models, setCliEnabled, useDisabledClis } from "./models";
-import { notify } from "./notifications";
+import { dismiss, notify } from "./notifications";
 import {
   kindOf,
   logoOf,
@@ -710,19 +710,22 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     setChecking(false);
     setError(errors.find(Boolean));
   };
-  const save = async (instance: ProviderInstance) =>
-    setError(await saveProvider(host.id, instance));
+  const save = async (instance: ProviderInstance) => {
+    const failed = await saveProvider(host.id, instance);
+    if (failed) notify({ tone: "error", title: `Couldn't save ${instance.name}`, body: failed });
+  };
 
   const list = providers?.providers;
   const current = list?.find((p) => p.instance.id === selected) ?? list?.[0];
   const asking = confirming !== undefined && confirming === current?.instance.id;
   const remove = async (id: string) => {
+    const name = list?.find((p) => p.instance.id === id)?.instance.name ?? "the provider";
     setRemoving(true);
     const failed = await removeProvider(host.id, id);
     // Gone from the list, its pane goes too, and the next one is chosen.
     setRemoving(false);
     setConfirming(undefined);
-    setError(failed);
+    if (failed) notify({ tone: "error", title: `Couldn't remove ${name}`, body: failed });
   };
   const on = list?.filter((p) => p.instance.enabled) ?? [];
 
@@ -1007,7 +1010,11 @@ function InstancePane({
   const version = versionOf(instance);
   // The host's keys are for its Claude Code and Codex, the instances named for their kind.
   const keyProvider = instance.id === instance.kind ? cliInfo[instance.id]?.keyProvider : undefined;
-  const [error, setError] = useState<string>();
+  // Its failures replace each other, and the sign-in notice that follows them. Trying again
+  // closes the last one, as `retry` does.
+  const failed = (title: string, body: string) =>
+    notify({ key: `provider/${hostId}/${instance.id}`, tone: "error", title, body });
+  const retry = () => dismiss(`provider/${hostId}/${instance.id}`);
   // Whether the open terminal installs the CLI rather than signs in. Kept from when it opened, so
   // an install that ends and finds the CLI doesn't turn into a sign-in.
   const [installing, setInstalling] = useState(false);
@@ -1023,16 +1030,16 @@ function InstancePane({
       setInstalling(true);
       return onSignIn(true);
     }
-    setError(undefined);
+    retry();
     setNpmInstalling(true);
     // plxd installs Cursor's SDK in the background and reports it `installing` until it's done.
-    let failed: string | undefined;
+    let problem: string | undefined;
     if (cursor) {
       const answer = await window.parallax.request(hostId, "cursor/install", {});
-      if ("error" in answer) failed = describeError(answer.error);
-    } else failed = await window.parallax.install(hostId, instance.kind);
+      if ("error" in answer) problem = describeError(answer.error);
+    } else problem = await window.parallax.install(hostId, instance.kind);
     setNpmInstalling(false);
-    if (failed) setError(failed);
+    if (problem) failed(`Couldn't install ${instance.name}`, problem);
     else onSignedIn();
   };
   // While it installs, plxd probes it again on each list, so the list shows when it ends.
@@ -1053,8 +1060,11 @@ function InstancePane({
     (instance.kind !== "ollamaCloud" || ollamaCloud) &&
     !instance.program &&
     (instance.kind !== "pi" || piCommand === "pi");
-  const save = async (change: Partial<ProviderInstance>) =>
-    setError(await saveProvider(hostId, { ...instance, ...change }));
+  const save = async (change: Partial<ProviderInstance>) => {
+    retry();
+    const problem = await saveProvider(hostId, { ...instance, ...change });
+    if (problem) failed(`Couldn't save ${instance.name}`, problem);
+  };
   const program = instance.program ?? kind.program ?? "the program";
   // A Cursor instance with its own CURSOR_API_KEY runs on that key, with no browser sign-in (as T3 Code).
   const cursorAccount =
@@ -1081,27 +1091,33 @@ function InstancePane({
   useEffect(() => {
     if (cursorWaiting && info.signInError) {
       setCursorWaiting(false);
-      setError(info.signInError);
+      notify({
+        key: `provider/${hostId}/${instance.id}`,
+        tone: "error",
+        title: `Couldn't sign in to ${instance.name}`,
+        body: info.signInError,
+      });
     }
-  }, [cursorWaiting, info.signInError]);
+  }, [cursorWaiting, info.signInError, hostId, instance.id, instance.name]);
   const signInCursor = async () => {
-    setError(undefined);
+    retry();
     const answer = await window.parallax.request(hostId, "cursor/signIn", {
       instance: instance.id,
     });
     if ("error" in answer) {
-      setError(describeError(answer.error));
+      failed(`Couldn't sign in to ${instance.name}`, describeError(answer.error));
       return;
     }
     window.open(answer.result.url, "_blank");
     setCursorWaiting(true);
   };
   const signOutCursor = async () => {
-    setError(undefined);
+    retry();
     const answer = await window.parallax.request(hostId, "cursor/signOut", {
       instance: instance.id,
     });
-    if ("error" in answer) setError(describeError(answer.error));
+    if ("error" in answer)
+      failed(`Couldn't sign out of ${instance.name}`, describeError(answer.error));
     else void loadProviders(hostId, true);
   };
 
@@ -1137,11 +1153,6 @@ function InstancePane({
       {!instance.enabled && (
         <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-[12.5px] text-muted-foreground">
           Off on this host: new threads and model menus leave out {instance.name}'s models.
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="mb-5 text-[12.5px] text-danger">
-          {error}
         </p>
       )}
       <Card label="Account">
@@ -1496,7 +1507,6 @@ function KeyRow({
 }) {
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [error, setError] = useState<string>();
   const remove = async () => {
     setRemoving(true);
     const answer = await window.parallax.request(hostId, "accounts/keys/remove", {
@@ -1505,7 +1515,11 @@ function KeyRow({
     setRemoving(false);
     // Already gone, such as removed by another client: that's what Remove wanted.
     if ("error" in answer && answer.error.data?.kind !== "accountNotFound")
-      setError(accountsError(answer.error));
+      notify({
+        tone: "error",
+        title: `Couldn't remove ${account.label}`,
+        body: accountsError(answer.error),
+      });
     else onRemoved();
   };
 
@@ -1519,11 +1533,6 @@ function KeyRow({
             : `${providerNames[account.provider] ?? account.provider} API key · ${account.maskedKey}`}
         </span>
         {usage}
-        {error && (
-          <span role="alert" className="block text-[12.5px] text-danger">
-            {error}
-          </span>
-        )}
       </div>
       {/* Cancel takes Remove's place and focus, so a double click or a second Enter can't remove. */}
       <div className="flex shrink-0 gap-1">
@@ -1651,7 +1660,6 @@ function KeyForm({
 }) {
   // One id while the form is open, so sending it again can't store the key twice (0007).
   const [id] = useState(uuidv7);
-  const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const save = async (form: HTMLFormElement) => {
     const data = new FormData(form);
@@ -1666,7 +1674,12 @@ function KeyForm({
     setSaving(true);
     const answer = await window.parallax.request(hostId, "accounts/keys/add", params);
     setSaving(false);
-    if ("error" in answer) setError(accountsError(answer.error));
+    if ("error" in answer)
+      notify({
+        tone: "error",
+        title: "Couldn't add the API key",
+        body: accountsError(answer.error),
+      });
     else onDone(answer.result.account);
   };
 
@@ -1708,11 +1721,6 @@ function KeyForm({
           Kept in the host's keychain. Parallax never shows it again.
         </span>
       </label>
-      {error && (
-        <p role="alert" className="text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
       <div className="flex justify-end gap-2">
         <button type="button" onClick={() => onDone()} className={quietButton}>
           Cancel

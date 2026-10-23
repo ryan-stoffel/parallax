@@ -2,6 +2,7 @@ import { FolderOpen, Puzzle, Trash2 } from "lucide-react";
 import { createElement, useEffect, useId, useState } from "react";
 
 import type { ExtensionInfo } from "../preload/bridge";
+import { dismiss, notify } from "./notifications";
 import { memory } from "./stored";
 import { IconButton, Menu, menuHeading, menuItem } from "./ui";
 
@@ -23,12 +24,17 @@ export function Extensions({ tab }: { tab?: number }) {
   const menuId = useId();
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
 
   const added = (answer: ExtensionInfo | string | undefined) => {
-    if (typeof answer === "string") setError(answer);
+    if (typeof answer === "string")
+      notify({
+        key: "extension",
+        tone: "error",
+        title: "Couldn't add the extension",
+        body: answer,
+      });
     else if (answer) {
-      setError(undefined);
+      dismiss("extension");
       setLink("");
     }
     void refresh();
@@ -60,7 +66,6 @@ export function Extensions({ tab }: { tab?: number }) {
         label="Extensions"
         align="end"
         focus='input, [role="menuitem"]'
-        onClose={() => setError(undefined)}
         className="w-72 p-1"
       >
         <p className={menuHeading}>Extensions</p>
@@ -116,11 +121,6 @@ export function Extensions({ tab }: { tab?: number }) {
             {busy ? "Adding…" : "Add"}
           </button>
         </form>
-        {error && (
-          <p role="alert" className="px-2 pb-1 text-[12px] text-danger">
-            {error}
-          </p>
-        )}
         <button
           type="button"
           role="menuitem"
