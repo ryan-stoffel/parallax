@@ -50,6 +50,21 @@ test("sections: the Project's brief, entries by their folder, knowledge, then th
   ]);
 });
 
+test("sections: a stale or unused entry moves from its kind to Review", () => {
+  const s = sectionsOf([
+    memory(project, "memory/gotcha/flaky.md"),
+    memory(project, "memory/gotcha/gone.md", { stale: true }),
+    memory(you, "memory/preference/old.md", { unused: true }),
+    memory(project, "knowledge/old.md", { unused: true }),
+  ]);
+  expect(s.review.map((f) => f.path)).toEqual([
+    "memory/gotcha/gone.md",
+    "memory/preference/old.md",
+  ]);
+  expect(s.entries.flatMap((g) => g.files.map((f) => f.path))).toEqual(["memory/gotcha/flaky.md"]);
+  expect(s.knowledge.map((f) => f.path)).toEqual(["knowledge/old.md"]);
+});
+
 test("promote goes Project to Repo to You, past a missing Repo", () => {
   expect(nextScope(project, "r-1")).toEqual(repo);
   expect(nextScope(project)).toEqual(you);
@@ -122,6 +137,24 @@ test("watches the Repo and Project folders for context.changed, without their ru
     { after: 1, project: "r-1", shell: true, logId: "log-1" },
     { after: 1, project: "p-1", shell: true, logId: "log-1" },
   ]);
+});
+
+test("entries show when an agent last read them, and the ones to review get their own section", async () => {
+  lists = {
+    "p-1": [
+      file("memory/decision/vitest.md", { title: "Use Vitest", lastUsed: "2026-10-20" }),
+      file("memory/gotcha/old.md", { title: "Old trap", date: "2026-01-02", unused: true }),
+    ],
+  };
+  await render();
+  const review = document.querySelector('[aria-label="Review"]')?.textContent;
+  expect(review).toContain("Old trap");
+  expect(review).toContain("Not used yet");
+  expect(review).not.toContain("Use Vitest");
+  expect(document.querySelector('[aria-label="Decisions"]')?.textContent).toContain(
+    "Last used 2026-10-20",
+  );
+  expect(document.querySelector('[aria-label="Gotchas"]')).toBeNull();
 });
 
 test("a proposal saves as an entry at its folder's scope, keeping its title and source", async () => {
@@ -198,11 +231,11 @@ test("an entry shows its scope, source, and stale mark, and promotes to the next
       file("memory/decision/sqlite.md", { kind: "decision", title: "Keep SQLite", source: "user" }),
     ],
   };
-  // PLX-407's flag, which the generated type doesn't have yet.
+  // PLX-407's flag, which puts it in Review (PLX-943).
   (lists["p-1"]![0] as Memory).stale = true;
   bodies = { "memory/decision/sqlite.md": "One writer." };
   await render();
-  const decisions = document.querySelector('[aria-label="Decisions"]')!;
+  const decisions = document.querySelector('[aria-label="Review"]')!;
   expect(decisions.textContent).toContain("Keep SQLite");
   expect(decisions.textContent).toContain("Stale");
   expect(decisions.textContent).toContain("Project");

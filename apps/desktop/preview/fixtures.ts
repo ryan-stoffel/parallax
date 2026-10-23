@@ -1648,7 +1648,15 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     path: string,
     content: string,
     minutes: number,
-    header: { kind?: MemoryKind; title?: string; source?: string; writer?: string } = {},
+    header: {
+      kind?: MemoryKind;
+      title?: string;
+      source?: string;
+      writer?: string;
+      lastUsed?: string;
+      unused?: boolean;
+      stale?: boolean;
+    } = {},
   ): MemoryDoc => ({
     file: {
       path,
@@ -1688,12 +1696,13 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       memoryDoc(
         "memory/convention/conventional-commits.md",
         "Commits use Conventional Commits and end with the Linear ID, e.g. `feat: show follow-up messages (PLX-92)`.",
-        60 * 24 * 30,
+        60 * 24 * 90,
         {
           kind: "convention",
           title: "Conventional Commits ending in the Linear ID",
           source: "AGENTS.md",
           writer: "user",
+          unused: true,
         },
       ),
       memoryDoc(
@@ -1727,6 +1736,8 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
           title: "node-pty has no Windows arm64 prebuild",
           source: "release.yml",
           writer: "user",
+          lastUsed: new Date(now - 60 * 24 * 2 * 60_000).toISOString().slice(0, 10),
+          stale: true,
         },
       ),
       memoryDoc(
@@ -1762,7 +1773,13 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         "memory/decision/children-auto-mode.md",
         "Children of this Project run in auto mode; bypass is never used here.",
         60 * 24 * 5,
-        { kind: "decision", title: "Children run in auto mode", source: "user", writer: "user" },
+        {
+          kind: "decision",
+          title: "Children run in auto mode",
+          source: "user",
+          writer: "user",
+          lastUsed: new Date(now - 60 * 24 * 60_000).toISOString().slice(0, 10),
+        },
       ),
       memoryDoc(
         "memory/convention/shortcuts-wait-for-dialogs.md",

@@ -8,6 +8,9 @@
 //! there for the user. A coordinator's rewrite of the brief has no `Kind:` line.
 //!
 //! A Project's child starts with the brief and an [`index`] of the entries' titles ([`start`]).
+//!
+//! An agent's `memory_read` of an entry stamps it with a `Last used:` line ([`used`]). An entry
+//! not read for [`UNUSED_DAYS`] goes to the Memory tab's review list ([`unused`]).
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -36,6 +39,8 @@ pub(crate) struct Header {
     pub replaces: Option<String>,
     /// The paths plxd found missing when it marked the entry for review ([`super::stale`]).
     pub stale: Option<String>,
+    /// The day an agent's `memory_read` last returned the entry ([`used`]).
+    pub last_used: Option<String>,
 }
 
 /// The folder name of `kind`, or `None` for one this plxd doesn't know.
@@ -129,6 +134,7 @@ pub(crate) fn parse(content: &str) -> (Header, &str) {
             "Scope" => header.scope = value,
             "Replaces" => header.replaces = value,
             "Stale" => header.stale = value,
+            "Last used" => header.last_used = value,
             _ => break,
         }
         rest = after;
@@ -137,6 +143,40 @@ pub(crate) fn parse(content: &str) -> (Header, &str) {
         return (header, content);
     }
     (header, rest)
+}
+
+/// How long an entry goes unread before it is listed for review (PLX-943).
+pub(crate) const UNUSED_DAYS: i32 = 60;
+
+/// `text` with its header's `Last used:` line set to `day`, last in the header, or `None` when it
+/// already says `day`, so an entry is rewritten at most once a day. The rest is kept as it is.
+pub(crate) fn used(text: &str, day: &str) -> Option<String> {
+    let (header, body) = parse(text);
+    if header.last_used.as_deref() == Some(day) {
+        return None;
+    }
+    let head = &text[..text.len() - body.len()];
+    let mut stamped = String::new();
+    for line in head.lines() {
+        if !line.trim().is_empty() && !line.starts_with("Last used:") {
+            stamped.push_str(line);
+            stamped.push('\n');
+        }
+    }
+    let _ = writeln!(stamped, "Last used: {day}\n");
+    stamped.push_str(body);
+    Some(stamped)
+}
+
+/// Whether the entry with `header` has gone [`UNUSED_DAYS`] or more unread on `today`: since its
+/// `Last used:` day, or its `Date:` when it has none. A day that doesn't parse counts as recent.
+pub(crate) fn unused(header: &Header, today: jiff::civil::Date) -> bool {
+    header
+        .last_used
+        .as_deref()
+        .or(header.date.as_deref())
+        .and_then(|day| day.parse::<jiff::civil::Date>().ok())
+        .is_some_and(|day| day.saturating_add(jiff::Span::new().days(UNUSED_DAYS)) <= today)
 }
 
 /// The child proposals waiting in Project folder `dir`, each with its path and the lines a
@@ -358,7 +398,7 @@ mod tests {
 
     use std::path::Path;
 
-    use super::{Header, INDEX_BYTES, entry_kind, index, parse, render, slug};
+    use super::{Header, INDEX_BYTES, entry_kind, index, parse, render, slug, unused, used};
 
     /// Writes an entry titled `title` at `path` in `dir`.
     fn entry(dir: &Path, path: &str, title: &str) {
@@ -495,9 +535,52 @@ mod tests {
                 scope: Some("repo".to_owned()),
                 replaces: Some("memory/decision/vitest.md".to_owned()),
                 stale: None,
+                last_used: None,
             }
         );
         assert_eq!(body, "We moved off Jest.\n");
+    }
+
+    #[test]
+    fn a_read_stamps_last_used_once_a_day_and_keeps_the_rest() {
+        let entry = render(
+            MemoryKind::Gotcha,
+            "T",
+            "s",
+            "2026-01-01",
+            "w",
+            &[],
+            "Body.\n",
+        );
+        let stamped = used(&entry, "2026-10-23").unwrap();
+        let (header, body) = parse(&stamped);
+        assert_eq!(header.last_used.as_deref(), Some("2026-10-23"));
+        assert_eq!(header.title.as_deref(), Some("T"));
+        assert_eq!(body, "Body.\n");
+        assert_eq!(used(&stamped, "2026-10-23"), None);
+        // A later day replaces the line rather than adding one.
+        let later = used(&stamped, "2026-10-24").unwrap();
+        assert_eq!(later.matches("Last used:").count(), 1);
+        assert_eq!(parse(&later).0.last_used.as_deref(), Some("2026-10-24"));
+        // A file the user wrote without a header gets one.
+        let plain = used("# Notes\n", "2026-10-23").unwrap();
+        assert_eq!(plain, "Last used: 2026-10-23\n\n# Notes\n");
+    }
+
+    #[test]
+    fn an_entry_is_unused_after_60_days_from_its_last_use_or_else_its_date() {
+        let today: jiff::civil::Date = "2026-10-23".parse().unwrap();
+        let header = |date: &str, last_used: Option<&str>| Header {
+            date: Some(date.to_owned()),
+            last_used: last_used.map(str::to_owned),
+            ..Header::default()
+        };
+        assert!(unused(&header("2026-08-24", None), today));
+        assert!(!unused(&header("2026-08-25", None), today));
+        assert!(!unused(&header("2026-01-01", Some("2026-10-01")), today));
+        assert!(unused(&header("2026-10-01", Some("2026-08-01")), today));
+        assert!(!unused(&header("someday", None), today));
+        assert!(!unused(&Header::default(), today));
     }
 
     #[test]

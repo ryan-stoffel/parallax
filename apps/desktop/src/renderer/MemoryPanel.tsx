@@ -35,16 +35,19 @@ export function scopesOf(project?: string, repo?: string): MemoryScope[] {
 }
 
 /**
- * Sorts listed files into the view's sections: the Project's brief, entries by kind (by their
- * folder, `memory/<kind>/`), knowledge, and the proposals waiting for the user. A child's proposal
- * in a Project's folder (writer `thread <run id>`) is its coordinator's to curate, so it isn't one.
+ * Sorts listed files into the view's sections: the Project's brief, the entries to review (marked
+ * stale, or unread by agents for 60 days, PLX-943), the other entries by kind (by their folder,
+ * `memory/<kind>/`), knowledge, and the proposals waiting for the user. A child's proposal in a
+ * Project's folder (writer `thread <run id>`) is its coordinator's to curate, so it isn't one.
  */
 export function sectionsOf(files: readonly Memory[]) {
+  const review = (f: Memory) => f.stale || f.unused;
   return {
     brief: files.find((f) => f.scope.kind === "project" && f.path === "brief.md"),
+    review: files.filter((f) => f.path.startsWith("memory/") && review(f)),
     entries: kindGroups.map((g) => ({
       ...g,
-      files: files.filter((f) => f.path.startsWith(`memory/${g.kind}/`)),
+      files: files.filter((f) => f.path.startsWith(`memory/${g.kind}/`) && !review(f)),
     })),
     knowledge: files.filter((f) => f.path.startsWith("knowledge/")),
     proposals: files.filter(
@@ -199,7 +202,8 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
 
 /**
  * The side panel's Memory view (0044) for a Project, or for a thread's repository. It shows the
- * Project's brief, then entries grouped Preferences, Conventions, Decisions, and Gotchas, then
+ * Project's brief, then entries to review, then the rest grouped Preferences, Conventions,
+ * Decisions, and Gotchas, then
  * knowledge, from the You, Repo, and Project scopes; then the proposals waiting for the user. Each
  * opens to its text, to edit, promote, or delete it, or for a proposal to save or discard it.
  * Show it only on a plxd with `memory`, and key it by host and folder. `start` and `footer` are
@@ -243,6 +247,7 @@ export function MemoryPanel({
   const empty =
     sections &&
     !sections.brief &&
+    sections.review.length === 0 &&
     sections.entries.every((g) => g.files.length === 0) &&
     sections.knowledge.length === 0 &&
     sections.proposals.length === 0;
@@ -259,6 +264,15 @@ export function MemoryPanel({
             ) : (
               <BriefStart project={project} calls={calls} onChanged={reload} />
             )}
+          </section>
+        )}
+        {sections && sections.review.length > 0 && (
+          <section aria-label="Review">
+            <h3 className={sectionHeading}>Review</h3>
+            <p className="px-2.5 pb-1 text-[11.5px] text-faint-foreground">
+              Stale, or unused by agents for 60 days. Edit or delete what no longer holds.
+            </p>
+            <ul>{sections.review.map((f) => row(f))}</ul>
           </section>
         )}
         {sections?.entries.map(
@@ -345,7 +359,8 @@ function BriefStart({
 }
 
 /**
- * One memory file: its title, scope, source, and stale mark, opening to its text and actions.
+ * One memory file: its title, stale mark, last use for an entry, scope, and source, opening to its
+ * text and actions.
  * The brief only edits. A proposal saves or discards. Promote and Save ask
  * before replacing a file already at their target. Entries and proposals show as plain text, so an
  * agent's link can't hide where it goes.
@@ -372,7 +387,8 @@ function MemoryRow({
 }) {
   const brief = file.path === "brief.md";
   const proposal = file.path.startsWith("proposals/");
-  const plain = proposal || file.path.startsWith("memory/");
+  const entry = file.path.startsWith("memory/");
+  const plain = proposal || entry;
   const [open, setOpen] = useState(false);
   const [content, setContent] = useState<string>();
   const [editing, setEditing] = useState(false);
@@ -421,6 +437,11 @@ function MemoryRow({
         {file.stale && (
           <span className={`${badge} text-warning`} title="It names a file that's gone">
             Stale
+          </span>
+        )}
+        {entry && (
+          <span className={badge} title="When an agent last read it">
+            {file.lastUsed ? `Last used ${file.lastUsed}` : "Not used yet"}
           </span>
         )}
         <span className={badge}>{scopeLabels[file.scope.kind]}</span>

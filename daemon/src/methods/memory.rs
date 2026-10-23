@@ -100,10 +100,24 @@ pub(super) async fn read(
     ];
     let path = checked(&params.path, &all, "read")?.to_owned();
     let dir = scope_dir(context, params.scope).await?;
+    let agent = params.from.is_some();
     run_blocking(move || {
-        let (bytes, metadata) = context::read_file(&dir, &path).map_err(io_error(&path))?;
-        let text = String::from_utf8(bytes)
+        let (bytes, mut metadata) = context::read_file(&dir, &path).map_err(io_error(&path))?;
+        let mut text = String::from_utf8(bytes)
             .map_err(|_| ErrorObject::internal_error(format!("{path} is not valid UTF-8 text")))?;
+        // An agent's read of an entry is a use of it (PLX-943), stamped at most once a day. A
+        // failed stamp still reads.
+        // ponytail: a write to the entry between this read and the stamp is lost; serialize
+        // writes per folder if that race ever shows up.
+        if agent
+            && place(&path) == Place::Entry
+            && let Some(stamped) = memory::used(&text, &today())
+        {
+            match context::write_file(&dir, &path, stamped.as_bytes()) {
+                Ok(written) => (text, metadata) = (stamped, written),
+                Err(error) => tracing::warn!(path, %error, "could not record a memory entry's use"),
+            }
+        }
         if has_header(&path) {
             let (header, body) = memory::parse(&text);
             let file = memory_file(&path, &metadata, header);
@@ -522,6 +536,7 @@ fn header_of(dir: &Path, path: &str) -> memory::Header {
 }
 
 fn memory_file(path: &str, metadata: &std::fs::Metadata, header: memory::Header) -> MemoryFile {
+    let unused = place(path) == Place::Entry && memory::unused(&header, today_date());
     MemoryFile {
         path: path.to_owned(),
         size: metadata.len(),
@@ -539,6 +554,8 @@ fn memory_file(path: &str, metadata: &std::fs::Metadata, header: memory::Header)
         }),
         replaces: header.replaces,
         stale: header.stale.is_some(),
+        unused,
+        last_used: header.last_used,
     }
 }
 
@@ -555,10 +572,13 @@ fn check_title(title: &str) -> Result<String, ErrorObject> {
 
 /// Today's date in UTC, as an entry's header gives it.
 fn today() -> String {
+    today_date().to_string()
+}
+
+fn today_date() -> jiff::civil::Date {
     jiff::Timestamp::now()
         .to_zoned(jiff::tz::TimeZone::UTC)
         .date()
-        .to_string()
 }
 
 fn corrupt(id: impl std::fmt::Display) -> ErrorObject {

@@ -32,6 +32,16 @@ fn entry(scope: MemoryScope, path: &str, title: &str, content: &str) -> MemoryWr
     }
 }
 
+/// The body of `path` at `scope`, read as the user.
+async fn content(client: &mut Conn, scope: MemoryScope, path: String) -> String {
+    let read = MemoryReadParams {
+        scope,
+        path,
+        from: None,
+    };
+    client.call::<MemoryRead>(read).await.unwrap().content
+}
+
 async fn listed(client: &mut Conn, scope: MemoryScope, path: &str) -> MemoryFile {
     let files = client
         .call::<MemoryList>(MemoryListParams { scope })
@@ -115,11 +125,7 @@ async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_mi
         |event| matches!(&event.event, ParallaxEvent::ContextChanged { file } if file.path == path),
     )
     .await;
-    let history = client
-        .call::<MemoryRead>(MemoryReadParams { scope, path })
-        .await
-        .unwrap()
-        .content;
+    let history = content(&mut client, scope, path).await;
     let lines: Vec<&str> = history.lines().collect();
     assert_eq!(
         lines[..3],

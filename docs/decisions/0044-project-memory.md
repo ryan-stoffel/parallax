@@ -40,16 +40,17 @@ A thread starts from zero. Each Project has a context folder (0005), where the c
 
 ### Who writes
 
-- **Children propose, the coordinator curates.** A child has `memory_read` and `memory_propose`. A proposal waits until the coordinator's next wake-up, where it dedupes, checks it against existing entries, and writes with `memory_write` or drops it. This replaces last-writer-wins for memory.
+- **Children propose, the coordinator curates.** A child has `memory_read` and `memory_propose`. A proposal waits until the coordinator's next wake-up, where it dedupes, checks it against existing entries, and writes with `memory_write` or drops it. This replaces last-writer-wins for memory. Amended 2026-10-23 (PLX-943): when the user says "remember X" in the coordinator chat, the coordinator writes it at once with `memory_write` and confirms in one line. Children still propose.
 - **Children reach memory only through the tools.** Unlike 0005, plxd gives a child neither the folder's path nor an allowed directory for it. A child in Bypass that finds the folder under plxd's data folder anyway isn't stopped, as 0043 says of pushes.
 - **Plain threads** get `memory_read` and `memory_propose` for their repo's scope through 0041's host-wide MCP, but no index in their first message, which stays the user's own (0034). A plain thread's proposals go to the user in the Memory tab. A coordinator curates only its own children's proposals, at any scope.
 - **The user** edits and deletes any entry directly.
 - **Corrections reach running children.** Changing or deleting an entry sends each running child of the affected Projects a queued message (PLX-370) naming the change.
 - **Stale entries.** After each landing ([0045](0045-integration-branch.md)), plxd checks the paths entries name in backticks against the integration branch, and marks an entry naming a missing one for review.
+- **Unused entries.** Amended 2026-10-23 (PLX-943): an agent's `memory_read` of an entry stamps a `Last used:` line in its header with the day, at most once a day. The user's reads don't count. An entry whose last use, or else its date, is 60 or more days old is reported `unused`. A rewrite drops the line, so the clock restarts from the new date.
 
 ### The Memory tab
 
-- The Brief, then entries grouped as Preferences, Conventions, Decisions, and Gotchas, then Knowledge. Each shows its scope and source, and can be edited, promoted, or deleted.
+- The Brief, then entries grouped as Preferences, Conventions, Decisions, and Gotchas, then Knowledge. Each shows its scope and source, and can be edited, promoted, or deleted. Amended 2026-10-23 (PLX-943): a Review section after the Brief holds the entries that are stale or unused, out of their kind's group, and each entry shows when an agent last used it.
 - A box takes a change in plain words ("we moved off Jest, use Vitest"). It goes to the coordinator, whose rewrite comes back as a proposal the user saves or discards.
 - The inbox's Learned lists what changed since the user last looked.
 
