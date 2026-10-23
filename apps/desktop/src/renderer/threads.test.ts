@@ -1,9 +1,11 @@
-import { expect, test } from "vite-plus/test";
+import { expect, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/threads.json";
 import type {
   AgentRun,
   EventsEventParams,
+  ProjectIcon,
+  Repo,
   ThreadStartResult,
   ParallaxEvent,
 } from "../protocol/generated/protocol";
@@ -11,13 +13,18 @@ import {
   asksOf,
   emptyThreads,
   groupThreads,
+  idleThreads,
   waitingOf,
   noRepo,
   projectRuns,
+  setRepoIcons,
+  sharedRepoIcons,
   threadProjects,
   threadsReducer,
   type ThreadsState,
+  type ThreadsView,
 } from "./threads";
+import type { Host } from "./hosts";
 
 const messages = samples as { id?: number; method?: string; params?: unknown; result?: unknown }[];
 const events = messages
@@ -272,4 +279,54 @@ test("a run is monitoring a watched pull request and waiting on work that wakes 
   expect(waitingOf(state, "a")).toBe("waiting");
   state = apply(state, { kind: "agent.background", runId: "a", tasks: [] });
   expect(waitingOf(state, "a")).toBeUndefined();
+});
+
+// A computer's view listing `repos`, keeping repo icons and images up to `iconImageBytes`.
+const repoView = (repos: Repo[], iconImageBytes?: number): ThreadsView => ({
+  ...idleThreads,
+  state: { ...emptyThreads, repos },
+  capabilities: { threadAttention: {} },
+  iconImageBytes,
+  updateRepo: vi.fn(async () => undefined),
+});
+const repoNamed = (id: string, name: string, extra: Partial<Repo> = {}): Repo => ({
+  id,
+  name,
+  path: `/src/${name}`,
+  createdAt: "2026-10-23T12:00:00Z",
+  ...extra,
+});
+
+test("a repository's icon is shared by name with its copies on other computers, the first host's winning", () => {
+  const logo: ProjectIcon = { name: "layers", image: { mediaType: "image/webp", data: "AAAA" } };
+  const hosts = [{ id: "macbook" }, { id: "mini" }] as Host[];
+  const views = {
+    macbook: repoView([repoNamed("a", "parallax", { icon: logo })]),
+    mini: repoView([
+      repoNamed("b", "parallax", { icon: { name: "rocket" } }),
+      repoNamed("c", "notes", { icon: { name: "book-open" } }),
+      repoNamed("d", "chats", { space: true, icon: { name: "bot" } }),
+    ]),
+  };
+  expect(Object.fromEntries(sharedRepoIcons(hosts, views))).toEqual({
+    parallax: logo,
+    notes: { name: "book-open" },
+  });
+});
+
+test("picking an icon sets it on each computer's repository of that name, an image only where it fits", () => {
+  const roomy = repoView([repoNamed("a", "parallax"), repoNamed("b", "notes")], 65536);
+  const noImages = repoView([repoNamed("c", "parallax")]);
+  const old = { ...repoView([repoNamed("d", "parallax")], 65536), capabilities: {} };
+  const views = [roomy, noImages, old];
+
+  setRepoIcons(views, "parallax", { name: "rocket" });
+  expect(roomy.updateRepo).toHaveBeenCalledExactlyOnceWith("a", { name: "rocket" });
+  expect(noImages.updateRepo).toHaveBeenCalledExactlyOnceWith("c", { name: "rocket" });
+  expect(old.updateRepo).not.toHaveBeenCalled();
+
+  const logo: ProjectIcon = { name: "layers", image: { mediaType: "image/webp", data: "AAAA" } };
+  setRepoIcons(views, "parallax", logo);
+  expect(roomy.updateRepo).toHaveBeenLastCalledWith("a", logo);
+  expect(noImages.updateRepo).toHaveBeenCalledTimes(1);
 });

@@ -50,6 +50,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import {
+  createContext,
+  useContext,
   useEffect,
   useId,
   useImperativeHandle,
@@ -128,6 +130,8 @@ import {
   groupOf,
   waitingOf,
   projectRuns,
+  repoIconOf,
+  setRepoIcons,
   threadProjects,
   type ForkChoice,
   type ProjectChange,
@@ -313,11 +317,20 @@ export function ProjectIcon({
   return <Icon aria-hidden className={`${color} ${className}`} />;
 }
 
-/** A repo's color: its icon's, or else one picked from its name, as its initials' tile shows. */
-function repoColor(repo: Repo) {
+/**
+ * Every computer's repository icons by name (`sharedRepoIcons`), which App provides, so a repo
+ * with no icon of its own draws its namesake's.
+ */
+export const SharedRepoIcons = createContext<ReadonlyMap<string, ProjectIconValue>>(new Map());
+
+/**
+ * A repo's color: `icon`'s, its own or its namesake's (`repoIconOf`), or else one picked from its
+ * name, as its initials' tile shows.
+ */
+function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
   const palette = iconColors.slice(1);
-  if (repo.icon?.color) return `var(--project-${repo.icon.color})`;
-  if (repo.icon) return "var(--accent)";
+  if (icon?.color) return `var(--project-${icon.color})`;
+  if (icon) return "var(--accent)";
   let hash = 0;
   for (let i = 0; i < repo.name.length; i++) hash = (hash * 31 + repo.name.charCodeAt(i)) | 0;
   return `var(--project-${palette[Math.abs(hash) % palette.length]!.key})`;
@@ -335,19 +348,21 @@ export function FolderMark({ folder, big }: { folder: PinFolder; big?: boolean }
 }
 
 /**
- * A repo's icon: the one the user chose, in a Project's shape (0033), or else its initials on a
- * tile in a color picked from its name. No Repo is a dashed square. `big` draws it at 18px, as a
- * thread row's.
+ * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
+ * another computer, or else its initials on a tile in a color picked from its name. No Repo is a
+ * dashed square. `big` draws it at 18px, as a thread row's.
  */
 export function RepoIcon({ repo, big }: { repo?: Repo; big?: boolean }) {
+  const shared = useContext(SharedRepoIcons);
   const size = big ? "size-[18px]" : "size-4";
   if (!repo || repo.scratch)
     return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
-  if (repo.icon) return <ProjectIcon icon={repo.icon} className={`${size} shrink-0`} />;
+  const icon = repoIconOf(repo, shared);
+  if (icon) return <ProjectIcon icon={icon} className={`${size} shrink-0`} />;
   return (
     <span
       aria-hidden
-      style={{ color: repoColor(repo) }}
+      style={{ color: repoColor(repo, undefined) }}
       className={`grid ${size} shrink-0 place-items-center rounded-[4px] bg-current/15 ${big ? "text-[9.5px]" : "text-[8.5px]"} leading-none font-bold`}
     >
       {/* Drawn from the attribute, so the tile adds nothing to the text around it. */}
@@ -542,6 +557,7 @@ export function ThreadList({
   // Threads marked unread (pins.ts) read as Done or Failed again until opened.
   const unread = pinUnread.use();
   const pinFolders = pinLayout.use().folders;
+  const sharedIcons = useContext(SharedRepoIcons);
 
   // A chosen repo that's gone, deleted or not loaded yet, shows everything, keeping the choice
   // for its return. A scope from when areas and Spaces showed (0073) shows everything too.
@@ -556,7 +572,7 @@ export function ThreadList({
   const scope: Scope =
     parsed.kind === "area" || (parsed.kind === "repo" && !scopeRepo) ? "all" : chosen;
   const scopeLabel = scopeRepo
-    ? { name: scopeRepo.name, color: repoColor(scopeRepo) }
+    ? { name: scopeRepo.name, color: repoColor(scopeRepo, repoIconOf(scopeRepo, sharedIcons)) }
     : scope === "none"
       ? { name: "No repo", color: "var(--faint-foreground)" }
       : undefined;
@@ -1319,7 +1335,7 @@ export function ThreadList({
       tint: chosen?.color
         ? `var(--project-${chosen.color})`
         : repo
-          ? repoColor(repo)
+          ? repoColor(repo, repoIconOf(repo, sharedIcons))
           : "var(--faint-foreground)",
       attention: rowAttention(i),
       selected: i.key === openKey,
@@ -2149,6 +2165,7 @@ function ScopeMenu({
   const picker = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<{ view: ThreadsView; repo: Repo }>();
+  const sharedIcons = useContext(SharedRepoIcons);
   const q = query.trim().toLowerCase();
   // Spaces (0069) don't list: pinned folders keep chats instead (0075).
   const repos = hosts
@@ -2340,8 +2357,15 @@ function ScopeMenu({
       <IconPicker
         ref={picker}
         id={pickerId}
-        value={editing?.repo.icon}
-        onPick={(icon) => editing && void editing.view.updateRepo(editing.repo.id, icon)}
+        value={editing && repoIconOf(editing.repo, sharedIcons)}
+        onPick={(icon) =>
+          editing &&
+          setRepoIcons(
+            hosts.map((h) => h.view),
+            editing.repo.name,
+            icon,
+          )
+        }
         maxImageBytes={editing?.view.iconImageBytes}
       />
     </>
