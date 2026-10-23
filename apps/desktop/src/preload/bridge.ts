@@ -150,6 +150,13 @@ export interface ParallaxBridge {
   setThemeSource(preference: ThemePreference): void;
   /** Zooms this window's page, 1 being 100%: Settings > Appearance's text size. */
   setZoom(factor: number): void;
+  /** Tells main the page's zoom changed, so Windows' window buttons match the top row (frame.ts). */
+  zoomed(): void;
+  /**
+   * Calls `listener` with whether this window is full screen, now and on every change. Returns the
+   * unsubscribe function.
+   */
+  onFullScreen(listener: (full: boolean) => void): () => void;
   /**
    * This window's background, Settings > Appearance's Window: opaque, clear (see-through where
    * `transparent`, and from the next launch), or blurred where `canBlur`. Not on the web.

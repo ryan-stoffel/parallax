@@ -10,6 +10,7 @@ import {
   nativeTheme,
   net,
   protocol,
+  screen,
   session,
   shell,
   webContents,
@@ -85,6 +86,7 @@ import { startStorage } from "./storage";
 import { startTelemetry } from "./telemetry";
 import { isNightly, startUpdater } from "./updater";
 import { broadcast } from "./windows";
+import { readWindowState, writeWindowState } from "./windowState";
 
 // The app menu's About, Hide, and Quit items show the app's name, which says a nightly build is
 // one, as its bundle's name does (scripts/ci/package-app). userData is `desktop` in plxd's
@@ -93,6 +95,22 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", appDataDir(homedir(), app.getPath("userData")));
 }
 app.setName(isNightly(app.getVersion()) ? "Parallax (Nightly)" : "Parallax");
+// Windows ties the taskbar button and notifications to the Start menu shortcut the installer made by
+// its AppUserModelID, the appId (electron-builder.yml). Without it, toasts aren't the app's.
+if (process.platform === "win32" && app.isPackaged) app.setAppUserModelId("dev.parallax.desktop");
+// One copy per userData off macOS, where the OS already brings a running app forward: a second
+// launch, from the Start menu or a shortcut, shows the first one's window and quits. Only a
+// packaged app, so `pnpm dev` still runs beside an installed Parallax, whose userData it shares.
+const secondCopy =
+  app.isPackaged && process.platform !== "darwin" && !app.requestSingleInstanceLock();
+if (secondCopy) app.quit();
+app.on("second-instance", () => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+});
 // Before `ready`, when Chromium picks the keychain safeStorage uses.
 const store = passwordStore(
   process.platform,
@@ -123,8 +141,15 @@ const clearAtLaunch = (() => {
   }
 })();
 
+// Where the window was when it last closed, which the next one opens at (windowState.ts).
+const windowStateFile = path.join(app.getPath("userData"), "window.json");
+
 function createWindow() {
   const dark = nativeTheme.shouldUseDarkColors;
+  const saved = readWindowState(
+    windowStateFile,
+    screen.getAllDisplays().map((display) => display.workArea),
+  );
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -155,7 +180,41 @@ function createWindow() {
       ],
     },
   });
-  win.once("ready-to-show", () => win.show());
+  if (saved) {
+    const { width, height } = saved.bounds;
+    win.setBounds(saved.bounds);
+    // On Windows, a window without a title bar comes out a little larger than the bounds it's
+    // given, so a saved window would grow each launch: it's given them again, less the difference.
+    const got = win.getBounds();
+    if (process.platform === "win32" && (got.width !== width || got.height !== height))
+      win.setBounds({
+        ...saved.bounds,
+        width: 2 * width - got.width,
+        height: 2 * height - got.height,
+      });
+  }
+  // Whether the window was last maximized, and its bounds when it last wasn't, which
+  // getNormalBounds misreports on Windows. Neither changes while it's minimized or full screen,
+  // where Windows reports it unmaximized.
+  let bounds = win.getBounds();
+  let maximized = saved?.maximized ?? false;
+  const track = () => {
+    if (win.isMinimized() || win.isFullScreen()) return;
+    maximized = win.isMaximized();
+    if (!maximized) bounds = win.getBounds();
+  };
+  win.on("resize", track);
+  win.on("move", track);
+  win.on("maximize", track);
+  win.on("unmaximize", track);
+  win.once("ready-to-show", () => {
+    if (saved?.maximized) win.maximize();
+    win.show();
+  });
+  win.on("close", () => writeWindowState(windowStateFile, { bounds, maximized }));
+  // Full screen hides Windows' window buttons, so the top row needs no room for them (main.tsx).
+  win.on("enter-full-screen", () => win.webContents.send("parallax:fullScreen", true));
+  win.on("leave-full-screen", () => win.webContents.send("parallax:fullScreen", false));
 
   void win.loadURL(devServerUrl ?? rendererUrl);
   return win;
@@ -673,14 +732,27 @@ ipcMain.on("parallax:relaunch", () => {
 // Fires for the setting above, and for an OS theme change while it's "system".
 nativeTheme.on("updated", () => {
   const dark = nativeTheme.shouldUseDarkColors;
-  const overlay = titleBarOverlay(process.platform, dark);
   for (const win of BrowserWindow.getAllWindows()) {
     if (!seeThrough.has(win)) win.setBackgroundColor(windowBackground(dark));
+    const overlay = titleBarOverlay(process.platform, dark, win.webContents.getZoomFactor());
     if (overlay) win.setTitleBarOverlay(overlay);
   }
 });
+ipcMain.handle(
+  "parallax:fullScreen",
+  (event) => BrowserWindow.fromWebContents(event.sender)?.isFullScreen() ?? false,
+);
+// The page's zoom changed (main.tsx): Windows' window buttons grow or shrink with the top row. The
+// page names its zoom, since main's copy can lag behind it.
+ipcMain.on("parallax:zoomed", (event, zoom: unknown) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || typeof zoom !== "number" || !(zoom > 0 && zoom < 10)) return;
+  const overlay = titleBarOverlay(process.platform, nativeTheme.shouldUseDarkColors, zoom);
+  if (overlay) win.setTitleBarOverlay(overlay);
+});
 
 void app.whenReady().then(async () => {
+  if (secondCopy) return;
   if (!devServerUrl) await serveAppScheme();
   protocol.handle("plx-render", (request) => renderPage(request.url));
   protocol.handle("plx-file", (request) => streamFile(request.url, request.headers.get("range")));

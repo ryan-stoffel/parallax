@@ -553,6 +553,8 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     version: async () => (host.state.status === "connected" ? host.state.plxd : "web"),
     setThemeSource: () => {},
     setZoom: (factor) => void (document.documentElement.style.zoom = String(factor)),
+    zoomed: () => {},
+    onFullScreen: none,
     pickFolder: async () => null,
     listFolders: async () => ({ error: NOT_HERE }),
     createRepo: async () => ({ error: NOT_HERE }),
