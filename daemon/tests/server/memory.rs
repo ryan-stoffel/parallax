@@ -59,7 +59,11 @@ async fn read(
 ) -> Result<MemoryReadResult, ErrorObject> {
     let path = path.to_owned();
     client
-        .call::<MemoryRead>(MemoryReadParams { scope, path })
+        .call::<MemoryRead>(MemoryReadParams {
+            scope,
+            path,
+            from: None,
+        })
         .await
 }
 
@@ -196,6 +200,59 @@ async fn the_app_writes_reads_lists_and_deletes_an_entry_as_the_user() {
     delete(&mut client, scope, path).await;
     let gone = read(&mut client, scope, path).await.unwrap_err();
     assert_eq!(kind(&gone), ErrorKind::ContextNotFound);
+    host.server.stop().await;
+}
+
+/// PLX-943: the user's read isn't a use; an agent's stamps the day, and the list reports it.
+#[tokio::test]
+async fn an_agents_read_records_an_entrys_last_use_and_the_users_doesnt() {
+    let host = Host::start(temp_dir(), fake(vec![init("s-1"), end_turn("Done.")]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let scope = MemoryScope::Project { id: project.id };
+    let path = "memory/decision/vitest.md";
+    let body = "We moved off Jest.\n";
+    let written = client
+        .call::<MemoryWrite>(write(scope, path, body, Some("Use Vitest")))
+        .await
+        .unwrap()
+        .file;
+
+    // An hour back, so a stamp that bumped the time would show.
+    let file = host
+        .dir
+        .path()
+        .join("context")
+        .join(project.id.to_string())
+        .join(path);
+    let hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+    let opened = std::fs::File::options().write(true).open(&file).unwrap();
+    opened.set_modified(hour_ago).unwrap();
+    drop(opened);
+
+    let entry = read(&mut client, scope, path).await.unwrap();
+    assert_eq!(entry.file.last_used, None);
+    assert!(!entry.file.unused);
+    let used = client
+        .call::<MemoryRead>(MemoryReadParams {
+            scope,
+            path: path.to_owned(),
+            from: Some(RunId::generate()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(used.content, body);
+    assert_eq!(used.file.last_used, written.date);
+    let listed = files(&mut client, scope).await;
+    let listed = listed.iter().find(|file| file.path == path).unwrap();
+    assert_eq!(listed.last_used, written.date);
+    // The stamp isn't an edit: the modified time stays where it was.
+    assert_eq!(used.file.modified_at, entry.file.modified_at);
+    assert_eq!(listed.modified_at, entry.file.modified_at);
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().modified().unwrap(),
+        hour_ago
+    );
     host.server.stop().await;
 }
 

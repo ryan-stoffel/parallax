@@ -263,6 +263,26 @@ pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs:
 /// A [`symlink_error`] if `name` or a folder on its way is already a symlink, or another
 /// [`io::Error`] from creating a folder or creating or renaming the temporary file.
 pub(crate) fn write_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<std::fs::Metadata> {
+    write(dir, name, content, None)
+}
+
+/// [`write_file`], keeping the file's modified time at `modified`, for a change that isn't an
+/// edit, such as a memory entry's `Last used:` stamp (PLX-943).
+pub(crate) fn write_file_keeping(
+    dir: &Path,
+    name: &str,
+    content: &[u8],
+    modified: std::time::SystemTime,
+) -> io::Result<std::fs::Metadata> {
+    write(dir, name, content, Some(modified))
+}
+
+fn write(
+    dir: &Path,
+    name: &str,
+    content: &[u8],
+    modified: Option<std::time::SystemTime>,
+) -> io::Result<std::fs::Metadata> {
     let parent = parent_dir(dir, name, true)?;
     let target = parent.join(file_name(name));
     if let Ok(metadata) = std::fs::symlink_metadata(&target)
@@ -274,6 +294,10 @@ pub(crate) fn write_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<s
         .prefix(".parallax-context-")
         .tempfile_in(&parent)?;
     temp.write_all(content)?;
+    // Set before the rename, which keeps it, so the file never shows a new time.
+    if let Some(modified) = modified {
+        temp.as_file().set_modified(modified)?;
+    }
     temp.as_file().sync_all()?;
     let file = temp.persist(&target).map_err(|error| error.error)?;
     file.metadata()

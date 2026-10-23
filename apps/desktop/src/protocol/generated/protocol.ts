@@ -8059,6 +8059,16 @@ export type MemoryFile = {
 	 * (0044, PLX-407). Rewriting the entry clears it.
 	 */
 	stale?: boolean,
+	/**
+	 * The day an agent's `memory_read` last returned the entry, as its file says, such as
+	 * `2026-10-20` (PLX-943). Absent until one does; rewriting the entry clears it.
+	 */
+	lastUsed?: string,
+	/**
+	 * An entry no agent has read for 60 days or more: its `last_used`, or its `date` when it has
+	 * none, is that old (PLX-943). The Memory tab lists it, and a `stale` one, for review.
+	 */
+	unused?: boolean,
 };
 
 /**
@@ -8087,6 +8097,11 @@ export type MemoryReadParams = {
 	 * The file's path.
 	 */
 	path: string,
+	/**
+	 * The run reading, for a thread's Parallax tools. Its read of an entry records today as the
+	 * entry's `last_used`. Absent: the user reads, which records nothing.
+	 */
+	from?: RunId,
 };
 
 /**

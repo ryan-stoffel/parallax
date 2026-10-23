@@ -243,8 +243,13 @@ impl Memory {
                     return Ok(pretty(&json!({"files": files})));
                 };
                 check_text("path", &path, MAX_PATH_BYTES)?;
+                // Naming the caller records the entry's use (PLX-943).
                 let read = plxd
-                    .call::<MemoryRead>(MemoryReadParams { scope, path })
+                    .call::<MemoryRead>(MemoryReadParams {
+                        scope,
+                        path,
+                        from: Some(caller),
+                    })
                     .await?;
                 Ok(pretty(&read))
             }
