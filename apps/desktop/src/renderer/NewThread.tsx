@@ -178,13 +178,17 @@ export function NewThread({
   // ponytail: read as the screen opens, since plxd has no event for a changed default. One
   // changed elsewhere shows once New Thread opens again. Until then plxd refuses an effort or
   // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
-  const [backend, setBackend] = useState(() => workerBackends.get(hostId));
+  // The backend shown, with the host it was read for: another host's stands in until this one's is.
+  const [read, setRead] = useState(() =>
+    workerBackends.has(hostId) ? { hostId, backend: workerBackends.get(hostId) } : undefined,
+  );
+  const backend = read?.backend;
   useEffect(() => {
     if (!runOptions) return;
     let live = true;
     void defaultBackend(hostId, "worker").then((b) => {
       workerBackends.set(hostId, b);
-      if (live) setBackend(b);
+      if (live) setRead({ hostId, backend: b });
     });
     return () => {
       live = false;
@@ -208,7 +212,7 @@ export function NewThread({
   // stays until the new host's is read, so the box's choices don't blink out.
   useEffect(() => {
     failed.current = undefined;
-    if (workerBackends.has(hostId)) setBackend(workerBackends.get(hostId));
+    if (workerBackends.has(hostId)) setRead({ hostId, backend: workerBackends.get(hostId) });
     setChoices(undefined);
   }, [hostId]);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
@@ -448,7 +452,7 @@ export function NewThread({
     else onGroupChange(repo.id);
   };
 
-  const hold = starting !== undefined || (runOptions && !workerBackends.has(hostId));
+  const hold = starting !== undefined || (runOptions && read?.hostId !== hostId);
 
   // While starting, laid out as AgentChat is, so opening the thread doesn't move anything. The
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.

@@ -778,6 +778,26 @@ test("picking another computer leaves the composer as it was, with no state in b
   expect([...seen]).toEqual([before]);
 });
 
+test("a send right after picking a computer not read yet starts the thread there", async () => {
+  capabilities = { runOptions: {} };
+  window.parallax.hosts = async () => [{ id: "ssh-studio", name: "studio", destination: "studio" }];
+  answers["accounts/defaults/get"] = () => ({ result: {} });
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Fix it"),
+    },
+  });
+  await renderApp();
+  await choose("Runs on", "studioSSH · studio");
+  await send("Fix it");
+  expect(
+    request.mock.calls.filter(
+      ([host, method]) => host === "ssh-studio" && method === "thread/start",
+    ),
+  ).toHaveLength(1);
+});
+
 test("Picking another computer in Runs on keeps the draft and starts the thread there, in its repository of the same name", async () => {
   window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
   const mini: Repo = { ...parallax, id: "r-mini-parallax", path: "/Users/me/parallax" };
