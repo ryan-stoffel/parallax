@@ -2612,6 +2612,9 @@ function majorityLook(prs: PullRequests) {
   return lookOf(best);
 }
 
+/** Space between a draft's outlined row and its neighbors, so the outline doesn't touch them. */
+const draftGap = "my-1 first:mt-0 last:mb-0";
+
 /** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
 function DraftStatus() {
   return (
@@ -2624,7 +2627,8 @@ function DraftStatus() {
 
 /**
  * An unsent New Thread prompt's row (PLX-788): its repo and a Draft status, then its first line,
- * outlined in the warning color. Opening it reopens New Thread with it, which takes it off the list.
+ * outlined in the warning color and spaced off its neighbors (PLX-932). Opening it reopens New
+ * Thread with it, which takes it off the list.
  */
 function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: () => void }) {
   const attached = draft.images.length + draft.files.length + draft.threads.length;
@@ -2632,7 +2636,7 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
     draft.text.trim().split("\n")[0] ||
     `${attached} ${attached === 1 ? "attachment" : "attachments"}`;
   return (
-    <li data-kind="draft">
+    <li data-kind="draft" className={draftGap}>
       <button
         type="button"
         onClick={onOpen}
@@ -2885,7 +2889,8 @@ function ThreadRow({
   );
   // A rename's input can't sit in a button, so the row is a plain box while it's open.
   const Main = renaming ? "div" : "button";
-  // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887).
+  // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887), and
+  // spaces it off its neighbors. An open thread holds its own draft, so neither shows while it's open.
   const rowLook = picked
     ? "bg-accent/14 ring-1 ring-accent/38 ring-inset"
     : selected
@@ -2895,7 +2900,7 @@ function ThreadRow({
     <li
       data-kind="thread"
       data-flip={rowKey}
-      className={`group/row relative rounded-lg transition-colors duration-100 ${rowLook} ${flash ? "row-flash" : ""}`}
+      className={`group/row relative rounded-lg transition-colors duration-100 ${rowLook} ${drafted ? draftGap : ""} ${flash ? "row-flash" : ""}`}
       onMouseEnter={(e) => onRest(e.currentTarget)}
       onMouseLeave={onLeave}
     >
