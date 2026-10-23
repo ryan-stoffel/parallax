@@ -9,6 +9,7 @@ import { useState, type ReactNode } from "react";
 
 import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";
 import { runAttention, type Attention } from "./attention";
+import { WorkingMark } from "./AttentionMark";
 import { questionOf, type InboxView } from "./Inbox";
 import { locale } from "./locale";
 import { notify } from "./notifications";
@@ -264,7 +265,7 @@ function LiveRow({
       <ChildButton
         icon={
           !waiting ? (
-            <LoaderCircle className="spin-live text-accent" />
+            <WorkingMark />
           ) : failed ? (
             <CircleAlert className="text-danger" />
           ) : (

@@ -2015,11 +2015,3 @@ browser-action-list::part(badge) {
     transform: scale(0.97);
   }
 }
-
-/* The Project tab's working child (ProjectHome.tsx) spins, slower than a loading spinner. */
-.spin-live {
-  animation: spin 1.6s linear infinite;
-}
-:root.reduce-motion .spin-live {
-  animation: none;
-}
