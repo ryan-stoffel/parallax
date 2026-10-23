@@ -2697,9 +2697,10 @@ test("a Project opens its side panel on the Project tab: who works and waits in 
   expect(projectTab()!.getAttribute("aria-current")).toBe("true");
   expect(projectTab()!.textContent).toBe("Project2");
   expect(home().querySelector("h2")!.textContent).toBe("ember");
-  expect(home().querySelector("header p")!.textContent).toBe(
-    "1 agent working, 2 need you. 2 done this week.",
-  );
+  expect(home().querySelector("header p")!.textContent).toBe("4 open threads · 2 done this week");
+  expect(
+    [...home().querySelectorAll('[aria-label="Open threads"] li')].map((c) => c.textContent),
+  ).toEqual(["1working", "2need you", "1to review"]);
   expect(nowTitles()).toEqual(["Fix the login bug", "Write the docs", "Cut the release"]);
   // The log has each finished child once, bright until what it reported is read.
   expect(logTitles()).toEqual(["Add the tests", "Bump the version"]);

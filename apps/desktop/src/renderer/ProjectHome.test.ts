@@ -1,20 +1,19 @@
 import { expect, test } from "vite-plus/test";
 
-import { dayLabel, plainTitle, standing } from "./ProjectHome";
+import { dayLabel, openLine, plainTitle } from "./ProjectHome";
 
 const now = Date.parse("2026-10-22T15:00:00");
 const row = (group: "waiting" | "working" | "ready" | "resolved", daysAgo = 0) =>
   ({ group, run: { updatedAt: new Date(now - daysAgo * 86_400_000).toISOString() } }) as never;
 
-test("the head says who works and waits, else All quiet, then what finished this week", () => {
-  expect(standing([], now)).toBe("All quiet.");
-  expect(standing([row("resolved", 2), row("ready"), row("resolved", 9)], now)).toBe(
-    "All quiet. 2 done this week.",
+test("the head counts open threads, then what finished this week", () => {
+  expect(openLine([], now)).toBe("No open threads");
+  expect(openLine([row("resolved", 2), row("ready"), row("resolved", 9)], now)).toBe(
+    "1 open thread · 2 done this week",
   );
-  expect(standing([row("working"), row("working"), row("waiting")], now)).toBe(
-    "2 agents working, 1 needs you.",
+  expect(openLine([row("working"), row("waiting"), row("resolved", 9)], now)).toBe(
+    "2 open threads",
   );
-  expect(standing([row("working"), row("ready")], now)).toBe("1 agent working. 1 done this week.");
 });
 
 test("a log day is Today, Yesterday, or its date", () => {

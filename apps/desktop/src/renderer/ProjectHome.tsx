@@ -38,10 +38,11 @@ const dayMs = 24 * 60 * 60 * 1000;
 
 /**
  * A Project's home in the side panel, read like a log in grouped lists. Its head is the Project's
- * icon, name, and a sentence on where it stands. Under it, Now: the children working or waiting on
- * the user, each with what it last said, a question taking its answer in place. Then the log: each
- * finished child once, newest first, under its day, with its diff and the time it finished. A
- * finish is bright until it's opened, which marks what it reported read (0043).
+ * icon, name, and how many of its threads are open, then a chip for each open state. Under it, Now:
+ * the children working or waiting on the user, each with what it last said, a question taking its
+ * answer in place. Then the log: each finished child once, newest first, under its day, with its
+ * diff and the time it finished. A finish is bright until it's opened, which marks what it reported
+ * read (0043).
  */
 export function ProjectHome({
   project,
@@ -85,9 +86,10 @@ export function ProjectHome({
           <h2 className="truncate font-brand text-[19px] leading-tight font-semibold tracking-tight">
             {project.name}
           </h2>
-          <p className="mt-0.5 text-[12.5px] text-muted-foreground">{standing(rows)}</p>
+          <p className="mt-0.5 text-[12.5px] text-muted-foreground">{openLine(rows)}</p>
         </div>
       </header>
+      <OpenCounts rows={rows} />
       {live.length > 0 && (
         <section aria-label="Now">
           <h3 className={sectionHeading}>Now</h3>
@@ -118,23 +120,52 @@ const sectionHeading =
 const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
 
 /**
- * Where the Project stands, in a sentence or two: who works and who waits on the user, else All
- * quiet; then how many finished in the last week.
+ * How many of a Project's threads are open, working, waiting, or done but unread, and how many
+ * finished in the last week.
  */
-export function standing(rows: readonly Pick<Row, "group" | "run">[], now = Date.now()): string {
-  const working = rows.filter((r) => r.group === "working").length;
-  const waiting = rows.filter((r) => r.group === "waiting").length;
+export function openLine(rows: readonly Pick<Row, "group" | "run">[], now = Date.now()): string {
+  const open = rows.filter((r) => r.group !== "resolved").length;
   const done = rows.filter(
     (r) =>
       (r.group === "ready" || r.group === "resolved") &&
       now - Date.parse(r.run.updatedAt) < 7 * dayMs,
   ).length;
-  const live = [
-    working > 0 && `${working} ${working === 1 ? "agent" : "agents"} working`,
-    waiting > 0 && `${waiting} ${waiting === 1 ? "needs" : "need"} you`,
-  ].filter(Boolean);
-  const first = live.length ? `${live.join(", ")}.` : "All quiet.";
-  return done > 0 ? `${first} ${done} done this week.` : first;
+  const first = open > 0 ? `${open} open ${open === 1 ? "thread" : "threads"}` : "No open threads";
+  return done > 0 ? `${first} · ${done} done this week` : first;
+}
+
+/**
+ * The open threads by state, as a row of chips under the head, each with its rows' icon: working,
+ * needing the user, and done but unread. Only states with threads show.
+ */
+function OpenCounts({ rows }: { rows: readonly Row[] }) {
+  const count = (g: Group) => rows.filter((r) => r.group === g).length;
+  const chips = [
+    { label: "working", n: count("working"), icon: <WorkingMark /> },
+    {
+      label: count("waiting") === 1 ? "needs you" : "need you",
+      n: count("waiting"),
+      icon: <MessageCircleQuestion className="text-warning" />,
+    },
+    { label: "to review", n: count("ready"), icon: <CircleCheck className="text-added" /> },
+  ].filter((c) => c.n > 0);
+  if (chips.length === 0) return null;
+  return (
+    <ul aria-label="Open threads" className="mt-3 flex flex-wrap gap-1.5 px-1">
+      {chips.map((c) => (
+        <li
+          key={c.label}
+          className="flex h-6 items-center gap-1.5 rounded-full border border-border bg-surface pr-2.5 pl-2 text-[12px] text-muted-foreground [&_svg]:size-3.5"
+        >
+          <span aria-hidden className="grid">
+            {c.icon}
+          </span>
+          <span className="font-medium text-foreground tabular-nums">{c.n}</span>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** Finished rows under their day, Today, Yesterday, or the date, newest first. */
