@@ -17,6 +17,11 @@ const tailLength = 12;
  */
 const baseOrder = ["origin/develop", "develop", "origin/main", "main"];
 
+// Each repository's refs, or why they couldn't be listed, by host and repository, kept while the
+// app runs, so a picker that mounts or changes computer reads its ref at once. Only a picker's own
+// answer picks a default base, since a kept list may be stale.
+const known = new Map<string, RepoRef[] | string>();
+
 /** A ref's quiet note in the menu. */
 const hint = (r: RepoRef) =>
   r.current ? "current" : r.worktree ? "worktree" : r.default ? "default" : undefined;
@@ -24,8 +29,9 @@ const hint = (r: RepoRef) =>
 /**
  * New Thread's ref picker, for a plxd with `repoRefs`. For a new worktree its button reads
  * `From <ref>`, and picks the first of `baseOrder` the repository has, else it reads the checkout's
- * branch. For the current checkout it reads the picked ref, or `Select ref`. Its menu searches the
- * repository's branches from `repo/refs`, asked again each time it opens.
+ * branch. For the current checkout it reads the picked ref, or `Select ref`. While another
+ * repository's refs load, it keeps the label it had. Its menu searches the repository's branches
+ * from `repo/refs`, asked again each time it opens.
  */
 export function RefMenu({
   hostId,
@@ -43,15 +49,17 @@ export function RefMenu({
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
   const searchBox = useRef<HTMLInputElement>(null);
-  // Each repository's refs, or why they couldn't be listed, so a late answer lands on its own.
-  const [all, setAll] = useState<Record<string, RepoRef[] | string>>({});
   const [query, setQuery] = useState("");
-  const refs = all[repo];
+  const key = `${hostId}/${repo}`;
+  const refs = known.get(key);
+  // The host and repository whose refs this picker has asked for and put in `known`.
+  const [fresh, setFresh] = useState<string>();
 
   const load = useCallback(async () => {
     const answer = await window.parallax.request(hostId, "repo/refs", { repo });
     const refs = "error" in answer ? describeError(answer.error) : answer.result.refs;
-    setAll((prev) => ({ ...prev, [repo]: refs }));
+    known.set(`${hostId}/${repo}`, refs);
+    setFresh(`${hostId}/${repo}`);
   }, [hostId, repo]);
   // On mount too, for a new worktree's default base.
   useEffect(() => void load(), [load]);
@@ -62,11 +70,16 @@ export function RefMenu({
   const shown = matches.slice(0, maxRows);
   const base = checkout ? undefined : baseOrder.find((name) => list.some((r) => r.name === name));
   useEffect(() => {
-    if (value === undefined && base) onChange(base);
-  }, [value, base]);
-  const label = checkout
-    ? (value ?? "Select ref")
-    : `From ${value ?? base ?? list.find((r) => r.current)?.name ?? "HEAD"}`;
+    if (value === undefined && base && fresh === key) onChange(base);
+  }, [value, base, fresh, key]);
+  const [last, setLast] = useState<string>();
+  const label =
+    refs === undefined && value === undefined && last !== undefined
+      ? last
+      : checkout
+        ? (value ?? "Select ref")
+        : `From ${value ?? base ?? list.find((r) => r.current)?.name ?? "HEAD"}`;
+  if (label !== last) setLast(label);
   // Where the label's visible end starts: its last word, after a `-`, `/`, or space, up to
   // `tailLength` characters of it.
   const tail = Math.max(

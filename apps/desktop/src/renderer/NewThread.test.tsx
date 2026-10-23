@@ -258,7 +258,15 @@ test("Send shows the prompt at once while plxd starts the thread, and a failure 
   expect(bubble()).toBe("Tidy the README");
   expect(document.querySelector('[role="log"] .bg-selected')!.className).not.toContain("opacity");
   expect(musing()).toBe("Working");
-  expect(composer().getAttribute("aria-placeholder")).toBe("Starting thread…");
+  // The box looks as it did, and a send meanwhile stays in it.
+  expect(composer().getAttribute("aria-placeholder")).toBe(
+    "Build a feature, fix a bug, paste an image, use /skills, @files or threads",
+  );
+  expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
+  await send("And the CHANGELOG");
+  expect(composer().textContent).toBe("And the CHANGELOG");
+  expect(calls("thread/start")).toHaveLength(1);
+  act(() => void composer().editor!.commands.clearContent());
 
   await act(async () => answer({ error: { code: -32000, message: "plxd is busy" } }));
   await settle();
@@ -742,6 +750,32 @@ test("a thread starts on a branch named from its prompt, and plxd names it with 
       naming: { backend: "codex", model: "gpt-6-luna", effort: "low" },
     },
   ]);
+});
+
+test("picking another computer leaves the composer as it was, with no state in between", async () => {
+  capabilities = { runOptions: {}, repoRefs: {} };
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  answers["accounts/defaults/get"] = () => ({ result: {} });
+  answers["repo/refs"] = () => ({ result: { refs: [{ name: "origin/develop", remote: true }] } });
+  await renderApp();
+  // The box's hint, model, and base, as each DOM change leaves them.
+  const look = () =>
+    [
+      composer().getAttribute("aria-placeholder"),
+      control("Model: Claude Opus 5.5") && "model",
+      button("From origin/develop") && "base",
+    ].join(" | ");
+  const before = look();
+  const seen = new Set<string>();
+  const observer = new MutationObserver(() => seen.add(look()));
+  observer.observe(document.body, { subtree: true, childList: true, attributes: true });
+  await choose("Runs on", "mac miniSSH · mini");
+  observer.disconnect();
+  expect(control("Runs on: mac mini, New worktree")).not.toBeNull();
+  expect(before).toBe(
+    "Build a feature, fix a bug, paste an image, use /skills, @files or threads | model | base",
+  );
+  expect([...seen]).toEqual([before]);
 });
 
 test("Picking another computer in Runs on keeps the draft and starts the thread there, in its repository of the same name", async () => {

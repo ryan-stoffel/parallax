@@ -1,19 +1,41 @@
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
 
+// Every host's last known state, shared by all views, so a view that changes host reads the new
+// host's state on its first render rather than showing it as connecting until IPC answers. Kept
+// only while something listens, since a state nobody hears about can go stale.
+const states = new Map<string, ConnectionState>();
+const listeners = new Set<() => void>();
+let stopListening: (() => void) | undefined;
+const put = (hostId: string, state: ConnectionState) => {
+  states.set(hostId, state);
+  for (const listener of listeners) listener();
+};
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  stopListening ??= window.parallax.onConnectionState(put);
+  return () => {
+    listeners.delete(listener);
+    if (listeners.size > 0) return;
+    stopListening?.();
+    stopListening = undefined;
+    states.clear();
+  };
+}
+
 /** A host's connection state, kept current. Undefined until the first answer for this host. */
 export function useConnection(hostId: string): ConnectionState | undefined {
-  // Tagged with its host, so switching hosts never shows the last host's state.
-  const [known, setKnown] = useState<{ hostId: string; state: ConnectionState }>();
+  const state = useSyncExternalStore(subscribe, () => states.get(hostId));
   useEffect(() => {
-    const set = (state: ConnectionState) => setKnown({ hostId, state });
-    const stop = window.parallax.onConnectionState((id, next) => id === hostId && set(next));
-    // It rejects only for a host just removed, whose views are going away.
-    window.parallax.connectionState(hostId).then(set, () => {});
-    return stop;
+    // Asked on every mount too, since the state may have changed while nothing listened. It
+    // rejects only for a host just removed, whose views are going away.
+    window.parallax.connectionState(hostId).then(
+      (next) => put(hostId, next),
+      () => {},
+    );
   }, [hostId]);
-  return known?.hostId === hostId ? known.state : undefined;
+  return state;
 }
 
 /** Why a host's chat is off while it isn't connected, or undefined once it is. */

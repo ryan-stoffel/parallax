@@ -1,4 +1,4 @@
-import { ChevronDown, Folder, House, LoaderCircle, MessagesSquare, Plus } from "lucide-react";
+import { ChevronDown, Folder, House, MessagesSquare, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
@@ -6,7 +6,7 @@ import { CloneDialog } from "./AddDialog";
 import { parseProgress } from "./CloneProgress";
 import { TranscriptView } from "./AgentChat";
 import type { CloneAsk } from "./clone";
-import { Composer, tabItem } from "./Composer";
+import { Composer } from "./Composer";
 import { useConnection } from "./ConnectionStatus";
 import { drafts, isEmpty, type ComposerContents } from "./drafts";
 import { describeError } from "./errors";
@@ -142,6 +142,9 @@ export async function defaultBackend(hostId: string, role: Role): Promise<string
 const noAccounts =
   "No account can run this thread yet. Sign in to Claude Code, or add an API key, then try again.";
 
+// Each host's worker backend once read, so New Thread shows its choices on its first render.
+const workerBackends = new Map<string, string | undefined>();
+
 /**
  * The New Thread screen: a centered composer, and under it where the thread runs. When the host
  * has no usable default account for threads, it picks the only one there is (and says so), or asks
@@ -175,11 +178,14 @@ export function NewThread({
   // ponytail: read as the screen opens, since plxd has no event for a changed default. One
   // changed elsewhere shows once New Thread opens again. Until then plxd refuses an effort or
   // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
-  const [backend, setBackend] = useState<string>();
+  const [backend, setBackend] = useState(() => workerBackends.get(hostId));
   useEffect(() => {
     if (!runOptions) return;
     let live = true;
-    void defaultBackend(hostId, "worker").then((b) => live && setBackend(b));
+    void defaultBackend(hostId, "worker").then((b) => {
+      workerBackends.set(hostId, b);
+      if (live) setBackend(b);
+    });
     return () => {
       live = false;
     };
@@ -198,10 +204,11 @@ export function NewThread({
   }>();
   const failed = useRef<Attempt>(undefined);
   // The screen stays mounted when another computer is picked, so the Composer keeps its draft.
-  // What belongs to the old host goes: its failed start, account chooser, and default backend.
+  // What belongs to the old host goes: its failed start and account chooser. Its default backend
+  // stays until the new host's is read, so the box's choices don't blink out.
   useEffect(() => {
     failed.current = undefined;
-    setBackend(undefined);
+    if (workerBackends.has(hostId)) setBackend(workerBackends.get(hostId));
     setChoices(undefined);
   }, [hostId]);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
@@ -614,21 +621,21 @@ export function NewThread({
           newThread
           initial={draft}
           contents={contents}
+          // The box looks the same while a start is under way, so a send meanwhile stays in it.
           onSend={(prompt, options, images, threads) =>
-            send(prompt, options, images, threads, false)
+            starting ? Promise.resolve("") : send(prompt, options, images, threads, false)
           }
           onSendInBackground={(prompt, options, images, threads) =>
-            send(prompt, options, images, threads, true)
+            starting ? Promise.resolve("") : send(prompt, options, images, threads, true)
           }
           attach={attachThreads(connection, threadLinks)}
-          // Hidden while starting, as the opened thread's composer has none.
-          backend={runOptions && starting === undefined ? backend : undefined}
+          backend={runOptions ? backend : undefined}
           hostId={hostId}
           connected={connection?.status === "connected"}
           contextAndFast={
             connection?.status === "connected" && "contextAndFast" in connection.capabilities
           }
-          disabledReason={starting !== undefined ? "Starting thread…" : disabledReason}
+          disabledReason={disabledReason}
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
           menus={
@@ -643,45 +650,43 @@ export function NewThread({
               ? "host"
               : undefined
           }
-          // A repoless thread has no tab once it opens: nothing to pick a worktree of. No Repo picks
-          // only its computer here, and a Space nothing, since its entry is on this computer alone.
+          // No Repo picks only its computer here, and a Space nothing, since its entry is on this
+          // computer alone. While a start is under way it stays as it was, but inert, so the thread
+          // can't move. `contents` keeps the tab's own layout.
           tab={
-            group.space ? undefined : starting !== undefined ? (
-              repoless(group) ? undefined : (
-                <span className={tabItem}>
-                  <LoaderCircle aria-hidden className="animate-spin" />
-                  Starting…
-                </span>
-              )
-            ) : repoless(group) ? (
-              <RunTargetMenu
-                hosts={hosts}
-                hostId={shownHostId}
-                busy={!!moving}
-                onHostChange={pickHost}
-              />
-            ) : (
-              <>
-                <RunTargetMenu
-                  hosts={hosts}
-                  hostId={shownHostId}
-                  busy={!!moving}
-                  onHostChange={pickHost}
-                  workspace={checkout ? "checkout" : "worktree"}
-                  onWorkspaceChange={setWorkspace}
-                  checkoutUnavailable={checkoutUnavailable}
-                  missing={missing && { repo: group.name, hostIds: missing }}
-                />
-                {refsAvailable && (
-                  <RefMenu
-                    hostId={hostId}
-                    repo={group.id}
-                    checkout={checkout}
-                    value={gitRef}
-                    onChange={(ref) => setPickedRef({ groupId: group.id, checkout, ref })}
+            group.space ? undefined : (
+              <div inert={starting !== undefined} className="contents">
+                {repoless(group) ? (
+                  <RunTargetMenu
+                    hosts={hosts}
+                    hostId={shownHostId}
+                    busy={!!moving}
+                    onHostChange={pickHost}
                   />
+                ) : (
+                  <>
+                    <RunTargetMenu
+                      hosts={hosts}
+                      hostId={shownHostId}
+                      busy={!!moving}
+                      onHostChange={pickHost}
+                      workspace={checkout ? "checkout" : "worktree"}
+                      onWorkspaceChange={setWorkspace}
+                      checkoutUnavailable={checkoutUnavailable}
+                      missing={missing && { repo: group.name, hostIds: missing }}
+                    />
+                    {refsAvailable && (
+                      <RefMenu
+                        hostId={hostId}
+                        repo={group.id}
+                        checkout={checkout}
+                        value={gitRef}
+                        onChange={(ref) => setPickedRef({ groupId: group.id, checkout, ref })}
+                      />
+                    )}
+                  </>
                 )}
-              </>
+              </div>
             )
           }
           footer={
