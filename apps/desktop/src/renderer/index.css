@@ -655,8 +655,9 @@ body {
   padding-left: 80px;
 }
 /* Room for Windows' window buttons, where a row ends at the window's right
-   edge: whatever the title bar area leaves free on the right. */
-[data-platform="win32"] .window-controls-inset {
+   edge: whatever the title bar area leaves free on the right. Full screen
+   hides the buttons, though the title bar area still reports them. */
+[data-platform="win32"]:not([data-full-screen]) .window-controls-inset {
   padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
 }
 

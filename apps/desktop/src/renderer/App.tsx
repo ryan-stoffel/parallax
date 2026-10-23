@@ -828,6 +828,17 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
+  // The mouse's back and forward buttons, as Back and Forward.
+  useEffect(() => {
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button !== 3 && e.button !== 4) return;
+      e.preventDefault();
+      if (document.querySelector("dialog[open]") || settings) return;
+      step(e.button === 3 ? -1 : 1);
+    };
+    window.addEventListener("mouseup", onMouseUp);
+    return () => window.removeEventListener("mouseup", onMouseUp);
+  });
 
   // Shown in the main pane's top row only while the sidebar is hidden.
   const showSidebar = !sidebarOpen && (

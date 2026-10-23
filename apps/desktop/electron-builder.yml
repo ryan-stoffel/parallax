@@ -63,8 +63,17 @@ mac:
 dmg:
   sign: true
   writeUpdateInfo: false
+# The exe's company, Apps & features' publisher, and the copyright are package.json's `author`,
+# without which the exe keeps Electron's own "GitHub, Inc.".
 win:
   target: nsis
+  # The full-bleed dark tile with rounded corners (design/icon/ico/make-ico.py), for the exe, the
+  # installer, and the shortcuts. scripts/ci/package-app swaps in the nightly's.
+  icon: ../../design/icon/ico/Parallax.ico
+# Apps & features lists the app by name, as other apps do, and shows the version in its own column.
+nsis:
+  uninstallDisplayName: ${productName}
+  include: installer.nsh
 # The static type2 runtime: the legacy one (toolset 0.0.0) dlopens libfuse.so.2, which Arch,
 # Omarchy, and newer Fedora and Ubuntu don't install, so the AppImage didn't start there (PLX-808).
 toolsets:

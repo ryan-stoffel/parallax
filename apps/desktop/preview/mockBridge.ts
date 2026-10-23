@@ -1768,6 +1768,8 @@ export const mockBridge: ParallaxBridge = {
   setZoom: (factor) => {
     document.documentElement.style.zoom = String(factor);
   },
+  zoomed: noop,
+  onFullScreen: () => () => {},
   pickFolder: () => delay(`${HOME}/Developer/personal/new-repo`),
   listFolders: (input) => delay(listing(input)),
   createRepo: (name) => delay({ path: `${HOME}/.parallax/projects/${name}` }, 400),

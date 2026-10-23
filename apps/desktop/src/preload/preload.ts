@@ -76,6 +76,8 @@ const bridge: ParallaxBridge = {
   version: () => ipcRenderer.invoke("parallax:version") as Promise<string>,
   setThemeSource: (preference) => ipcRenderer.send("parallax:theme", preference),
   setZoom: (factor) => webFrame.setZoomFactor(factor),
+  zoomed: () => ipcRenderer.send("parallax:zoomed", webFrame.getZoomFactor()),
+  onFullScreen: (listener) => follow("parallax:fullScreen", listener),
   setWindowLook: (look) => ipcRenderer.send("parallax:windowLook", look),
   canBlur: blurSupported(process.platform, process.getSystemVersion()),
   transparent: process.argv.includes("--parallax-transparent"),

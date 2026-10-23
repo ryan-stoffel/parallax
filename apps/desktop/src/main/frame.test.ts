@@ -20,6 +20,11 @@ test("the overlay's color is the window's background, fully transparent", () => 
     expect(titleBarOverlay("win32", dark)?.color).toBe(`${windowBackground(dark)}00`);
 });
 
+test("the overlay is as tall as the top row at the page's zoom", () => {
+  expect(titleBarOverlay("win32", true, 1.5)?.height).toBe(78);
+  expect(titleBarOverlay("win32", true, 0.9)?.height).toBe(47);
+});
+
 test("only Windows gets an overlay", () => {
   for (const platform of ["darwin", "linux"]) {
     expect(titleBarOverlay(platform, true)).toBeUndefined();
