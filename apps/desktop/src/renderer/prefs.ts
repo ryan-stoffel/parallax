@@ -1,4 +1,5 @@
 import type { AgentEffort, AgentPermission } from "../protocol/generated/protocol";
+import { localId } from "./hosts";
 import { merged, stored } from "./stored";
 
 /**
@@ -7,6 +8,8 @@ import { merged, stored } from "./stored";
  * can't honor, such as a model its catalog lacks, falls back as an unset one does.
  */
 export type NewThreadPrefs = {
+  /** The computer a new thread starts on, by host id. One that's gone or offline: the open one. */
+  host: string;
   /** The default model, by instance and id. Unset: the backend's first model. */
   model?: { provider: string; id: string };
   effort: AgentEffort;
@@ -25,6 +28,7 @@ export type NewThreadPrefs = {
 };
 
 export const newThreadDefaults: NewThreadPrefs = {
+  host: localId,
   effort: "high",
   fast: false,
   permission: "edit",
