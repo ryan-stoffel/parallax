@@ -600,8 +600,11 @@ body {
 /* Cursors, the same on every OS. The body leaves Chromium's `cursor: auto`, which shows the I-beam
    over fields and over text that can be selected (select-text) and the arrow over the rest. What
    can be clicked shows the hand, unless it's disabled. In the base layer, so cursor-* utilities
-   still win. */
+   still win. Rendered Markdown and code can always be selected, wherever they show. */
 @layer base {
+  :where(.markdown, .code-lines) {
+    user-select: text;
+  }
   :where(
     a[href],
     button,

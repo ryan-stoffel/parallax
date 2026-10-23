@@ -450,7 +450,7 @@ function MemoryRow({
             <>
               {content !== undefined &&
                 (plain ? (
-                  <p className="font-mono text-[12px] whitespace-pre-wrap">{content}</p>
+                  <p className="font-mono text-[12px] whitespace-pre-wrap select-text">{content}</p>
                 ) : (
                   <div className="context-doc text-[13px]">
                     <MarkdownText text={content} />
