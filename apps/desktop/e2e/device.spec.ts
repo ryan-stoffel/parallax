@@ -32,8 +32,8 @@ test("an agent opening a device shows the Device view", async () => {
     "aria-current",
     "true",
   );
-  // The fake device isn't on this host, so the view lists what is, or opens a device of the same
-  // name if the host has one. A cold Mac runner's first simctl listing can take a while.
+  // The fake device isn't on this host, so the view lists what is, or, with one simulator
+  // running, opens it. A cold Mac runner's first simctl listing can take a while.
   // Or, on a host that can run none, what it's missing: a runner whose simctl fails gets Get Xcode
   // (PLX-919).
   const missing = panel.getByText(/needs a Mac|Get Xcode|Get Android Studio/).first();
