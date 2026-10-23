@@ -816,7 +816,7 @@ export function AgentChat({
       </SubagentsContext>
     );
 
-  // The tabs over the composer, back to front, so the queue sits nearest the box.
+  // The tabs over the composer, in order along their line: the first shows in full.
   const running = isRunning(run?.status);
   const tabs: ComposerTab[] = [];
   if (strip) tabs.push(strip);
