@@ -228,7 +228,8 @@ impl Tools for Server {
             return self.computer.call(&self.binding, name, arguments).await;
         }
         if super::files::TOOLS.contains(&name) {
-            return super::files::call(&self.binding, name, arguments).await;
+            let child = self.project.is_some() && !self.coordinator;
+            return super::files::call(&self.binding, child, name, arguments).await;
         }
         if name.starts_with("html_") {
             return super::html::call(&self.binding, name, arguments).await;
@@ -434,10 +435,10 @@ fn definitions(project: bool) -> Value {
         let context = [
             tool(
                 "read_context",
-                "Read your Project's shared context: one file's content by path, or the list of files without a path.",
+                "Read your Project's shared context: one file's content by path, or the list of files without a path. It holds top-level files such as plan.md, memory/<preference|convention|decision|gotcha>/, knowledge/, proposals/, history/<thread>.md, and artifacts/<thread>/, the files children presented, which are listed but can't be read here.",
                 object(
                     json!({
-                        "path": {"type": "string", "description": "A file name such as plan.md. Omit it to list the files."},
+                        "path": {"type": "string", "description": "A path from the list, such as plan.md or knowledge/auth.md. Omit it to list the files."},
                     }),
                     &[],
                 ),
@@ -445,7 +446,7 @@ fn definitions(project: bool) -> Value {
             ),
             tool(
                 "write_context",
-                "Write a file in your Project's shared context, replacing it. Only .md, .markdown, and .txt names, with no folders.",
+                "Write a top-level file in your Project's shared context, such as plan.md, replacing it. Only .md, .markdown, and .txt names, and not brief.md. The folders are written another way: memory/, knowledge/, and proposals/ with the memory tools, and history/ and artifacts/ by Parallax.",
                 object(
                     json!({
                         "path": {"type": "string", "description": "A file name such as plan.md."},
@@ -757,6 +758,11 @@ async fn context_tool(
             return Ok(pretty(&json!({"files": files})));
         };
         check_text("path", &path, MAX_PATH_BYTES)?;
+        if path.starts_with("artifacts/") {
+            return Err(format!(
+                "{path} is an artifact, a file shown to the reader, which read_context can't read"
+            ));
+        }
         let read = plxd
             .call::<ContextRead>(ContextReadParams { project, path })
             .await?;

@@ -4,9 +4,16 @@
 //! Layout: [`crate::paths::DataDir::context_dir`] under the data folder for a Project or a repo
 //! entry, and [`you_dir`] for the user's own memory. A path is relative to that folder: one file
 //! name, or a file in one of 0044's [`FOLDERS`], `memory/<kind>/`, `knowledge/`, `history/`, and
-//! `proposals/` (a plain thread's memory proposals, waiting for the user). Every component is a
-//! normal, non-hidden name with no `..`, `\`, `:`, or leading `/`, and the file ends in `.md`,
-//! `.markdown`, or `.txt`. Nothing else nests, so the folders stay a fixed, shallow set.
+//! `proposals/` (a plain thread's memory proposals, waiting for the user), or a file of any type
+//! under `artifacts/<thread>/` (PLX-941), at its path in the child's folder, which plxd copies
+//! there from a child's `present_files`. Every component is a normal name with no `..`, `\`, `:`,
+//! or leading `/`, and none is hidden but an artifact's own folders, such as `.screenshots/`.
+//! Outside `artifacts/` the file ends in `.md`, `.markdown`, or `.txt`, and nothing else nests, so
+//! those folders stay a fixed, shallow set.
+//!
+//! Two caps hold: Markdown and text total at most [`MAX_PROJECT_BYTES`], and the bulk folders,
+//! `history/`, `artifacts/`, and `.versions/`, at most [`MAX_BULK_BYTES`] apart from that, the
+//! oldest artifacts pruned to make room ([`make_room`]).
 //!
 //! Three more defenses hold even when a path passes that check:
 //!
@@ -31,7 +38,7 @@ pub(crate) mod stale;
 pub(crate) mod watcher;
 
 use std::collections::HashMap;
-use std::io::{self, Read, Write as _};
+use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt as _;
 #[cfg(windows)]
@@ -65,8 +72,12 @@ fn symlink_error() -> io::Error {
 /// The largest a single shared context file may be: 1 MiB.
 pub(crate) const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
-/// The largest a project's shared context folder may total: 20 MiB.
+/// The largest a project's shared context folder may total: 20 MiB, apart from the bulk folders
+/// ([`is_bulk`]).
 pub(crate) const MAX_PROJECT_BYTES: u64 = 20 * MAX_FILE_BYTES;
+
+/// The largest a project's `history/`, `artifacts/`, and `.versions/` may total: 2 GiB.
+pub(crate) const MAX_BULK_BYTES: u64 = 2048 * MAX_FILE_BYTES;
 
 const ALLOWED_EXTENSIONS: [&str; 3] = ["md", "markdown", "txt"];
 
@@ -107,8 +118,9 @@ const FOLDERS: [&[&str]; 7] = [
 ];
 
 /// Rejects `path` unless it is one normal, non-hidden file name ending in `.md`, `.markdown`, or
-/// `.txt`, alone or under one of [`FOLDERS`], separated by `/`. This alone rejects `..`, a leading
-/// `/`, and any other folder, since each component must be a [`Component::Normal`] name.
+/// `.txt`, alone or under one of [`FOLDERS`], or a file of any type under `artifacts/<thread>/`,
+/// separated by `/`. This alone rejects `..`, a leading `/`, and any other folder, since each
+/// component must be a [`Component::Normal`] name.
 ///
 /// Returns the same string back, borrowed, so a caller can use it as the file name without
 /// re-deriving it from the path.
@@ -117,7 +129,8 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
         ErrorObject::invalid_params(
             "path must be a relative file name ending in .md, .markdown, or .txt, alone or under \
              memory/<preference|convention|decision|gotcha>/, knowledge/, history/, or \
-             proposals/, with no \"..\", no leading \"/\", and no hidden (dot) name",
+             proposals/, or any file under artifacts/<thread>/, with no \"..\", no leading \"/\", \
+             and no hidden (dot) name but an artifact's folders",
         )
     };
     // Control characters and line separators would let a file name break a line where plxd
@@ -130,7 +143,8 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
     let Some((name, folders)) = parts.split_last() else {
         return Err(invalid());
     };
-    if !folders.is_empty() && !FOLDERS.contains(&folders) {
+    let artifact = matches!(folders, ["artifacts", _, ..]);
+    if !folders.is_empty() && !artifact && !FOLDERS.contains(&folders) {
         return Err(invalid());
     }
     // `Component::Normal` only guarantees no separator survives; comparing back to the original
@@ -139,13 +153,16 @@ pub(crate) fn validate_relative_path(path: &str) -> Result<&str, ErrorObject> {
         let mut components = Path::new(part).components();
         matches!(components.next(), Some(Component::Normal(one)) if one.to_str() == Some(part))
             && components.next().is_none()
-            && !part.starts_with('.')
     };
-    if !parts.iter().all(|part| normal(part)) {
+    // An artifact keeps its folders from the child's folder, which may be hidden, such as
+    // `.screenshots/`. Its thread and file name may not be.
+    let may_hide = |index: usize| artifact && index >= 2 && index < folders.len();
+    let hidden = |(index, part): (usize, &&str)| part.starts_with('.') && !may_hide(index);
+    if !parts.iter().all(|part| normal(part)) || parts.iter().enumerate().any(hidden) {
         return Err(invalid());
     }
     let extension = Path::new(name).extension().and_then(|ext| ext.to_str());
-    if !extension.is_some_and(|ext| ALLOWED_EXTENSIONS.contains(&ext)) {
+    if !artifact && !extension.is_some_and(|ext| ALLOWED_EXTENSIONS.contains(&ext)) {
         return Err(invalid());
     }
     Ok(path)
@@ -218,14 +235,48 @@ fn file_name(name: &str) -> &str {
 /// a directory, so one can't be read as though it were content), or an `ELOOP` error (see
 /// [`is_symlink_error`]) if it or a folder on its way is a symlink.
 pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs::Metadata)> {
+    let (mut file, metadata) = open_file(dir, name)?;
+    let mut content = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
+    file.read_to_end(&mut content)?;
+    Ok((content, metadata))
+}
+
+/// Up to `length` bytes of `name` in `dir` from `offset`, empty past the end, and its metadata,
+/// for `context/readBytes`. Opens it as [`read_file`] does, with the same errors.
+pub(crate) fn read_slice(
+    dir: &Path,
+    name: &str,
+    offset: u64,
+    length: u64,
+) -> io::Result<(Vec<u8>, std::fs::Metadata)> {
+    use std::io::{Seek as _, SeekFrom};
+    let (mut file, metadata) = open_file(dir, name)?;
+    let mut content = Vec::new();
+    // Past the end is empty, however far: a seek to 2^63 or more fails.
+    if offset < metadata.len() {
+        file.seek(SeekFrom::Start(offset))?;
+        file.take(length).read_to_end(&mut content)?;
+    }
+    Ok((content, metadata))
+}
+
+/// Opens `name` in `dir`, refusing a symlink, a folder, or a FIFO or other special file, for
+/// [`read_file`], [`read_slice`], and `context/saveArtifact`'s read of a child's file.
+pub(crate) fn open_file(dir: &Path, name: &str) -> io::Result<(std::fs::File, std::fs::Metadata)> {
     let path = parent_dir(dir, name, false)?.join(file_name(name));
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
-    options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
+    // Non-blocking, so a FIFO planted in a child's folder opens and is refused below rather than
+    // hanging the open. It changes nothing for a regular file.
+    options.custom_flags(
+        (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK)
+            .bits()
+            .cast_signed(),
+    );
     #[cfg(windows)]
     options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
-    let mut file = match options.open(&path) {
+    let file = match options.open(&path) {
         Ok(file) => file,
         // Windows can't open a folder as a file, and says so as access denied.
         #[cfg(windows)]
@@ -245,9 +296,7 @@ pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs:
     if !metadata.is_file() {
         return Err(io::Error::from(io::ErrorKind::NotFound));
     }
-    let mut content = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    file.read_to_end(&mut content)?;
-    Ok((content, metadata))
+    Ok((file, metadata))
 }
 
 /// Writes `content` to `name` in `dir`, replacing it in full, and creates the folders it names.
@@ -263,7 +312,7 @@ pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs:
 /// A [`symlink_error`] if `name` or a folder on its way is already a symlink, or another
 /// [`io::Error`] from creating a folder or creating or renaming the temporary file.
 pub(crate) fn write_file(dir: &Path, name: &str, content: &[u8]) -> io::Result<std::fs::Metadata> {
-    write(dir, name, content, None)
+    write(dir, name, content, content.len() as u64, None)
 }
 
 /// [`write_file`], keeping the file's modified time at `modified`, for a change that isn't an
@@ -274,13 +323,28 @@ pub(crate) fn write_file_keeping(
     content: &[u8],
     modified: std::time::SystemTime,
 ) -> io::Result<std::fs::Metadata> {
-    write(dir, name, content, Some(modified))
+    write(dir, name, content, content.len() as u64, Some(modified))
 }
 
+/// [`write_file`] from a reader, for an artifact too large to hold in memory. Reads at most `max`
+/// bytes, and fails with [`io::ErrorKind::FileTooLarge`], leaving `name` as it was, when there
+/// are more, such as from a file that grew since its size was checked.
+pub(crate) fn copy_file(
+    dir: &Path,
+    name: &str,
+    source: impl Read,
+    max: u64,
+) -> io::Result<std::fs::Metadata> {
+    write(dir, name, source, max, None)
+}
+
+/// [`write_file`], [`write_file_keeping`], and [`copy_file`]'s work: at most `max` bytes of
+/// `source` into `name`, with its modified time set to `modified` when given.
 fn write(
     dir: &Path,
     name: &str,
-    content: &[u8],
+    source: impl Read,
+    max: u64,
     modified: Option<std::time::SystemTime>,
 ) -> io::Result<std::fs::Metadata> {
     let parent = parent_dir(dir, name, true)?;
@@ -293,7 +357,9 @@ fn write(
     let mut temp = tempfile::Builder::new()
         .prefix(".parallax-context-")
         .tempfile_in(&parent)?;
-    temp.write_all(content)?;
+    if io::copy(&mut source.take(max + 1), &mut temp)? > max {
+        return Err(io::Error::from(io::ErrorKind::FileTooLarge));
+    }
     // Set before the rename, which keeps it, so the file never shows a new time.
     if let Some(modified) = modified {
         temp.as_file().set_modified(modified)?;
@@ -303,7 +369,8 @@ fn write(
     file.metadata()
 }
 
-/// Lists the shared context files in `dir`, and in the [`FOLDERS`] under it, ordered by path.
+/// Lists the shared context files in `dir`, and in the [`FOLDERS`] and `artifacts/` under it,
+/// ordered by path.
 ///
 /// A hidden (dot) entry (including plxd's own temporary files while a write is in progress), a
 /// symlink, or a name with a disallowed extension or in another folder is skipped rather than
@@ -317,7 +384,7 @@ pub(crate) fn list_files(dir: &Path) -> io::Result<Vec<(String, std::fs::Metadat
 }
 
 /// Adds the files in `dir`'s folder `folder` (`""` for `dir` itself) to `files`, and walks those
-/// of its folders that lead to one of [`FOLDERS`].
+/// of its folders that lead to one of [`FOLDERS`] or are in `artifacts/`.
 fn walk(dir: &Path, folder: &str, files: &mut Vec<(String, std::fs::Metadata)>) -> io::Result<()> {
     let entries = match std::fs::read_dir(dir.join(folder)) {
         Ok(entries) => entries,
@@ -337,7 +404,8 @@ fn walk(dir: &Path, folder: &str, files: &mut Vec<(String, std::fs::Metadata)>) 
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
             let prefix: Vec<&str> = path.split('/').collect();
-            if FOLDERS.iter().any(|allowed| allowed.starts_with(&prefix)) {
+            let artifacts = matches!(prefix[..], ["artifacts", ..]);
+            if artifacts || FOLDERS.iter().any(|allowed| allowed.starts_with(&prefix)) {
                 walk(dir, &path, files)?;
             }
         } else if file_type.is_file() && validate_relative_path(&path).is_ok() {
@@ -361,16 +429,100 @@ pub(crate) fn delete_file(dir: &Path, name: &str) -> io::Result<()> {
     std::fs::remove_file(path)
 }
 
-/// The total size of a project's shared context, in bytes, apart from `except`'s own current
-/// size, if it exists. Used to check the per-project cap before a write, without counting the
-/// file the write is about to replace against itself. plxd's copies of a hand-written board
-/// ([`crate::board::LEGACY`]) don't count, so keeping them can't fail on the cap or crowd out
-/// other files.
+/// Whether `path` is in `history/` or `artifacts/`, which count toward [`MAX_BULK_BYTES`] rather
+/// than [`MAX_PROJECT_BYTES`]. `.versions/` does too, but is hidden, so it is never listed.
+pub(crate) fn is_bulk(path: &str) -> bool {
+    path.starts_with("history/") || path.starts_with("artifacts/")
+}
+
+/// The total size of a project's shared context outside the bulk folders ([`is_bulk`]), in bytes,
+/// apart from `except`'s own current size, if it exists. Used to check [`MAX_PROJECT_BYTES`]
+/// before a write, without counting the file the write is about to replace against itself.
+/// plxd's copies of a hand-written board ([`crate::board::LEGACY`]) don't count either, so
+/// keeping them can't fail on the cap or crowd out other files.
 pub(crate) fn other_files_total(dir: &Path, except: &str) -> io::Result<u64> {
     let mut total = 0_u64;
     for (name, metadata) in list_files(dir)? {
-        if name != except && !crate::board::LEGACY.contains(&name.as_str()) {
+        if name != except && !is_bulk(&name) && !crate::board::LEGACY.contains(&name.as_str()) {
             total += metadata.len();
+        }
+    }
+    Ok(total)
+}
+
+/// Makes room for `needed` more bytes in `dir`'s bulk folders under [`MAX_BULK_BYTES`], not
+/// counting `except`, which the write replaces, by deleting the oldest artifacts first. Returns
+/// the paths it deleted, or `None`, deleting nothing, when even deleting every artifact would not
+/// make room.
+pub(crate) fn make_room(dir: &Path, except: &str, needed: u64) -> io::Result<Option<Vec<String>>> {
+    make_room_under(dir, except, needed, MAX_BULK_BYTES)
+}
+
+/// [`make_room`] under `cap`, so a test needn't write gigabytes.
+fn make_room_under(
+    dir: &Path,
+    except: &str,
+    needed: u64,
+    cap: u64,
+) -> io::Result<Option<Vec<String>>> {
+    let mut total = needed + tree_size(&dir.join(".versions"))?;
+    let mut artifacts = Vec::new();
+    for (path, metadata) in list_files(dir)? {
+        if path == except || !is_bulk(&path) {
+            continue;
+        }
+        total += metadata.len();
+        if path.starts_with("artifacts/") {
+            artifacts.push((modified_at(&metadata), path, metadata.len()));
+        }
+    }
+    let prunable: u64 = artifacts.iter().map(|(_, _, size)| size).sum();
+    if total - prunable > cap {
+        return Ok(None);
+    }
+    artifacts.sort();
+    let mut pruned = Vec::new();
+    for (_, path, size) in artifacts {
+        if total <= cap {
+            break;
+        }
+        match delete_file(dir, &path) {
+            Ok(()) => pruned.push(path.clone()),
+            // Another save racing this one deleted it, and reports it: the space is free all the
+            // same.
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        // Drops its folders up to the thread's once they're empty; one still holding files stays.
+        let mut folder = path.as_str();
+        while let Some((parent, _)) = folder.rsplit_once('/')
+            && parent.contains('/')
+            && std::fs::remove_dir(dir.join(parent)).is_ok()
+        {
+            folder = parent;
+        }
+        total -= size;
+    }
+    Ok(Some(pruned))
+}
+
+/// The total size of the files under `path`, never following a symlink. 0 when it's missing or
+/// isn't a real folder.
+fn tree_size(path: &Path) -> io::Result<u64> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !is_link(&metadata) => {}
+        Ok(_) => return Ok(0),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error),
+    }
+    let mut total = 0;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            total += tree_size(&entry.path())?;
+        } else if kind.is_file() {
+            total += entry.metadata()?.len();
         }
     }
     Ok(total)
@@ -566,7 +718,8 @@ mod tests {
 
     use super::{
         ContextIndex, Existing, MAX_FILE_BYTES, delete_file, ensure_dir, list_files,
-        other_files_total, read_file, validate_relative_path, write_file,
+        make_room_under, other_files_total, read_file, read_slice, validate_relative_path,
+        write_file,
     };
     use crate::paths::DataDir;
 
@@ -584,6 +737,10 @@ mod tests {
             "knowledge/auth.md",
             "history/run.md",
             "proposals/idea.md",
+            "artifacts/0190a1b2/shot.png",
+            "artifacts/0190a1b2/report",
+            "artifacts/0190a1b2/out/deeper/shot.png",
+            "artifacts/0190a1b2/.screenshots/shot.png",
         ] {
             assert_eq!(validate_relative_path(good), Ok(good), "{good}");
         }
@@ -614,6 +771,14 @@ mod tests {
             "knowledge/a\u{1b}b.md",
             "knowledge/a\u{2028}b.md",
             "knowledge/a\u{85}b.md",
+            "artifacts/shot.png",
+            "artifacts/.run/shot.png",
+            "artifacts/run/.shot.png",
+            "artifacts/run/out/.shot.png",
+            "artifacts/../shot.png",
+            "artifacts/run/../shot.png",
+            "artifacts/run/./shot.png",
+            ".artifacts/run/shot.png",
         ] {
             let error = validate_relative_path(bad).unwrap_err();
             assert_eq!(error.code, INVALID_PARAMS, "{bad}");
@@ -771,13 +936,90 @@ mod tests {
     }
 
     #[test]
-    fn other_files_total_excludes_the_named_file() {
+    fn other_files_total_excludes_the_named_file_and_the_bulk_folders() {
         let dir = tempfile::tempdir().unwrap();
         write_file(dir.path(), "a.md", &[b'a'; 100]).unwrap();
         write_file(dir.path(), "b.md", &[b'b'; 50]).unwrap();
+        write_file(dir.path(), "history/run.md", &[b'h'; 1000]).unwrap();
+        write_file(dir.path(), "artifacts/run/shot.png", &[b'p'; 1000]).unwrap();
         assert_eq!(other_files_total(dir.path(), "a.md").unwrap(), 50);
         assert_eq!(other_files_total(dir.path(), "b.md").unwrap(), 100);
         assert_eq!(other_files_total(dir.path(), "c.md").unwrap(), 150);
+    }
+
+    #[test]
+    fn a_copy_past_its_limit_leaves_the_target_as_it_was() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "artifacts/run/shot.png", b"old").unwrap();
+        let error = super::copy_file(dir.path(), "artifacts/run/shot.png", &b"grown"[..], 4);
+        assert_eq!(error.unwrap_err().kind(), std::io::ErrorKind::FileTooLarge);
+        let (content, _) = read_file(dir.path(), "artifacts/run/shot.png").unwrap();
+        assert_eq!(content, b"old");
+    }
+
+    #[test]
+    fn artifacts_are_listed_and_read_in_slices() {
+        let dir = tempfile::tempdir().unwrap();
+        write_file(dir.path(), "artifacts/run/shot.png", b"0123456789").unwrap();
+        let listed: Vec<String> = list_files(dir.path())
+            .unwrap()
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(listed, ["artifacts/run/shot.png"]);
+        let (slice, metadata) = read_slice(dir.path(), "artifacts/run/shot.png", 2, 3).unwrap();
+        assert_eq!((slice.as_slice(), metadata.len()), (&b"234"[..], 10));
+        let (tail, _) = read_slice(dir.path(), "artifacts/run/shot.png", 8, 5).unwrap();
+        assert_eq!(tail, b"89");
+        let (past, _) = read_slice(dir.path(), "artifacts/run/shot.png", u64::MAX, 5).unwrap();
+        assert!(past.is_empty());
+    }
+
+    /// The bulk cap counts history, artifacts, and `.versions/`, and deletes the oldest artifacts
+    /// first, never history, Markdown elsewhere, or the file being replaced.
+    #[test]
+    fn making_room_deletes_the_oldest_artifacts_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        let at =
+            |seconds| std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds);
+        for (name, seconds) in [
+            ("artifacts/a/old.png", 1),
+            ("artifacts/b/mid.png", 2),
+            ("artifacts/a/new.png", 3),
+        ] {
+            let metadata = write_file(path, name, &[0; 100]).unwrap();
+            assert_eq!(metadata.len(), 100);
+            let file = std::fs::File::options()
+                .write(true)
+                .open(path.join(name))
+                .unwrap();
+            file.set_modified(at(seconds)).unwrap();
+        }
+        write_file(path, "history/run.md", &[0; 100]).unwrap();
+        write_file(path, "notes.md", &[0; 1000]).unwrap();
+        std::fs::create_dir_all(path.join(".versions/notes.md")).unwrap();
+        std::fs::write(path.join(".versions/notes.md/1"), [0; 100]).unwrap();
+
+        // 500 in the bulk folders: room for 100 more under 600 deletes nothing.
+        assert_eq!(make_room_under(path, "", 100, 600).unwrap(), Some(vec![]));
+        // Replacing old.png with 300 bytes leaves 400 counted: two artifacts go, oldest first.
+        let pruned = make_room_under(path, "artifacts/a/old.png", 300, 500).unwrap();
+        assert_eq!(
+            pruned,
+            Some(vec![
+                "artifacts/b/mid.png".to_owned(),
+                "artifacts/a/new.png".to_owned()
+            ])
+        );
+        assert!(
+            !path.join("artifacts/b").exists(),
+            "an empty thread folder goes too"
+        );
+        assert!(path.join("artifacts/a/old.png").exists());
+        // History and versions alone are over: nothing is deleted.
+        assert_eq!(make_room_under(path, "", 1, 200).unwrap(), None);
+        assert!(path.join("artifacts/a/old.png").exists());
     }
 
     #[test]

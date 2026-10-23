@@ -21,6 +21,7 @@ A thread starts from zero. Each Project has a context folder (0005), where the c
 | History | One summary per finished child: its task, how it ended, its diff stats, its last result | The coordinator searches it |
 
 - History is written by plxd when a child ends, from the run's row and last result, as 0025's summaries are. It costs no tokens.
+- Amended 2026-10-23 (PLX-941): history no longer counts toward the folder's 20 MiB cap. It and `artifacts/<thread>/`, a child's presented files, share their own cap of 2 GiB per Project, and the oldest artifacts are deleted to stay under it, with a Needs you inbox item. A history write that fails adds a `failed` inbox item rather than only a log line.
 - Only lasting facts are memory. What a child did today is history, not memory.
 
 ### Scopes

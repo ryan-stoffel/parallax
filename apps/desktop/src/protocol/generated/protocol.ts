@@ -176,6 +176,16 @@ export type ParallaxRequests = {
 	 */
 	"context/write": { params: ContextWriteParams, result: ContextWriteResult },
 	/**
+	 * `context/readBytes`: one slice of a shared context file of any type, such as an
+	 * artifact, base64-encoded. Behind `projectArtifacts`.
+	 */
+	"context/readBytes": { params: ContextReadBytesParams, result: ContextReadBytesResult },
+	/**
+	 * `context/saveArtifact`: copies a file from a Project child's working folder into the
+	 * Project's `artifacts/<run id>/`. Behind `projectArtifacts`.
+	 */
+	"context/saveArtifact": { params: ContextSaveArtifactParams, result: ContextWriteResult },
+	/**
 	 * `agent/start`: starts a worker in its own worktree of the project's repository, with
 	 * the worker sandbox (0013) and the shared context folder, idempotent on its
 	 * client-generated run id. Gated on the `agents` capability, like every `agent/*`
@@ -933,6 +943,8 @@ export const REQUEST_METHODS = [
 	"context/list",
 	"context/read",
 	"context/write",
+	"context/readBytes",
+	"context/saveArtifact",
 	"agent/start",
 	"agent/send",
 	"agent/cancel",
@@ -2813,6 +2825,63 @@ export type ContextWriteResult = {
 	 * The written file's metadata.
 	 */
 	file: ContextFile,
+};
+
+/**
+ * Params of `context/readBytes`, behind `projectArtifacts` (PLX-941): one slice of a shared
+ * context file of any type, such as an artifact, as `agent/file`'s working side reads one
+ * (`fileChunks`, 0074). Fails with `contextNotFound` if it does not exist.
+ */
+export type ContextReadBytesParams = {
+	/**
+	 * The file's project.
+	 */
+	project: ProjectId,
+	/**
+	 * The file's path.
+	 */
+	path: string,
+	/**
+	 * Where to start reading, in bytes. Absent means 0.
+	 */
+	offset?: number,
+	/**
+	 * How many bytes to read, at most `fileChunks`' `chunkBytes`, which is also the default.
+	 */
+	length?: number,
+};
+
+/**
+ * Result of `context/readBytes`.
+ */
+export type ContextReadBytesResult = {
+	/**
+	 * The file's metadata, with the whole file's size.
+	 */
+	file: ContextFile,
+	/**
+	 * The slice, base64-encoded: empty past the end.
+	 */
+	content: string,
+};
+
+/**
+ * Params of `context/saveArtifact`, behind `projectArtifacts` (PLX-941): copies a file from a
+ * Project child's working folder into its Project's `artifacts/<run id>/`, at the same path,
+ * replacing an earlier copy. When the Project's `history/`, `artifacts/`, and `.versions/` would
+ * pass 2 GiB, plxd deletes its oldest artifacts first and adds a `needsYou` inbox item. Fails
+ * with `invalidParams` for a run outside a Project or a path that isn't a file, and
+ * `contextTooLarge` when deleting artifacts can't make room.
+ */
+export type ContextSaveArtifactParams = {
+	/**
+	 * The child whose file it is.
+	 */
+	runId: RunId,
+	/**
+	 * The file's path in the child's working folder, as `agent/file` takes it.
+	 */
+	path: string,
 };
 
 /**

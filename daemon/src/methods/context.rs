@@ -1,4 +1,5 @@
-//! `context/list`, `context/read`, and `context/write` (0005, #155).
+//! `context/list`, `context/read`, and `context/write` (0005, #155), and behind
+//! `projectArtifacts`, `context/readBytes` and `context/saveArtifact` (PLX-941).
 //!
 //! File I/O runs on tokio's blocking pool (`spawn_blocking`), not the request's own task, since
 //! reading, writing, and listing a project's shared context folder are ordinary blocking
@@ -8,8 +9,9 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
-    ContextWriteResult, ErrorKind, ParallaxEvent, ProjectId,
+    ContextListParams, ContextListResult, ContextReadBytesParams, ContextReadBytesResult,
+    ContextReadParams, ContextReadResult, ContextSaveArtifactParams, ContextWriteParams,
+    ContextWriteResult, ErrorKind, InboxKind, ParallaxEvent, ProjectId, RunId,
 };
 use parallax_store::StoreError;
 use tracing::info;
@@ -45,6 +47,12 @@ pub(crate) async fn read(
     params: ContextReadParams,
 ) -> Result<ContextReadResult, ErrorObject> {
     let name = context::validate_relative_path(&params.path)?.to_owned();
+    // An artifact can be hundreds of MiB and is rarely text.
+    if name.starts_with("artifacts/") {
+        return Err(ErrorObject::invalid_params(format!(
+            "{name} is an artifact; read it in slices with context/readBytes"
+        )));
+    }
     let project = params.project;
     ensure_project_exists(context, project).await?;
     let daemon = Arc::clone(&context.daemon);
@@ -63,6 +71,138 @@ pub(crate) async fn read(
     .await
 }
 
+/// `context/readBytes`: one slice of a file of any type, as `agent/file`'s working side reads one.
+pub(crate) async fn read_bytes(
+    context: &Context,
+    params: ContextReadBytesParams,
+) -> Result<ContextReadBytesResult, ErrorObject> {
+    let name = context::validate_relative_path(&params.path)?.to_owned();
+    let (offset, length) =
+        super::host::slice(params.offset, params.length)?.unwrap_or((0, super::host::CHUNK_BYTES));
+    let project = params.project;
+    ensure_project_exists(context, project).await?;
+    let daemon = Arc::clone(&context.daemon);
+    run_blocking(move || {
+        let dir = context::ensure_dir(&daemon.data_dir, project).map_err(io_error(&name))?;
+        let (bytes, metadata) =
+            context::read_slice(&dir, &name, offset, length).map_err(io_error(&name))?;
+        let writer = daemon.context.writer_of(project, &name);
+        Ok(ContextReadBytesResult {
+            file: context::context_file(&name, &metadata, writer),
+            content: crate::images::encode(&bytes),
+        })
+    })
+    .await
+}
+
+/// The largest artifact `context/saveArtifact` copies: `present_files`' own cap.
+const MAX_ARTIFACT_BYTES: u64 = 256 * 1024 * 1024;
+
+/// `context/saveArtifact`: copies `path` from a Project child's working folder into the Project's
+/// `artifacts/<run id>/<path>`, deleting the oldest artifacts first when the bulk folders would pass
+/// their cap, with a `needsYou` inbox item saying so.
+pub(crate) async fn save_artifact(
+    context: &Context,
+    params: ContextSaveArtifactParams,
+) -> Result<ContextWriteResult, ErrorObject> {
+    let ContextSaveArtifactParams { run_id, path } = params;
+    crate::worktree::validate_repo_path(&path).map_err(ErrorObject::invalid_params)?;
+    let name = format!("artifacts/{run_id}/{path}");
+    context::validate_relative_path(&name)?;
+    let project = project_of(context, run_id).await?;
+    let daemon = Arc::clone(&context.daemon);
+    let (root, _) = crate::agents::review::run_folder(&daemon, run_id).await?;
+    let (pruned, saved) = run_blocking(move || {
+        let (source, metadata) = context::open_file(&root, &path).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                ErrorObject::invalid_params(format!("{path} isn't a file in run {run_id}'s folder"))
+            } else {
+                context::io_error(&path, &error)
+            }
+        })?;
+        let too_large = || {
+            ErrorObject::parallax(
+                ErrorKind::ContextTooLarge,
+                format!("{path} would be over the artifacts size cap"),
+            )
+        };
+        if metadata.len() > MAX_ARTIFACT_BYTES {
+            return Err(too_large());
+        }
+        let dir = context::ensure_dir(&daemon.data_dir, project).map_err(io_error(&name))?;
+        let pruned = context::make_room(&dir, &name, metadata.len())
+            .map_err(io_error(&name))?
+            .ok_or_else(too_large)?;
+        // Never more than was counted above, so a file growing meanwhile can't pass the caps.
+        let saved = match context::copy_file(&dir, &name, source, metadata.len()) {
+            Ok(metadata) => {
+                let file = context::context_file(&name, &metadata, None);
+                let seq = daemon.store.append_blocking(
+                    jiff::Timestamp::now(),
+                    Some(project),
+                    ParallaxEvent::ContextChanged { file: file.clone() },
+                );
+                info!(project = %project, path = name, seq, "saved an artifact");
+                Ok(file)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::FileTooLarge => {
+                Err(ErrorObject::parallax(
+                    ErrorKind::ContextTooLarge,
+                    format!("{path} grew while it was copied"),
+                ))
+            }
+            Err(error) => Err(context::io_error(&name, &error)),
+        };
+        Ok((pruned, saved))
+    })
+    .await?;
+    // Reported whether or not the copy then worked: the deletions happened either way.
+    pruned_item(&context.daemon, project, run_id, &pruned).await;
+    Ok(ContextWriteResult { file: saved? })
+}
+
+/// The Project `run` is a child of, or `invalidParams` for a run in a repo entry.
+async fn project_of(context: &Context, run: RunId) -> Result<ProjectId, ErrorObject> {
+    context
+        .daemon
+        .store
+        .run(&context.cancel, move |store| {
+            let row = store
+                .get_run(run.into())
+                .map_err(|error| store_error(&error))?
+                .ok_or_else(|| store_error(&StoreError::NotFound { id: run.into() }))?;
+            let in_project = store
+                .get_project(row.fields.project_id)
+                .map_err(|error| store_error(&error))?
+                .is_some();
+            match ProjectId::try_from(row.fields.project_id) {
+                Ok(project) if in_project => Ok(project),
+                _ => Err(ErrorObject::invalid_params(format!(
+                    "run {run} isn't in a Project, so it has no artifacts"
+                ))),
+            }
+        })
+        .await
+}
+
+/// Adds a `needsYou` item to `project`'s inbox about `run` when [`context::make_room`] deleted
+/// artifacts.
+pub(crate) async fn pruned_item(
+    daemon: &Arc<crate::server::Daemon>,
+    project: ProjectId,
+    run: RunId,
+    pruned: &[String],
+) {
+    if pruned.is_empty() {
+        return;
+    }
+    let text = format!(
+        "Deleted the {} oldest artifacts to keep this Project's history and artifacts under 2 GiB",
+        pruned.len()
+    );
+    super::inbox::add(daemon, project, run, InboxKind::NeedsYou, text).await;
+}
+
 /// The logic behind `context/write`, apart from plxd's blocking pool, so a test can call it
 /// directly.
 ///
@@ -71,6 +211,9 @@ pub(crate) async fn read(
 /// retry with different params fails with `idConflict`. The last write to a path wins when two
 /// race, since each runs independently and the later one's atomic rename is simply the one that
 /// lands last (0005).
+///
+/// A path in `history/` skips [`context::MAX_PROJECT_BYTES`]: its caller makes room under
+/// [`context::MAX_BULK_BYTES`] with [`context::make_room`] first.
 pub(crate) fn write_context_file(
     daemon: &crate::server::Daemon,
     project: ProjectId,
@@ -107,9 +250,8 @@ pub(crate) fn write_context_file(
         Existing::New => {}
     }
     let other_total = context::other_files_total(&dir, name).map_err(io_error(name))?;
-    if !crate::board::LEGACY.contains(&name)
-        && other_total + content.len() as u64 > context::MAX_PROJECT_BYTES
-    {
+    let exempt = context::is_bulk(name) || crate::board::LEGACY.contains(&name);
+    if !exempt && other_total + content.len() as u64 > context::MAX_PROJECT_BYTES {
         return Err(ErrorObject::parallax(
             ErrorKind::ContextTooLarge,
             format!("{name} would be over the shared context size cap"),
@@ -312,6 +454,29 @@ mod tests {
             error.parallax_data().unwrap().kind,
             ErrorKind::ContextTooLarge
         );
+    }
+
+    /// History counts toward the bulk cap, not the 20 MiB one (PLX-941).
+    #[test]
+    fn a_history_write_is_not_held_to_the_per_project_cap() {
+        let (_dir, daemon) = daemon();
+        let project = ProjectId::generate();
+        let full = "a".repeat(usize::try_from(super::context::MAX_FILE_BYTES).unwrap());
+        let write = |path: &str, content: &str| {
+            write_context_file(
+                &daemon,
+                project,
+                path,
+                content,
+                None,
+                ContextWriteId::generate(),
+            )
+        };
+        for n in 0..20 {
+            write(&format!("{n}.md"), &full).unwrap();
+        }
+        assert!(write("20.md", "x").is_err());
+        write("history/run.md", "Run: x").unwrap();
     }
 
     #[test]

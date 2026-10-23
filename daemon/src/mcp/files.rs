@@ -1,12 +1,15 @@
 //! `present_files` (PLX-755): shows documents the agent made, from its thread's folder, as cards in
 //! the transcript, images and videos large in it (PLX-785), and any other file as one to download
 //! (0074). The app reads each through `agent/file`'s working side, in slices, and shows it,
-//! view-only, with Download.
+//! view-only, with Download. A Project's child's files are also copied into the Project's
+//! `artifacts/<thread>/`, so they outlive its worktree (PLX-941).
 
 use std::path::{Component, Path, PathBuf};
 
-use parallax_protocol::methods::{AgentFile, AgentFiles};
-use parallax_protocol::{AgentFileParams, AgentFileSide, AgentFilesParams};
+use parallax_protocol::methods::{AgentFile, AgentFiles, ContextSaveArtifact};
+use parallax_protocol::{
+    AgentFileParams, AgentFileSide, AgentFilesParams, ContextSaveArtifactParams,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -62,12 +65,17 @@ struct PresentArgs {
     paths: Vec<String>,
 }
 
-/// Runs `name`, one of [`TOOLS`].
+/// Runs `name`, one of [`TOOLS`], for a Project's child when `child` is set.
 ///
 /// # Errors
 ///
 /// What went wrong, for the model.
-pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Reply, String> {
+pub async fn call(
+    binding: &Binding,
+    child: bool,
+    name: &str,
+    arguments: Value,
+) -> Result<Reply, String> {
     if name != "present_files" {
         return Err(format!("no tool is named {name:?}"));
     }
@@ -138,7 +146,7 @@ pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Rep
         let kind = known.unwrap_or_else(|| "file".to_owned());
         files.push(json!({"path": path, "name": name, "kind": kind}));
     }
-    let message = if copied.is_empty() {
+    let mut message = if copied.is_empty() {
         "Shown to the reader above your reply.".to_owned()
     } else {
         format!(
@@ -146,11 +154,37 @@ pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Rep
             copied.join(", ")
         )
     };
+    if child {
+        message.push_str(&save_artifacts(binding, &files).await);
+    }
     Ok(pretty(&json!({
         "presentedFiles": files,
         "message": message,
     }))
     .into())
+}
+
+/// Copies each of `files` into the Project's `artifacts/<thread>/`, and what to tell the model
+/// about it. A failure doesn't fail the presentation, which already happened.
+async fn save_artifacts(binding: &Binding, files: &[Value]) -> String {
+    let mut failed = Vec::new();
+    for path in files.iter().filter_map(|file| file["path"].as_str()) {
+        let params = ContextSaveArtifactParams {
+            run_id: binding.run,
+            path: path.to_owned(),
+        };
+        if let Err(error) = binding.plxd.call::<ContextSaveArtifact>(params).await {
+            failed.push(format!("{path} ({error})"));
+        }
+    }
+    if failed.is_empty() {
+        " Saved in your Project's artifacts.".to_owned()
+    } else {
+        format!(
+            " Not saved in your Project's artifacts: {}.",
+            failed.join(", ")
+        )
+    }
 }
 
 /// `asked` as a `/`-separated path relative to `folder`, by `agent/file`'s rules, or `None` for an
