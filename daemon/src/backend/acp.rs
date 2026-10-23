@@ -11,8 +11,9 @@
 //! resume, whose replayed history it drops ([`stream::Translator::replaying`]). A model the agent
 //! takes over ACP is `session/set_config_option` for its model option, or else `session/set_model`;
 //! Plan, and Bypass for an agent with a bypass mode, are `session/set_mode`. Then each message is
-//! a `session/prompt`, the first one the user's message as written, with its images as image
-//! blocks before its text. A follow-up sent during a turn waits for that turn's response, then
+//! a `session/prompt`, the first one the user's message as written, after a coordinator's
+//! instructions, since ACP has no system prompt (0078), with its images as image blocks before
+//! its text. A follow-up sent during a turn waits for that turn's response, then
 //! goes into the same session. ACP has no way to add to a running turn, so a steer (PLX-370)
 //! sends `session/cancel`, which the agent answers by ending the turn `cancelled`, and then the
 //! steer as the next `session/prompt`. Once no turn is outstanding, no request waits, and plxd
@@ -376,6 +377,9 @@ impl Backend for AcpBackend {
             return Err(StartError::Invalid("the prompt is empty".into()));
         }
         let mcp_servers = thread_mcp_servers(&request)?;
+        // ponytail: ACP has no system prompt, so a resume carries the instructions in its first
+        // message and a compaction inside one process can still drop them (0078).
+        let first = request.first_prompt();
         let mut spec = self.spec(&request.cwd);
         spec.args = arguments(&self.agent, &request)?;
         let mut process = self.launcher.spawn(&spec)?;
@@ -440,12 +444,7 @@ impl Backend for AcpBackend {
             session_model: None,
             session: None,
             modes_pending: 0,
-            prompts: VecDeque::from([Prompt::new(
-                request.turn_id,
-                &request.prompt,
-                &request.images,
-                false,
-            )]),
+            prompts: VecDeque::from([Prompt::new(request.turn_id, &first, &request.images, false)]),
             in_flight: None,
             build: None,
             asks: HashMap::new(),

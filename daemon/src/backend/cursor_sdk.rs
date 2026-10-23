@@ -144,7 +144,10 @@ impl Backend for CursorSdkBackend {
             "type": "start",
             "cwd": request.cwd,
             "model": request.model,
-            "prompt": request.prompt,
+            // ponytail: Cursor's `systemPrompt` replaces its whole harness prompt, so a
+            // coordinator's instructions lead each process's first message instead, and a
+            // compaction inside one process can still drop them (0078).
+            "prompt": request.first_prompt(),
             "agentId": request.resume.as_ref().map(|resume| &resume.session_id),
             "permission": permission,
             "name": request.run_id.to_string(),
@@ -1064,6 +1067,7 @@ esac
             thread_tools: None,
             approvals: false,
             thread: true,
+            instructions: None,
         }
     }
 
@@ -1109,6 +1113,42 @@ esac
             leaked.trim().is_empty(),
             "CURSOR_* reached the sidecar: {leaked}"
         );
+    }
+
+    /// 0078: Cursor's `systemPrompt` replaces its own, so a coordinator's instructions lead the
+    /// first message of a fresh start and of a resume alike.
+    #[tokio::test]
+    async fn instructions_lead_the_first_message_on_a_start_and_a_resume() {
+        for resume in [None, Some(crate::backend::Resume::new("agent-1"))] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let program = root.join("fake-cursor");
+            fs::write(&program, FAKE).unwrap();
+            fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+            let backend = CursorSdkBackend::new(launcher(&root, &program));
+            let request = RunRequest {
+                resume: resume.clone(),
+                instructions: Some("Never edit files.".into()),
+                ..request(root.clone())
+            };
+            let started = backend.start(request).unwrap();
+            let mut events = started.events;
+            while let Some(event) = tokio::time::timeout(Duration::from_secs(5), events.next())
+                .await
+                .unwrap()
+            {
+                if matches!(event, Event::Finished { .. }) {
+                    break;
+                }
+            }
+            let stdin = fs::read_to_string(root.join("stdin")).unwrap();
+            let start: Value = serde_json::from_str(stdin.lines().next().unwrap()).unwrap();
+            assert_eq!(start["prompt"], "Never edit files.\n\nSay hello");
+            assert_eq!(
+                start["agentId"].as_str(),
+                resume.as_ref().map(|r| r.session_id.as_str())
+            );
+        }
     }
 
     /// A login that fails after its URL went out is kept for `providers/list`, as T3 Code's

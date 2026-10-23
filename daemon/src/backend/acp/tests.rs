@@ -132,6 +132,7 @@ impl Fake {
             thread_tools: None,
             approvals: true,
             thread: true,
+            instructions: None,
         }
     }
 }
@@ -847,6 +848,7 @@ async fn thread_mcp_is_injected_on_new_and_load_and_preapproved() {
         request.approvals = approvals;
         request.permission = bypass.then_some(AgentPermission::Bypass);
         request.resume = resume.then(|| Resume::new("mcp-session"));
+        request.instructions = Some("Never edit files.".into());
         let events = run(
             &fake,
             request,
@@ -874,6 +876,15 @@ async fn thread_mcp_is_injected_on_new_and_load_and_preapproved() {
             json!([])
         };
         assert_eq!(messages[1]["params"]["mcpServers"], expected_servers);
+        // ACP has no system prompt, so each process's first message leads with them (0078).
+        let prompt = messages
+            .iter()
+            .find(|message| message["method"] == "session/prompt")
+            .unwrap();
+        assert_eq!(
+            prompt["params"]["prompt"][0]["text"],
+            format!("Never edit files.\n\n{PROMPT}")
+        );
         assert_eq!(
             messages[3]["result"]["outcome"]["optionId"],
             if approvals || bypass {

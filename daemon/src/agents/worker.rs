@@ -596,6 +596,7 @@ mod tests {
                 thread_tools: None,
                 approvals: false,
                 thread: false,
+                instructions: None,
             })
             .unwrap();
         let mut seen = Vec::new();

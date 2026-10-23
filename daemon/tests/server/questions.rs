@@ -659,9 +659,8 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
         .run;
     let first = nth_launch(&seen, 0).await;
     assert!(
-        first.prompt.contains("The project's autonomy is Routine:"),
-        "{}",
-        first.prompt
+        pinned(&first).contains("The project's autonomy is Routine:"),
+        "{first:?}"
     );
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let child = spawn(&mut client, &coordinator, "Upgrade Node.").await;
@@ -675,6 +674,10 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
         wake.prompt.contains("The project's autonomy is Routine:"),
         "{}",
         wake.prompt
+    );
+    assert!(
+        pinned(&wake).contains("The project's autonomy is Routine:"),
+        "{wake:?}"
     );
 
     let updated = client
@@ -736,6 +739,11 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
     kept_after_restart(host, &seen, project.id, before.id).await;
 }
 
+/// The instructions pinned to a coordinator launch's system prompt (0078).
+fn pinned(launch: &RunRequest) -> &str {
+    launch.instructions.as_deref().unwrap_or_default()
+}
+
 /// Restarts `host`: the child's interrupted run wakes the coordinator without `before`, which
 /// stays escalated with its one Needs you item, beside the answered question's.
 async fn kept_after_restart(
@@ -752,6 +760,10 @@ async fn kept_after_restart(
         !wake.prompt.contains(&before.to_string()),
         "{}",
         wake.prompt
+    );
+    assert!(
+        pinned(&wake).contains("The project's autonomy is Ask me:"),
+        "the new level applies from the next process (0078): {wake:?}"
     );
     let listed = questions(&mut client, project).await;
     let statuses: Vec<_> = listed.iter().map(|asked| asked.status).collect();

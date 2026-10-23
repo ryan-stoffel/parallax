@@ -73,6 +73,7 @@ fn request(permission: AgentPermission) -> RunRequest {
         thread_tools: None,
         approvals: true,
         thread: true,
+        instructions: None,
     }
 }
 
@@ -902,6 +903,24 @@ fn a_coordinator_gets_its_tools_as_a_thread_does() {
     );
     request.coordinator_tools = None;
     assert!(!request.full_agent(), "any other run is refused");
+}
+
+/// 0078: a coordinator's instructions are developer instructions on `thread/start`,
+/// `thread/resume`, and `thread/fork` alike, so a resumed thread gets them again.
+#[test]
+fn instructions_are_developer_instructions_on_start_resume_and_fork() {
+    for resume in [None, Some(false), Some(true)] {
+        let mut request = request(AgentPermission::Edit);
+        request.resume = resume.map(|fork| Resume {
+            fork,
+            ..Resume::new("t-0")
+        });
+        let (_, params) = super::thread_params(&request).unwrap();
+        assert!(params.get("developerInstructions").is_none(), "{params}");
+        request.instructions = Some("Never edit files.".into());
+        let (_, params) = super::thread_params(&request).unwrap();
+        assert_eq!(params["developerInstructions"], "Never edit files.");
+    }
 }
 
 /// Session overrides add only plxd's keys, so app-server retains the user's servers.
