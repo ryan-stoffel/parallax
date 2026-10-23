@@ -163,7 +163,11 @@ export function ProjectChat({
 
   const rows = projectAgentRows(agents, titles ?? {}, project.coordinator, needs);
   const bar = rows.some(isGoing)
-    ? { key: "agents", label: "Agents", node: <AgentsBar rows={rows} onOpen={onOpenRun} /> }
+    ? {
+        key: "agents",
+        node: <AgentsBar rows={rows} onOpen={onOpenRun} />,
+        compact: <AgentsBar rows={rows} onOpen={onOpenRun} compact />,
+      }
     : undefined;
 
   if (project.coordinator)

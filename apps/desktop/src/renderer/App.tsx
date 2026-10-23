@@ -1191,7 +1191,6 @@ export function App() {
                                 paneParent
                                   ? {
                                       key: "parent",
-                                      label: "Parent thread",
                                       node: (
                                         <ChildStrip
                                           name={threads.state.titles[paneParent] ?? "Thread"}
@@ -1277,7 +1276,6 @@ export function App() {
                       strip={
                         project && {
                           key: "parent",
-                          label: "Project",
                           node: (
                             <ChildStrip
                               name={project.name}

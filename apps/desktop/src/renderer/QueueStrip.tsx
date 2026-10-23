@@ -8,10 +8,11 @@ import {
   Pencil,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import type { OrchestrationCommand, QueuedMessage } from "../protocol/generated/protocol";
 import { notify } from "./notifications";
+import { popoverBeside } from "./ui";
 
 const action =
   "grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-3.5";
@@ -19,7 +20,8 @@ const action =
 /**
  * The host's next messages as a tab over the composer, editable until plxd delivers them, through `orchestration/dispatch`'s
  * queued-run commands (0059). A queue a Stop or a restart held waits for Resume (`queue.resume`,
- * 0060). Changes arrive through queue.updated.
+ * 0060). Changes arrive through queue.updated. `compact` shows only how many wait, opening the list
+ * above itself, for a place beside other tabs.
  */
 export function QueueStrip({
   hostId,
@@ -29,6 +31,7 @@ export function QueueStrip({
   running,
   disabledReason,
   onCancelled,
+  compact,
 }: {
   hostId: string;
   runId: string;
@@ -39,7 +42,9 @@ export function QueueStrip({
   disabledReason?: string;
   /** Called with a message's id once plxd has cancelled it. */
   onCancelled?: (id: string) => void;
+  compact?: boolean;
 }) {
+  const id = useId();
   const [editing, setEditing] = useState<string>();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -70,11 +75,8 @@ export function QueueStrip({
   }
 
   if (!messages.length) return null;
-  return (
-    <section
-      aria-label="Queued messages"
-      className="overflow-hidden rounded-t-3xl border border-b-0 border-border bg-surface pb-4 text-[12.5px]"
-    >
+  const list = (
+    <section aria-label="Queued messages" className="text-[12.5px]">
       <div className="flex items-center justify-between py-2 pr-3.5 pl-4 text-faint-foreground">
         <span>
           Queued{" "}
@@ -251,5 +253,29 @@ export function QueueStrip({
         ))}
       </ol>
     </section>
+  );
+  if (!compact) return list;
+  return (
+    <>
+      <button
+        type="button"
+        popoverTarget={id}
+        title="Show the queued messages"
+        className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+      >
+        Queued
+        <span className="rounded bg-hover px-1.5 text-foreground tabular-nums">
+          {messages.length}
+        </span>
+        {held && <span className="text-faint-foreground">Paused</span>}
+      </button>
+      <div
+        id={id}
+        popover="auto"
+        className={`inset-auto m-0 mb-2 overflow-hidden rounded-2xl border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`}
+      >
+        {list}
+      </div>
+    </>
   );
 }

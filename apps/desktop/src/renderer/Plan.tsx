@@ -29,6 +29,7 @@ import type {
   JsonValue,
 } from "../protocol/generated/protocol";
 import { field, isObject, type Item } from "./transcript";
+import { popoverBeside } from "./ui";
 
 type Todo = Extract<Item, { kind: "todo" }>;
 type Tool = Extract<Item, { kind: "tool" }>;
@@ -499,17 +500,19 @@ export function PlanLine({ item }: { item: PlanRow | PlanUpdate }) {
 /**
  * The plan over the composer while the run goes: the step under way (as TodoWrite says it, when it
  * does), how many are done, and a mini bar. It's tucked behind the box, as the tab is under it, and
- * opens the full card above itself.
+ * opens the full card above itself. `compact` leaves out the step, for a place beside other tabs.
  */
 export function PlanStrip({
   items,
   active,
   returnFocus,
+  compact,
 }: {
   items: readonly AgentTodoItem[];
   active?: string;
   /** Moves focus on, such as to the composer, when the strip goes with focus in it. Read once. */
   returnFocus?: () => void;
+  compact?: boolean;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -526,22 +529,18 @@ export function PlanStrip({
   const now = items.find((s) => s.status === "inProgress");
   const next = now ?? items.find((s) => s.status !== "completed");
   return (
-    <section
-      ref={section}
-      aria-label="Plan"
-      className="plan-strip rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
-    >
+    <section ref={section} aria-label="Plan" className="plan-strip">
       <button
         type="button"
         popoverTarget={id}
         aria-expanded={open}
         title={open ? "Hide the plan" : "Show the plan"}
-        className="flex w-full min-w-0 items-center gap-2.5 rounded-t-3xl py-2 pr-3.5 pl-4 text-left text-[13px] hover:bg-hover"
+        className={`flex min-w-0 items-center gap-2.5 text-left text-[13px] hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-1.5 pr-3.5 pl-4"}`}
       >
         <span className="grid size-4 shrink-0 place-items-center">
           <Marker state={now ? "now" : next ? "todo" : "done"} />
         </span>
-        <span className="min-w-0 flex-1 truncate">
+        <span className={compact ? "sr-only" : "min-w-0 flex-1 truncate"}>
           {next ? (
             <>
               <span className="sr-only">{now ? "In progress: " : "Next: "}</span>
@@ -556,17 +555,19 @@ export function PlanStrip({
           <span className="sr-only"> done</span>
         </span>
         <ProgressBar done={done} total={items.length} className="h-[3px] w-12 shrink-0" />
-        <ChevronUp
-          aria-hidden
-          className={`size-3.5 shrink-0 text-faint-foreground transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
-        />
+        {!compact && (
+          <ChevronUp
+            aria-hidden
+            className={`size-3.5 shrink-0 text-faint-foreground transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
+          />
+        )}
       </button>
       <div
         id={id}
         popover="auto"
         // Before it shows, so it never shows empty.
         onBeforeToggle={(e: ToggleEvent<HTMLDivElement>) => setOpen(e.newState === "open")}
-        className="inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] w-[anchor-size(width)] overflow-y-auto rounded-xl border-0 bg-transparent p-0 text-foreground shadow-composer [position-area:top_span-right] [position-try-fallbacks:flip-block]"
+        className={`inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] overflow-y-auto rounded-xl border-0 bg-transparent p-0 text-foreground shadow-composer [position-try-fallbacks:flip-block] ${compact ? popoverBeside : "w-[anchor-size(width)] [position-area:top_span-right]"}`}
       >
         {/* Only while open, so it mounts with the steps done so far drawn, not drawing. */}
         {open && <PlanCard items={items} />}

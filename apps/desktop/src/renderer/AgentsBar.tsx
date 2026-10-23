@@ -3,9 +3,9 @@ import { useId, useState, type ComponentType, type SVGProps } from "react";
 
 import { DoneMark } from "./AttentionMark";
 import { childOrder, runAttention, type Attention } from "./attention";
-import { Loader } from "./Loader";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { OpenHint } from "./OpenHint";
+import { popoverBeside } from "./ui";
 import { instanceLogo, instanceName } from "./providers";
 import { age, backendLogos } from "./Sidebar";
 import { titleOf } from "./threads";
@@ -65,16 +65,19 @@ export function projectAgentRows(
  * subagents. While any of them works or waits on the user, the providers of the first three as
  * stacked logos, a count of the rest, and the agent that matters most. It opens a card over the
  * chat listing them, those that need the user first, then those working, then the latest
- * finished; each opens its chat. Hidden while none is going. `rows` go oldest first.
+ * finished; each opens its chat. Hidden while none is going. `rows` go oldest first. `compact`
+ * leaves out the lead agent's title, for a place beside other tabs.
  */
 export function AgentsBar({
   rows,
   label = "Agents",
   onOpen,
+  compact,
 }: {
   rows: readonly AgentRow[];
   label?: string;
   onOpen: (id: string) => void;
+  compact?: boolean;
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
@@ -89,16 +92,13 @@ export function AgentsBar({
   const extra = going.length - 3;
 
   return (
-    <section
-      aria-label={label}
-      className="rounded-t-3xl border border-b-0 border-border bg-surface pb-4"
-    >
+    <section aria-label={label}>
       <button
         type="button"
         popoverTarget={id}
         aria-expanded={open}
         title={open ? `Hide the ${label.toLowerCase()}` : `Show the ${label.toLowerCase()}`}
-        className="flex w-full min-w-0 items-center gap-2.5 rounded-t-3xl py-1.5 pr-3.5 pl-2 text-left text-[13px] hover:bg-hover"
+        className={`flex min-w-0 items-center gap-2.5 text-left text-[13px] hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-1.5 pr-3.5 pl-2"}`}
       >
         {/* The providers at work, as one quiet group. */}
         <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2 [&_svg]:size-3.5">
@@ -121,10 +121,12 @@ export function AgentsBar({
           {going.length} {going.length === 1 ? "agent" : "agents"} going
           {waiting > 0 && `, ${waiting} waiting on you`}:{" "}
         </span>
-        <span className="flex min-w-0 flex-1 items-center gap-2">
-          <span className="truncate">{lead.title}</span>
-        </span>
-        <span className="flex shrink-0 items-center gap-1.5 font-mono text-[11.5px] text-faint-foreground tabular-nums">
+        {!compact && (
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="truncate">{lead.title}</span>
+          </span>
+        )}
+        <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-muted-foreground tabular-nums">
           {waiting > 0 ? (
             <>
               <span aria-hidden className="size-1.5 rounded-full bg-warning" />
@@ -132,21 +134,23 @@ export function AgentsBar({
             </>
           ) : (
             <>
-              <Loader kind="matrix" variant="ripple" size={11} />
+              <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-working" />
               {going.length} working
             </>
           )}
         </span>
-        <ChevronUp
-          aria-hidden
-          className={`size-3.5 shrink-0 text-faint-foreground transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
-        />
+        {!compact && (
+          <ChevronUp
+            aria-hidden
+            className={`size-3.5 shrink-0 text-faint-foreground transition-transform motion-reduce:transition-none ${open ? "rotate-180" : ""}`}
+          />
+        )}
       </button>
       <div
         id={id}
         popover="auto"
         onBeforeToggle={(e) => setOpen(e.newState === "open")}
-        className="inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] w-[anchor-size(width)] overflow-y-auto rounded-2xl border border-border bg-surface p-1.5 text-foreground shadow-composer [position-area:top_span-right] [position-try-fallbacks:flip-block]"
+        className={`inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] overflow-y-auto rounded-2xl border border-border bg-surface p-1.5 text-foreground shadow-composer [position-try-fallbacks:flip-block] ${compact ? popoverBeside : "w-[anchor-size(width)] [position-area:top_span-right]"}`}
       >
         {open && (
           <>
@@ -242,7 +246,7 @@ function State({ attention }: { attention: Attention }) {
   if (attention === "working")
     return (
       <span className="flex shrink-0 items-center gap-1.5 text-working">
-        <Loader kind="matrix" variant="scan" size={11} />
+        <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-working" />
         Working
       </span>
     );

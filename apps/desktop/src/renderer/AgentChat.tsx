@@ -816,51 +816,70 @@ export function AgentChat({
       </SubagentsContext>
     );
 
-  // The tabs over the composer, back to front, so the queue sits nearest the box.
+  // The tabs over the composer, in order along their line: the first shows in full.
   const running = isRunning(run?.status);
   const tabs: ComposerTab[] = [];
   if (strip) tabs.push(strip);
   const subagentTabRows = nativeRows(transcript.subagents, live, backgroundSubagents);
-  if (subagents && subagentTabRows.some(isGoing))
-    tabs.push({
-      key: "subagents",
-      label: "Subagents",
-      node: <AgentsBar rows={subagentTabRows} label="Subagents" onOpen={subagents.open} />,
-    });
+  const subagentsShown = !!subagents && subagentTabRows.some(isGoing);
+  if (subagentsShown) {
+    const bar = (compact: boolean) => (
+      <AgentsBar
+        rows={subagentTabRows}
+        label="Subagents"
+        onOpen={subagents.open}
+        compact={compact}
+      />
+    );
+    tabs.push({ key: "subagents", node: bar(false), compact: bar(true) });
+  }
   // Once its turn settles, as T3 Code's strip: a turn's own work shows in the transcript.
-  if (!running && presentWaiting(background, watching))
-    tabs.push({
-      key: "waiting",
-      label: "Waiting",
-      node: (
-        <WaitingBar hostId={hostId} runId={runId} background={background} watching={watching} />
-      ),
-    });
+  if (!running && presentWaiting(background, watching)) {
+    const bar = (compact: boolean) => (
+      <WaitingBar
+        hostId={hostId}
+        runId={runId}
+        background={background}
+        watching={watching}
+        agentsShown={subagentsShown}
+        compact={compact}
+      />
+    );
+    tabs.push({ key: "waiting", node: bar(false), compact: bar(true) });
+  }
   if (goal && running && !stalled)
-    tabs.push({ key: "goal", label: "Goal", node: <GoalStrip objective={goal} /> });
+    tabs.push({
+      key: "goal",
+      node: <GoalStrip objective={goal} />,
+      compact: <GoalStrip objective={goal} compact />,
+    });
   // The latest turn's plan, while the run works on it.
-  if (plan && running && !stalled)
-    tabs.push({
-      key: "plan",
-      label: "Plan",
-      node: <PlanStrip items={plan.items} active={plan.active} returnFocus={focusComposer} />,
-    });
-  if (queueEnabled && queue.length > 0)
-    tabs.push({
-      key: "queue",
-      label: "Queued",
-      node: (
-        <QueueStrip
-          hostId={hostId}
-          runId={runId}
-          messages={queue}
-          held={held}
-          running={running}
-          disabledReason={disabledReason}
-          onCancelled={(id) => setCancelled((prev) => new Set(prev).add(id))}
-        />
-      ),
-    });
+  if (plan && running && !stalled) {
+    const strip = (compact: boolean) => (
+      <PlanStrip
+        items={plan.items}
+        active={plan.active}
+        returnFocus={focusComposer}
+        compact={compact}
+      />
+    );
+    tabs.push({ key: "plan", node: strip(false), compact: strip(true) });
+  }
+  if (queueEnabled && queue.length > 0) {
+    const strip = (compact: boolean) => (
+      <QueueStrip
+        hostId={hostId}
+        runId={runId}
+        messages={queue}
+        held={held}
+        running={running}
+        disabledReason={disabledReason}
+        onCancelled={(id) => setCancelled((prev) => new Set(prev).add(id))}
+        compact={compact}
+      />
+    );
+    tabs.push({ key: "queue", node: strip(false), compact: strip(true) });
+  }
 
   return (
     <SubagentsContext value={subagents}>

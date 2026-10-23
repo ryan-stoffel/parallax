@@ -199,6 +199,12 @@ const panelAreas = {
 export const menuPanel = (align: "start" | "end" | "center" = "start") =>
   `inset-auto m-0 mt-2 rounded-lg border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block,flip-inline] ${panelAreas[align]}`;
 
+/**
+ * Where a compact composer tab's card opens: above it, a fixed width, lined up with its right
+ * edge, as it sits at the line's end.
+ */
+export const popoverBeside = "w-[min(26rem,90vw)] [position-area:top_span-left]";
+
 /** A row in a menu panel. */
 export const menuItem =
   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";

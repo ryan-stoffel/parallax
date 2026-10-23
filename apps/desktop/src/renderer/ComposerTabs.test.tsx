@@ -13,34 +13,24 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-const tab = (label: string) => ({ key: label, label, node: <section>{label}</section> });
+const tab = (label: string) => ({
+  key: label,
+  node: <section>{label}</section>,
+  compact: <section>{label} short</section>,
+});
 const render = (labels: string[]) =>
   act(() => root!.render(<ComposerTabs tabs={labels.map(tab)} />));
 const shown = () =>
-  [...document.querySelectorAll('[aria-label="Composer tabs"] > div:not([hidden]) section')].map(
-    (s) => s.textContent,
-  );
-const more = () => document.querySelector<HTMLButtonElement>('[aria-label="More tabs"] button');
+  [...document.querySelectorAll('[aria-label="Composer tabs"] section')].map((s) => s.textContent);
 
-test("the front two tabs show, the rest fold behind one that names them, and it opens them all", () => {
+test("the first tab shows in full and the rest beside it in short, on one line", () => {
   root = createRoot(document.body.appendChild(document.createElement("div")));
-  render(["Parent thread", "Subagents", "Plan", "Queued"]);
-  expect(shown()).toEqual(["2 moreParent thread, Subagents", "Plan", "Queued"]);
-  // Each tab further back sits 10px further in.
-  const insets = [...document.querySelectorAll<HTMLElement>('[aria-label="Composer tabs"] > div')]
-    .filter((d) => !d.hidden)
-    .map((d) => d.style.marginInline);
-  expect(insets).toEqual(["40px", "30px", "20px"]);
+  render(["Subagents", "Plan", "Queued"]);
+  expect(shown()).toEqual(["Subagents", "Plan short", "Queued short"]);
 
-  act(() => more()!.click());
-  expect(shown()).toEqual(["Show fewer", "Parent thread", "Subagents", "Plan", "Queued"]);
-  act(() => more()!.click());
-  expect(shown()).toEqual(["2 moreParent thread, Subagents", "Plan", "Queued"]);
-
-  // Two or fewer show as they are, and none renders nothing.
-  render(["Plan", "Queued"]);
-  expect(more()).toBeNull();
-  expect(shown()).toEqual(["Plan", "Queued"]);
+  // One shows in full, and none renders nothing.
+  render(["Plan"]);
+  expect(shown()).toEqual(["Plan"]);
   render([]);
   expect(document.querySelector('[aria-label="Composer tabs"]')).toBeNull();
 });

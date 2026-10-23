@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import type { AgentBackgroundKind, AgentBackgroundTask } from "../protocol/generated/protocol";
 import { notify } from "./notifications";
 import { numberOf } from "./PullRequests";
-import { menuPanel } from "./ui";
+import { menuPanel, popoverBeside } from "./ui";
 
 type Kind = AgentBackgroundKind | "pullRequest";
 
@@ -24,7 +24,7 @@ interface Item {
 export interface WaitingPresentation {
   /** "Waiting on subagent Review src/math.ts", "Waiting on 1 command and 1 monitor", "Monitoring pull request #750", or "Running: npm run dev". */
   title: string;
-  /** Every item's label, for a title that only counts them. */
+  /** The labels of the items the title counts, leaving out subagents the tab over it lists. */
   labels?: string;
   /** Each item, by kind, for the details popover. */
   items: { kind: string; label: string }[];
@@ -36,26 +36,31 @@ const joinWithAnd = (parts: string[]) =>
 /**
  * What a settled thread still waits on, as T3 Code's `presentPendingBackgroundWork` names it
  * (PLX-777): its agent's background tasks and the pull requests plxd watches, which read as
- * Monitoring. Undefined for nothing.
+ * Monitoring. With `agentsShown`, the subagents tab over it already lists its subagents, so the
+ * title leaves them out, or only counts them when they're all it waits on. The details name every
+ * item. Undefined for nothing.
  */
 export function presentWaiting(
   background: AgentBackgroundTask[],
   watching: string[],
+  agentsShown = false,
 ): WaitingPresentation | undefined {
-  const items: Item[] = [
+  const all: Item[] = [
     ...background.map((task) => {
       const kind = task.kind in kinds ? task.kind : "command";
       return { kind, label: task.description.trim() || kinds[kind].singular };
     }),
     ...watching.map((url) => ({ kind: "pullRequest" as const, label: `#${numberOf(url)}` })),
   ].toSorted((a, b) => kinds[a.kind].order - kinds[b.kind].order);
-  if (items.length === 0) return undefined;
+  if (all.length === 0) return undefined;
+  const details = all.map((item) => ({ kind: kinds[item.kind].singular, label: item.label }));
+  const unnamed = (item: Item) => agentsShown && item.kind === "agent";
+  const items = all.every(unnamed) ? all : all.filter((item) => !unnamed(item));
   const waiting = items.some((item) => item.kind !== "command");
-  const details = items.map((item) => ({ kind: kinds[item.kind].singular, label: item.label }));
   const [only] = items;
   if (items.length === 1 && only) {
     const noun = kinds[only.kind].singular;
-    const named = only.label !== noun;
+    const named = only.label !== noun && !unnamed(only);
     const title =
       only.kind === "pullRequest"
         ? `Monitoring pull request ${only.label}`
@@ -82,7 +87,10 @@ export function presentWaiting(
       : "Running";
   return {
     title: `${verb} ${joinWithAnd(groups)}`,
-    labels: items.map((item) => item.label).join(", "),
+    labels: items
+      .filter((item) => !unnamed(item))
+      .map((item) => item.label)
+      .join(", "),
     items: details,
   };
 }
@@ -90,22 +98,28 @@ export function presentWaiting(
 /**
  * What a thread's settled agent still waits on, tucked over its composer as T3 Code's strip is
  * (PLX-777): one line naming its background tasks, such as a Monitor, and the pull requests plxd
- * watches for it, and Stop, which ends them all. Hidden while it waits on nothing.
+ * watches for it, and Stop, which ends them all. Hidden while it waits on nothing. `compact` shows
+ * only how many, opening the details and Stop above itself, for a place beside other tabs.
  */
 export function WaitingBar({
   hostId,
   runId,
   background,
   watching,
+  agentsShown,
+  compact,
 }: {
   hostId: string;
   runId: string;
   background: AgentBackgroundTask[];
   watching: string[];
+  /** Whether the subagents tab shows over it, naming its subagents. */
+  agentsShown?: boolean;
+  compact?: boolean;
 }) {
   const [stopping, setStopping] = useState(false);
   const id = useId();
-  const shown = presentWaiting(background, watching);
+  const shown = presentWaiting(background, watching, agentsShown);
   if (!shown) return null;
 
   async function stop() {
@@ -124,39 +138,73 @@ export function WaitingBar({
       notify({ tone: "error", title: "Couldn't stop waiting", body: failed.error.message });
   }
 
-  return (
-    <section
-      aria-label="Waiting on"
-      className="rounded-t-3xl border border-b-0 border-border bg-surface pt-1 pb-5 text-[13px]"
+  const stopButton = (
+    <button
+      type="button"
+      disabled={stopping}
+      onClick={() => void stop()}
+      className="shrink-0 rounded-md px-2 py-0.5 font-medium text-foreground hover:bg-hover disabled:opacity-40"
     >
-      <div className="flex min-w-0 items-center gap-2.5 py-1 pr-3 pl-4">
-        <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground" />
-        <span className="min-w-0 truncate font-medium">{shown.title}</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">{shown.labels}</span>
+      {stopping ? "Stopping…" : "Stop"}
+    </button>
+  );
+  // As the title counts them: the subagents the tab beside it lists only when they're all there is.
+  const others = shown.items.filter((item) => !agentsShown || item.kind !== "subagent");
+  const counted = others.length > 0 ? others : shown.items;
+  const kindsShown = new Set(counted.map((item) => item.kind));
+  const verb =
+    kindsShown.size === 1 && kindsShown.has("command")
+      ? "Running"
+      : kindsShown.size === 1 && kindsShown.has("pull request")
+        ? "Monitoring"
+        : "Waiting";
+
+  return (
+    <section aria-label="Waiting on" className="text-[13px]">
+      {compact ? (
         <button
           type="button"
           popoverTarget={`${id}-details`}
-          aria-label="What it waits on"
           aria-haspopup="dialog"
-          className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          title={shown.title}
+          className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
         >
-          <Info aria-hidden />
+          <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-foreground" />
+          {verb}
+          <span className="rounded bg-hover px-1.5 text-foreground tabular-nums">
+            {counted.length}
+          </span>
         </button>
-        <button
-          type="button"
-          disabled={stopping}
-          onClick={() => void stop()}
-          className="shrink-0 rounded-md px-2 py-0.5 font-medium text-foreground hover:bg-hover disabled:opacity-40"
-        >
-          {stopping ? "Stopping…" : "Stop"}
-        </button>
-      </div>
+      ) : (
+        <div className="flex min-w-0 items-center gap-2.5 py-1 pr-2.5 pl-4">
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground"
+          />
+          <span className="min-w-0 truncate font-medium">{shown.title}</span>
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">{shown.labels}</span>
+          <button
+            type="button"
+            popoverTarget={`${id}-details`}
+            aria-label="What it waits on"
+            aria-haspopup="dialog"
+            className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          >
+            <Info aria-hidden />
+          </button>
+          {stopButton}
+        </div>
+      )}
       <div
         id={`${id}-details`}
         popover="auto"
         role="dialog"
         aria-label="Waiting on"
-        className={`${menuPanel("end")} w-80 p-3 text-[12.5px]`}
+        className={
+          compact
+            ? `inset-auto m-0 mb-2 rounded-2xl border border-border bg-surface p-3 text-[12.5px] text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`
+            : `${menuPanel("end")} w-80 p-3 text-[12.5px]`
+        }
       >
         <p className="mb-2 text-muted-foreground">
           The agent picks up when one of these ends or changes.
@@ -169,6 +217,7 @@ export function WaitingBar({
             </li>
           ))}
         </ul>
+        {compact && <div className="mt-2 flex justify-end">{stopButton}</div>}
       </div>
     </section>
   );
