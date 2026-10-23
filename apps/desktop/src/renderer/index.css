@@ -1728,10 +1728,9 @@ body {
   }
 }
 
-/* The sidebar's attention marks (AttentionMark.tsx, 0033), from the logo's two circles. Only
-   transform and opacity move. Chromium repaints an svg's animated children on the main thread
-   each frame, and will-change gives each Working mark a layer of its own, which keeps that repaint
-   from reaching the GPU process. */
+/* The sidebar's attention marks (AttentionMark.tsx, 0033); Done's animation forms from the logo's
+   two circles. Only transform and opacity move. will-change gives each Working mark a layer of
+   its own, so its turning stays on the GPU. */
 .mark-blue,
 .mark-coral {
   transform-box: fill-box;
@@ -1744,36 +1743,15 @@ body {
 .mark-coral {
   fill: var(--mark-coral);
 }
+/* The working mark's ring of dots turns clockwise, its solid dot leading. */
 .mark-working {
+  fill: var(--mark-blue);
   will-change: transform;
+  animation: mark-turn 1.2s linear infinite;
 }
-/* Each slides through the other and back; the one passing in front grows, the other shrinks. */
-.mark-working .mark-blue {
-  animation: mark-swap-blue 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-}
-.mark-working .mark-coral {
-  animation: mark-swap-coral 1.6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
-}
-@keyframes mark-swap-blue {
-  25% {
-    transform: translate(2.5px, 2.5px) scale(1.18);
-  }
-  50% {
-    transform: translate(5px, 5px);
-  }
-  75% {
-    transform: translate(2.5px, 2.5px) scale(0.78);
-  }
-}
-@keyframes mark-swap-coral {
-  25% {
-    transform: translate(-2.5px, -2.5px) scale(0.78);
-  }
-  50% {
-    transform: translate(-5px, -5px);
-  }
-  75% {
-    transform: translate(-2.5px, -2.5px) scale(1.18);
+@keyframes mark-turn {
+  to {
+    rotate: 360deg;
   }
 }
 .mark-done .mark-disc {
@@ -1828,7 +1806,7 @@ body {
   }
 }
 :root.reduce-motion {
-  .mark-working :is(.mark-blue, .mark-coral),
+  .mark-working,
   .mark-done-animate :is(.mark-disc, .mark-check) {
     animation: none;
   }

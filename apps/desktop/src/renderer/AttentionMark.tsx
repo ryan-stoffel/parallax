@@ -3,15 +3,23 @@ import { useEffect, useState } from "react";
 
 import type { Attention } from "./attention";
 
+// The working mark's ring: eight dots from the top, the first solid and each counterclockwise of
+// it fainter, so as the ring turns clockwise they trail it.
+const ring = Array.from({ length: 8 }, (_, i) => {
+  const angle = (i / 8) * 2 * Math.PI;
+  return { x: 12 - 8 * Math.sin(angle), y: 12 - 8 * Math.cos(angle), opacity: 1 - i * 0.11 };
+});
+
 /**
- * Parallax's two circles, swapping places while an agent works: each slides through the other,
- * the blue one growing as it passes in front. Only transform moves (index.css).
+ * A ring of dots in Parallax blue, turning while an agent works, its faintest dot trailing. Only
+ * transform moves (index.css).
  */
 export function WorkingMark() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden className="mark-working">
-      <circle className="mark-coral" cx="14.5" cy="14.5" r="6.5" />
-      <circle className="mark-blue" cx="9.5" cy="9.5" r="6.5" />
+      {ring.map((dot, i) => (
+        <circle key={i} cx={dot.x} cy={dot.y} r="2" opacity={dot.opacity} />
+      ))}
     </svg>
   );
 }
