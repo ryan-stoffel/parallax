@@ -540,23 +540,27 @@ test("Limits show each provider set up in Settings once, whichever hosts report 
     instance: { id, kind: id, name: id, enabled },
     installed: true,
   });
-  // Codex is off on this computer; the Mac mini reports Claude too, and fails to read its Codex.
+  // Cursor is off on this computer, which fails to read its Codex. The Mac mini reports Claude
+  // too, and reads its Codex.
   const answers: Record<string, Record<string, unknown>> = {
     local: {
-      "providers/list": { providers: [instance("claude", true), instance("codex", false)] },
+      "providers/list": {
+        providers: [instance("claude", true), instance("codex", true), instance("cursor", false)],
+      },
       "usage/limits": {
         accounts: [
           { accountId: "claude", limits: [limit(14)] },
-          { accountId: "codex", limits: [limit(0)] },
+          { accountId: "codex", limits: [], problem: "it exited before answering" },
+          { accountId: "cursor", limits: [limit(0)] },
         ],
       },
     },
     mini: {
-      "providers/list": { providers: [instance("claude", true)] },
+      "providers/list": { providers: [instance("claude", true), instance("codex", true)] },
       "usage/limits": {
         accounts: [
           { accountId: "claude", limits: [limit(50)] },
-          { accountId: "codex", limits: [], problem: "it exited before answering" },
+          { accountId: "codex", limits: [limit(30)] },
         ],
       },
     },
@@ -590,8 +594,10 @@ test("Limits show each provider set up in Settings once, whichever hosts report 
 
   expect(
     [...document.querySelectorAll("section[aria-label]")].map((s) => s.getAttribute("aria-label")),
-  ).toEqual(["Claude Code"]);
-  // This computer's answer, and no host's name.
-  expect(document.querySelector('[role="meter"]')!.getAttribute("aria-valuenow")).toBe("86");
+  ).toEqual(["Claude Code", "Codex"]);
+  // This computer's Claude, the Mac mini's Codex, and no host's name.
+  expect(
+    [...document.querySelectorAll('[role="meter"]')].map((m) => m.getAttribute("aria-valuenow")),
+  ).toEqual(["86", "70"]);
   expect(document.body.textContent).not.toContain("Mac mini");
 });
