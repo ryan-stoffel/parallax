@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { AgentRun } from "../protocol/generated/protocol";
 import { childOrder, runAttention } from "./attention";
 import { describeError } from "./errors";
-import { notify } from "./notifications";
+import { dismiss, notify } from "./notifications";
 import { instanceLogo, instanceName } from "./providers";
 import { backendLogos, statusLooks } from "./Sidebar";
 import { projectRuns, titleOf, type ThreadsState } from "./threads";
@@ -214,6 +214,7 @@ function StartAgent({
         title: "Couldn't start the subagent",
         body: failed,
       });
+    dismiss("start-subagent");
     setText("");
     setRunId(uuidv7());
   };

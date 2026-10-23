@@ -32,7 +32,7 @@ import { describeError } from "./errors";
 import { localId, useHosts } from "./hosts";
 import { bindingsOf, formatKeybinding, type Command } from "./keybindings";
 import { ClaudeLogo, CursorLogo, OpenAILogo, OpenCodeLogo, ParallaxMark } from "./logos";
-import { notify } from "./notifications";
+import { dismiss, notify } from "./notifications";
 import { agents, finishOnboarding, infoOf, ready, setUpAgents, type Agent } from "./firstRun";
 import { Avatar, useProfile } from "./profile";
 import { kindOf, loadProviders, useProviders } from "./providers";
@@ -323,9 +323,13 @@ function Heading({ id, title, children }: { id: string; title: string; children:
   );
 }
 
-/** Says why setting up, installing, or signing in to an agent failed, when it did. */
+/**
+ * Says why setting up, installing, or signing in to an agent failed, when it did, and closes that
+ * once one works.
+ */
 function agentFailed(title: string, error: string | undefined) {
   if (error) notify({ key: "onboarding-agent", tone: "error", title, body: error });
+  else dismiss("onboarding-agent");
 }
 
 /**

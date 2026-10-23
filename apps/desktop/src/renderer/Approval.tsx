@@ -31,7 +31,7 @@ import {
 
 import type { JsonValue } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-import { notify } from "./notifications";
+import { dismiss as dismissNotice, notify } from "./notifications";
 import { ProposedPlan } from "./Plan";
 import {
   field,
@@ -124,9 +124,11 @@ export function useAnswers(hostId: string) {
       ...decision,
     });
     let next: AnswerState;
-    if ("result" in reply)
+    // An answer that takes closes the last one's failure.
+    if ("result" in reply) {
       next = { state: "answered", resolved: { ...reply.result, at: new Date().toISOString() } };
-    else if (reply.error.data?.kind === "approvalNotFound") next = { state: "gone" };
+      dismissNotice(`approval/${approvalId}`);
+    } else if (reply.error.data?.kind === "approvalNotFound") next = { state: "gone" };
     else {
       next = { state: "failed", choice, error: describeError(reply.error) };
       notify({

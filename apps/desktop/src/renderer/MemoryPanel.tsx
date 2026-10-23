@@ -4,7 +4,7 @@ import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/
 import { MarkdownText } from "./AgentChat";
 import { outlineButton, quietButton } from "./Approval";
 import { describeError } from "./errors";
-import { notify } from "./notifications";
+import { dismiss, notify } from "./notifications";
 
 /**
  * A memory file with the scope it was listed from. `stale` is PLX-407's review mark, read when
@@ -403,6 +403,7 @@ function MemoryRow({
     const failed = await run();
     setBusy(false);
     if (failed) changeFailed(failed);
+    else dismiss("memory");
     onChanged();
   };
   const move = (to: Target | undefined, done: string) => {
@@ -585,6 +586,7 @@ function Editor({
         setBusy(false);
         if (failed)
           notify({ key: "memory", tone: "error", title: `Couldn't save ${label}`, body: failed });
+        else dismiss("memory");
       }}
     >
       <textarea

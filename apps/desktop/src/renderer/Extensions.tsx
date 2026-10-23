@@ -2,7 +2,7 @@ import { FolderOpen, Puzzle, Trash2 } from "lucide-react";
 import { createElement, useEffect, useId, useState } from "react";
 
 import type { ExtensionInfo } from "../preload/bridge";
-import { notify } from "./notifications";
+import { dismiss, notify } from "./notifications";
 import { memory } from "./stored";
 import { IconButton, Menu, menuHeading, menuItem } from "./ui";
 
@@ -33,7 +33,10 @@ export function Extensions({ tab }: { tab?: number }) {
         title: "Couldn't add the extension",
         body: answer,
       });
-    else if (answer) setLink("");
+    else if (answer) {
+      dismiss("extension");
+      setLink("");
+    }
     void refresh();
   };
   const install = () => {

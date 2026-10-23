@@ -30,8 +30,8 @@ export type Notice = {
   /** The underlined link after the body: a page to open, or something to do in the app. */
   action?: { label: string; href: string } | { label: string; run: () => void };
   /**
-   * Work under way: a spinner, and a bar at `percent`, or pulsing without one. Replace the notice
-   * by its key as it goes, and with another or `dismiss` once it's done.
+   * Work under way: a spinner, and a bar at `percent`, or pulsing without one. `update` it by its
+   * key as it goes, and replace it with another or `dismiss` it once it's done.
    */
   progress?: { percent?: number };
   /**
@@ -79,6 +79,15 @@ export function notify(notice: Notice) {
   const replaced = notice.key === undefined ? undefined : shown.find((n) => n.key === notice.key);
   const kept = shown.filter((n) => n !== replaced);
   set([{ ...notice, id: replaced?.id ?? nextId++ }, ...kept].slice(0, MAX_SHOWN));
+}
+
+/**
+ * Replaces the notice with `notice`'s key in place, while it's shown: work that goes on updates its
+ * notice without bringing back one the user closed.
+ */
+export function update(notice: Notice & { key: string }) {
+  const replaced = shown.find((n) => n.key === notice.key);
+  if (replaced) set(shown.map((n) => (n === replaced ? { ...notice, id: replaced.id } : n)));
 }
 
 /** Closes the notice with `key`, if one is shown, as when the work it followed is done. */

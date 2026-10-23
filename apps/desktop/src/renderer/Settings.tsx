@@ -35,7 +35,7 @@ import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { models, setCliEnabled, useDisabledClis } from "./models";
-import { notify } from "./notifications";
+import { dismiss, notify } from "./notifications";
 import {
   kindOf,
   logoOf,
@@ -1010,9 +1010,11 @@ function InstancePane({
   const version = versionOf(instance);
   // The host's keys are for its Claude Code and Codex, the instances named for their kind.
   const keyProvider = instance.id === instance.kind ? cliInfo[instance.id]?.keyProvider : undefined;
-  // Its failures replace each other, and the sign-in notice that follows them.
+  // Its failures replace each other, and the sign-in notice that follows them. Trying again
+  // closes the last one, as `retry` does.
   const failed = (title: string, body: string) =>
     notify({ key: `provider/${hostId}/${instance.id}`, tone: "error", title, body });
+  const retry = () => dismiss(`provider/${hostId}/${instance.id}`);
   // Whether the open terminal installs the CLI rather than signs in. Kept from when it opened, so
   // an install that ends and finds the CLI doesn't turn into a sign-in.
   const [installing, setInstalling] = useState(false);
@@ -1028,6 +1030,7 @@ function InstancePane({
       setInstalling(true);
       return onSignIn(true);
     }
+    retry();
     setNpmInstalling(true);
     // plxd installs Cursor's SDK in the background and reports it `installing` until it's done.
     let problem: string | undefined;
@@ -1058,6 +1061,7 @@ function InstancePane({
     !instance.program &&
     (instance.kind !== "pi" || piCommand === "pi");
   const save = async (change: Partial<ProviderInstance>) => {
+    retry();
     const problem = await saveProvider(hostId, { ...instance, ...change });
     if (problem) failed(`Couldn't save ${instance.name}`, problem);
   };
@@ -1096,6 +1100,7 @@ function InstancePane({
     }
   }, [cursorWaiting, info.signInError, hostId, instance.id, instance.name]);
   const signInCursor = async () => {
+    retry();
     const answer = await window.parallax.request(hostId, "cursor/signIn", {
       instance: instance.id,
     });
@@ -1107,6 +1112,7 @@ function InstancePane({
     setCursorWaiting(true);
   };
   const signOutCursor = async () => {
+    retry();
     const answer = await window.parallax.request(hostId, "cursor/signOut", {
       instance: instance.id,
     });

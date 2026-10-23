@@ -115,7 +115,7 @@ import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NightSky } from "./NightSky";
-import { notify } from "./notifications";
+import { dismiss, notify } from "./notifications";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
@@ -2396,9 +2396,10 @@ function Marked({ text, words }: { text: string; words: readonly string[] }) {
 
 /** What a Project favorite's menu opens (Favorites.tsx). */
 type ProjectDialog = "rename" | "icon" | "access" | "autonomy";
-/** Says why a sidebar action failed, when `error` says one did. */
+/** Says why a sidebar action failed, when `error` says one did, and closes that once one works. */
 function actionFailed(error: string | undefined, title: string) {
   if (error) notify({ key: "sidebar", tone: "error", title, body: error });
+  else dismiss("sidebar");
 }
 
 type ProjectDialogsHandle = {

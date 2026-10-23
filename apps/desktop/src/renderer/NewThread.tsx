@@ -14,7 +14,7 @@ import type { Host } from "./hosts";
 import { imageCaps } from "./images";
 import { uploadBytes } from "./uploads";
 import type { RunOptions } from "./models";
-import { dismiss, notify } from "./notifications";
+import { dismiss, notify, update } from "./notifications";
 import { newThreadPrefs } from "./prefs";
 import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
@@ -344,6 +344,7 @@ export function NewThread({
   };
 
   const continueWith = async (option: AccountOption) => {
+    dismiss("account");
     setChoosing(true);
     opening.current = true;
     // Continue is a click on New Thread, so the thread opens, even after a Cmd/Ctrl+Enter.
@@ -381,15 +382,16 @@ export function NewThread({
     const result = await onHostChange(id, {
       at,
       onProgress: (line) => {
-        cloning = true;
         const { phase, percent, detail } = parseProgress(line);
-        notify({
+        // Shown once, then updated while it's open, so one the user closed stays closed.
+        (cloning ? update : notify)({
           key,
           tone: "info",
           title: `Cloning ${repo} onto ${hostName(id)}`,
           body: line ? [phase, detail].filter(Boolean).join(" · ") : "Connecting…",
           progress: { percent },
         });
+        cloning = true;
       },
     });
     setMoving((m) => (m?.hostId === id ? undefined : m));

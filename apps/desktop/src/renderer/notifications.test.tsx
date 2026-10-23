@@ -12,7 +12,7 @@ import {
   useThreadAlarms,
   type ThreadMark,
 } from "./alarms";
-import { dismiss, NOTICE_MS, Notifications, notify } from "./notifications";
+import { dismiss, NOTICE_MS, Notifications, notify, update } from "./notifications";
 import type { HostThreads } from "./Sidebar";
 import { emptyThreads, idleThreads, threadsReducer, asksOf, type ThreadsState } from "./threads";
 
@@ -81,6 +81,9 @@ test("work under way updates in its own toast, stays until done, and closes by i
   act(() => void vi.advanceTimersByTime(NOTICE_MS));
   expect(titles()).toEqual(["Cloning"]);
   act(() => dismiss("clone"));
+  expect(titles()).toEqual([]);
+  // An update doesn't bring back one that was closed.
+  act(() => update({ key: "clone", tone: "info", title: "Cloning", progress: { percent: 60 } }));
   expect(titles()).toEqual([]);
 });
 

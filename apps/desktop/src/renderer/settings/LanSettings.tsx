@@ -8,7 +8,7 @@ import type {
 } from "../../protocol/generated/protocol";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { localId, useHosts, type Host } from "../hosts";
-import { notify } from "../notifications";
+import { dismiss, notify } from "../notifications";
 import {
   dangerButton,
   primaryButton,
@@ -53,9 +53,10 @@ export function LanSettings() {
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [status, setStatus] = useState<RemoteSessionsResult>();
   const [adding, setAdding] = useState(false);
-  // What a switch or button here couldn't do. One replaces the last.
+  // What a switch or button here couldn't do. One replaces the last, and trying again closes it.
   const failed = (title: string, body: string) =>
     notify({ key: "same-network", tone: "error", title, body });
+  const retry = () => dismiss("same-network");
   const sessions = status?.sessions ?? [];
 
   const readSessions = async () => {
@@ -91,6 +92,7 @@ export function LanSettings() {
   }, [polling]);
 
   const toggle = async (next: boolean) => {
+    retry();
     const answer = await window.parallax.request(localId, "host/settings/set", { remote: next });
     if ("error" in answer)
       return failed(`Couldn't turn pairing ${next ? "on" : "off"}`, answer.error.message);
@@ -99,6 +101,7 @@ export function LanSettings() {
     void readSessions();
   };
   const toggleWeb = async (next: boolean) => {
+    retry();
     const answer = await window.parallax.request(localId, "host/settings/set", { remoteWeb: next });
     if ("error" in answer)
       return failed(`Couldn't turn Open in a browser ${next ? "on" : "off"}`, answer.error.message);
@@ -106,6 +109,7 @@ export function LanSettings() {
   };
   // On, it registers this computer under the signed-in account first: main sends the token to plxd.
   const toggleRelay = async (next: boolean) => {
+    retry();
     const title = `Couldn't turn Reach from anywhere ${next ? "on" : "off"}`;
     const registered = next ? await window.parallax.registerRelay() : undefined;
     if (registered) return failed(title, registered);
@@ -115,6 +119,7 @@ export function LanSettings() {
     void readSessions();
   };
   const removeRelayHost = async (hostId: string) => {
+    retry();
     setConfirmingRelay(undefined);
     const hosts = await window.parallax.removeRelayHost(hostId);
     if (typeof hosts === "string")
@@ -122,12 +127,14 @@ export function LanSettings() {
     setRelayHosts(hosts);
   };
   const pair = async () => {
+    retry();
     const answer = await window.parallax.request(localId, "remote/pair", {});
     if ("error" in answer) return failed("Couldn't make a pairing code", answer.error.message);
     setCode({ ...answer.result, before: sessions.length });
     void readSessions();
   };
   const revoke = async (id: string) => {
+    retry();
     const answer = await window.parallax.request(localId, "remote/revoke", { id });
     if ("error" in answer) return failed("Couldn't revoke the computer", answer.error.message);
     setStatus(answer.result);
