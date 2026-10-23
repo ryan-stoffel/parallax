@@ -3529,6 +3529,12 @@ export type AgentBackgroundTask = {
 	 * What it does, as the agent described it, such as `Watching pull request #746`.
 	 */
 	description: string,
+	/**
+	 * For one of the agent's own subagents, the call that started it, as its `subagent` items
+	 * name it, so a subagent still running after its parent's turn ended shows as working
+	 * (PLX-929). Absent for other kinds and from an older plxd.
+	 */
+	callId?: string,
 };
 
 /**

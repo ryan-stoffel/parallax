@@ -2,6 +2,7 @@
 // tested without React; useAgentRun feeds it a snapshot's events, older pages
 // of `orchestration/threadHistory`, and live events alike.
 import type {
+  AgentBackgroundTask,
   AgentFailureKind,
   AgentOutcome,
   AgentOutputItem,
@@ -266,16 +267,27 @@ export type SubagentState = "running" | "completed" | "failed" | "stopped";
 /**
  * Where a subagent stands. Only its finish says it's done: a status this app doesn't know reads as
  * stopped. Without one, a call that failed failed it, and otherwise it works while its run is
- * `live` and was stopped with the run once it isn't, since a background subagent's call succeeds
- * as soon as it launches.
+ * `live` or its call is among the run's `background` tasks, as a background subagent keeps going
+ * after its parent's turn ends (PLX-929), and was stopped once neither holds, since a background
+ * subagent's call succeeds as soon as it launches.
  */
-export function subagentState(s: Subagent, live: boolean): SubagentState {
+export function subagentState(
+  s: Subagent,
+  live: boolean,
+  background: ReadonlySet<string> = noCalls,
+): SubagentState {
   const status = s.finished?.status;
   if (status === "completed" || status === "failed") return status;
   if (status) return "stopped";
   if (s.call === "error" || s.call === "denied") return "failed";
-  return live ? "running" : "stopped";
+  return live || background.has(s.callId) ? "running" : "stopped";
 }
+
+const noCalls: ReadonlySet<string> = new Set();
+
+/** The calls that started a run's background subagents still running, as `subagentState` takes. */
+export const backgroundCalls = (tasks: readonly AgentBackgroundTask[]): ReadonlySet<string> =>
+  new Set(tasks.flatMap((task) => (task.callId ? [task.callId] : [])));
 
 export const subagentLabels: Record<SubagentState, string> = {
   running: "Working",

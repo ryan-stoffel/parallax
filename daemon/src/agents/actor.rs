@@ -4985,6 +4985,7 @@ mod tests {
                     task_id: id.to_owned(),
                     kind: AgentBackgroundKind::Command,
                     description: "npm run dev".to_owned(),
+                    call_id: None,
                 })
                 .collect(),
         };

@@ -28,10 +28,14 @@ export interface NativeSubagent {
   model?: string;
 }
 
-/** The open thread's subagents, whether its run is live, and how to open one. */
+/**
+ * The open thread's subagents, whether its run is live, the calls of those still running in the
+ * background, and how to open one.
+ */
 export interface Subagents {
   subagents: Readonly<Record<string, Subagent>>;
   live: boolean;
+  background: ReadonlySet<string>;
   open: (callId: string) => void;
 }
 
@@ -56,6 +60,7 @@ export function modelName(model?: string) {
 export function nativeSubagents(
   subagents: Readonly<Record<string, Subagent>> | undefined,
   live: boolean,
+  background?: ReadonlySet<string>,
 ): NativeSubagent[] {
   return Object.values(subagents ?? {})
     .filter((s) => s.at !== undefined)
@@ -63,7 +68,7 @@ export function nativeSubagents(
       callId: s.callId,
       ...(s.parent && { parent: s.parent }),
       title: nativeTitle(s),
-      state: subagentState(s, live),
+      state: subagentState(s, live, background),
       ...(s.model && { model: s.model }),
     }));
 }
@@ -110,7 +115,7 @@ function Avatar({ sub, state }: { sub: Subagent; state?: SubagentState }) {
 export function SubagentRow({ sub }: { sub: Subagent }) {
   const context = useContext(SubagentsContext);
   if (!context) return undefined;
-  const state = subagentState(sub, context.live);
+  const state = subagentState(sub, context.live, context.background);
   const title = nativeTitle(sub);
   const said = lastWord(sub);
   return (
@@ -162,7 +167,7 @@ export function SubagentCard({
   const context = useContext(SubagentsContext);
   if (!context) return undefined;
   if (subs.length === 1) return <SubagentRow sub={subs[0]!} />;
-  const states = subs.map((s) => subagentState(s, context.live));
+  const states = subs.map((s) => subagentState(s, context.live, context.background));
   const counts = (["running", "completed", "failed", "stopped"] as const)
     .map((state) => ({ state, n: states.filter((s) => s === state).length }))
     .filter(({ n }) => n > 0);

@@ -906,6 +906,36 @@ export function createFixtures(now = Date.now()): Fixtures {
         turnId: uuid(92),
         text: "Can a stable user opt in to nightlies from Settings?",
       },
+      // A subagent started in the background, still working after the turn ends (PLX-929).
+      {
+        kind: "toolCall",
+        callId: "toolu_updater_review",
+        name: "Agent",
+        input: {
+          description: "Review the updater channel change",
+          prompt: "Review the updater's channel change against 0028 and report any bugs.",
+          subagent_type: "general-purpose",
+          run_in_background: true,
+        },
+      },
+      {
+        kind: "toolResult",
+        callId: "toolu_updater_review",
+        status: "ok",
+        output: "Async agent launched successfully.",
+      },
+      {
+        kind: "subagent",
+        callId: "toolu_updater_review",
+        agentType: "general-purpose",
+        model: OPUS,
+        item: {
+          kind: "toolCall",
+          callId: callId(),
+          name: "Read",
+          input: { file_path: "apps/desktop/src/main/updater.ts" },
+        },
+      },
       {
         kind: "text",
         text: "Not without a setting, and 0028 keeps the channel out of settings on purpose: switching a stable install to nightlies would mean a downgrade path back. The supported way is to install a nightly build, which then follows nightlies on its own. I'd leave it as is; if you want an opt-in, it should be its own decision record.",

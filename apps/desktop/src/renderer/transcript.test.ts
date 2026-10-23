@@ -5,6 +5,7 @@ import type { AgentOutputItem, LoggedEvent, ParallaxEvent } from "../protocol/ge
 import {
   applyCompacted,
   applyEvents,
+  backgroundCalls,
   emptyTranscript,
   groupWork,
   subagentRuns,
@@ -740,6 +741,19 @@ test("a subagent works until it says how it ended, whatever its call's result", 
   // A finish this app doesn't know isn't Done.
   const newer = { status: "paused" } as unknown as NonNullable<Subagent["finished"]>;
   expect(subagentState({ ...sub, finished: newer }, true)).toBe("stopped");
+});
+
+test("a background subagent works after its parent's turn ends, until it finishes (PLX-929)", () => {
+  const sub = { callId: "a", items: [], call: "ok" as const };
+  const background = backgroundCalls([
+    { taskId: "t1", kind: "agent", description: "Review", callId: "a" },
+    { taskId: "t2", kind: "command", description: "npm run dev" },
+  ]);
+  expect(subagentState(sub, false, background)).toBe("running");
+  expect(subagentState({ ...sub, callId: "b" }, false, background)).toBe("stopped");
+  expect(subagentState({ ...sub, finished: { status: "completed" } }, false, background)).toBe(
+    "completed",
+  );
 });
 
 test("marks a session on another model above the message sent with it (PLX-495)", () => {

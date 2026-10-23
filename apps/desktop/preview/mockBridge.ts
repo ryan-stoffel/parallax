@@ -160,12 +160,20 @@ type Listener = {
 let subscriptions = 0;
 const listeners = new Set<Listener>();
 
-// What "Rework the updater" waits on (PLX-777): a Monitor on its CI, and plxd's watch of its pull
-// request. Stop ends either, with the event plxd would send.
+// What "Rework the updater" waits on (PLX-777): a Monitor on its CI, a subagent in the background
+// (PLX-929), and plxd's watch of its pull request. Stop ends any, with the event plxd would send.
 const background = new Map<string, AgentBackgroundTask[]>([
   [
     ids.updater,
-    [{ taskId: "monitor-1", kind: "monitor", description: "Watching CI on pull request #588" }],
+    [
+      { taskId: "monitor-1", kind: "monitor", description: "Watching CI on pull request #588" },
+      {
+        taskId: "agent-1",
+        kind: "agent",
+        description: "Review the updater channel change",
+        callId: "toolu_updater_review",
+      },
+    ],
   ],
 ]);
 const watching = new Map([[ids.updater, ["https://github.com/ryan-stoffel/parallax/pull/588"]]]);
