@@ -1289,7 +1289,8 @@ impl Actor {
     /// Sends what is waiting as the run's next turn, through the same resume as `agent/send`
     /// (PLX-42, PLX-380). Pauses wake-ups at the cap, or when this fails, keeping what is
     /// waiting. Only a project's current coordinator wakes: a replaced one drops them, so a
-    /// project never has two live (0024).
+    /// project never has two live (0024). `project/start` caught the new one up on them, start
+    /// lines aside, and `wake::send` sends later ones to it (PLX-936).
     async fn wake(&mut self) {
         // A shared thread's wake-up waits in line for a slot, and [`Self::slotted`] sends it.
         if !self.slot_ready().await {

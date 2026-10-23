@@ -1034,6 +1034,97 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
     host.server.stop().await;
 }
 
+/// PLX-936: a Start over orphans no child. One ends while the old coordinator's wake-ups are
+/// paused, and another after the new coordinator replaced it; the new one's single catch-up
+/// wake-up names both, and the old one never runs again.
+#[tokio::test]
+async fn children_of_a_replaced_coordinator_wake_the_one_that_replaced_it() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let worker = vec![init("worker-1"), Step::AwaitFollowUp, end_turn("Added it.")];
+    let coordinators = vec![
+        vec![init("coordinator-1"), end_turn("Planned.")],
+        vec![
+            init("coordinator-2"),
+            Step::AwaitFollowUp,
+            end_turn("Started over."),
+        ],
+        vec![init("coordinator-2"), end_turn("Reviewed.")],
+    ];
+    let host = Host::start(temp_dir(), roles(worker, coordinators, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let old = client
+        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let before = spawn(&mut client, &old, "Add a README.").await;
+    let after = spawn(&mut client, &old, "Add a license.").await;
+    sessions(&mut client, &[before, after]).await;
+    client
+        .call::<AgentCancel>(AgentCancelParams {
+            run_id: old.id,
+            from: None,
+        })
+        .await
+        .unwrap();
+    until(&mut client, |event| {
+        matches!(event.event, ParallaxEvent::AgentWakeupsPaused { .. })
+    })
+    .await;
+
+    let finish = async |client: &mut Conn, run: RunId| {
+        client
+            .call::<AgentSend>(AgentSendParams {
+                delivery: Some(AgentDelivery::Steer),
+                ..send_params(run, TurnId::generate(), "Finish.")
+            })
+            .await
+            .unwrap();
+        until(client, |event| {
+            matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+                if *run_id == run && state.status == AgentStatus::Completed)
+        })
+        .await;
+    };
+    // Its end waits on the old coordinator, paused.
+    finish(&mut client, before).await;
+    let new = client
+        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .await
+        .unwrap()
+        .run;
+    finish(&mut client, after).await;
+    // The new coordinator's first turn ends, and the catch-up follows it.
+    client
+        .call::<AgentSend>(AgentSendParams {
+            delivery: Some(AgentDelivery::Steer),
+            ..send_params(new.id, TurnId::generate(), "Go on.")
+        })
+        .await
+        .unwrap();
+
+    let wake = nth_launch(&seen, 2).await;
+    assert_eq!(
+        wake.resume.map(|resume| resume.session_id).as_deref(),
+        Some("coordinator-2"),
+        "the new coordinator wakes"
+    );
+    for (run, task) in [(before, "Add a README."), (after, "Add a license.")] {
+        assert!(
+            wake.prompt
+                .contains(&format!("- Run {run} ({task}): completed")),
+            "{}",
+            wake.prompt
+        );
+    }
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(coordinator_launches(&seen).len(), 3, "one wake-up");
+    host.server.stop().await;
+}
+
 /// PLX-380 (0025): only the user's own message ends a pause. A child's message to its parent
 /// (`thread_send`, with `from`) reaches it but leaves its wake-ups paused, so a loop between them
 /// can't get past the cap.

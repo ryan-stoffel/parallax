@@ -16,6 +16,8 @@
 //! disk ([`proposals`], 0044).
 //! A question counts as seen once a wake-up turn carries it to its coordinator's CLI, which
 //! the store keeps (PLX-469).
+//! A Project's coordinator's wake-ups go to the Project's current coordinator, so a Start over
+//! orphans no child ([`target`], [`hand_over`], PLX-936).
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -153,7 +155,8 @@ impl Wakes {
         self.state = state;
     }
 
-    /// Drops what is waiting, for a coordinator a newer one replaced (0024).
+    /// Drops what is waiting, for a coordinator a newer one replaced (0024): [`hand_over`] rebuilt
+    /// it for the new one (PLX-936).
     pub fn clear(&mut self) {
         self.waiting.clear();
         self.questions.clear();
@@ -211,8 +214,8 @@ pub(super) fn child_ended(
     });
 }
 
-/// Hands `summary` to run `parent`'s actor: see [`notify_questions`]. `task` is the delegated
-/// task it reports, if any.
+/// Hands `summary` to the actor of [`target`] of run `parent`: see [`notify_questions`]. `task`
+/// is the delegated task it reports, if any.
 fn send(
     daemon: &Arc<Daemon>,
     parent: Uuid,
@@ -220,11 +223,17 @@ fn send(
     questions: Vec<Uuid>,
     task: Option<Uuid>,
 ) {
-    let Ok(id) = RunId::try_from(parent) else {
-        return;
-    };
     let owned = Arc::clone(daemon);
     daemon.agents.tracker.spawn(async move {
+        let target = store(&owned, move |db| target(db, parent))
+            .await
+            .unwrap_or_else(|error| {
+                warn!(parent = %parent, error = %error.message, "could not find who a wake-up goes to");
+                parent
+            });
+        let Ok(id) = RunId::try_from(target) else {
+            return;
+        };
         match super::actor_for(&owned, id).await {
             Ok(actor) => {
                 // A closed channel is a parent that stopped or was deleted: nothing to wake.
@@ -235,6 +244,20 @@ fn send(
             }
         }
     });
+}
+
+/// The run `parent`'s wake-ups go to: for a Project's coordinator, whichever is the Project's
+/// coordinator now, so children a replaced one launched wake the one that replaced it (PLX-936);
+/// for any other run, itself.
+fn target(db: &parallax_store::Store, parent: Uuid) -> Result<Uuid, ErrorObject> {
+    let Some(run) = db.get_run(parent).map_err(|e| store_error(&e))? else {
+        return Ok(parent);
+    };
+    if run.fields.policy != NO_WRITE {
+        return Ok(parent);
+    }
+    let current = super::coordinator::coordinator_of(db, run.fields.project_id)?;
+    Ok(current.map_or(parent, Uuid::from))
 }
 
 /// Wakes `run`'s Project's current coordinator, if it has one, to say the run started (0043), so
@@ -261,20 +284,53 @@ pub(super) fn started(daemon: &Arc<Daemon>, run: &AgentRun) {
     });
 }
 
-/// Hands `project`'s questions still open to `coordinator` as one wake-up, which waits for its
-/// first turn to end (PLX-402). For a coordinator `project/start` just started: one it replaced
-/// dropped its waiting wake-ups (0024), so no question is lost with them.
-pub(super) fn hand_over(daemon: &Arc<Daemon>, project: Uuid, coordinator: RunId) {
+/// Hands a coordinator `project/start` just started one catch-up wake-up, which waits for its
+/// first turn to end: `project`'s questions still open (PLX-402), and the ends of the children of
+/// `replaced`, the coordinator it replaced, since that one's last turn began (PLX-936). Those are
+/// rebuilt from the store, as [`catch_up`] does, since the replaced one drops what it was holding,
+/// paused or not; later ends reach the new one through [`target`].
+pub(super) fn hand_over(
+    daemon: &Arc<Daemon>,
+    project: Uuid,
+    coordinator: RunId,
+    replaced: Option<Uuid>,
+) {
     let owned = Arc::clone(daemon);
     daemon.agents.tracker.spawn(async move {
-        match store(&owned, move |db| open_questions(db, project, coordinator.into())).await {
-            Ok(open) if !open.is_empty() => {
-                let (ids, lines): (Vec<_>, Vec<_>) = open.into_iter().unzip();
-                notify_questions(&owned, coordinator.into(), lines.join("\n"), ids);
+        let caught = store(&owned, move |db| {
+            let (ids, mut lines): (Vec<_>, Vec<_>) =
+                open_questions(db, project, coordinator.into())?
+                    .into_iter()
+                    .unzip();
+            let old = match replaced {
+                Some(old) => db.get_run(old).map_err(|e| store_error(&e))?,
+                None => None,
+            };
+            let mut tasks = Vec::new();
+            if let Some(old) = old {
+                let runs = db.list_runs(Some(project)).map_err(|e| store_error(&e))?;
+                let since = db
+                    .last_turn_at(old.id)
+                    .map_err(|e| store_error(&e))?
+                    .unwrap_or(old.created_at);
+                let (ends, delegated) = ended(db, &runs, old.id, since)?;
+                lines.extend(ends);
+                tasks = delegated;
             }
-            Ok(_) => {}
+            Ok((lines, ids, tasks))
+        })
+        .await;
+        match caught {
+            Ok((lines, ids, tasks)) => {
+                if !lines.is_empty() {
+                    notify_questions(&owned, coordinator.into(), lines.join("\n"), ids);
+                }
+                for (line, task) in tasks {
+                    send(&owned, coordinator.into(), line, Vec::new(), Some(task));
+                }
+            }
             Err(error) => {
-                warn!(error = %error.message, "could not hand a Project's questions to its coordinator");
+                warn!(error = %error.message, "could not catch a Project's new coordinator up");
             }
         }
     });
@@ -371,7 +427,8 @@ pub(super) async fn deliver(daemon: &Arc<Daemon>, coordinator: RunId, questions:
 /// again. If a Project's current coordinator's own turn was interrupted, the summary says so,
 /// since nothing else would pick it back up, and it names the Project's questions still open that
 /// no wake-up turn carried to it (PLX-469), unless the Project's autonomy is Ask me, which hands
-/// questions to the user instead. A replaced coordinator is skipped (0024). Called once at
+/// questions to the user instead. A replaced coordinator's children wake the current one
+/// ([`target`], PLX-936), for the ends since the current one's last turn began. Called once at
 /// startup, after runs the store still has running are marked interrupted.
 // ponytail: rebuilt from run rows, so a summary lacks the run's last result, and a run that ended
 // before the user's last message to the coordinator isn't named; store the summaries if that
@@ -395,14 +452,18 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
         );
         let mut missed = Vec::new();
         for parent in parents.iter().filter_map(|id| by_id.get(id)) {
-            let current = coordinators.get(&parent.fields.project_id) == Some(&parent.id);
-            if parent.fields.policy == NO_WRITE && !current {
-                continue;
-            }
+            let now = coordinators.get(&parent.fields.project_id);
+            let current = now == Some(&parent.id);
+            // A replaced coordinator's children count from the current one's last turn, since
+            // their ends go to it.
+            let from = match now.and_then(|id| by_id.get(id)) {
+                Some(now) if parent.fields.policy == NO_WRITE => now,
+                _ => parent,
+            };
             let since = db
-                .last_turn_at(parent.id)
+                .last_turn_at(from.id)
                 .map_err(|e| store_error(&e))?
-                .unwrap_or(parent.created_at);
+                .unwrap_or(from.created_at);
             let mut lines = Vec::new();
             let mut questions = Vec::new();
             let mut tasks = Vec::new();
@@ -415,28 +476,9 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
                     lines.push(line);
                 }
             }
-            for run in runs.iter().filter(|run| {
-                run.fields.parent == Some(parent.id)
-                    && run.fields.notify_parent
-                    && run.updated_at > since
-            }) {
-                let delivery = crate::delegation::wakes(db, run.id, parent.id)?;
-                if unrun_fork(db, run.id)? || delivery.is_none() {
-                    continue;
-                }
-                let worktree = db.get_worktree(run.id).map_err(|e| store_error(&e))?;
-                let Ok(run) = agent_run(run, worktree.as_ref()) else {
-                    continue;
-                };
-                let Some(outcome) = stored_outcome(&run) else {
-                    continue;
-                };
-                if delivery == Some(true) {
-                    tasks.push((completion(&run, &outcome), run.id.into()));
-                } else {
-                    lines.push(summary(&run, &outcome));
-                }
-            }
+            let (ends, delegated) = ended(db, &runs, parent.id, since)?;
+            lines.extend(ends);
+            tasks.extend(delegated);
             if !lines.is_empty() || !tasks.is_empty() {
                 missed.push((parent.id, lines.join("\n"), questions, tasks));
             }
@@ -460,6 +502,41 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
             warn!(error = %error.message, "could not find what parents missed while plxd was stopped");
         }
     }
+}
+
+/// Delegated completions' lines, each with its task (0063).
+type Delegated = Vec<(String, Uuid)>;
+
+/// Of `runs`, the notifying children of `parent` that ended after `since`, rebuilt from their
+/// rows: summary lines, and delegated completions with their tasks (0063).
+fn ended(
+    db: &parallax_store::Store,
+    runs: &[parallax_store::Run],
+    parent: Uuid,
+    since: jiff::Timestamp,
+) -> Result<(Vec<String>, Delegated), ErrorObject> {
+    let (mut lines, mut tasks) = (Vec::new(), Vec::new());
+    for run in runs.iter().filter(|run| {
+        run.fields.parent == Some(parent) && run.fields.notify_parent && run.updated_at > since
+    }) {
+        let delivery = crate::delegation::wakes(db, run.id, parent)?;
+        if unrun_fork(db, run.id)? || delivery.is_none() {
+            continue;
+        }
+        let worktree = db.get_worktree(run.id).map_err(|e| store_error(&e))?;
+        let Ok(run) = agent_run(run, worktree.as_ref()) else {
+            continue;
+        };
+        let Some(outcome) = stored_outcome(&run) else {
+            continue;
+        };
+        if delivery == Some(true) {
+            tasks.push((completion(&run, &outcome), run.id.into()));
+        } else {
+            lines.push(summary(&run, &outcome));
+        }
+    }
+    Ok((lines, tasks))
 }
 
 /// Whether run `id` is a fork that hasn't started a turn of its own (0050): its row reads
