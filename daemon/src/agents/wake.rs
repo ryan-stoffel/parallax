@@ -185,27 +185,39 @@ pub(crate) fn notify_questions(
     send(daemon, parent, summary, questions, None);
 }
 
-/// Wakes `parent` because its child `run` ended with `outcome` (0025). A task it delegated
-/// reports with T3 Code's delegated completion, unless the parent read or cancelled it, or it
-/// waits on it in a running turn ([`crate::delegation::wakes`], 0063).
+/// Wakes `parent`'s [`target`] because its child `run` ended with `outcome` at `ended`, the time
+/// its end was stored (0025). A task it delegated reports with T3 Code's delegated completion,
+/// unless the parent read or cancelled it, or it waits on it in a running turn
+/// ([`crate::delegation::wakes`], 0063). A coordinator made after `ended` was handed the end
+/// when it was made ([`handed`], PLX-936), so it isn't woken for it again.
 pub(super) fn child_ended(
     daemon: &Arc<Daemon>,
     parent: Uuid,
     run: &AgentRun,
     outcome: &AgentOutcome,
+    ended: jiff::Timestamp,
 ) {
     let child = Uuid::from(run.id);
     let (line, delegated) = (summary(run, outcome), completion(run, outcome));
     let owned = Arc::clone(daemon);
     daemon.agents.tracker.spawn(async move {
         let wakes = store(&owned, move |db| {
-            crate::delegation::wakes(db, child, parent)
+            let to = target(db, parent)?;
+            if to != parent
+                && db
+                    .get_run(to)
+                    .map_err(|e| store_error(&e))?
+                    .is_some_and(|current| current.created_at > ended)
+            {
+                return Ok(None);
+            }
+            Ok(crate::delegation::wakes(db, child, to)?.map(|task| (to, task)))
         })
         .await;
         match wakes {
             Ok(None) => {}
-            Ok(Some(true)) => send(&owned, parent, delegated, Vec::new(), Some(child)),
-            Ok(Some(false)) => send(&owned, parent, line, Vec::new(), None),
+            Ok(Some((to, true))) => wake(&owned, to, delegated, Vec::new(), Some(child)).await,
+            Ok(Some((to, false))) => wake(&owned, to, line, Vec::new(), None).await,
             Err(error) => {
                 warn!(parent = %parent, error = %error.message, "could not read how a child wakes its parent");
                 send(&owned, parent, line, Vec::new(), None);
@@ -231,19 +243,30 @@ fn send(
                 warn!(parent = %parent, error = %error.message, "could not find who a wake-up goes to");
                 parent
             });
-        let Ok(id) = RunId::try_from(target) else {
-            return;
-        };
-        match super::actor_for(&owned, id).await {
-            Ok(actor) => {
-                // A closed channel is a parent that stopped or was deleted: nothing to wake.
-                let _ = actor.send(Command::Wake(summary, questions, task)).await;
-            }
-            Err(error) => {
-                warn!(parent = %id, error = %error.message, "could not wake a parent");
-            }
-        }
+        wake(&owned, target, summary, questions, task).await;
     });
+}
+
+/// Hands `summary` to run `id`'s actor, spawning one after a restart.
+async fn wake(
+    daemon: &Arc<Daemon>,
+    id: Uuid,
+    summary: String,
+    questions: Vec<Uuid>,
+    task: Option<Uuid>,
+) {
+    let Ok(id) = RunId::try_from(id) else {
+        return;
+    };
+    match super::actor_for(daemon, id).await {
+        Ok(actor) => {
+            // A closed channel is a parent that stopped or was deleted: nothing to wake.
+            let _ = actor.send(Command::Wake(summary, questions, task)).await;
+        }
+        Err(error) => {
+            warn!(parent = %id, error = %error.message, "could not wake a parent");
+        }
+    }
 }
 
 /// The run `parent`'s wake-ups go to: for a Project's coordinator, whichever is the Project's
@@ -284,56 +307,104 @@ pub(super) fn started(daemon: &Arc<Daemon>, run: &AgentRun) {
     });
 }
 
-/// Hands a coordinator `project/start` just started one catch-up wake-up, which waits for its
-/// first turn to end: `project`'s questions still open (PLX-402), and the ends of the children of
-/// `replaced`, the coordinator it replaced, since that one's last turn began (PLX-936). Those are
-/// rebuilt from the store, as [`catch_up`] does, since the replaced one drops what it was holding,
-/// paused or not; later ends reach the new one through [`target`].
-pub(super) fn hand_over(
-    daemon: &Arc<Daemon>,
+/// A new coordinator's catch-up wake-up: its lines, the questions they name, and delegated
+/// completions with their tasks.
+#[derive(Default)]
+pub(super) struct HandOver {
+    lines: Vec<String>,
+    questions: Vec<Uuid>,
+    tasks: Delegated,
+}
+
+/// What `coordinator`, which `project/start` is making, hasn't heard of: `project`'s questions
+/// still open (PLX-402), and, when it replaces `replaced`, the ends of the children of every
+/// coordinator before it since `replaced`'s last turn began (PLX-936). A replaced coordinator
+/// drops what it was holding, paused or not, which may be ends of an older one's children, so
+/// they are rebuilt from the store, as [`catch_up`] does. Read in the store job that makes
+/// `coordinator`'s row: an end saved before it is named here, and one saved after reaches the new
+/// one through [`child_ended`] alone. Empty, with a warning, if the store can't say.
+pub(super) fn handed(
+    db: &parallax_store::Store,
     project: Uuid,
-    coordinator: RunId,
-    replaced: Option<Uuid>,
-) {
-    let owned = Arc::clone(daemon);
-    daemon.agents.tracker.spawn(async move {
-        let caught = store(&owned, move |db| {
-            let (ids, mut lines): (Vec<_>, Vec<_>) =
-                open_questions(db, project, coordinator.into())?
-                    .into_iter()
-                    .unzip();
-            let old = match replaced {
-                Some(old) => db.get_run(old).map_err(|e| store_error(&e))?,
-                None => None,
-            };
-            let mut tasks = Vec::new();
-            if let Some(old) = old {
-                let runs = db.list_runs(Some(project)).map_err(|e| store_error(&e))?;
-                let since = db
-                    .last_turn_at(old.id)
-                    .map_err(|e| store_error(&e))?
-                    .unwrap_or(old.created_at);
-                let (ends, delegated) = ended(db, &runs, old.id, since)?;
-                lines.extend(ends);
-                tasks = delegated;
-            }
-            Ok((lines, ids, tasks))
-        })
-        .await;
-        match caught {
-            Ok((lines, ids, tasks)) => {
-                if !lines.is_empty() {
-                    notify_questions(&owned, coordinator.into(), lines.join("\n"), ids);
-                }
-                for (line, task) in tasks {
-                    send(&owned, coordinator.into(), line, Vec::new(), Some(task));
-                }
-            }
-            Err(error) => {
-                warn!(error = %error.message, "could not catch a Project's new coordinator up");
-            }
+    coordinator: Uuid,
+    replaced: Option<&parallax_store::Run>,
+) -> HandOver {
+    caught_up(db, project, coordinator, replaced).unwrap_or_else(|error| {
+        warn!(run = %coordinator, error = %error.message, "could not catch a Project's new coordinator up");
+        HandOver::default()
+    })
+}
+
+fn caught_up(
+    db: &parallax_store::Store,
+    project: Uuid,
+    coordinator: Uuid,
+    replaced: Option<&parallax_store::Run>,
+) -> Result<HandOver, ErrorObject> {
+    let (questions, mut lines): (Vec<_>, Vec<_>) = open_questions(db, project, coordinator)?
+        .into_iter()
+        .unzip();
+    let mut tasks = Vec::new();
+    if let Some(replaced) = replaced {
+        let since = last_turn(db, replaced)?;
+        let runs = db.list_runs(Some(project)).map_err(|e| store_error(&e))?;
+        for parent in runs
+            .iter()
+            .filter(|run| run.fields.policy == NO_WRITE && run.id != coordinator)
+        {
+            let (ends, delegated) = ended(db, &runs, parent.id, since)?;
+            lines.extend(ends);
+            tasks.extend(delegated);
         }
-    });
+    }
+    Ok(HandOver {
+        lines,
+        questions,
+        tasks,
+    })
+}
+
+/// Hands `coordinator` its [`handed`] catch-up as one wake-up, which waits for its first turn to
+/// end.
+pub(super) fn hand_over(daemon: &Arc<Daemon>, coordinator: RunId, handed: HandOver) {
+    let HandOver {
+        lines,
+        questions,
+        tasks,
+    } = handed;
+    if !lines.is_empty() {
+        notify_questions(daemon, coordinator.into(), lines.join("\n"), questions);
+    }
+    for (line, task) in tasks {
+        send(daemon, coordinator.into(), line, Vec::new(), Some(task));
+    }
+}
+
+/// When `run`'s last turn began, or, with none, when it was made.
+fn last_turn(
+    db: &parallax_store::Store,
+    run: &parallax_store::Run,
+) -> Result<jiff::Timestamp, ErrorObject> {
+    Ok(db
+        .last_turn_at(run.id)
+        .map_err(|e| store_error(&e))?
+        .unwrap_or(run.created_at))
+}
+
+/// Since when a Project's current coordinator `now` may not have heard of its coordinators'
+/// children's ends: its last turn, or, while it has had only its first, the last turn of
+/// `before`, the one it replaced, since the ends [`handed`] gave it wait for that turn to end
+/// (PLX-936).
+fn heard(
+    db: &parallax_store::Store,
+    now: &parallax_store::Run,
+    before: Option<&parallax_store::Run>,
+) -> Result<jiff::Timestamp, ErrorObject> {
+    let first_only = db.run_turns(now.id).map_err(|e| store_error(&e))?.len() <= 1;
+    match before {
+        Some(before) if first_only => last_turn(db, before),
+        _ => last_turn(db, now),
+    }
 }
 
 /// The ids and [`question`] lines of `project`'s questions still open that no wake-up turn has
@@ -428,8 +499,8 @@ pub(super) async fn deliver(daemon: &Arc<Daemon>, coordinator: RunId, questions:
 /// since nothing else would pick it back up, and it names the Project's questions still open that
 /// no wake-up turn carried to it (PLX-469), unless the Project's autonomy is Ask me, which hands
 /// questions to the user instead. A replaced coordinator's children wake the current one
-/// ([`target`], PLX-936), for the ends since the current one's last turn began. Called once at
-/// startup, after runs the store still has running are marked interrupted.
+/// ([`target`], PLX-936), for the ends since [`heard`]. Called once at startup, after runs the
+/// store still has running are marked interrupted.
 // ponytail: rebuilt from run rows, so a summary lacks the run's last result, and a run that ended
 // before the user's last message to the coordinator isn't named; store the summaries if that
 // matters.
@@ -438,13 +509,19 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
         let runs = db.list_runs(None).map_err(|e| store_error(&e))?;
         let by_id: HashMap<Uuid, &parallax_store::Run> =
             runs.iter().map(|run| (run.id, run)).collect();
-        // Oldest first, so each project keeps its newest no-write run: its coordinator (0024).
-        let coordinators: HashMap<Uuid, Uuid> = runs
-            .iter()
-            .filter(|run| run.fields.policy == NO_WRITE)
-            .map(|run| (run.fields.project_id, run.id))
+        // Oldest first: each project's no-write runs, its coordinators, newest last (0024).
+        let mut coordinators: HashMap<Uuid, Vec<&parallax_store::Run>> = HashMap::new();
+        for run in runs.iter().filter(|run| run.fields.policy == NO_WRITE) {
+            coordinators
+                .entry(run.fields.project_id)
+                .or_default()
+                .push(run);
+        }
+        let mut parents: BTreeSet<Uuid> = coordinators
+            .values()
+            .filter_map(|list| list.last())
+            .map(|run| run.id)
             .collect();
-        let mut parents: BTreeSet<Uuid> = coordinators.values().copied().collect();
         parents.extend(
             runs.iter()
                 .filter(|run| run.fields.notify_parent)
@@ -452,18 +529,18 @@ pub(super) async fn catch_up(daemon: &Arc<Daemon>) {
         );
         let mut missed = Vec::new();
         for parent in parents.iter().filter_map(|id| by_id.get(id)) {
-            let now = coordinators.get(&parent.fields.project_id);
-            let current = now == Some(&parent.id);
-            // A replaced coordinator's children count from the current one's last turn, since
-            // their ends go to it.
-            let from = match now.and_then(|id| by_id.get(id)) {
-                Some(now) if parent.fields.policy == NO_WRITE => now,
-                _ => parent,
+            // A coordinator's children's ends go to the current one, so they count from it.
+            let (since, current) = match coordinators.get(&parent.fields.project_id) {
+                Some(list) if parent.fields.policy == NO_WRITE => {
+                    let (now, before) = match list.as_slice() {
+                        [.., before, now] => (*now, Some(*before)),
+                        [now] => (*now, None),
+                        [] => continue,
+                    };
+                    (heard(db, now, before)?, now.id == parent.id)
+                }
+                _ => (last_turn(db, parent)?, false),
             };
-            let since = db
-                .last_turn_at(from.id)
-                .map_err(|e| store_error(&e))?
-                .unwrap_or(from.created_at);
             let mut lines = Vec::new();
             let mut questions = Vec::new();
             let mut tasks = Vec::new();

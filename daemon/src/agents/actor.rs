@@ -3908,7 +3908,7 @@ impl Actor {
         if let Some(parent) = self.row.fields.parent
             && self.row.fields.notify_parent
         {
-            wake::child_ended(&self.daemon, parent, &run, &outcome);
+            wake::child_ended(&self.daemon, parent, &run, &outcome, self.row.updated_at);
         }
         // A child sent back from landing goes back in its Project's queue once a turn completes
         // (PLX-410).
