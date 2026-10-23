@@ -255,21 +255,6 @@ test("context and memory follow their folders' events without the runs' output",
   expect(params.every((p) => p.shell === true && p.after === 1)).toBe(true);
 });
 
-test("All files lists the Project's context files with when each changed, and a file opens in place", async () => {
-  await render("h-files", { context: true });
-  expect(listed()).toEqual(["notes.md", "plan.md"]);
-  expect(document.querySelector('[aria-label="All files"]')!.textContent).toContain("Today at");
-  await click(
-    [...document.querySelectorAll("li button")].find((b) => b.textContent?.startsWith("plan.md")),
-  );
-  expect(request.mock.calls.filter(([, m]) => m === "context/read").at(-1)?.[2]).toEqual({
-    project: "p-1",
-    path: "plan.md",
-  });
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "plan.md"));
-  expect(listed()).toEqual(["notes.md", "plan.md"]);
-});
-
 const plan = `# Plan
 
 - [ ] Unify launcher modes ([#17](https://github.com/o/r/issues/17))

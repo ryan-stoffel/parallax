@@ -9,7 +9,7 @@ import { dayLabel, locale } from "./locale";
 import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
 
-/** The status board the coordinator keeps (`coordinator.md` asks for it), led by the Project tab. */
+/** The status board the coordinator keeps, as `coordinator.md` asks; the Project tab leads with it. */
 export const board = "notes.md";
 
 /** Applies one of a Project's events to its context files: a changed file joins or replaces its row, by path. */
