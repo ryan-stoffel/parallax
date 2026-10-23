@@ -6,6 +6,9 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { Code, Eye } from "lucide-react";
+
+import { MarkdownText } from "./AgentChat";
 
 import { pagesOf, type Docx } from "./docx";
 import {
@@ -27,8 +30,8 @@ import { cellAt, colName, splitRef, type Xlsx } from "./xlsx";
  * A presented file in the side panel (PLX-755), view-only, as Claude shows one: its title and
  * type and Download over its pages, which sit on a gray backdrop with the page in view counted at
  * the bottom right. The panel's own button takes it full screen. A spreadsheet shows as its
- * sheets' grids instead, an image or video as itself, and any other file as its size, to download
- * (PLX-834). A video its host streams (PLX-836) isn't read whole first.
+ * sheets' grids instead, an image or video as itself, a Markdown file rendered or as its source
+ * (PLX-931), and any other file as its size, to download (PLX-834). A video its host streams (PLX-836) isn't read whole first.
  */
 export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const src = useStreamUrl(hostId, doc);
@@ -42,6 +45,8 @@ export function DocumentView({ hostId, doc }: { hostId: string; doc: DocRef }) {
 /** A file read whole, then opened by kind. */
 function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const { loaded, error } = useDocument(hostId, doc);
+  const markdown = doc.kind === "file" && /\.(md|markdown)$/i.test(doc.name);
+  const [source, setSource] = useState(false);
 
   let body: ReactNode;
   if (error) body = <p className="p-6 text-[13px] text-muted-foreground">{error}</p>;
@@ -69,6 +74,8 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
         </Paged>
       ) : opened.kind === "media" ? (
         <Media doc={doc} bytes={loaded.bytes} />
+      ) : markdown ? (
+        <MarkdownFile text={new TextDecoder().decode(loaded.bytes)} source={source} />
       ) : (
         <p className="p-6 text-[13px] text-muted-foreground">
           {sizeOf(loaded.bytes.length)}. Parallax can't show this kind of file, but you can download
@@ -82,6 +89,7 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
       doc={doc}
       disabled={!loaded}
       onDownload={() => loaded && download(doc.name, loaded.bytes)}
+      toggle={markdown && <SourceToggle source={source} onChange={setSource} />}
     >
       {body}
     </Framed>
@@ -106,17 +114,21 @@ function Framed({
   doc,
   disabled,
   onDownload,
+  toggle,
   children,
 }: {
   doc: DocRef;
   disabled: boolean;
   onDownload: () => void;
+  /** Switches how the file shows, before its title. */
+  toggle?: ReactNode;
   children: ReactNode;
 }) {
   const type = typeOf(doc);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-1 border-b border-border px-3 py-1.5">
+        {toggle}
         <p className="min-w-0 flex-1 truncate text-[13.5px] text-foreground">
           {titleOf(doc.name)}
           <span className="text-muted-foreground"> · {type}</span>
@@ -131,6 +143,57 @@ function Framed({
         </button>
       </div>
       {children}
+    </div>
+  );
+}
+
+/** A Markdown file (PLX-931), rendered as the transcript renders an agent's, or as its `source`. */
+function MarkdownFile({ text, source }: { text: string; source: boolean }) {
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+      {source ? (
+        <pre className="font-mono text-[12.5px] whitespace-pre-wrap text-foreground">{text}</pre>
+      ) : (
+        <div className="mx-auto max-w-[760px]">
+          <MarkdownText text={text} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Preview and Source buttons, as one control, for a Markdown file. */
+function SourceToggle({
+  source,
+  onChange,
+}: {
+  source: boolean;
+  onChange: (source: boolean) => void;
+}) {
+  const button =
+    "grid size-7 place-items-center rounded-md text-muted-foreground hover:text-foreground aria-pressed:bg-hover aria-pressed:text-foreground";
+  return (
+    <div className="mr-1 flex shrink-0 gap-0.5 rounded-lg bg-selected p-0.5">
+      <button
+        type="button"
+        aria-label="Preview"
+        title="Preview"
+        aria-pressed={!source}
+        onClick={() => onChange(false)}
+        className={button}
+      >
+        <Eye aria-hidden className="size-4" />
+      </button>
+      <button
+        type="button"
+        aria-label="Source"
+        title="Source"
+        aria-pressed={source}
+        onClick={() => onChange(true)}
+        className={button}
+      >
+        <Code aria-hidden className="size-4" />
+      </button>
     </div>
   );
 }

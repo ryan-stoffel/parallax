@@ -17,7 +17,8 @@
           "Budget.xlsx",
           "Ember_Deck.pptx",
           "Ember_Screenshot.png",
-          "Ember_Recording.mp4"
+          "Ember_Recording.mp4",
+          "Ember_Notes.md"
         ]
       }
     }
@@ -27,13 +28,13 @@
       "kind": "toolResult",
       "callId": "toolu_present",
       "status": "ok",
-      "output": "{\"presentedFiles\": [{\"path\": \"Executive_Summary.docx\", \"name\": \"Executive_Summary.docx\", \"kind\": \"docx\"}, {\"path\": \"Executive_Summary.pdf\", \"name\": \"Executive_Summary.pdf\", \"kind\": \"pdf\"}, {\"path\": \"Budget.xlsx\", \"name\": \"Budget.xlsx\", \"kind\": \"xlsx\"}, {\"path\": \"Ember_Deck.pptx\", \"name\": \"Ember_Deck.pptx\", \"kind\": \"pptx\"}, {\"path\": \"Ember_Screenshot.png\", \"name\": \"Ember_Screenshot.png\", \"kind\": \"png\"}, {\"path\": \"Ember_Recording.mp4\", \"name\": \"Ember_Recording.mp4\", \"kind\": \"mp4\"}], \"message\": \"Shown to the reader above your reply.\"}"
+      "output": "{\"presentedFiles\": [{\"path\": \"Executive_Summary.docx\", \"name\": \"Executive_Summary.docx\", \"kind\": \"docx\"}, {\"path\": \"Executive_Summary.pdf\", \"name\": \"Executive_Summary.pdf\", \"kind\": \"pdf\"}, {\"path\": \"Budget.xlsx\", \"name\": \"Budget.xlsx\", \"kind\": \"xlsx\"}, {\"path\": \"Ember_Deck.pptx\", \"name\": \"Ember_Deck.pptx\", \"kind\": \"pptx\"}, {\"path\": \"Ember_Screenshot.png\", \"name\": \"Ember_Screenshot.png\", \"kind\": \"png\"}, {\"path\": \"Ember_Recording.mp4\", \"name\": \"Ember_Recording.mp4\", \"kind\": \"mp4\"}, {\"path\": \"Ember_Notes.md\", \"name\": \"Ember_Notes.md\", \"kind\": \"file\"}], \"message\": \"Shown to the reader above your reply.\"}"
     }
   },
   {
     "emit": {
       "kind": "text",
-      "text": "Here are the summary and its PDF, the budget, the deck, a screenshot, and a recording."
+      "text": "Here are the summary and its PDF, the budget, the deck, a screenshot, a recording, and the launch notes."
     }
   },
   {
