@@ -6,9 +6,10 @@
 //! `archived.md` once it is [`ARCHIVE_AFTER`] old. `context/write` refuses both files. Each line
 //! ends with the item's id, which the coordinator's `board_update` and `board_remove` take.
 //!
-//! Migration 49 marks a store that had Projects. At the next start, [`migrate`] parses each
+//! Migration 49 marks each Project the store had. At start, [`migrate`] parses each marked
 //! Project's hand-written board ([`parse`]) into items once, keeping the originals as
-//! `notes.legacy.md` and `archived.legacy.md`.
+//! [`LEGACY`]. plxd never renders a marked Project, so a migration that fails leaves its files as
+//! they were for the next start to try again.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,6 +37,10 @@ pub(crate) const NOTES: &str = "notes.md";
 
 /// Done items older than [`ARCHIVE_AFTER`], rendered.
 pub(crate) const ARCHIVED: &str = "archived.md";
+
+/// The copies of `notes.md` and `archived.md` from before 0081 that the migration keeps. They
+/// don't count toward the shared context cap, and `context/write` refuses them.
+pub(crate) const LEGACY: [&str; 2] = ["notes.legacy.md", "archived.legacy.md"];
 
 /// How long a done item stays in `notes.md`.
 const ARCHIVE_AFTER: SignedDuration = SignedDuration::from_hours(7 * 24);
@@ -422,13 +427,27 @@ fn checkbox(line: &str) -> Option<(bool, &str)> {
     (!text.is_empty()).then_some((done, text))
 }
 
-/// Renders `project`'s board to its context folder, writing each file only when it changed. A
-/// failure is logged: the items are saved, and the next render writes the files.
+/// Renders `project`'s board to its context folder, writing each file only when it changed,
+/// unless its board migration is still to do. A failure is logged: the items are saved, and the
+/// next render writes the files.
 pub(crate) async fn publish(daemon: &Arc<Daemon>, project: ProjectId) {
     let _render = RENDER.lock().await;
-    let listed = store(daemon, move |db| items(db, project)).await;
+    let listed = store(daemon, move |db| {
+        if db
+            .board_migration_pending(project.into())
+            .map_err(|e| store_error(&e))?
+        {
+            return Ok(None);
+        }
+        items(db, project).map(Some)
+    })
+    .await;
     let items = match listed {
-        Ok(items) => items,
+        Ok(Some(items)) => items,
+        Ok(None) => {
+            warn!(%project, "not rendering a board whose migration is still to do");
+            return;
+        }
         Err(error) => {
             warn!(%project, error = error.message, "could not read the board to render it");
             return;
@@ -476,21 +495,11 @@ fn write_if_changed(
     Ok(())
 }
 
-/// Parses each Project's hand-written board into items once, when migration 49 marked the store,
-/// before plxd serves anything. See [`migrate_project`].
+/// Parses each marked Project's hand-written board into items once, before plxd serves anything.
+/// A Project that fails stays marked, and the next start tries it again. See [`migrate_project`].
 pub(crate) async fn migrate(daemon: &Arc<Daemon>) {
     let pending = store(daemon, |db| {
-        if !db.board_migration_pending().map_err(|e| store_error(&e))? {
-            return Ok(Vec::new());
-        }
-        db.list_projects()
-            .map_err(|e| store_error(&e))?
-            .into_iter()
-            .map(|project| {
-                ProjectId::try_from(project.id)
-                    .map_err(|_| ErrorObject::internal_error("a stored Project id is invalid"))
-            })
-            .collect()
+        db.board_migrations_pending().map_err(|e| store_error(&e))
     })
     .await;
     let projects = match pending {
@@ -500,36 +509,43 @@ pub(crate) async fn migrate(daemon: &Arc<Daemon>) {
             return;
         }
     };
-    if projects.is_empty() {
-        return;
-    }
-    let mut failed = false;
     for project in projects {
+        let Ok(project) = ProjectId::try_from(project) else {
+            continue;
+        };
         if let Err(error) = migrate_project(daemon, project).await {
             warn!(%project, error = error.message, "could not migrate a Project's board");
-            failed = true;
         }
-    }
-    if failed {
-        return;
-    }
-    if let Err(error) = store(daemon, |db| {
-        db.finish_board_migration().map_err(|e| store_error(&e))
-    })
-    .await
-    {
-        warn!(
-            error = error.message,
-            "could not record the board migration"
-        );
     }
 }
 
-/// Keeps `project`'s `notes.md` and `archived.md` as `notes.legacy.md` and `archived.legacy.md`,
-/// then, unless it has items already, adds what [`parse`] finds in them, and renders the board.
-/// Safe to run again after a crash at any step: a legacy copy is written once, and items are
-/// added only to an empty board.
+/// Keeps `project`'s `notes.md` and `archived.md` as [`LEGACY`], adds what [`parse`] finds in the
+/// copies as items and clears its mark in one transaction, then renders the board. Until that
+/// transaction the board isn't rendered, so a failure at any step leaves the originals for the
+/// next run. A Project deleted since it was marked just loses its mark, and one not marked is
+/// left alone.
 async fn migrate_project(daemon: &Arc<Daemon>, project: ProjectId) -> Result<(), ErrorObject> {
+    let due = store(daemon, move |db| {
+        if !db
+            .board_migration_pending(project.into())
+            .map_err(|e| store_error(&e))?
+        {
+            return Ok(false);
+        }
+        let exists = db
+            .get_project(project.into())
+            .map_err(|e| store_error(&e))?
+            .is_some();
+        if !exists {
+            db.finish_board_migration(project.into())
+                .map_err(|e| store_error(&e))?;
+        }
+        Ok(exists)
+    })
+    .await?;
+    if !due {
+        return Ok(());
+    }
     let copied = {
         let daemon = Arc::clone(daemon);
         tokio::task::spawn_blocking(move || keep_originals(&daemon, project))
@@ -540,13 +556,6 @@ async fn migrate_project(daemon: &Arc<Daemon>, project: ProjectId) -> Result<(),
     };
     let now = Timestamp::now();
     let added = store(daemon, move |db| {
-        if !db
-            .board_items(project.into())
-            .map_err(|e| store_error(&e))?
-            .is_empty()
-        {
-            return Ok(0);
-        }
         let mut added = 0;
         for (content, archived_at) in copied {
             for parsed in parse(&content) {
@@ -570,6 +579,8 @@ async fn migrate_project(daemon: &Arc<Daemon>, project: ProjectId) -> Result<(),
                 added += 1;
             }
         }
+        db.finish_board_migration(project.into())
+            .map_err(|e| store_error(&e))?;
         Ok(added)
     })
     .await?;
@@ -578,36 +589,41 @@ async fn migrate_project(daemon: &Arc<Daemon>, project: ProjectId) -> Result<(),
     Ok(())
 }
 
-/// The originals of `project`'s `notes.md` and `archived.md` to parse, each with the time to call
-/// its done items done: now for `notes.md`, and for `archived.md` at least [`ARCHIVE_AFTER`] ago,
-/// so they stay archived. Copies each to its `.legacy.md` name first, unless that exists.
+/// The hand-written `notes.md` and `archived.md` of `project` to parse, each with the time to
+/// call its done items done: now for `notes.md`, and for `archived.md` at least
+/// [`ARCHIVE_AFTER`] ago, so they stay archived. Reads each from its [`LEGACY`] copy when there
+/// is one, and otherwise copies the original there first.
 fn keep_originals(
     daemon: &Daemon,
     project: ProjectId,
 ) -> Result<Vec<(String, Option<Timestamp>)>, ErrorObject> {
     let dir = crate::context::ensure_dir(&daemon.data_dir, project)
         .map_err(|e| crate::context::io_error("", &e))?;
+    let read = |name: &str| match crate::context::read_file(&dir, name) {
+        Ok(read) => Ok(Some(read)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(crate::context::io_error(name, &error)),
+    };
     let mut originals = Vec::new();
-    for (name, legacy) in [(NOTES, "notes.legacy.md"), (ARCHIVED, "archived.legacy.md")] {
-        let (bytes, metadata) = match crate::context::read_file(&dir, name) {
-            Ok(read) => read,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(crate::context::io_error(name, &error)),
-        };
-        let content = String::from_utf8_lossy(&bytes).into_owned();
-        if crate::context::read_file(&dir, legacy).is_err() {
+    for (name, legacy) in [(NOTES, LEGACY[0]), (ARCHIVED, LEGACY[1])] {
+        let (bytes, metadata) = if let Some(kept) = read(legacy)? {
+            kept
+        } else if let Some((bytes, metadata)) = read(name)? {
             write_context_file(
                 daemon,
                 project,
                 legacy,
-                &content,
+                &String::from_utf8_lossy(&bytes),
                 Some("plxd".to_owned()),
                 ContextWriteId::generate(),
             )?;
-        }
+            (bytes, metadata)
+        } else {
+            continue;
+        };
         let archived_at = (name == ARCHIVED)
             .then(|| crate::context::modified_at(&metadata).min(Timestamp::now() - ARCHIVE_AFTER));
-        originals.push((content, archived_at));
+        originals.push((String::from_utf8_lossy(&bytes).into_owned(), archived_at));
     }
     Ok(originals)
 }
@@ -646,7 +662,7 @@ mod tests {
         BoardItem, BoardLinks, BoardSection, BoardStatus, ProjectCreateParams, ProjectId, RunId,
     };
 
-    use super::{ARCHIVE_AFTER, Parsed, migrate_project, parse, render};
+    use super::{ARCHIVE_AFTER, Parsed, migrate, parse, publish, render};
     use crate::server::Daemon;
     use crate::store::{fields, store_error};
     use crate::threads::store;
@@ -724,7 +740,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn migration_keeps_the_originals_and_turns_every_line_into_an_item_once() {
+    async fn a_migration_that_fails_partway_leaves_the_board_for_the_next_start() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10, std::time::Duration::from_secs(90));
         let params = ProjectCreateParams {
@@ -740,6 +756,8 @@ mod tests {
         store(&daemon, move |db| {
             let (id, fields) = fields(params);
             db.create_project(id, &fields)
+                .map_err(|error| store_error(&error))?;
+            db.mark_board_migration(id)
                 .map_err(|error| store_error(&error))
         })
         .await
@@ -749,12 +767,26 @@ mod tests {
         let archived = "- [x] Shipped long ago\n";
         std::fs::write(context.join("notes.md"), notes).unwrap();
         std::fs::write(context.join("archived.md"), archived).unwrap();
-
-        migrate_project(&daemon, project).await.unwrap();
-        // A second run, as after a crash before the flag cleared, adds nothing.
-        migrate_project(&daemon, project).await.unwrap();
-
+        // A folder where `archived.legacy.md` goes makes the second copy fail.
+        let blocker = context.join("archived.legacy.md");
+        std::fs::create_dir(&blocker).unwrap();
+        std::fs::write(blocker.join("x"), "x").unwrap();
         let read = |name: &str| std::fs::read_to_string(context.join(name)).unwrap();
+
+        migrate(&daemon).await;
+        assert_eq!(read("notes.legacy.md"), notes);
+        // The hourly render and a board change leave the unmigrated board alone.
+        publish(&daemon, project).await;
+        assert_eq!(read("notes.md"), notes);
+        assert_eq!(read("archived.md"), archived);
+        // Whatever happens to notes.md now, the next start parses the copy.
+        std::fs::write(context.join("notes.md"), "").unwrap();
+
+        std::fs::remove_dir_all(&blocker).unwrap();
+        migrate(&daemon).await;
+        // Once done, a later start leaves it alone.
+        migrate(&daemon).await;
+
         assert_eq!(read("notes.legacy.md"), notes);
         assert_eq!(read("archived.legacy.md"), archived);
         assert_eq!(

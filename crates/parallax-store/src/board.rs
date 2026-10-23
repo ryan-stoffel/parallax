@@ -6,9 +6,9 @@ use crate::Store;
 use crate::error::StoreError;
 use crate::timestamp;
 
-/// The `host_settings` key migration 49 sets on a store that had Projects: plxd hasn't yet parsed
-/// their hand-written boards into items (0081).
-const BOARD_MIGRATION: &str = "board_migration";
+/// The `host_settings` key prefix, before a Project's id, that migration 49 sets for each Project
+/// the store had: plxd hasn't yet parsed its hand-written board into items (0081).
+const BOARD_MIGRATION: &str = "board_migration:";
 
 /// One item on a Project's status board (0081, PLX-940). The daemon owns what `status`,
 /// `section`, and `links` mean; this crate stores them as text.
@@ -170,21 +170,49 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Whether plxd still has to parse existing Projects' boards into items (migration 49).
+    /// The Projects whose hand-written boards plxd still has to parse into items (migration 49).
     ///
     /// # Errors
     ///
-    /// A database error.
-    pub fn board_migration_pending(&self) -> Result<bool, StoreError> {
-        Ok(self.text(BOARD_MIGRATION)?.is_some())
+    /// A database error, or an error if a stored id is corrupt.
+    pub fn board_migrations_pending(&self) -> Result<Vec<Uuid>, StoreError> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT substr(key, {}) FROM host_settings WHERE key GLOB '{BOARD_MIGRATION}*'",
+            BOARD_MIGRATION.len() + 1
+        ))?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.iter()
+            .map(|id| Uuid::parse_str(id).map_err(Into::into))
+            .collect()
     }
 
-    /// Records that every existing Project's board is now items.
+    /// Whether `project`'s board migration is still to do.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn finish_board_migration(&self) -> Result<(), StoreError> {
-        self.set_text(BOARD_MIGRATION, None)
+    pub fn board_migration_pending(&self, project: Uuid) -> Result<bool, StoreError> {
+        Ok(self.text(&format!("{BOARD_MIGRATION}{project}"))?.is_some())
+    }
+
+    /// Marks `project`'s board for the migration, as migration 49 marks each Project the store
+    /// had.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn mark_board_migration(&self, project: Uuid) -> Result<(), StoreError> {
+        self.set_text(&format!("{BOARD_MIGRATION}{project}"), Some("pending"))
+    }
+
+    /// Records that `project`'s board is now items.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn finish_board_migration(&self, project: Uuid) -> Result<(), StoreError> {
+        self.set_text(&format!("{BOARD_MIGRATION}{project}"), None)
     }
 }

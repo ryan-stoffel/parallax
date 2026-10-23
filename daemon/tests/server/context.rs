@@ -178,7 +178,13 @@ async fn the_board_files_are_rendered_from_items_and_refused_to_writers() {
     assert!(done.done_at.is_some());
     assert!(notes(&mut client).await.contains("- [x] **Search**"));
 
-    for path in ["notes.md", "archived.md"] {
+    for path in [
+        "notes.md",
+        "archived.md",
+        "Notes.md",
+        "ARCHIVED.md",
+        "notes.legacy.md",
+    ] {
         let refused = client
             .call::<ContextWrite>(write_params(project.id, path, "x", Some("coordinator")))
             .await
