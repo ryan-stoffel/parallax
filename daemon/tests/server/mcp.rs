@@ -15,7 +15,7 @@ use plxd::backend::fake::Step;
 use plxd::mcp::question::COORDINATOR_TOOLS;
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
 use plxd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES};
-use plxd::mcp::{delegation, device, files, html, land, preview, triggers};
+use plxd::mcp::{board, delegation, device, files, html, land, preview, triggers};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -227,6 +227,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
             CONTEXT_TOOLS,
             COORDINATOR_TOOLS,
             land::TOOLS,
+            board::TOOLS,
             &["memory_read", "memory_propose", "memory_write"],
             html::TOOLS,
             files::TOOLS,

@@ -33,6 +33,7 @@ mod account;
 mod agent;
 mod approval;
 mod area;
+mod board;
 mod bundle;
 mod cli_account;
 mod composer;
@@ -96,6 +97,10 @@ pub use approval::{
 pub use area::{
     Area, AreaCreateParams, AreaDeleteParams, AreaDeleteResult, AreaId, AreaResult,
     AreaUpdateParams, MAX_AREA_NAME_CHARS,
+};
+pub use board::{
+    BoardAddParams, BoardItem, BoardItemResult, BoardLinks, BoardListParams, BoardListResult,
+    BoardRemoveParams, BoardRemoveResult, BoardSection, BoardStatus, BoardUpdateParams,
 };
 pub use bundle::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleFile,

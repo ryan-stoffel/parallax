@@ -155,6 +155,14 @@ pub(crate) async fn write(
              knowledge, history, and proposals are written through memory/*",
         ));
     }
+    // plxd renders the board from its items (0081), so a write here would be lost at the next
+    // render, and rewriting it whole is what dropped items before.
+    if name == crate::board::NOTES || name == crate::board::ARCHIVED {
+        return Err(ErrorObject::invalid_params(format!(
+            "Parallax writes {name} from the status board's items; change the board with \
+             board_add, board_update, and board_remove instead"
+        )));
+    }
     // A fast, redundant check: `write_context_file` enforces this cap too, but failing here skips
     // a project lookup and a trip to the blocking pool for a request that is invalid regardless.
     if content.len() as u64 > context::MAX_FILE_BYTES {

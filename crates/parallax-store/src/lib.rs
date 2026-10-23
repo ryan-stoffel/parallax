@@ -13,6 +13,7 @@
 mod accounts;
 mod areas;
 mod attached;
+mod board;
 mod defaults;
 mod error;
 mod events;
@@ -47,6 +48,7 @@ use rusqlite::{Connection, Error as SqliteError, ErrorCode};
 
 pub use accounts::{Account, AccountFields};
 pub use areas::{Area, AreaFields};
+pub use board::BoardItem;
 pub use defaults::RoleDefault;
 pub use error::StoreError;
 pub use events::{CompactableTurn, StoredEvent};

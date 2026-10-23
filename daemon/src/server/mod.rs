@@ -591,6 +591,9 @@ impl Server {
             lock.release();
             return Err(io::Error::other(error.message));
         }
+        if daemon.store.state() != parallax_protocol::StoreState::Unavailable {
+            crate::board::migrate(&daemon).await;
+        }
         let cut = agents::recover(&daemon).await;
         crate::setup_scripts::recover(&daemon).await;
         // Before what waits is sent: a turn waits for its thread's checkpoint captures (0062).
@@ -614,6 +617,10 @@ impl Server {
                 crate::agents::cleanup::run(daemon, stop).await;
             })
         };
+        let board = tokio::spawn(crate::board::run(
+            Arc::clone(&daemon),
+            shutdown.graceful.clone(),
+        ));
         let import = tokio::spawn(crate::graph::sweep(
             Arc::clone(&daemon),
             shutdown.graceful.clone(),
@@ -731,6 +738,7 @@ impl Server {
         daemon.agents.shutdown().await;
         let _ = compact.await;
         let _ = cleanup.await;
+        let _ = board.await;
         let _ = import.await;
         let _ = effects.await;
         let _ = schedules.await;

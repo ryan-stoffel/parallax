@@ -1,6 +1,6 @@
 # 0044: Project memory: what a child starts with, and who writes it
 
-- Status: accepted; supersedes in part [0005](0005-shared-context-folder.md) (every agent writes the folder, last writer wins, and agents get its path)
+- Status: accepted; supersedes in part [0005](0005-shared-context-folder.md) (every agent writes the folder, last writer wins, and agents get its path); its Board layer amended by [0081](0081-board-items.md)
 - Date: 2026-10-03
 - Issue: PLX-383
 
@@ -17,7 +17,7 @@ A thread starts from zero. Each Project has a context folder (0005), where the c
 | Brief | Goal, scope, and constraints, written or approved by the user | In its first message |
 | Memory | Short lasting facts: preferences, conventions, decisions and why, gotchas | An index in its first message, one line per entry; full entries on request |
 | Knowledge | Longer write-ups: research, investigations, test instructions | Listed in the index, read on request |
-| Board | `notes.md`, as today | Read on request |
+| Board | `notes.md`, rendered from items plxd stores ([0081](0081-board-items.md)) | Read on request |
 | History | One summary per finished child: its task, how it ended, its diff stats, its last result | The coordinator searches it |
 
 - History is written by plxd when a child ends, from the run's row and last result, as 0025's summaries are. It costs no tokens.

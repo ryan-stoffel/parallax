@@ -39,17 +39,19 @@ use crate::{
     AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams,
     AgentRunResult, AgentSendParams, AgentStartParams, AgentStopTaskParams, AgentStopTaskResult,
     AgentWaitParams, AgentWaitResult, AreaCreateParams, AreaDeleteParams, AreaDeleteResult,
-    AreaResult, AreaUpdateParams, ComputerAskParams, ComputerAskResult, ComputerForgetParams,
-    ComputerStatus, ComputerStatusParams, ConnectDevicesParams, ConnectDevicesResult,
-    ContextListParams, ContextListResult, ContextReadParams, ContextReadResult, ContextWriteParams,
-    ContextWriteResult, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
-    CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
-    CursorSignOutResult, DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams,
-    DeviceDataParams, DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult,
-    DeviceSetupParams, DeviceStateParams, DeviceStateResult, DeviceStreamParams,
-    DeviceStreamResult, DeviceTarget, DispatchResult, EventsEventParams, EventsResyncParams,
-    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
-    FullThreadDiffParams, GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    AreaResult, AreaUpdateParams, BoardAddParams, BoardItemResult, BoardListParams,
+    BoardListResult, BoardRemoveParams, BoardRemoveResult, BoardUpdateParams, ComputerAskParams,
+    ComputerAskResult, ComputerForgetParams, ComputerStatus, ComputerStatusParams,
+    ConnectDevicesParams, ConnectDevicesResult, ContextListParams, ContextListResult,
+    ContextReadParams, ContextReadResult, ContextWriteParams, ContextWriteResult,
+    CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
+    CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
+    DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams, DeviceDataParams,
+    DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult, DeviceSetupParams,
+    DeviceStateParams, DeviceStateResult, DeviceStreamParams, DeviceStreamResult, DeviceTarget,
+    DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
+    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, FullThreadDiffParams,
+    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
     GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
     HostFoldersParams, HostFoldersResult, HostHealthParams, HostHealthResult, HostReadUploadParams,
     HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
@@ -547,6 +549,16 @@ method_table! {
         QuestionEscalate = "question/escalate": QuestionEscalateParams => QuestionResult;
         /// `question/list`: a Project's questions, oldest first.
         QuestionList = "question/list": QuestionListParams => QuestionListResult;
+        /// `board/list`: a Project's status board items, oldest first (PLX-940). Gated on the
+        /// `board` capability.
+        BoardList = "board/list": BoardListParams => BoardListResult;
+        /// `board/add`: adds an item to a Project's status board and renders `notes.md`
+        /// (PLX-940). Gated on the `board` capability.
+        BoardAdd = "board/add": BoardAddParams => BoardItemResult;
+        /// `board/update`: changes one board item (PLX-940). Gated on the `board` capability.
+        BoardUpdate = "board/update": BoardUpdateParams => BoardItemResult;
+        /// `board/remove`: removes one board item (PLX-940). Gated on the `board` capability.
+        BoardRemove = "board/remove": BoardRemoveParams => BoardRemoveResult;
         /// `memory/list`: a scope's brief, memory entries, knowledge, and proposals, with each
         /// entry's header (PLX-405, 0044). Gated on the `memory` capability, like every
         /// `memory/*` method.
@@ -872,6 +884,10 @@ mod tests {
                 "question/answer",
                 "question/escalate",
                 "question/list",
+                "board/list",
+                "board/add",
+                "board/update",
+                "board/remove",
                 "memory/list",
                 "memory/read",
                 "memory/write",

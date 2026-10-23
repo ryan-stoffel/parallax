@@ -182,7 +182,7 @@ async fn the_app_writes_reads_lists_and_deletes_an_entry_as_the_user() {
         .call::<ContextWrite>(ContextWriteParams {
             id: ContextWriteId::generate(),
             project: project.id,
-            path: "notes.md".to_owned(),
+            path: "plan.md".to_owned(),
             content: "Board".to_owned(),
             writer: None,
         })
@@ -351,7 +351,7 @@ async fn write_context_never_reaches_memorys_folders_or_the_brief() {
             let refused = mcp.refused("write_context", write).await;
             assert!(refused.contains("one file name"), "{refused}");
         }
-        mcp.ok("write_context", json!({"path": "notes.md", "content": "x"}))
+        mcp.ok("write_context", json!({"path": "plan.md", "content": "x"}))
             .await;
     }
     // The user still writes the brief, through memory/*.

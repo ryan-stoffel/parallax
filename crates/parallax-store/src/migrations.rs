@@ -773,6 +773,26 @@ const MIGRATIONS: &[Migration] = &[
         version: 48,
         sql: "ALTER TABLE projects ADD COLUMN computer TEXT;",
     },
+    // A Project's status board as items (0081, PLX-940), which plxd renders to `notes.md` and
+    // `archived.md`. `links` is plxd's JSON. A store that has Projects gets `board_migration`, so
+    // plxd's next start parses each one's hand-written board into items once.
+    Migration {
+        version: 49,
+        sql: "CREATE TABLE board_items (
+            id INTEGER PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+            text TEXT NOT NULL,
+            status TEXT NOT NULL,
+            section TEXT NOT NULL,
+            links TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            done_at TEXT
+        );
+        CREATE INDEX board_items_project ON board_items (project_id);
+        INSERT INTO host_settings (key, value)
+            SELECT 'board_migration', 'pending' WHERE EXISTS (SELECT 1 FROM projects);",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
@@ -966,6 +986,47 @@ mod tests {
         assert!(!marked(39), "a store from before schedules");
         assert!(marked(40));
         assert!(marked(42));
+    }
+
+    /// Migration 49 marks only a store that has Projects for the one-time board migration
+    /// (0081), and the daemon clears the mark.
+    #[test]
+    fn only_a_store_with_projects_is_marked_for_the_board_migration() {
+        let pending = |with_project: bool| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("plxd.sqlite3");
+            {
+                let conn = rusqlite::Connection::open(&path).unwrap();
+                conn.execute_batch(
+                    "CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);
+                    CREATE TEMP TABLE migrating_from AS SELECT 0 AS version;",
+                )
+                .unwrap();
+                for migration in MIGRATIONS.iter().filter(|m| m.version <= 48) {
+                    conn.execute_batch(migration.sql).unwrap();
+                    conn.execute(
+                        "INSERT INTO schema_version VALUES (?1, 'then')",
+                        [migration.version],
+                    )
+                    .unwrap();
+                }
+                if with_project {
+                    conn.execute(
+                        "INSERT INTO projects (id, name, repo_path, created_at, updated_at)
+                         VALUES ('p', 'n', '/r', 'then', 'then')",
+                        [],
+                    )
+                    .unwrap();
+                }
+            }
+            let store = crate::Store::open(&path).unwrap();
+            let pending = store.board_migration_pending().unwrap();
+            store.finish_board_migration().unwrap();
+            assert!(!store.board_migration_pending().unwrap());
+            pending
+        };
+        assert!(!pending(false));
+        assert!(pending(true));
     }
 
     /// A backup that fails partway, here on a corrupt page, leaves no partial copy or journal

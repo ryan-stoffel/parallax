@@ -46,7 +46,7 @@ use super::{
     MAX_CONTEXT_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, Plxd, Reply, Tools, check_text, clip,
     last_output, parse, pretty, tail,
 };
-use super::{device, land, question};
+use super::{board, device, land, question};
 
 /// Every tool the server offers a thread outside a Project.
 pub const TOOLS: &[&str] = &[
@@ -172,6 +172,7 @@ impl Tools for Server {
                 CONTEXT_TOOLS,
                 question::tools(self.coordinator),
                 land::tools(self.coordinator),
+                board::tools(self.coordinator),
             ]
             .concat()
         } else {
@@ -201,6 +202,7 @@ impl Tools for Server {
             if self.project.is_some() {
                 list.extend(question::definitions(self.coordinator));
                 list.extend(land::definitions(self.coordinator));
+                list.extend(board::definitions(self.coordinator));
             }
             if let Some(memory) = &self.memory {
                 list.extend(memory.definitions());
@@ -703,6 +705,15 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
             land::call(
                 binding,
                 server.project.filter(|_| server.coordinator),
+                arguments,
+            )
+            .await
+        }
+        "board_add" | "board_update" | "board_remove" => {
+            board::call(
+                binding,
+                server.project.filter(|_| server.coordinator),
+                name,
                 arguments,
             )
             .await
@@ -1403,7 +1414,7 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{ALLOWED_TOOLS, CONTEXT_TOOLS, TOOLS, definitions};
-    use crate::mcp::{SERVER, device, land, question};
+    use crate::mcp::{SERVER, board, device, land, question};
 
     #[test]
     fn the_allowlist_is_the_servers_name_and_each_role_lists_its_tools() {
@@ -1424,6 +1435,7 @@ mod tests {
             let tools = [
                 question::definitions(coordinator),
                 land::definitions(coordinator),
+                board::definitions(coordinator),
             ]
             .concat();
             let listed: Vec<&str> = tools
@@ -1432,7 +1444,12 @@ mod tests {
                 .collect();
             assert_eq!(
                 listed,
-                [question::tools(coordinator), land::tools(coordinator)].concat()
+                [
+                    question::tools(coordinator),
+                    land::tools(coordinator),
+                    board::tools(coordinator)
+                ]
+                .concat()
             );
         }
     }
@@ -1447,7 +1464,8 @@ mod tests {
                     [TOOLS, CONTEXT_TOOLS, crate::mcp::memory::COORDINATOR_TOOLS]
                         .concat()
                         .contains(&name)
-                        || land::TOOLS.contains(&name),
+                        || land::TOOLS.contains(&name)
+                        || board::TOOLS.contains(&name),
                     "coordinator.md names `{name}`, not a tool"
                 );
             }
@@ -1461,6 +1479,7 @@ mod tests {
         tools.extend(question::definitions(false));
         tools.extend(question::definitions(true));
         tools.extend(land::definitions(true));
+        tools.extend(board::definitions(true));
         tools.extend(device::definitions());
         tools.extend(crate::mcp::html::definitions());
         tools.extend(crate::mcp::files::definitions());

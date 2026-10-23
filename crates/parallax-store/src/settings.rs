@@ -354,7 +354,7 @@ impl Store {
         self.set_text(key, Some(&on.to_string()))
     }
 
-    fn text(&self, key: &str) -> Result<Option<String>, StoreError> {
+    pub(crate) fn text(&self, key: &str) -> Result<Option<String>, StoreError> {
         Ok(self
             .conn
             .query_row(
@@ -366,7 +366,7 @@ impl Store {
     }
 
     /// Stores `value` under `key`, or removes the key for `None`.
-    fn set_text(&self, key: &str, value: Option<&str>) -> Result<(), StoreError> {
+    pub(crate) fn set_text(&self, key: &str, value: Option<&str>) -> Result<(), StoreError> {
         match value {
             Some(value) => self.conn.execute(
                 "INSERT INTO host_settings (key, value) VALUES (?1, ?2)
