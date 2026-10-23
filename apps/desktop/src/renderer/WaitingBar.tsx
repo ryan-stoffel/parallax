@@ -4,7 +4,7 @@ import { useId, useState } from "react";
 import type { AgentBackgroundKind, AgentBackgroundTask } from "../protocol/generated/protocol";
 import { notify } from "./notifications";
 import { numberOf } from "./PullRequests";
-import { menuPanel } from "./ui";
+import { menuPanel, popoverBeside } from "./ui";
 
 type Kind = AgentBackgroundKind | "pullRequest";
 
@@ -98,7 +98,8 @@ export function presentWaiting(
 /**
  * What a thread's settled agent still waits on, tucked over its composer as T3 Code's strip is
  * (PLX-777): one line naming its background tasks, such as a Monitor, and the pull requests plxd
- * watches for it, and Stop, which ends them all. Hidden while it waits on nothing.
+ * watches for it, and Stop, which ends them all. Hidden while it waits on nothing. `compact` shows
+ * only how many, opening the details and Stop above itself, for a place beside other tabs.
  */
 export function WaitingBar({
   hostId,
@@ -106,6 +107,7 @@ export function WaitingBar({
   background,
   watching,
   agentsShown,
+  compact,
 }: {
   hostId: string;
   runId: string;
@@ -113,6 +115,7 @@ export function WaitingBar({
   watching: string[];
   /** Whether the subagents tab shows over it, naming its subagents. */
   agentsShown?: boolean;
+  compact?: boolean;
 }) {
   const [stopping, setStopping] = useState(false);
   const id = useId();
@@ -135,36 +138,73 @@ export function WaitingBar({
       notify({ tone: "error", title: "Couldn't stop waiting", body: failed.error.message });
   }
 
+  const stopButton = (
+    <button
+      type="button"
+      disabled={stopping}
+      onClick={() => void stop()}
+      className="shrink-0 rounded-md px-2 py-0.5 font-medium text-foreground hover:bg-hover disabled:opacity-40"
+    >
+      {stopping ? "Stopping…" : "Stop"}
+    </button>
+  );
+  // As the title counts them: the subagents the tab beside it lists only when they're all there is.
+  const others = shown.items.filter((item) => !agentsShown || item.kind !== "subagent");
+  const counted = others.length > 0 ? others : shown.items;
+  const kindsShown = new Set(counted.map((item) => item.kind));
+  const verb =
+    kindsShown.size === 1 && kindsShown.has("command")
+      ? "Running"
+      : kindsShown.size === 1 && kindsShown.has("pull request")
+        ? "Monitoring"
+        : "Waiting";
+
   return (
     <section aria-label="Waiting on" className="text-[13px]">
-      <div className="flex min-w-0 items-center gap-2.5 py-1 pr-2.5 pl-4">
-        <span aria-hidden className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground" />
-        <span className="min-w-0 truncate font-medium">{shown.title}</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">{shown.labels}</span>
+      {compact ? (
         <button
           type="button"
           popoverTarget={`${id}-details`}
-          aria-label="What it waits on"
           aria-haspopup="dialog"
-          className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          title={shown.title}
+          className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
         >
-          <Info aria-hidden />
+          <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-foreground" />
+          {verb}
+          <span className="rounded bg-hover px-1.5 text-foreground tabular-nums">
+            {counted.length}
+          </span>
         </button>
-        <button
-          type="button"
-          disabled={stopping}
-          onClick={() => void stop()}
-          className="shrink-0 rounded-md px-2 py-0.5 font-medium text-foreground hover:bg-hover disabled:opacity-40"
-        >
-          {stopping ? "Stopping…" : "Stop"}
-        </button>
-      </div>
+      ) : (
+        <div className="flex min-w-0 items-center gap-2.5 py-1 pr-2.5 pl-4">
+          <span
+            aria-hidden
+            className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground"
+          />
+          <span className="min-w-0 truncate font-medium">{shown.title}</span>
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">{shown.labels}</span>
+          <button
+            type="button"
+            popoverTarget={`${id}-details`}
+            aria-label="What it waits on"
+            aria-haspopup="dialog"
+            className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          >
+            <Info aria-hidden />
+          </button>
+          {stopButton}
+        </div>
+      )}
       <div
         id={`${id}-details`}
         popover="auto"
         role="dialog"
         aria-label="Waiting on"
-        className={`${menuPanel("end")} w-80 p-3 text-[12.5px]`}
+        className={
+          compact
+            ? `inset-auto m-0 mb-2 rounded-2xl border border-border bg-surface p-3 text-[12.5px] text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`
+            : `${menuPanel("end")} w-80 p-3 text-[12.5px]`
+        }
       >
         <p className="mb-2 text-muted-foreground">
           The agent picks up when one of these ends or changes.
@@ -177,6 +217,7 @@ export function WaitingBar({
             </li>
           ))}
         </ul>
+        {compact && <div className="mt-2 flex justify-end">{stopButton}</div>}
       </div>
     </section>
   );
