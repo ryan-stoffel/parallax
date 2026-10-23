@@ -150,6 +150,7 @@ import {
 } from "./Subagents";
 import { titleOf, type ForkChoice } from "./threads";
 import {
+  backgroundCalls,
   failureText,
   groupWork,
   isObject,
@@ -631,9 +632,14 @@ export function AgentChat({
   // One that couldn't load, stopped updating, or lost plxd shows nothing in progress.
   const stalled = error !== undefined || (connection !== undefined && !connected);
   const live = isRunning(run?.status) && !stalled;
+  // The subagents still running in the background, which outlast their parent's turn (PLX-929).
+  const backgroundSubagents = useMemo(
+    () => backgroundCalls(stalled ? [] : background),
+    [background, stalled],
+  );
   const native = useMemo(
-    () => JSON.stringify(nativeSubagents(transcript.subagents, live)),
-    [transcript.subagents, live],
+    () => JSON.stringify(nativeSubagents(transcript.subagents, live, backgroundSubagents)),
+    [transcript.subagents, live, backgroundSubagents],
   );
   useEffect(
     () => onSubagents?.(runId, JSON.parse(native) as NativeSubagent[]),
@@ -685,9 +691,10 @@ export function AgentChat({
       onOpenSubagent && {
         subagents: transcript.subagents ?? {},
         live,
+        background: backgroundSubagents,
         open: (callId: string) => onOpenSubagent(runId, callId),
       },
-    [transcript.subagents, live, onOpenSubagent, runId],
+    [transcript.subagents, live, backgroundSubagents, onOpenSubagent, runId],
   );
   const shown = subagent ? transcript.subagents?.[subagent] : undefined;
 
@@ -775,6 +782,7 @@ export function AgentChat({
           <SubagentView
             sub={shown}
             live={live}
+            background={backgroundSubagents}
             stalled={stalled}
             onBack={() => onOpenSubagent?.(runId)}
           />
@@ -791,7 +799,7 @@ export function AgentChat({
   const running = isRunning(run?.status);
   const tabs: ComposerTab[] = [];
   if (strip) tabs.push(strip);
-  const subagentTabRows = nativeRows(transcript.subagents, live);
+  const subagentTabRows = nativeRows(transcript.subagents, live, backgroundSubagents);
   if (subagents && subagentTabRows.some(isGoing))
     tabs.push({
       key: "subagents",
@@ -986,12 +994,16 @@ const subagentAttention: Record<SubagentState, AgentRow["attention"]> = {
   running: "working",
   completed: "done",
   failed: "failed",
-  stopped: "done",
+  stopped: "settled",
 };
 
 /** A thread's own subagents as the Subagents tab lists them, oldest first, nested ones left out. */
-function nativeRows(subagents: Readonly<Record<string, Subagent>> | undefined, live: boolean) {
-  return nativeSubagents(subagents, live)
+function nativeRows(
+  subagents: Readonly<Record<string, Subagent>> | undefined,
+  live: boolean,
+  background: ReadonlySet<string>,
+) {
+  return nativeSubagents(subagents, live, background)
     .filter((sub) => !sub.parent)
     .map((sub): AgentRow => ({
       id: sub.callId,
@@ -1009,17 +1021,19 @@ function nativeRows(subagents: Readonly<Record<string, Subagent>> | undefined, l
 function SubagentView({
   sub,
   live,
+  background,
   stalled,
   onBack,
 }: {
   sub: Subagent;
   live: boolean;
+  background: ReadonlySet<string>;
   stalled: boolean;
   /** Opens its thread. */
   onBack: () => void;
 }) {
   const rows = useMemo(() => subagentRows(sub), [sub]);
-  const state = subagentState(sub, live);
+  const state = subagentState(sub, live, background);
   const keys = useShortcutLabel("parentThread");
   return (
     <>

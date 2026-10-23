@@ -800,6 +800,12 @@ pub struct AgentBackgroundTask {
     pub kind: AgentBackgroundKind,
     /// What it does, as the agent described it, such as `Watching pull request #746`.
     pub description: String,
+    /// For one of the agent's own subagents, the call that started it, as its `subagent` items
+    /// name it, so a subagent still running after its parent's turn ended shows as working
+    /// (PLX-929). Absent for other kinds and from an older plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub call_id: Option<String>,
 }
 
 /// What an [`AgentBackgroundTask`] is.

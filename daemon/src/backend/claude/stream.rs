@@ -3,7 +3,7 @@
 //! The shapes follow the Agent SDK's types (0004 [14]) and the headless docs (0004 [11]). Fields
 //! Parallax doesn't use are ignored, as 0004 asks, so a newer CLI that adds fields still parses.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use jiff::Timestamp;
 use serde_json::{Map, Value};
@@ -165,6 +165,9 @@ pub(super) struct Translator {
     /// The monitors' tasks, by `task_id`, as T3 Code keeps them: `background_tasks_changed`
     /// names no call, so a monitor is known by its task once `task_started` tied the two.
     monitor_tasks: HashSet<String>,
+    /// The calls that started the subagents still running, by `task_id` (PLX-929):
+    /// `background_tasks_changed` names no call, so `task_started` ties the two.
+    agent_calls: HashMap<String, String>,
     turn_error: Option<FailureKind>,
     limit_rejected: bool,
     /// How many `result`s arrived.
@@ -244,6 +247,7 @@ impl Translator {
             tasks: BTreeMap::new(),
             monitors: HashSet::new(),
             monitor_tasks: HashSet::new(),
+            agent_calls: HashMap::new(),
             turn_error: None,
             limit_rejected: false,
             results: 0,
@@ -375,6 +379,13 @@ impl Translator {
                 {
                     self.monitor_tasks.insert(id.to_owned());
                 }
+                if let (Some(call), Some(id), Some("local_agent")) = (
+                    text(message, "tool_use_id"),
+                    text(message, "task_id"),
+                    text(message, "task_type"),
+                ) {
+                    self.agent_calls.insert(id.to_owned(), call.to_owned());
+                }
                 let mut tasks = self.tasks.clone();
                 if let Some(task) = self.counted(message) {
                     tasks.insert(task.task_id.clone(), task);
@@ -391,6 +402,8 @@ impl Translator {
                 // A monitor gone from the roster has ended.
                 self.monitor_tasks
                     .retain(|id| listed.iter().any(|task| text(task, "task_id") == Some(id)));
+                self.agent_calls
+                    .retain(|id, _| listed.iter().any(|task| text(task, "task_id") == Some(id)));
                 let tasks = listed
                     .iter()
                     .filter_map(|task| self.counted(task))
@@ -421,6 +434,7 @@ impl Translator {
                 if let Some(id) = text(message, "task_id") {
                     tasks.remove(id);
                     self.monitor_tasks.remove(id);
+                    self.agent_calls.remove(id);
                 }
                 steps.extend(self.tasks_changed(tasks));
                 steps
@@ -479,6 +493,7 @@ impl Translator {
             task_id: id.to_owned(),
             kind,
             description: text(task, "description").unwrap_or_default().to_owned(),
+            call_id: self.agent_calls.get(id).cloned(),
         })
     }
 

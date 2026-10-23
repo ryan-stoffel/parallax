@@ -511,6 +511,7 @@ async fn a_cli_killed_idle_with_background_work_resumes_its_session() {
             task_id: "m1".to_owned(),
             kind: AgentBackgroundKind::Monitor,
             description: "Watching CI".to_owned(),
+            call_id: None,
         }],
     });
     let first = killed(

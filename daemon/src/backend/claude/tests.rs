@@ -3690,6 +3690,7 @@ fn tasks(running: &[(&str, BackgroundKind, &str)]) -> Step {
                 task_id: id.to_owned(),
                 kind,
                 description: description.to_owned(),
+                call_id: None,
             })
             .collect(),
     })
@@ -3717,6 +3718,39 @@ fn a_monitor_call_s_task_is_a_monitor() {
             monitor
         ])]
     );
+}
+
+/// PLX-929: a background subagent's task carries the call that started it, tied by its
+/// `task_started`, through `background_tasks_changed`, which names no call, until it ends.
+#[test]
+fn a_subagent_s_task_names_its_call() {
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    let started = br#"{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_agent","description":"review","task_type":"local_agent","subagent_type":"general-purpose"}"#;
+    let roster = br#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a1","task_type":"local_agent","description":"review"},{"task_id":"b1","task_type":"local_bash","description":"dev server"}]}"#;
+    let ended = br#"{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_agent","status":"completed","summary":"done"}"#;
+    let review = BackgroundTask {
+        task_id: "a1".into(),
+        kind: BackgroundKind::Agent,
+        description: "review".into(),
+        call_id: Some("toolu_agent".into()),
+    };
+    let server = BackgroundTask {
+        task_id: "b1".into(),
+        kind: BackgroundKind::Command,
+        description: "dev server".into(),
+        call_id: None,
+    };
+    let running = |tasks: &[&BackgroundTask]| {
+        Step::Emit(Event::BackgroundTasks {
+            tasks: tasks.iter().map(|&task| task.clone()).collect(),
+        })
+    };
+    assert_eq!(translator.line(started), [running(&[&review])]);
+    assert_eq!(translator.line(roster), [running(&[&review, &server])]);
+    assert!(matches!(
+        translator.line(ended).as_slice(),
+        [Step::Emit(Event::SubagentFinished { .. }), finished] if *finished == running(&[&server])
+    ));
 }
 
 /// PLX-725: an `ambient` task (housekeeping or a live-update watcher) and a task type T3 Code

@@ -5,7 +5,7 @@
 {"kind":"reasoning","messageId":"msg_011CfwdSbPvYPmdsZSChYPXM","text":"I need to delegate to a general-purpose subagent using the haiku model to read README.md and get just the first line, running it in the foreground since the next step depends on its result. Then I'll write \"hi\" to notes.txt and reply with that first line in one sentence.\n\n"}
 {"callId":"toolu_012W4jQDW2JZsqZxNRomnKZ7","input":null,"kind":"toolCall","name":"Agent"}
 {"callId":"toolu_012W4jQDW2JZsqZxNRomnKZ7","input":{"description":"Read README first line","model":"haiku","prompt":"Read the file README.md in the current working directory /repo). Reply with only its first line, verbatim. No other text. Do not modify any files.","run_in_background":false,"subagent_type":"general-purpose"},"kind":"toolCall","name":"Agent"}
-{"kind":"backgroundTasks","tasks":[{"description":"Read README first line","kind":"agent","taskId":"ada9ea332299a446c"}]}
+{"kind":"backgroundTasks","tasks":[{"callId":"toolu_012W4jQDW2JZsqZxNRomnKZ7","description":"Read README first line","kind":"agent","taskId":"ada9ea332299a446c"}]}
 {"agentType":"general-purpose","callId":"toolu_012W4jQDW2JZsqZxNRomnKZ7","event":{"callId":"toolu_014M3yM3BTTfM6iphsxcBFKV","input":{"file_path":"/repo/README.md","limit":1},"kind":"toolCall","name":"Read"},"kind":"subagent","model":"claude-haiku-5-5"}
 {"agentType":"general-purpose","callId":"toolu_012W4jQDW2JZsqZxNRomnKZ7","event":{"callId":"toolu_014M3yM3BTTfM6iphsxcBFKV","kind":"toolResult","output":"1\t# demo","status":"ok"},"kind":"subagent"}
 {"callId":"toolu_012W4jQDW2JZsqZxNRomnKZ7","kind":"subagentFinished","status":"completed","summary":"# demo"}
