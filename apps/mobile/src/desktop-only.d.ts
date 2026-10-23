@@ -4,5 +4,5 @@ declare module "lucide-react" {
   import type { FC, SVGProps } from "react";
   type Icon = FC<SVGProps<SVGSVGElement>>;
   export const ArrowUpRight: Icon, Bot: Icon, CircleAlert: Icon, CircleCheck: Icon, Cpu: Icon;
-  export const Info: Icon, MessageCircleQuestion: Icon, X: Icon;
+  export const Info: Icon, LoaderCircle: Icon, MessageCircleQuestion: Icon, X: Icon;
 }
