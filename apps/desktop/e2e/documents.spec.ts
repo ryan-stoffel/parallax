@@ -17,7 +17,7 @@ test.afterEach(async () => {
 });
 test.afterAll(() => close(launched));
 
-// The fake agent presents the six files in e2e/documents, which the repository holds, so the
+// The fake agent presents the seven files in e2e/documents, which the repository holds, so the
 // thread's worktree has them (PLX-755).
 test("presented files show as cards and open view-only in the side panel, with download and full screen, and images and videos inline", async () => {
   const { page } = launched;
@@ -110,4 +110,16 @@ test("presented files show as cards and open view-only in the side panel, with d
   await card("Executive_Summary.pdf").click();
   await expect(panel.locator("canvas").first()).toBeVisible();
   await page.screenshot({ path: test.info().outputPath("pdf.png") });
+
+  // A Markdown file shows rendered, with a toggle to its source (PLX-931).
+  await card("Ember_Notes.md").click();
+  await expect(panel.getByRole("heading", { name: "Ember launch notes" })).toBeVisible();
+  await expect(panel.getByRole("cell", { name: "Priya" })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("md.png") });
+  await panel.getByRole("button", { name: "Source" }).click();
+  await expect(panel.getByText("# Ember launch notes")).toBeVisible();
+  await expect(panel.getByRole("heading", { name: "Ember launch notes" })).toHaveCount(0);
+  await page.screenshot({ path: test.info().outputPath("md-source.png") });
+  await panel.getByRole("button", { name: "Preview" }).click();
+  await expect(panel.getByRole("heading", { name: "Ember launch notes" })).toBeVisible();
 });
