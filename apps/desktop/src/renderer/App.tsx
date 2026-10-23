@@ -61,7 +61,15 @@ import {
   useSnoozeAlarms,
   useThreadAlarms,
 } from "./alarms";
-import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
+import {
+  ProjectIcon,
+  RepoIcon,
+  SettingsNav,
+  settingsNames,
+  SharedRepoIcons,
+  Sidebar,
+  ThreadList,
+} from "./Sidebar";
 import { newThreadPrefs } from "./prefs";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
@@ -78,6 +86,7 @@ import {
   noRepo,
   otherRepos,
   repoless,
+  sharedRepoIcons,
   rootOf,
   threadProjects,
   titleOf,
@@ -280,6 +289,8 @@ export function App() {
     () => otherRepos(hosts, views, start.id),
     [hosts, views, start.id],
   );
+  // Each repository's icon by name, for its copies on other computers that have none.
+  const repoIcons = useMemo(() => sharedRepoIcons(hosts, views), [hosts, views]);
   // Every thread and Project the open host has listed, so a selection is dropped only once what it
   // opened leaves the list: a just-started one reaches the list a render after it opens.
   const known = useRef(new Set<string>());
@@ -915,7 +926,7 @@ export function App() {
     sidePanelOpen ? "" : "window-controls-inset",
   ].join(" ");
 
-  return (
+  const page = (
     <div className="flex h-full">
       {hosts.map((h) => (
         <HostLoader key={h.id} hostId={h.id} onView={report} onNeedsYou={needsYou} />
@@ -1550,6 +1561,7 @@ export function App() {
       />
     </div>
   );
+  return <SharedRepoIcons value={repoIcons}>{page}</SharedRepoIcons>;
 }
 
 /**

@@ -369,6 +369,39 @@ export const lacksRepo = (view: ThreadsView | undefined, name: string) =>
   !view.error &&
   !view.state.repos.some((r) => isRepository(r) && r.name === name);
 
+/**
+ * Each repository's icon by name, from the first of `hosts` whose entry has one, so a computer's
+ * copy with no icon of its own draws its namesake's. Matched by name, as `otherRepos` matches.
+ */
+export function sharedRepoIcons(
+  hosts: Host[],
+  views: Readonly<Record<string, ThreadsView>>,
+): ReadonlyMap<string, ProjectIconValue> {
+  const icons = new Map<string, ProjectIconValue>();
+  for (const host of hosts)
+    for (const repo of views[host.id]?.state.repos ?? [])
+      if (isRepository(repo) && repo.icon && !icons.has(repo.name)) icons.set(repo.name, repo.icon);
+  return icons;
+}
+
+/** A repo's icon: its own, or else its namesake's on another computer (`sharedRepoIcons`). */
+export const repoIconOf = (repo: Repo, shared: ReadonlyMap<string, ProjectIconValue>) =>
+  repo.icon ?? (isRepository(repo) ? shared.get(repo.name) : undefined);
+
+/**
+ * Sets `icon` on the repository named `name` on each of `views`' computers that keeps repo icons
+ * (0033), so every copy draws the same one. An image goes only where its plxd takes one that big
+ * (0038).
+ */
+export function setRepoIcons(views: ThreadsView[], name: string, icon: ProjectIconValue) {
+  for (const view of views) {
+    if (!("threadAttention" in view.capabilities)) continue;
+    if (icon.image && icon.image.data.length > (view.iconImageBytes ?? -1)) continue;
+    for (const repo of view.state.repos)
+      if (isRepository(repo) && repo.name === name) void view.updateRepo(repo.id, icon);
+  }
+}
+
 /** Whether a group holds chats with no repository of the user's: No Repo, or a Space. */
 export const repoless = (g: { id: string; space?: boolean }) => g.id === noRepo || !!g.space;
 
