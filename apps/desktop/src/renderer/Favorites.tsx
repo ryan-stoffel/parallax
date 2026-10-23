@@ -60,7 +60,7 @@ const dots: Partial<Record<Attention, { color: string; words: string }>> = {
 
 /**
  * The favorites: squares, as many to a row as fit and stretched to fill it, so two Projects take
- * half the width each; folded, shorter. Dragging one between others moves it there. Dropping a
+ * half the width each. Dragging one between others moves it there. Dropping a
  * pinned thread, or a thread row, here makes it a favorite; dragging one back down to the pins, or
  * Remove from favorites, puts it back. Left and Right move between them, and with Alt, or Move left
  * and Move right in the menu, move one. A opens one's menu, and a thread's E, S, and ⌫ work as on
@@ -68,7 +68,6 @@ const dots: Partial<Record<Attention, { color: string; words: string }>> = {
  */
 export function Favorites({
   items,
-  folded,
   onOpen,
   onAdd,
   onPinRow,
@@ -78,7 +77,6 @@ export function Favorites({
   onLeave,
 }: {
   items: Favorite[];
-  folded: boolean;
   onOpen: (key: string) => void;
   /** A pinned thread dropped here. */
   onAdd: (key: string) => void;
@@ -190,7 +188,7 @@ export function Favorites({
           const row = draggedThread(e.dataTransfer);
           if (row) onPinRow(row.hostId, row.runId);
         }}
-        className={`grid rounded-[12px] px-0.5 transition-[background-color,box-shadow,margin,gap] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none ${folded ? "mb-1 grid-cols-[repeat(auto-fit,minmax(30px,1fr))] gap-1" : "mb-2 grid-cols-[repeat(auto-fit,minmax(40px,1fr))] gap-1.5"} ${over ? "bg-accent/6 shadow-[0_0_0_1.5px_color-mix(in_srgb,var(--accent)_45%,transparent)]" : ""}`}
+        className={`grid rounded-[12px] px-0.5 transition-[background-color,box-shadow] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none mb-2 grid-cols-[repeat(auto-fit,minmax(40px,1fr))] gap-1.5 ${over ? "bg-accent/6 shadow-[0_0_0_1.5px_color-mix(in_srgb,var(--accent)_45%,transparent)]" : ""}`}
       >
         {items.map((f) => (
           <li
@@ -213,7 +211,7 @@ export function Favorites({
             {dropAt?.key === f.key && dragging !== f.key && (
               <span
                 aria-hidden
-                className={`drop-line absolute inset-y-1 z-10 w-0.5 rounded-full bg-accent ${dropAt.after ? (folded ? "-right-[3px]" : "-right-[4px]") : folded ? "-left-[3px]" : "-left-[4px]"}`}
+                className={`drop-line absolute inset-y-1 z-10 w-0.5 rounded-full bg-accent ${dropAt.after ? "-right-[4px]" : "-left-[4px]"}`}
               />
             )}
             <button
@@ -272,13 +270,13 @@ export function Favorites({
                 setMenuFor(f.key);
                 openOnContextMenu(e, triggers.current.get(f.key) ?? null);
               }}
-              className={`relative grid w-full place-items-center rounded-[10px] transition-[height,background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none [&_svg]:transition-[width,height] [&_svg]:duration-250 ${folded ? "h-8 [&_svg]:size-4" : "h-11 [&_svg]:size-5"} ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_14%,transparent)]" : "bg-foreground/[0.045] hover:bg-foreground/[0.08]"}`}
+              className={`relative grid w-full place-items-center rounded-[10px] transition-[background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none h-11 [&_svg]:size-5 ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_14%,transparent)]" : "bg-foreground/[0.045] hover:bg-foreground/[0.08]"}`}
             >
               {f.icon}
               {dots[f.attention] && (
                 <span
                   aria-hidden
-                  className={`dot-in absolute size-[7px] rounded-full ${folded ? "top-1 right-1" : "top-1.5 right-1.5"} ${dots[f.attention]!.color}`}
+                  className={`dot-in absolute size-[7px] rounded-full top-1.5 right-1.5 ${dots[f.attention]!.color}`}
                 />
               )}
               {f.badge && <span className="absolute right-1 bottom-1">{f.badge}</span>}
@@ -299,9 +297,7 @@ export function Favorites({
           </li>
         ))}
         {over && (
-          <li
-            className={`grow-in grid place-items-center rounded-[10px] border border-dashed border-accent/50 text-[11.5px] font-medium text-accent ${folded ? "h-8" : "h-11"}`}
-          >
+          <li className="grow-in grid h-11 place-items-center rounded-[10px] border border-dashed border-accent/50 text-[11.5px] font-medium text-accent">
             Favorite
           </li>
         )}

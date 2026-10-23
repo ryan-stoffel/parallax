@@ -106,7 +106,7 @@ export const todayGroup = stored<TodayGroup>("parallax:todayGroup", "none", (raw
 /** The favorites in the order they were moved into, by key; ones it doesn't name follow. */
 export const favoriteOrder = stored<string[]>("parallax:favoriteOrder", [], strings);
 
-/** Whether the favorites and pins are folded down to a strip and a summary line. */
+/** Whether the favorites and pins are folded away, leaving Today. */
 export const topCollapsed = stored<boolean>("parallax:topCollapsed", false, (raw, fallback) =>
   typeof raw === "boolean" ? raw : fallback,
 );

@@ -2473,6 +2473,15 @@ test("search, the repo filter, and Mod+number cover the favorites and Today", as
   await keyDown({ key: "3", code: "Digit3", metaKey: true });
   await settle();
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
+
+  // Folded away, the Projects give up their numbers to Today's threads (PLX-922).
+  await click(document.querySelector('[aria-label="Fold favorites and pins"]'));
+  await keyDown({ key: "Meta", metaKey: true });
+  expect(statusOf("Fix the flaky test")).toBe("⌘1");
+  await click(rowButton("photon"));
+  await keyDown({ key: "1", code: "Digit1", metaKey: true });
+  await settle();
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
 });
 
 test("Delete… asks first, shows plxd's error in the dialog, then deletes the open Project and leaves its page", async () => {

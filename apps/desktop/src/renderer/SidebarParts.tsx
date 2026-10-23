@@ -1,16 +1,8 @@
-// Pieces of the sidebar (0075): the divider over Today with its View panel, the pins' folded
-// summary, and the small animated parts they share.
-import {
-  ArrowDown,
-  ChevronDown,
-  ChevronsDownUp,
-  ChevronsUpDown,
-  Pin,
-  SlidersHorizontal,
-} from "lucide-react";
+// Pieces of the sidebar (0075): the divider over Today with its View panel, and the small animated
+// parts the sidebar shares.
+import { ArrowDown, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from "lucide-react";
 import { useId, useState, type ReactNode, type ToggleEvent } from "react";
 
-import type { Attention } from "./attention";
 import { menuPanel } from "./ui";
 
 /** Today's auto-archive choices, in hours, and never. */
@@ -92,9 +84,9 @@ function Segmented<T extends string | number | boolean | null>({
 }
 
 /**
- * The line between what you keep and today's threads: Fold, which shrinks the favorites and pins
- * above it to a strip and a line, Clear, for what's finished, and View, for how today's threads
- * group, how tall their rows are, and when finished ones archive themselves.
+ * The line between what you keep and today's threads: Fold, which hides the favorites and pins
+ * above it, Clear, for what's finished, and View, for how today's threads group, how tall their
+ * rows are, and when finished ones archive themselves.
  */
 export function TodayDivider({
   clearable,
@@ -260,57 +252,3 @@ export const shownRows = (also = "") =>
   [...document.querySelectorAll<HTMLElement>(`#sidebar [data-row]${also}`)].filter(
     (r) => !r.closest("[inert]"),
   );
-
-const summaryDot: Partial<Record<Attention, string>> = {
-  failed: "bg-danger",
-  done: "bg-added",
-  needsYou: "bg-warning",
-};
-const summaryWord: Partial<Record<Attention, string>> = {
-  failed: "failed",
-  done: "done",
-  needsYou: "need you",
-};
-
-/**
- * The pins, folded: how many there are and how many finished or failed, as one row that unfolds
- * them.
- */
-export function PinSummary({
-  attention,
-  onUnfold,
-}: {
-  /** Each pin's status. */
-  attention: Attention[];
-  onUnfold: () => void;
-}) {
-  const news = (["failed", "done", "needsYou"] as const).flatMap((a) => {
-    const n = attention.filter((x) => x === a).length;
-    return n ? [{ a, n }] : [];
-  });
-  return (
-    <button
-      type="button"
-      data-row="pin-summary"
-      onClick={onUnfold}
-      className="group/sum flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-[12.5px] text-muted-foreground transition-[background-color,color,transform] duration-100 hover:bg-hover hover:text-foreground active:scale-[0.985] [&_svg]:size-3.5 [&_svg]:shrink-0"
-    >
-      <Pin aria-hidden className="text-faint-foreground" />
-      <span>
-        <Tick value={attention.length} /> pinned
-      </span>
-      {news.map(({ a, n }) => (
-        <span key={a} className="flex items-center gap-1 text-faint-foreground">
-          <span aria-hidden className={`dot-in size-1.5 rounded-full ${summaryDot[a]}`} />
-          <span>
-            <Tick value={n} /> {summaryWord[a]}
-          </span>
-        </span>
-      ))}
-      <ChevronDown
-        aria-hidden
-        className="ml-auto text-faint-foreground opacity-0 transition-opacity group-hover/sum:opacity-100"
-      />
-    </button>
-  );
-}
