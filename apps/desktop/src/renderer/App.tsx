@@ -637,9 +637,9 @@ export function App() {
   // of the same name (each host's entries have their own ids). A host whose list is in but lacks
   // it adds the repository at the same path first, or `at`, where New Thread's clone dialog put
   // it. A host without it at that path clones its origin there (PLX-905), sending git's progress
-  // to `onProgress`, or, when that path won't do there, resolves to where to ask to clone it. Once
-  // it added or cloned the repository there, it resolves to its entry there. When
-  // that fails, New Thread stays on this host and it resolves to plxd's error, for people. A host
+  // to `onProgress`, or, when no place there will do, resolves to where to ask to clone it. Once
+  // it added or cloned the repository there, it resolves to its entry there. When that fails,
+  // New Thread stays on this host and it resolves to plxd's error, for people. A host
   // whose list hasn't loaded yet gets New Thread's first repository. An add that finishes after
   // another pick, or once anything else is open, changes nothing.
   const picks = useRef(0);
@@ -679,8 +679,7 @@ export function App() {
         added = typeof cloned === "string" ? cloned : await view.addRepo(cloned.path);
         if (stale()) return undefined;
       }
-      if (typeof added === "string")
-        return `${hosts.find((h) => h.id === id)?.name ?? "That computer"}: ${added}`;
+      if (typeof added === "string") return added;
       groupId = added.id;
       moved = added;
     }

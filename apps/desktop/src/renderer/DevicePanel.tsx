@@ -35,6 +35,7 @@ import {
   type DeviceStream,
   type DeviceStreamStatus,
 } from "./deviceStream";
+import { notify } from "./notifications";
 import { Menu, menuItem } from "./ui";
 
 /** How often the device list refreshes while it shows, or while the hub installs. */
@@ -175,7 +176,15 @@ export function DevicePanel({
     setFailure(undefined);
     const error = await run();
     setBusy((all) => Object.fromEntries(Object.entries(all).filter(([each]) => each !== id)));
-    if (error) setFailure({ id, message: error });
+    // A start that fails says why on the device's screen. A new device or a power off, from the
+    // gallery, says why in a notification.
+    if (error && kind === "start" && !id.startsWith("new:")) setFailure({ id, message: error });
+    else if (error)
+      notify({
+        tone: "error",
+        title: kind === "stop" ? "Couldn't power off the device" : "Couldn't make the device",
+        body: error,
+      });
     await refresh();
   };
   // Opens the device at once; it boots in its frame.
@@ -252,8 +261,6 @@ export function DevicePanel({
       hostId={hostId}
       state={state}
       busy={busy}
-      failure={failure?.message}
-      onDismiss={() => setFailure(undefined)}
       onOpen={(target) => (target.booted ? select(target.id) : start(target))}
       onCreate={(platform) => void create(platform)}
     />
@@ -374,16 +381,12 @@ function Gallery({
   hostId,
   state,
   busy,
-  failure,
-  onDismiss,
   onOpen,
   onCreate,
 }: {
   hostId: string;
   state: DeviceStateResult;
   busy: Record<string, "start" | "stop">;
-  failure?: string;
-  onDismiss: () => void;
   onOpen: (device: DeviceInfo) => void;
   onCreate: (platform: DevicePlatform) => void;
 }) {
@@ -402,18 +405,6 @@ function Gallery({
   const empty = state.devices.length === 0 && makes.length === 0;
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-      {failure && (
-        <div
-          role="alert"
-          className="mx-4 mt-4 flex items-start gap-2 rounded-xl bg-danger/10 px-3 py-2.5 text-[12.5px] text-danger"
-        >
-          <TriangleAlert aria-hidden className="mt-px size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1">{failure}</span>
-          <button type="button" onClick={onDismiss} className="font-medium hover:underline">
-            Dismiss
-          </button>
-        </div>
-      )}
       {warnings.map((warning) => (
         <Warning key={warning} text={warning} />
       ))}

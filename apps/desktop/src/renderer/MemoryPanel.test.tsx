@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import type { ParallaxBridge } from "../preload/bridge";
 import type { MemoryFile, MemoryScope } from "../protocol/generated/protocol";
 import { MemoryPanel, nextScope, savedAs, sectionsOf, type Memory } from "./MemoryPanel";
+import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -92,18 +93,37 @@ beforeEach(() => {
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
+// happy-dom has no popovers; the notifications' stack shows one.
+HTMLElement.prototype.showPopover = () => {};
+
 let unmount = () => {};
-afterEach(() => act(() => unmount()));
+afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
+  act(() => unmount());
+});
 
 async function render() {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<MemoryPanel hostId="local" project="p-1" repo="r-1" />));
+  act(() =>
+    root.render(
+      <>
+        <MemoryPanel hostId="local" project="p-1" repo="r-1" />
+        <Notifications />
+      </>,
+    ),
+  );
   unmount = () => {
     root.unmount();
     document.body.innerHTML = "";
   };
   await settle();
 }
+/** The newest notification's body, which a failed change is. */
+const notice = () => document.querySelector('[aria-label="Notifications"] > div p')?.textContent;
 const settle = async () => {
   for (let i = 0; i < 10; i++) await act(async () => {});
 };
@@ -251,12 +271,12 @@ test("a failed write deletes nothing, and a failed delete says the copy was made
   await render();
   await click("Keep SQLite");
   await click("Promote to Repo");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("memory/write failed");
+  expect(notice()).toBe("memory/write failed");
   expect(calls("memory/delete")).toEqual([]);
 
   failing = new Set(["memory/delete"]);
   await click("Promote to Repo");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+  expect(notice()).toBe(
     "Copied to Repo, but couldn't remove it from Project: memory/delete failed",
   );
 });

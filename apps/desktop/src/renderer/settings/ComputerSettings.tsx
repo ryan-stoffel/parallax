@@ -5,6 +5,7 @@ import type { ComputerStatus } from "../../protocol/generated/protocol";
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId } from "../hosts";
+import { notify } from "../notifications";
 import { PageTitle, primaryButton, quietButton, Section, settingRow, StatusDot } from "./parts";
 
 /** How often the permissions are read while macOS's settings may be changing them. */
@@ -50,7 +51,8 @@ export function ComputerSettings() {
   };
   const remove = async (app: string) => {
     const answer = await window.parallax.request(localId, "computer/forget", { app });
-    if ("error" in answer) setError(describeError(answer.error));
+    if ("error" in answer)
+      notify({ tone: "error", title: `Couldn't remove ${app}`, body: describeError(answer.error) });
     else setStatus(answer.result);
   };
 

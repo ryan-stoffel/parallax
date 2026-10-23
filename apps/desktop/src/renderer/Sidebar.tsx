@@ -115,6 +115,7 @@ import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NightSky } from "./NightSky";
+import { notify } from "./notifications";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
@@ -498,7 +499,6 @@ export function ThreadList({
   const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string>();
-  const [actionError, setActionError] = useState<string>();
   // Threads deleted with Undo still offered: hidden until the toast goes, then deleted.
   const [doomed, setDoomed] = useState<ReadonlySet<string>>(new Set());
   // Threads sliding out to be archived, so a second E, click, or Clear meanwhile does nothing.
@@ -974,7 +974,7 @@ export function ThreadList({
     if (sweep?.done) await sweep.done;
     const error = await item.view.archive(t.id, !was);
     leaving.current.delete(item.key);
-    setActionError(error);
+    actionFailed(error, was ? "Couldn't unarchive the thread" : "Couldn't archive the thread");
     if (error) return sweep?.restore();
     focusAfter(item.key, focusAt);
     const lastOpen = items.every(
@@ -990,7 +990,7 @@ export function ThreadList({
     const { thread: t, host: h } = item;
     const was = t.snoozedUntil;
     const error = await item.view.update(t.id, { snoozedUntil: until.toISOString() });
-    setActionError(error);
+    actionFailed(error, "Couldn't snooze the thread");
     if (error) return;
     // A row that stays, as one already snoozed or archived or that needs the user, keeps focus.
     const stays = isSnoozed(item) || isArchived(item) || rowAttention(item) === "needsYou";
@@ -1012,7 +1012,7 @@ export function ThreadList({
     const { thread: t, host: h } = item;
     const was = !!t.pinned;
     const error = await item.view.update(t.id, { pinned: !was });
-    setActionError(error);
+    actionFailed(error, was ? "Couldn't unpin the thread" : "Couldn't pin the thread");
     if (!error)
       toast(was ? "Unpinned" : "Pinned to top", () => {
         void viewOf(h.id)?.update(t.id, { pinned: was });
@@ -1026,7 +1026,7 @@ export function ThreadList({
     const { thread: t, host: h } = item;
     const was = t.title ?? "";
     const error = await item.view.update(t.id, { title: next });
-    setActionError(error);
+    actionFailed(error, "Couldn't rename the thread");
     if (!error)
       toast("Renamed", () => {
         void viewOf(h.id)?.update(t.id, { title: was });
@@ -1101,7 +1101,7 @@ export function ThreadList({
           void viewOf(item.host.id)?.update(t.id, { pinned: !!t.pinned });
       });
     }
-    setActionError(errors.find(Boolean));
+    actionFailed(errors.find(Boolean), `Couldn't ${action} every thread`);
   };
   const rowKeys = (e: ReactKeyboardEvent<HTMLElement>, item: Item) => {
     if (e.metaKey || e.ctrlKey || e.altKey || e.nativeEvent.isComposing) return;
@@ -1216,7 +1216,10 @@ export function ThreadList({
             runId: t.id,
             ...(autoResume !== undefined && { autoResume }),
           });
-          setActionError("error" in answer ? answer.error.message : undefined);
+          actionFailed(
+            "error" in answer ? answer.error.message : undefined,
+            "Couldn't change auto-resume",
+          );
         }}
         onRest={restCard(item)}
         onLeave={hideCard}
@@ -1252,7 +1255,7 @@ export function ThreadList({
       toast(`Deleted “${short(title)}”`, restore, () => {
         void onDelete(h.id, t).then((error) => {
           restore();
-          setActionError(error);
+          actionFailed(error, "Couldn't delete the thread");
         });
       });
       return;
@@ -1575,7 +1578,7 @@ export function ThreadList({
     for (const i of threads) leaving.current.delete(i.key);
     // Those plxd didn't archive come back.
     sweep.restore(threads.flatMap((i, n) => (errors[n] ? [i.key] : [])));
-    setActionError(errors.find(Boolean));
+    actionFailed(errors.find(Boolean), "Couldn't archive every thread");
     const cleared = threads.filter((_, n) => !errors[n]);
     if (!cleared.length) return;
     toast(`Cleared ${plural(cleared.length, "thread")}`, () => {
@@ -1703,7 +1706,8 @@ export function ThreadList({
     </>
   );
 
-  const errors = [...new Set([actionError, ...hosts.map((h) => h.view.error)].filter(Boolean))];
+  // Why a host's list couldn't load or stopped updating, which is the list's own state.
+  const errors = [...new Set(hosts.map((h) => h.view.error).filter(Boolean))];
   const nothingShown =
     !projects.length &&
     !pool.length &&
@@ -1847,7 +1851,10 @@ export function ThreadList({
         create={open?.createProject ?? (async () => "Not connected")}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
       />
-      <ProjectDialogs ref={projectDialogs} onError={setActionError} />
+      <ProjectDialogs
+        ref={projectDialogs}
+        onError={(error) => actionFailed(error, "Couldn't change the Project")}
+      />
       <ConfirmDialog
         ref={deleteDialog}
         title={toDelete?.kind === "project" ? "Delete this Project?" : "Delete this thread?"}
@@ -2389,6 +2396,11 @@ function Marked({ text, words }: { text: string; words: readonly string[] }) {
 
 /** What a Project favorite's menu opens (Favorites.tsx). */
 type ProjectDialog = "rename" | "icon" | "access" | "autonomy";
+/** Says why a sidebar action failed, when `error` says one did. */
+function actionFailed(error: string | undefined, title: string) {
+  if (error) notify({ key: "sidebar", tone: "error", title, body: error });
+}
+
 type ProjectDialogsHandle = {
   open: (what: ProjectDialog, project: Project, view: ThreadsView, square: HTMLElement) => void;
 };

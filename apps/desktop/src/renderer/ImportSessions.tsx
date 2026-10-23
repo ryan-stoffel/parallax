@@ -14,6 +14,7 @@ import { readExports, type ExportPart, type ExportedChat } from "./chatExports";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId } from "./hosts";
+import { notify } from "./notifications";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import { loadProviders, useProviders } from "./providers";
 import { age } from "./Sidebar";
@@ -164,7 +165,6 @@ export function ImportChats({ className = "" }: { className?: string }) {
   const [file, setFile] = useState<string>();
   const [threads, setThreads] = useState<(string | null)[]>([]);
   const [reading, setReading] = useState(false);
-  const [error, setError] = useState<string>();
   // A Claude export manifest's conversations parts, still to download (PLX-890).
   const [parts, setParts] = useState<ExportPart[]>([]);
 
@@ -180,7 +180,6 @@ export function ImportChats({ className = "" }: { className?: string }) {
   const open = async (picked: File[]) => {
     if (!picked.length) return;
     setReading(true);
-    setError(undefined);
     try {
       const read = await readExports(picked);
       setParts(read.parts);
@@ -190,7 +189,7 @@ export function ImportChats({ className = "" }: { className?: string }) {
         setFile(picked.map((f) => f.name).join(", "));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      chatsFailed("Couldn't read the export", e);
     }
     setReading(false);
   };
@@ -207,7 +206,6 @@ export function ImportChats({ className = "" }: { className?: string }) {
       <ExportDrop
         className={className}
         reading={reading}
-        error={error}
         parts={parts}
         onFiles={(files) => void open(files)}
       />
@@ -222,18 +220,12 @@ export function ImportChats({ className = "" }: { className?: string }) {
           onClick={() => {
             setChats(undefined);
             setThreads([]);
-            setError(undefined);
           }}
           className="shrink-0 rounded-md px-1.5 py-0.5 font-medium hover:bg-hover hover:text-foreground"
         >
           Choose another
         </button>
       </p>
-      {error && (
-        <p role="alert" className="text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
       <SessionList
         className="min-h-0 flex-1"
         apps={chatApps}
@@ -254,11 +246,21 @@ export function ImportChats({ className = "" }: { className?: string }) {
           return "error" in answer ? describeError(answer.error) : undefined;
         }}
         onImported={() =>
-          refresh(chats).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+          refresh(chats).catch((e: unknown) => chatsFailed("Couldn't check the imported chats", e))
         }
       />
     </div>
   );
+}
+
+/** Says why reading an export or checking its chats failed. */
+function chatsFailed(title: string, e: unknown) {
+  notify({
+    key: "import-chats",
+    tone: "error",
+    title,
+    body: e instanceof Error ? e.message : String(e),
+  });
 }
 
 /**
@@ -268,13 +270,11 @@ export function ImportChats({ className = "" }: { className?: string }) {
 function ExportDrop({
   className,
   reading,
-  error,
   parts,
   onFiles,
 }: {
   className: string;
   reading: boolean;
-  error: string | undefined;
   parts: ExportPart[];
   onFiles: (files: File[]) => void;
 }) {
@@ -355,11 +355,6 @@ function ExportDrop({
           )}
           {reading ? "Reading…" : "Choose .zip…"}
         </button>
-        {error && (
-          <p role="alert" className="mt-3 text-[12.5px] text-danger">
-            {error}
-          </p>
-        )}
       </div>
       <div className="grid grid-cols-2 gap-3 text-[12.5px]">
         {[
@@ -406,7 +401,6 @@ function SessionList({
 }) {
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [progress, setProgress] = useState<{ done: number; total: number }>();
-  const [errors, setErrors] = useState<string[]>([]);
   const [filter, setFilter] = useState<ImportSource | "all">("all");
   const id = useId();
 
@@ -424,7 +418,6 @@ function SessionList({
   const importPicked = async () => {
     const chosen = open.filter((s) => picked.has(s.key));
     const failed: string[] = [];
-    setErrors([]);
     for (const [i, item] of chosen.entries()) {
       setProgress({ done: i, total: chosen.length });
       const error = await importItem(item);
@@ -432,7 +425,13 @@ function SessionList({
     }
     setProgress(undefined);
     setPicked(new Set());
-    setErrors(failed);
+    if (failed.length)
+      notify({
+        key: "import",
+        tone: "error",
+        title: `${failed.length} couldn't be imported`,
+        body: failed.join("\n"),
+      });
     await onImported();
   };
 
@@ -501,11 +500,9 @@ function SessionList({
           <p role="status" className="truncate text-[12.5px] text-muted-foreground">
             {progress
               ? `Importing ${progress.done + 1} of ${progress.total}…`
-              : errors.length
-                ? `${errors.length} couldn't be imported.`
-                : count
-                  ? `${count} selected`
-                  : `${items.length - open.length} of ${items.length} imported`}
+              : count
+                ? `${count} selected`
+                : `${items.length - open.length} of ${items.length} imported`}
           </p>
           {progress && (
             <span className="mt-1.5 block h-1 max-w-48 overflow-hidden rounded-full bg-selected">
@@ -526,15 +523,6 @@ function SessionList({
           {count ? `Import ${count}` : "Import"}
         </button>
       </div>
-      {errors.length > 0 && (
-        <ul role="alert" className="text-[12.5px] text-danger">
-          {errors.map((e) => (
-            <li key={e} className="truncate">
-              {e}
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }

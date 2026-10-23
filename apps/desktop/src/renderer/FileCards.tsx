@@ -18,6 +18,7 @@ import {
 } from "./documents";
 import { pagesOf } from "./docx";
 import { useSaveWhole, useStreamUrl } from "./mediaUrl";
+import { notify } from "./notifications";
 import { isMedia, isVideo } from "./transcript";
 import { renderSlide } from "./pptx";
 import { cellAt, colName, type Xlsx } from "./xlsx";
@@ -91,11 +92,10 @@ function FileCard({
         download(doc.name, bytes);
         setFile((f) => ({ size: f.size }));
       },
-      (error: unknown) =>
-        setFile((f) => ({
-          size: f.size,
-          error: error instanceof Error ? error.message : String(error),
-        })),
+      (error: unknown) => {
+        setFile((f) => ({ size: f.size }));
+        downloadFailed(doc.name, error);
+      },
     );
   };
   const error = plain ? file.error : loadError;
@@ -202,9 +202,10 @@ function ReadMedia({ hostId, doc }: { hostId: string; doc: DocRef }) {
 /** A streamed video, whose Download reads it whole only when clicked. */
 function StreamedMedia({ hostId, doc, src }: { hostId: string; doc: DocRef; src?: string }) {
   const { busy, error, save } = useSaveWhole(hostId, doc);
-  return (
-    <MediaFrame doc={doc} url={src} disabled={!src || busy} onDownload={save} problem={error} />
-  );
+  useEffect(() => {
+    if (error) downloadFailed(doc.name, error);
+  }, [error, doc.name]);
+  return <MediaFrame doc={doc} url={src} disabled={!src || busy} onDownload={save} />;
 }
 
 /** `url`'s image or video, or a placeholder until it has one, with Download in its corner. */
@@ -213,13 +214,11 @@ function MediaFrame({
   url,
   disabled,
   onDownload,
-  problem,
 }: {
   doc: DocRef;
   url?: string;
   disabled: boolean;
   onDownload: () => void;
-  problem?: string;
 }) {
   return (
     <div className="relative w-full overflow-hidden rounded-2xl border border-border bg-black">
@@ -229,11 +228,6 @@ function MediaFrame({
         <video controls src={url} aria-label={doc.name} className="block max-h-[80vh] w-full" />
       ) : (
         <img src={url} alt={doc.name} className="block max-h-[80vh] w-full object-contain" />
-      )}
-      {problem && (
-        <p role="alert" className="px-4 py-2 text-[12.5px] text-danger">
-          {problem}
-        </p>
       )}
       <button
         type="button"
@@ -249,39 +243,40 @@ function MediaFrame({
   );
 }
 
+/** Says in a notification why `name` couldn't be downloaded. */
+export const downloadFailed = (name: string, error: unknown) =>
+  notify({
+    tone: "error",
+    title: `Couldn't download ${name}`,
+    body: error instanceof Error ? error.message : String(error),
+  });
+
 /**
  * Download for bytes read only when it's clicked, such as a recording's (PLX-834): saves what
- * `read` gives as `name`, or says why it couldn't beside it.
+ * `read` gives as `name`, or says why it couldn't in a notification.
  */
 export function DownloadButton({ name, read }: { name: string; read: () => Promise<Uint8Array> }) {
-  const [state, setState] = useState<{ busy?: boolean; error?: string }>({});
+  const [busy, setBusy] = useState(false);
   const save = () => {
-    setState({ busy: true });
-    read().then(
-      (bytes) => {
-        download(name, bytes);
-        setState({});
-      },
-      (error: unknown) =>
-        setState({ error: error instanceof Error ? error.message : String(error) }),
-    );
+    setBusy(true);
+    read()
+      .then(
+        (bytes) => download(name, bytes),
+        (error: unknown) => downloadFailed(name, error),
+      )
+      .finally(() => setBusy(false));
   };
   return (
     <span className="flex items-center gap-2">
       <button
         type="button"
-        disabled={state.busy}
+        disabled={busy}
         onClick={save}
         className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-3.5"
       >
         <Download aria-hidden />
         Download
       </button>
-      {state.error && (
-        <span role="alert" className="text-[12.5px] text-danger">
-          {state.error}
-        </span>
-      )}
     </span>
   );
 }

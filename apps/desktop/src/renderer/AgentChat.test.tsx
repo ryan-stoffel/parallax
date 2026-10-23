@@ -38,6 +38,7 @@ import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import { GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
+import { Notifications } from "./notifications";
 import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";
@@ -52,6 +53,15 @@ vi.mock("./markdownBlocks", async (actual) => {
 });
 // happy-dom has no popovers. Menus are in the DOM either way.
 HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.showPopover = () => {};
+// The notifications, outside the body, which a test's unmount clears.
+const notices = document.documentElement.appendChild(document.createElement("div"));
+createRoot(notices).render(<Notifications />);
+/** The newest notification's title and body. */
+const notice = () => {
+  const n = notices.querySelector('[aria-label="Notifications"] > div');
+  return n && [n.querySelector("span")?.textContent, n.querySelector("p")?.textContent];
+};
 // happy-dom lays nothing out. Give the transcript a tall viewport and each row a
 // small height, so the virtualized list renders every row.
 Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
@@ -67,6 +77,9 @@ const logged = (samples as { method?: string; params?: unknown }[])
 
 let unmount = () => {};
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of notices.querySelectorAll<HTMLButtonElement>('button[aria-label="Close"]'))
+    act(() => close.click());
   act(() => unmount());
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -1386,7 +1399,7 @@ test("a message a finished run couldn't take goes back in the box, with no loade
   await renderChat();
   await send("Also mention the tests.");
   expect(composer().textContent).toBe("Also mention the tests.");
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("the CLI didn't start");
+  expect(notice()).toEqual(["Couldn't send the message", "the CLI didn't start"]);
   expect(transcriptText()).not.toContain("Also mention the tests.");
   expect(document.querySelector("[data-status=running]")).toBeNull();
   act(() => unmount());
@@ -1394,7 +1407,7 @@ test("a message a finished run couldn't take goes back in the box, with no loade
   fakeBridge(8, { sent: { status: "failed" } });
   await renderChat();
   await send("Also mention the tests.");
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("The agent couldn't start.");
+  expect(notice()).toEqual(["Couldn't send the message", "The agent couldn't start."]);
 });
 
 test("a pasted image goes with the message beside the text, and shows while it's pending", async () => {
@@ -1463,7 +1476,7 @@ test("Stop interrupts with the queue held, and a failed Stop says why and allows
     threadId: runId,
     holdQueue: true,
   });
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("plxd is gone");
+  expect(notice()).toEqual(["Couldn't stop the thread", "plxd is gone"]);
   expect(document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.disabled).toBe(
     false,
   );
@@ -1616,7 +1629,7 @@ test("a finished run opens a pull request titled like its thread, then links to 
   expect(openPr()).toBeUndefined();
 });
 
-test("an Open PR that fails for gh says so in one line by Set up GitHub", async () => {
+test("an Open PR that fails for gh says so in a notification with Set up GitHub", async () => {
   fakeBridge(8, {
     capabilities: { openPr: {} },
     prError: {
@@ -1637,10 +1650,13 @@ test("an Open PR that fails for gh says so in one line by Set up GitHub", async 
   const button = (name: string) =>
     [...document.querySelectorAll("button")].find((b) => b.textContent === name);
   await act(async () => button("Open PR")!.click());
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe(
-    "GitHub isn't installed on this host.Set up GitHub",
+  expect(notice()).toEqual([
+    "Couldn't create the pull request",
+    "GitHub isn't installed on this host.",
+  ]);
+  await act(async () =>
+    [...notices.querySelectorAll("button")].find((b) => b.textContent === "Set up GitHub")!.click(),
   );
-  await act(async () => button("Set up GitHub")!.click());
   expect(onSetUpGithub).toHaveBeenCalledOnce();
 });
 
@@ -2149,7 +2165,7 @@ test("a chat that couldn't load shows its first message, with no loader", async 
   await settle();
   expect(transcriptText()).toBe("Add a README");
   expect(document.querySelector("[data-status=running]")).toBeNull();
-  expect(document.querySelector('[role="alert"]')!.textContent).toBe("plxd is gone");
+  expect(notice()).toEqual(["This chat isn't updating", "plxd is gone"]);
 });
 
 // A two-step checklist with `done` steps finished and the next one under way.

@@ -43,13 +43,11 @@ test("the main action is the next useful one, and each other says why it can't r
   expect(gitActions(finished, { ...clean, changes: 2 }, true)).toEqual({
     why: { push: "Nothing to push" },
     main: "commit",
-    note: undefined,
   });
   expect(gitActions(finished, { ...clean, ahead: 1 }, true).main).toBe("push");
   expect(gitActions(finished, clean, true)).toEqual({
     why: { commit: "No changes", push: "Nothing to push" },
     main: "pr",
-    note: undefined,
   });
   // A worktree run with no commit has no pull request to open, nor does a plxd without openPr.
   expect(gitActions({ ...finished, diff: undefined }, clean, true).why.pr).toBe("No commits yet");
@@ -60,9 +58,8 @@ test("the main action is the next useful one, and each other says why it can't r
     pr: "No origin remote",
   });
   expect(gitActions(finished, { ...clean, branch: null, changes: 1 }, true)).toEqual({
-    why: { push: "Detached HEAD", pr: "Detached HEAD" },
+    why: { push: "Check out a branch", pr: "Check out a branch" },
     main: "commit",
-    note: "Detached HEAD: check out a branch to push or open a pull request.",
   });
 });
 
@@ -279,15 +276,14 @@ test("the status is read again when a turn ends, and every action waits while on
   expect(button("Create PR")!.disabled).toBe(false);
 });
 
-test("a detached HEAD shows its note", async () => {
+test("a detached HEAD says so, and Push and Create PR say what to do", async () => {
   fakeBridge(
     { git: {}, openPr: {} },
     { "agent/gitStatus": () => ({ result: { ...clean, branch: null, upstream: null } }) },
   );
   await render(finished);
-  expect(document.body.textContent).toContain(
-    "Detached HEAD: check out a branch to push or open a pull request.",
-  );
+  expect(document.body.textContent).toContain("Detached HEAD");
+  expect(item("Push").textContent).toBe("PushCheck out a branch");
   expect(item("Push").disabled).toBe(true);
   expect(item("Create PR").disabled).toBe(true);
 });
@@ -330,10 +326,9 @@ test("a failed refresh clears stale status and gives a concise missing-worktree 
   await render({ ...finished, diff: { ...finished.diff!, commit: "changed" } });
   expect(document.body.textContent).not.toContain("+12");
   expect(document.body.textContent).not.toContain("/full/recorded/path");
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe("Worktree no longer exists");
-  expect(document.querySelector('[role="alert"]')?.getAttribute("title")).toBe(
-    "Missing /full/recorded/path",
-  );
+  const branch = document.querySelector("div[title]")!;
+  expect(branch.textContent).toBe("Worktree no longer exists");
+  expect(branch.getAttribute("title")).toBe("Missing /full/recorded/path");
   for (const action of ["Commit", "Push", "Create PR"]) expect(item(action).disabled).toBe(true);
 });
 

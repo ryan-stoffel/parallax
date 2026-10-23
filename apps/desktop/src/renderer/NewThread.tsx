@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
 import { CloneDialog } from "./AddDialog";
-import { CloneProgress } from "./CloneProgress";
+import { parseProgress } from "./CloneProgress";
 import { TranscriptView } from "./AgentChat";
 import type { CloneAsk } from "./clone";
 import { Composer, tabItem } from "./Composer";
@@ -14,6 +14,7 @@ import type { Host } from "./hosts";
 import { imageCaps } from "./images";
 import { uploadBytes } from "./uploads";
 import type { RunOptions } from "./models";
+import { dismiss, notify } from "./notifications";
 import { newThreadPrefs } from "./prefs";
 import { RefMenu } from "./RefMenu";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
@@ -43,7 +44,8 @@ interface NewThreadProps {
    * Called when the user picks another computer to run the thread on, which may clone the
    * repository there (PLX-905), sending git's progress to `onProgress`, or add it `at` the path
    * the clone dialog put it. Resolves to why New Thread couldn't move there, for people, to where
-   * to ask to clone the repository there, or to its entry there once it added or cloned it.
+   * to ask to clone the repository there, or to its entry there once it added or cloned it. New
+   * Thread shows the clone's progress and a failure as notifications (PLX-930).
    */
   onHostChange: (
     hostId: string,
@@ -183,12 +185,10 @@ export function NewThread({
     };
   }, [hostId, runOptions]);
   const connection = useConnection(hostId);
-  const [repoError, setRepoError] = useState<string>();
   // Open while the host needs an account for the failed start.
   const [choices, setChoices] = useState<AccountOption[]>();
   const [picked, setPicked] = useState(0);
   const [choosing, setChoosing] = useState(false);
-  const [chooseError, setChooseError] = useState<string>();
   // The prompt, images, and threads of a start in flight. Starting takes plxd a moment (a
   // worktree, a worker), so the screen shows them as the thread it opens meanwhile.
   const [starting, setStarting] = useState<{
@@ -203,8 +203,6 @@ export function NewThread({
     failed.current = undefined;
     setBackend(undefined);
     setChoices(undefined);
-    setChooseError(undefined);
-    setRepoError(undefined);
   }, [hostId]);
   const group = groups.find((g) => g.id === groupId) ?? groups.at(-1)!;
   // The draft this screen edits (PLX-788): out of the sidebar's list while it's open, and back in
@@ -276,7 +274,6 @@ export function NewThread({
     if (options.length === 0) return noAccounts;
     if (options.length === 1) return runOn(attempt, options[0]!);
     setPicked(0);
-    setChooseError(undefined);
     setChoices(options);
     return "";
   };
@@ -348,21 +345,23 @@ export function NewThread({
 
   const continueWith = async (option: AccountOption) => {
     setChoosing(true);
-    setChooseError(undefined);
     opening.current = true;
     // Continue is a click on New Thread, so the thread opens, even after a Cmd/Ctrl+Enter.
     const error = await runOn({ ...failed.current!, background: false }, option);
     setChoosing(false);
     if (error) {
-      setChooseError(error);
+      notify({ key: "account", tone: "error", title: "Couldn't start the thread", body: error });
       opening.current = false;
     }
   };
 
-  // The computer picked while it adds or clones the repository (PLX-905), with git's progress
-  // once it clones. A send meanwhile is held, so it starts there once the move is done, rather
-  // than on the computer being left, and fails if the move does.
-  const [moving, setMoving] = useState<{ hostId: string; progress?: string }>();
+  // The computer picked while it adds or clones the repository (PLX-905), which the menu shows
+  // picked at once while a notification follows git's progress (PLX-930). A send meanwhile is
+  // held, so it starts there once the move is done, rather than on the computer being left, and
+  // fails if the move does.
+  const [moving, setMoving] = useState<{ hostId: string }>();
+  // Whether the last move failed, which a held send then does too.
+  const [moveFailed, setMoveFailed] = useState(false);
   // Where to clone the repository on the computer picked, when its path won't do there.
   const [asking, setAsking] = useState<{ hostId: string; ask: CloneAsk }>();
   // The entry the move added or cloned, which a held send waits to see in `groups`.
@@ -372,40 +371,59 @@ export function NewThread({
     done: (error: string | undefined) => void;
   }>();
   const pickHost = async (id: string, at?: string) => {
-    setRepoError(undefined);
+    setMoveFailed(false);
     // Its accounts are this computer's, and its Continue would start the thread here.
     setChoices(undefined);
     setMoving({ hostId: id });
+    const repo = group.name;
+    const key = `setup/${id}`;
+    let cloning = false;
     const result = await onHostChange(id, {
       at,
-      onProgress: (progress) => setMoving((m) => (m?.hostId === id ? { hostId: id, progress } : m)),
+      onProgress: (line) => {
+        cloning = true;
+        const { phase, percent, detail } = parseProgress(line);
+        notify({
+          key,
+          tone: "info",
+          title: `Cloning ${repo} onto ${hostName(id)}`,
+          body: line ? [phase, detail].filter(Boolean).join(" · ") : "Connecting…",
+          progress: { percent },
+        });
+      },
     });
     setMoving((m) => (m?.hostId === id ? undefined : m));
-    if (typeof result === "string") setRepoError(result);
-    else if (result && "url" in result) setAsking({ hostId: id, ask: result });
-    else setArriving(result?.id);
+    if (typeof result === "string") {
+      setMoveFailed(true);
+      notify({
+        key,
+        tone: "error",
+        title: `Couldn't set up ${repo} on ${hostName(id)}`,
+        body: result,
+        action: { label: "Try again", run: () => void pickHost(id, at) },
+      });
+    } else if (result && "url" in result) {
+      dismiss(key);
+      setAsking({ hostId: id, ask: result });
+    } else {
+      // No entry when the computer had it, or another pick came first.
+      if (result && cloning)
+        notify({ key, tone: "success", title: `${repo} is ready on ${hostName(id)}` });
+      else dismiss(key);
+      setArriving(result?.id);
+    }
   };
   const hostName = (id: string) => hosts.find((h) => h.id === id)?.name ?? "that computer";
-  // The move under way, as a card: above the box until a send, then in the thread it starts.
-  const moveCard = moving && (
-    <CloneProgress
-      title={
-        moving.progress === undefined
-          ? `Adding ${group.name} on ${hostName(moving.hostId)}…`
-          : `Cloning ${group.name} on ${hostName(moving.hostId)}`
-      }
-      line={moving.progress}
-      cloning={moving.progress !== undefined}
-    />
-  );
+  // The computer the thread runs on as far as the user can tell: the one picked, while it's set up.
+  const shownHostId = moving?.hostId ?? asking?.hostId ?? hostId;
   // A held send goes once the move is over, from this render's props: the new computer's.
   useEffect(() => {
     if (!held || moving || asking) return;
     if (arriving && !groups.some((g) => g.id === arriving)) return;
     setHeld(undefined);
     setArriving(undefined);
-    if (repoError) {
-      // The alert under the box says why.
+    if (moveFailed) {
+      // A notification says why.
       setStarting(undefined);
       opening.current = false;
       held.done("");
@@ -413,11 +431,11 @@ export function NewThread({
   });
 
   const pickRepository = async () => {
-    setRepoError(undefined);
     const path = await window.parallax.pickFolder();
     if (!path) return;
     const repo = await addRepo(path);
-    if (typeof repo === "string") setRepoError(repo);
+    if (typeof repo === "string")
+      notify({ tone: "error", title: "Couldn't add the repository", body: repo });
     else onGroupChange(repo.id);
   };
 
@@ -447,9 +465,8 @@ export function NewThread({
             ]}
             sent={new Map()}
             live={false}
-            // Nothing works on it until the clone is done: the card says what's going.
-            stalled={!!moveCard}
-            end={moveCard && <div className="mt-3">{moveCard}</div>}
+            // Nothing works on it until the clone is done: a notification says what's going.
+            stalled={!!moving}
           />
         </ThreadLinksContext>
       )}
@@ -474,7 +491,10 @@ export function NewThread({
                   >
                     {folder.name}
                   </span>
-                  {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === hostId)?.name}`}?
+                  {shared &&
+                    !repoless(group) &&
+                    ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
+                  ?
                 </h1>
                 <div className="mb-9 text-center">
                   <button
@@ -517,7 +537,10 @@ export function NewThread({
                   >
                     {group.id === noRepo ? "without a repo" : group.name}
                   </button>
-                  {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === hostId)?.name}`}?
+                  {shared &&
+                    !repoless(group) &&
+                    ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
+                  ?
                 </h1>
                 {!repoless(group) && (
                   <div className="relative mb-9 text-center">
@@ -525,7 +548,6 @@ export function NewThread({
                     <button
                       type="button"
                       onClick={() => {
-                        setRepoError(undefined);
                         setChoices(undefined);
                         onGroupChange(noRepo);
                       }}
@@ -554,7 +576,6 @@ export function NewThread({
               value={group.id}
               onChange={(value) => {
                 if (value === addRepository) return void pickRepository();
-                setRepoError(undefined);
                 setChoices(undefined);
                 const other = elsewhere.find((o) => elsewhereValue(o) === value);
                 if (other) onPickElsewhere(other.host.id, other.repo.id);
@@ -587,7 +608,6 @@ export function NewThread({
             />
           </>
         )}
-        {starting === undefined && moveCard && <div className="mb-3">{moveCard}</div>}
         <Composer
           newThread
           initial={draft}
@@ -632,12 +652,18 @@ export function NewThread({
                 </span>
               )
             ) : repoless(group) ? (
-              <RunTargetMenu hosts={hosts} hostId={hostId} onHostChange={pickHost} />
+              <RunTargetMenu
+                hosts={hosts}
+                hostId={shownHostId}
+                busy={!!moving}
+                onHostChange={pickHost}
+              />
             ) : (
               <>
                 <RunTargetMenu
                   hosts={hosts}
-                  hostId={hostId}
+                  hostId={shownHostId}
+                  busy={!!moving}
                   onHostChange={pickHost}
                   workspace={checkout ? "checkout" : "worktree"}
                   onWorkspaceChange={setWorkspace}
@@ -676,11 +702,6 @@ export function NewThread({
                   }}
                 />
               )}
-              {repoError && (
-                <p role="alert" className="px-2 pt-1.5 text-[12.5px] text-danger">
-                  {repoError}
-                </p>
-              )}
               {choices && (
                 <fieldset
                   ref={chooser}
@@ -711,11 +732,6 @@ export function NewThread({
                       </label>
                     ))}
                   </div>
-                  {chooseError && (
-                    <p role="alert" className="pt-2 text-[12.5px] text-danger">
-                      {chooseError}
-                    </p>
-                  )}
                   <button
                     type="button"
                     disabled={choosing}

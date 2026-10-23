@@ -5,6 +5,7 @@ import type { RpcError } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { useCatalog, type Model } from "./models";
+import { notify } from "./notifications";
 import { kindOf, logoOf } from "./providers";
 import type { ForkChoice } from "./threads";
 import { isRunning } from "./transcript";
@@ -60,7 +61,6 @@ export function ForkMenu({
   const own = useRef<HTMLDivElement>(null);
   const menu = ref ?? own;
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
   // Its items render only while it's open: set before it shows, so the first takes focus, and
   // cleared once it has hidden, so focus goes back to the button that opened it.
   const [open, setOpen] = useState(false);
@@ -76,11 +76,15 @@ export function ForkMenu({
 
   const pick = async (choice: ForkChoice) => {
     setBusy(true);
-    setError(undefined);
     const failed = await onFork(choice);
     setBusy(false);
-    if (failed) setError(forkError(failed, isRunning(run.status)));
-    else menu.current?.hidePopover();
+    menu.current?.hidePopover();
+    if (failed)
+      notify({
+        tone: "error",
+        title: "Couldn't fork the thread",
+        body: forkError(failed, isRunning(run.status)),
+      });
   };
 
   return (
@@ -91,10 +95,7 @@ export function ForkMenu({
       align={align}
       className="w-64 p-1 text-[13px]"
       onBeforeToggle={(e) => e.newState === "open" && setOpen(true)}
-      onClose={() => {
-        setError(undefined);
-        setOpen(false);
-      }}
+      onClose={() => setOpen(false)}
     >
       {open && (
         <>
@@ -144,11 +145,6 @@ export function ForkMenu({
             </>
           )}
         </>
-      )}
-      {error && (
-        <p role="alert" className="px-2 py-1.5 text-[12px] text-danger">
-          {error}
-        </p>
       )}
     </Menu>
   );

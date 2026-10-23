@@ -1,6 +1,7 @@
 import { Check, LoaderCircle, Palette, Search, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
+import { notify } from "../notifications";
 import {
   addExtension,
   fetchExtension,
@@ -31,8 +32,8 @@ export function AddThemeDialog({
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<FoundExtension[]>();
   const [error, setError] = useState<string>();
-  // An extension's add in flight ("busy"), or why it failed, by `namespace.name`.
-  const [status, setStatus] = useState<Record<string, string>>({});
+  // The extensions whose add is in flight, by `namespace.name`.
+  const [busy, setBusy] = useState<ReadonlySet<string>>(new Set());
   const added = useAddedThemes();
 
   useEffect(() => dialog.current?.showModal(), []);
@@ -49,14 +50,19 @@ export function AddThemeDialog({
 
   const add = async ({ namespace, name }: FoundExtension) => {
     const id = `${namespace}.${name}`;
-    setStatus((s) => ({ ...s, [id]: "busy" }));
+    setBusy((b) => new Set(b).add(id));
     try {
       const extension = await fetchExtension(namespace, name, parallaxTokens());
       addExtension(extension);
       onAdded(extension);
       dialog.current?.close();
     } catch (e) {
-      setStatus((s) => ({ ...s, [id]: e instanceof Error ? e.message : String(e) }));
+      setBusy((b) => new Set([...b].filter((x) => x !== id)));
+      notify({
+        tone: "error",
+        title: `Couldn't add ${name}`,
+        body: e instanceof Error ? e.message : String(e),
+      });
     }
   };
 
@@ -125,7 +131,7 @@ export function AddThemeDialog({
         <ul className="grid grid-cols-2 gap-3">
           {results?.map((e) => {
             const id = `${e.namespace}.${e.name}`;
-            const state = status[id];
+            const adding = busy.has(id);
             const isAdded = added.some((a) => a.id === id);
             return (
               <li key={id} className="flex flex-col gap-2 rounded-xl border border-border p-3">
@@ -149,23 +155,18 @@ export function AddThemeDialog({
                     {e.description}
                   </p>
                 )}
-                {state && state !== "busy" && (
-                  <p role="alert" className="text-[12px] text-danger">
-                    {state}
-                  </p>
-                )}
                 <button
                   type="button"
-                  disabled={isAdded || state === "busy"}
+                  disabled={isAdded || adding}
                   onClick={() => void add(e)}
                   className="mt-auto flex h-7 items-center gap-1.5 self-end rounded-md border border-border px-2.5 text-[12.5px] font-medium enabled:hover:bg-hover disabled:text-muted-foreground"
                 >
                   {isAdded ? (
                     <Check className="size-3.5" />
-                  ) : state === "busy" ? (
+                  ) : adding ? (
                     <LoaderCircle className="size-3.5 animate-spin" />
                   ) : null}
-                  {isAdded ? "Added" : state === "busy" ? "Adding" : "Add"}
+                  {isAdded ? "Added" : adding ? "Adding" : "Add"}
                 </button>
               </li>
             );

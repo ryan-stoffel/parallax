@@ -1,6 +1,7 @@
 import { ArrowUpRight, Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
+import type { RpcError } from "../../preload/bridge";
 import type { GithubStatus } from "../../protocol/generated/protocol";
 import { useCopy } from "../AgentChat";
 import { statusLabel, useConnection } from "../ConnectionStatus";
@@ -61,8 +62,10 @@ function GitHub({
   const [status, setStatus] = useState<GithubStatus>();
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
-  // Why Install, Sign in, or Cancel was refused.
-  const [failed, setFailed] = useState<string>();
+  // Why Install, Sign in, or Cancel was refused. Why one that ran didn't finish, or what of it
+  // failed, is plxd's `setupNote`, which stays under the row.
+  const refused = (title: string, error: RpcError) =>
+    notify({ key: `github/${host.id}`, tone: "error", title, body: describeError(error) });
   const [starting, setStarting] = useState(false);
   const [copied, copy] = useCopy();
 
@@ -127,24 +130,22 @@ function GitHub({
   }, [status, host.id, host.name]);
 
   const install = async () => {
-    setFailed(undefined);
     const answer = await window.parallax.request(host.id, "github/install", {});
-    if ("error" in answer) setFailed(describeError(answer.error));
+    if ("error" in answer) refused("Couldn't install the GitHub CLI", answer.error);
     else setStatus(answer.result);
   };
   const signIn = async () => {
-    setFailed(undefined);
     setStarting(true);
     const answer = await window.parallax.request(host.id, "github/signIn", {});
     setStarting(false);
-    if ("error" in answer) return setFailed(describeError(answer.error));
+    if ("error" in answer) return refused("Couldn't sign in to GitHub", answer.error);
     setStatus((s) => s && { ...s, signingIn: answer.result, setupNote: undefined });
     // The device page opens here even for an SSH host, whose browser is this computer's.
     window.open(answer.result.url, "_blank");
   };
   const cancel = async () => {
     const answer = await window.parallax.request(host.id, "github/signInCancel", {});
-    if ("error" in answer) setFailed(describeError(answer.error));
+    if ("error" in answer) refused("Couldn't cancel the GitHub sign-in", answer.error);
     await load(true);
   };
 
@@ -216,7 +217,7 @@ function GitHub({
     );
 
   const pending = setup ? status?.signingIn : undefined;
-  const note = failed ?? (setup ? status?.setupNote : undefined);
+  const note = setup ? status?.setupNote : undefined;
   return (
     <Section
       title="Hosting"

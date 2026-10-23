@@ -4,6 +4,7 @@ import type { StorageItem } from "../../preload/bridge";
 import { useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId, useHosts } from "../hosts";
+import { notify } from "../notifications";
 import {
   dangerButton,
   formatBytes,
@@ -129,11 +130,12 @@ function WorktreeCleanup() {
     if (shown.current !== host) return;
     if ("error" in answer) {
       setOn(!cleanWorktrees);
-      setError(describeError(answer.error));
-    } else {
-      setOn(answer.result.cleanWorktrees ?? cleanWorktrees);
-      setError(undefined);
-    }
+      notify({
+        tone: "error",
+        title: `Couldn't turn worktree cleanup ${cleanWorktrees ? "on" : "off"}`,
+        body: describeError(answer.error),
+      });
+    } else setOn(answer.result.cleanWorktrees ?? cleanWorktrees);
   };
 
   return (
@@ -192,7 +194,11 @@ function ArchivedThreads() {
     for (const id of archived ?? []) {
       const answer = await window.parallax.request(host.id, "thread/delete", { runId: id });
       if ("error" in answer) {
-        setError(describeError(answer.error));
+        notify({
+          tone: "error",
+          title: "Couldn't delete the archived threads",
+          body: describeError(answer.error),
+        });
         break;
       }
     }

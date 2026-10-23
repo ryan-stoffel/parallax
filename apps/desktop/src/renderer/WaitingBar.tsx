@@ -2,6 +2,7 @@ import { Info } from "lucide-react";
 import { useId, useState } from "react";
 
 import type { AgentBackgroundKind, AgentBackgroundTask } from "../protocol/generated/protocol";
+import { notify } from "./notifications";
 import { numberOf } from "./PullRequests";
 import { menuPanel } from "./ui";
 
@@ -103,14 +104,12 @@ export function WaitingBar({
   watching: string[];
 }) {
   const [stopping, setStopping] = useState(false);
-  const [error, setError] = useState<string>();
   const id = useId();
   const shown = presentWaiting(background, watching);
   if (!shown) return null;
 
   async function stop() {
     setStopping(true);
-    setError(undefined);
     const answers = await Promise.all([
       ...background.map((task) =>
         window.parallax.request(hostId, "agent/stopTask", { runId, taskId: task.taskId }),
@@ -121,7 +120,8 @@ export function WaitingBar({
     // didn't can be stopped again.
     setStopping(false);
     const failed = answers.find((answer) => "error" in answer);
-    if (failed && "error" in failed) setError(failed.error.message);
+    if (failed && "error" in failed)
+      notify({ tone: "error", title: "Couldn't stop waiting", body: failed.error.message });
   }
 
   return (
@@ -170,11 +170,6 @@ export function WaitingBar({
           ))}
         </ul>
       </div>
-      {error && (
-        <p role="alert" className="px-4 pb-1 text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
     </section>
   );
 }

@@ -5,6 +5,7 @@ import { olderVersion, type ConnectionError, type ConnectionState } from "../../
 import { statusLabel, useConnection } from "../ConnectionStatus";
 import { DeviceIcon } from "../DeviceIcon";
 import { localId, useHosts, type Host } from "../hosts";
+import { notify } from "../notifications";
 import { IconButton } from "../ui";
 import { ConnectSettings } from "./ConnectSettings";
 import { LanSettings } from "./LanSettings";
@@ -75,8 +76,10 @@ export function ConnectionSettings() {
   const [editing, setEditing] = useState<string>();
   const [appVersion, setAppVersion] = useState<string>();
   useEffect(() => void window.parallax.version().then(setAppVersion), []);
-  const [removeError, setRemoveError] = useState<string>();
-  const remove = async (id: string) => setRemoveError(await window.parallax.removeHost(id));
+  const remove = async (host: Host) => {
+    const failed = await window.parallax.removeHost(host.id);
+    if (failed) notify({ tone: "error", title: `Couldn't remove ${host.name}`, body: failed });
+  };
 
   return (
     <>
@@ -101,18 +104,13 @@ export function ConnectionSettings() {
           </button>
         }
       >
-        {removeError && (
-          <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
-            {removeError}
-          </p>
-        )}
         {remote.map((h) => (
           <RemoteHost
             key={h.id}
             host={h}
             appVersion={appVersion}
             onEdit={() => setEditing(h.id)}
-            onRemove={() => void remove(h.id)}
+            onRemove={() => void remove(h)}
           />
         ))}
         {editing && (
@@ -140,11 +138,10 @@ export function ConnectionSettings() {
 function LocalHost({ host }: { host: Host }) {
   const state = useConnection(host.id);
   const [renaming, setRenaming] = useState(false);
-  const [error, setError] = useState<string>();
   const rename = async (name: string) => {
     const failed = await window.parallax.renameLocal(name);
-    setError(failed);
-    if (!failed) setRenaming(false);
+    if (failed) notify({ tone: "error", title: "Couldn't rename this computer", body: failed });
+    else setRenaming(false);
   };
 
   return (
@@ -167,11 +164,6 @@ function LocalHost({ host }: { host: Host }) {
           </>
         )}
       </div>
-      {error && (
-        <p role="alert" className="mb-2 text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
       <div className="rounded-xl border border-border bg-surface">
         <Row
           title="Local plxd"
@@ -212,11 +204,16 @@ function RemoteHost({
   const [signingIn, setSigningIn] = useState(false);
   const fix = plxdFix(state, appVersion);
   const [installing, setInstalling] = useState(false);
-  const [installError, setInstallError] = useState<string>();
   const install = async () => {
     setInstalling(true);
-    setInstallError(await window.parallax.installPlxd(host.id));
+    const failed = await window.parallax.installPlxd(host.id);
     setInstalling(false);
+    if (failed)
+      notify({
+        tone: "error",
+        title: `Couldn't ${fix === "update" ? "update" : "install"} plxd on ${host.name}`,
+        body: failed,
+      });
   };
   const canSignIn =
     window.parallax.platform !== "win32" && state?.status === "failed" && signInFixes(state.error);
@@ -244,11 +241,6 @@ function RemoteHost({
               {fix === "install" ? "Install" : "Update"} downloads plxd {appVersion} there from
               GitHub, checks its SHA256, and puts it in ~/.parallax-plxd
               {fix === "update" && ", then restarts plxd, which stops its running agents"}.
-            </p>
-          )}
-          {installError && (
-            <p role="alert" className="mt-1 text-[12.5px] text-danger">
-              {installError}
             </p>
           )}
         </div>

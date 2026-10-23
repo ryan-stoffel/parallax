@@ -8,6 +8,7 @@ import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/g
 import type { SettingsSection } from "./App";
 import { applyAppearance, type Appearance } from "./appearance";
 import { models } from "./models";
+import { Notifications } from "./notifications";
 import { behaviorDefaults, behaviorPrefs, setBehaviorPrefs } from "./prefs";
 import { Settings } from "./Settings";
 import { anchorOf, settingsIndex } from "./settings/search";
@@ -17,6 +18,7 @@ import { appShortcut } from "./ui";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 HTMLElement.prototype.hidePopover = () => {};
+HTMLElement.prototype.showPopover = () => {};
 
 // xterm.js needs a real canvas; the stand-in only marks where the terminal is.
 vi.mock("./SignInTerminal", () => ({
@@ -96,6 +98,11 @@ beforeEach(() => {
 
 let unmount = () => {};
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => unmount());
   vi.useRealTimers();
 });
@@ -107,7 +114,10 @@ async function renderSettings(
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root.render(
-      <Settings section={name} listed={listed} theme="system" onThemeChange={() => {}} />,
+      <>
+        <Settings section={name} listed={listed} theme="system" onThemeChange={() => {}} />
+        <Notifications />
+      </>,
     ),
   );
   unmount = () => {
@@ -134,6 +144,9 @@ const tab = (name: string) =>
     t.textContent?.trim().startsWith(name),
   )!;
 const pane = () => visible('[role="tabpanel"]');
+/** The newest notification's text, which an action's result is. */
+const notice = () =>
+  document.querySelector('[aria-label="Notifications"] > div')?.textContent ?? undefined;
 // The Work key's row.
 const work = () =>
   [...section("Anthropic API keys").querySelectorAll("div")].find((d) =>
@@ -272,8 +285,8 @@ test("adds a key, clearing it from its field after each try, and never gets it b
     },
   });
   await submit();
-  expect(form.querySelector('[role="alert"]')!.textContent).toBe(
-    "This host's keychain isn't available: the keychain is locked or access was denied.",
+  expect(notice()).toBe(
+    "Couldn't add the API keyThis host's keychain isn't available: the keychain is locked or access was denied.",
   );
   expect(keyField.value).toBe("");
 
@@ -1330,7 +1343,9 @@ describe("on a plxd with providers", () => {
     expect(section("Account").textContent).toContain("Approve the sign-in in your browser");
     listed = [{ ...cursor, signInError: "Cursor sign-in failed or expired. Start sign-in again." }];
     await act(() => vi.advanceTimersByTimeAsync(2100));
-    expect(pane().textContent).toContain("Cursor sign-in failed or expired");
+    expect(notice()).toBe(
+      "Couldn't sign in to CursorCursor sign-in failed or expired. Start sign-in again.",
+    );
     expect(section("Account").textContent).not.toContain("Approve the sign-in in your browser");
   });
 

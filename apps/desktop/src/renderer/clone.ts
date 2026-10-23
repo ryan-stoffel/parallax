@@ -42,10 +42,12 @@ export async function cloneOn(
 export type CloneAsk = { url: string; name: string; path: string };
 
 /**
- * Puts `repo` from `from` onto `to`, which lacks it (PLX-905): clones its `origin` at the same
- * path when the folder that path goes in exists there and the path itself doesn't. Otherwise
- * resolves to what to ask, with the path from `~` on `from` as the suggestion. Resolves to an
- * error, for people, when `repo` has no `origin` to clone.
+ * Puts `repo` from `from` onto `to`, which lacks it (PLX-905), without asking (PLX-930): clones
+ * its `origin` at the same path when the folder that path goes in exists there and the path
+ * itself doesn't, else at the same place under `to`'s home folder, which plxd makes as it clones.
+ * A folder already at that place is added when it's this repository's clone. When it's something
+ * else, resolves to what to ask, with that place as the suggestion. Resolves to an error, for
+ * people, when `repo` has no `origin` to clone or the clone fails.
  */
 export async function cloneOnto(
   from: string,
@@ -57,7 +59,7 @@ export async function cloneOnto(
   if ("error" in remote) return describeError(remote.error);
   const url = remote.result.url;
   if (!url) return `${repo.name} has no origin remote to clone it from`;
-  const dir = repo.path.slice(0, Math.max(repo.path.lastIndexOf("/"), repo.path.lastIndexOf("\\")));
+  const dir = parentOf(repo.path);
   const there = dir && (await window.parallax.request(to, "host/folders", { path: dir }));
   const free =
     there && "result" in there && !there.result.folders.some((f) => f.path === repo.path);
@@ -71,5 +73,16 @@ export async function cloneOnto(
     root !== undefined && /^[\\/]/.test(repo.path.slice(root.length)) && repo.path.startsWith(root)
       ? repo.path.slice(root.length + 1).replaceAll("\\", "/")
       : undefined;
-  return { url, name: repo.name, path: `~/${under || repo.name}` };
+  const path = `~/${under || repo.name}`;
+  const parent = await window.parallax.request(to, "host/folders", { path: parentOf(path) });
+  const name = path.slice(path.lastIndexOf("/") + 1);
+  const taken = "result" in parent && parent.result.folders.some((f) => f.name === name);
+  onProgress("");
+  const cloned = await cloneOn(to, url, path, onProgress);
+  return typeof cloned === "string" && taken ? { url, name: repo.name, path } : cloned;
+}
+
+/** The folder `path` goes in, or "" for a path with none. */
+function parentOf(path: string) {
+  return path.slice(0, Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")));
 }

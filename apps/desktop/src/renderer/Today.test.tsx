@@ -114,6 +114,11 @@ beforeEach(() => {
 
 let unmount = () => {};
 afterEach(() => {
+  // The app keeps its notifications between tests, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] [aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => unmount());
   flushToasts();
 });
@@ -166,7 +171,7 @@ test("Clear archives the finished threads already seen, not one waiting out a us
   expect(document.body.textContent).toContain("Cleared 2 threads");
 });
 
-test("a thread Clear can't archive stays, and the sidebar says why", async () => {
+test("a thread Clear can't archive stays, and a notification says why", async () => {
   threads = [thread("stuck", 30), thread("done", 20)];
   runs = [run("stuck", "completed", 30), run("done", "completed", 20)];
   answers["thread/archive"] = archiving("stuck");
@@ -174,7 +179,9 @@ test("a thread Clear can't archive stays, and the sidebar says why", async () =>
   await act(async () => button("Clear")!.click());
   await waitForArchives(2);
   await settle();
-  expect(document.querySelector("#sidebar [role=alert]")?.textContent).toBe("stuck is busy");
+  const notice = document.querySelector('[aria-label="Notifications"] > div')!;
+  expect(notice.querySelector("span")!.textContent).toBe("Couldn't archive every thread");
+  expect(notice.querySelector("p")!.textContent).toBe("stuck is busy");
   expect(row("stuck")).toBeDefined();
   expect(document.body.textContent).toContain("Cleared 1 thread");
 });

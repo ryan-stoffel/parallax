@@ -5,12 +5,20 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
 import { IconPicker } from "./IconPicker";
+import { Notifications } from "./notifications";
 import { projectIcons } from "./projectIcons";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers; the notifications' stack shows one.
+HTMLElement.prototype.showPopover = () => {};
 
 let root: Root | undefined;
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
@@ -20,7 +28,10 @@ function render(value: ProjectIconValue | undefined, onPick = vi.fn(), maxImageB
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root!.render(
-      <IconPicker id="picker" value={value} onPick={onPick} maxImageBytes={maxImageBytes} />,
+      <>
+        <IconPicker id="picker" value={value} onPick={onPick} maxImageBytes={maxImageBytes} />
+        <Notifications />
+      </>,
     ),
   );
   return onPick;
@@ -279,10 +290,11 @@ test("a glyph or a color picked after an upload replaces the image", async () =>
   expect(onPick).toHaveBeenLastCalledWith({ name: "bug", color: "violet" });
 });
 
-test("a file that isn't an image plxd takes, can't be read, or is over the cap says so in the picker", async () => {
+test("a file that isn't an image plxd takes, can't be read, or is over the cap says so in a notification", async () => {
   const onPick = render(undefined, vi.fn(), 8);
   toggle("open");
-  const alert = () => panel().querySelector('[role="alert"]')?.textContent;
+  // The newest notification's body, each replacing the last.
+  const alert = () => document.querySelector('[aria-label="Notifications"] > div p')?.textContent;
 
   await upload(new File(["x"], "logo.svg", { type: "image/svg+xml" }));
   expect(alert()).toBe("Only PNG, JPEG, GIF, and WebP images can be used.");
@@ -296,8 +308,5 @@ test("a file that isn't an image plxd takes, can't be read, or is over the cap s
   expect(alert()).toBe("That image couldn't be read.");
   vi.stubGlobal("createImageBitmap", async () => ({ width: 300, height: 200, close() {} }));
   expect(onPick).not.toHaveBeenCalled();
-
-  // A pick clears it.
-  click(option("Star"));
-  expect(alert()).toBeUndefined();
+  expect(document.querySelectorAll('[aria-label="Notifications"] > div')).toHaveLength(1);
 });

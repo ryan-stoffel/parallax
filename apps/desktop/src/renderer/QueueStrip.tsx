@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 
 import type { OrchestrationCommand, QueuedMessage } from "../protocol/generated/protocol";
+import { notify } from "./notifications";
 
 const action =
   "grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-3.5";
@@ -42,16 +43,19 @@ export function QueueStrip({
   const [editing, setEditing] = useState<string>();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
   const disabled = busy || !!disabledReason;
 
   async function change(command: OrchestrationCommand) {
     if (disabled) return;
     setBusy(true);
-    setError(undefined);
     const answer = await window.parallax.request(hostId, "orchestration/dispatch", command);
     setBusy(false);
-    if ("error" in answer) return setError(answer.error.message);
+    if ("error" in answer)
+      return notify({
+        tone: "error",
+        title: "Couldn't change the queue",
+        body: answer.error.message,
+      });
     setEditing(undefined);
     if (command.type === "queued-run.cancel") onCancelled?.(command.runId);
   }
@@ -65,7 +69,7 @@ export function QueueStrip({
     void change({ type: "queued-run.reorder", threadId: runId, runIds: ids });
   }
 
-  if (!messages.length && !error) return null;
+  if (!messages.length) return null;
   return (
     <section
       aria-label="Queued messages"
@@ -246,11 +250,6 @@ export function QueueStrip({
           </li>
         ))}
       </ol>
-      {error && (
-        <p role="alert" className="px-3 py-2 text-danger">
-          {error}
-        </p>
-      )}
     </section>
   );
 }

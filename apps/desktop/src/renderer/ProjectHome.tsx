@@ -7,6 +7,7 @@ import { DoneMark } from "./AttentionMark";
 import { questionOf, type InboxView } from "./Inbox";
 import { Loader } from "./Loader";
 import { locale } from "./locale";
+import { notify } from "./notifications";
 import { OpenHint } from "./OpenHint";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { instanceLogo } from "./providers";
@@ -325,14 +326,13 @@ function QuestionBox({
 }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
   const send = async (answer: string) => {
     if (!answer.trim() || busy) return;
     setBusy(true);
     const failed = await onAnswer(answer.trim());
     setBusy(false);
-    setError(failed);
-    if (!failed) setText("");
+    if (failed) notify({ tone: "error", title: "Couldn't send your answer", body: failed });
+    else setText("");
   };
   return (
     <div className="mx-2.5 mb-2 overflow-hidden rounded-xl border border-border bg-surface">
@@ -384,11 +384,6 @@ function QuestionBox({
           </button>
         </form>
       </div>
-      {error && (
-        <p role="alert" className="px-3.5 pb-2.5 text-[12px] text-danger">
-          {error}
-        </p>
-      )}
     </div>
   );
 }

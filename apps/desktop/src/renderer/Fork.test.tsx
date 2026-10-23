@@ -6,8 +6,11 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import type { ParallaxBridge, RpcError } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
 import { forkError, ForkMenu } from "./Fork";
+import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// happy-dom has no popovers.
+HTMLElement.prototype.showPopover = () => {};
 const hide = vi.fn();
 HTMLElement.prototype.hidePopover = hide;
 let root: Root | undefined;
@@ -19,6 +22,11 @@ beforeEach(() => {
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
@@ -35,7 +43,14 @@ const run = (over: Partial<AgentRun> = {}): AgentRun =>
   }) as AgentRun;
 function render(r: AgentRun, onFork: (choice: object) => Promise<RpcError | undefined>) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root!.render(<ForkMenu id="fork" hostId="local" run={r} onFork={onFork} />));
+  act(() =>
+    root!.render(
+      <>
+        <ForkMenu id="fork" hostId="local" run={r} onFork={onFork} />
+        <Notifications />
+      </>,
+    ),
+  );
   // happy-dom has no popovers: the menu gets the event a browser sends as it opens.
   act(() => {
     document
@@ -43,6 +58,11 @@ function render(r: AgentRun, onFork: (choice: object) => Promise<RpcError | unde
       .dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
   });
 }
+/** The newest notification's title and body. */
+const notice = () => {
+  const n = document.querySelector('[aria-label="Notifications"] > div');
+  return n && [n.querySelector("span")?.textContent, n.querySelector("p")?.textContent];
+};
 const menuItems = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
 const nameOf = (b: HTMLElement) => b.getAttribute("aria-label") ?? b.textContent;
 const items = () => menuItems().map(nameOf);
@@ -77,17 +97,18 @@ test("Keep sends nothing to change, another model its id, and another provider's
   });
 });
 
-test("plxd's refusal stays in the menu, in words, and the items wait on the request", async () => {
+test("plxd's refusal closes the menu for a notification, in words, and the items wait on the request", async () => {
   let answer: (error: RpcError | undefined) => void = () => {};
   render(run({ status: "running" }), () => new Promise((resolve) => (answer = resolve)));
   act(() => item("Keep Claude Sonnet 5").click());
   expect(item("Keep Claude Sonnet 5").disabled).toBe(true);
   await act(async () => answer({ code: -32602, message: "thread run is still running turn t" }));
   expect(item("Keep Claude Sonnet 5").disabled).toBe(false);
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe(
+  expect(notice()).toEqual([
+    "Couldn't fork the thread",
     "This turn is still running. Fork it once it finishes.",
-  );
-  expect(hide).not.toHaveBeenCalled();
+  ]);
+  expect(hide).toHaveBeenCalledTimes(1);
 });
 
 test("each refusal plxd gives a fork reads plainly", () => {

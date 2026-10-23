@@ -12,7 +12,7 @@ import {
   useThreadAlarms,
   type ThreadMark,
 } from "./alarms";
-import { NOTICE_MS, Notifications, notify } from "./notifications";
+import { dismiss, NOTICE_MS, Notifications, notify } from "./notifications";
 import type { HostThreads } from "./Sidebar";
 import { emptyThreads, idleThreads, threadsReducer, asksOf, type ThreadsState } from "./threads";
 
@@ -67,6 +67,21 @@ test("a notice with a key replaces its last, news closes by itself, and what ask
   act(() => open!.click());
   expect(run).toHaveBeenCalledOnce();
   expect(titles()).toEqual(["Thread needs your input"]);
+});
+
+test("work under way updates in its own toast, stays until done, and closes by its key (PLX-930)", () => {
+  vi.useFakeTimers();
+  render(<Notifications />);
+  act(() => notify({ key: "clone", tone: "info", title: "Cloning", progress: {} }));
+  const toast = document.querySelector('[aria-label="Notifications"] > div');
+  act(() => notify({ key: "clone", tone: "info", title: "Cloning", progress: { percent: 42 } }));
+  // The same element, so it doesn't animate in again.
+  expect(document.querySelector('[aria-label="Notifications"] > div')).toBe(toast);
+  expect(toast!.textContent).toContain("42%");
+  act(() => void vi.advanceTimersByTime(NOTICE_MS));
+  expect(titles()).toEqual(["Cloning"]);
+  act(() => dismiss("clone"));
+  expect(titles()).toEqual([]);
 });
 
 test("a system notice also goes to the OS only while the window is in the background", () => {

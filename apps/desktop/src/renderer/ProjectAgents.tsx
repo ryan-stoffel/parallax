@@ -4,6 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import type { AgentRun } from "../protocol/generated/protocol";
 import { childOrder, runAttention } from "./attention";
 import { describeError } from "./errors";
+import { notify } from "./notifications";
 import { instanceLogo, instanceName } from "./providers";
 import { backendLogos, statusLooks } from "./Sidebar";
 import { projectRuns, titleOf, type ThreadsState } from "./threads";
@@ -199,16 +200,20 @@ function StartAgent({
   // Reused until a start succeeds, so a retry never starts two (0007).
   const [runId, setRunId] = useState(uuidv7);
   const [starting, setStarting] = useState(false);
-  const [error, setError] = useState<string>();
   const canStart = !disabledReason && !starting && text.trim() !== "";
 
   const submit = async () => {
     if (!canStart) return;
     setStarting(true);
-    setError(undefined);
     const failed = await start(runId, text);
     setStarting(false);
-    if (failed) return setError(failed);
+    if (failed)
+      return notify({
+        key: "start-subagent",
+        tone: "error",
+        title: "Couldn't start the subagent",
+        body: failed,
+      });
     setText("");
     setRunId(uuidv7());
   };
@@ -245,11 +250,6 @@ function StartAgent({
           {starting ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}
         </button>
       </div>
-      {error && (
-        <p role="alert" className="px-2 pt-2 text-[12.5px] text-danger">
-          {error}
-        </p>
-      )}
     </form>
   );
 }

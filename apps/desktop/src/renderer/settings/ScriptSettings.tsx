@@ -4,6 +4,7 @@ import type { RepoScript } from "../../protocol/generated/protocol";
 import { useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId, useHosts, type Host } from "../hosts";
+import { notify } from "../notifications";
 import { isRepository, type ThreadsView } from "../threads";
 import { Picker } from "../ui";
 import { field, HostPicker, PageTitle, primaryButton, quietButton, Section, Switch } from "./parts";
@@ -65,10 +66,14 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
       scripts,
     });
     setBusy(false);
-    if ("error" in answer) return setError(describeError(answer.error));
+    if ("error" in answer)
+      return notify({
+        tone: "error",
+        title: `Couldn't save ${repo.name}'s scripts`,
+        body: describeError(answer.error),
+      });
     setSaved(answer.result.scripts);
     setScripts(answer.result.scripts);
-    setError(undefined);
   };
   const edit = (i: number, change: Partial<RepoScript>) =>
     setScripts(scripts.map((s, j) => (j === i ? { ...s, ...change } : s)));
@@ -185,11 +190,6 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
         )}
         {!empty && (
           <div className="flex items-center justify-end gap-3 border-t border-border px-4 py-2.5">
-            {error && (
-              <p role="alert" className="mr-auto text-[12.5px] text-danger">
-                {error}
-              </p>
-            )}
             <button
               type="button"
               className={quietButton}

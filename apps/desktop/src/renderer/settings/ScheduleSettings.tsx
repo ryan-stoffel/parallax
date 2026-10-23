@@ -4,6 +4,7 @@ import type { Schedule, ScheduledTask } from "../../protocol/generated/protocol"
 import { useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId, useHosts } from "../hosts";
+import { notify } from "../notifications";
 import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
 
 const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -86,7 +87,14 @@ export function ScheduleSettings() {
               permission: task.permission,
             });
     setBusy(undefined);
-    if ("error" in answer) setError(describeError(answer.error));
+    if ("error" in answer) {
+      const verb = action === "pause" ? (task.enabled ? "pause" : "resume") : action;
+      notify({
+        tone: "error",
+        title: `Couldn't ${verb} ${task.title}`,
+        body: describeError(answer.error),
+      });
+    }
     void load();
   };
 
