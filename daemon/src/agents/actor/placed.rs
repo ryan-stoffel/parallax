@@ -40,7 +40,7 @@ impl Actor {
             self.id,
             Some(account),
             Role::Worker,
-            full_claude_code(&self.row.fields),
+            full_claude_code(&self.row.fields, None),
         )
         .await?;
         // Another instance of the same kind serves the same model, so the model goes with it.

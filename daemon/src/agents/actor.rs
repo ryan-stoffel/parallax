@@ -2717,7 +2717,7 @@ impl Actor {
             self.id,
             Some(account),
             role,
-            super::full_claude_code(&self.row.fields),
+            super::full_claude_code(&self.row.fields, changes.permission),
         )
         .await
         {

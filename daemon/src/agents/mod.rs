@@ -331,14 +331,12 @@ fn requested_account(account: Option<&AccountChoice>) -> Option<String> {
 }
 
 /// Whether the worker run `fields` describe is full Claude Code if it runs on Claude, with no
-/// worker sandbox ([`crate::backend::claude::unsandboxed`]). Every worker run is a thread to its
-/// backend.
-pub(super) fn full_claude_code(fields: &RunFields) -> bool {
-    crate::backend::claude::runs_unsandboxed(
-        true,
-        fields.approvals,
-        fields.permission.as_deref().and_then(option_value),
-    )
+/// worker sandbox ([`crate::backend::claude::unsandboxed`]). `changed` is the permission a
+/// message changes to, which the new process runs with instead of the stored one. Every worker
+/// run is a thread to its backend.
+pub(super) fn full_claude_code(fields: &RunFields, changed: Option<AgentPermission>) -> bool {
+    let permission = changed.or_else(|| fields.permission.as_deref().and_then(option_value));
+    crate::backend::claude::runs_unsandboxed(true, fields.approvals, permission)
 }
 
 /// The project's repository, the routing inputs, and the paths run `run` of `project` needs,
@@ -1182,7 +1180,7 @@ pub(crate) async fn create_started(
         run_id,
         account,
         Role::Worker,
-        full_claude_code(&fields),
+        full_claude_code(&fields, None),
         thread.is_some(),
     )
     .await?;
@@ -2226,6 +2224,47 @@ mod tests {
         // A busy one leaves the count, so the next goes idle under the cap.
         idle.remove(runs[2]);
         assert_eq!(idle.push(RunId::generate()), None);
+    }
+
+    /// PLX-959: a run with approvals or in Bypass is full Claude Code, and skips the worker
+    /// sandbox checks on every OS. A message's permission change decides for the new process.
+    #[test]
+    fn only_full_claude_code_skips_the_sandbox_checks() {
+        use parallax_protocol::AgentPermission::{Bypass, Manual};
+
+        let fields = |approvals: bool, permission: Option<&str>| RunFields {
+            project_id: Uuid::nil(),
+            prompt: "p".to_owned(),
+            requested_account: None,
+            policy: "workspaceWrite".to_owned(),
+            backend: "claude".to_owned(),
+            coordinator_thread: None,
+            parent: None,
+            notify_parent: false,
+            model: None,
+            effort: None,
+            permission: permission.map(str::to_owned),
+            context_window: None,
+            fast: None,
+            approvals,
+            checkout: false,
+            explore: false,
+        };
+        assert!(super::full_claude_code(&fields(true, None), None));
+        assert!(super::full_claude_code(
+            &fields(false, Some("bypass")),
+            None
+        ));
+        assert!(!super::full_claude_code(&fields(false, None), None));
+        assert!(!super::full_claude_code(
+            &fields(false, Some("manual")),
+            None
+        ));
+        assert!(super::full_claude_code(&fields(false, None), Some(Bypass)));
+        assert!(!super::full_claude_code(
+            &fields(false, Some("bypass")),
+            Some(Manual)
+        ));
     }
 
     /// PLX-406 (0044): the brief, then the index, between the tools and the task, and neither
