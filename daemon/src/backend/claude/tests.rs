@@ -2656,7 +2656,8 @@ fn a_full_thread_gets_its_thread_tools_beside_the_users_mcp_servers() {
     assert!(!args.contains(&"--mcp-config".into()));
 }
 
-/// PLX-730: a thread's agent is told to write math as LaTeX, which the app typesets.
+/// PLX-730: a thread's agent is told to write math as LaTeX, which the app typesets. A
+/// coordinator's instructions (0078) join it, since the CLI keeps one addition.
 #[test]
 fn a_thread_is_told_to_write_math_as_latex() {
     let cwd = Path::new("/repo");
@@ -2665,60 +2666,49 @@ fn a_thread_is_told_to_write_math_as_latex() {
     thread.sandbox = Some(worker_sandbox(cwd));
     thread.approvals = true;
     thread.thread = true;
-    let args = super::arguments(&thread).unwrap();
-    let at = args
-        .iter()
-        .position(|arg| arg == "--append-system-prompt")
-        .unwrap();
-    assert_eq!(args[at + 1], crate::backend::MATH_FORMAT);
-    // A sandboxed thread keeps the sandbox's own prompt.
-    thread.approvals = false;
-    assert!(
-        !super::arguments(&thread)
-            .unwrap()
-            .contains(&"--append-system-prompt".into())
-    );
-}
-
-/// 0078: a coordinator's instructions are its `--append-system-prompt` on a fresh start and on a
-/// resume alike, joined with the math format for a thread that gets both, since the CLI keeps one.
-#[test]
-fn instructions_are_appended_to_the_system_prompt_on_a_start_and_a_resume() {
-    let cwd = Path::new("/repo");
-    let appended = |request: &RunRequest| {
-        let args = super::arguments(request).unwrap();
-        let at = args
-            .iter()
-            .position(|arg| arg == "--append-system-prompt")
-            .unwrap();
-        assert_eq!(
-            args.iter()
-                .filter(|arg| *arg == "--append-system-prompt")
-                .count(),
-            1
-        );
-        args[at + 1].clone()
-    };
-    let mut fresh = coordinator(cwd);
-    fresh.policy = ToolPolicy::NoWrite;
-    fresh.instructions = Some("Never edit files.".into());
-    assert_eq!(appended(&fresh), "Never edit files.");
-    let resumed = RunRequest {
-        resume: Some(Resume::new("s-1")),
-        ..fresh
-    };
-    assert_eq!(appended(&resumed), "Never edit files.");
-
-    let mut thread = request(cwd);
-    thread.policy = ToolPolicy::WorkspaceWrite;
-    thread.sandbox = Some(worker_sandbox(cwd));
-    thread.approvals = true;
-    thread.thread = true;
+    let math = crate::backend::MATH_FORMAT;
+    assert_eq!(super::appended_prompt(&thread).as_deref(), Some(math));
     thread.instructions = Some("Never edit files.".into());
     assert_eq!(
-        appended(&thread),
-        &*format!("{}\n\nNever edit files.", crate::backend::MATH_FORMAT)
+        super::appended_prompt(&thread),
+        Some(format!("{math}\n\nNever edit files."))
     );
+    // A sandboxed thread keeps the sandbox's own prompt.
+    thread.approvals = false;
+    thread.instructions = None;
+    assert_eq!(super::appended_prompt(&thread), None);
+}
+
+/// 0078: a coordinator's instructions reach the CLI as `--append-system-prompt-file` on a fresh
+/// start and on a resume alike, never as a multi-line argument, which Rust refuses for a `.cmd`
+/// shim on Windows. The file is in the data folder's `tmp/` and gone once the run has ended.
+#[tokio::test]
+async fn instructions_go_in_a_prompt_file_on_a_start_and_a_resume() {
+    for resume in [None, Some(Resume::new("s-1"))] {
+        let fake = Fake::new("coordinator-tasks");
+        let request = RunRequest {
+            resume,
+            instructions: Some("Never edit files.\nNot even one line.".into()),
+            ..coordinator(&fake.root())
+        };
+        run(&fake, request).await;
+        let argv = fake.argv();
+        assert!(
+            !argv.iter().any(|arg| arg == "--append-system-prompt"),
+            "{argv:?}"
+        );
+        let at = argv
+            .iter()
+            .position(|arg| arg == "--append-system-prompt-file")
+            .unwrap();
+        let file = PathBuf::from(&argv[at + 1]);
+        assert_eq!(file.parent(), Some(fake.root().join("data/tmp").as_path()));
+        assert_eq!(
+            fake.recorded("prompt-file"),
+            "Never edit files.\nNot even one line."
+        );
+        assert!(!file.exists());
+    }
 }
 
 /// 0027: a coordinator and a bypass worker are full Claude Code, so their init may list any

@@ -732,6 +732,7 @@ fi"#;
             thread_tools: None,
             approvals: false,
             thread: false,
+            instructions: None,
         };
         let mut started = backend.start(request).unwrap();
         loop {

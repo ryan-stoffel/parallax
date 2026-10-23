@@ -548,6 +548,36 @@ pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
     Ok(file.into_temp_path())
 }
 
+/// What a run adds to Claude Code's system prompt: the math format for a full thread (PLX-730)
+/// and a coordinator's instructions (0078), joined, since the CLI keeps one addition.
+#[must_use]
+pub fn appended_prompt(request: &RunRequest) -> Option<String> {
+    let parts: Vec<&str> = unsandboxed(request)
+        .then_some(super::MATH_FORMAT)
+        .into_iter()
+        .chain(request.instructions.as_deref())
+        .collect();
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
+/// Writes [`appended_prompt`]'s `text` into `dir`, plxd's data folder's `tmp/`, for
+/// `--append-system-prompt-file`, and returns its path, which deletes the file when dropped. A
+/// file, not `--append-system-prompt`, because Rust refuses a newline in an argument to a `.cmd`
+/// shim, as npm installs Claude Code on Windows.
+///
+/// # Errors
+///
+/// If `dir` can't be created or the file can't be written.
+pub fn write_prompt_file(dir: &Path, text: &str) -> io::Result<TempPath> {
+    std::fs::create_dir_all(dir)?;
+    let mut file = tempfile::Builder::new()
+        .prefix("claude-prompt-")
+        .suffix(".md")
+        .tempfile_in(dir)?;
+    file.write_all(text.as_bytes())?;
+    Ok(file.into_temp_path())
+}
+
 /// A [`Backend`] that runs Claude Code.
 #[derive(Clone, Debug)]
 pub struct ClaudeBackend {
@@ -673,10 +703,6 @@ impl ClaudeBackend {
 /// worker has no usable [`WorkerSandbox`], or if a no-write run other than a coordinator asks for
 /// a permission.
 /// [`StartError::Unsupported`] for an effort or permission this version doesn't know.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one flag group per run kind, read in order"
-)]
 pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
     let coordinator = request.coordinator_tools.is_some();
     if coordinator && request.policy != ToolPolicy::NoWrite {
@@ -756,16 +782,6 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         for dir in &sandbox.writable {
             args.extend(["--add-dir".into(), dir.into()]);
         }
-    }
-    // The CLI keeps one `--append-system-prompt`, so the math format and a coordinator's
-    // instructions (0078) share it.
-    let append: Vec<&str> = unsandboxed
-        .then_some(super::MATH_FORMAT)
-        .into_iter()
-        .chain(request.instructions.as_deref())
-        .collect();
-    if !append.is_empty() {
-        args.extend(["--append-system-prompt".into(), append.join("\n\n").into()]);
     }
     if coordinator || unsandboxed {
         // Full Claude Code loads the user's and the project's settings, whose `env` could share
@@ -1202,6 +1218,18 @@ impl Backend for ClaudeBackend {
             }
             _ => None,
         };
+        let prompt_file = match appended_prompt(&request) {
+            Some(text) => {
+                let dir = self.launcher.data_dir().temp_dir();
+                let file = write_prompt_file(&dir, &text).map_err(SpawnError::Io)?;
+                spec.args.extend([
+                    "--append-system-prompt-file".into(),
+                    file.as_os_str().into(),
+                ]);
+                Some(file)
+            }
+            None => None,
+        };
 
         let query = Query::open(&self.launcher, &spec, request.run_id)?;
         let switch = CancelSwitch::new();
@@ -1238,6 +1266,7 @@ impl Backend for ClaudeBackend {
             asks: HashMap::new(),
             violation: None,
             env_file,
+            prompt_file,
         };
         let prompt = Message::new(request.turn_id, &request.prompt, &request.images, false);
         tokio::spawn(driver.run(prompt));
@@ -1450,6 +1479,8 @@ struct Driver {
     violation: Option<Failure>,
     /// A worker's [`ENV_FILE_ENV`] script, deleted once the CLI has exited.
     env_file: Option<TempPath>,
+    /// [`write_prompt_file`]'s file, deleted with [`Self::env_file`].
+    prompt_file: Option<TempPath>,
 }
 
 impl Driver {
@@ -1552,6 +1583,7 @@ impl Driver {
         self.drop_undelivered(stdin).await;
         self.withdraw_left().await;
         self.env_file = None;
+        self.prompt_file = None;
         let outcome = self.outcome(exit);
         let _ = self.sink.finish(outcome).await;
     }

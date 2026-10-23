@@ -327,7 +327,7 @@ pub struct RunRequest {
     pub thread: bool,
     /// Text added to the agent's system prompt on this CLI process, resumes included, so
     /// compaction never drops it: a coordinator's instructions (0078). Claude Code takes it as
-    /// `--append-system-prompt`, Codex as developer instructions, and `OpenCode` as each
+    /// `--append-system-prompt-file`, Codex as developer instructions, and `OpenCode` as each
     /// message's `system`. ACP agents and Cursor have no channel that adds to their own prompt,
     /// so they get it ahead of the process's first message ([`Self::first_prompt`]).
     pub instructions: Option<String>,

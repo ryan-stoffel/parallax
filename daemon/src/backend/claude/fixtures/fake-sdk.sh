@@ -1,8 +1,9 @@
 #!/bin/sh
 # A stand-in for the Claude Agent SDK sidecar in tests (sdk.rs, sidecar/claude), one query at a
-# time. It records each query's `open` line, a copy of its $CLAUDE_ENV_FILE, and what plxd sends
-# its CLI's stdin under $FAKE_CLAUDE_DIR, then replays $FAKE_CLAUDE_FIXTURE as that CLI's stdout,
-# each line after the query's id, and reports how the CLI exited. It exits once stdin closes.
+# time. It records each query's `open` line, copies of its $CLAUDE_ENV_FILE and its
+# --append-system-prompt-file, and what plxd sends its CLI's stdin under $FAKE_CLAUDE_DIR, then
+# replays $FAKE_CLAUDE_FIXTURE as that CLI's stdout, each line after the query's id, and reports
+# how the CLI exited. It exits once stdin closes.
 #
 # Fixture lines starting with # are comments and blank lines are skipped. These directives act:
 #   @read          wait for one stdin line, or exit 0 if the prompt has ended
@@ -54,6 +55,8 @@ while IFS= read -r open; do
   printf '%s\n' "$open" > "$dir/open"
   env_file=$(printf '%s' "$open" | sed -n 's/.*"CLAUDE_ENV_FILE":"\([^"]*\)".*/\1/p')
   if [ -n "$env_file" ]; then cp "$env_file" "$dir/env-file"; fi
+  prompt_file=$(printf '%s' "$open" | sed -n 's/.*"--append-system-prompt-file","\([^"]*\)".*/\1/p')
+  if [ -n "$prompt_file" ]; then cp "$prompt_file" "$dir/prompt-file"; fi
   id=$(printf '%s' "$open" | sed -n 's/^{"id":"\([^"]*\)".*/\1/p')
   stderr= trap_int= ignore_int= done= ended=
   exec 3< "$FAKE_CLAUDE_FIXTURE"
