@@ -62,6 +62,7 @@ import {
   useThreadAlarms,
 } from "./alarms";
 import { ProjectIcon, RepoIcon, SettingsNav, settingsNames, Sidebar, ThreadList } from "./Sidebar";
+import { newThreadPrefs } from "./prefs";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
 import { useAppearanceEffects } from "./appearance";
@@ -270,6 +271,17 @@ export function App() {
   const startFolder = startId ? pinFolders[startId] : undefined;
   // The other computers' repositories, which New Thread and Mod+N's picker list too.
   const elsewhere = useMemo(() => otherRepos(hosts, views, host.id), [hosts, views, host.id]);
+  // The computer New thread opens on: Settings > Threads' while it's listed and connected, else
+  // the open one. Mod+N's picker lists its repositories first.
+  const startPref = newThreadPrefs.use().host;
+  const startConnected = useConnection(startPref)?.status === "connected";
+  const start = (startConnected && hosts.find((h) => h.id === startPref)) || host;
+  const startState = (views[start.id] ?? idleThreads).state;
+  const startGroups = start.id === host.id ? groups : groupThreads(startState).groups;
+  const startElsewhere = useMemo(
+    () => otherRepos(hosts, views, start.id),
+    [hosts, views, start.id],
+  );
   // Every thread and Project the open host has listed, so a selection is dropped only once what it
   // opened leaves the list: a just-started one reaches the list a render after it opens.
   const known = useRef(new Set<string>());
@@ -696,9 +708,18 @@ export function App() {
     openOnHost(hostId, { kind: "new", groupId });
   };
 
-  // A plain New thread, so not in the folder a folder's New thread put it in.
+  // A plain New thread, so not in the folder a folder's New thread put it in. It opens on the
+  // computer new threads start on, in the repository of the same name there, or No Repo when it
+  // has none.
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
     startIn.set(null);
+    if (start.id !== host.id) {
+      const name = groups.find((g) => g.id === groupId)?.name;
+      return openOnHost(start.id, {
+        kind: "new",
+        groupId: groupId && (startGroups.find((g) => g.name === name)?.id ?? noRepo),
+      });
+    }
     setSettings(null);
     setSelection({ kind: "new", groupId });
   };
@@ -897,11 +918,13 @@ export function App() {
       {onboarding && <Onboarding onStart={() => picker.current?.showModal()} />}
       <NewThreadPicker
         ref={picker}
-        groups={groups.filter((g) => !g.space)}
-        repos={threads.state.repos}
-        hostName={host.name}
-        elsewhere={elsewhere}
-        onPick={newThread}
+        groups={startGroups.filter((g) => !g.space)}
+        repos={startState.repos}
+        hostName={start.name}
+        elsewhere={startElsewhere}
+        onPick={(groupId) =>
+          start.id === host.id ? newThread(groupId) : pickRepoOn(start.id, groupId)
+        }
         onPickElsewhere={pickRepoOn}
       />
       <Sidebar

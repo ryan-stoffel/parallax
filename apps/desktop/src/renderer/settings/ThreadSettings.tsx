@@ -14,7 +14,7 @@ import { localId, useHosts } from "../hosts";
 import { ModelMenu } from "../ModelMenu";
 import { models, useCatalog, type Provider } from "../models";
 import { newThreadPrefs, setNewThreadPrefs } from "../prefs";
-import { workspaces } from "../RunTargetMenu";
+import { RunTargetMenu, workspaces } from "../RunTargetMenu";
 import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
 import { Picker } from "../ui";
 import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
@@ -79,12 +79,13 @@ export function ThreadSettings() {
 }
 
 /**
- * What a new thread starts with, picked with the composer's own menus (`newThreadPrefs`). The
- * model list is this computer's; a thread on a host that lacks the model starts on that host's
+ * What a new thread starts with, picked with the composer's own menus (`newThreadPrefs`), and the
+ * computer with New Thread's own. The model list is this computer's; a thread on a host that lacks the model starts on that host's
  * first. The naming model is any Claude Code or Codex model; a host that lacks it names threads
  * with the thread's own provider's default (0058).
  */
 function NewThreads() {
+  const hosts = useHosts();
   const catalog = useCatalog(localId);
   const prefs = newThreadPrefs.use();
   const blocked: Partial<Record<Provider, string>> = {};
@@ -117,6 +118,18 @@ function NewThreads() {
 
   return (
     <Section title="New threads">
+      <Row
+        title="Computer"
+        description="The computer a new thread starts on, while it's connected. New Thread's menu can pick another."
+      >
+        <span className={pickerBox}>
+          <RunTargetMenu
+            hosts={hosts}
+            hostId={prefs.host}
+            onHostChange={(host) => setNewThreadPrefs({ host })}
+          />
+        </span>
+      </Row>
       <Row title="Model" description="The model a new thread starts on.">
         {model ? (
           <span className={pickerBox}>

@@ -104,6 +104,7 @@ export const settingsIndex: SettingEntry[] = [
   ]),
   // Threads
   ...entries("threads", "New threads", [
+    ["Computer", "The computer a new thread starts on", "host machine remote ssh device default"],
     ["Model", "The model a new thread starts on", "default model claude gpt opus sonnet codex"],
     [
       "Reasoning",
