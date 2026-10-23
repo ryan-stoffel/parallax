@@ -180,34 +180,38 @@ function createWindow() {
       ],
     },
   });
-  // On Windows, a window without a title bar comes out a little larger than the bounds it's given,
-  // so a saved window would grow each launch: it's given them again, less the difference.
   if (saved) {
     const { width, height } = saved.bounds;
     win.setBounds(saved.bounds);
+    // On Windows, a window without a title bar comes out a little larger than the bounds it's
+    // given, so a saved window would grow each launch: it's given them again, less the difference.
     const got = win.getBounds();
-    if (got.width !== width || got.height !== height)
+    if (process.platform === "win32" && (got.width !== width || got.height !== height))
       win.setBounds({
         ...saved.bounds,
         width: 2 * width - got.width,
         height: 2 * height - got.height,
       });
   }
-  // The window's bounds when it's last neither maximized, minimized, nor full screen, which
-  // getNormalBounds misreports on Windows too.
+  // Whether the window was last maximized, and its bounds when it last wasn't, which
+  // getNormalBounds misreports on Windows. Neither changes while it's minimized or full screen,
+  // where Windows reports it unmaximized.
   let bounds = win.getBounds();
+  let maximized = saved?.maximized ?? false;
   const track = () => {
-    if (!win.isMaximized() && !win.isMinimized() && !win.isFullScreen()) bounds = win.getBounds();
+    if (win.isMinimized() || win.isFullScreen()) return;
+    maximized = win.isMaximized();
+    if (!maximized) bounds = win.getBounds();
   };
   win.on("resize", track);
   win.on("move", track);
+  win.on("maximize", track);
+  win.on("unmaximize", track);
   win.once("ready-to-show", () => {
     if (saved?.maximized) win.maximize();
     win.show();
   });
-  win.on("close", () =>
-    writeWindowState(windowStateFile, { bounds, maximized: win.isMaximized() }),
-  );
+  win.on("close", () => writeWindowState(windowStateFile, { bounds, maximized }));
   // Full screen hides Windows' window buttons, so the top row needs no room for them (main.tsx).
   win.on("enter-full-screen", () => win.webContents.send("parallax:fullScreen", true));
   win.on("leave-full-screen", () => win.webContents.send("parallax:fullScreen", false));

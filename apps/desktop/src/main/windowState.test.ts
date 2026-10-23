@@ -24,6 +24,19 @@ test("a window whose top row is on no display opens at the default place", () =>
   expect(readWindowState(at, [screen, right])?.bounds.x).toBe(2200);
 });
 
+test("a window larger than its display, saved on a bigger one, fits the display", () => {
+  const at = file();
+  writeWindowState(at, { bounds: { x: 100, y: 0, width: 2400, height: 1300 }, maximized: false });
+  expect(readWindowState(at, [screen])?.bounds).toEqual(screen);
+  writeWindowState(at, { bounds: { x: 1000, y: 500, width: 1200, height: 800 }, maximized: false });
+  expect(readWindowState(at, [screen])?.bounds).toEqual({
+    x: 720,
+    y: 240,
+    width: 1200,
+    height: 800,
+  });
+});
+
 test("no file, or a malformed one, opens at the default place", () => {
   const at = file();
   expect(readWindowState(at, [screen])).toBeUndefined();
