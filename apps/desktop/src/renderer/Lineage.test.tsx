@@ -363,8 +363,8 @@ test("a Project's children never show in the main sidebar, only in its own view 
     [...document.querySelectorAll("#side-panel li > button [data-title]")].map(
       (t) => t.textContent,
     );
-  const now = document.querySelector('#side-panel section[aria-label="Running"]')!;
-  expect([...now.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual([
+  const running = document.querySelector('#side-panel section[aria-label="Running"]')!;
+  expect([...running.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual([
     "Check the links",
   ]);
   expect(titles()).toEqual(["Check the links", "Write the docs"]);

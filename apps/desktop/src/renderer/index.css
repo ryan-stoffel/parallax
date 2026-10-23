@@ -945,11 +945,11 @@ body {
   line-height: 1.55;
   color: var(--muted-foreground);
 }
-.context-board .markdown h1 {
+.context-board .markdown .board-title {
   font-size: 14px;
   color: var(--foreground);
 }
-.context-board .markdown h2 {
+.context-board .markdown .board-section {
   margin: 1.6em 0.25em 0.6em;
   font-size: 11px;
   font-weight: 500;

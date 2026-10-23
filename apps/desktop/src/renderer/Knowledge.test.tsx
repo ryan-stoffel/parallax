@@ -230,7 +230,7 @@ test("the status board reads as a project page: tasks as circles, bold leads, an
     "Fix the login bug",
     "Flaky CI",
   ]);
-  expect([...shown.querySelectorAll("h2")].map((h) => h.textContent)).toEqual([
+  expect([...shown.querySelectorAll("h4")].map((h) => h.textContent)).toEqual([
     "Now",
     "Next",
     "Risks",

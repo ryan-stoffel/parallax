@@ -1439,6 +1439,7 @@ export function App() {
             waiting: waitingCount(project, agents, inbox),
             home: (
               <ProjectHome
+                key={`${host.id}/${project.id}`}
                 hostId={host.id}
                 context={context}
                 project={project}

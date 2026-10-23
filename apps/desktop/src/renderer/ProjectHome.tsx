@@ -14,7 +14,7 @@ import { runAttention, type Attention } from "./attention";
 import { WorkingMark } from "./AttentionMark";
 import { AllFiles, board, ContextBody, ContextReader, type ProjectContext } from "./ContextPanel";
 import { questionOf, type InboxView } from "./Inbox";
-import { locale } from "./locale";
+import { dayLabel, locale } from "./locale";
 import { notify } from "./notifications";
 import { OpenHint } from "./OpenHint";
 import { clockOptions } from "./prefs";
@@ -251,28 +251,12 @@ function daysOf(rows: readonly Row[]): { label: string; rows: Row[] }[] {
   return days;
 }
 
-/** Today, Yesterday, or the date, such as "Mon, Oct 20", of `at`. */
-export function dayLabel(at: number, now = Date.now()): string {
-  // Local midnights, by the calendar, so a daylight-saving day's 23 or 25 hours still count.
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  if (at >= today.getTime()) return "Today";
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  if (at >= yesterday.getTime()) return "Yesterday";
-  return new Date(at).toLocaleDateString(locale(), {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 /** 1234 as "1.2k", for a diff's counts in a row. */
 const short = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`);
 
 /**
- * A title without a Conventional Commit prefix, which plxd's thread titles often lead with: "fix(GH-27):
- * x" reads "x". Any other title is left as it is.
+ * A title without a Conventional Commit prefix, which plxd's thread titles often lead with:
+ * "fix(GH-27): x" reads "x". Any other title is left as it is.
  */
 export const plainTitle = (title: string) =>
   /^(?:feat|fix|chore|docs|test|refactor|perf|build|ci|style|revert)(?:\([^)]+\))?!?: +(\S.*)$/.exec(
@@ -281,7 +265,7 @@ export const plainTitle = (title: string) =>
 
 /**
  * Each child of `project` once, newest first, with its group: waiting on the user (a question, an
- * approval, or an unread failure) or working, which the Project tab shows in Now; or finished,
+ * approval, or an unread failure) or working, which the Project tab shows in Running; or finished,
  * ready while its news is unread and resolved once read, which it shows in the log.
  */
 function rowsOf(

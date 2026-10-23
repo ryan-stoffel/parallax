@@ -1,9 +1,8 @@
-import type { AgentRun } from "../protocol/generated/protocol";
 import type { ProjectContext } from "./ContextPanel";
 import type { InboxView } from "./Inbox";
 import { MemoryPanel, type Memory } from "./MemoryPanel";
 import { MiniPrompt } from "./MiniPrompt";
-import type { ContextFile } from "../protocol/generated/protocol";
+import type { AgentRun, ContextFile } from "../protocol/generated/protocol";
 import { age } from "./Sidebar";
 
 // What counts as new: learned in the last day.

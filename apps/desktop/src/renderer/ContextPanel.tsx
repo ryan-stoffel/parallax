@@ -5,11 +5,11 @@ import type { Components } from "react-markdown";
 import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { describeError } from "./errors";
-import { locale } from "./locale";
+import { dayLabel, locale } from "./locale";
 import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
 
-/** The status board the coordinator keeps (coordinator.md), which the view opens on. */
+/** The status board the coordinator keeps (`coordinator.md` asks for it), led by the Project tab. */
 export const board = "notes.md";
 
 /** Applies one of a Project's events to its context files: a changed file joins or replaces its row, by path. */
@@ -35,6 +35,9 @@ export function useProjectContext(
   const [error, setError] = useState<string>();
 
   useEffect(() => {
+    // Another Project's files, or why they failed, never show under this one.
+    setFiles([]);
+    setError(undefined);
     if (!connected) return;
     let stopped = false;
     let unsubscribe = () => {};
@@ -74,7 +77,7 @@ export function useProjectContext(
  * A context file's content, read again whenever `file` changes: it's a new object for each
  * `context.changed` to it.
  */
-export function useContent(hostId: string, project: string, file: ContextFile) {
+function useContent(hostId: string, project: string, file: ContextFile) {
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();
   useEffect(() => {
@@ -150,32 +153,34 @@ export function ContextBody({
         </p>
       ) : (
         content !== undefined && (
-          <MarkdownText text={content} components={contextComponents(files, onOpen)} />
+          <MarkdownText
+            text={content}
+            components={{ ...contextComponents(files, onOpen), ...boardHeadings }}
+          />
         )
       )}
     </div>
   );
 }
 
+// The board's own headings sit under the Project's name (h2) as the tab's sections do (h3): its
+// title an h3, and its sections h4.
+const boardHeadings: Components = {
+  h1: ({ children }) => <h3 className="board-title">{children}</h3>,
+  h2: ({ children }) => <h4 className="board-section">{children}</h4>,
+};
+
 /** "Today at 8:49 AM", "Yesterday at…", or "Oct 20 at…": when `at` was. */
-export function when(at: string, now = Date.now()): string {
-  const day = new Date(at);
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const date =
-    day >= today
-      ? "Today"
-      : day >= yesterday
-        ? "Yesterday"
-        : day.toLocaleDateString(locale(), { month: "short", day: "numeric" });
-  return `${date} at ${day.toLocaleTimeString(locale(), clockOptions())}`;
+function when(at: string): string {
+  const time = Date.parse(at);
+  const day = dayLabel(time, Date.now(), { month: "short", day: "numeric" });
+  return `${day} at ${new Date(time).toLocaleTimeString(locale(), clockOptions())}`;
 }
 
 /** A Project's context files as a tree: each folder once, above its files, by path. */
-export function fileTree(files: readonly ContextFile[]) {
-  const rows: { name: string; depth: number; at: string; path?: string }[] = [];
+function fileTree(files: readonly ContextFile[]) {
+  // `key` is a folder's whole path, as two folders may share a name under different parents.
+  const rows: { key: string; name: string; depth: number; at: string; path?: string }[] = [];
   const folders = new Map<string, (typeof rows)[number]>();
   for (const f of files.toSorted((a, b) => a.path.localeCompare(b.path, locale()))) {
     const parts = f.path.split("/");
@@ -185,12 +190,18 @@ export function fileTree(files: readonly ContextFile[]) {
       // A folder shows when anything in it last changed.
       if (folder) folder.at = f.modifiedAt > folder.at ? f.modifiedAt : folder.at;
       else {
-        const row = { name, depth, at: f.modifiedAt };
+        const row = { key, name, depth, at: f.modifiedAt };
         folders.set(key, row);
         rows.push(row);
       }
     });
-    rows.push({ name: parts.at(-1)!, depth: parts.length - 1, at: f.modifiedAt, path: f.path });
+    rows.push({
+      key: f.path,
+      name: parts.at(-1)!,
+      depth: parts.length - 1,
+      at: f.modifiedAt,
+      path: f.path,
+    });
   }
   return rows;
 }
@@ -222,7 +233,7 @@ export function AllFiles({
         );
         const indent = { paddingLeft: 10 + row.depth * 16 };
         return (
-          <li key={row.path ?? `${row.depth}/${row.name}`}>
+          <li key={row.key}>
             {row.path ? (
               <button
                 type="button"

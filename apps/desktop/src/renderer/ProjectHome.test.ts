@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
-import { dayLabel, openLine, plainTitle } from "./ProjectHome";
+import { dayLabel } from "./locale";
+import { openLine, plainTitle } from "./ProjectHome";
 
 const now = Date.parse("2026-10-22T15:00:00");
 const row = (group: "waiting" | "working" | "ready" | "resolved", daysAgo = 0) =>
