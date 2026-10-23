@@ -24,7 +24,7 @@ interface Item {
 export interface WaitingPresentation {
   /** "Waiting on subagent Review src/math.ts", "Waiting on 1 command and 1 monitor", "Monitoring pull request #750", or "Running: npm run dev". */
   title: string;
-  /** Every item's label, for a title that only counts them. */
+  /** The labels of the items the title counts, leaving out subagents the tab over it lists. */
   labels?: string;
   /** Each item, by kind, for the details popover. */
   items: { kind: string; label: string }[];

@@ -61,7 +61,8 @@ export function ComposerTabs({ tabs }: { tabs: readonly ComposerTab[] }) {
         </section>
       )}
       {tabs.map((tab, i) => (
-        <div key={tab.key} hidden={i < folded}>
+        // Clipped, so a tab sliding in rises from its own row, not over the one in front.
+        <div key={tab.key} hidden={i < folded} className="overflow-hidden">
           {tab.node}
         </div>
       ))}
