@@ -406,7 +406,7 @@ pub(crate) fn answers(autonomy: ProjectAutonomy) -> bool {
     matches!(autonomy, ProjectAutonomy::Routine | ProjectAutonomy::Full)
 }
 
-/// What the coordinator is told about `autonomy`, in its first message and with each question.
+/// What the coordinator is told about `autonomy`, in its system prompt and with each question.
 pub(crate) fn level(autonomy: ProjectAutonomy) -> &'static str {
     match autonomy {
         ProjectAutonomy::Routine => {
