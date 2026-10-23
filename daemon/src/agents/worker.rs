@@ -262,8 +262,8 @@ const NO_SANDBOX_HINT: &str = "Claude Code has no sandbox on native Windows, so 
                                WSL2 and add that as the host for workers";
 
 /// Refuses any run on a backend that doesn't enforce the worker sandbox (0013). `prepare_run`
-/// skips it only for a thread on a backend that runs threads as the full agent, Codex and Cursor
-/// (0035, 0036).
+/// skips it only for a run with no sandbox: a thread on a backend that runs threads as the full
+/// agent, Codex and Cursor (0035, 0036), and a full Claude Code run (PLX-959).
 pub(super) fn check_backend(backend: &dyn Backend) -> Result<(), ErrorObject> {
     if backend.capabilities().worker_sandbox {
         return Ok(());
@@ -312,7 +312,7 @@ pub(super) fn check_version(
     }
 }
 
-/// Refuses a Claude worker unless Claude Code's sandbox works on this Linux host, seccomp filter
+/// Refuses a sandboxed Claude worker unless Claude Code's sandbox works on this Linux host, seccomp filter
 /// included (0013), for the `claude` that `check_version` accepted.
 #[cfg(target_os = "linux")]
 pub(super) async fn check_linux_sandbox(
