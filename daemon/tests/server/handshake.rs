@@ -86,6 +86,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("openPr".to_owned(), serde_json::Map::new()),
             ("orchestration".to_owned(), serde_json::Map::new()),
             ("peerGit".to_owned(), serde_json::Map::new()),
+            ("projectArtifacts".to_owned(), serde_json::Map::new()),
             ("projectAutonomy".to_owned(), serde_json::Map::new()),
             ("projectDelete".to_owned(), serde_json::Map::new()),
             ("projectEdit".to_owned(), serde_json::Map::new()),

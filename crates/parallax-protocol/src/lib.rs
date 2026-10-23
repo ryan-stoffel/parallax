@@ -124,7 +124,8 @@ pub use connect::{
     TailnetDevice, TailscaleState,
 };
 pub use context::{
-    ContextFile, ContextListParams, ContextListResult, ContextReadParams, ContextReadResult,
+    ContextFile, ContextListParams, ContextListResult, ContextReadBytesParams,
+    ContextReadBytesResult, ContextReadParams, ContextReadResult, ContextSaveArtifactParams,
     ContextWriteId, ContextWriteParams, ContextWriteResult,
 };
 pub use defaults::{

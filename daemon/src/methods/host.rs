@@ -237,6 +237,8 @@ pub(crate) fn initialize(
 /// and `length`, which an older plxd would ignore, sending the whole file or refusing it. Its
 /// options are `chunkBytes`, the most file bytes a piece or slice carries, and `maxBytes`, the
 /// largest file pieces make.
+/// `projectArtifacts` (PLX-941): `context/readBytes` and `context/saveArtifact`, and files of any
+/// type in a Project's `artifacts/<thread>/`, which `context/list` lists.
 /// `hostUpdate` (PLX-700, 0066): `host/update`, which installs a newer plxd and restarts into it.
 /// `providerUpdates` (PLX-746): `providers/updates` and `providers/upgrade`, and `host/update`'s
 /// `now`.
@@ -314,6 +316,7 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
         ("orchestration".to_owned(), serde_json::Map::new()),
         ("peerGit".to_owned(), serde_json::Map::new()),
         ("prDiff".to_owned(), serde_json::Map::new()),
+        ("projectArtifacts".to_owned(), serde_json::Map::new()),
         ("projectAutonomy".to_owned(), serde_json::Map::new()),
         ("projectDelete".to_owned(), serde_json::Map::new()),
         ("projectEdit".to_owned(), serde_json::Map::new()),

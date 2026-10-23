@@ -154,6 +154,49 @@
   },
   {
     "jsonrpc": "2.0",
+    "id": 29,
+    "method": "context/readBytes",
+    "params": {
+      "project": "01a0d349-6e00-7c9e-80e2-0426486a8cae",
+      "path": "artifacts/01a0d34b-0000-7000-8000-000000000001/shot.png",
+      "offset": 0,
+      "length": 4
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 29,
+    "result": {
+      "file": {
+        "path": "artifacts/01a0d34b-0000-7000-8000-000000000001/shot.png",
+        "size": 2048,
+        "modifiedAt": "2026-09-24T12:00:00Z"
+      },
+      "content": "iVBORw=="
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 30,
+    "method": "context/saveArtifact",
+    "params": {
+      "runId": "01a0d34b-0000-7000-8000-000000000001",
+      "path": "out/shot.png"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 30,
+    "result": {
+      "file": {
+        "path": "artifacts/01a0d34b-0000-7000-8000-000000000001/shot.png",
+        "size": 2048,
+        "modifiedAt": "2026-09-24T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "method": "events/event",
     "params": {
       "subscription": "01a0d34a-5860-7ee2-a66a-aef2367abe02",

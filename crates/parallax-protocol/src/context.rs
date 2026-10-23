@@ -3,17 +3,18 @@
 //! and write.
 //!
 //! A path is always relative to the project's context folder: no `..`, no leading `/`, and no
-//! hidden (dot) name. plxd only ever holds Markdown or plain text there, so a path must end in
-//! `.md`, `.markdown`, or `.txt`. `context/write` takes exactly one file name. `context/list` and
-//! `context/read` also reach memory's folders (0044, PLX-405), such as `memory/decision/x.md`,
-//! which only `memory/*` writes.
+//! hidden (dot) name. A path must end in `.md`, `.markdown`, or `.txt`, except in
+//! `artifacts/<thread>/`, which holds files of any type (PLX-941). `context/write` takes exactly
+//! one file name. `context/list` and `context/read` also reach memory's folders (0044, PLX-405),
+//! such as `memory/decision/x.md`, which only `memory/*` writes, and, behind `projectArtifacts`,
+//! `artifacts/`, which only `context/saveArtifact` writes and `context/readBytes` reads.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::ProjectId;
 use crate::id::uuid_v7_id;
+use crate::{ProjectId, RunId};
 
 uuid_v7_id! {
     /// A `context/write`'s id: a version 7 UUID that the client generates once and sends again on
@@ -106,6 +107,51 @@ pub struct ContextWriteParams {
 pub struct ContextWriteResult {
     /// The written file's metadata.
     pub file: ContextFile,
+}
+
+/// Params of `context/readBytes`, behind `projectArtifacts` (PLX-941): one slice of a shared
+/// context file of any type, such as an artifact, as `agent/file`'s working side reads one
+/// (`fileChunks`, 0074). Fails with `contextNotFound` if it does not exist.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextReadBytesParams {
+    /// The file's project.
+    pub project: ProjectId,
+    /// The file's path.
+    pub path: String,
+    /// Where to start reading, in bytes. Absent means 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub offset: Option<u64>,
+    /// How many bytes to read, at most `fileChunks`' `chunkBytes`, which is also the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub length: Option<u64>,
+}
+
+/// Result of `context/readBytes`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextReadBytesResult {
+    /// The file's metadata, with the whole file's size.
+    pub file: ContextFile,
+    /// The slice, base64-encoded: empty past the end.
+    pub content: String,
+}
+
+/// Params of `context/saveArtifact`, behind `projectArtifacts` (PLX-941): copies a file from a
+/// Project child's working folder into its Project's `artifacts/<run id>/`, under its own name,
+/// replacing an earlier copy. When the Project's `history/`, `artifacts/`, and `.versions/` would
+/// pass 2 GiB, plxd deletes its oldest artifacts first and adds a `needsYou` inbox item. Fails
+/// with `invalidParams` for a run outside a Project or a path that isn't a file, and
+/// `contextTooLarge` when deleting artifacts can't make room.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextSaveArtifactParams {
+    /// The child whose file it is.
+    pub run_id: RunId,
+    /// The file's path in the child's working folder, as `agent/file` takes it.
+    pub path: String,
 }
 
 #[cfg(test)]

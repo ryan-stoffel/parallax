@@ -19,4 +19,5 @@ Shared context is a folder of Markdown files that every agent reads and writes: 
 
 - Agent notes stay out of the user's git history and out of PR diffs.
 - The folder is not versioned by git, so `plxd` is responsible for backups and history, if we want them.
+- Amended 2026-10-23 (PLX-941): the folder also holds `artifacts/<thread>/`, files of any type that `plxd` copies there when a Project's child presents them with `present_files`, so screenshots and reports outlive the child's worktree. Markdown and text stay under 1 MiB a file and 20 MiB a folder. `history/`, `artifacts/`, and `.versions/` count apart from that, under 2 GiB a Project, and `plxd` deletes the oldest artifacts to stay under it, with a Needs you inbox item. Clients read any file in slices with `context/readBytes`, behind `projectArtifacts`.
 - M3 builds the host side (read and write from a worktree). M5 builds the mirror and the sync back to the host.

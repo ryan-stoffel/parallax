@@ -254,6 +254,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ContextList => |p| context::list(context, p),
         ContextRead => |p| context::read(context, p),
         ContextWrite => |p| context::write(context, p),
+        ContextReadBytes => |p| context::read_bytes(context, p),
+        ContextSaveArtifact => |p| context::save_artifact(context, p),
         ProjectList => |p| project::list(context, p),
         ProjectCreate => |p| project::create(context, p),
         ProjectStart => |p| project::start(context, p),

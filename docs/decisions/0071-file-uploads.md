@@ -28,4 +28,5 @@ The composer takes any file, but only images reach the agent (0026). Ryan wants 
 
 - A file is at most about 4.5 MiB. A larger one is refused when it's attached. Chunked uploads are the upgrade if that's too small.
 - Uploads are never removed. Removing them with their thread would need the thread to record them.
+- Amended 2026-10-23 (PLX-941): files now persist in the other direction too. A file a Project's child presents with `present_files` is copied into the Project's `artifacts/<thread>/` (0005), where it outlives the child's worktree, and clients read it back in slices with `context/readBytes`, as `host/readUpload` reads an upload (0074). Unlike uploads, artifacts are deleted oldest first past 2 GiB a Project.
 - The paths are in the message's text, so another client, such as the mobile app, shows them as text, and Stop puts them back as text.

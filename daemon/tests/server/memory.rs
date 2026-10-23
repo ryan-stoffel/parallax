@@ -7,11 +7,13 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::methods::{
-    AgentStart, ContextWrite, InboxList, MemoryDelete, MemoryList, MemoryPropose, MemoryRead,
-    MemoryWrite, ProjectStart, RepoAdd, ThreadStart,
+    AgentList, AgentStart, ContextList, ContextReadBytes, ContextSaveArtifact, ContextWrite,
+    InboxList, MemoryDelete, MemoryList, MemoryPropose, MemoryRead, MemoryWrite, ProjectStart,
+    RepoAdd, ThreadStart,
 };
 use parallax_protocol::{
-    AgentRun, AgentStatus, ContextWriteId, ContextWriteParams, ErrorKind, InboxKind,
+    AgentListParams, AgentRun, AgentStatus, ContextListParams, ContextReadBytesParams,
+    ContextSaveArtifactParams, ContextWriteId, ContextWriteParams, ErrorKind, InboxKind,
     InboxListParams, MemoryDeleteParams, MemoryFile, MemoryKind, MemoryListParams,
     MemoryProposalTo, MemoryProposeParams, MemoryReadParams, MemoryReadResult, MemoryScope,
     MemoryScopeKind, MemoryWriteParams, Project, ProjectId, Repo, RepoAddParams, RepoId, RunId,
@@ -385,6 +387,79 @@ async fn only_the_coordinator_writes_and_its_write_adds_a_learned_item() {
         INVALID_PARAMS,
         "a coordinator's alone"
     );
+    host.server.stop().await;
+}
+
+/// PLX-941: a Project child's `present_files` also saves each file in the Project's
+/// `artifacts/<thread>/`, which `context/list` lists and `context/readBytes` reads in slices. A
+/// run outside a Project has no artifacts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_childs_presented_files_are_saved_in_the_projects_artifacts() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (host, mut client, project, coordinator) = project_with_coordinator(&seen).await;
+    let child = spawn(&mut client, &coordinator, "Take a screenshot.").await;
+    let folder = loop {
+        let runs = client
+            .call::<AgentList>(AgentListParams { project: None })
+            .await
+            .unwrap()
+            .runs;
+        let run = runs.into_iter().find(|run| run.id == child).unwrap();
+        if let Some(path) = run.worktree_path {
+            break std::path::PathBuf::from(path);
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    std::fs::write(folder.join("shot.png"), b"0123456789").unwrap();
+    let mut mcp = tools(&host, child).await;
+    let shown = mcp
+        .ok("present_files", json!({"paths": ["shot.png"]}))
+        .await;
+    let message = shown["message"].as_str().unwrap();
+    assert!(
+        message.contains("Saved in your Project's artifacts"),
+        "{message}"
+    );
+
+    let path = format!("artifacts/{child}/shot.png");
+    let listed = client
+        .call::<ContextList>(ContextListParams {
+            project: project.id,
+        })
+        .await
+        .unwrap()
+        .files;
+    assert!(listed.iter().any(|file| file.path == path), "{listed:?}");
+    let read = client
+        .call::<ContextReadBytes>(ContextReadBytesParams {
+            project: project.id,
+            path,
+            offset: Some(2),
+            length: Some(3),
+        })
+        .await
+        .unwrap();
+    assert_eq!(read.file.size, 10);
+    assert_eq!(read.content, "MjM0", "base64 of 234");
+
+    let save = |run_id, path: &str| ContextSaveArtifactParams {
+        run_id,
+        path: path.to_owned(),
+    };
+    for path in ["../shot.png", "missing.png"] {
+        let refused = client.call::<ContextSaveArtifact>(save(child, path)).await;
+        assert_eq!(refused.unwrap_err().code, INVALID_PARAMS, "{path}");
+    }
+    let outside = client
+        .call::<ThreadStart>(crate::open_pr::thread(None))
+        .await
+        .unwrap()
+        .run
+        .id;
+    let refused = client
+        .call::<ContextSaveArtifact>(save(outside, "shot.png"))
+        .await;
+    assert_eq!(refused.unwrap_err().code, INVALID_PARAMS);
     host.server.stop().await;
 }
 

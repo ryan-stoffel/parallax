@@ -934,6 +934,30 @@ async fn cancel_stops_a_running_worker() {
     host.server.stop().await;
 }
 
+/// PLX-941: a child's history that can't be written adds a `failed` inbox item.
+#[tokio::test]
+async fn a_history_write_that_fails_adds_a_failed_inbox_item() {
+    let host = Host::start(temp_dir(), fake(vec![init("s"), end_turn("ok")]));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    // A file where the history folder goes.
+    let context = host.dir.path().join("context").join(project.id.to_string());
+    std::fs::create_dir_all(&context).unwrap();
+    std::fs::write(context.join("history"), "in the way").unwrap();
+    subscribe(&mut client, project.id, 0).await;
+    let params = start_params(project.id, "Do it");
+    let run = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::InboxAdded { item }
+            if item.kind == parallax_protocol::InboxKind::Failed
+                && item.run == run
+                && item.text.contains("history"))
+    })
+    .await;
+    host.server.stop().await;
+}
+
 #[tokio::test]
 async fn agent_start_is_idempotent_on_its_run_id() {
     let dir = temp_dir();

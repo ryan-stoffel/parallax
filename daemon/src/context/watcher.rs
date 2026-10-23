@@ -79,7 +79,9 @@ fn observe(daemon: &Daemon, context_root: &Path, path: &Path) {
     let Some((project, name)) = relative_file(context_root, path) else {
         return;
     };
-    if validate_relative_path(&name).is_err() {
+    // plxd copies artifacts in itself and reports them then; reading one here to hash it could
+    // mean reading hundreds of MiB.
+    if validate_relative_path(&name).is_err() || name.starts_with("artifacts/") {
         return;
     }
     let metadata = match std::fs::symlink_metadata(path) {
