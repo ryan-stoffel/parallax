@@ -91,6 +91,10 @@ export const addressBox =
 export const addressInput =
   "h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint-foreground";
 
+/** Whether a key press holds the OS's Mod key: Cmd on macOS, Ctrl elsewhere, and not the other. */
+const modKey = (e: { metaKey: boolean; ctrlKey: boolean }) =>
+  window.parallax.platform === "darwin" ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+
 /** A url as the address bar shows it while unfocused: without its scheme or a lone trailing slash. */
 export const shortUrl = (url: string) =>
   url.replace(/^https?:\/\//, "").replace(/^([^/?#]*)\/$/, "$1");
@@ -290,6 +294,11 @@ export function Browser({
   // Closing the last tab leaves a blank one, as the panel has no window to close.
   // The pages of the tabs closed here, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
   const closed = useRef<string[]>([]);
+  const reopen = () => {
+    const page = closed.current.at(-1);
+    closed.current = closed.current.slice(0, -1);
+    if (page) newTab(page, current);
+  };
   const close = (id: number) => {
     const at = tabs.findIndex((t) => t.id === id);
     const page = tabs[at]?.url;
@@ -382,7 +391,17 @@ export function Browser({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // Cmd/Ctrl+Shift+T anywhere in the browser's own UI too, such as a blank tab's address bar,
+    // which the page's shortcuts don't reach (links.ts).
+    <div
+      onKeyDown={(e) => {
+        if (modKey(e) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "t") {
+          e.preventDefault();
+          reopen();
+        }
+      }}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       {shownTab && agent && (
         <AgentBrowser
           key={shownTab.tabId}
@@ -419,11 +438,7 @@ export function Browser({
               show(tabs[(at - 1 + tabs.length) % tabs.length]);
             else if (action.kind === "tab") show(tabs[action.index]);
             else if (action.kind === "lastTab") show(tabs.at(-1));
-            else if (action.kind === "reopenTab") {
-              const page = closed.current.at(-1);
-              closed.current = closed.current.slice(0, -1);
-              if (page) newTab(page, t.id);
-            }
+            else if (action.kind === "reopenTab") reopen();
           }}
         />
       ))}
@@ -562,6 +577,12 @@ function Tab({
   };
   const latest = useRef({ onChange, ask, local });
   latest.current = { onChange, ask, local };
+
+  // A tab shown, by a click or a shortcut, takes focus to its page, as in Chrome, so the page's
+  // shortcuts keep working from it.
+  useEffect(() => {
+    if (shown && src) requestAnimationFrame(() => view.current?.focus());
+  }, [shown]);
 
   // Extensions see the shown tab as the active one.
   useEffect(() => {
@@ -839,7 +860,27 @@ function Tab({
   const compact = layout === "compact" && !!slots?.start && !!slots.end;
 
   return (
-    <div className={`min-h-0 flex-1 flex-col ${shown ? "flex" : "hidden"}`}>
+    // Chrome's find, bookmark, and print keys in the tab's own UI too, its address bar and find bar
+    // (which its portal's events reach here), rather than the app's Find in thread.
+    <div
+      onKeyDown={(e) => {
+        if (!modKey(e) || e.altKey) return;
+        const key = e.key.toLowerCase();
+        const action: BrowserAction | undefined =
+          key === "f" && !e.shiftKey
+            ? { kind: "find" }
+            : key === "g"
+              ? { kind: e.shiftKey ? "findPrevious" : "findNext" }
+              : key === "d" && !e.shiftKey
+                ? { kind: "bookmark" }
+                : undefined;
+        if (key === "p" && !e.shiftKey && src) void view.current?.print().catch(() => {});
+        else if (!action || !local(action)) return;
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      className={`min-h-0 flex-1 flex-col ${shown ? "flex" : "hidden"}`}
+    >
       {compact ? (
         <>
           {into(slots.start, navBar, "min-w-0 flex-1 gap-0.5")}
