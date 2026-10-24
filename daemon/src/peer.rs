@@ -126,6 +126,8 @@ struct Connection {
     reader: tokio::task::AbortHandle,
     /// plxd has `agent/wait` (`agentWait`, PLX-451).
     agent_wait: bool,
+    /// plxd has `memory/syncList` and `memory/syncRead` (`youSync`, 0082).
+    you_sync: bool,
     /// An `events/subscribe` was answered on it. A subscribed connection is never idle.
     subscribed: AtomicBool,
     idle: Duration,
@@ -222,6 +224,11 @@ impl Plxd {
     /// Whether plxd has `agent/wait`, as it said when the connection opened.
     pub(crate) async fn agent_wait(&self) -> Result<bool, String> {
         Ok(self.connect().await?.agent_wait)
+    }
+
+    /// Whether plxd syncs You memory (`youSync`, 0082), as it said when the connection opened.
+    pub(crate) async fn you_sync(&self) -> Result<bool, String> {
+        Ok(self.connect().await?.you_sync)
     }
 
     /// Sends one request.
@@ -437,6 +444,7 @@ impl Connection {
             state,
             reader: reader.abort_handle(),
             agent_wait: false,
+            you_sync: false,
             subscribed: AtomicBool::new(false),
             idle,
         };
@@ -461,6 +469,7 @@ impl Connection {
             .into_result()
             .map_err(|error| error.message)?;
         connection.agent_wait = initialized.capabilities.0.contains_key("agentWait");
+        connection.you_sync = initialized.capabilities.0.contains_key("youSync");
         Ok(connection)
     }
 

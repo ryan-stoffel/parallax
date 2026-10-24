@@ -648,6 +648,9 @@ export const withheldMethods = [
   "land/queue",
   "land/sendBack",
   "memory/propose",
+  // Another plxd's, which pulls You memory with them (0082).
+  "memory/syncList",
+  "memory/syncRead",
   "pr/link",
   "pr/unlink",
   // `pr/unwatch` stays callable: the waiting bar's Stop ends a watch (PLX-777).

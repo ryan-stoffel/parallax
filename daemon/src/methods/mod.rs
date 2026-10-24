@@ -31,7 +31,7 @@ mod events;
 pub(crate) mod host;
 pub(crate) mod inbox;
 pub(crate) mod land;
-mod memory;
+pub(crate) mod memory;
 mod orchestration;
 mod pr;
 pub(crate) mod project;
@@ -85,6 +85,9 @@ pub(crate) struct Context {
     /// The connection's writer, for notifications that aren't events, such as a terminal's
     /// output.
     pub replies: tokio::sync::mpsc::Sender<Reply>,
+    /// The connection came through Parallax Connect's listener from another of the user's
+    /// devices, which `tailscale whois` checked (0056). Only such a connection syncs You (0082).
+    pub over_connect: bool,
 }
 
 /// What the connection's writer sends for a request.
@@ -352,6 +355,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         MemoryWrite => |p| memory::write(context, p),
         MemoryDelete => |p| memory::delete(context, p),
         MemoryPropose => |p| memory::propose(context, p),
+        MemorySyncList => |p| memory::sync_list(context, p),
+        MemorySyncRead => |p| memory::sync_read(context, p),
         LandQueue => |p| land::queue(context, p),
         LandApprove => |p| land::approve(context, p),
         LandSendBack => |p| land::send_back(context, p),
@@ -481,6 +486,7 @@ mod tests {
             stopped_reading: CancellationToken::new(),
             command_id: None,
             replies: tokio::sync::mpsc::channel(1).0,
+            over_connect: false,
         };
         let request = Request {
             id: 1.into(),
