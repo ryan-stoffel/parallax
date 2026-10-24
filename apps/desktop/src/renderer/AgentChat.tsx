@@ -250,6 +250,7 @@ export function AgentChat({
   title,
   prompt,
   going,
+  listed,
   noRepo,
   space,
   tab,
@@ -283,6 +284,8 @@ export function AgentChat({
    * the transcript loads, `prompt` then shows as on its way to it, with the loader under it.
    */
   going?: boolean;
+  /** The run as the thread list has it, which the composer shows until the transcript loads. */
+  listed?: AgentRun;
   /** A thread with no repo: its scratch repository has no origin, so it gets no run tab or Open PR. */
   noRepo?: boolean;
   /** A chat in a Space: no Access picker, and no run tab, since it has no repository. */
@@ -719,38 +722,42 @@ export function AgentChat({
   );
   const shown = subagent ? transcript.subagents?.[subagent] : undefined;
 
+  // The run as the composer shows it: the transcript's, or until that loads, the thread list's, so
+  // the box opens as it will look.
+  const box = run ?? listed;
   let disabledReason = offlineReason(connection);
-  if (connected && !run) disabledReason = error ? "This chat couldn't load" : "Loading…";
+  if (connected && !run && (error || !box))
+    disabledReason = error ? "This chat couldn't load" : "Loading…";
   let optionsDisabled: string | undefined;
   // `sendModel` is `sendOptions`' successor, which also takes the model (PLX-163). With
   // `sendAccount`, a message that changes them while the run works waits for it to finish.
   const moves = connected && "sendAccount" in connection.capabilities;
   if (connected && !("sendModel" in connection.capabilities))
     optionsDisabled = "This host's plxd can't change a thread's model, effort, or access";
-  else if (isRunning(run?.status) && !moves)
+  else if (isRunning(box?.status) && !moves)
     optionsDisabled = "The model, effort, and access can change once it finishes";
   // The instances the run can't move to, by why: any but its own on a plxd that can't move runs,
   // and for a coordinator, those that can't run one.
   const unavailable: Partial<Record<Provider, string>> = {};
   for (const i of catalog.instances)
-    if (i.id === run?.backend) continue;
+    if (i.id === box?.backend) continue;
     else if (!moves)
       unavailable[i.id] =
         `${i.name} is unavailable in this thread. Start a new thread to switch providers.`;
-    else if (run?.policy === "noWrite" && !i.coordinator)
+    else if (box?.policy === "noWrite" && !i.coordinator)
       unavailable[i.id] = `${i.name} can't run a Project's coordinator yet.`;
   // Manual's requests come here only from a run that asked for them, on a plxd that sends them.
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
-  else if (run && !run.approvals) manualDenied = "run";
+  else if (box && !box.approvals) manualDenied = "run";
   // A finished run with a commit can go to GitHub (PLX-168), until Accept removes its branch.
   const canOpenPr =
     connected &&
     "openPr" in connection.capabilities &&
     !noRepo &&
-    !!run?.diff &&
-    !isRunning(run.status) &&
-    run.status !== "accepted";
+    !!box?.diff &&
+    !isRunning(box.status) &&
+    box.status !== "accepted";
 
   // Each turn's run, for its changes card: by its prompt row's turn id, and the first prompt's,
   // whose row has none, by `undefined`. A fork's first run is its copied prompt's, which has no
@@ -958,8 +965,11 @@ export function AgentChat({
         )}
         <ComposerTabs tabs={tabs} />
         <Composer
+          // One sent before the transcript loads stays in the box.
           onSend={(text, options, images, threads) =>
-            sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
+            run
+              ? sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
+              : Promise.resolve("")
           }
           onSteer={
             queueEnabled && isRunning(run?.status)
@@ -968,19 +978,19 @@ export function AgentChat({
               : undefined
           }
           history={history}
-          onStop={isRunning(run?.status) ? stop : undefined}
+          onStop={isRunning(box?.status) ? stop : undefined}
           unanswered={stopBack}
           disabledReason={disabledReason}
           tab={
             tab ??
-            (run && !space && !noRepo && (
-              <RunTab run={run} host={host}>
+            (box && !space && !noRepo && (
+              <RunTab run={box} host={host}>
                 {pullRequests ||
                   (canOpenPr && (
                     <OpenPr
                       hostId={hostId}
-                      run={run}
-                      title={title ?? titleOf(run)}
+                      run={box}
+                      title={title ?? titleOf(box)}
                       onError={prFailed}
                       onOpened={onPrOpened}
                     />
@@ -988,9 +998,9 @@ export function AgentChat({
               </RunTab>
             ))
           }
-          backend={run?.backend}
-          started={run}
-          accountId={run?.accountId}
+          backend={box?.backend}
+          started={box}
+          accountId={box?.accountId}
           requestUsage={transcript.requestUsage}
           connected={connected}
           hostId={hostId}

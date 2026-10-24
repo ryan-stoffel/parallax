@@ -258,7 +258,15 @@ test("Send shows the prompt at once while plxd starts the thread, and a failure 
   expect(bubble()).toBe("Tidy the README");
   expect(document.querySelector('[role="log"] .bg-selected')!.className).not.toContain("opacity");
   expect(musing()).toBe("Working");
-  expect(composer().getAttribute("aria-placeholder")).toBe("Starting thread…");
+  // The box looks as it did, and a send meanwhile stays in it.
+  expect(composer().getAttribute("aria-placeholder")).toBe(
+    "Build a feature, fix a bug, paste an image, use /skills, @files or threads",
+  );
+  expect(control("Runs on: This Mac, New worktree")).not.toBeNull();
+  await send("And the CHANGELOG");
+  expect(composer().textContent).toBe("And the CHANGELOG");
+  expect(calls("thread/start")).toHaveLength(1);
+  act(() => void composer().editor!.commands.clearContent());
 
   await act(async () => answer({ error: { code: -32000, message: "plxd is busy" } }));
   await settle();
@@ -742,6 +750,52 @@ test("a thread starts on a branch named from its prompt, and plxd names it with 
       naming: { backend: "codex", model: "gpt-6-luna", effort: "low" },
     },
   ]);
+});
+
+test("picking another computer leaves the composer as it was, with no state in between", async () => {
+  capabilities = { runOptions: {}, repoRefs: {} };
+  window.parallax.hosts = async () => [{ id: "ssh-mini", name: "mac mini", destination: "mini" }];
+  answers["accounts/defaults/get"] = () => ({ result: {} });
+  answers["repo/refs"] = () => ({ result: { refs: [{ name: "origin/develop", remote: true }] } });
+  await renderApp();
+  // The box's hint, model, and base, as each DOM change leaves them.
+  const look = () =>
+    [
+      composer().getAttribute("aria-placeholder"),
+      control("Model: Claude Opus 5.5") && "model",
+      button("From origin/develop") && "base",
+    ].join(" | ");
+  const before = look();
+  const seen = new Set<string>();
+  const observer = new MutationObserver(() => seen.add(look()));
+  observer.observe(document.body, { subtree: true, childList: true, attributes: true });
+  await choose("Runs on", "mac miniSSH · mini");
+  observer.disconnect();
+  expect(control("Runs on: mac mini, New worktree")).not.toBeNull();
+  expect(before).toBe(
+    "Build a feature, fix a bug, paste an image, use /skills, @files or threads | model | base",
+  );
+  expect([...seen]).toEqual([before]);
+});
+
+test("a send right after picking a computer not read yet starts the thread there", async () => {
+  capabilities = { runOptions: {} };
+  window.parallax.hosts = async () => [{ id: "ssh-studio", name: "studio", destination: "studio" }];
+  answers["accounts/defaults/get"] = () => ({ result: {} });
+  answers["thread/start"] = (p) => ({
+    result: {
+      thread: { id: p["runId"], repo: p["repo"], createdAt: "2026-09-26T12:05:00Z" },
+      run: run(p["runId"] as string, "Fix it"),
+    },
+  });
+  await renderApp();
+  await choose("Runs on", "studioSSH · studio");
+  await send("Fix it");
+  expect(
+    request.mock.calls.filter(
+      ([host, method]) => host === "ssh-studio" && method === "thread/start",
+    ),
+  ).toHaveLength(1);
 });
 
 test("Picking another computer in Runs on keeps the draft and starts the thread there, in its repository of the same name", async () => {
@@ -1267,6 +1321,19 @@ describe("the ref picker", () => {
         base: "feature",
       },
     ]);
+  });
+
+  test("reopening the menu lists refs made since it last opened", async () => {
+    capabilities = { repoRefs: {} };
+    await renderApp();
+    answers["repo/refs"] = () => ({
+      result: { refs: [{ name: "origin/develop", remote: true }, { name: "fresh-branch" }] },
+    });
+    const menu = document.querySelector<HTMLElement>('main [role="menu"][aria-label="Ref"]')!;
+    const opened = Object.assign(new Event("toggle"), { newState: "open" });
+    await act(async () => void menu.dispatchEvent(opened));
+    await settle();
+    expect(menu.textContent).toContain("fresh-branch");
   });
 
   test("a new worktree starts from main without develop, not the checkout's branch", async () => {

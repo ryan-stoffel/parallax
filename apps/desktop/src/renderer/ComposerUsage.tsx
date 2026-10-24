@@ -9,6 +9,9 @@ const refreshMs = 60_000;
 const staleMs = 90_000;
 
 type LimitsAnswer = Awaited<ReturnType<typeof readLimits>>;
+/** Each host's last answer read without error, so a composer that mounts or changes host shows
+ * its limits on its first render. */
+const answered = new Map<string, LimitsAnswer>();
 /** Each host's last answer and the read under way, shared by every strip: plxd starts the
  * providers' CLIs for each read, so open threads and remounts must not multiply them. */
 const limitReads = new Map<string, { at: number; answer: Promise<LimitsAnswer> }>();
@@ -28,6 +31,7 @@ function sharedLimits(hostId: string, now = Date.now()): Promise<LimitsAnswer> {
 /** For tests: forgets every host's shared answer. */
 export function forgetLimits() {
   limitReads.clear();
+  answered.clear();
 }
 
 /** Only current, valid provider observations can fill a limit meter. */
@@ -196,7 +200,7 @@ export function useComposerUsage({
 }): ComposerUsageData | undefined {
   const key = `${hostId}/${backend}/${accountId}/${connected}`;
   const subscription = connected && !!hostId && !!backend && accountId === backend;
-  // The answer for one host, provider, and account; another key's is never shown.
+  // The answer for one host, provider, and account.
   const [read, setRead] = useState<{ key: string; limits?: AccountLimits; problem?: string }>();
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
@@ -210,8 +214,9 @@ export function useComposerUsage({
         if (stopped) return;
         setNow(Date.now());
         if ("result" in response) {
-          const account = response.result.accounts.find((entry) => entry.accountId === accountId);
-          setRead({ key, limits: account, problem: account?.problem });
+          const found = response.result.accounts.find((entry) => entry.accountId === accountId);
+          answered.set(hostId, response);
+          setRead({ key, limits: found, problem: found?.problem });
         } else setRead({ key, problem: failed });
       } catch {
         if (stopped) return;
@@ -231,7 +236,16 @@ export function useComposerUsage({
   }, []);
   if (!hostId || !backend || !accountId) return undefined;
 
-  const current = read?.key === key ? read : undefined;
+  // Until this key's own answer lands: the host's last one, else the account's last on another
+  // computer, so the ring doesn't blink out as the box opens or changes computer.
+  const accountIn = (answer?: LimitsAnswer) =>
+    answer && "result" in answer
+      ? answer.result.accounts.find((entry) => entry.accountId === accountId)
+      : undefined;
+  const own = answered.get(hostId);
+  const held = own ? accountIn(own) : [...answered.values()].map(accountIn).find(Boolean);
+  const current =
+    read?.key === key ? read : (own ?? held) && { limits: held, problem: held?.problem };
   const windows: Window[] = (subscription ? (current?.limits?.limits ?? []) : []).map((limit) => {
     const used = currentLimit(limit, now);
     return {

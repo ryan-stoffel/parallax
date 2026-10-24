@@ -1185,6 +1185,7 @@ export function App() {
                               prompt={threads.state.runs[threadId]?.prompt}
                               // The list's status goes stale once the run moves on, so only a start says so.
                               going={focused && selection.started}
+                              listed={threads.state.runs[threadId]}
                               noRepo={repoless({
                                 id: paneThread ? groupOf(threads.state, paneThread) : noRepo,
                                 space: inSpace,
