@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { useBrowserTheme } from "./browserTheme";
 import { stored } from "./stored";
 import {
   ChevronRight,
@@ -261,7 +262,9 @@ export function BookmarkStar({ page }: { page?: Bookmark }) {
       </button>
       {/* Outside the address bar's form, so Enter here doesn't open the address. */}
       {createPortal(
-        <BookmarkEditor id={editorId} url={page?.url} title="Bookmark" align="end" />,
+        <Themed>
+          <BookmarkEditor id={editorId} url={page?.url} title="Bookmark" align="end" />
+        </Themed>,
         document.body,
       )}
     </>
@@ -621,22 +624,24 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
         </MenuButton>
       </Menu>
       {createPortal(
-        <>
-          <BookmarkEditor id={editorId} url={editing.url} title="Edit bookmark" />
-          <FolderEditor id={folderEditorId} folderId={editing.folder} onDelete={deleteFolder} />
-          <ConfirmDialog
-            ref={confirm}
-            title="Delete this folder?"
-            action="Delete folder"
-            onConfirm={() => {
-              if (deleting) bookmarks.set(removedFolder(bookmarks.get(), deleting.id));
-              confirm.current?.close();
-            }}
-          >
-            Its {deleting?.count === 1 ? "bookmark goes" : `${deleting?.count} bookmarks go`} with
-            it.
-          </ConfirmDialog>
-        </>,
+        <Themed>
+          <>
+            <BookmarkEditor id={editorId} url={editing.url} title="Edit bookmark" />
+            <FolderEditor id={folderEditorId} folderId={editing.folder} onDelete={deleteFolder} />
+            <ConfirmDialog
+              ref={confirm}
+              title="Delete this folder?"
+              action="Delete folder"
+              onConfirm={() => {
+                if (deleting) bookmarks.set(removedFolder(bookmarks.get(), deleting.id));
+                confirm.current?.close();
+              }}
+            >
+              Its {deleting?.count === 1 ? "bookmark goes" : `${deleting?.count} bookmarks go`} with
+              it.
+            </ConfirmDialog>
+          </>
+        </Themed>,
         document.body,
       )}
     </nav>
@@ -812,7 +817,9 @@ function SubFolder({
         <ChevronRight aria-hidden />
       </button>
       {createPortal(
-        <NodeMenu id={id} label={folder.title} nodes={folder.children} onOpen={onOpen} />,
+        <Themed>
+          <NodeMenu id={id} label={folder.title} nodes={folder.children} onOpen={onOpen} />
+        </Themed>,
         document.body,
       )}
     </>
@@ -825,3 +832,15 @@ const BookmarkIcon = ({ bookmark }: { bookmark: Bookmark }) =>
   ) : (
     <Public aria-hidden className="size-3.5 shrink-0" />
   );
+
+/**
+ * What's drawn outside the browser, such as an editor or a folder's menu over the page, in the
+ * browser's theme, which the page's own elements take from the browser around them.
+ */
+function Themed({ children }: { children: ReactNode }) {
+  return (
+    <div className="contents" style={useBrowserTheme()}>
+      {children}
+    </div>
+  );
+}

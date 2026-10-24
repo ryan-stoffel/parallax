@@ -1,7 +1,7 @@
 import { argbFromHex, Hct } from "@material/material-color-utilities";
 import { expect, test } from "vite-plus/test";
 
-import { browserThemes, colorsOf, themeStyle } from "./browserTheme";
+import { accentText, browserThemes, colorsOf, themeStyle } from "./browserTheme";
 
 const hct = (hex: string) => Hct.fromInt(argbFromHex(hex));
 
@@ -37,4 +37,23 @@ test("every theme but the app's paints the app's tokens and the browser's own", 
     expect(style["--pane"]).toMatch(/^#[0-9A-F]{6}$/);
     expect(style["--browser-omnibox"]).toBe(style["--selected"]);
   }
+});
+
+test("text on every theme's accent reads, at least 4.5:1, in light and dark", () => {
+  const luminance = (hex: string) =>
+    [1, 3, 5]
+      .map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255)
+      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+      .reduce((sum, c, i) => sum + c * [0.2126, 0.7152, 0.0722][i]!, 0);
+  const contrast = (a: string, b: string) => {
+    const [x, y] = [luminance(a), luminance(b)].sort((m, n) => n - m);
+    return (x! + 0.05) / (y! + 0.05);
+  };
+  for (const theme of browserThemes.filter((t) => t.id !== "parallax"))
+    for (const dark of [false, true]) {
+      const { accent } = colorsOf(theme.id, dark)!;
+      expect(contrast(accent, accentText(accent)), `${theme.id} ${dark}`).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    }
 });

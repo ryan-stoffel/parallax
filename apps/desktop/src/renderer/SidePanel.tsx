@@ -344,12 +344,16 @@ export function SidePanel({
         e.preventDefault();
         openView(next);
       }}
-      // While browsing, the browser's theme paints the column, its top bar included.
-      style={{ ...(!expanded && { width }), ...(browsing && browserStyle) }}
+      style={expanded ? undefined : { width }}
       className={`relative flex min-w-0 flex-col bg-pane ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`}
     >
       {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}
-      <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
+      {/* While browsing, the browser's theme paints its top bar and the browser, and nothing else,
+          such as the terminals mounted behind it (browserTheme.ts). */}
+      <TopBar
+        style={browsing ? browserStyle : undefined}
+        className={`window-controls-inset px-2 ${browsing && browserStyle ? "bg-pane" : ""} ${topBarClassName}`}
+      >
         {leading}
         {browsing ? (
           <BrowserTabBar scope={scope} />
@@ -454,7 +458,8 @@ export function SidePanel({
           <div
             key={`${key}/B`}
             hidden={key !== scope || !browsing}
-            className="flex min-h-0 flex-1 flex-col"
+            style={browserStyle}
+            className="flex min-h-0 flex-1 flex-col bg-pane"
           >
             <Browser
               scope={key}

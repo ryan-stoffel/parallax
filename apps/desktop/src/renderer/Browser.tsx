@@ -1169,7 +1169,7 @@ function ThemePicker() {
               browserTheme.set(t.id);
             }}
             style={{ background: t.swatch }}
-            className={`size-6 rounded-full border border-border ${t.id === "parallax" ? "bg-[conic-gradient(var(--accent)_0_25%,var(--pane)_0_100%)]!" : ""} ${picked === t.id ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""}`}
+            className={`size-6 rounded-full border border-border ${t.id === "parallax" ? "bg-[conic-gradient(#ffffff_0_50%,#1f1f2e_0_100%)]!" : ""} ${picked === t.id ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""}`}
           />
         ))}
       </div>

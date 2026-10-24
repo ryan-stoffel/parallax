@@ -1015,12 +1015,7 @@ export function App() {
 
       {/* An expanded side panel takes the main pane's place. */}
       <OpenDocumentContext value={openDoc}>
-        <main
-          hidden={expanded}
-          // The permanent browser's theme paints the pane while it shows (browserTheme.ts).
-          style={!settings && mainPage === "browser" ? browserStyle : undefined}
-          className="flex min-w-0 flex-1 flex-col bg-pane"
-        >
+        <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
           {settings ? (
             <>
               <TopBar className={topBarInset}>
@@ -1037,7 +1032,9 @@ export function App() {
               />
             </>
           ) : mainPage === "browser" ? (
-            <TopBar className={topBarInset}>
+            // The browser's theme paints its top bar and the browser, not the terminal drawer under
+            // them (browserTheme.ts).
+            <TopBar style={browserStyle} className={`bg-pane ${topBarInset}`}>
               {showSidebar}
               <BrowserTabBar scope="permanent" />
             </TopBar>
@@ -1433,7 +1430,8 @@ export function App() {
           {browserPage && (
             <div
               hidden={!!settings || mainPage !== "browser"}
-              className="flex min-h-0 flex-1 flex-col"
+              style={browserStyle}
+              className="flex min-h-0 flex-1 flex-col bg-pane"
             >
               <Browser scope="permanent" remoteHost={host.id === localId ? undefined : host.name} />
             </div>

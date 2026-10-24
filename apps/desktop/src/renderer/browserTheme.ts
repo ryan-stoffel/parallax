@@ -155,6 +155,12 @@ function lightness(hex: string): number {
   return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
 }
 
+/**
+ * The text that reads on `accent`: black above the luminance where black and white contrast with
+ * it equally, as index.css's --black-or-white picks, else white.
+ */
+export const accentText = (accent: string) => (lightness(accent) > 0.1791 ? "#1A1C1C" : "#FFFFFF");
+
 /** A seeded theme's colors, as Chrome builds them from the seed's hue. */
 export function seededColors({ seed, variant }: Seeded, dark: boolean): BrowserColors {
   const hue = Hct.fromInt(argbFromHex(seed)).hue;
@@ -212,7 +218,7 @@ export const themeStyle = (colors: BrowserColors) =>
     "--hover": `color-mix(in srgb, ${colors.text} 7%, transparent)`,
     "--selected": colors.omnibox,
     "--accent": colors.accent,
-    "--accent-foreground": lightness(colors.accent) > 0.6 ? "#1A1C1C" : "#FFFFFF",
+    "--accent-foreground": accentText(colors.accent),
     "--border": `color-mix(in srgb, ${colors.text} 12%, transparent)`,
     "--ring": colors.accent,
     "--browser-tab": colors.tab,
