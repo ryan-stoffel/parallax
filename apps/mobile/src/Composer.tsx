@@ -17,7 +17,7 @@ import {
   Square,
   X,
 } from "lucide-react-native";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActionSheetIOS,
   Image,
@@ -45,6 +45,7 @@ import {
   type Model,
 } from "../../desktop/src/renderer/catalog";
 import { imageCaps } from "../../desktop/src/renderer/images";
+import { defaultBackend } from "../../desktop/src/renderer/settings/shared";
 import type { ThreadStart } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import type { Computer } from "./fleet";
@@ -365,7 +366,20 @@ export function Composer({
   const c = useColors();
   const offers = useOffers(computer);
   const [provider, setProvider] = useState<string>();
-  const shownProvider = provider ?? run?.backend;
+  // A new thread runs on its computer's default provider unless another is picked, as on the
+  // desktop, so the sheet opens on that one's models.
+  const [standard, setStandard] = useState<string>();
+  const hostId = computer?.machine.id;
+  const online = !!computer?.connected;
+  useEffect(() => {
+    if (!onStart || !hostId || !online) return;
+    let live = true;
+    void defaultBackend(hostId, "worker").then((b) => live && setStandard(b));
+    return () => {
+      live = false;
+    };
+  }, [!!onStart, hostId, online]);
+  const shownProvider = provider ?? run?.backend ?? standard;
   const fallback: Offer = {
     id: "",
     name: "",
@@ -465,7 +479,9 @@ export function Composer({
           images,
           options: {
             ...(changes && model !== undefined && model !== "" && { model }),
-            ...(provider && { account: { kind: "subscription" as const, backend: provider } }),
+            // The provider shown, which is the default's unless another was picked or it's off.
+            ...(offer.id &&
+              offer.id !== standard && { account: { kind: "subscription" as const, backend: offer.id } }),
             ...(changes && effort && offer.efforts && { effort }),
             ...(changes && permission && offer.permissions.includes(permission) && { permission }),
           },

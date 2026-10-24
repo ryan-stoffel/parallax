@@ -10,6 +10,7 @@ import {
   type Provider,
   type ProviderInfo,
   type RepoScript,
+  type Role,
   type Schedule,
 } from "../../protocol/generated/protocol";
 import { describeError } from "../errors";
@@ -201,4 +202,21 @@ export function importAccount(source: ImportSource, providers: ProviderInfo[] | 
   const info =
     on?.find((p) => p.instance.id === kind) ?? on?.find((p) => p.instance.kind === kind) ?? on?.[0];
   return info && ({ kind: "subscription", backend: info.instance.id } as const);
+}
+
+/**
+ * The backend the host's new runs in `role` run on: its default's, or Claude's with no default,
+ * since only Claude accounts are offered (`accountOptions`). Undefined when that can't be told.
+ */
+export async function defaultBackend(hostId: string, role: Role): Promise<string | undefined> {
+  const defaults = await window.parallax.request(hostId, "accounts/defaults/get", {});
+  if ("error" in defaults) return undefined;
+  const choice = defaults.result[role];
+  if (!choice) return "claude";
+  if (choice.kind === "subscription") return choice.backend;
+  if (choice.kind !== "key") return undefined;
+  const keys = await window.parallax.request(hostId, "accounts/keys/list", {});
+  if ("error" in keys) return undefined;
+  const provider = keys.result.accounts.find((k) => k.id === choice.id)?.provider;
+  return provider === "anthropic" ? "claude" : provider === "openai" ? "codex" : undefined;
 }
