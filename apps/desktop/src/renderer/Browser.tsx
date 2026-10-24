@@ -164,6 +164,9 @@ interface OwnTab {
   id: number;
   load?: { url: string };
   restored?: boolean;
+  // Opened by the user, by a shortcut, a link, or a bookmark, so its page takes focus once it
+  // loads; an agent's preview doesn't take it from the composer.
+  focus?: boolean;
   url?: string;
   title?: string;
   icon?: string;
@@ -276,14 +279,14 @@ export function Browser({
     setTabs((all) => all.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   // A new tab after `after`, or at the end, which becomes the current one. An empty new tab
   // reuses a blank one, so they don't pile up.
-  const newTab = (url?: string, after?: number) => {
+  const newTab = (url?: string, after?: number, focus = true) => {
     const blank = !url && tabs.find((t) => !t.url && !t.load);
     if (blank) {
       setCurrent(blank.id);
       setAgentTab(undefined);
       return;
     }
-    const tab = ownTab(url);
+    const tab = { ...ownTab(url), focus };
     setTabs((all) => {
       const at = all.findIndex((t) => t.id === after);
       return at < 0 ? [...all, tab] : all.toSpliced(at + 1, 0, tab);
@@ -332,7 +335,7 @@ export function Browser({
       if (tab && !tab.url && !tab.load) {
         update(tab.id, { load: { url: page.url } });
         setAgentTab(undefined);
-      } else newTab(page.url, current);
+      } else newTab(page.url, current, false);
     }
   }, [page]);
 
@@ -419,6 +422,7 @@ export function Browser({
           shown={!shownTab && t.id === current}
           page={t.url ? { url: t.url, title: t.title, icon: t.icon } : undefined}
           load={t.load}
+          focusOnLoad={!!t.focus}
           remoteHost={remoteHost}
           onChange={(patch) => update(t.id, patch)}
           onAsk={(action) => {
@@ -494,6 +498,7 @@ export const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
 function Tab({
   scope,
   shown,
+  focusOnLoad,
   page,
   load,
   remoteHost,
@@ -502,6 +507,7 @@ function Tab({
 }: {
   scope?: string;
   shown: boolean;
+  focusOnLoad?: boolean;
   /** The page it shows, for its bookmark star (Bookmarks.tsx). */
   page?: { url: string; title?: string; icon?: string };
   load?: { url: string };
@@ -575,8 +581,10 @@ function Tab({
     } else return false;
     return true;
   };
-  const latest = useRef({ onChange, ask, local });
-  latest.current = { onChange, ask, local };
+  const latest = useRef({ onChange, ask, local, shown, focusOnLoad });
+  latest.current = { onChange, ask, local, shown, focusOnLoad };
+  // Whether the page has taken the focus it's due on its first load.
+  const focused = useRef(false);
 
   // A tab shown, by a click or a shortcut, takes focus to its page, as in Chrome, so the page's
   // shortcuts keep working from it.
@@ -656,6 +664,12 @@ function Tab({
     }
     el.addEventListener("did-attach", ready);
     el.addEventListener("dom-ready", ready);
+    const firstLoad = () => {
+      if (focused.current || !latest.current.focusOnLoad || !latest.current.shown) return;
+      focused.current = true;
+      el.focus();
+    };
+    el.addEventListener("dom-ready", firstLoad);
     el.addEventListener("did-navigate", navigated);
     el.addEventListener("did-navigate-in-page", navigated);
     el.addEventListener("did-start-navigation", starting);
@@ -668,6 +682,7 @@ function Tab({
       stopAsking();
       el.removeEventListener("did-attach", ready);
       el.removeEventListener("dom-ready", ready);
+      el.removeEventListener("dom-ready", firstLoad);
       el.removeEventListener("did-navigate", navigated);
       el.removeEventListener("did-navigate-in-page", navigated);
       el.removeEventListener("did-start-navigation", starting);
@@ -714,8 +729,9 @@ function Tab({
         <Search aria-hidden />
         <input
           ref={addressBar}
-          // A new tab's address bar takes focus, as in Chrome, but not a tab shown again.
-          autoFocus={!src}
+          // A blank new tab's address bar takes focus, as in Chrome, but not a tab shown again or one
+          // opening a page, whose page takes it.
+          autoFocus={!src && !load}
           aria-label="Address"
           placeholder="Search Google or type a URL"
           spellCheck={false}
