@@ -9,6 +9,7 @@ import {
   session as sessions,
   type ContextMenuParams,
   type Extension,
+  type ServiceWorkerMain,
   type Session,
   type WebContents,
 } from "electron";
@@ -65,6 +66,19 @@ export function startExtensions(
   });
   // The toolbar's extension buttons draw their icons from crx:// in the app's own session.
   ElectronChromeExtensions.handleCRXProtocol(sessions.defaultSession);
+  // Each extension's worker asks, as it starts, whether its extension was just added, to hear the
+  // `runtime.onInstalled` Electron never fires (extensionBrowser.ts). Asked once, it says no after.
+  const asking = new WeakSet<ServiceWorkerMain>();
+  session.serviceWorkers.on("running-status-changed", ({ runningStatus, versionId }) => {
+    if (runningStatus !== "starting") return;
+    const worker = session.serviceWorkers.getWorkerFromVersionID(versionId);
+    if (!worker?.scope.startsWith("chrome-extension://") || asking.has(worker)) return;
+    asking.add(worker);
+    worker.ipc.handle("parallax:extensionAdded", async () => {
+      await adding;
+      return added.delete(new URL(worker.scope).host);
+    });
+  });
 }
 
 // A page's preferred size, as Chrome sizes an extension's popup: its content's widest line, and
@@ -298,8 +312,16 @@ export async function addUnpacked(session: Session, folder: string) {
   }
 }
 
+// Extensions added since launch whose worker hasn't yet asked whether it was just installed, and
+// the add in progress, whose worker can start before it ends.
+const added = new Set<string>();
+let adding: Promise<unknown> = Promise.resolve();
+
 async function add(session: Session, folder: string): Promise<ExtensionInfo> {
-  const extension = await session.extensions.loadExtension(folder);
+  const loading = session.extensions.loadExtension(folder);
+  adding = loading.catch(() => {});
+  const extension = await loading;
+  added.add(extension.id);
   await saveFolders([...(await folders()), folder]);
   return describe(extension);
 }
