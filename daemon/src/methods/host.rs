@@ -251,6 +251,8 @@ pub(crate) fn initialize(
 /// `devices` (PLX-886): every `device/*` method and notification.
 /// `computerUse` (PLX-897, 0077), on macOS only: `computer/ask`, `computer/status`, and
 /// `computer/forget`.
+/// `youSync` (0082): `memory/syncList` and `memory/syncRead`, which another of the user's plxds
+/// pulls You memory with, and `machine` on a You `MemoryFile`.
 /// `projectComputer` (0057), only with [`Config::project_computer`](crate::server::Config): the
 /// `computer` a Project's children run on, on `Project` and `project/update`, which a plxd
 /// without it refuses.
@@ -360,6 +362,7 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
         ("threadTools".to_owned(), serde_json::Map::new()),
         ("threads".to_owned(), serde_json::Map::new()),
         ("worktreeCleanup".to_owned(), serde_json::Map::new()),
+        ("youSync".to_owned(), serde_json::Map::new()),
     ]));
     if cfg!(target_os = "macos") {
         capabilities

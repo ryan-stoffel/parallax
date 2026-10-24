@@ -60,23 +60,25 @@ use crate::{
     InboxListResult, InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult,
     LandApproveParams, LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams,
     MemoryDeleteResult, MemoryListParams, MemoryListResult, MemoryProposeParams,
-    MemoryProposeResult, MemoryReadParams, MemoryReadResult, MemoryWriteParams, MemoryWriteResult,
-    OrchestrationCommand, PrActParams, PrDiffResult, PrStatusResult, PrViewParams, PrWatchResult,
-    PrWatchesParams, PrWatchesResult, PreviewCallParams, PreviewCallResult, PreviewFrameParams,
-    PreviewFrameResult, PreviewInputParams, PreviewInputResult, PreviewListParams,
-    PreviewListResult, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams,
-    ProjectListResult, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage,
-    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
-    ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult,
-    PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
-    QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
-    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams,
-    RelayHostsResult, RelayRegisterParams, RelayRemoveParams, RemotePairParams, RemotePairResult,
-    RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult,
-    RepoCloneParams, RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams,
-    RepoFilesResult, RepoGitStatusParams, RepoMatchParams, RepoMatchResult, RepoRefsParams,
-    RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
+    MemoryProposeResult, MemoryReadParams, MemoryReadResult, MemorySyncListParams,
+    MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult, MemoryWriteParams,
+    MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult, PrStatusResult,
+    PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PreviewCallParams,
+    PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInputParams,
+    PreviewInputResult, PreviewListParams, PreviewListResult, ProjectCreateParams,
+    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams,
+    ProjectFromThreadsResult, ProjectListParams, ProjectListResult, ProjectStartParams,
+    ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
+    ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
+    RelayRegisterParams, RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
+    RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
+    RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
+    RepoGitStatusParams, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
+    RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
     RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
     ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
     SecretAnswerResult, SecretRequestParams, SecretRequestResult, SpaceCreateParams,
@@ -577,6 +579,11 @@ method_table! {
         MemoryDelete = "memory/delete": MemoryDeleteParams => MemoryDeleteResult;
         /// `memory/propose`: a thread proposes an entry, for its coordinator or the user.
         MemoryPropose = "memory/propose": MemoryProposeParams => MemoryProposeResult;
+        /// `memory/syncList`: every version plxd has recorded in You, for another of the user's
+        /// plxds to pull (0082). Gated on the `youSync` capability, like `memory/syncRead`.
+        MemorySyncList = "memory/syncList": MemorySyncListParams => MemorySyncListResult;
+        /// `memory/syncRead`: the text that syncs of one You entry or knowledge file.
+        MemorySyncRead = "memory/syncRead": MemorySyncReadParams => MemorySyncReadResult;
         /// `land/queue`: queues a Project's finished child to land on its integration branch, as
         /// the coordinator's `land` tool does (PLX-410, 0045). Gated on the `landing` capability,
         /// like every `land/*` method.
@@ -901,6 +908,8 @@ mod tests {
                 "memory/write",
                 "memory/delete",
                 "memory/propose",
+                "memory/syncList",
+                "memory/syncRead",
                 "land/queue",
                 "land/approve",
                 "land/sendBack",

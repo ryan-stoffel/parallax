@@ -9,6 +9,9 @@
 //! naming the scope it is for, until its coordinator's next wake-up carries it; a coordinator's
 //! the same way, for the user, such as a rewrite the Memory tab asked for, naming the entry it
 //! replaces, or the brief's; and a plain thread's in its repository's folder, for the user.
+//!
+//! `memory/syncList` and `memory/syncRead`, behind `youSync`, are another plxd's, which pulls
+//! You memory with them ([`crate::context::you_sync`], 0082).
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +19,8 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ErrorKind, InboxKind, MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind,
     MemoryListParams, MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult,
-    MemoryReadParams, MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams,
+    MemoryReadParams, MemoryReadResult, MemoryScope, MemoryScopeKind, MemorySyncListParams,
+    MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult, MemoryWriteParams,
     MemoryWriteResult, ProjectId, RunId,
 };
 use uuid::Uuid;
@@ -24,7 +28,7 @@ use uuid::Uuid;
 use super::Context;
 use super::context::{io_error, run_blocking};
 use crate::context::corrections::Change;
-use crate::context::{self, memory};
+use crate::context::{self, memory, you_sync};
 use crate::store::store_error;
 
 /// The longest title, in bytes.
@@ -73,6 +77,11 @@ pub(super) async fn list(
     params: MemoryListParams,
 ) -> Result<MemoryListResult, ErrorObject> {
     let dir = scope_dir(context, params.scope).await?;
+    // Which machine last wrote each You entry (0082).
+    let versions = match params.scope {
+        MemoryScope::You => Some(you_sync::recorded(&context.daemon.reader).await?),
+        _ => None,
+    };
     run_blocking(move || {
         let mut files = Vec::new();
         for (path, metadata) in context::list_files(&dir).map_err(io_error(""))? {
@@ -80,7 +89,11 @@ pub(super) async fn list(
                 continue;
             }
             let header = header_of(&dir, &path);
-            files.push(memory_file(&path, &metadata, header));
+            let mut file = memory_file(&path, &metadata, header);
+            if let Some(versions) = &versions {
+                file.machine = you_sync::machine(&dir, &path, versions);
+            }
+            files.push(file);
         }
         Ok(MemoryListResult { files })
     })
@@ -314,7 +327,7 @@ pub(super) async fn propose(
     );
     let slug = memory::slug(&title);
     let file = run_blocking(move || {
-        let path = free_path(&dir, &slug);
+        let path = free_path(&dir, "proposals", &slug);
         save(&dir, &path, &text)
     })
     .await?;
@@ -322,6 +335,20 @@ pub(super) async fn propose(
         to,
         file: Some(file),
     })
+}
+
+pub(super) async fn sync_list(
+    context: &Context,
+    _: MemorySyncListParams,
+) -> Result<MemorySyncListResult, ErrorObject> {
+    you_sync::list(&context.daemon).await
+}
+
+pub(super) async fn sync_read(
+    context: &Context,
+    params: MemorySyncReadParams,
+) -> Result<MemorySyncReadResult, ErrorObject> {
+    you_sync::read(&context.daemon, params.path).await
 }
 
 /// Checks the entry a proposal `replaces`: only a coordinator names one, and it is an existing
@@ -490,7 +517,7 @@ async fn scope_dir(context: &Context, scope: MemoryScope) -> Result<PathBuf, Err
 }
 
 /// Writes `text` to `path` in `dir` within the shared context caps, and returns it.
-fn save(dir: &Path, path: &str, text: &str) -> Result<MemoryFile, ErrorObject> {
+pub(crate) fn save(dir: &Path, path: &str, text: &str) -> Result<MemoryFile, ErrorObject> {
     let size = text.len() as u64;
     let other = context::other_files_total(dir, path).map_err(io_error(path))?;
     if size > context::MAX_FILE_BYTES || other + size > context::MAX_PROJECT_BYTES {
@@ -508,13 +535,13 @@ fn save(dir: &Path, path: &str, text: &str) -> Result<MemoryFile, ErrorObject> {
     Ok(memory_file(path, &metadata, header))
 }
 
-/// A proposal path for `slug` that no file has yet in `dir`.
-fn free_path(dir: &Path, slug: &str) -> String {
+/// A path in `folder` for `slug` that no file has yet in `dir`, such as a proposal's.
+pub(crate) fn free_path(dir: &Path, folder: &str, slug: &str) -> String {
     let taken = |path: &str| std::fs::symlink_metadata(dir.join(path)).is_ok();
-    let mut path = format!("proposals/{slug}.md");
+    let mut path = format!("{folder}/{slug}.md");
     let mut n = 2;
     while taken(&path) {
-        path = format!("proposals/{slug}-{n}.md");
+        path = format!("{folder}/{slug}-{n}.md");
         n += 1;
     }
     path
@@ -558,6 +585,7 @@ fn memory_file(path: &str, metadata: &std::fs::Metadata, header: memory::Header)
         stale: header.stale.is_some(),
         unused,
         last_used: header.last_used,
+        machine: None,
     }
 }
 

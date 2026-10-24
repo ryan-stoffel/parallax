@@ -148,6 +148,12 @@ pub struct Config {
     /// The largest bundle `bundle/prepare` and `bundle/begin` take (0057). 64 MiB by default;
     /// tests shrink it.
     pub max_bundle_bytes: u64,
+    /// How often plxd pulls You memory from the user's other Connect devices (0082). 60 s by
+    /// default.
+    pub you_sync_interval: Duration,
+    /// The port of the other devices' Connect listeners, for that pull. `None`, the default, is
+    /// `connect_port`; tests run two plxds on one loopback.
+    pub you_sync_port: Option<u16>,
 }
 
 impl Config {
@@ -189,6 +195,8 @@ impl Config {
             relay_url: crate::relay::url(),
             project_computer: false,
             max_bundle_bytes: crate::methods::bundle::MAX_BYTES,
+            you_sync_interval: Duration::from_secs(60),
+            you_sync_port: None,
         }
     }
 }
@@ -331,6 +339,8 @@ pub(crate) struct Daemon {
     pub project_computer: bool,
     /// The bundle files `bundle/*` holds (0057).
     pub bundles: crate::methods::bundle::Bundles,
+    /// Held while plxd records or applies You memory's versions (0082).
+    pub(crate) you_sync: tokio::sync::Mutex<()>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -498,6 +508,7 @@ impl Server {
                 data_dir.temp_dir().join("bundles"),
                 config.max_bundle_bytes,
             ),
+            you_sync: tokio::sync::Mutex::new(()),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -648,6 +659,12 @@ impl Server {
                 }
             })
         };
+        let you_sync = tokio::spawn(crate::context::you_sync::run(
+            Arc::clone(&daemon),
+            config.you_sync_interval,
+            config.you_sync_port.unwrap_or(config.connect_port),
+            shutdown.graceful.clone(),
+        ));
         let secrets = tokio::spawn(crate::secrets::run(
             Arc::clone(&daemon),
             shutdown.graceful.clone(),
@@ -746,6 +763,7 @@ impl Server {
         let _ = relay.await;
         let _ = handover.await;
         let _ = secrets.await;
+        let _ = you_sync.await;
         daemon.store.stop().await;
         daemon.reader.stop().await;
         lock.release();
@@ -912,6 +930,7 @@ impl Daemon {
                 DataDir::new(dir).unwrap().temp_dir().join("bundles"),
                 crate::methods::bundle::MAX_BYTES,
             ),
+            you_sync: tokio::sync::Mutex::new(()),
         })
     }
 }

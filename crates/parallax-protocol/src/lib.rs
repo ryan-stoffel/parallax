@@ -176,8 +176,10 @@ pub use land::{
 };
 pub use memory::{
     MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind, MemoryListParams,
-    MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult, MemoryReadParams,
-    MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams, MemoryWriteResult,
+    MemoryListResult, MemoryMachine, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult,
+    MemoryReadParams, MemoryReadResult, MemoryScope, MemoryScopeKind, MemorySyncEntry,
+    MemorySyncListParams, MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult,
+    MemoryWriteParams, MemoryWriteResult,
 };
 pub use orchestration::{
     CheckpointFile, CheckpointStatus, DispatchMode, DispatchResult, FullThreadDiffParams,

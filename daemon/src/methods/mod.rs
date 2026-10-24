@@ -31,7 +31,7 @@ mod events;
 pub(crate) mod host;
 pub(crate) mod inbox;
 pub(crate) mod land;
-mod memory;
+pub(crate) mod memory;
 mod orchestration;
 mod pr;
 pub(crate) mod project;
@@ -352,6 +352,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         MemoryWrite => |p| memory::write(context, p),
         MemoryDelete => |p| memory::delete(context, p),
         MemoryPropose => |p| memory::propose(context, p),
+        MemorySyncList => |p| memory::sync_list(context, p),
+        MemorySyncRead => |p| memory::sync_read(context, p),
         LandQueue => |p| land::queue(context, p),
         LandApprove => |p| land::approve(context, p),
         LandSendBack => |p| land::send_back(context, p),

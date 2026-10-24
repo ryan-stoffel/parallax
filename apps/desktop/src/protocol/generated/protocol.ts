@@ -704,6 +704,15 @@ export type ParallaxRequests = {
 	 */
 	"memory/propose": { params: MemoryProposeParams, result: MemoryProposeResult },
 	/**
+	 * `memory/syncList`: every version plxd has recorded in You, for another of the user's
+	 * plxds to pull (0082). Gated on the `youSync` capability, like `memory/syncRead`.
+	 */
+	"memory/syncList": { params: MemorySyncListParams, result: MemorySyncListResult },
+	/**
+	 * `memory/syncRead`: the text that syncs of one You entry or knowledge file.
+	 */
+	"memory/syncRead": { params: MemorySyncReadParams, result: MemorySyncReadResult },
+	/**
 	 * `land/queue`: queues a Project's finished child to land on its integration branch, as
 	 * the coordinator's `land` tool does (PLX-410, 0045). Gated on the `landing` capability,
 	 * like every `land/*` method.
@@ -1050,6 +1059,8 @@ export const REQUEST_METHODS = [
 	"memory/write",
 	"memory/delete",
 	"memory/propose",
+	"memory/syncList",
+	"memory/syncRead",
 	"land/queue",
 	"land/approve",
 	"land/sendBack",
@@ -8138,6 +8149,11 @@ export type MemoryFile = {
 	 * none, is that old (PLX-943). The Memory tab lists it, and a `stale` one, for review.
 	 */
 	unused?: boolean,
+	/**
+	 * For a You entry or knowledge file, the computer that last wrote it (0082). Absent until
+	 * plxd has recorded its current text, which it does within a minute while `connect` is on.
+	 */
+	machine?: MemoryMachine,
 };
 
 /**
@@ -8146,6 +8162,20 @@ export type MemoryFile = {
  * A newer plxd may send a kind this version does not know; treat it as unknown.
  */
 export type MemoryKind = "preference" | "convention" | "decision" | "gotcha";
+
+/**
+ * A computer that wrote a You entry (0082).
+ */
+export type MemoryMachine = {
+	/**
+	 * Its Tailscale node ID.
+	 */
+	id: string,
+	/**
+	 * Its device name, or its Tailscale host name when it has none, as of the write.
+	 */
+	name: string,
+};
 
 /**
  * A scope's name, as a proposal's file names the scope it is for.
@@ -8309,6 +8339,72 @@ export type MemoryProposeResult = {
  * A newer plxd may send a value this version does not know; treat it as unknown.
  */
 export type MemoryProposalTo = "coordinator" | "user";
+
+/**
+ * Params of `memory/syncList`.
+ */
+export type MemorySyncListParams = Record<symbol, never>;
+
+/**
+ * Result of `memory/syncList`.
+ */
+export type MemorySyncListResult = {
+	/**
+	 * Every path plxd has recorded in You, deletions included.
+	 */
+	entries: Array<MemorySyncEntry>,
+};
+
+/**
+ * One version of a You entry or knowledge file, as a plxd records it (0082).
+ */
+export type MemorySyncEntry = {
+	/**
+	 * The path in the You folder.
+	 */
+	path: string,
+	/**
+	 * The SHA-256, in hex, of the text that syncs: the file without its `Last used:` and
+	 * `Stale:` lines. Empty for a deletion.
+	 */
+	hash: string,
+	/**
+	 * The version vector: each machine's node ID, and how many local changes it made.
+	 */
+	clock: Record<string, number>,
+	/**
+	 * The computer that wrote this version.
+	 */
+	machine: MemoryMachine,
+	/**
+	 * When it did, in RFC 3339 UTC.
+	 */
+	writtenAt: string,
+	/**
+	 * This version deletes the file.
+	 */
+	deleted?: boolean,
+};
+
+/**
+ * Params of `memory/syncRead`. Fails with `contextNotFound` if there is no such file.
+ */
+export type MemorySyncReadParams = {
+	/**
+	 * The path in the You folder: an entry or a knowledge file.
+	 */
+	path: string,
+};
+
+/**
+ * Result of `memory/syncRead`.
+ */
+export type MemorySyncReadResult = {
+	/**
+	 * The text that syncs, whose SHA-256 is its entry's `hash`.
+	 */
+	content: string,
+};
 
 /**
  * Params of `land/queue`: queues a finished child of a Project to land on its integration

@@ -138,6 +138,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("threadTools".to_owned(), serde_json::Map::new()),
             ("threads".to_owned(), serde_json::Map::new()),
             ("worktreeCleanup".to_owned(), serde_json::Map::new()),
+            ("youSync".to_owned(), serde_json::Map::new()),
         ]))
     );
     assert_eq!(init.max_frame_bytes, MAX_FRAME_BYTES as u64);
