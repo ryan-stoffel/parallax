@@ -81,12 +81,13 @@ function withReorderLimits(sps: Uint8Array): Uint8Array {
     if (!/^10{0,7}$/.test(bits.slice(position))) return sps;
 
     // The VUI flag, eight absent optional sections, bitstream_restriction_flag and
-    // motion_vectors_over_pic_boundaries_flag, then the restrictions' defaults with
-    // max_num_reorder_frames 0 and max_dec_frame_buffering the SPS's reference frames.
+    // motion_vectors_over_pic_boundaries_flag, then the restrictions' inferred values, with
+    // max_num_reorder_frames 0 and max_dec_frame_buffering the SPS's reference frames. T3 writes
+    // 16 for the motion vector lengths, which the current edition of H.264 no longer allows.
     const restricted =
       bits.slice(0, vuiPosition) +
       "10000000011" +
-      [2, 1, 16, 16, 0, maxReferenceFrames].map(unsignedGolomb).join("") +
+      [2, 1, 15, 15, 0, maxReferenceFrames].map(unsignedGolomb).join("") +
       "1";
     const padded = restricted.padEnd(Math.ceil(restricted.length / 8) * 8, "0");
     const output = [sps[0]!];
@@ -108,7 +109,7 @@ function withReorderLimits(sps: Uint8Array): Uint8Array {
 
 /**
  * An `avcC` record from the hub with each SPS given reorder limits it lacks. A record that's
- * malformed, too large, or already has them comes back as it is, never changed in place.
+ * malformed, too large, or whose SPS already has VUI comes back as it is, never changed in place.
  */
 export function simulatorAvcConfig(description: Uint8Array): Uint8Array {
   if (description.length < 7 || description.length > MAX_CONFIG_BYTES || description[0] !== 1)

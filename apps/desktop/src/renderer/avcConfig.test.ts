@@ -12,7 +12,7 @@ const fallback = Uint8Array.from([
   238, 60, 176,
 ]);
 const repaired = Uint8Array.from([
-  1, 100, 0, 51, 255, 225, 0, 17, 39, 100, 0, 51, 172, 86, 128, 76, 1, 73, 230, 168, 6, 208, 68, 35,
+  1, 100, 0, 51, 255, 225, 0, 17, 39, 100, 0, 51, 172, 86, 128, 76, 1, 73, 230, 168, 6, 208, 64, 33,
   80, 1, 0, 4, 40, 238, 60, 176,
 ]);
 
@@ -76,4 +76,34 @@ test("a truncated, malformed, or unfamiliar description passes through", () => {
   const oversized = new Uint8Array(64 * 1024 + 1);
   oversized.set(fallback);
   expect(simulatorAvcConfig(oversized)).toBe(oversized);
+  // An SPS over 4 KiB.
+  const oversizedSps = new Uint8Array(6 + 2 + 4097 + 7);
+  oversizedSps.set(fallback.subarray(0, 6));
+  oversizedSps.set([0x10, 1], 6);
+  oversizedSps.set(fallback.subarray(8, 20), 8);
+  oversizedSps.set(fallback.subarray(20), 8 + 4097);
+  expect(simulatorAvcConfig(oversizedSps)).toBe(oversizedSps);
+});
+
+test("emulation prevention bytes are read past, and a run of zeros stays unparsed", () => {
+  const escaped = Uint8Array.from([
+    ...fallback.subarray(0, 6),
+    0,
+    13,
+    39,
+    100,
+    0,
+    51,
+    0,
+    0,
+    3,
+    0,
+    0,
+    3,
+    0,
+    0,
+    0,
+    ...fallback.subarray(20),
+  ]);
+  expect(simulatorAvcConfig(escaped)).toBe(escaped);
 });
