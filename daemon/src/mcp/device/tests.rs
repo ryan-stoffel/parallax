@@ -74,9 +74,16 @@ fn ios(dir: &Path) -> Ios {
         r#"case "$2" in
   list) cat "$D/list.json" ;;
   io) cp "$D/shot.png" "$6" ;;
+  boot) sleep 1; sed "/\"$3\"/s/Shutdown/Booted/" "$D/list.json" > "$D/list.new"; mv "$D/list.new" "$D/list.json" ;;
 esac"#,
     );
     Ios { xcrun }
+}
+
+/// Shuts down every simulator in `ios`'s list, as though none were running.
+fn shut_all(dir: &Path) {
+    let list = SIMCTL_LIST.replace("Booted", "Shutdown");
+    std::fs::write(dir.join("list.json"), list).unwrap();
 }
 
 fn devices(dir: &TempDir, tools: Toolchain) -> Devices {
@@ -177,13 +184,13 @@ async fn without_a_toolchain_each_platform_says_why_and_open_points_at_device_li
 }
 
 #[tokio::test]
-async fn open_picks_as_t3_does() {
+async fn open_picks_as_t3_does_when_nothing_runs() {
     let dir = TempDir::new().unwrap();
-    std::fs::write(dir.path().join("booted"), "").unwrap();
     let tools = Toolchain {
         ios: Ok(ios(dir.path())),
         android: Ok(android(dir.path())),
     };
+    shut_all(dir.path());
     let devices = devices(&dir, tools);
     let error = call(&devices, "device_open", json!({})).await.unwrap_err();
     assert_eq!(
@@ -197,18 +204,94 @@ async fn open_picks_as_t3_does() {
         error,
         "No device nope on host local. Call device_list for current ids."
     );
-    // The platform's booted device, not its first.
     let opened = call(&devices, "device_open", json!({"platform": "ios"}))
         .await
         .unwrap();
-    assert_eq!(opened["device"]["id"], "SIM-ON");
-    assert!(!calls(&dir).contains("simctl boot"), "{}", calls(&dir));
+    assert_eq!(opened["device"]["id"], "SIM-OFF");
+    assert!(calls(&dir).contains("xcrun simctl boot SIM-OFF"));
     assert!(
         opened["quickStart"]
             .as_str()
             .unwrap()
-            .contains("xcrun simctl launch SIM-ON <bundle-id>")
+            .contains("xcrun simctl launch SIM-OFF <bundle-id>")
     );
+}
+
+#[tokio::test]
+async fn every_thread_shares_the_running_simulator_and_only_its_last_shuts_it_down() {
+    let dir = TempDir::new().unwrap();
+    let tools = || Toolchain {
+        ios: Ok(ios(dir.path())),
+        android: Err("Android SDK was not found.".to_owned()),
+    };
+    let (first, second) = (devices(&dir, tools()), devices(&dir, tools()));
+    for thread in [&first, &second] {
+        let opened = call(thread, "device_open", json!({})).await.unwrap();
+        assert_eq!(opened["device"]["id"], "SIM-ON");
+    }
+    let error = call(&second, "device_open", json!({"deviceId": "SIM-OFF"}))
+        .await
+        .unwrap_err();
+    assert!(
+        error.starts_with("iPhone 16 Pro (SIM-ON) is this computer's one simulator or emulator"),
+        "{error}"
+    );
+    assert!(!calls(&dir).contains("simctl boot"), "{}", calls(&dir));
+
+    // The first thread still has it open, so the second only closes it.
+    let closed = call(&second, "device_close", json!({"shutdown": true}))
+        .await
+        .unwrap();
+    assert_eq!(closed["leftRunning"], json!(["SIM-ON"]));
+    assert!(!calls(&dir).contains("simctl shutdown"), "{}", calls(&dir));
+    let closed = call(&first, "device_close", json!({"shutdown": true}))
+        .await
+        .unwrap();
+    assert_eq!(closed, json!({}));
+    assert!(calls(&dir).contains("xcrun simctl shutdown SIM-ON"));
+}
+
+#[tokio::test]
+async fn open_shuts_down_every_other_running_simulator_and_emulator() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(dir.path().join("booted"), "").unwrap();
+    let tools = Toolchain {
+        ios: Ok(ios(dir.path())),
+        android: Ok(android(dir.path())),
+    };
+    let list = SIMCTL_LIST.replace("Shutdown", "Booted");
+    std::fs::write(dir.path().join("list.json"), list).unwrap();
+    let devices = devices(&dir, tools);
+    let opened = call(&devices, "device_open", json!({"deviceId": "SIM-ON"}))
+        .await
+        .unwrap();
+    assert_eq!(opened["device"]["id"], "SIM-ON");
+    let calls = calls(&dir);
+    assert!(calls.contains("xcrun simctl shutdown SIM-OFF"), "{calls}");
+    assert!(calls.contains("adb -s emulator-5554 emu kill"), "{calls}");
+    assert!(!calls.contains("shutdown SIM-ON"), "{calls}");
+    // A phone isn't a simulator, so it stays.
+    assert!(!calls.contains("R58M emu kill"), "{calls}");
+}
+
+#[tokio::test]
+async fn two_threads_opening_at_once_boot_one_simulator() {
+    let dir = TempDir::new().unwrap();
+    let tools = || Toolchain {
+        ios: Ok(ios(dir.path())),
+        android: Err("Android SDK was not found.".to_owned()),
+    };
+    let (first, second) = (devices(&dir, tools()), devices(&dir, tools()));
+    shut_all(dir.path());
+    let args = json!({"platform": "ios"});
+    let (a, b) = tokio::join!(
+        call(&first, "device_open", args.clone()),
+        call(&second, "device_open", args)
+    );
+    assert_eq!(a.unwrap()["device"]["id"], "SIM-OFF");
+    assert_eq!(b.unwrap()["device"]["id"], "SIM-OFF");
+    let calls = calls(&dir);
+    assert_eq!(calls.matches("simctl boot ").count(), 1, "{calls}");
 }
 
 #[tokio::test]
@@ -218,6 +301,7 @@ async fn a_simulator_boots_shows_its_screen_and_shuts_down() {
         ios: Ok(ios(dir.path())),
         android: Err("Android SDK was not found.".to_owned()),
     };
+    shut_all(dir.path());
     let devices = devices(&dir, tools);
     let opened = call(&devices, "device_open", json!({"deviceId": "SIM-OFF"}))
         .await
