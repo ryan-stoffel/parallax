@@ -16,17 +16,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Alert, Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { authorize } from "../modules/pinned-tls";
 import { keychain } from "./host";
 import { base64url } from "./pairing";
 import { LockKeyhole, LogOut, UserRound } from "lucide-react-native";
 
+import { initials } from "../../desktop/src/renderer/attention";
+
 import { font } from "./theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Button, Mark, Row, Section, SkyBanner, T, useColors } from "./ui";
+import { Button, Icon, Mark, Row, Section, SkyBanner, T, useColors } from "./ui";
 
 // The Clerk instance and the desktop app's OAuth application there, both public (desktop:
 // main/account.ts). The phone signs in as the same application.
@@ -47,6 +49,8 @@ export interface User {
   email?: string;
   given_name?: string;
   family_name?: string;
+  /** The profile picture's URL, from the sign-in provider. */
+  picture?: string;
 }
 
 interface Session {
@@ -85,8 +89,8 @@ async function token(params: Record<string, string>) {
 async function userinfo(bearer: string): Promise<User> {
   const res = await fetch(`${API}/oauth/userinfo`, { headers: { Authorization: `Bearer ${bearer}` } });
   if (!res.ok) throw new ClerkError(`Clerk answered ${res.status}.`);
-  const { email, given_name, family_name } = (await res.json()) as User;
-  return { email, given_name, family_name };
+  const { email, given_name, family_name, picture } = (await res.json()) as User;
+  return { email, given_name, family_name, picture };
 }
 
 interface AccountValue {
@@ -186,7 +190,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       try {
         const fresh = await token({ grant_type: "refresh_token", refresh_token: session.refreshToken });
         setAccess(fresh.access);
-        if (fresh.refreshToken) await save({ ...session, refreshToken: fresh.refreshToken });
+        // Each refresh also refreshes the profile, so a sign-in from before the picture gets it.
+        const user = await userinfo(fresh.access.token).catch(() => session.user);
+        await save({ user, refreshToken: fresh.refreshToken ?? session.refreshToken });
         return fresh.access.token;
       } catch (e) {
         // Revoked, such as by signing out everywhere: signed out here too.
@@ -247,10 +253,35 @@ export function SignIn() {
   );
 }
 
+/** The user's full name, or undefined when Clerk has none. */
+export const nameOf = (user: User | null | undefined) =>
+  [user?.given_name, user?.family_name].filter(Boolean).join(" ") || undefined;
+
+/**
+ * The signed-in user's profile picture, as round as iOS draws one: their picture, else their
+ * initials, else (signed out, as the development shortcut is) a person.
+ */
+export function Avatar({ size = 36 }: { size?: number }) {
+  const c = useColors();
+  const { user } = useAccount();
+  const name = nameOf(user);
+  const shape = { width: size, height: size, borderRadius: size / 2 };
+  if (user?.picture) return <Image source={{ uri: user.picture }} style={[shape, { backgroundColor: c.selected }]} />;
+  return (
+    <View style={[shape, { alignItems: "center", justifyContent: "center", backgroundColor: name ? c.accent : c.selected }]}>
+      {name ? (
+        <T style={{ color: "#ffffff", fontSize: size * 0.38, fontWeight: "600" }}>{initials(name)}</T>
+      ) : (
+        <Icon icon={UserRound} size={size * 0.5} color={c.mutedForeground} />
+      )}
+    </View>
+  );
+}
+
 /** Settings' account section: who's signed in, their account page, and Sign out. */
 export function AccountSection() {
   const { user, signOut } = useAccount();
-  const name = [user?.given_name, user?.family_name].filter(Boolean).join(" ");
+  const name = nameOf(user);
   return (
     <Section title="Parallax account">
       <Row

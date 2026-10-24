@@ -1,42 +1,15 @@
-// A tab's screen, as the desktop's sidebar opens: its top row on the nightly sky, the wordmark and
-// the tab's actions, and below it on the sky, a search field where the tab has one. The sky fades
-// into the page before the tab's content starts, so nothing scrolls under it. Content opens with
+// A screen that opens as the desktop's sidebar does, now only the pull requests sheet's (the
+// sidebar draws its own sky, Sidebar.tsx): its top row on the nightly sky, the wordmark and
+// actions, and below it on the sky, a search field where the screen has one. The sky fades into
+// the page before the content starts, so nothing scrolls under it. Content opens with
 // `ScreenTitle`.
 import { useFocusEffect, useIsFocused } from "@react-navigation/native";
-import type { LucideIcon } from "lucide-react-native";
 import { Search, X } from "lucide-react-native";
 import { useCallback, type ReactNode } from "react";
 import { Pressable, StatusBar, StyleSheet, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
-
-/** A round action in the top row: a white icon on the sky's glass. */
-export function SkyButton({
-  icon,
-  label,
-  onPress,
-  marked,
-}: {
-  icon: LucideIcon;
-  label: string;
-  onPress: () => void;
-  /** A dot on it, as a filter in effect has. */
-  marked?: boolean;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      hitSlop={6}
-      onPress={onPress}
-      style={({ pressed }) => [styles.action, pressed && { backgroundColor: "rgba(255, 255, 255, 0.24)" }]}
-    >
-      <Icon icon={icon} size={17} color="#ffffff" />
-      {marked && <View style={styles.mark} />}
-    </Pressable>
-  );
-}
 
 const ROW = 52;
 const SEARCH = 52;
@@ -120,25 +93,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   actions: { flexDirection: "row", gap: 10 },
-  action: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.12)",
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "rgba(255, 255, 255, 0.18)",
-  },
-  mark: {
-    position: "absolute",
-    top: 5,
-    right: 5,
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "#8a86e4",
-  },
   search: {
     height: 40,
     marginHorizontal: 16,

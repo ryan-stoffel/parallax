@@ -1,16 +1,23 @@
-// Every computer's threads, as the desktop's sidebar lists a host's: pinned first, then the rest
-// grouped by day or by repository, each with its attention badge (Working, Needs you, Done,
-// Failed), and drawers for those working, snoozed, and archived. The filter narrows it to one
-// computer or repository, the search bar to titles, repositories, and branches. A swipe left
-// archives a thread, and a long press pins, snoozes, renames, or archives it.
+// The sidebar, as Claude's app has one: a swipe right on the main view opens it over most of the
+// screen. Its top wears the nightly sky, with the Parallax mark (a new thread where the last one
+// started) and search. Below are every computer's threads, as the desktop's sidebar lists a
+// host's: Projects, pinned, then the rest grouped by day or by repository, each with its attention
+// badge (Working, Needs you, Done, Failed), and drawers for those working, snoozed, and archived.
+// The filter narrows it to one computer or repository. A swipe left archives a thread, and a long
+// press pins, snoozes, renames, or archives it. Its bottom has the profile picture (Settings),
+// pull requests, and New thread. The drawer keeps it mounted, so the sky never flickers in.
+import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
 import {
   Archive,
+  ChevronDown,
   ChevronRight,
   Clock,
   FolderGit2,
+  GitPullRequest,
   ListFilter,
   Pin,
+  Search,
   SquarePen,
 } from "lucide-react-native";
 import { useRef, useState, type ReactNode } from "react";
@@ -26,6 +33,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import * as Lucide from "lucide-react-native";
 
@@ -44,15 +52,20 @@ import {
   projectRuns,
   threadProjects,
 } from "../../desktop/src/renderer/threads";
+import { Avatar } from "./Account";
 import { Choices, type Choice } from "./Choices";
 import { useFleet, type Computer } from "./fleet";
+import { GlassButton } from "./Glass";
 import { ProjectGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
-import { ScreenTitle, SkyButton, TabScreen } from "./TabScreen";
-import { ago, useNav } from "./nav";
-import { AttentionBadge, Icon, T, useColors } from "./ui";
+import { ago, useNav, useShow } from "./nav";
+import { getPrefs } from "./prefs";
+import { AttentionBadge, Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
+
+/** How much of the screen's width the sidebar takes. */
+export const sidebarWidth = (screen: number) => Math.round(screen * 0.78);
 
 /** One thread as the list shows it. */
-interface Entry {
+export interface Entry {
   computer: Computer;
   thread: Thread;
   run?: AgentRun;
@@ -64,7 +77,7 @@ interface Entry {
   repoId: string;
 }
 
-const when = (t: Thread) => t.lastPromptAt ?? t.createdAt;
+export const when = (t: Thread) => t.lastPromptAt ?? t.createdAt;
 
 /** A Parallax Project (0042) as the list shows it: its coordinator, threads, and attention. */
 interface ProjectEntry {
@@ -96,7 +109,7 @@ function projectsOf(computers: Computer[]): ProjectEntry[] {
 
 function ProjectRow({ entry, many }: { entry: ProjectEntry; many: boolean }) {
   const c = useColors();
-  const nav = useNav();
+  const show = useShow();
   const { project, computer, attention, threads, working } = entry;
   const coordinator = project.coordinator;
   return (
@@ -104,7 +117,7 @@ function ProjectRow({ entry, many }: { entry: ProjectEntry; many: boolean }) {
       accessibilityRole="button"
       accessibilityLabel={project.name}
       disabled={!coordinator}
-      onPress={() => coordinator && nav.navigate("Thread", { hostId: computer.machine.id, runId: coordinator })}
+      onPress={() => coordinator && show({ name: "Thread", params: { hostId: computer.machine.id, runId: coordinator } })}
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
     >
       <View style={styles.line}>
@@ -148,7 +161,8 @@ function ProjectRow({ entry, many }: { entry: ProjectEntry; many: boolean }) {
   );
 }
 
-function entriesOf(computers: Computer[]): Entry[] {
+/** Every computer's threads, but those in a Project or forked from another. */
+export function entriesOf(computers: Computer[]): Entry[] {
   return computers.flatMap((computer) => {
     const { state } = computer.view;
     const inProject = threadProjects(state);
@@ -198,7 +212,7 @@ function Swipe({
   onPress: () => void;
   children: ReactNode;
 }) {
-  const { width } = useWindowDimensions();
+  const width = sidebarWidth(useWindowDimensions().width);
   const view = useRef<ScrollView>(null);
   return (
     <ScrollView
@@ -239,7 +253,7 @@ function ThreadRow({
   shared: ReadonlyMap<string, ProjectIcon>;
 }) {
   const c = useColors();
-  const nav = useNav();
+  const show = useShow();
   const { thread, run, computer, title, repo, attention } = entry;
   const diff = run?.diff;
   const view = computer.view;
@@ -280,7 +294,7 @@ function ThreadRow({
       accessibilityLabel={title}
       accessibilityActions={[{ name: "archive", label: thread.archived ? "Unarchive" : "Archive" }]}
       onAccessibilityAction={() => void view.archive(thread.id, !thread.archived)}
-      onPress={() => nav.navigate("Thread", { hostId: computer.machine.id, runId: thread.id })}
+      onPress={() => show({ name: "Thread", params: { hostId: computer.machine.id, runId: thread.id } })}
       onLongPress={actions}
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
     >
@@ -318,14 +332,19 @@ type Scope = "all" | `computer:${string}` | `repo:${string}`;
 type GroupBy = "day" | "repo";
 type DrawerName = "Projects" | "Working" | "Snoozed" | "Archived";
 
-export function ThreadList() {
+/** The sky's bar below the status bar, and its fade into the list. */
+const BAR = 56;
+const FADE = 28;
+
+export function Sidebar() {
   const c = useColors();
   const nav = useNav();
+  const show = useShow();
+  const insets = useSafeAreaInsets();
   const { computers } = useFleet();
   const [scope, setScope] = useState<Scope>("all");
   const [groupBy, setGroupBy] = useState<GroupBy>("day");
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"scope">();
+  const [filter, setFilter] = useState(false);
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set(["Snoozed", "Archived"]));
   const [refreshing, setRefreshing] = useState(false);
   const many = computers.length > 1;
@@ -337,12 +356,7 @@ export function ThreadList() {
     scope === "all" ||
     scope === `computer:${e.computer.machine.id}` ||
     scope === `repo:${e.repoId}`;
-  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-  const matches = (e: Entry) =>
-    words.every((w) =>
-      `${e.title} ${e.repo ?? ""} ${e.run?.branch ?? ""} ${e.computer.machine.name}`.toLowerCase().includes(w),
-    );
-  const shown = all.filter((e) => inScope(e) && matches(e)).sort((a, b) => when(b.thread).localeCompare(when(a.thread)));
+  const shown = all.filter(inScope).sort((a, b) => when(b.thread).localeCompare(when(a.thread)));
 
   const archived = shown.filter((e) => e.thread.archived);
   const live = shown.filter((e) => !e.thread.archived);
@@ -353,9 +367,9 @@ export function ThreadList() {
   const pinned = rest.filter((e) => e.thread.pinned);
   const listed = rest.filter((e) => !e.thread.pinned);
 
-  const projects = projectsOf(computers.filter((m) => scope === "all" || scope === `computer:${m.machine.id}`))
-    .filter((p) => words.every((w) => `${p.project.name} ${p.computer.machine.name}`.toLowerCase().includes(w)))
-    .sort((a, b) => b.at.localeCompare(a.at));
+  const projects = projectsOf(computers.filter((m) => scope === "all" || scope === `computer:${m.machine.id}`)).sort(
+    (a, b) => b.at.localeCompare(a.at),
+  );
 
   const groups = new Map<string, Entry[]>();
   const groupRepos = new Map<string, Repo | undefined>();
@@ -379,7 +393,7 @@ export function ThreadList() {
     ...(working.length ? [drawer("Working", working)] : []),
     ...(snoozedList.length ? [drawer("Snoozed", snoozedList)] : []),
     ...(archived.length ? [drawer("Archived", archived)] : []),
-  ].map((s) => ({ ...s, count: s.data.length, data: folded.has(s.title) && !words.length ? [] : s.data }));
+  ].map((s) => ({ ...s, count: s.data.length, data: folded.has(s.title) ? [] : s.data }));
 
   // The filter's choices: everything, a computer, or a repository, each with who needs you there.
   const needs = (list: Entry[]) => list.filter((e) => e.attention === "needsYou" && !e.thread.archived).length;
@@ -414,7 +428,6 @@ export function ThreadList() {
   ];
   const scopeLabel = scopes.find((s) => s.value === scope)?.label;
 
-
   const offline = computers.filter((m) => !m.connected);
   const loading = computers.some((m) => m.connected && m.view.loading);
   const toggle = (title: string) =>
@@ -428,26 +441,35 @@ export function ThreadList() {
     Snoozed: Clock,
     Archived: Archive,
   };
+  // The mark starts a new thread where the last one started, as Claude's starts a new chat.
+  const fresh = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    show({ name: "StartThread", params: getPrefs().lastStart });
+  };
+  const bar = insets.top + BAR;
 
   return (
-    <TabScreen
-      search={{ value: query, onChange: setQuery, placeholder: "Search threads" }}
-      actions={
-        <>
-          <SkyButton
-            icon={ListFilter}
-            label={`Filter, showing ${scopeLabel}`}
-            marked={scope !== "all"}
-            onPress={() => setFilter("scope")}
-          />
-          <SkyButton icon={SquarePen} label="New thread" onPress={() => nav.navigate("NewThread")} />
-        </>
-      }
-    >
+    <View style={{ flex: 1, backgroundColor: c.background }}>
+      <View style={{ height: bar + FADE }}>
+        <SkyBanner bar={bar} solid={bar} fade={FADE} />
+        <View style={[styles.top, { marginTop: insets.top }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="New thread where you last started one"
+            hitSlop={8}
+            onPress={fresh}
+            style={({ pressed }) => pressed && { opacity: 0.6 }}
+          >
+            <Wordmark size={19} color="#ffffff" />
+          </Pressable>
+          <GlassButton label="Search threads" size={40} dark onPress={() => nav.navigate("Search")}>
+            <Icon icon={Search} size={18} color="#ffffff" />
+          </GlassButton>
+        </View>
+      </View>
       <SectionList
-        style={{ backgroundColor: "transparent" }}
+        style={{ flex: 1 }}
         contentInsetAdjustmentBehavior="never"
-        keyboardDismissMode="on-drag"
         sections={sections}
         keyExtractor={(r) =>
           `${r.entry.computer.machine.id}:${r.kind === "thread" ? r.entry.thread.id : r.entry.project.id}`
@@ -464,36 +486,41 @@ export function ThreadList() {
           />
         }
         ListHeaderComponent={
-          <>
-            <ScreenTitle>Threads</ScreenTitle>
-            {(scope !== "all" || offline.length > 0) && (
-            <View style={styles.header}>
+          <View style={styles.header}>
+            <View style={styles.line}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Filter, showing ${scopeLabel}`}
+                hitSlop={8}
+                onPress={() => setFilter(true)}
+                style={({ pressed }) => [styles.scope, pressed && { opacity: 0.6 }]}
+              >
+                <T medium numberOfLines={1} style={{ fontSize: 15, flexShrink: 1 }}>
+                  {scopeLabel}
+                </T>
+                <Icon icon={ChevronDown} size={15} color={c.mutedForeground} />
+              </Pressable>
               {scope !== "all" && (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={`Showing ${scopeLabel}. Show all threads`}
+                  accessibilityLabel="Show all threads"
+                  hitSlop={10}
                   onPress={() => setScope("all")}
-                  style={[styles.chip, { backgroundColor: c.selected }]}
                 >
-                  <Icon icon={ListFilter} size={13} color={c.foreground} />
-                  <T medium numberOfLines={1} style={{ fontSize: 13, flexShrink: 1 }}>
-                    {scopeLabel}
-                  </T>
-                  <Icon icon={Lucide.X} size={13} color={c.mutedForeground} />
+                  <Icon icon={Lucide.CircleX} size={15} color={c.faintForeground} />
                 </Pressable>
               )}
-              {offline.length > 0 && (
-                <View style={styles.offline}>
-                  <Icon icon={Lucide.WifiOff} size={13} color={c.faintForeground} />
-                  <T faint numberOfLines={1} style={{ fontSize: 13 }}>
-                    {offline.map((m) => m.machine.name).join(", ")}{" "}
-                    {offline.every((m) => m.state.status === "connecting") ? "connecting…" : "offline"}
-                  </T>
-                </View>
-              )}
             </View>
+            {offline.length > 0 && (
+              <View style={styles.line}>
+                <Icon icon={Lucide.WifiOff} size={13} color={c.faintForeground} />
+                <T faint numberOfLines={1} style={{ fontSize: 13, flexShrink: 1 }}>
+                  {offline.map((m) => m.machine.name).join(", ")}{" "}
+                  {offline.every((m) => m.state.status === "connecting") ? "connecting…" : "offline"}
+                </T>
+              </View>
             )}
-          </>
+          </View>
         }
         renderSectionHeader={({ section }) =>
           section.drawer ? (
@@ -547,16 +574,50 @@ export function ThreadList() {
               <ActivityIndicator color={c.accent} />
             ) : (
               <T muted style={{ textAlign: "center" }}>
-                {query ? "Nothing matches." : "No threads yet. Start one with the compose button."}
+                No threads yet. Start one with New thread.
               </T>
             )}
           </View>
         }
-        contentContainerStyle={{ paddingBottom: 120 }}
+        contentContainerStyle={{ paddingBottom: 16 }}
       />
+      <View style={[styles.bottom, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+          hitSlop={6}
+          onPress={() => {
+            void Haptics.selectionAsync();
+            nav.navigate("Settings");
+          }}
+          style={({ pressed }) => pressed && { opacity: 0.7, transform: [{ scale: 0.94 }] }}
+        >
+          <Avatar size={40} />
+        </Pressable>
+        <GlassButton label="Pull requests" size={40} onPress={() => nav.navigate("PullRequests")}>
+          <Icon icon={GitPullRequest} size={18} color={c.foreground} />
+        </GlassButton>
+        <View style={{ flex: 1 }} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="New thread"
+          onPress={() => {
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            nav.navigate("NewThread");
+          }}
+          style={({ pressed }) => [
+            styles.newThread,
+            { backgroundColor: c.accent, shadowColor: c.accent },
+            pressed && { opacity: 0.85, transform: [{ scale: 0.96 }] },
+          ]}
+        >
+          <Icon icon={SquarePen} size={17} color="#ffffff" />
+          <T style={{ color: "#ffffff", fontSize: 16, fontWeight: "600" }}>New thread</T>
+        </Pressable>
+      </View>
       <Choices
         title="Filter threads"
-        open={filter === "scope"}
+        open={filter}
         value={[scope, `group:${groupBy}`]}
         options={[
           ...scopes,
@@ -569,26 +630,23 @@ export function ThreadList() {
           { value: "group:repo", label: "By repository", description: "Under each repository, newest first." },
         ]}
         onChoose={(v) => (v.startsWith("group:") ? setGroupBy(v.slice(6) as GroupBy) : setScope(v as Scope))}
-        onClose={() => setFilter(undefined)}
+        onClose={() => setFilter(false)}
       />
-    </TabScreen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  header: { gap: 8, paddingHorizontal: 20, paddingTop: 4 },
-  chip: {
+  top: {
+    height: BAR,
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-start",
-    gap: 6,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    maxWidth: "100%",
+    justifyContent: "space-between",
+    paddingLeft: 14,
+    paddingRight: 12,
   },
-  offline: { flexDirection: "row", alignItems: "center", gap: 6 },
-  filterDot: { position: "absolute", top: -2, right: -3, width: 7, height: 7, borderRadius: 4 },
+  header: { gap: 8, paddingHorizontal: 20, paddingBottom: 2 },
+  scope: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1 },
   section: { fontSize: 13, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 4 },
   drawer: {
     flexDirection: "row",
@@ -613,5 +671,17 @@ const styles = StyleSheet.create({
   row: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, gap: 3 },
   line: { flexDirection: "row", alignItems: "center", gap: 6 },
   small: { fontSize: 13, lineHeight: 18 },
-  empty: { alignItems: "center", gap: 12, paddingTop: 80, paddingHorizontal: 40 },
+  empty: { alignItems: "center", gap: 12, paddingTop: 80, paddingHorizontal: 32 },
+  bottom: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 16, paddingTop: 10 },
+  newThread: {
+    height: 44,
+    borderRadius: 22,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 18,
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+  },
 });

@@ -1,4 +1,4 @@
-// The Usage tab, as the desktop's usage page (UsagePage.tsx) has it, for a phone. Cost and Tokens
+// Usage, pushed in the Settings sheet, as the desktop's usage page (UsagePage.tsx) has it, for a phone. Cost and Tokens
 // sum every connected computer's `usage/daily` over a range: the totals, the tokens by kind, a
 // bar chart a tap reads out, a card per provider, a breakdown by model or day, and each
 // computer's part. Limits shows each subscription's windows once, from `usage/limits`. Pull to
@@ -36,7 +36,6 @@ import {
 } from "../../desktop/src/renderer/usageStats";
 import { useFleet, type Computer } from "./fleet";
 import { ProviderLogo } from "./logos";
-import { ScreenTitle, TabScreen } from "./TabScreen";
 import type { Colors } from "./theme";
 import { DeviceIcon, Icon, T, useColors } from "./ui";
 import {
@@ -72,6 +71,7 @@ type LimitsAnswer = { accounts: Account[] } | { problem: string };
 const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export function UsageScreen() {
+  const c = useColors();
   const { computers } = useFleet();
   const focused = useIsFocused();
   const [view, setView] = useState<Choice>("cost");
@@ -156,38 +156,36 @@ export function UsageScreen() {
   };
 
   return (
-    <TabScreen>
-      <ScrollView
-        contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={{ paddingBottom: 120 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
-      >
-        <ScreenTitle>Usage</ScreenTitle>
-        <View style={styles.controls}>
-          <Segmented label="Usage view" options={views} value={view} onChange={setView} />
-          {view !== "limits" && (
-            <Segmented
-              label="Usage range"
-              options={ranges}
-              value={range}
-              onChange={(next) => {
-                setRange(next);
-                setNow(Date.now());
-              }}
-            />
-          )}
-        </View>
-        <View style={styles.page}>
-          {computers.length === 0 ? (
-            <Empty title="No computers">Pair a computer in Settings to see its usage here.</Empty>
-          ) : view === "limits" ? (
-            <Limits computers={computers} answers={limits} />
-          ) : (
-            <History computers={computers} daily={daily} since={since} range={range} span={span} view={view} />
-          )}
-        </View>
-      </ScrollView>
-    </TabScreen>
+    <ScrollView
+      style={{ backgroundColor: c.background }}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ paddingTop: 8, paddingBottom: 60 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
+    >
+      <View style={styles.controls}>
+        <Segmented label="Usage view" options={views} value={view} onChange={setView} />
+        {view !== "limits" && (
+          <Segmented
+            label="Usage range"
+            options={ranges}
+            value={range}
+            onChange={(next) => {
+              setRange(next);
+              setNow(Date.now());
+            }}
+          />
+        )}
+      </View>
+      <View style={styles.page}>
+        {computers.length === 0 ? (
+          <Empty title="No computers">Pair a computer in Settings to see its usage here.</Empty>
+        ) : view === "limits" ? (
+          <Limits computers={computers} answers={limits} />
+        ) : (
+          <History computers={computers} daily={daily} since={since} range={range} span={span} view={view} />
+        )}
+      </View>
+    </ScrollView>
   );
 }
 

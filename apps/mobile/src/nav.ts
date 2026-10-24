@@ -1,11 +1,11 @@
-// The app's screens and what each opens with, for typed navigation.
+// The app's screens and what each opens with, for typed navigation, and the sidebar's controls.
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { createContext, useContext } from "react";
 
 import type { SettingsPage } from "./settingsLogic";
 
 export type Screens = {
-  Tabs: undefined;
   Thread: { hostId: string; runId: string };
   ThreadDetails: { hostId: string; runId: string };
   Computer: { id: string };
@@ -18,8 +18,10 @@ export type Screens = {
   StartThread: { hostId?: string; groupId?: string } | undefined;
   /** Search every thread, as a sheet. */
   Search: undefined;
-  /** Settings, as a sheet, which pushes Computer, ComputerSettings, Provider, Usage, and AddComputer. */
+  /** Settings, as a sheet, which pushes Computer, ComputerSettings, Provider, Usage, About, and AddComputer. */
   Settings: undefined;
+  /** The app's version and links, pushed in the Settings sheet. */
+  About: undefined;
   Usage: undefined;
   /** Every pull request, as a sheet, which pushes PullRequest. */
   PullRequests: undefined;
@@ -27,6 +29,31 @@ export type Screens = {
 };
 
 export const useNav = () => useNavigation<NativeStackNavigationProp<Screens>>();
+
+/** What the main view can show: a thread, or a new thread's page. */
+export type Main =
+  | { name: "Thread"; params: Screens["Thread"] }
+  | { name: "StartThread"; params?: Screens["StartThread"] };
+
+/** Opens and closes the sidebar (App.tsx). */
+export const SidebarControl = createContext({ open: () => {}, close: () => {} });
+
+/**
+ * Makes `route` the main view, with no back stack of threads, as Claude's app has none. The
+ * sidebar closes when the main view changes; showing the one already there just closes it.
+ */
+export function useShow() {
+  const nav = useNav();
+  const { close } = useContext(SidebarControl);
+  return (route: Main) => {
+    const state = nav.getState();
+    const now = state?.routes[0];
+    const same =
+      state?.index === 0 && now?.name === route.name && JSON.stringify(now.params ?? {}) === JSON.stringify(route.params ?? {});
+    if (same) close();
+    else nav.reset({ index: 0, routes: [route] });
+  };
+}
 
 /** "now", "5m", "3h", "2d": how long ago `iso` was, as the desktop's sidebar says it. */
 export function ago(iso: string, now = Date.now()) {
