@@ -212,7 +212,7 @@ export function SignIn() {
   };
   return (
     <View style={[styles.page, { backgroundColor: c.background }]}>
-      <SkyBanner bar={insets.top + 64} height={insets.top + 260} />
+      <SkyBanner bar={insets.top + 64} solid={insets.top + 64} fade={180} />
       <View style={{ flex: 1, justifyContent: "center", gap: 14 }}>
         <Mark size={56} />
         <Text style={{ fontFamily: font.brand, fontSize: 34, color: c.foreground, marginTop: 10 }}>

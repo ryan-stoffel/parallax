@@ -5,6 +5,7 @@
 
 import type { RpcError } from "../../desktop/src/preload/bridge";
 import type {
+  AccountChoice,
   AgentEffort,
   AgentPermission,
   PromptImage,
@@ -22,6 +23,8 @@ export interface Outgoing {
   model?: string;
   effort?: AgentEffort;
   permission?: AgentPermission;
+  /** Another provider for the thread, with `model` one of its own. */
+  account?: AccountChoice;
 }
 
 /** What one try did: plxd took it, the phone isn't connected, or plxd refused it. */

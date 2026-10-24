@@ -71,12 +71,12 @@ export function Mark({ size = 22 }: { size?: number }) {
 }
 
 /** The mark and "Parallax" in the brand's Sora, as the desktop's top row shows them. */
-export function Wordmark({ size = 18 }: { size?: number }) {
+export function Wordmark({ size = 17, color }: { size?: number; color?: string }) {
   const c = useColors();
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-      <Mark size={size + 4} />
-      <Text style={{ fontFamily: font.brand, fontSize: size, color: c.foreground }}>Parallax</Text>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 4 }}>
+      <Mark size={size + 1} />
+      <Text style={{ fontFamily: font.brand, fontSize: size, color: color ?? c.foreground }}>Parallax</Text>
     </View>
   );
 }
@@ -101,21 +101,27 @@ const skyClouds: [number, number, number, 0 | 1 | 2][] = [
   [450, 62, 0.9, 2],
   [620, 61, 0.8, 2],
 ];
-// Dawn in light mode, night in dark: the sky's stops, star, glow, and each layer's lit top and body.
-const skies = {
-  light: {
-    stops: ["#c3c9fb", "#d9d6fb", "#ebe7fb"],
-    star: "#4f46e5",
-    glow: "#ec4899",
-    clouds: [["#e2e2fc", "#d3d4fa"], ["#f3f2fe", "#e6e4fc"], ["#ffffff", "#f1effd"]],
-  },
-  dark: {
-    stops: ["#070923", "#17184f", "#2a2470"],
-    star: "#ffffff",
-    glow: "#7c3aed",
-    clouds: [["#3c3a8c", "#2c2a6e"], ["#5753b4", "#43409a"], ["#8a86e4", "#6e6ac8"]],
-  },
+// The desktop's night, in both appearances: the sky's stops, its stars and glow, and each cloud
+// layer's lit top and body, far to near.
+const sky = {
+  stops: ["#070923", "#17184f", "#2a2470"],
+  star: "#ffffff",
+  glow: "#7c3aed",
+  clouds: [
+    ["#3c3a8c", "#2c2a6e"],
+    ["#5753b4", "#43409a"],
+    ["#8a86e4", "#6e6ac8"],
+  ],
 };
+
+/** `from` moved toward `to` by `k` (0 to 1), both `#rrggbb`. */
+function mix(from: string, to: string, k: number): string {
+  const channel = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16);
+  return `#${[0, 1, 2]
+    .map((i) => Math.round(channel(from, i) + (channel(to, i) - channel(from, i)) * k))
+    .map((v) => v.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
 
 function Cloud({ fill, dy = 0 }: { fill: string; dy?: number }) {
   return (
@@ -130,32 +136,41 @@ function Cloud({ fill, dy = 0 }: { fill: string; dy?: number }) {
 }
 
 /**
- * The nightly build's sky across the top of a screen, as the desktop's sidebar wears it: the sky
- * deepening (or paling, at dawn) into the background, with stars, a glow, and clouds along the
- * bottom of the bar at `bar` points. Put it behind a screen's content.
+ * The nightly build's sky across the top of a screen, as the desktop's sidebar wears it: night
+ * down to `solid` points, with stars, a glow, and clouds along the bottom of the bar at `bar`,
+ * then a `fade` into the page. Put it behind a screen's content.
  */
-export function SkyBanner({ bar, height }: { bar: number; height: number }) {
+export function SkyBanner({ bar, solid, fade }: { bar: number; solid: number; fade: number }) {
   const c = useColors();
-  const sky = skies[useColorScheme() === "dark" ? "dark" : "light"];
+  const height = solid + fade;
+  const at = (y: number) => y / height;
+  // Night down to `solid`, then an eased fade into the page, so the sky has no edge.
+  const eased = [0, 0.12, 0.3, 0.5, 0.7, 0.86, 1].map((t) => ({
+    offset: at(solid + fade * t),
+    color: mix(sky.stops[2]!, c.background, 1 - (1 - t) ** 2.2),
+  }));
   // The art is 640 by 56: drawn at the bar's bottom, as tall as 56 points, and cropped at the sides.
   const art = 56;
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, { height }]}>
       <Svg width="100%" height={height}>
         <Defs>
-          <LinearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0" stopColor={sky.stops[0]} />
-            <Stop offset="0.3" stopColor={sky.stops[1]} />
-            <Stop offset="0.55" stopColor={sky.stops[2]} />
-            <Stop offset="1" stopColor={c.background} />
+          <LinearGradient id="sky" x1="0" y1="0" x2="0" y2={height} gradientUnits="userSpaceOnUse">
+            {[
+              { offset: 0, color: sky.stops[0]! },
+              { offset: at(bar * 0.6), color: sky.stops[1]! },
+              ...eased,
+            ].map((e, i) => (
+              <Stop key={i} offset={e.offset} stopColor={e.color} />
+            ))}
           </LinearGradient>
           <RadialGradient id="glow" cx="0.75" cy="0" r="0.6">
-            <Stop offset="0" stopColor={sky.glow} stopOpacity={0.35} />
+            <Stop offset="0" stopColor={sky.glow} stopOpacity={0.4} />
             <Stop offset="1" stopColor={sky.glow} stopOpacity={0} />
           </RadialGradient>
         </Defs>
         <Rect width="100%" height={height} fill="url(#sky)" />
-        <Rect width="100%" height={bar} fill="url(#glow)" />
+        <Rect width="100%" height={solid} fill="url(#glow)" />
       </Svg>
       <Svg
         width="100%"
@@ -193,32 +208,32 @@ export function SkyBanner({ bar, height }: { bar: number; height: number }) {
   );
 }
 
-/** A small night-sky tile with stars, as the desktop's send button wears it. */
-export function NightSky({ width, height }: { width: number; height: number }) {
+/** A round button's night sky, as the desktop's nightly send button wears it: a disc of `size`. */
+export function NightOrb({ size }: { size: number }) {
+  const r = size / 2;
   return (
-    <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+    <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
       <Defs>
-        <LinearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+        <LinearGradient id="orb" x1="0" y1="0" x2="0" y2="1">
           <Stop offset="0" stopColor="#070923" />
           <Stop offset="0.6" stopColor="#17184f" />
           <Stop offset="1" stopColor="#2a2470" />
         </LinearGradient>
-        <RadialGradient id="tileglow" cx="0.7" cy="0.1" r="0.6">
-          <Stop offset="0" stopColor="#7c3aed" stopOpacity={0.45} />
+        <RadialGradient id="orbglow" cx="0.7" cy="0.15" r="0.6">
+          <Stop offset="0" stopColor="#7c3aed" stopOpacity={0.5} />
           <Stop offset="1" stopColor="#7c3aed" stopOpacity={0} />
         </RadialGradient>
       </Defs>
-      <Rect width={width} height={height} fill="url(#tile)" />
-      <Rect width={width} height={height} fill="url(#tileglow)" />
+      <Circle cx={r} cy={r} r={r} fill="url(#orb)" />
+      <Circle cx={r} cy={r} r={r} fill="url(#orbglow)" />
       {[
-        [0.28, 0.26, 0.8, 1],
-        [0.66, 0.2, 0.6, 0.8],
-        [0.78, 0.46, 0.7, 0.7],
-        [0.4, 0.5, 0.5, 0.6],
-        [0.14, 0.64, 0.5, 0.5],
-        [0.88, 0.72, 0.5, 0.6],
-      ].map(([x, y, r, o], i) => (
-        <Circle key={i} cx={x! * width} cy={y! * height} r={r} fill="#ffffff" opacity={o} />
+        [0.3, 0.28, 0.7, 1],
+        [0.66, 0.22, 0.6, 0.8],
+        [0.74, 0.5, 0.6, 0.7],
+        [0.24, 0.64, 0.5, 0.55],
+        [0.6, 0.76, 0.5, 0.6],
+      ].map(([x, y, rr, o], i) => (
+        <Circle key={i} cx={x! * size} cy={y! * size} r={rr} fill="#ffffff" opacity={o} />
       ))}
     </Svg>
   );

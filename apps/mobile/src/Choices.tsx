@@ -32,7 +32,8 @@ export function Choices<V extends string>({
   title: string;
   open: boolean;
   options: Choice<V>[];
-  value?: V;
+  /** The chosen value, or several, one from each section. */
+  value?: V | V[];
   onChoose: (value: V) => void;
   onClose: () => void;
 }) {
@@ -44,7 +45,7 @@ export function Choices<V extends string>({
       <View
         style={[
           styles.sheet,
-          { backgroundColor: c.surface, borderColor: c.border, paddingBottom: insets.bottom + 8 },
+          { backgroundColor: c.surface, borderColor: c.border, marginBottom: Math.max(insets.bottom - 26, 8) },
         ]}
       >
         <View style={[styles.grabber, { backgroundColor: c.border }]} />
@@ -61,7 +62,7 @@ export function Choices<V extends string>({
             <Pressable
               key={o.value}
               accessibilityRole="radio"
-              accessibilityState={{ selected: o.value === value }}
+              accessibilityState={{ selected: Array.isArray(value) ? value.includes(o.value) : o.value === value }}
               onPress={() => {
                 void Haptics.selectionAsync();
                 onChoose(o.value);
@@ -79,7 +80,9 @@ export function Choices<V extends string>({
                 )}
               </View>
               {!!o.right && <T faint style={{ fontSize: 13 }}>{o.right}</T>}
-              {o.value === value && <Icon icon={Check} size={17} color={c.accent} />}
+              {(Array.isArray(value) ? value.includes(o.value) : o.value === value) && (
+                <Icon icon={Check} size={17} color={c.accent} />
+              )}
             </Pressable>,
           ])}
         </ScrollView>
@@ -90,11 +93,14 @@ export function Choices<V extends string>({
 
 const styles = StyleSheet.create({
   scrim: { flex: 1, backgroundColor: "rgba(0, 0, 0, 0.3)" },
+  // Floating, rounded on every corner, as iOS 26's sheets are.
   sheet: {
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
+    marginHorizontal: 8,
+    borderRadius: 38,
     borderWidth: StyleSheet.hairlineWidth,
     paddingTop: 8,
+    paddingBottom: 16,
+    overflow: "hidden",
   },
   grabber: { alignSelf: "center", width: 36, height: 5, borderRadius: 3, marginBottom: 10 },
   choice: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingVertical: 12 },

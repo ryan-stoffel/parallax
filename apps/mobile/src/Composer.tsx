@@ -27,6 +27,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -50,18 +51,25 @@ import { imageCaps } from "../../desktop/src/renderer/images";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import type { Computer } from "./fleet";
 import { openLightbox } from "./Lightbox";
-import { Icon, NightSky, T, useColors } from "./ui";
+import { Icon, NightOrb, T, useColors } from "./ui";
 
 
-/** What an instance offers: its models, whether it takes an effort, and its access levels. */
+/**
+ * A provider instance a thread can run on, as the desktop's catalog has it (models.ts): its
+ * models, whether it takes an effort, and its access levels.
+ */
 interface Offer {
+  id: string;
+  name: string;
   models: Model[];
   efforts: boolean;
   permissions: AgentPermission[];
 }
 
-/** The models, efforts, and access levels the thread's provider instance offers on `computer`. */
-function useOffer(computer: Computer | undefined, backend: string | undefined): Offer {
+const allAccess: AgentPermission[] = ["manual", "edit", "auto", "plan", "bypass"];
+
+/** The provider instances on `computer` (`providers/list`), or on an older plxd, the built-in three. */
+function useOffers(computer: Computer | undefined): Offer[] {
   const [listed, setListed] = useState<ProvidersListResult>();
   const id = computer?.machine.id;
   const providers = computer?.connected && "providers" in (computer.view.capabilities ?? {});
@@ -71,15 +79,21 @@ function useOffer(computer: Computer | undefined, backend: string | undefined): 
       if (!("error" in answer)) setListed(answer.result as ProvidersListResult);
     });
   }, [id, providers]);
-  const info = listed?.providers.find((p) => p.instance.id === backend);
-  if (info)
-    return { models: instanceModels(info), efforts: info.efforts, permissions: info.permissions };
-  // An older plxd, without `providers`: the built-in catalog of the thread's backend.
-  return {
-    models: builtIn.filter((m) => m.provider === backend),
-    efforts: backend !== "cursor",
-    permissions: ["manual", "edit", "auto", "plan", "bypass"],
-  };
+  if (listed)
+    return listed.providers
+      .filter((info) => info.instance.enabled)
+      .map((info) => ({
+        id: info.instance.id,
+        name: info.instance.name,
+        models: instanceModels(info),
+        efforts: info.efforts,
+        permissions: info.permissions,
+      }));
+  return [
+    { id: "claude", name: "Claude", efforts: true, permissions: allAccess },
+    { id: "codex", name: "Codex", efforts: true, permissions: ["manual", "edit", "auto", "bypass"] },
+    { id: "cursor", name: "Cursor", efforts: false, permissions: ["edit", "plan", "auto", "bypass"] },
+  ].map((o) => ({ ...o, models: builtIn.filter((m) => m.provider === o.id) }) as Offer);
 }
 
 /** A file picked to send: an image (shown, and sent as one), or any other file. */
@@ -146,7 +160,7 @@ function modelLine(m: Model): string | undefined {
   return parts.length ? parts.join(" · ") : undefined;
 }
 
-type Page = "model" | "all" | "effort" | "access";
+type Page = "model" | "all" | "provider" | "effort" | "access";
 
 /**
  * The model sheet, as Claude's app has it: the provider's models in a card, then Effort and
@@ -157,6 +171,10 @@ function ModelSheet({
   page,
   onPage,
   onClose,
+  offers,
+  provider,
+  onProvider,
+  canMove,
   models,
   model,
   onModel,
@@ -171,6 +189,10 @@ function ModelSheet({
   page: Page;
   onPage: (page: Page) => void;
   onClose: () => void;
+  offers: Offer[];
+  provider: string;
+  onProvider: (id: string) => void;
+  canMove: (id: string) => boolean;
   models: Model[];
   model: string;
   onModel: (id: string) => void;
@@ -183,6 +205,7 @@ function ModelSheet({
 }) {
   const c = useColors();
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const choose = (then: () => void) => {
     void Haptics.selectionAsync();
     then();
@@ -222,7 +245,13 @@ function ModelSheet({
       <Icon icon={ChevronRight} size={17} color={c.faintForeground} />
     </Pressable>
   );
-  const title = { model: "Select model", all: "More models", effort: "Effort", access: "Access" }[page];
+  const title = {
+    model: "Select model",
+    all: "More models",
+    provider: "Provider",
+    effort: "Effort",
+    access: "Access",
+  }[page];
   // The first four, as Claude's sheet lists them, and the chosen one if it's further down.
   const first = models.filter((m, i) => i < 4 || m.id === model);
   const list = (shown: Model[]) => (
@@ -238,7 +267,12 @@ function ModelSheet({
   return (
     <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel="Close" />
-      <View style={[styles.sheet, { backgroundColor: c.sidebar, paddingBottom: insets.bottom + 12 }]}>
+      <View
+        style={[
+          styles.sheet,
+          { backgroundColor: c.sidebar, marginBottom: Math.max(insets.bottom - 26, 8), paddingBottom: 16 },
+        ]}
+      >
         <View style={[styles.grabber, { backgroundColor: c.border }]} />
         <View style={styles.sheetHead}>
           <Pressable
@@ -252,9 +286,14 @@ function ModelSheet({
           <T style={{ fontSize: 17, fontWeight: "600" }}>{title}</T>
           <View style={{ width: 40 }} />
         </View>
-        <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ gap: 14, paddingHorizontal: 16 }}>
+        <ScrollView
+          style={{ maxHeight: height * 0.78 }}
+          contentContainerStyle={{ gap: 12, paddingHorizontal: 16 }}
+        >
           {page === "model" && (
             <>
+              {offers.length > 1 &&
+                link("Provider", offers.find((o) => o.id === provider)?.name ?? provider, () => onPage("provider"))}
               {list(first)}
               {efforts &&
                 effort &&
@@ -264,6 +303,30 @@ function ModelSheet({
             </>
           )}
           {page === "all" && list(models)}
+          {page === "provider" && (
+            <View style={card}>
+              {offers.map((o, i) => {
+                const can = canMove(o.id);
+                return (
+                  <View key={o.id} style={!can && { opacity: 0.45 }} pointerEvents={can ? "auto" : "none"}>
+                    {option(
+                      o.id,
+                      o.name,
+                      can
+                        ? `${o.models.length} model${o.models.length === 1 ? "" : "s"}`
+                        : "Start a new thread to switch to it here.",
+                      o.id === provider,
+                      () => {
+                        onProvider(o.id);
+                        onPage("model");
+                      },
+                      i === offers.length - 1,
+                    )}
+                  </View>
+                );
+              })}
+            </View>
+          )}
           {page === "effort" && (
             <View style={card}>
               {effortLevels.map((l, i) =>
@@ -310,7 +373,13 @@ export function Composer({
   bottom: number;
 }) {
   const c = useColors();
-  const offer = useOffer(computer, run?.backend);
+  const offers = useOffers(computer);
+  const [provider, setProvider] = useState<string>();
+  const shownProvider = provider ?? run?.backend;
+  const fallback: Offer = { id: "", name: "", models: [], efforts: true, permissions: allAccess };
+  const offer = offers.find((o) => o.id === shownProvider) ?? offers[0] ?? fallback;
+  // Another provider takes a message only on a plxd that moves runs (`sendAccount`), as on the desktop.
+  const moves = "sendAccount" in (computer?.view.capabilities ?? {});
   const [model, setModel] = useState<string>();
   const [effort, setEffort] = useState<AgentEffort>();
   const [permission, setPermission] = useState<AgentPermission>();
@@ -397,6 +466,9 @@ export function Composer({
         steer,
         ...(images.length && { images }),
         ...(changes && model !== undefined && { model }),
+        ...(moves && provider && provider !== run?.backend && {
+          account: { kind: "subscription" as const, backend: provider },
+        }),
         ...(changes && effort && { effort }),
         ...(changes && permission && { permission }),
       });
@@ -521,10 +593,14 @@ export function Composer({
               accessibilityLabel={working ? "Queue" : "Send"}
               disabled={!ready}
               onPress={() => void send(false)}
-              style={[styles.send, { opacity: ready ? 1 : 0.4, overflow: "hidden" }]}
+              style={({ pressed }) => [
+                styles.send,
+                !ready && { backgroundColor: c.selected },
+                pressed && { opacity: 0.8 },
+              ]}
             >
-              <NightSky width={34} height={34} />
-              <Icon icon={ArrowUp} size={17} color="#ffffff" strokeWidth={2.5} />
+              {ready && <NightOrb size={38} />}
+              <Icon icon={ArrowUp} size={18} color={ready ? "#ffffff" : c.faintForeground} strokeWidth={2.5} />
             </Pressable>
           )}
         </View>
@@ -534,6 +610,14 @@ export function Composer({
         page={sheet ?? "model"}
         onPage={setSheet}
         onClose={() => setSheet(undefined)}
+        offers={offers}
+        provider={offer.id}
+        onProvider={(id) => {
+          setProvider(id);
+          // A new provider's own first model, as its default.
+          setModel(offers.find((o) => o.id === id)?.models[0]?.id ?? "");
+        }}
+        canMove={(id) => id === run?.backend || moves}
         models={offer.models}
         model={shownModel}
         onModel={setModel}
@@ -549,7 +633,16 @@ export function Composer({
 }
 
 const styles = StyleSheet.create({
-  box: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 26, paddingTop: 6, paddingBottom: 10 },
+  box: {
+    borderWidth: 1,
+    borderRadius: 26,
+    paddingTop: 6,
+    paddingBottom: 10,
+    shadowColor: "#1e1b4b",
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 4 },
+  },
   strip: { gap: 8, paddingHorizontal: 12, paddingTop: 8 },
   thumb: { width: 56, height: 56, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth },
   fileChip: {
@@ -574,7 +667,8 @@ const styles = StyleSheet.create({
   input: { fontSize: 17, minHeight: 44, maxHeight: 160, paddingHorizontal: 16, paddingTop: 10 },
   bar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingTop: 6 },
   scrim: { flex: 1, backgroundColor: "rgba(0, 0, 0, 0.3)" },
-  sheet: { borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingTop: 8 },
+  // Floating, rounded on every corner, as iOS 26's sheets and Claude's are.
+  sheet: { marginHorizontal: 8, borderRadius: 38, paddingTop: 8, overflow: "hidden" },
   grabber: { alignSelf: "center", width: 40, height: 5, borderRadius: 3, marginBottom: 8 },
   sheetHead: {
     flexDirection: "row",

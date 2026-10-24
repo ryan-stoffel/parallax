@@ -45,7 +45,7 @@ import {
 import { Choices, type Choice } from "./Choices";
 import { useFleet, type Computer } from "./fleet";
 import { ago, useNav } from "./nav";
-import { AttentionBadge, DeviceIcon, Dot, Icon, T, useColors } from "./ui";
+import { AttentionBadge, DeviceIcon, Icon, T, useColors } from "./ui";
 
 /** One thread as the list shows it. */
 interface Entry {
@@ -254,7 +254,7 @@ export function ThreadList() {
   const [scope, setScope] = useState<Scope>("all");
   const [groupBy, setGroupBy] = useState<GroupBy>("day");
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"scope" | "group">();
+  const [filter, setFilter] = useState<"scope">();
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set(["Snoozed", "Archived"]));
   const [refreshing, setRefreshing] = useState(false);
   const many = computers.length > 1;
@@ -348,7 +348,7 @@ export function ThreadList() {
         onCancelButtonPress: () => setQuery(""),
       },
       headerRight: () => (
-        <View style={{ flexDirection: "row", gap: 18 }}>
+        <View style={{ flexDirection: "row", gap: 16, paddingHorizontal: 4 }}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Filter, showing ${scopeLabel}`}
@@ -356,7 +356,7 @@ export function ThreadList() {
             onPress={() => setFilter("scope")}
           >
             <View>
-              <Icon icon={ListFilter} size={21} color={scope === "all" ? c.foreground : c.accent} />
+              <Icon icon={ListFilter} size={18} color="#ffffff" />
               {scope !== "all" && <View style={[styles.filterDot, { backgroundColor: c.accent }]} />}
             </View>
           </Pressable>
@@ -366,7 +366,7 @@ export function ThreadList() {
             hitSlop={10}
             onPress={() => nav.navigate("NewThread")}
           >
-            <Icon icon={SquarePen} size={21} color={c.foreground} />
+            <Icon icon={SquarePen} size={18} color="#ffffff" />
           </Pressable>
         </View>
       ),
@@ -408,39 +408,33 @@ export function ThreadList() {
           />
         }
         ListHeaderComponent={
-          <View style={{ gap: 6, paddingTop: 4 }}>
-            <View style={styles.toolbar}>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setFilter("scope")}
-                style={[styles.chip, { backgroundColor: scope === "all" ? c.sidebar : c.accent }]}
-              >
-                <T medium style={{ fontSize: 13, color: scope === "all" ? c.foreground : "#ffffff" }} numberOfLines={1}>
-                  {scopeLabel}
-                </T>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setFilter("group")}
-                style={[styles.chip, { backgroundColor: c.sidebar }]}
-              >
-                <T medium style={{ fontSize: 13 }}>
-                  {groupBy === "day" ? "By day" : "By repository"}
-                </T>
-              </Pressable>
+          scope !== "all" || offline.length > 0 ? (
+            <View style={styles.header}>
+              {scope !== "all" && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Showing ${scopeLabel}. Show all threads`}
+                  onPress={() => setScope("all")}
+                  style={[styles.chip, { backgroundColor: c.selected }]}
+                >
+                  <Icon icon={ListFilter} size={13} color={c.foreground} />
+                  <T medium numberOfLines={1} style={{ fontSize: 13, flexShrink: 1 }}>
+                    {scopeLabel}
+                  </T>
+                  <Icon icon={Lucide.X} size={13} color={c.mutedForeground} />
+                </Pressable>
+              )}
+              {offline.length > 0 && (
+                <View style={styles.offline}>
+                  <Icon icon={Lucide.WifiOff} size={13} color={c.faintForeground} />
+                  <T faint numberOfLines={1} style={{ fontSize: 13 }}>
+                    {offline.map((m) => m.machine.name).join(", ")}{" "}
+                    {offline.every((m) => m.state.status === "connecting") ? "connecting…" : "offline"}
+                  </T>
+                </View>
+              )}
             </View>
-            {offline.length > 0 && (
-              <View style={[styles.notice, { backgroundColor: c.sidebar }]}>
-                <Dot color={offline.some((m) => m.state.status === "connecting") ? c.warning : c.faintForeground} />
-                <T muted style={{ ...styles.small, flex: 1 }}>
-                  {offline.map((m) => m.machine.name).join(", ")}{" "}
-                  {offline.every((m) => m.state.status === "connecting")
-                    ? "connecting…"
-                    : "not reachable. Check that it's on and Tailscale is connected."}
-                </T>
-              </View>
-            )}
-          </View>
+          ) : null
         }
         renderSectionHeader={({ section }) =>
           section.drawer ? (
@@ -495,22 +489,20 @@ export function ThreadList() {
         contentContainerStyle={{ paddingBottom: 40 }}
       />
       <Choices
-        title="Show"
+        title="Filter threads"
         open={filter === "scope"}
-        value={scope}
-        options={scopes}
-        onChoose={setScope}
-        onClose={() => setFilter(undefined)}
-      />
-      <Choices
-        title="Group threads"
-        open={filter === "group"}
-        value={groupBy}
+        value={[scope, `group:${groupBy}`]}
         options={[
-          { value: "day", label: "By day", description: "Today, yesterday, this week, and older." },
-          { value: "repo", label: "By repository", description: "Under each repository, newest first." },
+          ...scopes,
+          {
+            value: "group:day",
+            label: "By day",
+            description: "Today, yesterday, this week, and older.",
+            section: "Group",
+          },
+          { value: "group:repo", label: "By repository", description: "Under each repository, newest first." },
         ]}
-        onChoose={setGroupBy}
+        onChoose={(v) => (v.startsWith("group:") ? setGroupBy(v.slice(6) as GroupBy) : setScope(v as Scope))}
         onClose={() => setFilter(undefined)}
       />
     </>
@@ -518,18 +510,19 @@ export function ThreadList() {
 }
 
 const styles = StyleSheet.create({
-  toolbar: { flexDirection: "row", gap: 8, paddingHorizontal: 16 },
-  chip: { borderRadius: 999, paddingHorizontal: 12, paddingVertical: 6, maxWidth: 220 },
-  filterDot: { position: "absolute", top: -2, right: -3, width: 7, height: 7, borderRadius: 4 },
-  notice: {
+  header: { gap: 8, paddingHorizontal: 20, paddingTop: 4 },
+  chip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    marginHorizontal: 16,
-    marginTop: 6,
-    padding: 10,
-    borderRadius: 12,
+    alignSelf: "flex-start",
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    maxWidth: "100%",
   },
+  offline: { flexDirection: "row", alignItems: "center", gap: 6 },
+  filterDot: { position: "absolute", top: -2, right: -3, width: 7, height: 7, borderRadius: 4 },
   section: { fontSize: 13, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 4 },
   drawer: {
     flexDirection: "row",

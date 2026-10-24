@@ -72,6 +72,7 @@ function outboxFor(host: () => Fleet, id: string): Outbox {
       ...(m.model !== undefined && { model: m.model }),
       ...(m.effort && { effort: m.effort }),
       ...(m.permission && { permission: m.permission }),
+      ...(m.account && { account: m.account }),
       dispatchMode: { type: m.steer ? "steer_active" : "queue_after_active" },
     });
     if (!("error" in answer)) return "sent";

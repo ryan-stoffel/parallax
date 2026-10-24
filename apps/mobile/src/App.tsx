@@ -3,13 +3,15 @@
 // connections, thread lists, and transcripts are the desktop renderer's (fleet.tsx).
 import {
   createNavigationContainerRef,
+  useFocusEffect,
+  useIsFocused,
   DarkTheme,
   DefaultTheme,
   NavigationContainer,
 } from "@react-navigation/native";
 import { createNativeBottomTabNavigator } from "@react-navigation/bottom-tabs/unstable";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useColorScheme } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -27,7 +29,7 @@ import { AddComputerScreen, ComputerScreen, SettingsScreen } from "./Settings";
 import { ThreadDetailsScreen } from "./ThreadDetails";
 import { SkyBanner, useColors, Wordmark } from "./ui";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { StyleSheet, View } from "react-native";
+import { StatusBar, StyleSheet, View } from "react-native";
 import { dark, light } from "./theme";
 import { ThreadScreen } from "./Thread";
 import { ThreadList } from "./ThreadList";
@@ -42,6 +44,16 @@ function tab(title: string, Screen: React.ComponentType) {
   function Sky() {
     const c = useColors();
     const insets = useSafeAreaInsets();
+    // The sky only while this tab is in front: a screen pushed over it would see it through its own
+    // header, whose glass buttons iOS then tints dark.
+    const focused = useIsFocused();
+    // Light status bar text over the night sky while this tab shows; the system's on other screens.
+    useFocusEffect(
+      useCallback(() => {
+        StatusBar.setBarStyle("light-content", true);
+        return () => StatusBar.setBarStyle("default", true);
+      }, []),
+    );
     return (
       // The list first, which iOS's large title collapses with as it scrolls, the sky under it.
       <View style={{ flex: 1 }}>
@@ -50,7 +62,7 @@ function tab(title: string, Screen: React.ComponentType) {
           pointerEvents="none"
           style={[StyleSheet.absoluteFill, { zIndex: -1, backgroundColor: c.background }]}
         >
-          <SkyBanner bar={insets.top + 54} height={insets.top + 190} />
+          {focused && <SkyBanner bar={insets.top + 54} solid={insets.top + 54 + 52} fade={96} />}
         </View>
       </View>
     );
@@ -62,7 +74,9 @@ function tab(title: string, Screen: React.ComponentType) {
           headerLargeTitle: true,
           headerTransparent: true,
           headerLargeTitleShadowVisible: false,
-          headerLeft: () => <Wordmark />,
+          // White over the night sky, in either appearance.
+          headerLeft: () => <Wordmark color="#ffffff" />,
+          headerLargeTitleStyle: { color: "#ffffff" },
           contentStyle: { backgroundColor: "transparent" },
         }}
       >
