@@ -481,8 +481,11 @@ pub(crate) async fn run(daemon: Arc<Daemon>, every: Duration, port: u16, stop: C
     }
 }
 
-/// Scans, then pulls every online device at once, each within `every`, so a device that went to
-/// sleep mid-call can't hold up the others.
+/// A peer's versions, and the texts read for them, by path.
+type Fetched = (Vec<MemorySyncEntry>, HashMap<String, String>);
+
+/// Scans, then pulls every online device at once, each device's calls within `every`, so a
+/// device that went to sleep mid-call can't hold up the others.
 async fn pull_all(daemon: &Arc<Daemon>, peers: &Peers, every: Duration) -> Result<(), ErrorObject> {
     let on = daemon
         .reader
@@ -501,23 +504,21 @@ async fn pull_all(daemon: &Arc<Daemon>, peers: &Peers, every: Duration) -> Resul
     let pulls = status.own_peers().filter(|node| node.online).map(|node| {
         let (client, me) = (peers.client(&node.id), &me);
         async move {
-            let error = match time::timeout(every, pull(daemon, &client, me)).await {
-                Ok(Ok(())) => return,
-                Ok(Err(error)) => error,
-                Err(_) => format!("no answer within {every:?}"),
-            };
-            debug!(device = %node.host_name, %error, "could not pull You memory");
+            if let Err(error) = pull(daemon, &client, me, every).await {
+                debug!(device = %node.host_name, %error, "could not pull You memory");
+            }
         }
     });
     futures_util::future::join_all(pulls).await;
     Ok(())
 }
 
-/// Pulls `peer`'s versions and applies them. The text is read before taking the lock, so two
-/// hosts pulling from each other never wait on each other's lock.
-async fn pull(daemon: &Arc<Daemon>, peer: &Plxd, me: &MemoryMachine) -> Result<(), String> {
+/// `peer`'s versions, and the text of each one this host may take, or `None` for a peer without
+/// `youSync`. It runs before the lock is taken, so two hosts pulling from each other never wait
+/// on each other's lock.
+async fn fetch(daemon: &Daemon, peer: &Plxd) -> Result<Option<Fetched>, String> {
     if !peer.you_sync().await? {
-        return Ok(());
+        return Ok(None);
     }
     let remote = peer
         .call::<MemorySyncList>(MemorySyncListParams {})
@@ -549,6 +550,23 @@ async fn pull(daemon: &Arc<Daemon>, peer: &Plxd, me: &MemoryMachine) -> Result<(
             Err(error) => debug!(path = %entry.path, %error, "could not read a You entry"),
         }
     }
+    Ok(Some((remote, texts)))
+}
+
+/// Pulls `peer`'s versions and applies them. Only the calls to `peer` have to finish within
+/// `every`: the apply always runs to the end, so no file is written without its row.
+async fn pull(
+    daemon: &Arc<Daemon>,
+    peer: &Plxd,
+    me: &MemoryMachine,
+    every: Duration,
+) -> Result<(), String> {
+    let fetched = time::timeout(every, fetch(daemon, peer))
+        .await
+        .map_err(|_| format!("no answer within {every:?}"))??;
+    let Some((remote, texts)) = fetched else {
+        return Ok(());
+    };
     let _sync = daemon.you_sync.lock().await;
     let local = record(daemon, me).await.map_err(|e| e.message)?;
     let dir = super::you_dir(&daemon.data_dir);
