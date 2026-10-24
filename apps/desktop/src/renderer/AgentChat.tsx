@@ -25,6 +25,7 @@ import {
   MousePointerClick,
   Pencil,
   Plug,
+  RotateCcw,
   Search,
   Sparkles,
   SquareTerminal,
@@ -255,7 +256,6 @@ export function AgentChat({
   space,
   tab,
   strip,
-  startOver,
   others,
   projectMode,
   pullRequests,
@@ -296,15 +296,6 @@ export function AgentChat({
   tab?: ReactNode;
   /** The back tab over the composer, behind the plan's, such as a Project's agents. */
   strip?: ComposerTab;
-  /**
-   * Starts a new run with `text` and `images` in place of this one once this one can't take
-   * messages, as a Project's coordinator can (0024). Resolves to an error message, or undefined.
-   */
-  startOver?: (
-    text: string,
-    options: RunOptions,
-    images: PromptImage[],
-  ) => Promise<string | undefined>;
   /**
    * Permission requests other runs wait on, pinned here with this run's own, as a Project's other
    * runs' are in each of its chats (PLX-196).
@@ -448,52 +439,13 @@ export function AgentChat({
   const secret = useMemo(() => waitingSecrets(items)[0], [items]);
   const showImage = useCallback((id: ImageId) => loadImage(hostId, runId, id), [hostId, runId]);
 
-  // A message plxd wouldn't send because the run can't be resumed, which `startOver` can take.
-  const [refused, setRefused] = useState<{
-    text: string;
-    options: RunOptions;
-    images: PromptImage[];
-    why: string;
-  }>();
-  const [startingOver, setStartingOver] = useState(false);
   const sendText = async (
     text: string,
     options: RunOptions,
     images: PromptImage[],
     threads: string[],
     delivery?: AgentDelivery,
-  ) => {
-    const failed = await send(text, options, images, threads, delivery);
-    if (!startOver || failed?.data?.kind !== "runNotResumable") return failed?.message;
-    setRefused({ text, options, images, why: failed.message });
-    return ""; // Back in the box; the line above it says why and offers Start over.
-  };
-  // A run that ended before its CLI reported a session never answered: it starts over with its
-  // own first message. ponytail: without that message's images, which would need fetching first.
-  const stuck =
-    startOver &&
-    (refused ??
-      (run && !isRunning(run.status) && !run.sessionId
-        ? {
-            text: run.prompt,
-            options: {},
-            images: [],
-            why: "it stopped before its session started.",
-          }
-        : undefined));
-  const restart = async () => {
-    if (!stuck) return;
-    setStartingOver(true);
-    // The new run keeps this one's model, effort, and mode unless the message changed them.
-    const {
-      model = run?.model,
-      effort = run?.effort,
-      permission = run?.permission,
-    } = stuck.options;
-    const failed = await startOver(stuck.text, { model, effort, permission }, stuck.images);
-    setStartingOver(false);
-    if (failed) setRefused({ ...stuck, why: failed });
-  };
+  ) => (await send(text, options, images, threads, delivery))?.message;
 
   // Sent from here, but no turnStarted (or followUpDropped) for it yet.
   const rows = useMemo<Row[]>(() => {
@@ -950,19 +902,6 @@ export function AgentChat({
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
         {/* Requests waiting on the user, pinned so they can't scroll away. */}
         {pinned}
-        {stuck && (
-          <p role="alert" className="px-2 pb-2 text-[12.5px] text-danger">
-            This chat can't continue: {stuck.why}{" "}
-            <button
-              type="button"
-              disabled={startingOver}
-              onClick={() => void restart()}
-              className="font-medium text-foreground underline underline-offset-2 disabled:opacity-50"
-            >
-              Start over
-            </button>
-          </p>
-        )}
         <ComposerTabs tabs={tabs} />
         <Composer
           // One sent before the transcript loads stays in the box.
@@ -1448,7 +1387,7 @@ export function TranscriptView({
 
 // Rows of the agent's work, which sit closer to one another and to the messages around them, as
 // T3 Code's work log does (PLX-584, PLX-770).
-const listKinds = new Set(["work", "plan", "todo", "musing", "compaction"]);
+const listKinds = new Set(["work", "plan", "todo", "musing", "compaction", "epoch"]);
 
 /**
  * The user's prompts among `view`'s rows, for the rail: a follow-up's text from `sent` when the
@@ -1711,6 +1650,16 @@ export const RowView = memo(function RowView({
       return <WorkingFor since={row.since} />;
     case "musing":
       return <Musing />;
+    case "epoch":
+      // A coordinator's new session (0079): the conversation before it is no longer the agent's.
+      return (
+        <div className="flex items-center gap-2 text-[12px] text-faint-foreground">
+          <span className="h-px flex-1 bg-border" />
+          <RotateCcw aria-hidden className="size-3.5" />
+          <span>New session, picked up from the Project's state</span>
+          <span className="h-px flex-1 bg-border" />
+        </div>
+      );
     case "compaction":
       // Under way, it's the live row; done, a divider where the earlier conversation became a summary.
       return row.done ? (

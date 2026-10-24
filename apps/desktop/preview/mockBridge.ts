@@ -69,6 +69,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "computerUse",
     "contextAndFast",
     "coordinator",
+    "coordinatorEpochs",
     "eventFilters",
     "files",
     "git",
@@ -722,6 +723,26 @@ const handlers: { [M in Method]?: Handler<M> } = {
     db.projects = db.projects.filter((x) => x.id !== p.project);
     emit({ kind: "project.deleted", project: p.project });
     return {};
+  },
+  // Ends the coordinator's session: its next message starts the next epoch (0079).
+  "coordinator/fresh": (p) => {
+    const project = db.projects.find((x) => x.id === p.project);
+    if (!project) return fail("no such project", "projectNotFound");
+    const run = project.coordinator ? runOf(project.coordinator) : undefined;
+    if (!run) return fail("no coordinator", "runNotFound");
+    const epochs = (logs.get(run.id) ?? []).filter(
+      (l) => l.event.kind === "agent.output" && l.event.items.some((i) => i.kind === "epoch"),
+    ).length;
+    patchRun(run.id, { sessionId: undefined });
+    emit(
+      {
+        kind: "agent.output",
+        runId: run.id,
+        items: [{ kind: "epoch", epoch: epochs + 2, reason: "userFresh" }],
+      },
+      run.project,
+    );
+    return { run: { ...run } };
   },
   "project/start": (p) => {
     const project = db.projects.find((x) => x.id === p.project);

@@ -15,10 +15,11 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentRunResult, ErrorKind, InboxKind, ParallaxEvent, ProjectAutonomy, ProjectCreateParams,
-    ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams,
-    ProjectFromThreadsResult, ProjectIcon, ProjectId, ProjectListParams, ProjectListResult,
-    ProjectPermission, ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, RunId,
+    AgentRunResult, CoordinatorFreshParams, ErrorKind, InboxKind, ParallaxEvent, ProjectAutonomy,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectIcon, ProjectId, ProjectListParams,
+    ProjectListResult, ProjectPermission, ProjectStartParams, ProjectUpdateParams,
+    ProjectUpdateResult, RunId,
 };
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -147,6 +148,15 @@ pub(crate) async fn start(
         .agents
         .detached(coordinator::start(daemon, params))
         .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `coordinator/fresh` (PLX-937, decision 0079).
+pub(crate) async fn fresh(
+    context: &Context,
+    params: CoordinatorFreshParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let run = coordinator::fresh(&context.daemon, params.project).await?;
     Ok(AgentRunResult { run })
 }
 

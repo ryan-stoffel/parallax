@@ -198,6 +198,7 @@ pub(crate) fn initialize(
 /// `Project` and `project/update`, which an older plxd would silently ignore.
 /// `checks` (PLX-411, 0045): `checks` and `proposedChecks` on `Project` and `project/update`,
 /// which an older plxd would silently ignore, and the checks running after each landing.
+/// `coordinatorEpochs` (PLX-937, 0079): `coordinator/fresh` and the `epoch` output item.
 /// `queue` (PLX-370, 0048): `queue/list`, `queue/edit`, `queue/reorder`, `queue/cancel`,
 /// `queue/steer`, and `queue.updated`, and `agent/send` takes `delivery`, which an older plxd
 /// would silently ignore, queueing a steer.
@@ -281,6 +282,7 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
         ("connect".to_owned(), serde_json::Map::new()),
         ("contextAndFast".to_owned(), serde_json::Map::new()),
         ("coordinator".to_owned(), serde_json::Map::new()),
+        ("coordinatorEpochs".to_owned(), serde_json::Map::new()),
         ("delegation".to_owned(), serde_json::Map::new()),
         ("eventFilters".to_owned(), serde_json::Map::new()),
         ("eventsBefore".to_owned(), serde_json::Map::new()),

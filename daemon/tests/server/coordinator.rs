@@ -10,27 +10,30 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::methods::{
-    AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, EventsSubscribe, HostHealth,
-    ProjectDelete, ProjectList, ProjectStart, ProjectUpdate, RepoAdd,
+    AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, CoordinatorFresh, EventsSubscribe,
+    HostHealth, ProjectDelete, ProjectList, ProjectStart, ProjectUpdate, RepoAdd,
 };
 use parallax_protocol::{
     AccountChoice, AgentCancelParams, AgentDelivery, AgentEventsParams, AgentListParams,
     AgentOutputItem, AgentPermission, AgentPolicy, AgentRun, AgentSendParams, AgentStartParams,
-    AgentStatus, CoordinatorThreadId, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    HostHealthParams, ParallaxEvent, ProjectCreateParams, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectId, ProjectListParams, ProjectPermission, ProjectStartParams, ProjectUpdateParams,
-    Provider, RepoAddParams, RepoId, RunId, TurnId,
+    AgentStatus, CoordinatorFreshParams, CoordinatorSessionEnd, CoordinatorThreadId, ErrorKind,
+    EventsEventParams, EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectCreateParams,
+    ProjectDeleteParams, ProjectDeleteResult, ProjectId, ProjectListParams, ProjectPermission,
+    ProjectStartParams, ProjectUpdateParams, Provider, RepoAddParams, RepoId, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::process::{Environment, Launcher};
-use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
+use plxd::backend::{
+    Backend, Capabilities, Event, Failure, FailureKind, Outcome, RunRequest, StartError, Started,
+    ToolPolicy,
+};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use uuid::Uuid;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params, real_repo,
-    send_params, subscribe, text, until, updated_to,
+    Conn, Host, create, end_turn, fake, fake_backend, git, has_item, init, items, project_params,
+    real_repo, send_params, subscribe, text, until, updated_to,
 };
 use crate::support::{InProcess, PATIENCE, eventually, kind, temp_dir};
 
@@ -1550,5 +1553,182 @@ async fn deleting_an_unknown_project_or_a_repo_entry_fails() {
         .unwrap()
         .repo;
     assert_eq!(listed.id, entry.id, "the repo entry stays");
+    host.server.stop().await;
+}
+
+/// The fake backend for epochs (PLX-937): each new session is `coordinator-<n>`, and a resume
+/// fails as a session the CLI no longer has when `lost`, keeping every request.
+struct Epochs {
+    seen: Arc<Mutex<Vec<RunRequest>>>,
+    lost: bool,
+}
+
+impl Backend for Epochs {
+    fn name(&self) -> &'static str {
+        "fake"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        fake_backend(Vec::new()).capabilities()
+    }
+
+    fn permissions(&self) -> &[AgentPermission] {
+        &[AgentPermission::Auto, AgentPermission::Bypass]
+    }
+
+    fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        let mut seen = self.seen.lock().unwrap();
+        seen.push(request.clone());
+        let script = if request.resume.is_some() && self.lost {
+            vec![Step::Emit(Event::Finished {
+                outcome: Outcome::Failed(Failure::new(
+                    FailureKind::SessionNotFound,
+                    "No conversation found with session ID".to_owned(),
+                )),
+                usage_totals: Vec::new(),
+            })]
+        } else {
+            let fresh = seen.iter().filter(|r| r.resume.is_none()).count();
+            vec![
+                init(&format!("coordinator-{fresh}")),
+                text("On it."),
+                end_turn("On it."),
+            ]
+        };
+        fake_backend(script).start(request)
+    }
+}
+
+fn epochs(lost: bool, seen: &Arc<Mutex<Vec<RunRequest>>>) -> BackendRegistry {
+    let mut backends = BackendRegistry::new();
+    backends.register(
+        Provider::Anthropic,
+        Arc::new(Epochs {
+            seen: Arc::clone(seen),
+            lost,
+        }),
+    );
+    backends
+}
+
+/// The run `id` as `agent/list` has it now.
+async fn run_of(client: &mut Conn, project: ProjectId, id: RunId) -> AgentRun {
+    runs_of(client, project)
+        .await
+        .into_iter()
+        .find(|run| run.id == id)
+        .unwrap()
+}
+
+/// PLX-937 (0079): a coordinator whose session the CLI lost starts its next epoch in the same
+/// run, from the packet, with the message it was sent, and its transcript marks it.
+#[tokio::test]
+async fn a_coordinator_whose_session_is_lost_starts_its_next_epoch_from_the_packet() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host::start(temp_dir(), epochs(true, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let run = client
+        .call::<ProjectStart>(start_params(project.id, "Plan the README."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    client
+        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Go on."))
+        .await
+        .unwrap();
+    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 3, "the start, the resume, and the new session");
+    let resume = seen[1].resume.clone().unwrap();
+    assert_eq!(resume.session_id, "coordinator-1");
+    let packet = resume.fallback.unwrap();
+    assert!(
+        packet.starts_with("Parallax, not the user: this is a new session"),
+        "{packet}"
+    );
+    assert!(
+        packet.contains("> Plan the README."),
+        "the user's messages: {packet}"
+    );
+    assert!(
+        packet.ends_with("The message that starts this session:\nGo on."),
+        "{packet}"
+    );
+    assert_eq!(seen[2].resume, None);
+    assert_eq!(seen[2].prompt, packet);
+    assert!(items(&events).contains(&AgentOutputItem::Epoch {
+        epoch: 2,
+        reason: CoordinatorSessionEnd::NotResumable,
+    }));
+    let now = run_of(&mut client, project.id, run.id).await;
+    assert_eq!(now.session_id.as_deref(), Some("coordinator-2"));
+    host.server.stop().await;
+}
+
+/// PLX-937 (0079): `coordinator/fresh` ends the coordinator's epoch, and its next message starts
+/// a new session from the packet; an unknown Project fails.
+#[tokio::test]
+async fn fresh_session_starts_the_next_message_from_the_packet() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host::start(temp_dir(), epochs(false, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let run = client
+        .call::<ProjectStart>(start_params(project.id, "Plan the README."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let fresh = client
+        .call::<CoordinatorFresh>(CoordinatorFreshParams {
+            project: project.id,
+        })
+        .await
+        .unwrap()
+        .run;
+    assert_eq!(fresh.id, run.id, "the same thread");
+    assert_eq!(fresh.session_id, None);
+    until(
+        &mut client,
+        has_item(AgentOutputItem::Epoch {
+            epoch: 2,
+            reason: CoordinatorSessionEnd::UserFresh,
+        }),
+    )
+    .await;
+
+    client
+        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Next."))
+        .await
+        .unwrap();
+    // Ending the old session reported the run as it stood, with no session.
+    until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. }
+            if state.status == AgentStatus::Completed && state.session_id.is_some())
+    })
+    .await;
+    let next = seen.lock().unwrap()[1].clone();
+    assert_eq!(next.resume, None, "a new session");
+    assert!(
+        next.prompt
+            .starts_with("Parallax, not the user: this is a new session")
+    );
+    assert!(next.prompt.ends_with("\nNext."), "{}", next.prompt);
+    let now = run_of(&mut client, project.id, run.id).await;
+    assert_eq!(now.session_id.as_deref(), Some("coordinator-2"));
+
+    let unknown = client
+        .call::<CoordinatorFresh>(CoordinatorFreshParams {
+            project: ProjectId::generate(),
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&unknown), ErrorKind::ProjectNotFound);
     host.server.stop().await;
 }

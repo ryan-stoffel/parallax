@@ -1416,72 +1416,39 @@ test("with no coordinator account, the coordinator runs on the host's Claude Cod
   expect(transcript()).toContain("I'll plan it.");
 });
 
-const startOverButton = () =>
-  [...document.querySelectorAll("main button")].find((b) => b.textContent === "Start over");
-/** Ember, whose coordinator is `old`, which `agent/events` serves along with any new one. */
-function emberWith(old: AgentRun) {
-  capabilities = { coordinator: {} };
-  const runs: AgentRun[] = [old];
-  answers["project/list"] = () => ({
-    result: { projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: old.id }] },
-  });
-  answers["agent/events"] = serveEvents(() => runs);
-  answers["project/start"] = (p) => {
-    runs.push(coordinatorRun(p["runId"] as string, p["prompt"] as string));
-    return { result: { run: runs.at(-1) } };
-  };
-}
 const oldId = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
 
-test("a coordinator plxd can't resume offers Start over, which replaces it with the refused message", async () => {
-  emberWith({
-    ...coordinatorRun(oldId, "Add a dark mode"),
-    status: "completed",
-    sessionId: "s-1",
-    model: "claude-sonnet-5",
-    effort: "low",
-    permission: "plan",
+test("Fresh session in a Project's menu ends its coordinator's session, which shows as a divider", async () => {
+  capabilities = { coordinator: {}, coordinatorEpochs: {} };
+  const run = { ...coordinatorRun(oldId, "Add a dark mode"), status: "completed" as const };
+  answers["project/list"] = () => ({
+    result: { projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: oldId }] },
   });
-  answers["orchestration/dispatch"] = () => ({
-    error: {
-      code: -32000,
-      message: `run ${oldId} can't be resumed: its session's account claude no longer exists`,
-      data: { kind: "runNotResumable" },
+  answers["agent/events"] = () => ({
+    result: {
+      events: [
+        { seq: 8, time: "", event: { kind: "agent.started", runId: oldId, run } },
+        {
+          seq: 9,
+          time: "",
+          event: {
+            kind: "agent.output",
+            runId: oldId,
+            items: [{ kind: "epoch", epoch: 2, reason: "userFresh" }],
+          },
+        },
+      ],
+      more: false,
     },
   });
+  answers["coordinator/fresh"] = () => ({ result: { run } });
   await renderApp();
-  await openEmber();
-  expect(startOverButton()).toBeUndefined();
+  await click(menuItem("ember", "Fresh session"));
+  expect(calls("coordinator/fresh")).toEqual([{ project: "p-ember" }]);
 
-  type("Keep going");
-  await click(button("Send"));
-  expect(startOverButton()!.parentElement!.textContent).toBe(
-    `This chat can't continue: run ${oldId} can't be resumed: its session's account claude no longer exists Start over`,
-  );
-  await click(startOverButton());
-  // A new run id, which 0024 lets replace a coordinator that isn't running, on the old one's model
-  // and permission mode.
-  expect(calls("project/start")).toEqual([
-    {
-      project: "p-ember",
-      runId: expect.not.stringMatching(oldId),
-      prompt: "Keep going",
-      model: "claude-sonnet-5",
-      effort: "low",
-      permission: "plan",
-    },
-  ]);
-  expect(transcript()).toContain("Keep going");
-  expect(startOverButton()).toBeUndefined();
-});
-
-test("a coordinator that stopped before its session started offers Start over with its first message", async () => {
-  emberWith({ ...coordinatorRun(oldId, "Add a dark mode"), status: "failed" });
-  await renderApp();
   await openEmber();
-  await click(startOverButton());
-  expect(calls("project/start")).toMatchObject([{ prompt: "Add a dark mode" }]);
-  expect(sentMessages()).toEqual([]);
+  expect(transcript()).toContain("New session, picked up from the Project's state");
+  expect(transcript()).not.toContain("Start over");
 });
 
 const coordinatorId = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";

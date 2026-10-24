@@ -51,6 +51,7 @@ pub(crate) mod compact;
 pub(crate) mod convert;
 pub(crate) mod coordinator;
 pub(crate) mod handoff;
+pub(crate) mod packet;
 mod placement;
 mod resume;
 pub(crate) mod review;

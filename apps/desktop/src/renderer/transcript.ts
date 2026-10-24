@@ -101,6 +101,8 @@ type ItemBody =
   | { kind: "modelSwitch"; key: string; from: string; to: string }
   /** The agent compacting its context: under way, then `done` (PLX-584). */
   | { kind: "compaction"; key: string; done: boolean }
+  /** A coordinator's new session, picked up from the Project's state (PLX-937, 0079). */
+  | { kind: "epoch"; key: string; epoch: number }
   /** A page the agent showed with html_render (PLX-639), kept with run `runId`'s images. */
   | ({ kind: "htmlRender"; key: string; runId: string } & HtmlRenderRef)
   /** A browser recording the agent stopped with preview_recording_stop (PLX-639). */
@@ -771,6 +773,9 @@ function applyOutput(
       else items.push({ kind: "compaction", key, done: item.done });
       break;
     }
+    case "epoch":
+      items.push({ kind: "epoch", key, epoch: item.epoch });
+      break;
     case "warning":
       items.push({ kind: "notice", key, tone: "warning", text: item.detail });
       break;

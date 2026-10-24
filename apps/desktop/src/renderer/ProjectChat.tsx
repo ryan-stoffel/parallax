@@ -181,8 +181,6 @@ export function ProjectChat({
           going={started === project.coordinator}
           tab={tab}
           strip={bar}
-          // A new coordinator replaces one that can't take messages (0024).
-          startOver={(text, options, images) => start(uuidv7(), text, options, images)}
           others={others}
           projectMode={project.permission}
           threadLinks={threadLinks}
