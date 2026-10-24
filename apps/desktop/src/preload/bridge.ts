@@ -769,6 +769,7 @@ export type BrowserAction =
         | "findNext"
         | "findPrevious"
         | "bookmark"
+        | "history"
         | "zoomIn"
         | "zoomOut"
         | "resetZoom";
