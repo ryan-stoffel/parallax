@@ -180,8 +180,9 @@ export function App() {
     setSettingsFocus(undefined);
   };
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // Keep each host's chats independent when switching between them.
-  const [openPanels, setOpenPanels] = useState<Record<string, boolean>>({});
+  // What each chat's right column shows, if anything: the side panel's views, or the browser,
+  // which is apart from them (PLX-962). Each host's chats stay independent when switching.
+  const [openPanes, setOpenPanes] = useState<Record<string, "views" | "browser" | undefined>>({});
   const panelKey = JSON.stringify([
     host.id,
     selection.kind,
@@ -191,12 +192,11 @@ export function App() {
         ? selection.projectId
         : selection.groupId,
   ]);
-  const panelOpen = openPanels[panelKey] ?? false;
-  const setPanelOpen = (next: boolean | ((open: boolean) => boolean)) =>
-    setOpenPanels((panels) => ({
-      ...panels,
-      [panelKey]: typeof next === "function" ? next(panels[panelKey] ?? false) : next,
-    }));
+  const pane = openPanes[panelKey];
+  const setPane = (next: "views" | "browser" | undefined) =>
+    setOpenPanes((panes) => ({ ...panes, [panelKey]: next }));
+  const panelOpen = pane === "views";
+  const setPanelOpen = (open: boolean) => setPane(open ? "views" : undefined);
   // Full screen is per panel too.
   const [expandedPanels, setExpandedPanels] = useState<Record<string, boolean>>({});
   const panelExpanded = expandedPanels[panelKey] ?? false;
@@ -218,15 +218,12 @@ export function App() {
     const last = tabs.at(-1);
     // Only the focused thread's own preview opens its panel, not the other side of a split's.
     if (reveal && last && selection.kind === "thread" && selection.threadId === runId) {
-      setPanelOpen(true);
+      setPane("browser");
       setBrowse({ agentTab: last.tabId });
     }
   };
-  // The top bar's Browser button: the side panel, on its Browser view as the user left it (PLX-962).
-  const openBrowser = () => {
-    setPanelOpen(true);
-    setBrowse({});
-  };
+  // The top bar's Browser button shows or hides the browser, as the user left it (PLX-962).
+  const toggleBrowser = () => setPane(pane === "browser" ? undefined : "browser");
   // The device the side panel's Device view last showed for an agent (PLX-886).
   const [showDevice, setShowDevice] = useState<{ deviceId?: string }>();
   const showAgentDevice = async (runId: string, named?: string) => {
@@ -817,7 +814,7 @@ export function App() {
     if (!drawers.has(folder.key)) setDrawers(new Set(drawers).add(folder.key));
     runInDrawer(folder, action.command);
     if (action.openPreview && action.previewUrl) {
-      setPanelOpen(true);
+      setPane("browser");
       setBrowse({ url: action.previewUrl });
     }
   };
@@ -829,8 +826,8 @@ export function App() {
       const command = appShortcut(e);
       // A new thread waits for an open dialog, the picker included, to close.
       const dialog = !!document.querySelector("dialog[open]");
-      if (command === "panel") setPanelOpen((open) => !open);
-      else if (command === "browser" && !settings) openBrowser();
+      if (command === "panel") setPanelOpen(!panelOpen);
+      else if (command === "browser" && !settings) toggleBrowser();
       else if (command === "sidebar") setSidebarOpen((open) => !open);
       else if (command === "terminal" && folder) toggleDrawer();
       else if (command === "newThread") {
@@ -908,7 +905,7 @@ export function App() {
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
-  const sidePanelOpen = panelOpen && chat;
+  const sidePanelOpen = pane !== undefined && chat;
   const expanded = sidePanelOpen && panelExpanded;
   const [leftWidth, rightWidth] = panelWidths(
     viewportWidth,
@@ -1086,10 +1083,15 @@ export function App() {
                       <PanelBottom />
                     </IconButton>
                   )}
-                  <IconButton label="Browser" command="browser" onClick={openBrowser}>
+                  <IconButton
+                    label={pane === "browser" ? "Hide browser" : "Browser"}
+                    command="browser"
+                    aria-pressed={pane === "browser"}
+                    onClick={toggleBrowser}
+                  >
                     <Globe />
                   </IconButton>
-                  {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
+                  {/* Shown only while the panel's views are hidden; their top bar has it otherwise. */}
                   {!panelOpen && (
                     <IconButton
                       label="Show side panel"
@@ -1426,6 +1428,7 @@ export function App() {
         topBarClassName={expanded && !sidebarOpen ? "traffic-light-inset" : ""}
         remoteHost={host.id === localId ? undefined : host.name}
         browse={browse}
+        browsing={pane === "browser"}
         changes={showChanges}
         agentTabs={
           threadRun && agentTabs?.runId === threadRun.id
@@ -1475,7 +1478,7 @@ export function App() {
                     prs={prs}
                     onSetUpGithub={setUpGithub}
                     onBrowse={(page) => {
-                      setPanelOpen(true);
+                      setPane("browser");
                       setBrowse({ url: page });
                     }}
                     onCompose={(text, send) => {

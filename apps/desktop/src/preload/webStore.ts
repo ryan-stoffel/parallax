@@ -56,8 +56,8 @@ if (location?.origin === "https://chromewebstore.google.com") {
     getAll: call(() => ask("getAll")),
     setEnabled: constant(true),
     uninstall: call(async (id) => {
-      await ask("uninstall", id);
-      for (const listener of uninstalled) listener(id);
+      if ((await ask("uninstall", id)) === "success")
+        for (const listener of uninstalled) listener(id);
     }),
     onInstalled: event(installed),
     onUninstalled: event(uninstalled),

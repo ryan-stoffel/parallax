@@ -565,9 +565,9 @@ test("saves a repository action and runs it in the drawer, opening its preview (
   await dialog.getByRole("button", { name: "Save action" }).click();
   await page.screenshot({ path: test.info().outputPath("action-details.png") });
 
-  // The drawer opens and runs it, and the side panel's Browser shows the preview.
+  // The drawer opens and runs it, and the browser shows the preview.
   await details.getByRole("button", { name: "Git version", exact: true }).click();
-  // The side panel opening takes the thread's room: a docked card collapses unless the window is
+  // The browser opening takes the thread's room: a docked card collapses unless the window is
   // wide enough to dock it beside both, and on a small screen it was floating already.
   const panel = page.locator("#thread-details");
   const terminal = page.getByRole("group", { name: "Terminal", exact: true });

@@ -17,9 +17,12 @@ import { installExtension, removeExtension } from "./extensions";
 
 export const storeOrigin = "https://chromewebstore.google.com";
 
-/** The user agent with Electron's and the app's tokens taken out, so pages see plain Chrome. */
+/**
+ * The user agent with Electron's and the app's tokens taken out, so pages see plain Chrome. A
+ * nightly's name, `Parallax (Nightly)`, arrives as `Parallax(Nightly)/<version>`.
+ */
 export const chromeUserAgent = (userAgent: string) =>
-  userAgent.replace(/ (?!(?:AppleWebKit|Chrome|Safari)\/)[\w.-]+\/\S+/g, "");
+  userAgent.replace(/ (?!(?:AppleWebKit|Chrome|Safari)\/)\S+\/\S+/g, "");
 
 /**
  * What the store shows for an extension: added, too old for Chrome to install (Manifest V2, as
@@ -58,10 +61,18 @@ export async function answerStore(
       return session.extensions.getAllExtensions().map(info);
     case "beginInstall":
       return begin(session, event, args[0]);
-    case "uninstall":
+    case "uninstall": {
+      const extension = session.extensions.getExtension(id);
+      if (!extension) return "success";
+      const confirmed = await confirm(event, {
+        message: `Remove “${extension.name}”?`,
+        button: "Remove",
+      });
+      if (!confirmed) return "user_cancelled";
       await removeExtension(session, id);
       changed();
       return "success";
+    }
     default:
       return undefined;
   }
@@ -75,21 +86,13 @@ async function begin(session: Session, event: IpcMainInvokeEvent, details: unkno
   if (installing.has(id)) return { result: "install_in_progress" };
   installing.add(id);
   try {
-    const page = event.sender;
-    const window = BrowserWindow.fromWebContents(page.hostWebContents ?? page);
     const name = typeof localizedName === "string" ? localizedName : "this extension";
-    const options = {
-      type: "question" as const,
+    const confirmed = await confirm(event, {
       message: `Add “${name}”?`,
       detail: "It runs in Parallax's browser, as it would in Chrome.",
-      buttons: ["Add Extension", "Cancel"],
-      defaultId: 0,
-      cancelId: 1,
-    };
-    const { response } = await (window
-      ? dialog.showMessageBox(window, options)
-      : dialog.showMessageBox(options));
-    if (response !== 0) return { result: "user_cancelled" };
+      button: "Add Extension",
+    });
+    if (!confirmed) return { result: "user_cancelled" };
     const answer = await installExtension(session, id);
     if (typeof answer === "string") return { result: "install_error", message: answer };
     changed();
@@ -98,6 +101,27 @@ async function begin(session: Session, event: IpcMainInvokeEvent, details: unkno
   } finally {
     installing.delete(id);
   }
+}
+
+/** Asks the user, over the window that shows the store's page, as Chrome asks before a change. */
+async function confirm(
+  event: IpcMainInvokeEvent,
+  ask: { message: string; detail?: string; button: string },
+) {
+  const page = event.sender;
+  const window = BrowserWindow.fromWebContents(page.hostWebContents ?? page);
+  const options = {
+    type: "question" as const,
+    message: ask.message,
+    ...(ask.detail && { detail: ask.detail }),
+    buttons: [ask.button, "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+  };
+  const { response } = await (window
+    ? dialog.showMessageBox(window, options)
+    : dialog.showMessageBox(options));
+  return response === 0;
 }
 
 /** Tells every window the installed list changed, so the browser's toolbar shows it. */
