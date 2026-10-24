@@ -1,6 +1,14 @@
 import { expect, test } from "vite-plus/test";
 
-import { browserUrl, savedOf, searchUrl, shortUrl, withSaved, type SavedTabs } from "./Browser";
+import {
+  browserUrl,
+  nextZoom,
+  savedOf,
+  searchUrl,
+  shortUrl,
+  withSaved,
+  type SavedTabs,
+} from "./Browser";
 import { fitSize } from "./PageFrame";
 
 test("a host without a scheme is https, or http when it's local, and only http and https pages open", () => {
@@ -89,4 +97,15 @@ test("saved browsers keep the permanent one and the newest 100 chats', and drop 
   all = withSaved(all, "t1", entry);
   expect(Object.keys(all).at(-1)).toBe("t1");
   expect(withSaved(all, "t1", undefined)["t1"]).toBeUndefined();
+});
+
+test("zoom steps through Chrome's levels and stays at either end", () => {
+  expect(nextZoom(1, 1)).toBe(1.1);
+  expect(nextZoom(1, -1)).toBe(0.9);
+  expect(nextZoom(1.1, 1)).toBe(1.25);
+  expect(nextZoom(5, 1)).toBe(5);
+  expect(nextZoom(0.25, -1)).toBe(0.25);
+  // A level between Chrome's goes to the next one along.
+  expect(nextZoom(1.2, 1)).toBe(1.25);
+  expect(nextZoom(1.2, -1)).toBe(1.1);
 });

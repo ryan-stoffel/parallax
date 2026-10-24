@@ -740,15 +740,31 @@ export type ConnectionError = {
 /**
  * What a side panel browser's page asks of its tab, from main: open a page in a new tab (a popup,
  * "Open Link in New Tab", or an extension's), show its favicon, as a data url the app's CSP
- * allows, Cmd/Ctrl+L, T, or W pressed in the page, or be shown or closed for an extension.
+ * allows, a Chrome shortcut pressed in the page (links.ts), or be shown or closed for an extension.
  */
 export type BrowserAction =
   | { kind: "open"; url: string }
   | { kind: "icon"; url: string }
-  | { kind: "select" }
-  | { kind: "address" }
-  | { kind: "newTab" }
-  | { kind: "closeTab" };
+  | {
+      kind:
+        | "select"
+        | "address"
+        | "newTab"
+        | "closeTab"
+        | "reopenTab"
+        | "nextTab"
+        | "previousTab"
+        | "lastTab"
+        | "find"
+        | "findNext"
+        | "findPrevious"
+        | "bookmark"
+        | "zoomIn"
+        | "zoomOut"
+        | "resetZoom";
+    }
+  // Cmd/Ctrl+1 to 8's tab, from 0 (PLX-969).
+  | { kind: "tab"; index: number };
 
 /**
  * A Chrome extension in the side panel's browser: its name, its toolbar icon as a data url, and

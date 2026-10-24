@@ -69,6 +69,7 @@ import {
 import { answerStore, chromeUserAgent, storeOrigin } from "./webStore";
 import {
   browserShortcut,
+  type BrowserShortcut,
   isBrowsable,
   isExtensionPage,
   isOpenableExternally,
@@ -275,11 +276,17 @@ app.on("web-contents-created", (_event, contents) => {
       else if (shortcut === "hardReload") contents.reloadIgnoringCache();
       else if (shortcut === "back") history.goBack();
       else if (shortcut === "forward") history.goForward();
-      // Chrome's zoom, a level at a time, which the session keeps for the page's site.
-      else if (shortcut === "zoomIn") contents.setZoomLevel(contents.getZoomLevel() + 1);
-      else if (shortcut === "zoomOut") contents.setZoomLevel(contents.getZoomLevel() - 1);
-      else if (shortcut === "resetZoom") contents.setZoomLevel(0);
-      else tell({ kind: shortcut });
+      else if (shortcut === "print") contents.print();
+      else if (shortcut.startsWith("tab"))
+        tell({ kind: "tab", index: Number(shortcut.slice(3)) - 1 });
+      // The rest, zoom and find included, the tab does, which shows them (Browser.tsx).
+      else
+        tell({
+          kind: shortcut as Exclude<
+            BrowserShortcut,
+            `tab${number}` | "print" | "reload" | "hardReload" | "back" | "forward"
+          >,
+        });
     });
   // The app's CSP takes no image from the web, so main fetches a page's favicon and hands its tab
   // the image inline.

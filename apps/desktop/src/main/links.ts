@@ -29,11 +29,36 @@ const browserShortcuts = {
   l: "address",
   t: "newTab",
   w: "closeTab",
+  f: "find",
+  g: "findNext",
+  p: "print",
+  d: "bookmark",
+  "1": "tab1",
+  "2": "tab2",
+  "3": "tab3",
+  "4": "tab4",
+  "5": "tab5",
+  "6": "tab6",
+  "7": "tab7",
+  "8": "tab8",
+  "9": "lastTab",
 } as const;
 
+// With Shift as well.
+const shiftShortcuts = { r: "hardReload", t: "reopenTab", g: "findPrevious" } as const;
+
+/** A page shortcut a browser tab acts on (main.ts). */
+export type BrowserShortcut =
+  | (typeof browserShortcuts)[keyof typeof browserShortcuts]
+  | (typeof shiftShortcuts)[keyof typeof shiftShortcuts]
+  | "nextTab"
+  | "previousTab";
+
 /**
- * What Cmd (macOS) or Ctrl (elsewhere) with a key does in a side panel browser's page, as Chrome
- * does, or undefined for a press it leaves to the page and the app's menu.
+ * What a key press in a side panel browser's page does, as Chrome's shortcuts do (PLX-969), or
+ * undefined for a press it leaves to the page and the app's menu: Cmd (macOS) or Ctrl (elsewhere)
+ * with a key, Shift for a few more, Ctrl+Tab and Ctrl+Shift+Tab, and Cmd+Option+Right and Left on
+ * macOS, Ctrl+PageDown and PageUp elsewhere, for the next and previous tab.
  */
 export function browserShortcut(
   input: {
@@ -45,12 +70,24 @@ export function browserShortcut(
     shift: boolean;
   },
   platform: NodeJS.Platform,
-): (typeof browserShortcuts)[keyof typeof browserShortcuts] | "hardReload" | undefined {
-  const mod = platform === "darwin" ? input.meta && !input.control : input.control && !input.meta;
-  if (input.type !== "keyDown" || !mod || input.alt) return undefined;
-  // Shift makes Reload Chrome's hard reload, and leaves every other key to the page.
-  if (input.shift) return input.key.toLowerCase() === "r" ? "hardReload" : undefined;
-  return browserShortcuts[input.key.toLowerCase() as keyof typeof browserShortcuts];
+): BrowserShortcut | undefined {
+  if (input.type !== "keyDown") return undefined;
+  const mac = platform === "darwin";
+  if (input.key === "Tab" && input.control && !input.meta && !input.alt)
+    return input.shift ? "previousTab" : "nextTab";
+  if (mac && input.meta && input.alt && !input.control && !input.shift) {
+    if (input.key === "ArrowRight") return "nextTab";
+    if (input.key === "ArrowLeft") return "previousTab";
+  }
+  if (!mac && input.control && !input.meta && !input.alt && !input.shift) {
+    if (input.key === "PageDown") return "nextTab";
+    if (input.key === "PageUp") return "previousTab";
+  }
+  const mod = mac ? input.meta && !input.control : input.control && !input.meta;
+  if (!mod || input.alt) return undefined;
+  const key = input.key.toLowerCase();
+  if (input.shift) return shiftShortcuts[key as keyof typeof shiftShortcuts];
+  return browserShortcuts[key as keyof typeof browserShortcuts];
 }
 
 /** Whether a url is a Chrome extension's page, such as its popup (extensions.ts). */
