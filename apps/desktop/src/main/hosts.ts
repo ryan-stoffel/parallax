@@ -167,10 +167,14 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
     },
     emit: (event) => broadcast("parallax:hostUpdate", event),
   });
-  addConnection("local", () => {
-    const plxd = localPlxd();
-    return plxd === undefined ? undefined : [plxd, "attach"];
-  });
+  addConnection(
+    "local",
+    () => {
+      const plxd = localPlxd();
+      return plxd === undefined ? undefined : [plxd, "attach"];
+    },
+    { env: () => exitWithApp },
+  );
   // Connect on or off, so a `plxd connect on|off` run outside the app is followed too, and an
   // installed service is kept current either way.
   setInterval(() => void refreshConnect().then(keepServing), DISCOVERY_MS);
@@ -720,6 +724,15 @@ export async function streamFile(url: string, range: string | null): Promise<Res
 /** A saved SSH host by id. Undefined for this computer, `local`, and for an unknown id. */
 export const savedHost = (id: string): SshHost | undefined =>
   settings.hosts.find((h) => h.id === id);
+
+/**
+ * A dev or test app's (`PLXD_PATH` or `PLXD_FAKE_BACKEND`) `plxd serve` stops when this app exits,
+ * even when it's killed (PLX-990). The installed app's outlives it.
+ */
+const exitWithApp =
+  process.env["PLXD_PATH"] || process.env["PLXD_FAKE_BACKEND"]
+    ? { PLXD_EXIT_WITH: String(process.pid) }
+    : undefined;
 
 /** The local `plxd` binary (plxd.ts). */
 const localPlxd = () =>

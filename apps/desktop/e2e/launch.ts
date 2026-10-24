@@ -92,7 +92,7 @@ export async function printFailure({ page, dataDir }: Launched) {
   console.log(`--- the window's text\n${await page.locator("body").innerText()}`);
 }
 
-/** Closes the app, and the detached `serve` that `plxd attach` started, which outlives it. */
+/** Closes the app, and stops the `serve` that `plxd attach` started. */
 export async function close(launched: Launched | undefined) {
   if (!launched) return;
   await launched.app.close();
@@ -104,23 +104,25 @@ export async function stopServe(dataDir: string) {
   const pid = servePids(dataDir).at(-1) ?? 0;
   // Never pid 0 or below, which process.kill reads as a whole process group.
   if (Number.isSafeInteger(pid) && pid > 1) {
-    process.kill(pid, "SIGTERM");
+    // A dev or test serve stops by itself once its app has exited (PLX-990), so it may be gone.
+    if (alive(pid)) process.kill(pid, "SIGTERM");
     // Seeding or reopening this data directory must wait until SQLite has closed on Windows.
-    await expect
-      .poll(() => {
-        try {
-          process.kill(pid, 0);
-          return false;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
-          throw error;
-        }
-      })
-      .toBe(true);
+    await expect.poll(() => alive(pid)).toBe(false);
     // Windows reports the process gone before it has unmapped plxd.sqlite3-shm, and opening the
     // database in that window fails with SQLITE_IOERR_TRUNCATE (PLX-683). Wait until a read works.
     const file = path.join(dataDir, "plxd.sqlite3");
     await expect.poll(() => !existsSync(file) || readable(file)).toBe(true);
+  }
+}
+
+/** Whether process `pid` is still running, or is a zombie not yet reaped. */
+export function alive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+    throw error;
   }
 }
 

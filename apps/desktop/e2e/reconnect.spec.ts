@@ -6,13 +6,14 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
-import { close, launch, openThread, printFailure, type Launched } from "./launch";
+import { alive, close, launch, openThread, printFailure, servePids, type Launched } from "./launch";
 
 // A dropped connection to a plxd that keeps running (0059): the app's subscriptions stay open,
 // and once `plxd attach` is back, main resumes each after its last event. plxd replays the short
 // gap, so the open transcript gets the text streamed meanwhile as events, with no fresh snapshot.
 // It finds `plxd attach` among the app's child processes with `pgrep`, which Windows lacks.
-test.skip(process.platform === "win32", "finds plxd attach with pgrep");
+// And a killed dev or test app takes its plxd serve and agents with it (PLX-990).
+test.skip(process.platform === "win32", "finds processes with pgrep");
 
 let launched: Launched | undefined;
 test.afterEach(async () => {
@@ -37,11 +38,10 @@ function streamingScript(): string {
   return file;
 }
 
-test("a dropped connection resumes after the last event, with no fresh snapshot", async () => {
+/** Launches the app, and opens a thread streaming `streamingScript` once its fifth delta is in. */
+async function startStreaming(): Promise<Launched> {
   launched = await launch(streamingScript());
-  const { app, page } = launched;
-  const state = () =>
-    page.evaluate(`window.parallax.connectionState("local").then((s) => s.status)`);
+  const { page } = launched;
   await expect.poll(state).toBe("connected");
   const set = await page.evaluate(`window.parallax.request("local", "accounts/defaults/set", {
     role: "worker",
@@ -54,8 +54,17 @@ test("a dropped connection resumes after the last event, with no fresh snapshot"
   );
   expect(started).not.toHaveProperty("error");
   await openThread(page, new RegExp(prompt));
+  await expect(page.getByRole("log", { name: "Transcript" })).toContainText("Delta 5.");
+  return launched;
+}
+
+/** The local connection's status. */
+const state = () =>
+  launched!.page.evaluate(`window.parallax.connectionState("local").then((s) => s.status)`);
+
+test("a dropped connection resumes after the last event, with no fresh snapshot", async () => {
+  const { app, page } = await startStreaming();
   const transcript = page.getByRole("log", { name: "Transcript" });
-  await expect(transcript).toContainText("Delta 5.");
 
   // What main sends the window's subscriptions from here on: each message's type.
   await app.evaluate(({ webContents }) => {
@@ -91,4 +100,23 @@ test("a dropped connection resumes after the last event, with no fresh snapshot"
   const text = (await transcript.textContent()) ?? "";
   for (let i = 1; i <= 30; i++) expect(text).toContain(`Delta ${i}. `);
   expect(await sent()).not.toContain("snapshot");
+});
+
+test("a killed app's plxd serve exits, and its agent with it (PLX-990)", async () => {
+  const { app, dataDir } = await startStreaming();
+  const serve = servePids(dataDir).at(-1)!;
+  // The fake backend's shell, streaming the thread.
+  const [agent] = execFileSync("pgrep", ["-P", String(serve), "-f", "resume="], {
+    encoding: "utf8",
+  })
+    .split("\n")
+    .map(Number)
+    .filter((pid) => pid > 1);
+  expect(agent).toBeDefined();
+
+  // Nothing is left for afterEach to close.
+  launched = undefined;
+  app.process().kill("SIGKILL");
+  await expect.poll(() => alive(serve), { timeout: 20_000 }).toBe(false);
+  await expect.poll(() => alive(agent!)).toBe(false);
 });

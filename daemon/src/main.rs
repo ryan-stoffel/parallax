@@ -663,6 +663,7 @@ fn serve(args: &ServeArgs) -> ExitCode {
             ));
         }
         info!(log_level = %args.log_level, "starting");
+        stop_with_app(shutdown.clone());
         // Every path plxd uses is absolute by now. Leaving the directory it was started in
         // keeps a folder, or the volume it is on, from staying busy for as long as plxd runs.
         if let Err(error) = std::env::set_current_dir("/") {
@@ -847,6 +848,53 @@ fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
     Ok(())
 }
 
+/// The pid of the dev or test app whose `plxd attach` started this `serve` (PLX-990). The app sets
+/// it under `PLXD_PATH` or `PLXD_FAKE_BACKEND`; the installed app doesn't, so its `serve` outlives
+/// it.
+const EXIT_WITH_ENV: &str = "PLXD_EXIT_WITH";
+
+/// Under [`EXIT_WITH_ENV`], stops `serve` as SIGTERM does once that process is gone, killed or
+/// not. Shutting down cancels every run, which kills its process group. A plain thread, not a
+/// blocking task, so a `serve` stopped another way never waits on it.
+fn stop_with_app(shutdown: Shutdown) {
+    let Ok(value) = std::env::var(EXIT_WITH_ENV) else {
+        return;
+    };
+    let Ok(pid) = value.parse::<u32>() else {
+        warn!(%value, "{EXIT_WITH_ENV} is not a pid; not watching it");
+        return;
+    };
+    info!(pid, "will stop when the app that started plxd exits");
+    std::thread::spawn(move || {
+        wait_for_exit(pid);
+        info!(pid, "the app that started plxd exited");
+        shutdown.trigger();
+    });
+}
+
+/// Returns once process `pid` is gone, or right away if it can't be watched.
+// ponytail: polls once a second, so a pid reused within that second is missed; a kqueue or pidfd
+// watch would close it.
+#[cfg(unix)]
+fn wait_for_exit(pid: u32) {
+    use rustix::io::Errno;
+    use rustix::process::{Pid, test_kill_process};
+
+    let Some(pid) = i32::try_from(pid).ok().and_then(Pid::from_raw) else {
+        return;
+    };
+    while test_kill_process(pid) != Err(Errno::SRCH) {
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+#[cfg(windows)]
+fn wait_for_exit(pid: u32) {
+    if let Err(error) = plxd::windows::wait_for_exit(pid) {
+        warn!(pid, %error, "could not watch the app that started plxd; taking it as exited");
+    }
+}
+
 fn fail(message: &str) -> ExitCode {
     eprintln!("plxd: {message}");
     ExitCode::FAILURE
@@ -887,6 +935,30 @@ mod tests {
     use clap::{CommandFactory, Parser};
 
     use super::{AttachArgs, Cli, Command, OnOff, as_parallax, parse_dial_address};
+
+    #[test]
+    fn waits_for_the_app_to_exit() {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/c", "ping", "-n", "30", "127.0.0.1"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("30");
+            command
+        };
+        let mut app = command.stdout(std::process::Stdio::null()).spawn().unwrap();
+        let pid = app.id();
+        let (exited, waited) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            super::wait_for_exit(pid);
+            exited.send(()).unwrap();
+        });
+        assert!(waited.recv_timeout(Duration::from_millis(300)).is_err());
+        app.kill().unwrap();
+        app.wait().unwrap();
+        waited.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
 
     #[test]
     fn parallax_alone_is_the_tui() {
