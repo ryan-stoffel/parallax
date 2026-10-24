@@ -741,7 +741,7 @@ export function createDeviceStream(
     },
     fold(pose) {
       // serve-sim folds it and moves the live display, then reports both in the next screen.
-      if (ios && screen?.fold) send(tagged(IOS_POSE, { pose }));
+      if (ios) send(tagged(IOS_POSE, { pose }));
     },
   };
 }
