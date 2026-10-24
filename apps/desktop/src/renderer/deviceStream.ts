@@ -1,8 +1,9 @@
 // The Device panel's live view of a simulator or emulator (PLX-886), ported from T3 Code's
-// `packages/client-runtime/src/device/stream.ts` (MIT, T3 Tools Inc.) to plxd's relay of Expo's
-// device hub. iOS sends H.264 as AVCC envelopes on a video stream, and takes HID input and sends
-// its screen size on a control stream; Android sends SEMU-framed H.264 and takes JSON input on one
-// control stream. Frames decode with WebCodecs onto a canvas.
+// `packages/client-runtime/src/device/stream.ts` (MIT, T3 Tools Inc.) to plxd's relay of
+// upstream serve-sim for iOS (PLX-988) and Expo's device hub for Android. iOS sends H.264 as AVCC
+// envelopes on a video stream, and takes HID input and sends its screen size on a control stream;
+// Android sends SEMU-framed H.264 and takes JSON input on one control stream. Frames decode with
+// WebCodecs onto a canvas.
 
 import type { DevicePlatform, DeviceStreamKind } from "../protocol/generated/protocol";
 import { simulatorAvcConfig } from "./avcConfig";
@@ -62,6 +63,8 @@ const FIRST_FRAME_MS = 15_000;
 const FRAME_US = 16_667;
 /** Frames the decoder may queue before the stream restarts at a keyframe. */
 const DECODE_QUEUE = 8;
+/** How many times one start reopens iOS video that came without its description. */
+const DESCRIPTION_RETRIES = 3;
 const SEMU_MAGIC = 0x53454d55;
 const SEMU_HEADER = 16;
 // serve-emu's input takes at most 300 UTF-8 bytes of text per message.
@@ -73,10 +76,10 @@ const IOS_TOUCH = 0x03;
 const IOS_BUTTON = 0x04;
 const IOS_KEY = 0x06;
 const IOS_ORIENTATION = 0x07;
-const IOS_HINGE = 0x10;
+const IOS_POSE = 0x0e;
 const IOS_SCREEN = 0x82;
-const IOS_ADMITTED = 0x83;
-const IOS_HINGE_DONE = 0x90;
+/** serve-sim's hinge angle below which an iPhone Duo's cover is the live display. */
+const DUO_COVER_BELOW = 90;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -308,7 +311,12 @@ export function createDeviceStream(
   let timestamp = 0;
   let decoded = false;
   let firstFrame = false;
-  let admitted = false;
+  // Whether the iOS control stream is open, so input reaches the device.
+  let inputOpen = false;
+  // iOS: the video's last description, for a reopened stream serve-sim sends none on, and how
+  // many times this start has reopened video for one.
+  let description: Uint8Array | undefined;
+  let describeRetries = 0;
   let screen: DeviceScreen | null = null;
   let frameTimer: ReturnType<typeof setTimeout> | undefined;
   const retries = new Map<DeviceStreamKind, ReturnType<typeof setTimeout>>();
@@ -369,6 +377,12 @@ export function createDeviceStream(
       fail(`This computer can't decode the device's ${config.codec} video.`);
       return false;
     }
+    install(full);
+    return true;
+  };
+
+  /** Configures the decoder, making it first if there's none. */
+  const install = (full: VideoDecoderConfig) => {
     if (!videoDecoder || videoDecoder.state === "closed") {
       const decoder: VideoDecoder = new VideoDecoder({
         output: (frame) => {
@@ -388,7 +402,6 @@ export function createDeviceStream(
       videoDecoder = decoder;
     }
     videoDecoder.configure(full);
-    return true;
   };
 
   const decode = (key: boolean, data: Uint8Array, pts?: number | null) => {
@@ -437,11 +450,15 @@ export function createDeviceStream(
     );
   };
 
-  /** Opens a stream of `kind`, whose messages go to `onData` while it's current. */
+  /**
+   * Opens a stream of `kind`, whose messages go to `onData` while it's current. `onOpen` runs once
+   * plxd has connected it.
+   */
   const open = (
     kind: DeviceStreamKind,
     onData: (data: Uint8Array | string, current: () => boolean) => void,
     onEnd: (error?: string) => void,
+    onOpen?: () => void,
   ) => {
     const session = generation;
     // Unique across reloads too, so a late close for a stream from before one never meets it.
@@ -457,7 +474,9 @@ export function createDeviceStream(
         else onEnd(message.error);
       })
       .then((error) => {
-        if (error && current()) onEnd(error);
+        if (!current()) return;
+        if (error) onEnd(error);
+        else onOpen?.();
       });
     return id;
   };
@@ -465,6 +484,10 @@ export function createDeviceStream(
   const openVideo = () => {
     const demuxer = new AvccDemuxer();
     decoded = false;
+    // Whether this stream has configured the decoder, and the frames since its last keyframe
+    // while that is pending: the keyframe usually comes right behind the description.
+    let described = false;
+    let pending: AvccChunk[] | null = null;
     open(
       "video",
       (data, current) => {
@@ -479,9 +502,32 @@ export function createDeviceStream(
               })
               .catch(() => {});
           } else if (chunk.type === "description") {
+            described = true;
             awaitingKey = true;
-            const description = simulatorAvcConfig(chunk.payload);
-            void configure({ codec: avcCodec(description), description }, current);
+            description = simulatorAvcConfig(chunk.payload);
+            const queued: AvccChunk[] = [];
+            pending = queued;
+            void configure({ codec: avcCodec(description), description }, current).then((ok) => {
+              if (pending !== queued) return;
+              pending = null;
+              if (ok) for (const each of queued) decode(each.type === "keyframe", each.payload);
+            });
+          } else if (pending) {
+            if (chunk.type === "keyframe") pending.splice(0, pending.length, chunk);
+            else if (pending.length < DECODE_QUEUE) pending.push(chunk);
+            else return restartVideo();
+          } else if (!described && chunk.type === "keyframe") {
+            // serve-sim sends no description on some streams, such as the first of a new capture
+            // session: the last one still holds, or a reopened stream brings one.
+            if (description) {
+              described = true;
+              awaitingKey = true;
+              install({ codec: avcCodec(description), description, optimizeForLatency: true });
+              decode(true, chunk.payload);
+            } else if (describeRetries < DESCRIPTION_RETRIES) {
+              describeRetries++;
+              return restartVideo();
+            }
           } else decode(chunk.type === "keyframe", chunk.payload);
         }
       },
@@ -495,49 +541,33 @@ export function createDeviceStream(
   };
 
   const openIosControl = () => {
-    admitted = false;
+    inputOpen = false;
     open(
       "control",
       (data) => {
-        if (typeof data === "string" || data.length < 1) return;
-        if (data[0] === IOS_ADMITTED) {
-          admitted = true;
-          return events.onInput(true);
-        }
-        if (data[0] === IOS_HINGE_DONE) {
-          try {
-            const reply = JSON.parse(decoder.decode(data.subarray(1))) as { requestId?: number };
-            if (next && reply.requestId === next.after) {
-              const command = next.command;
-              next = undefined;
-              send(tagged(IOS_HINGE, { requestId: ++hinge, command }));
-            }
-          } catch {}
-          return;
-        }
-        if (data[0] !== IOS_SCREEN) return;
+        if (typeof data === "string" || data[0] !== IOS_SCREEN) return;
         try {
           const config = JSON.parse(decoder.decode(data.subarray(1))) as DeviceScreen & {
-            inputUnavailable?: boolean;
-            supportsHingeAngle?: boolean;
-            screenId?: number;
-            hingeAngle?: number;
+            hingeDegrees?: number;
           };
-          if (config.inputUnavailable) events.onInput(false);
           screen = { width: config.width, height: config.height, orientation: config.orientation };
-          if (config.supportsHingeAngle && config.screenId !== undefined)
+          if (config.hingeDegrees !== undefined)
             screen.fold = {
-              display: config.screenId,
-              angle: config.hingeAngle ?? (config.screenId === 1 ? 0 : 180),
+              display: config.hingeDegrees < DUO_COVER_BELOW ? 1 : 3,
+              angle: config.hingeDegrees,
             };
           events.onScreen(screen);
         } catch {}
       },
       () => {
         control = undefined;
-        admitted = false;
+        inputOpen = false;
         events.onInput(false);
         retry("control", openIosControl);
+      },
+      () => {
+        inputOpen = true;
+        events.onInput(true);
       },
     );
   };
@@ -595,6 +625,7 @@ export function createDeviceStream(
     if (!stopped) return;
     stopped = false;
     generation++;
+    describeRetries = 0;
     if (!("VideoDecoder" in globalThis)) {
       return fail("This window can't decode video.");
     }
@@ -619,7 +650,7 @@ export function createDeviceStream(
   };
 
   const send = (data: Uint8Array | string) => {
-    if (!stopped && control && (!ios || admitted)) bridge.sendDeviceStream(control, data);
+    if (!stopped && control && (!ios || inputOpen)) bridge.sendDeviceStream(control, data);
   };
 
   /** serve-sim streams the raw framebuffer, so a turned simulator's touches turn back to it. */
@@ -637,10 +668,6 @@ export function createDeviceStream(
     }
   };
 
-  // The hub answers each hinge command by its id; the next screen it reports shows the fold. It
-  // takes one command at a time, so a second waits for the first's answer.
-  let hinge = 0;
-  let next: { after: number; command: unknown } | undefined;
   const hidKey = (usage: number, type: "down" | "up") => send(tagged(IOS_KEY, { type, usage }));
 
   return {
@@ -713,14 +740,8 @@ export function createDeviceStream(
       if (ios) send(tagged(IOS_ORIENTATION, { orientation }));
     },
     fold(pose) {
-      if (!ios || !screen?.fold) return;
-      send(tagged(IOS_HINGE, { requestId: ++hinge, command: { control: "pose", value: pose } }));
-      // Shut, the inside display stays live until the phone lies face down on it, which hands the
-      // screen to the cover, as T3 Code does.
-      next =
-        pose === "closed"
-          ? { after: hinge, command: { control: "physical", value: "facedown" } }
-          : undefined;
+      // serve-sim folds it and moves the live display, then reports both in the next screen.
+      if (ios && screen?.fold) send(tagged(IOS_POSE, { pose }));
     },
   };
 }

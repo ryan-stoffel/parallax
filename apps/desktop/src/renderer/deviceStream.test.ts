@@ -1,6 +1,14 @@
-import { expect, test } from "vite-plus/test";
+import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import { AvccDemuxer, avcCodec, hidUsage, keyFor, parseSemu, scanAccessUnit } from "./deviceStream";
+import {
+  AvccDemuxer,
+  avcCodec,
+  createDeviceStream,
+  hidUsage,
+  keyFor,
+  parseSemu,
+  scanAccessUnit,
+} from "./deviceStream";
 
 const envelope = (tag: number, payload: number[]) => {
   const out = new Uint8Array(5 + payload.length);
@@ -61,4 +69,92 @@ test("pasted text types as US keyboard keys on iOS", () => {
   expect(hidUsage("KeyA")).toBe(0x04);
   expect(hidUsage("Digit1")).toBe(0x1e);
   expect(hidUsage("F13")).toBeNull();
+});
+
+/** A VideoDecoder that records what it's given. */
+class FakeDecoder {
+  static made: FakeDecoder[] = [];
+  static isConfigSupported = async () => ({ supported: true });
+  state = "unconfigured";
+  decodeQueueSize = 0;
+  configs: VideoDecoderConfig[] = [];
+  decoded: string[] = [];
+  constructor() {
+    FakeDecoder.made.push(this);
+  }
+  configure(config: VideoDecoderConfig) {
+    this.state = "configured";
+    this.configs.push(config);
+  }
+  decode(chunk: { type: string }) {
+    this.decoded.push(chunk.type);
+  }
+  close() {
+    this.state = "closed";
+  }
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  FakeDecoder.made = [];
+});
+
+test("iOS video without a description reopens for one, then reuses it", async () => {
+  const opened: { id: string; kind: string; send: (data: Uint8Array) => void }[] = [];
+  const closed: string[] = [];
+  vi.stubGlobal("VideoDecoder", FakeDecoder);
+  vi.stubGlobal(
+    "EncodedVideoChunk",
+    class {
+      constructor(public init: { type: string }) {
+        Object.assign(this, init);
+      }
+    },
+  );
+  vi.stubGlobal("window", {
+    parallax: {
+      openDeviceStream: async (
+        _host: string,
+        params: { streamId: string; kind: string },
+        listener: (message: { type: "data"; data: Uint8Array }) => void,
+      ) => {
+        opened.push({
+          id: params.streamId,
+          kind: params.kind,
+          send: (data) => listener({ type: "data", data }),
+        });
+        return undefined;
+      },
+      sendDeviceStream: () => {},
+      closeDeviceStream: (id: string) => closed.push(id),
+    },
+  });
+  const events = { onStatus: () => {}, onScreen: () => {}, onInput: () => {} };
+  const canvas = { getContext: () => null } as unknown as HTMLCanvasElement;
+  const stream = createDeviceStream(
+    { hostId: "h", deviceId: "d", platform: "ios" },
+    canvas,
+    events,
+  );
+  stream.start();
+  const videos = () => opened.filter((each) => each.kind === "video");
+  const decoder = () => FakeDecoder.made.at(-1)!;
+
+  // A new capture session's first stream: a keyframe, and no description.
+  videos()[0]!.send(envelope(2, [1]));
+  expect(closed).toEqual([videos()[0]!.id]);
+  expect(videos()).toHaveLength(2);
+
+  // The reopened stream's keyframe lands right behind its description, while it's configured.
+  videos()[1]!.send(new Uint8Array([...envelope(1, [1, 0x64, 0, 0x33]), ...envelope(2, [2])]));
+  await vi.waitFor(() => expect(decoder().decoded).toEqual(["key"]));
+
+  // Restarted behind: the new stream sends no description, and the last one still holds.
+  decoder().decodeQueueSize = 9;
+  videos()[1]!.send(envelope(3, [3]));
+  expect(videos()).toHaveLength(3);
+  videos()[2]!.send(envelope(2, [4]));
+  expect(decoder().configs.at(-1)!.codec).toBe("avc1.640033");
+  expect(decoder().decoded).toEqual(["key"]);
+  stream.stop();
 });
