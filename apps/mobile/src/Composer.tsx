@@ -349,7 +349,15 @@ export function Composer({
   const offers = useOffers(computer);
   const [provider, setProvider] = useState<string>();
   const shownProvider = provider ?? run?.backend;
-  const fallback: Offer = { id: "", name: "", kind: "", models: [], efforts: true, permissions: allAccess };
+  const fallback: Offer = {
+    id: "",
+    name: "",
+    kind: "",
+    models: [],
+    efforts: true,
+    permissions: allAccess,
+    coordinator: true,
+  };
   const offer = offers.find((o) => o.id === shownProvider) ?? offers[0] ?? fallback;
   // Another provider takes a message only on a plxd that moves runs (`sendAccount`), as on the desktop.
   const moves = "sendAccount" in (computer?.view.capabilities ?? {});
@@ -442,8 +450,9 @@ export function Composer({
         ...(moves && provider && provider !== run?.backend && {
           account: { kind: "subscription" as const, backend: provider },
         }),
-        ...(changes && effort && { effort }),
-        ...(changes && permission && { permission }),
+        // Only what the thread's provider takes: plxd refuses a run on a provider that can't.
+        ...(changes && effort && offer.efforts && { effort }),
+        ...(changes && permission && offer.permissions.includes(permission) && { permission }),
       });
       onDraft("");
       setAttached([]);
@@ -583,10 +592,17 @@ export function Composer({
         provider={offer.id}
         onProvider={(id) => {
           setProvider(id);
-          // A new provider's own first model, as its default.
+          // A new provider's own first model, and its own effort and access, as their defaults.
           setModel(offers.find((o) => o.id === id)?.models[0]?.id ?? "");
+          setEffort(undefined);
+          setPermission(undefined);
         }}
-        canMove={(id) => id === run?.backend || moves}
+        // As on the desktop: another provider only where plxd moves runs, and for a Project's
+        // coordinator (a `noWrite` run), only one that can run a coordinator.
+        canMove={(id) =>
+          id === run?.backend ||
+          (moves && (run?.policy !== "noWrite" || !!offers.find((o) => o.id === id)?.coordinator))
+        }
         models={offer.models}
         model={shownModel}
         onModel={setModel}

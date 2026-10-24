@@ -105,7 +105,10 @@ function AccountsPage({ m }: { m: Computer }) {
       "error" in got ? accountsError(got.error) : typeof offered === "string" ? offered : "error" in listed ? accountsError(listed.error) : undefined,
     );
   }, [id]);
-  useEffect(() => void load(), [load]);
+  // Again once the computer connects, as the desktop reloads a host's settings.
+  useEffect(() => {
+    if (m.connected) void load();
+  }, [load, m.connected]);
 
   const choose = async (role: Role, key: string) => {
     const option = options?.find((o) => choiceKey(o.account) === key);
