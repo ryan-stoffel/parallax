@@ -655,7 +655,8 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
     Alert.prompt("Rename thread", undefined, (next) => void computer?.view.update(runId, { title: next.trim() }), "plain-text", title);
   const archive = () => {
     void computer?.view.archive(runId, !thread?.archived);
-    if (!thread?.archived) navigation.goBack();
+    // The main view has no back stack, so an archived thread gives way to a new one.
+    if (!thread?.archived) navigation.reset({ index: 0, routes: [{ name: "StartThread" }] });
   };
   const symbol = (name: SFSymbol): MenuIcon => ({ type: "sfSymbol" as const, name });
 

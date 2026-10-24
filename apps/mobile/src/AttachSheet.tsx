@@ -3,7 +3,7 @@
 // tapped; and Add files at the foot. It springs up, and a swipe down or the X puts it away.
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
-import { AssetField, MediaType, Query, requestPermissionsAsync, type AssetMetadata } from "expo-media-library";
+import { Asset, AssetField, MediaType, Query, requestPermissionsAsync, type AssetMetadata } from "expo-media-library";
 import { Camera, Check, FileText, X } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Image, Linking, Modal, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
@@ -48,6 +48,8 @@ export function AttachSheet({
   // Undefined until asked, the first time the sheet opens.
   const [allowed, setAllowed] = useState<boolean>();
   const [recent, setRecent] = useState<AssetMetadata[]>([]);
+  // Each recent photo's file URL, by id: React Native's Image can't load a `ph://` id here.
+  const [files, setFiles] = useState<ReadonlyMap<string, string>>(new Map());
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +67,10 @@ export function AttachSheet({
           .orderBy({ key: AssetField.CREATION_TIME, ascending: false })
           .limit(RECENT)
           .exeForMetadata();
-        if (live) setRecent(photos);
+        if (!live) return;
+        setRecent(photos);
+        const uris = await Promise.all(photos.map((p) => new Asset(p.id).getUri().catch(() => undefined)));
+        if (live) setFiles(new Map(photos.flatMap((p, i) => (uris[i] ? [[p.id, uris[i]] as const] : []))));
       })
       .catch(() => live && setAllowed(false));
     return () => {
@@ -151,8 +156,11 @@ export function AttachSheet({
                       accessibilityState={{ selected: on }}
                       onPress={() => toggle(p)}
                     >
-                      {/* `ph://` ids load through expo-media-library's image loader, at the tile's size. */}
-                      <Image source={{ uri: p.id }} style={[styles.tile, { backgroundColor: c.selected }]} />
+                      <Image
+                        source={{ uri: files.get(p.id) }}
+                        resizeMethod="resize"
+                        style={[styles.tile, { backgroundColor: c.selected }]}
+                      />
                       {on && (
                         <View style={[styles.check, { backgroundColor: c.accent }]}>
                           <Icon icon={Check} size={14} color="#ffffff" strokeWidth={3} />

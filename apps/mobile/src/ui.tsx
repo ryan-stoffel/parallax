@@ -214,37 +214,6 @@ export function SkyBanner({ bar, solid, fade }: { bar: number; solid: number; fa
   );
 }
 
-/** A round button's night sky, as the desktop's nightly send button wears it: a disc of `size`. */
-export function NightOrb({ size }: { size: number }) {
-  const r = size / 2;
-  return (
-    <Svg width={size} height={size} style={StyleSheet.absoluteFill}>
-      <Defs>
-        <LinearGradient id="orb" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0" stopColor="#070923" />
-          <Stop offset="0.6" stopColor="#17184f" />
-          <Stop offset="1" stopColor="#2a2470" />
-        </LinearGradient>
-        <RadialGradient id="orbglow" cx="0.7" cy="0.15" r="0.6">
-          <Stop offset="0" stopColor="#7c3aed" stopOpacity={0.5} />
-          <Stop offset="1" stopColor="#7c3aed" stopOpacity={0} />
-        </RadialGradient>
-      </Defs>
-      <Circle cx={r} cy={r} r={r} fill="url(#orb)" />
-      <Circle cx={r} cy={r} r={r} fill="url(#orbglow)" />
-      {[
-        [0.3, 0.28, 0.7, 1],
-        [0.66, 0.22, 0.6, 0.8],
-        [0.74, 0.5, 0.6, 0.7],
-        [0.24, 0.64, 0.5, 0.55],
-        [0.6, 0.76, 0.5, 0.6],
-      ].map(([x, y, rr, o], i) => (
-        <Circle key={i} cx={x! * size} cy={y! * size} r={rr} fill="#ffffff" opacity={o} />
-      ))}
-    </Svg>
-  );
-}
-
 /** A lucide icon, as the desktop draws its: 2 px strokes, in the text's color. */
 export function Icon({
   icon: Glyph,
