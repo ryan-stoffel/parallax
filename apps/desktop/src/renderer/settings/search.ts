@@ -220,6 +220,14 @@ export const settingsIndex: SettingEntry[] = [
     ["Show home button", "In the toolbar, beside Reload", "homepage"],
     ["Home page", "Empty opens a new tab", "homepage start page url"],
   ]),
+  ...entries("browser", "Downloads", [
+    ["Location", "Where downloads go", "downloads folder save path"],
+    [
+      "Ask where to save each file before downloading",
+      "Off, each file goes straight to the location",
+      "downloads save dialog prompt",
+    ],
+  ]),
   ...entries("browser", "Privacy", [
     [
       "Clear browsing data",

@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer, webFrame } from "electron";
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   BrowserAction,
+  DownloadInfo,
   ConnectionState,
   DeviceStreamMessage,
   Profile,
@@ -102,6 +103,14 @@ const bridge: ParallaxBridge = {
   },
   selectBrowserTab: (id) => ipcRenderer.send("parallax:selectBrowserTab", id),
   clearBrowsingData: (what) => ipcRenderer.invoke("parallax:clearBrowsingData", what),
+  downloads: () => ipcRenderer.invoke("parallax:downloads"),
+  onDownloads(listener) {
+    const forward = (_event: unknown, list: DownloadInfo[]) => listener(list);
+    ipcRenderer.on("parallax:downloads", forward);
+    return () => ipcRenderer.removeListener("parallax:downloads", forward);
+  },
+  downloadAction: (id, action) => ipcRenderer.send("parallax:downloadAction", id, action),
+  setDownloadPrefs: (prefs) => ipcRenderer.send("parallax:downloadPrefs", prefs),
   updatable: process.argv.includes("--parallax-updatable"),
   firstRun: process.argv.includes("--parallax-first-run"),
   locale: validLocale(

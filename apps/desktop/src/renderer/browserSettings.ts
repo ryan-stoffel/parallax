@@ -50,3 +50,20 @@ export const homeButton = stored<{ show: boolean; url: string }>(
   { show: false, url: "" },
   merged,
 );
+
+/**
+ * Where downloads go, the OS's downloads folder when empty, and whether to ask each time (PLX-975).
+ * Main saves them, so it hears the settings at startup and on each change.
+ */
+export const downloadPrefs = stored<{ dir: string; ask: boolean }>(
+  "parallax.downloadPrefs",
+  { dir: "", ask: false },
+  merged,
+);
+// Tests load this without a window.
+if (typeof window !== "undefined") window.parallax?.setDownloadPrefs?.(downloadPrefs.get());
+
+export function setDownloadPrefs(next: { dir: string; ask: boolean }) {
+  downloadPrefs.set(next);
+  window.parallax.setDownloadPrefs(next);
+}
