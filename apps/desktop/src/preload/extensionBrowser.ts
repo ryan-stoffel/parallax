@@ -43,9 +43,17 @@ if (inExtension && process.type === "service-worker")
         listeners.push(listener);
         add(listener);
       };
+      // As Chrome does, one listener that throws doesn't stop the rest.
       void added.then((yes) => {
-        if (yes) for (const listener of listeners) listener({ reason: "install" });
+        if (!yes) return;
+        for (const listener of listeners)
+          try {
+            listener({ reason: "install" });
+          } catch (error) {
+            console.error(error);
+          }
       });
     },
-    args: [ipcRenderer.invoke("parallax:extensionAdded")],
+    // A worker main never registered a handler for hears no.
+    args: [ipcRenderer.invoke("parallax:extensionAdded").catch(() => false)],
   });

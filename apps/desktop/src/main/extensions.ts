@@ -319,9 +319,11 @@ let adding: Promise<unknown> = Promise.resolve();
 
 async function add(session: Session, folder: string): Promise<ExtensionInfo> {
   const loading = session.extensions.loadExtension(folder);
-  adding = loading.catch(() => {});
+  adding = loading.then(
+    (extension) => added.add(extension.id),
+    () => {},
+  );
   const extension = await loading;
-  added.add(extension.id);
   await saveFolders([...(await folders()), folder]);
   return describe(extension);
 }
