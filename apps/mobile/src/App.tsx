@@ -27,7 +27,7 @@ import { AddComputerScreen, ComputerScreen, SettingsScreen } from "./Settings";
 import { ThreadDetailsScreen } from "./ThreadDetails";
 import { SkyBanner, useColors, Wordmark } from "./ui";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { dark, light } from "./theme";
 import { ThreadScreen } from "./Thread";
 import { ThreadList } from "./ThreadList";
@@ -43,9 +43,15 @@ function tab(title: string, Screen: React.ComponentType) {
     const c = useColors();
     const insets = useSafeAreaInsets();
     return (
-      <View style={{ flex: 1, backgroundColor: c.background }}>
-        <SkyBanner bar={insets.top + 54} height={insets.top + 190} />
+      // The list first, which iOS's large title collapses with as it scrolls, the sky under it.
+      <View style={{ flex: 1 }}>
         <Screen />
+        <View
+          pointerEvents="none"
+          style={[StyleSheet.absoluteFill, { zIndex: -1, backgroundColor: c.background }]}
+        >
+          <SkyBanner bar={insets.top + 54} height={insets.top + 190} />
+        </View>
       </View>
     );
   }
