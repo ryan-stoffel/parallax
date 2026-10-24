@@ -205,7 +205,7 @@ export const settingsIndex: SettingEntry[] = [
   ]),
   // Browser (PLX-974)
   ...entries("browser", "Appearance", [
-    ["Theme", "Helium's and Chrome's colors, or Parallax's own", "color colour palette dark light"],
+    ["Theme", "Parallax's own colors, or Helium's and Chrome's", "color colour palette dark light"],
     ["Layout", "Compact puts the tabs and the address bar in one row", "compact classic toolbar"],
     ["Show bookmarks bar", "Under the toolbar, while there are bookmarks", "favorites"],
     ["Page size", "Desktop lays a page out as on a monitor", "zoom fit monitor"],

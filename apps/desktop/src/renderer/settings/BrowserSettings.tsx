@@ -40,7 +40,7 @@ export function BrowserSettings() {
       </PageTitle>
 
       <Section title="Appearance">
-        <Row title="Theme" description="Helium's and Chrome's colors, or Parallax's own">
+        <Row title="Theme" description="Parallax's own colors, or Helium's and Chrome's">
           <ThemeSwatches />
         </Row>
         <Row title="Layout" description="Compact puts the tabs and the address bar in one row">
