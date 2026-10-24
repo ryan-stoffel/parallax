@@ -119,10 +119,13 @@ export interface SavedTabs {
 // The most chats' browsers whose tabs are kept, so deleted threads' don't pile up. The
 // permanent browser's are always kept.
 const SAVED_SCOPES = 100;
+// The longest icon kept, in characters of its data URL.
+const SAVED_ICON = 16_384;
 
 /**
- * `tabs` as saved: those with a page, and an icon only as a link, since a page's icon can be a
- * large data URL. Undefined when none has a page.
+ * `tabs` as saved: those with a page, and a small icon. A page's icon arrives as a data URL of up
+ * to 256 KB (main.ts), and a favicon is a few KB, so a larger one isn't kept. Undefined when none
+ * has a page.
  */
 export function savedOf(tabs: readonly OwnTab[], current: number): SavedTabs | undefined {
   const kept = tabs.filter((t) => t.url);
@@ -131,7 +134,7 @@ export function savedOf(tabs: readonly OwnTab[], current: number): SavedTabs | u
     tabs: kept.map((t) => ({
       url: t.url!,
       ...(t.title && { title: t.title }),
-      ...(t.icon?.startsWith("http") && { icon: t.icon }),
+      ...(t.icon && t.icon.length <= SAVED_ICON && { icon: t.icon }),
     })),
     current: Math.max(
       0,

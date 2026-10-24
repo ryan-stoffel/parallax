@@ -62,17 +62,15 @@ test("a page fits to a monitor until the panel holds one whole", () => {
   expect(fitSize(416, 900, "panel")).toEqual({ width: 416, height: 900 });
 });
 
-test("a browser saves its tabs with pages, the one in front, and only linked icons", () => {
+test("a browser saves its tabs with pages, the one in front, and only small icons", () => {
+  const icon = "data:image/png;base64,AAAA";
   const tabs = [
     { id: 1 },
-    { id: 2, url: "https://a.com/", title: "A", icon: "https://a.com/favicon.ico" },
-    { id: 3, url: "https://b.com/", icon: "data:image/png;base64,AAAA" },
+    { id: 2, url: "https://a.com/", title: "A", icon },
+    { id: 3, url: "https://b.com/", icon: `data:image/png;base64,${"A".repeat(20_000)}` },
   ];
   expect(savedOf(tabs, 3)).toEqual({
-    tabs: [
-      { url: "https://a.com/", title: "A", icon: "https://a.com/favicon.ico" },
-      { url: "https://b.com/" },
-    ],
+    tabs: [{ url: "https://a.com/", title: "A", icon }, { url: "https://b.com/" }],
     current: 1,
   });
   // A blank tab in front saves the first page in front; only blank tabs save nothing.
