@@ -1,10 +1,9 @@
-import { FolderOpen, Trash2 } from "lucide-react";
 import { createElement, useEffect, useId, useState } from "react";
 
 import type { ExtensionInfo } from "../preload/bridge";
 import { dismiss, notify } from "./notifications";
 import { memory } from "./stored";
-import { Extension } from "./symbols";
+import { Delete, Extension, FolderOpen } from "./symbols";
 import { IconButton, Menu, menuHeading, menuItem } from "./ui";
 
 // The installed extensions, shared by every tab's toolbar, read once and after each change.
@@ -91,7 +90,7 @@ export function Extensions({ tab }: { tab?: number }) {
                 onClick={() => void window.parallax.removeExtension(extension.id).then(refresh)}
                 className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100"
               >
-                <Trash2 aria-hidden />
+                <Delete aria-hidden />
               </button>
             </div>
           ))

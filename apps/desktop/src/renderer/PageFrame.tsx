@@ -1,8 +1,7 @@
-import { Monitor, PanelRight, Scaling } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { stored } from "./stored";
-import { MoreVert } from "./symbols";
+import { DesktopWindows, MoreVert, Resize, RightPanelOpen } from "./symbols";
 import { IconButton, Menu, menuHeading, MenuOption } from "./ui";
 
 /** A page's size in CSS pixels. */
@@ -259,7 +258,7 @@ export function ViewMenu({
           option={{
             value: "monitor",
             label: "Desktop",
-            icon: <Monitor aria-hidden />,
+            icon: <DesktopWindows aria-hidden />,
             hint: `${MONITOR.width} × ${MONITOR.height}`,
             description: "The site as on a monitor, scaled to fit the panel",
           }}
@@ -270,7 +269,7 @@ export function ViewMenu({
           option={{
             value: "panel",
             label: "Panel",
-            icon: <PanelRight aria-hidden />,
+            icon: <RightPanelOpen aria-hidden />,
             description: "The site at the panel's size, like a normal browser",
           }}
           checked={!fixed && fit === "panel"}
@@ -281,7 +280,7 @@ export function ViewMenu({
             option={{
               value: "custom",
               label: "Custom",
-              icon: <Scaling aria-hidden />,
+              icon: <Resize aria-hidden />,
               hint: `${size.width} × ${size.height}`,
               description: "Drag the window's corner or type a size under it",
             }}
