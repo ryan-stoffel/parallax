@@ -20,6 +20,7 @@ import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
 import { bookmarks, BookmarksBar, BookmarkStar, bookmarksBar, toggled } from "./Bookmarks";
+import { browserTheme, browserThemes } from "./browserTheme";
 import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
@@ -87,7 +88,7 @@ export function browserUrl(address: string): string | undefined {
  * text, ringed in the accent while focused. Its input takes `addressInput`.
  */
 export const addressBox =
-  "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-transparent bg-selected px-2.5 text-[13px] focus-within:border-ring focus-within:bg-background [&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
+  "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-transparent bg-[var(--browser-omnibox,var(--selected))] px-2.5 text-[13px] focus-within:border-ring focus-within:bg-background [&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
 export const addressInput =
   "h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint-foreground";
 
@@ -863,6 +864,8 @@ function Tab({
           checked={layout === "classic"}
           onClick={() => browserLayout.set("classic")}
         />
+        <div className="my-1 h-px bg-border" />
+        <ThemePicker />
       </ViewMenu>
     </>
   );
@@ -896,7 +899,8 @@ function Tab({
         e.preventDefault();
         e.stopPropagation();
       }}
-      className={`min-h-0 flex-1 flex-col ${shown ? "flex" : "hidden"}`}
+      // The theme's toolbar color under the tabs and around the page (browserTheme.ts).
+      className={`min-h-0 flex-1 flex-col bg-[var(--browser-toolbar,transparent)] ${shown ? "flex" : "hidden"}`}
     >
       {compact ? (
         <>
@@ -1113,7 +1117,7 @@ function BrowserTab({
   );
   return (
     <div
-      className={`group flex h-8 w-60 min-w-9 shrink items-center rounded-lg text-[12.5px] ${selected ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+      className={`group flex h-8 w-60 min-w-9 shrink items-center rounded-lg text-[12.5px] ${selected ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
     >
       <button
         type="button"
@@ -1138,6 +1142,37 @@ function BrowserTab({
           <CloseSmall aria-hidden className="size-4" />
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * The More menu's themes, as Chrome's Customize panel shows them: a swatch each, the picked one
+ * ringed. Picking one keeps the menu open, to try another (browserTheme.ts).
+ */
+function ThemePicker() {
+  const picked = browserTheme.use();
+  return (
+    <div role="group" aria-label="Theme" className="px-2 pt-1 pb-2">
+      <p className={`${menuHeading} px-0`}>Theme</p>
+      <div className="grid grid-cols-8 gap-1.5">
+        {browserThemes.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={picked === t.id}
+            aria-label={t.name}
+            title={t.name}
+            onClick={(e) => {
+              e.stopPropagation();
+              browserTheme.set(t.id);
+            }}
+            style={{ background: t.swatch }}
+            className={`size-6 rounded-full border border-border ${t.id === "parallax" ? "bg-[conic-gradient(#ffffff_0_50%,#1f1f2e_0_100%)]!" : ""} ${picked === t.id ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""}`}
+          />
+        ))}
+      </div>
     </div>
   );
 }

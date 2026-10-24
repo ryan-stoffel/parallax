@@ -630,9 +630,20 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
 }
 
 /** The 52px top row of a pane. On macOS and Windows it is also the window's title bar. */
-export function TopBar({ className = "", children }: { className?: string; children: ReactNode }) {
+export function TopBar({
+  className = "",
+  style,
+  children,
+}: {
+  className?: string;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
   return (
-    <div className={`titlebar flex h-13 shrink-0 items-center gap-2 px-3 ${className}`}>
+    <div
+      style={style}
+      className={`titlebar flex h-13 shrink-0 items-center gap-2 px-3 ${className}`}
+    >
       {children}
     </div>
   );

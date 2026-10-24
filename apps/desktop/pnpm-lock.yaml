@@ -30,6 +30,9 @@ importers:
       '@fontsource-variable/source-code-pro':
         specifier: ^5.3.1
         version: 5.3.1
+      '@material/material-color-utilities':
+        specifier: 0.4.0
+        version: 0.4.0
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
@@ -356,6 +359,9 @@ packages:
   '@malept/flatpak-bundler@0.4.0':
     resolution: {integrity: sha512-9QOtNffcOF/c1seMCDnjckb3R9WHcG34tky+FHpNKKCW0wc/scYLwMtO+ptyGUfMW0/b/n4qRiALlaFHc9Oj7Q==}
     engines: {node: '>= 10.0.0'}
+
+  '@material/material-color-utilities@0.4.0':
+    resolution: {integrity: sha512-dlq6VExJReb8dhjj3a/yTigr3ncNwoFmL5Iy2ENtbDX03EmNeOEdZ+vsaGrj7RTuO+mB7L58II4LCsl4NpM8uw==}
 
   '@napi-rs/canvas-android-arm64@1.0.11':
     resolution: {integrity: sha512-dtJS4FQEfH9OwSYLtMrEnj7T8DzBbJc/97LI/OkiWOYpW/iW5t6R/gcxVrUXS8l45gCVpwMufgucRe/pe0ISqA==}
@@ -3518,6 +3524,8 @@ snapshots:
       tmp-promise: 3.0.3
     transitivePeerDependencies:
       - supports-color
+
+  '@material/material-color-utilities@0.4.0': {}
 
   '@napi-rs/canvas-android-arm64@1.0.11':
     optional: true

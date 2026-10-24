@@ -53,6 +53,7 @@ import { PullRequestsPage, type PrEntry } from "./PullRequestsPage";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { Browser, BrowserTabBar } from "./Browser";
+import { useBrowserTheme } from "./browserTheme";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
 import {
@@ -169,6 +170,7 @@ export function App() {
   // The page shown in place of the chat, if any: Pull requests, or the sidebar's permanent browser
   // (PLX-964). Opening a thread or Settings closes it.
   const [mainPage, setMainPage] = useState<"pullRequests" | "browser">();
+  const browserStyle = useBrowserTheme();
   // The permanent browser mounts the first time it opens and stays, so its pages keep running.
   const [browserPage, setBrowserPage] = useState(false);
   if (mainPage === "browser" && !browserPage) setBrowserPage(true);
@@ -1030,7 +1032,9 @@ export function App() {
               />
             </>
           ) : mainPage === "browser" ? (
-            <TopBar className={topBarInset}>
+            // The browser's theme paints its top bar and the browser, not the terminal drawer under
+            // them (browserTheme.ts).
+            <TopBar style={browserStyle} className={`bg-pane ${topBarInset}`}>
               {showSidebar}
               <BrowserTabBar scope="permanent" />
             </TopBar>
@@ -1426,7 +1430,8 @@ export function App() {
           {browserPage && (
             <div
               hidden={!!settings || mainPage !== "browser"}
-              className="flex min-h-0 flex-1 flex-col"
+              style={browserStyle}
+              className="flex min-h-0 flex-1 flex-col bg-pane"
             >
               <Browser scope="permanent" remoteHost={host.id === localId ? undefined : host.name} />
             </div>

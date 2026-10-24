@@ -22,6 +22,7 @@ import {
 import { useState, type ComponentProps, type ReactNode } from "react";
 
 import { Browser, BrowserTabBar } from "./Browser";
+import { useBrowserTheme } from "./browserTheme";
 import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
 import { lookOf, numberOf, type PullRequests } from "./PullRequests";
@@ -215,6 +216,7 @@ export function SidePanel({
       recent: [...panel.recent.filter(([t, at]) => t !== s || at !== thread), [s, thread]],
     }));
 
+  const browserStyle = useBrowserTheme();
   const available = project
     ? surfaces
     : ["Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
@@ -346,7 +348,12 @@ export function SidePanel({
       className={`relative flex min-w-0 flex-col bg-pane ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`}
     >
       {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}
-      <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
+      {/* While browsing, the browser's theme paints its top bar and the browser, and nothing else,
+          such as the terminals mounted behind it (browserTheme.ts). */}
+      <TopBar
+        style={browsing ? browserStyle : undefined}
+        className={`window-controls-inset px-2 ${browsing && browserStyle ? "bg-pane" : ""} ${topBarClassName}`}
+      >
         {leading}
         {browsing ? (
           <BrowserTabBar scope={scope} />
@@ -451,7 +458,8 @@ export function SidePanel({
           <div
             key={`${key}/B`}
             hidden={key !== scope || !browsing}
-            className="flex min-h-0 flex-1 flex-col"
+            style={browserStyle}
+            className="flex min-h-0 flex-1 flex-col bg-pane"
           >
             <Browser
               scope={key}
