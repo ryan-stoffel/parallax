@@ -1,15 +1,54 @@
 import { expect, test } from "vite-plus/test";
 
-import { toggled } from "./Bookmarks";
+import {
+  findBookmark,
+  folderList,
+  moved,
+  removedFolder,
+  toggled,
+  withFolder,
+  withIcon,
+  type BookmarkNode,
+} from "./Bookmarks";
 
-test("the star adds a page's bookmark at the end, or removes it when it has one", () => {
+const icon = "data:image/png;base64,AAAA";
+
+test("the star adds a page's bookmark at the bar's end, or removes it wherever it is", () => {
   const a = { url: "https://a.com/", title: "A" };
-  const icon = "data:image/png;base64,AAAA";
   const list = toggled([a], { url: "https://b.com/", title: "B", icon });
   expect(list).toEqual([a, { url: "https://b.com/", title: "B", icon }]);
-  expect(toggled(list, { url: "https://a.com/" })).toEqual([list[1]]);
+  const tree: BookmarkNode[] = [{ id: "f", title: "Work", children: [a] }];
+  expect(toggled(tree, a)).toEqual([{ id: "f", title: "Work", children: [] }]);
   // A large icon isn't kept.
   expect(toggled([], { url: "https://c.com/", icon: `${icon}${"A".repeat(20_000)}` })).toEqual([
     { url: "https://c.com/" },
   ]);
+});
+
+test("bookmarks move into folders, nested ones too, and a folder goes with what it holds", () => {
+  const a = { url: "https://a.com/" };
+  const [withWork, work] = withFolder([a], "Work");
+  const [nested, docs] = withFolder(withWork, "Docs", work);
+  const tree = moved(nested, a.url, docs);
+  expect(findBookmark(tree, a.url)).toEqual({ bookmark: a, folder: docs });
+  expect(folderList(tree)).toEqual([
+    { id: work, title: "Work", depth: 0 },
+    { id: docs, title: "Docs", depth: 1 },
+  ]);
+  // Back to the bar.
+  expect(findBookmark(moved(tree, a.url, undefined), a.url)).toEqual({ bookmark: a });
+  expect(removedFolder(tree, work)).toEqual([]);
+});
+
+test("a bookmark saved before its page's icon arrived gets it later", () => {
+  const tree: BookmarkNode[] = [
+    { id: "f", title: "F", children: [{ url: "https://a.com/" }] },
+    { url: "https://b.com/", icon: "data:old" },
+  ];
+  expect(findBookmark(withIcon(tree, "https://a.com/", icon), "https://a.com/")?.bookmark).toEqual({
+    url: "https://a.com/",
+    icon,
+  });
+  // One that has an icon keeps it.
+  expect(withIcon(tree, "https://b.com/", icon)[1]).toEqual(tree[1]);
 });
