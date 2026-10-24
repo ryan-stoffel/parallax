@@ -47,7 +47,13 @@ export function watchGoogleAccounts(
   const read = async () => {
     let next: GoogleAccount | undefined;
     try {
-      const answer = await session.fetch(listAccounts, { credentials: "include" });
+      // As Chromium asks: a GET gets an error page.
+      const answer = await session.fetch(listAccounts, {
+        method: "POST",
+        body: " ",
+        headers: { Origin: "https://www.google.com" },
+        credentials: "include",
+      });
       next = answer.ok ? parseListAccounts(await answer.text()) : undefined;
     } catch {
       // Offline: as signed out, until the next change.

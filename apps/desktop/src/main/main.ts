@@ -67,7 +67,7 @@ import {
   startExtensions,
 } from "./extensions";
 import { googleAccount, watchGoogleAccounts } from "./googleAccount";
-import { answerStore, browserUserAgent, chromeUserAgent, storeOrigin } from "./webStore";
+import { answerStore, browserUserAgent, storeOrigin } from "./webStore";
 import { downloadAction, downloadList, setDownloadPrefs, startDownloads } from "./downloads";
 import {
   browserShortcut,
@@ -809,21 +809,16 @@ void app.whenReady().then(async () => {
   browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));
   browserSession.setPermissionCheckHandler(() => false);
   // Its user agent is Electron's, without the app's token: Cloudflare's Turnstile and Google's
-  // sign-in refuse one that claims plain Chrome (PLX-981). The Chrome Web Store alone gets
-  // Chrome's, which enables its Add to Chrome button (PLX-962): here for its requests, and in its
-  // preload for `navigator.userAgent` (webStore.ts). Its Accept-Language is the OS's languages,
+  // sign-in refuse one that claims plain Chrome (PLX-981). The Chrome Web Store's pages read
+  // Chrome's from their preload, which enables Add to Chrome (webStore.ts); a request hook would
+  // do it too, but any `session.webRequest` listener turns off extensions' `chrome.webRequest`
+  // in Electron. Its Accept-Language is the OS's languages,
   // as before the app shipped only Chromium's en-US locale (PLX-613). Its pages'
   // `navigator.language` is en-US all the same.
   const languages = app.getPreferredSystemLanguages().filter((tag) => validLocale(tag));
-  const storeAgent = chromeUserAgent(browserSession.getUserAgent());
   browserSession.setUserAgent(
     browserUserAgent(browserSession.getUserAgent()),
     languages.length > 0 ? languages.join(",") : undefined,
-  );
-  browserSession.webRequest.onBeforeSendHeaders(
-    { urls: [`${storeOrigin}/*`] },
-    ({ requestHeaders }, callback) =>
-      callback({ requestHeaders: { ...requestHeaders, "User-Agent": storeAgent } }),
   );
   // Google's signed-in account, for the browser's profile button (googleAccount.ts).
   watchGoogleAccounts(browserSession, favicon);

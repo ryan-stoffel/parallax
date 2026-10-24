@@ -581,9 +581,13 @@ function Tab({
   const [newTabPage, setNewTabPage] = useState(!page && !load);
   const ntp = useRef(newTabPage);
   const homeLoaded = useRef(false);
+  // The url the tab last showed, so a reload keeps its title.
+  const shownUrl = useRef(page?.url);
   const leaveNewTabPage = () => {
     ntp.current = false;
     setNewTabPage(false);
+    // The page it goes to takes the focus the home page's load didn't.
+    focused.current = false;
   };
   // The first page, which mounts the webview; later pages load in it.
   const [src, setSrc] = useState<string | undefined>(() =>
@@ -750,9 +754,12 @@ function Tab({
         }
         leaveNewTabPage();
       }
+      // Another page has no title until it says, rather than the last page's (PLX-981). A reload
+      // keeps its own, which it doesn't say again.
+      const moved = url !== shownUrl.current;
+      shownUrl.current = url;
       setAddress(url);
-      // A new document has no title until it says, rather than the last page's (PLX-981).
-      latest.current.onChange(inPage ? { url } : { url, title: undefined });
+      latest.current.onChange(moved && !inPage ? { url, title: undefined } : { url });
       // Each web page visited goes in History, not an extension's own pages.
       if (/^https?:/.test(url)) browserHistory.set(visited(browserHistory.get(), url, Date.now()));
     };
@@ -985,7 +992,8 @@ function Tab({
   };
   const settingsAt = (title?: string) =>
     pick(() => browserSettingsAsked.set(title ? { title } : {}));
-  const bookmarked = !!page && !!findBookmark(bookmarks.get(), page.url);
+  const tree = bookmarks.use();
+  const bookmarked = !!page && !!findBookmark(tree, page.url);
   const desktop = fit === "monitor" && !fixed;
   const toolsBar = (
     <>

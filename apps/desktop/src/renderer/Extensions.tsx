@@ -79,6 +79,14 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
     return () => actions()?.removeEventListener("update", update);
   }, []);
 
+  // An extension removed, here or in Settings, forgets its unpin, so it starts pinned if it's
+  // added again.
+  useEffect(() => {
+    if (!list) return;
+    const kept = hidden.filter((id) => list.some((e) => e.id === id));
+    if (kept.length !== hidden.length) unpinned.set(kept);
+  }, [list]);
+
   const pinned =
     list?.filter((e) => !hidden.includes(e.id) && actions()?.getAction(e.id) !== undefined) ?? [];
   const setPinned = (id: string, pin: boolean) =>

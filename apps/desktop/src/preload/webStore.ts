@@ -64,7 +64,7 @@ if (location?.origin === "https://chromewebstore.google.com") {
   };
 
   // Chrome's user agent, which the store reads to enable Add to Chrome. The browser's own keeps
-  // Electron's token (main.ts), which the store's requests already lose there.
+  // Electron's token (main.ts).
   const { navigator } = globalThis as unknown as { navigator: { userAgent: string } };
   const userAgent = navigator.userAgent.replace(/ Electron\/\S+/, "");
 
