@@ -681,7 +681,8 @@ function Tab({
   };
   const latest = useRef({ onChange, ask, local, shown, focusOnLoad });
   latest.current = { onChange, ask, local, shown, focusOnLoad };
-  // Whether the page has taken the focus it's due on its first load.
+  // Whether the page has taken the focus it's due on load: its first, and again after each page
+  // the user opens from the toolbar (`open`), as in Chrome.
   const focused = useRef(false);
 
   // A tab shown, by a click or a shortcut, takes focus to its page, as in Chrome, so the page's
@@ -796,7 +797,7 @@ function Tab({
     el.addEventListener("did-attach", ready);
     el.addEventListener("dom-ready", ready);
     const firstLoad = () => {
-      // Only the first load's, shown or not, so a later one doesn't take focus.
+      // Once per page the tab opens, shown or not, so the page's own later loads don't take it.
       if (focused.current) return;
       focused.current = true;
       if (latest.current.focusOnLoad && latest.current.shown && !ntp.current) el.focus();
