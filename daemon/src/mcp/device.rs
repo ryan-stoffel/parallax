@@ -359,14 +359,24 @@ impl Devices {
         let (mut running, rest): (Vec<_>, Vec<_>) = devices
             .into_iter()
             .partition(|device| device.booted && !device.physical);
+        // The one a thread has open stays: this thread's, then another's, then the requested one.
+        let mut sessions = self.read_sessions()?;
+        let elsewhere = self.open_elsewhere();
+        let mine = |device: &Device| sessions.iter().any(|s| s.device_id == device.id);
         let shared = running
             .iter()
-            .position(|device| wants(&args, device))
+            .position(mine)
+            .or_else(|| running.iter().position(|d| elsewhere.contains(&d.id)))
+            .or_else(|| running.iter().position(|d| wants(&args, d)))
             .unwrap_or(0);
         let shared = (!running.is_empty()).then(|| running.remove(shared));
+        // Never one another thread holds. A failed shutdown leaves it running rather than failing
+        // the open: `plxd mcp` has no log, and the next device_open tries again.
+        running.retain(|extra| !elsewhere.contains(&extra.id));
         for extra in &running {
-            shutdown(&self.tools, extra.platform, &extra.id).await?;
+            let _ = shutdown(&self.tools, extra.platform, &extra.id).await;
         }
+        sessions.retain(|session| running.iter().all(|extra| extra.id != session.device_id));
         let phone = rest.iter().find(|device| {
             device.physical && args.device_id.as_ref().is_some_and(|id| *id == device.id)
         });
@@ -381,7 +391,6 @@ impl Devices {
             }
             (None, None) => boot(&self.tools, pick(rest, &args)?).await?,
         };
-        let mut sessions = self.read_sessions()?;
         sessions.retain(|session| session.device_id != device.id);
         sessions.push(Session {
             host_id: LOCAL.to_owned(),
@@ -438,6 +447,8 @@ impl Devices {
 
     async fn close(&self, args: CloseArgs) -> Result<String, String> {
         check_host(args.host_id.as_deref())?;
+        // Under the lock, so no thread opens the device between the check and its shutdown.
+        let _lock = self.lock().await?;
         let (closing, kept): (Vec<_>, Vec<_>) =
             self.read_sessions()?.into_iter().partition(|session| {
                 args.device_id
@@ -451,8 +462,6 @@ impl Devices {
         if !args.shutdown {
             return Ok("{}".to_owned());
         }
-        // Under the lock, so no thread opens the device between the check and its shutdown.
-        let _lock = self.lock().await?;
         let elsewhere = self.open_elsewhere();
         let mut left_running = Vec::new();
         for session in &closing {
@@ -514,11 +523,15 @@ impl Devices {
     fn write_sessions(&self, sessions: &[Session]) -> Result<(), String> {
         let failed =
             |error: std::io::Error| format!("could not save this thread's open devices: {error}");
-        if let Some(dir) = self.sessions.parent() {
-            std::fs::create_dir_all(dir).map_err(failed)?;
-        }
+        let dir = self.sessions.parent().ok_or("no folder for open devices")?;
+        std::fs::create_dir_all(dir).map_err(failed)?;
         let json = serde_json::to_vec(sessions).map_err(|error| error.to_string())?;
-        std::fs::write(&self.sessions, json).map_err(failed)
+        // Written whole, then renamed over the old one, so another thread never reads half.
+        let mut file = tempfile::NamedTempFile::new_in(dir).map_err(failed)?;
+        std::io::Write::write_all(&mut file, &json).map_err(failed)?;
+        file.persist(&self.sessions)
+            .map(drop)
+            .map_err(|error| failed(error.error))
     }
 }
 
@@ -574,7 +587,12 @@ pub(crate) async fn shutdown(
     match platform {
         Platform::Ios => {
             let ios = tools.ios.as_ref()?;
-            run(&ios.xcrun, &["simctl", "shutdown", id], BOOT_TIMEOUT).await?;
+            // Already off, as when two threads shut it down at once, is done.
+            if let Err(error) = run(&ios.xcrun, &["simctl", "shutdown", id], BOOT_TIMEOUT).await
+                && !error.contains("current state: Shutdown")
+            {
+                return Err(error);
+            }
         }
         Platform::Android if id.starts_with("emulator-") => {
             let android = tools.android.as_ref()?;

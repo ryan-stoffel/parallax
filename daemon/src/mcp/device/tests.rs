@@ -74,6 +74,7 @@ fn ios(dir: &Path) -> Ios {
         r#"case "$2" in
   list) cat "$D/list.json" ;;
   io) cp "$D/shot.png" "$6" ;;
+  shutdown) [ -e "$D/off-$3" ] && { echo "Unable to shutdown device in current state: Shutdown" >&2; exit 149; }; touch "$D/off-$3" ;;
   boot) sleep 1; sed "/\"$3\"/s/Shutdown/Booted/" "$D/list.json" > "$D/list.new"; mv "$D/list.new" "$D/list.json" ;;
 esac"#,
     );
@@ -249,6 +250,30 @@ async fn every_thread_shares_the_running_simulator_and_only_its_last_shuts_it_do
         .unwrap();
     assert_eq!(closed, json!({}));
     assert!(calls(&dir).contains("xcrun simctl shutdown SIM-ON"));
+    // A second shutdown, as from a thread closing at the same time, finds it off and succeeds.
+    super::shutdown(&tools(), super::Platform::Ios, "SIM-ON")
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn open_keeps_the_device_another_thread_has_and_shuts_down_one_booted_by_hand() {
+    let dir = TempDir::new().unwrap();
+    let tools = || Toolchain {
+        ios: Ok(ios(dir.path())),
+        android: Err("Android SDK was not found.".to_owned()),
+    };
+    let (first, second) = (devices(&dir, tools()), devices(&dir, tools()));
+    let opened = call(&first, "device_open", json!({})).await.unwrap();
+    assert_eq!(opened["device"]["id"], "SIM-ON");
+    // Booted by hand; it's first in simctl's list.
+    let list = SIMCTL_LIST.replace("Shutdown", "Booted");
+    std::fs::write(dir.path().join("list.json"), list).unwrap();
+    let opened = call(&second, "device_open", json!({})).await.unwrap();
+    assert_eq!(opened["device"]["id"], "SIM-ON");
+    let calls = calls(&dir);
+    assert!(calls.contains("xcrun simctl shutdown SIM-OFF"), "{calls}");
+    assert!(!calls.contains("shutdown SIM-ON"), "{calls}");
 }
 
 #[tokio::test]
