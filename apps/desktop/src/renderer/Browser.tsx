@@ -333,7 +333,7 @@ export function Browser({
     else if (page?.url !== undefined) {
       const tab = tabs.find((t) => t.id === current);
       if (tab && !tab.url && !tab.load) {
-        update(tab.id, { load: { url: page.url } });
+        update(tab.id, { load: { url: page.url }, focus: false });
         setAgentTab(undefined);
       } else newTab(page.url, current, false);
     }
@@ -665,9 +665,10 @@ function Tab({
     el.addEventListener("did-attach", ready);
     el.addEventListener("dom-ready", ready);
     const firstLoad = () => {
-      if (focused.current || !latest.current.focusOnLoad || !latest.current.shown) return;
+      // Only the first load's, shown or not, so a later one doesn't take focus.
+      if (focused.current) return;
       focused.current = true;
-      el.focus();
+      if (latest.current.focusOnLoad && latest.current.shown) el.focus();
     };
     el.addEventListener("dom-ready", firstLoad);
     el.addEventListener("did-navigate", navigated);
