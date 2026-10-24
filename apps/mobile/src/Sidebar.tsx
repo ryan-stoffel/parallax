@@ -336,6 +336,16 @@ type DrawerName = "Projects" | "Working" | "Snoozed" | "Archived";
 const BAR = 56;
 const FADE = 28;
 
+/**
+ * The sidebar's sky across the whole screen, behind the sidebar and the main view, so the main
+ * view's rounded corners show sky where they meet it, not the page.
+ */
+export function SidebarSky() {
+  const insets = useSafeAreaInsets();
+  const bar = insets.top + BAR;
+  return <SkyBanner bar={bar} solid={bar} fade={FADE} />;
+}
+
 export function Sidebar() {
   const c = useColors();
   const nav = useNav();

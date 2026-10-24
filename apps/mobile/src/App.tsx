@@ -17,7 +17,7 @@ import { createNativeStackNavigator, type NativeStackNavigationOptions } from "@
 import * as Haptics from "expo-haptics";
 import { Info, X } from "lucide-react-native";
 import { useContext, useEffect, useRef, useState } from "react";
-import { Linking, StatusBar, StyleSheet, useColorScheme, useWindowDimensions } from "react-native";
+import { Linking, StatusBar, StyleSheet, useColorScheme, useWindowDimensions, View } from "react-native";
 import { Drawer, useDrawerProgress } from "react-native-drawer-layout";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated";
@@ -38,7 +38,7 @@ import { SearchScreen } from "./Search";
 import { AboutScreen, AddComputerScreen, ComputerScreen, SettingsScreen } from "./Settings";
 import { ComputerSettingsScreen } from "./SettingsComputer";
 import { ProviderScreen } from "./SettingsProviders";
-import { Sidebar, sidebarWidth } from "./Sidebar";
+import { Sidebar, SidebarSky, sidebarWidth } from "./Sidebar";
 import { ThreadDetailsScreen } from "./ThreadDetails";
 import { dark, light } from "./theme";
 import { ThreadScreen } from "./Thread";
@@ -186,6 +186,8 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <SidebarControl value={{ open: () => toggle(true), close: () => toggle(false) }}>
       <StatusBar barStyle={open ? "light-content" : "default"} animated />
+      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <SidebarSky />
       <Drawer
         open={open}
         onOpen={() => toggle(true)}
@@ -194,7 +196,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         drawerStyle={{ width: drawerWidth, backgroundColor: c.background }}
         // The dim is the main view's own (`Rounded`), so it rounds with it; the overlay only closes.
         overlayStyle={{ backgroundColor: "transparent" }}
-        style={{ backgroundColor: c.background }}
+        style={{ backgroundColor: "transparent" }}
         overlayAccessibilityLabel="Close sidebar"
         swipeEnabled={depth === 0}
         swipeEdgeWidth={width}
@@ -209,6 +211,7 @@ function Shell({ children }: { children: React.ReactNode }) {
       >
         <Rounded dim={scheme === "dark" ? "rgba(0, 0, 0, 0.5)" : "rgba(14, 12, 40, 0.18)"}>{children}</Rounded>
       </Drawer>
+      </View>
     </SidebarControl>
   );
 }
