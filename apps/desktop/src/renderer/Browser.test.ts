@@ -80,11 +80,12 @@ test("a browser saves its tabs with pages, the one in front, and only linked ico
   expect(savedOf([{ id: 1 }], 1)).toBeUndefined();
 });
 
-test("saved browsers keep the newest 100, and one with nothing to save is dropped", () => {
+test("saved browsers keep the permanent one and the newest 100 chats', and drop an empty one", () => {
   const entry: SavedTabs = { tabs: [{ url: "https://a.com/" }], current: 0 };
-  let all: Record<string, SavedTabs> = {};
+  let all = withSaved({}, "permanent", entry);
   for (let i = 0; i < 101; i++) all = withSaved(all, `t${i}`, entry);
-  expect(Object.keys(all)).toHaveLength(100);
+  expect(Object.keys(all)).toHaveLength(101);
+  expect(all["permanent"]).toEqual(entry);
   expect(all["t0"]).toBeUndefined();
   // Saving one again makes it the newest.
   all = withSaved(all, "t1", entry);

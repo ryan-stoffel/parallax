@@ -116,7 +116,8 @@ export interface SavedTabs {
   current: number;
 }
 
-// The most browsers whose tabs are kept, newest first, so deleted threads' don't pile up.
+// The most chats' browsers whose tabs are kept, so deleted threads' don't pile up. The
+// permanent browser's are always kept.
 const SAVED_SCOPES = 100;
 
 /**
@@ -139,7 +140,10 @@ export function savedOf(tabs: readonly OwnTab[], current: number): SavedTabs | u
   };
 }
 
-/** Every browser's saved tabs with `scope`'s set to `entry`, newest last, at most `SAVED_SCOPES`. */
+/**
+ * Every browser's saved tabs with `scope`'s set to `entry`, newest last: the permanent browser's,
+ * and at most `SAVED_SCOPES` chats'.
+ */
 export function withSaved(
   all: Readonly<Record<string, SavedTabs>>,
   scope: string,
@@ -147,8 +151,9 @@ export function withSaved(
 ): Record<string, SavedTabs> {
   const { [scope]: _old, ...rest } = all;
   const next = entry ? { ...rest, [scope]: entry } : rest;
-  const scopes = Object.keys(next);
-  return Object.fromEntries(scopes.slice(-SAVED_SCOPES).map((key) => [key, next[key]!] as const));
+  const chats = Object.keys(next).filter((key) => key !== "permanent");
+  const kept = [...(next["permanent"] ? ["permanent"] : []), ...chats.slice(-SAVED_SCOPES)];
+  return Object.fromEntries(kept.map((key) => [key, next[key]!] as const));
 }
 
 const savedTabs = stored<Record<string, SavedTabs>>("parallax.browserTabs", {}, (raw, fallback) =>
@@ -170,9 +175,9 @@ function restored(scope: string | undefined): { tabs: OwnTab[]; current: number 
 }
 
 /**
- * The side panel's browser, laid out like Chrome (PLX-888). Its tabs, the agent's (PLX-639) then
- * the user's own, show in the side panel's top bar while it's in front (`browserTabs`), so the
- * panel has one row of tabs. Each own tab is a webview, which main keeps in its own session with no preload or Node (main.ts), and
+ * A browser, laid out like Chrome (PLX-888): a chat's in the side panel, or the permanent one in
+ * the main pane (PLX-964). Its tabs, the agent's (PLX-639) then the user's own, show in the top bar
+ * over it (`browserTabs`, `BrowserTabBar`), so it has one row of tabs. Each own tab is a webview, which main keeps in its own session with no preload or Node (main.ts), and
  * whose new windows open as tabs here. Each new `page` opens in the current tab while it's blank,
  * or else in a new one. Its own tabs are saved under `scope` and come back after a restart
  * (PLX-964). `remoteHost`, the open host's name when it's an SSH host, notes that localhost is
@@ -361,7 +366,7 @@ const driverOf = (backend?: string): Driver =>
       }
     : { name: "The agent" };
 
-/** A browser tab as the side panel's top bar draws it: its key is `a:` and an agent tab's id, or `o:` and an own tab's. */
+/** A browser tab as its top bar draws it: its key is `a:` and an agent tab's id, or `o:` and an own tab's. */
 export interface BrowserTabFace {
   key: string;
   title: string;
@@ -381,7 +386,7 @@ export interface BrowserTabs {
   newTab: () => void;
 }
 
-/** Each side panel scope's browser tabs, by scope. */
+/** Each browser's tabs, by its scope: a side panel's, or `permanent`. */
 export const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
 
 /**
