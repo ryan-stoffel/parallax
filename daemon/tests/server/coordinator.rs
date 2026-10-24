@@ -12,7 +12,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::methods::{
     AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysRemove, AgentCancel, AgentEvents, AgentList,
     AgentSend, AgentStart, CoordinatorFresh, EventsSubscribe, HostHealth, ProjectDelete,
-    ProjectList, ProjectStart, ProjectUpdate, RepoAdd,
+    ProjectList, ProjectStart, ProjectUpdate, RepoAdd, ScheduleRun, ScheduleSave,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AccountsDefaultsSetParams, AccountsKeysRemoveParams,
@@ -21,7 +21,8 @@ use parallax_protocol::{
     CoordinatorFreshParams, CoordinatorSessionEnd, CoordinatorThreadId, ErrorKind,
     EventsEventParams, EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectCreateParams,
     ProjectDeleteParams, ProjectDeleteResult, ProjectId, ProjectListParams, ProjectPermission,
-    ProjectStartParams, ProjectUpdateParams, Provider, RepoAddParams, RepoId, Role, RunId, TurnId,
+    ProjectStartParams, ProjectUpdateParams, Provider, RepoAddParams, RepoId, Role, RunId,
+    Schedule, ScheduleIdParams, ScheduleSaveParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::process::{Environment, Launcher};
@@ -1698,6 +1699,32 @@ async fn fresh_session_starts_the_next_message_from_the_packet() {
         .await
         .unwrap();
     until(&mut client, updated_to(AgentStatus::Completed)).await;
+    // Nor is a scheduled task's, which plxd sends to the Project's coordinator.
+    let task = client
+        .call::<ScheduleSave>(ScheduleSaveParams {
+            id: None,
+            title: "Status".to_owned(),
+            prompt: "From a schedule.".to_owned(),
+            enabled: true,
+            schedule: Schedule::Interval {
+                every_ms: 3_600_000,
+            },
+            thread: None,
+            project: Some(project.id),
+            repo: None,
+            account: None,
+            model: None,
+            effort: None,
+            permission: None,
+            from: None,
+        })
+        .await
+        .unwrap();
+    client
+        .call::<ScheduleRun>(ScheduleIdParams { id: task.id })
+        .await
+        .unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
 
     let fresh = client
         .call::<CoordinatorFresh>(CoordinatorFreshParams {
@@ -1739,6 +1766,7 @@ async fn fresh_session_starts_the_next_message_from_the_packet() {
         next.prompt
     );
     assert!(!next.prompt.contains("From a thread."), "{}", next.prompt);
+    assert!(!next.prompt.contains("From a schedule."), "{}", next.prompt);
     assert!(next.prompt.ends_with("\nNext."), "{}", next.prompt);
     let now = run_of(&mut client, project.id, run.id).await;
     assert_eq!(now.session_id.as_deref(), Some("coordinator-2"));

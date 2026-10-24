@@ -67,7 +67,8 @@ pub(crate) fn tell(
                 from: None,
                 delivery: Some(AgentDelivery::Queue),
             };
-            if let Err(error) = crate::agents::send(Arc::clone(&daemon), params).await {
+            if let Err(error) = crate::agents::send_from_parallax(Arc::clone(&daemon), params).await
+            {
                 warn!(run = %run_id, error = %error.message, "could not tell a child of a memory change");
             }
         }

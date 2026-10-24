@@ -363,6 +363,9 @@ pub(super) struct Queued {
     pub account: Option<AccountChoice>,
     /// The thread that sent it through its Parallax tools (0041).
     pub from: Option<RunId>,
+    /// plxd's own message, not the user's, such as a scheduled task's or a pull request watch's,
+    /// which a coordinator's packet leaves out of the user's messages (PLX-937).
+    pub parallax: bool,
 }
 
 /// What a stored [`Queued`] keeps beside its text, as its row's JSON. `held` is the queue's:
@@ -375,6 +378,7 @@ struct QueuedExtra {
     options: RunOptions,
     account: Option<AccountChoice>,
     from: Option<RunId>,
+    parallax: bool,
     held: bool,
 }
 
@@ -386,6 +390,7 @@ impl Queued {
             options: self.options.clone(),
             account: self.account.clone(),
             from: self.from,
+            parallax: self.parallax,
             held,
         };
         QueuedRow {
@@ -409,6 +414,7 @@ impl Queued {
                 options: extra.options,
                 account: extra.account,
                 from: extra.from,
+                parallax: extra.parallax,
             },
             extra.held,
         ))
@@ -591,6 +597,9 @@ pub(super) struct Actor {
     /// The cursor of the turn the live CLI is finishing ([`Event::TurnCursor`]), until its
     /// `TurnFinished` item carries it.
     cursor: Option<String>,
+    /// The messages plxd sent as its own ([`Queued::parallax`]), by turn id, until they're
+    /// recorded as sent.
+    parallax_turns: HashSet<TurnId>,
     /// Whether a coordinator's provider compacted its session since its last turn began, so the
     /// next one carries the Project's state again (PLX-937). Lost on a restart.
     compacted: bool,
@@ -644,6 +653,7 @@ impl Actor {
             pr_calls: HashSet::new(),
             senders: HashMap::new(),
             cursor: None,
+            parallax_turns: HashSet::new(),
             compacted: false,
         }
     }
@@ -1035,6 +1045,9 @@ impl Actor {
                 let (turn_id, from) = (message.turn_id, message.from);
                 if let Some(from) = from {
                     self.senders.insert(turn_id, from);
+                }
+                if message.parallax {
+                    self.parallax_turns.insert(turn_id);
                 }
                 let answer = self.send(message, delivery).await;
                 if answer.is_err() && from.is_some() {
@@ -2108,6 +2121,7 @@ impl Actor {
             options,
             account,
             from: _,
+            parallax: _,
         } = queued;
         let changes = self.changes(options);
         self.resume(turn_id, text, images, threads, changes, account)
@@ -2444,6 +2458,7 @@ impl Actor {
                 options,
                 account,
                 from: _,
+                parallax: _,
             } = next;
             let changes = self.changes(options);
             let why = match self
@@ -2629,6 +2644,9 @@ impl Actor {
                         Some((queued, held)) => {
                             if let Some(from) = queued.from {
                                 self.senders.insert(queued.turn_id, from);
+                            }
+                            if queued.parallax {
+                                self.parallax_turns.insert(queued.turn_id);
                             }
                             self.queue_held |= held;
                             self.queued.push_back(queued);
@@ -2862,6 +2880,7 @@ impl Actor {
             options: RunOptions::default(),
             account: None,
             from: None,
+            parallax: false,
         };
         if self.live_open() && !changing {
             match self.hand_over(&queued).await? {
@@ -3187,8 +3206,9 @@ impl Actor {
     async fn record_turn(&mut self, turn_id: TurnId, text: String, seen: Vec<(Uuid, u64)>) {
         self.turns.insert(turn_id, text.clone());
         let (run_id, id) = (self.row.id, self.id);
-        // Not a wake-up, a usage limit's resume, or another thread's message (PLX-937).
-        let from_user = !self.senders.contains_key(&turn_id)
+        // Not plxd's own, a wake-up, a usage limit's resume, or another thread's (PLX-937).
+        let from_user = !self.parallax_turns.remove(&turn_id)
+            && !self.senders.contains_key(&turn_id)
             && !self.wakes.sends(turn_id)
             && !self.resumes.sends(turn_id);
         let stored = store(&self.daemon, move |db| {
@@ -4441,6 +4461,7 @@ mod tests {
             options,
             account: None,
             from: None,
+            parallax: false,
         }
     }
 
