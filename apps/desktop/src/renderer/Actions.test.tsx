@@ -43,6 +43,7 @@ beforeEach(() => {
     terminalInput,
     closeTerminal,
     extensions: () => Promise.resolve([]),
+    onExtensionsChanged: () => () => {},
     request: () =>
       Promise.resolve({
         result: { terminals: running.map((terminalId) => ({ threadId: "t3", terminalId })) },
@@ -306,7 +307,7 @@ test("a folder's tabs that plxd still runs come back, as after a restart", async
   expect(button("Terminal 4")).toBeDefined();
 });
 
-test("a preview opens the side panel's Browser view at its URL", () => {
+test("a preview opens the browser at its URL, apart from the panel's views", () => {
   const panel = (browse?: { url: string }) => (
     <SidePanel
       scope="t"
@@ -315,15 +316,16 @@ test("a preview opens the side panel's Browser view at its URL", () => {
       expanded={false}
       onExpandedChange={() => {}}
       browse={browse}
+      browsing={!!browse}
     />
   );
   render(panel());
   expect(document.querySelector('input[aria-label="Address"]')).toBeNull();
   render(panel({ url: "localhost:5173" }));
-  // The Browser view is in front, as its icon, and the page's tab is in the top bar.
-  expect(document.querySelector('[aria-current="true"]')?.getAttribute("aria-label")).toBe(
-    "Browser",
-  );
+  // The column is the browser alone: its page's tab is in the top bar, without the views.
+  expect(document.querySelector("aside")?.getAttribute("aria-label")).toBe("Browser");
+  expect(document.querySelector('[aria-label="Open views"]')).toBeNull();
+  expect(document.querySelector('button[aria-label="Open a view"]')).toBeNull();
   expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe(
     "localhost:5173",
   );

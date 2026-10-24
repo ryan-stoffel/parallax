@@ -8,7 +8,6 @@ import {
   GitCompare,
   GitPullRequest,
   Globe,
-  LayoutGrid,
   SquareKanban,
   Maximize2,
   Minimize2,
@@ -88,7 +87,6 @@ const surfaces: Surface[] = [
     key: "F",
     empty: { title: "No thread open", hint: "Open a thread to browse its folder." },
   },
-  { name: "Browser", icon: Globe, key: "B" },
   {
     name: "Device",
     icon: Smartphone,
@@ -104,26 +102,28 @@ const surfaces: Surface[] = [
 ];
 
 const knowledgeSurface = surfaces.find((s) => s.name === "Knowledge")!;
-const browserSurface = surfaces.find((s) => s.name === "Browser")!;
 const deviceSurface = surfaces.find((s) => s.name === "Device")!;
 const terminalSurface = surfaces.find((s) => s.name === "Terminal")!;
 
 /**
  * One `scope`'s panel: its open views in tab order, and each in the order it was last shown, with
  * the thread (`documents.runId`) it was shown in, as a Project's subagents share its panel; whether
- * + is showing the list; and the page its Browser last opened.
+ * + is showing the list; whether its browser has opened; and the page its browser last opened.
  */
 interface Scoped {
   tabs: Surface[];
   recent: [Surface, string | undefined][];
   listing: boolean;
+  browsed?: boolean;
   page?: { url?: string; agentTab?: string };
 }
 const unopened: Scoped = { tabs: [], recent: [], listing: false };
 
 /**
  * The collapsible right column. Each `scope`, such as a thread or a Project, keeps its own tabs and
- * Browser, so a view opened in one thread doesn't open in another (PLX-872). Each view opens as a
+ * browser, so a view opened in one thread doesn't open in another (PLX-872). While `browsing`, the
+ * column is the browser alone, with its page tabs in the top bar, as Chrome's, and no views; the
+ * browser is apart from the panel's views (PLX-962). Each view opens as a
  * tab in its top bar, VS Code style; the + after the tabs, or closing the last one, shows the list
  * of views, where each view's letter opens it while focus is in the panel. Open tabs stay mounted, so a view keeps its state behind another.
  * The top bar keeps the hide button where the main pane shows it while the panel is closed.
@@ -131,7 +131,7 @@ const unopened: Scoped = { tabs: [], recent: [], listing: false };
  * for the hidden main pane's top-left corner. `agents`, `knowledge`, `files`, and `changesView` are
  * those views, such as a Project's, in place of their empty states. `remoteHost` is the open host's name when
  * it's an SSH host. `terminal` draws the Terminal view, told whether it's shown and given its empty
- * state. Each new `browse` opens the Browser view at its url, or at one of `agentTabs`. `pullRequests` are the open thread's
+ * state. Each new `browse` opens its url in the browser, or one of `agentTabs`. `pullRequests` are the open thread's
  * linked pull requests (PLX-319): its URLs, each one's read, the Pull requests view, and each one's
  * view, shown in a `#n` tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
  * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
@@ -155,6 +155,7 @@ export function SidePanel({
   files,
   changesView,
   browse,
+  browsing = false,
   changes,
   agentTabs,
   pullRequests,
@@ -180,9 +181,10 @@ export function SidePanel({
   files?: ReactNode;
   changesView?: ReactNode;
   browse?: { url?: string; agentTab?: string };
+  browsing?: boolean;
   /** A new request opens the Changes view. */
   changes?: object;
-  /** The open thread's agent browser tabs (PLX-639), for the Browser view. */
+  /** The open thread's agent browser tabs (PLX-639), for the browser. */
   agentTabs?: ComponentProps<typeof Browser>["agent"];
   pullRequests?: {
     urls: readonly string[];
@@ -216,13 +218,14 @@ export function SidePanel({
 
   const available = project
     ? surfaces
-    : ["Browser", "Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
+    : ["Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
         surfaces.find((s) => s.name === name)!,
       );
   const nameOf = (s: Surface) => (!project && s.name === "Changes" ? "Diff" : s.name);
-  // While the Browser view is in front, its tabs take the top bar, as Chrome's do, and the
-  // views shrink to icons beside them, so the panel has one row of tabs (Browser.tsx).
+  // The browser's page tabs, which take the top bar while browsing (Browser.tsx).
   const browser = browserTabs.use()[scope];
+  // The browser mounts the first time it shows, and stays.
+  if (browsing && !scopes[scope]?.browsed) update(() => ({ browsed: true }));
   // A Project pins its Overview and Knowledge first, without close buttons.
   const pinned = project ? [overview, knowledgeSurface] : [];
   // A pull request tab the thread no longer links stays open, but hidden.
@@ -242,7 +245,6 @@ export function SidePanel({
     : (lastShown(recent.filter(([, at]) => at === thread)) ??
       lastShown(recent) ??
       (project ? overview : undefined));
-  const compact = current === browserSurface && !!browser;
 
   const openView = (s: Surface) => {
     if (pinned.includes(s)) return setActive(s);
@@ -273,10 +275,7 @@ export function SidePanel({
   const [browsed, setBrowsed] = useState(browse);
   if (browse !== browsed) {
     setBrowsed(browse);
-    if (browse) {
-      openView(browserSurface);
-      update(() => ({ page: browse }));
-    }
+    if (browse) update(() => ({ page: browse }));
   }
   const [deviceShown, setDeviceShown] = useState(showDevice);
   if (showDevice !== deviceShown) {
@@ -318,9 +317,9 @@ export function SidePanel({
         : s.name === "Knowledge" && knowledge
           ? knowledge
           : s.name === "Terminal" && terminal
-            ? terminal(open && s === current, emptyOf(s))
+            ? terminal(open && !browsing && s === current, emptyOf(s))
             : s.name === "Device" && device
-              ? device(open && s === current)
+              ? device(open && !browsing && s === current)
               : s.name === "Files" && files
                 ? files
                 : s.name === "Changes" && changesView
@@ -336,11 +335,11 @@ export function SidePanel({
   return (
     <aside
       id="side-panel"
-      aria-label="Side panel"
+      aria-label={browsing ? "Browser" : "Side panel"}
       hidden={!open}
       // From the list, a view's letter opens it while focus is in the panel.
       onKeyDown={(e) => {
-        if (current || e.metaKey || e.ctrlKey || e.altKey) return;
+        if (browsing || current || e.metaKey || e.ctrlKey || e.altKey) return;
         const next = available.find((s) => s.key === e.key.toUpperCase());
         if (!next) return;
         e.preventDefault();
@@ -352,93 +351,75 @@ export function SidePanel({
       {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}
       <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
         {leading}
-        <ul
-          aria-label="Open views"
-          className={`flex gap-0.5 ${compact ? "shrink-0" : "min-w-0 overflow-x-auto"}`}
-        >
-          {shown.map((s) => {
-            const look = s.url ? lookOf(pullRequests?.get(s.url)?.pr) : undefined;
-            const Icon = look?.Icon ?? s.icon;
-            // Beside the browser's tabs, a view is its icon: a click shows it, a middle click
-            // closes it.
-            if (compact)
-              return (
-                <li key={s.key}>
-                  <button
-                    type="button"
-                    id={`side-panel-tab-${s.key}`}
-                    aria-label={nameOf(s)}
-                    title={nameOf(s)}
-                    aria-current={s === current ? "true" : undefined}
-                    onClick={() => setActive(s)}
-                    onAuxClick={(e) => e.button === 1 && !pinned.includes(s) && closeView(s)}
-                    className={`grid size-7 place-items-center rounded-md ${s === current ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
-                  >
-                    <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
-                  </button>
-                </li>
-              );
-            return (
-              <li
-                key={s.key}
-                className={`flex shrink-0 items-center rounded-lg ${s === current ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+        {browsing ? (
+          browser && (
+            <>
+              <div
+                role="tablist"
+                aria-label="Browser tabs"
+                className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
               >
-                <button
-                  type="button"
-                  id={`side-panel-tab-${s.key}`}
-                  aria-current={s === current ? "true" : undefined}
-                  onClick={() => setActive(s)}
-                  className={`flex items-center gap-1.5 py-1 pl-2 text-[13px] ${pinned.includes(s) ? "pr-2" : ""}`}
-                >
-                  <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
-                  {nameOf(s)}
-                  {s === overview && !!project?.waiting && (
-                    <span className="font-mono text-[11px] text-warning tabular-nums">
-                      {project.waiting}
-                    </span>
-                  )}
-                </button>
-                {!pinned.includes(s) && (
-                  <button
-                    type="button"
-                    aria-label={`Close ${nameOf(s)}`}
-                    title={`Close ${nameOf(s)}`}
-                    onClick={() => closeView(s)}
-                    className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
-                  >
-                    <X />
-                  </button>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-        <IconButton
-          id="side-panel-open-view"
-          label="Open a view"
-          onClick={() => update(() => ({ listing: true }))}
-        >
-          {compact ? <LayoutGrid /> : <Plus />}
-        </IconButton>
-        {compact && browser && (
+                {browser.tabs.map((tab) => (
+                  <BrowserTab
+                    key={tab.key}
+                    tab={tab}
+                    selected={tab.key === browser.selected}
+                    onSelect={() => browser.select(tab.key)}
+                    onClose={() => browser.close(tab.key)}
+                  />
+                ))}
+              </div>
+              <IconButton label="New tab" onClick={browser.newTab}>
+                <Plus />
+              </IconButton>
+            </>
+          )
+        ) : (
           <>
-            <span aria-hidden className="h-5 w-px shrink-0 bg-border" />
-            <div
-              role="tablist"
-              aria-label="Browser tabs"
-              className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto"
+            <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
+              {shown.map((s) => {
+                const look = s.url ? lookOf(pullRequests?.get(s.url)?.pr) : undefined;
+                const Icon = look?.Icon ?? s.icon;
+                return (
+                  <li
+                    key={s.key}
+                    className={`flex shrink-0 items-center rounded-lg ${s === current ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+                  >
+                    <button
+                      type="button"
+                      id={`side-panel-tab-${s.key}`}
+                      aria-current={s === current ? "true" : undefined}
+                      onClick={() => setActive(s)}
+                      className={`flex items-center gap-1.5 py-1 pl-2 text-[13px] ${pinned.includes(s) ? "pr-2" : ""}`}
+                    >
+                      <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
+                      {nameOf(s)}
+                      {s === overview && !!project?.waiting && (
+                        <span className="font-mono text-[11px] text-warning tabular-nums">
+                          {project.waiting}
+                        </span>
+                      )}
+                    </button>
+                    {!pinned.includes(s) && (
+                      <button
+                        type="button"
+                        aria-label={`Close ${nameOf(s)}`}
+                        title={`Close ${nameOf(s)}`}
+                        onClick={() => closeView(s)}
+                        className="mx-0.5 grid size-5 place-items-center rounded-md hover:bg-hover [&_svg]:size-3.5"
+                      >
+                        <X />
+                      </button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+            <IconButton
+              id="side-panel-open-view"
+              label="Open a view"
+              onClick={() => update(() => ({ listing: true }))}
             >
-              {browser.tabs.map((tab) => (
-                <BrowserTab
-                  key={tab.key}
-                  tab={tab}
-                  selected={tab.key === browser.selected}
-                  onSelect={() => browser.select(tab.key)}
-                  onClose={() => browser.close(tab.key)}
-                />
-              ))}
-            </div>
-            <IconButton label="New tab" onClick={browser.newTab}>
               <Plus />
             </IconButton>
           </>
@@ -450,37 +431,50 @@ export function SidePanel({
           >
             {expanded ? <Minimize2 /> : <Maximize2 />}
           </IconButton>
-          <IconButton
-            label="Hide side panel"
-            command="panel"
-            aria-expanded
-            aria-controls="side-panel"
-            onClick={onClose}
-          >
-            <PanelRight />
-          </IconButton>
+          {browsing ? (
+            <IconButton label="Hide browser" command="browser" onClick={onClose}>
+              <PanelRight />
+            </IconButton>
+          ) : (
+            <IconButton
+              label="Hide side panel"
+              command="panel"
+              aria-expanded
+              aria-controls="side-panel"
+              onClick={onClose}
+            >
+              <PanelRight />
+            </IconButton>
+          )}
         </div>
       </TopBar>
       {shown
-        .filter((s) => s !== browserSurface && s !== terminalSurface)
+        .filter((s) => s !== terminalSurface)
         .map((s) => (
-          <div key={s.key} hidden={s !== current} className="flex min-h-0 flex-1 flex-col">
+          <div
+            key={s.key}
+            hidden={browsing || s !== current}
+            className="flex min-h-0 flex-1 flex-col"
+          >
             {viewOf(s)}
           </div>
         ))}
-      {/* Browser and Terminal stay mounted while any scope has them open, so a thread's page and
-          shells are still there on coming back to it. The terminal pool shows the open thread's. */}
+      {/* The browser and Terminal stay mounted while any scope has them open, so a thread's page
+          and shells are still there on coming back to it. The terminal pool shows the open thread's. */}
       {Object.values(scopes).some((panel) => panel.tabs.includes(terminalSurface)) && (
-        <div hidden={current !== terminalSurface} className="flex min-h-0 flex-1 flex-col">
+        <div
+          hidden={browsing || current !== terminalSurface}
+          className="flex min-h-0 flex-1 flex-col"
+        >
           {viewOf(terminalSurface)}
         </div>
       )}
       {Object.entries(scopes)
-        .filter(([, panel]) => panel.tabs.includes(browserSurface))
+        .filter(([, panel]) => panel.browsed)
         .map(([key, panel]) => (
           <div
             key={`${key}/B`}
-            hidden={key !== scope || current !== browserSurface}
+            hidden={key !== scope || !browsing}
             className="flex min-h-0 flex-1 flex-col"
           >
             <Browser
@@ -491,7 +485,7 @@ export function SidePanel({
             />
           </div>
         ))}
-      {!current && (
+      {!browsing && !current && (
         <nav
           aria-labelledby="side-panel-views"
           className="flex flex-1 flex-col items-center justify-center px-8 pb-16"

@@ -95,6 +95,11 @@ const bridge: ParallaxBridge = {
   installExtension: (text) => ipcRenderer.invoke("parallax:installExtension", text),
   loadUnpackedExtension: () => ipcRenderer.invoke("parallax:loadUnpackedExtension"),
   removeExtension: (id) => ipcRenderer.invoke("parallax:removeExtension", id),
+  onExtensionsChanged(listener) {
+    const forward = () => listener();
+    ipcRenderer.on("parallax:extensionsChanged", forward);
+    return () => ipcRenderer.removeListener("parallax:extensionsChanged", forward);
+  },
   selectBrowserTab: (id) => ipcRenderer.send("parallax:selectBrowserTab", id),
   updatable: process.argv.includes("--parallax-updatable"),
   firstRun: process.argv.includes("--parallax-first-run"),

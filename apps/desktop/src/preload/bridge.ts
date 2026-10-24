@@ -191,6 +191,11 @@ export interface ParallaxBridge {
   /** Asks for an unpacked extension's folder and loads it: it, an error, or undefined if canceled. */
   loadUnpackedExtension(): Promise<ExtensionInfo | string | undefined>;
   removeExtension(id: string): Promise<void>;
+  /**
+   * Calls `listener` when an extension is added or removed outside the toolbar's menu, such as
+   * from the Chrome Web Store's own button (PLX-962). Returns the unsubscribe function.
+   */
+  onExtensionsChanged(listener: () => void): () => void;
   /** Tells extensions which browser tab is shown, by its webview's webContents id. */
   selectBrowserTab(webContentsId: number): void;
   /**

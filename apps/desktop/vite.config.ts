@@ -58,8 +58,12 @@ const external = ["electron"];
 const electronBundle = (name: "main" | "preload"): PackUserConfig => ({
   entry: {
     [name]: `src/${name}/${name}.ts`,
-    // Points extensions' `browser` namespace at the filled-in `chrome` (extensionBrowser.ts).
-    ...(name === "preload" && { extensionBrowser: "src/preload/extensionBrowser.ts" }),
+    // The browser's own preloads: extensions' `browser` namespace pointed at the filled-in
+    // `chrome` (extensionBrowser.ts), and the Chrome Web Store's install calls (webStore.ts).
+    ...(name === "preload" && {
+      extensionBrowser: "src/preload/extensionBrowser.ts",
+      webStore: "src/preload/webStore.ts",
+    }),
   },
   // electron-chrome-extensions finds its preload for extensions' pages beside the bundle that
   // inlines it, since the packaged app has no node_modules (extensions.ts).

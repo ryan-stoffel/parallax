@@ -66,6 +66,7 @@ import {
   selectTab,
   startExtensions,
 } from "./extensions";
+import { answerStore, chromeUserAgent, storeOrigin } from "./webStore";
 import {
   browserShortcut,
   isBrowsable,
@@ -423,6 +424,12 @@ ipcMain.handle("parallax:loadUnpackedExtension", async (event) => {
 ipcMain.handle("parallax:removeExtension", (_event, id: unknown) =>
   typeof id === "string" ? removeExtension(browserSession(), id) : undefined,
 );
+// The Chrome Web Store page's install calls (webStore.ts), from its own origin only.
+ipcMain.handle("parallax:webStore", (event, method: unknown, ...args: unknown[]) =>
+  event.senderFrame?.origin === storeOrigin && typeof method === "string"
+    ? answerStore(browserSession(), event, method, args)
+    : undefined,
+);
 
 // New Thread's "Add repository…" and the add palette's "Choose in Finder": a folder on this Mac,
 // sheet-attached to the asking window.
@@ -760,11 +767,15 @@ void app.whenReady().then(async () => {
   const browserSession = session.fromPartition(browserPartition);
   browserSession.setPermissionRequestHandler((_c, _p, grant) => grant(false));
   browserSession.setPermissionCheckHandler(() => false);
-  // Its Accept-Language is the OS's languages, as before the app shipped only Chromium's en-US
-  // locale (PLX-613). Its pages' `navigator.language` is en-US all the same.
+  // Its user agent is Chrome's, without Electron's and the app's tokens, so sites such as the
+  // Chrome Web Store treat it as Chrome (PLX-962). Its Accept-Language is the OS's languages, as
+  // before the app shipped only Chromium's en-US locale (PLX-613). Its pages'
+  // `navigator.language` is en-US all the same.
   const languages = app.getPreferredSystemLanguages().filter((tag) => validLocale(tag));
-  if (languages.length > 0)
-    browserSession.setUserAgent(browserSession.getUserAgent(), languages.join(","));
+  browserSession.setUserAgent(
+    chromeUserAgent(browserSession.getUserAgent()),
+    languages.length > 0 ? languages.join(",") : undefined,
+  );
   // Before any window, so a page's content scripts are there when it loads.
   startExtensions(browserSession, tellTab);
   await loadExtensions(browserSession);

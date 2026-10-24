@@ -58,6 +58,11 @@ export function startExtensions(
   const filePath = path.join(__dirname, "../preload/extensionBrowser.cjs");
   for (const type of ["frame", "service-worker"] as const)
     session.registerPreloadScript({ type, filePath });
+  // The Chrome Web Store's install calls, on its pages only (webStore.ts).
+  session.registerPreloadScript({
+    type: "frame",
+    filePath: path.join(__dirname, "../preload/webStore.cjs"),
+  });
   // The toolbar's extension buttons draw their icons from crx:// in the app's own session.
   ElectronChromeExtensions.handleCRXProtocol(sessions.defaultSession);
 }

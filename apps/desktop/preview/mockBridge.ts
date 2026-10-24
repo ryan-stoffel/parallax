@@ -1787,6 +1787,7 @@ export const mockBridge: ParallaxBridge = {
   installExtension: () => delay("Extensions need the desktop app."),
   loadUnpackedExtension: () => delay(undefined),
   removeExtension: () => delay(undefined),
+  onExtensionsChanged: () => () => {},
   selectBrowserTab: () => {},
   updatable: false,
   firstRun: onboarding,

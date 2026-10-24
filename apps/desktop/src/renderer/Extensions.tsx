@@ -14,13 +14,15 @@ const refresh = () => window.parallax.extensions().then((list) => installed.set(
  * A tab toolbar's Chrome extensions (PLX-888): electron-chrome-extensions' buttons, with their
  * badges and popups, for the tab whose webview's webContents id is `tab`, and the Extensions menu,
  * which lists them all, removes one, and adds one from a Chrome Web Store link or an unpacked
- * folder.
+ * folder. The store's own Add to Chrome button adds one too (webStore.ts in main).
  */
 export function Extensions({ tab }: { tab?: number }) {
   const list = installed.use();
   useEffect(() => {
     if (!list) void refresh();
   }, [list]);
+  // An extension added or removed from the Chrome Web Store's page (PLX-962).
+  useEffect(() => window.parallax.onExtensionsChanged(() => void refresh()), []);
   const menuId = useId();
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
