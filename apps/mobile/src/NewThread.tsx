@@ -1,21 +1,33 @@
-// A new thread, as the desktop starts one: first the repository picker, every computer's
-// repositories with where each lives, and no repo on each computer; then the new thread's page,
-// "What should we build in <repo> on <computer>?" over the message box that starts it.
+// A new thread: first the picker sheet, each repository once across every computer and then no
+// repo, sliding over to which computer it runs on; then the new thread's page, the repository's
+// icon and a greeting over the message box that starts it.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
-import { Search, SquareDashed } from "lucide-react-native";
-import { useLayoutEffect, useMemo, useState } from "react";
-import { KeyboardAvoidingView, Pressable, ScrollView, StyleSheet, TextInput, View } from "react-native";
+import { ChevronDown, ChevronLeft, Search, SquareDashed } from "lucide-react-native";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Animated,
+  Keyboard,
+  KeyboardAvoidingView,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+} from "react-native";
 import { useHeaderHeight } from "@react-navigation/elements";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import type { Repo } from "../../desktop/src/protocol/generated/protocol";
 import { isRepository, noRepo } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
+import { useAccount } from "./Account";
 import { Composer, type Start } from "./Composer";
 import { type Computer, useComputer, useFleet } from "./fleet";
+import { greeting } from "./greeting";
 import type { Screens } from "./nav";
+import { getPrefs, setPrefs } from "./prefs";
 import { RepoIcon, useSharedIcons } from "./RepoIcon";
-import { font } from "./theme";
 import { DeviceIcon, Icon, Section, T, useColors } from "./ui";
 
 /** `path` with the home folder as `~`. */
@@ -33,133 +45,233 @@ const ordered = (computers: Computer[], defaultId?: string) =>
       a.machine.name.localeCompare(b.machine.name),
   );
 
+/** One computer a new thread can start on, and the repository there, none for no repo. */
+interface Place {
+  computer: Computer;
+  repo?: Repo;
+}
+
+/** A row of the picker: a leading icon, a title, and a quiet subtitle. */
+function Choice({
+  leading,
+  title,
+  detail,
+  label,
+  disabled,
+  last,
+  onPress,
+}: {
+  leading: React.ReactNode;
+  title: string;
+  detail?: string;
+  label: string;
+  disabled?: boolean;
+  last?: boolean;
+  onPress: () => void;
+}) {
+  const c = useColors();
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.row,
+        !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+        pressed && { backgroundColor: c.hover },
+        disabled && { opacity: 0.4 },
+      ]}
+    >
+      <View style={styles.glyph}>{leading}</View>
+      <View style={{ flex: 1, gap: 1 }}>
+        <T medium numberOfLines={1} style={{ fontSize: 16 }}>
+          {title}
+        </T>
+        {detail && (
+          <T faint numberOfLines={1} style={{ fontSize: 13, lineHeight: 17 }}>
+            {detail}
+          </T>
+        )}
+      </View>
+    </Pressable>
+  );
+}
+
+/**
+ * The picker sheet: every repository once, by name, then no repo; a pick slides to the
+ * computers that have it, and a computer opens the new thread's page there as the main view.
+ */
 export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, "NewThread">) {
   const c = useColors();
   const { computers, defaultId } = useFleet();
   const shared = useSharedIcons();
   const [query, setQuery] = useState("");
+  /** The picked repository's name, null for no repo; kept while sliding back so the page stays drawn. */
+  const [picked, setPicked] = useState<string | null>();
+  const [step, setStep] = useState(0);
+  const [width, setWidth] = useState(0);
+  const slide = useRef(new Animated.Value(0)).current;
   const q = query.trim().toLowerCase();
   const machines = ordered(computers, defaultId);
-  const repos = machines.flatMap((m) =>
-    m.view.state.repos
-      .filter(isRepository)
-      .filter((r) => !q || r.name.toLowerCase().includes(q) || m.machine.name.toLowerCase().includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((repo) => ({ computer: m, repo })),
-  );
-  const several = computers.length > 1;
 
-  /** Opens the new thread's page, or changes the one this picker came from. */
-  function pick(hostId: string, groupId: string) {
-    void Haptics.selectionAsync();
-    const params = { hostId, groupId };
-    if (navigation.getState().routes.some((r) => r.name === "StartThread"))
-      navigation.popTo("StartThread", params);
-    else navigation.replace("StartThread", params);
+  const byName = new Map<string, Place[]>();
+  for (const computer of machines)
+    for (const repo of computer.view.state.repos.filter(isRepository))
+      byName.set(repo.name, [...(byName.get(repo.name) ?? []), { computer, repo }]);
+  const names = [...byName.keys()]
+    .filter((name) => !q || name.toLowerCase().includes(q))
+    .sort((a, b) => a.localeCompare(b));
+  const places: Place[] =
+    picked === null ? machines.map((computer) => ({ computer })) : (byName.get(picked ?? "") ?? []);
+
+  /** Slides to the computers (1) or back to the repositories (0). */
+  function go(to: number) {
+    setStep(to);
+    Animated.spring(slide, { toValue: to, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
   }
 
+  function pickRepo(name: string | null) {
+    void Haptics.selectionAsync();
+    Keyboard.dismiss();
+    setPicked(name);
+    go(1);
+  }
+
+  function pickComputer(hostId: string, groupId: string) {
+    void Haptics.selectionAsync();
+    setPrefs({ lastStart: { hostId, groupId } });
+    navigation.reset({ index: 0, routes: [{ name: "StartThread", params: { hostId, groupId } }] });
+  }
+
+  const translateX = slide.interpolate({ inputRange: [0, 1], outputRange: [0, -width] });
   return (
-    <ScrollView
-      style={{ backgroundColor: c.background }}
-      contentContainerStyle={styles.page}
-      keyboardShouldPersistTaps="handled"
-      automaticallyAdjustKeyboardInsets
+    <View
+      style={{ flex: 1, overflow: "hidden", backgroundColor: c.background }}
+      onLayout={(e) => setWidth(e.nativeEvent.layout.width)}
     >
-      <View style={[styles.search, { backgroundColor: c.surface, borderColor: c.border }]}>
-        <Icon icon={Search} size={16} color={c.faintForeground} />
-        <TextInput
-          accessibilityLabel="Search repositories"
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search repositories"
-          placeholderTextColor={c.faintForeground}
-          autoCorrect={false}
-          autoCapitalize="none"
-          clearButtonMode="while-editing"
-          style={[styles.input, { color: c.foreground }]}
-        />
-      </View>
-      <Section title="Repositories">
-        {repos.length === 0 && (
-          <T muted style={{ padding: 16, fontSize: 14 }}>
-            {q ? "No repository matches." : "No computer has a repository yet."}
-          </T>
-        )}
-        {repos.map(({ computer, repo }, i) => (
-          <Pressable
-            key={`${computer.machine.id}/${repo.id}`}
-            accessibilityRole="button"
-            accessibilityLabel={`${repo.name} on ${computer.machine.name}`}
-            disabled={!computer.connected}
-            onPress={() => pick(computer.machine.id, repo.id)}
-            style={({ pressed }) => [
-              styles.row,
-              i < repos.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border },
-              pressed && { backgroundColor: c.hover },
-              !computer.connected && { opacity: 0.45 },
-            ]}
-          >
-            <RepoIcon repo={repo} shared={shared} size={26} />
-            <View style={{ flex: 1, gap: 1 }}>
-              <T medium numberOfLines={1} style={{ fontSize: 16, fontWeight: "500" }}>
-                {repo.name}
+      <Animated.View style={{ flex: 1, flexDirection: "row", width: width * 2, transform: [{ translateX }] }}>
+        <ScrollView
+          style={{ width }}
+          contentContainerStyle={styles.page}
+          keyboardShouldPersistTaps="handled"
+          automaticallyAdjustKeyboardInsets
+          accessibilityElementsHidden={step !== 0}
+          importantForAccessibility={step !== 0 ? "no-hide-descendants" : "auto"}
+        >
+          <View style={[styles.search, { backgroundColor: c.selected }]}>
+            <Icon icon={Search} size={16} color={c.faintForeground} />
+            <TextInput
+              accessibilityLabel="Search repositories"
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search repositories"
+              placeholderTextColor={c.faintForeground}
+              autoCorrect={false}
+              autoCapitalize="none"
+              clearButtonMode="while-editing"
+              style={[styles.input, { color: c.foreground }]}
+            />
+          </View>
+          <Section>
+            {names.length === 0 && (
+              <T muted style={{ padding: 16, fontSize: 14 }}>
+                {q ? "No repository matches." : "No computer has a repository yet."}
               </T>
-              <T faint numberOfLines={1} style={{ fontSize: 13, lineHeight: 17 }}>
-                {[several && computer.machine.name, homeless(repo.path), !computer.connected && "offline"]
-                  .filter(Boolean)
-                  .join(" · ")}
+            )}
+            {names.map((name, i) => {
+              const at = byName.get(name)!;
+              return (
+                <Choice
+                  key={name}
+                  leading={<RepoIcon repo={at[0]!.repo} shared={shared} size={28} />}
+                  title={name}
+                  detail={at.length === 1 ? at[0]!.computer.machine.name : `${at.length} computers`}
+                  label={name}
+                  last={i === names.length - 1}
+                  onPress={() => pickRepo(name)}
+                />
+              );
+            })}
+          </Section>
+          <Section>
+            <Choice
+              leading={<Icon icon={SquareDashed} size={24} color={c.faintForeground} />}
+              title="No repo"
+              detail="A thread in a folder of its own"
+              label="No repo"
+              last
+              onPress={() => pickRepo(null)}
+            />
+          </Section>
+        </ScrollView>
+        <ScrollView
+          style={{ width }}
+          contentContainerStyle={styles.page}
+          accessibilityElementsHidden={step !== 1}
+          importantForAccessibility={step !== 1 ? "no-hide-descendants" : "auto"}
+        >
+          <View style={styles.stepHeader}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to repositories"
+              hitSlop={8}
+              onPress={() => go(0)}
+              style={({ pressed }) => [styles.back, { backgroundColor: pressed ? c.selected : c.hover }]}
+            >
+              <Icon icon={ChevronLeft} size={20} color={c.foreground} />
+            </Pressable>
+            <View style={{ flex: 1 }}>
+              <T medium numberOfLines={1} style={{ fontSize: 17, fontWeight: "600" }}>
+                {picked ?? "No repo"}
+              </T>
+              <T faint style={{ fontSize: 13, lineHeight: 17 }}>
+                Which computer should it run on?
               </T>
             </View>
-          </Pressable>
-        ))}
-      </Section>
-      {!q && (
-        <Section title="Without a repo">
-          {machines.map((m, i) => (
-            <Pressable
-              key={m.machine.id}
-              accessibilityRole="button"
-              accessibilityLabel={`No repo on ${m.machine.name}`}
-              disabled={!m.connected}
-              onPress={() => pick(m.machine.id, noRepo)}
-              style={({ pressed }) => [
-                styles.row,
-                i < machines.length - 1 && {
-                  borderBottomWidth: StyleSheet.hairlineWidth,
-                  borderColor: c.border,
-                },
-                pressed && { backgroundColor: c.hover },
-                !m.connected && { opacity: 0.45 },
-              ]}
-            >
-              <View style={styles.glyph}>
-                <Icon icon={SquareDashed} size={22} color={c.faintForeground} />
-              </View>
-              <View style={{ flex: 1, gap: 1 }}>
-                <T medium style={{ fontSize: 16, fontWeight: "500" }}>
-                  No repo
-                </T>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
-                  <DeviceIcon name={m.machine.name} size={12} color={c.faintForeground} />
-                  <T faint numberOfLines={1} style={{ fontSize: 13, lineHeight: 17 }}>
-                    {m.machine.name}
-                    {!m.connected && " · offline"}
-                  </T>
-                </View>
-              </View>
-            </Pressable>
-          ))}
-        </Section>
-      )}
-    </ScrollView>
+          </View>
+          <Section>
+            {places.map(({ computer, repo }, i) => (
+              <Choice
+                key={computer.machine.id}
+                leading={<DeviceIcon name={computer.machine.name} size={22} color={c.mutedForeground} />}
+                title={computer.machine.name}
+                detail={[
+                  repo && homeless(repo.path),
+                  computer.machine.id === defaultId && "Default",
+                  !computer.connected && "Offline",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+                label={`${picked ?? "No repo"} on ${computer.machine.name}`}
+                disabled={!computer.connected}
+                last={i === places.length - 1}
+                onPress={() => pickComputer(computer.machine.id, repo?.id ?? noRepo)}
+              />
+            ))}
+          </Section>
+        </ScrollView>
+      </Animated.View>
+    </View>
   );
 }
 
+/**
+ * A new thread's page, the app's home: the repository's icon, a greeting, and where it runs,
+ * which opens the picker, over the message box. With no params, it starts where the last one did.
+ */
 export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<Screens, "StartThread">) {
-  const { hostId = "", groupId = noRepo } = route.params ?? {};
   const c = useColors();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
+  const { computers, defaultId } = useFleet();
+  const { user } = useAccount();
+  const last = getPrefs().lastStart;
+  const { hostId = "", groupId = noRepo } = route.params?.hostId
+    ? route.params
+    : last && computers.some((m) => m.machine.id === last.hostId)
+      ? last
+      : { hostId: defaultId ?? computers[0]?.machine.id, groupId: noRepo };
   const computer = useComputer(hostId);
   const [draft, setDraft] = useState("");
   const repo = useMemo(
@@ -170,15 +282,16 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
   const shared = useSharedIcons();
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title: "", headerShadowVisible: false });
+    navigation.setOptions({ title: "", headerTransparent: true, headerShadowVisible: false });
   }, [navigation]);
 
   async function start({ text, images, options }: Start) {
     if (!computer?.connected) return `${name} isn't connected.`;
     const runId = uuidv7();
+    const at = repo ? groupId : noRepo;
     const failed = await computer.view.start({
       runId,
-      groupId: repo ? groupId : noRepo,
+      groupId: at,
       prompt: text,
       images,
       threads: [],
@@ -192,51 +305,31 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
         : failed.message;
     }
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    navigation.replace("Thread", { hostId, runId });
+    setPrefs({ lastStart: { hostId, groupId: at } });
+    navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId } }] });
     return undefined;
   }
 
-  const change = () => navigation.navigate("NewThread");
-  const link = {
-    textDecorationLine: "underline",
-    textDecorationStyle: "dotted",
-    textDecorationColor: c.mutedForeground,
-  } as const;
   return (
-    <KeyboardAvoidingView
-      behavior="padding"
-      keyboardVerticalOffset={headerHeight}
-      style={{ flex: 1, backgroundColor: c.background }}
-    >
-      <Pressable accessible={false} style={styles.middle}>
-        <RepoIcon repo={repo} shared={shared} size={44} />
-        <T medium style={styles.heading}>
-          {repo ? "What should we build in " : "What should we work on "}
-          <T medium accessibilityRole="button" onPress={change} style={{ ...styles.heading, ...link }}>
-            {repo ? repo.name : "without a repo"}
+    <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: c.background }}>
+      <Pressable accessible={false} onPress={Keyboard.dismiss} style={[styles.middle, { paddingTop: headerHeight }]}>
+        <RepoIcon repo={repo} shared={shared} size={64} />
+        <T style={styles.greeting}>{greeting(new Date().getHours(), user?.given_name)}</T>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${repo?.name ?? "No repo"} on ${name}. Change`}
+          hitSlop={10}
+          onPress={() => {
+            void Haptics.selectionAsync();
+            navigation.navigate("NewThread");
+          }}
+          style={({ pressed }) => [styles.where, pressed && { opacity: 0.5 }]}
+        >
+          <T muted numberOfLines={1} style={{ fontSize: 15, flexShrink: 1 }}>
+            {repo?.name ?? "No repo"} on {name}
           </T>
-          {" on "}
-          <T medium accessibilityRole="button" onPress={change} style={{ ...styles.heading, ...link }}>
-            {name}
-          </T>
-          ?
-        </T>
-        {repo && (
-          <Pressable
-            accessibilityRole="button"
-            hitSlop={8}
-            onPress={() => navigation.setParams({ groupId: noRepo })}
-          >
-            <T muted style={{ fontSize: 15 }}>
-              or start without a repo
-            </T>
-          </Pressable>
-        )}
-        {repo && (
-          <T faint numberOfLines={1} style={{ fontSize: 13, fontFamily: font.mono }}>
-            {homeless(repo.path)}
-          </T>
-        )}
+          <Icon icon={ChevronDown} size={15} color={c.mutedForeground} />
+        </Pressable>
       </Pressable>
       <Composer
         computer={computer}
@@ -251,19 +344,21 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
 }
 
 const styles = StyleSheet.create({
-  page: { padding: 16, gap: 22 },
+  page: { padding: 16, gap: 18 },
   search: {
-    height: 42,
+    height: 40,
     borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     paddingHorizontal: 12,
   },
   input: { flex: 1, fontSize: 16, paddingVertical: 0 },
-  row: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 14, paddingVertical: 11 },
-  glyph: { width: 26, alignItems: "center" },
-  middle: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, paddingHorizontal: 28 },
-  heading: { fontSize: 24, lineHeight: 32, fontWeight: "500", textAlign: "center", letterSpacing: -0.3 },
+  row: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 14, paddingVertical: 12, minHeight: 60 },
+  glyph: { width: 28, alignItems: "center" },
+  stepHeader: { flexDirection: "row", alignItems: "center", gap: 12, paddingTop: 2 },
+  back: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  middle: { flex: 1, alignItems: "center", justifyContent: "center", gap: 14, paddingHorizontal: 32 },
+  greeting: { fontSize: 28, lineHeight: 34, fontWeight: "500", letterSpacing: -0.5, textAlign: "center", marginTop: 6 },
+  where: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: "100%" },
 });
