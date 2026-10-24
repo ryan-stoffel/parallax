@@ -150,6 +150,36 @@ test("Projects keep pinned Knowledge and their view list", async () => {
   expect(listButton("Knowledge")).toBeDefined();
 });
 
+test("opening a Project from the sidebar shows its Project tab, even after Knowledge", async () => {
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  const show = (showProject: object) =>
+    act(() =>
+      root.render(
+        <SidePanel
+          scope="project"
+          open
+          onClose={() => {}}
+          expanded={false}
+          onExpandedChange={() => {}}
+          project={{ home: <p>Project home</p>, waiting: 0 }}
+          knowledge={<p>Project knowledge</p>}
+          showProject={showProject}
+        />,
+      ),
+    );
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  show({});
+  await settle();
+  await click(tab("K"));
+  expect(tabs()).toEqual(["Project", "Knowledge*"]);
+  show({});
+  await settle();
+  expect(tabs()).toEqual(["Project*", "Knowledge"]);
+});
+
 test("each thread shows its own last tab again, and pull request tabs are colored by state", async () => {
   const a = "https://github.com/o/r/pull/1";
   const b = "https://github.com/o/r/pull/2";

@@ -12,6 +12,7 @@ import {
 } from "react";
 
 import type { Attention } from "./attention";
+import { WorkingMark } from "./AttentionMark";
 import { draggedPin, pinDragType, setDraggedPin } from "./pins";
 import { MenuKey } from "./Sidebar";
 import { shownRows } from "./SidebarParts";
@@ -25,6 +26,9 @@ export interface Favorite {
   title: string;
   icon: ReactNode;
   attention: Attention;
+  /** A Project's status in place of a dot (0083): whether any of its runs works, and how many
+   * wait on the user. */
+  project?: { working: boolean; waiting: number };
   selected: boolean;
   /** Its Mod+number badge while Mod is held. */
   badge?: ReactNode;
@@ -49,14 +53,22 @@ export interface FavoriteAction {
 /** What a favorite's drag carries, so only the favorites take it as a move. */
 const favoriteDragType = "application/x-parallax-favorite";
 
-// A favorite's dot, and its words for a screen reader and the tooltip: only for what finished,
+// A thread's dot, and its words for a screen reader and the tooltip: only for what finished,
 // failed, or waits on the user. Work in progress shows nothing, as the Working drawer keeps it out
-// of sight.
+// of sight. A Project shows its working ring and waiting count instead.
 const dots: Partial<Record<Attention, { color: string; words: string }>> = {
   needsYou: { color: "bg-warning", words: "needs you" },
   failed: { color: "bg-danger", words: "failed" },
   done: { color: "bg-added", words: "done" },
 };
+
+/** What a favorite's mark says, for a screen reader and the tooltip. */
+function wordsOf(f: Favorite): string | undefined {
+  if (!f.project) return dots[f.attention]?.words;
+  const { working, waiting } = f.project;
+  const words = [working && "working", waiting > 0 && `${waiting} waiting on you`].filter(Boolean);
+  return words.length ? words.join(", ") : undefined;
+}
 
 /**
  * The favorites: squares, as many to a row as fit and stretched to fill it, so two Projects take
@@ -219,12 +231,10 @@ export function Favorites({
               data-row={f.key}
               // A thread's card names it.
               title={
-                f.thread && onRest
-                  ? undefined
-                  : `${f.title}${dots[f.attention] ? `, ${dots[f.attention]!.words}` : ""}`
+                f.thread && onRest ? undefined : `${f.title}${wordsOf(f) ? `, ${wordsOf(f)}` : ""}`
               }
               aria-label={f.title}
-              aria-description={dots[f.attention]?.words}
+              aria-description={wordsOf(f)}
               aria-current={f.selected ? "page" : undefined}
               draggable={!!onReorder || !!f.thread}
               onDragStart={(e) => {
@@ -273,11 +283,32 @@ export function Favorites({
               className={`relative grid w-full place-items-center rounded-[10px] transition-[background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none h-11 [&_svg]:size-5 ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_14%,transparent)]" : "bg-foreground/[0.045] hover:bg-foreground/[0.08]"}`}
             >
               {f.icon}
-              {dots[f.attention] && (
-                <span
-                  aria-hidden
-                  className={`dot-in absolute size-[7px] rounded-full top-1.5 right-1.5 ${dots[f.attention]!.color}`}
-                />
+              {f.project ? (
+                <>
+                  {f.project.working && (
+                    <span
+                      aria-hidden
+                      className="absolute top-[3px] left-[3px] grid [&_svg]:size-2.5"
+                    >
+                      <WorkingMark />
+                    </span>
+                  )}
+                  {f.project.waiting > 0 && (
+                    <span
+                      aria-hidden
+                      className="absolute top-[3px] right-[5px] font-mono text-[10.5px] leading-3 font-semibold text-warning tabular-nums"
+                    >
+                      {f.project.waiting}
+                    </span>
+                  )}
+                </>
+              ) : (
+                dots[f.attention] && (
+                  <span
+                    aria-hidden
+                    className={`dot-in absolute size-[7px] rounded-full top-1.5 right-1.5 ${dots[f.attention]!.color}`}
+                  />
+                )
               )}
               {f.badge && <span className="absolute right-1 bottom-1">{f.badge}</span>}
             </button>
