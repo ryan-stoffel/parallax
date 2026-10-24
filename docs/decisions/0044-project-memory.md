@@ -1,6 +1,6 @@
 # 0044: Project memory: what a child starts with, and who writes it
 
-- Status: accepted; supersedes in part [0005](0005-shared-context-folder.md) (every agent writes the folder, last writer wins, and agents get its path); its Board layer amended by [0081](0081-board-items.md)
+- Status: accepted; supersedes in part [0005](0005-shared-context-folder.md) (every agent writes the folder, last writer wins, and agents get its path); its Board layer amended by [0081](0081-board-items.md); You's per-host scope superseded by [0082](0082-you-memory-across-machines.md), which syncs You between the user's Connect devices
 - Date: 2026-10-03
 - Issue: PLX-383
 
