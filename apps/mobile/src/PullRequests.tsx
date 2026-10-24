@@ -5,7 +5,6 @@
 // merged or closed with `pr/act`. plxd asks GitHub with the computer's own `gh`, so the phone needs
 // no GitHub sign-in.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { useNavigation } from "@react-navigation/native";
 import * as Clipboard from "expo-clipboard";
 import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
@@ -34,7 +33,6 @@ import {
   TriangleAlert,
   UserCheck,
   UserX,
-  X,
 } from "lucide-react-native";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -50,7 +48,6 @@ import {
   StyleSheet,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
 
 import type {
   PrAction,
@@ -120,18 +117,6 @@ async function view(e: Pick<PrEntry, "hostId" | "runId" | "url">): Promise<PullR
 const numberOf = (url: string) => url.split("/").pop() ?? "";
 /** `owner/name` from a pull request's URL, for before it's read. */
 const repoOf = (url: string) => url.split("/").slice(3, 5).join("/");
-
-/** A round button on Liquid Glass, as iOS draws a sheet's close button. */
-function GlassButton({ icon, label, onPress }: { icon: LucideIcon; label: string; onPress: () => void }) {
-  const c = useColors();
-  return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} hitSlop={8} onPress={onPress}>
-      <GlassView isInteractive style={[styles.glass, !isLiquidGlassAvailable() && { backgroundColor: c.selected }]}>
-        <Icon icon={icon} size={18} color={c.foreground} />
-      </GlassView>
-    </Pressable>
-  );
-}
 
 /** Which pull requests the list shows, by state, as T3's state filter. */
 type Filter = "open" | "merged" | "closed" | "all";
@@ -231,7 +216,6 @@ function PrRow({ entry, pr, error }: { entry: PrEntry; pr?: PullRequest; error?:
 
 export function PullRequestList() {
   const c = useColors();
-  const navigation = useNavigation();
   const { computers } = useFleet();
   const entries = entriesOf(computers);
   const [, setVersion] = useState(0);
@@ -262,12 +246,6 @@ export function PullRequestList() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
-      <SafeAreaView edges={["top"]}>
-        <View style={styles.sheetHeader}>
-          <T style={{ fontSize: 28, lineHeight: 34, fontWeight: "700", flex: 1 }}>Pull requests</T>
-          <GlassButton icon={X} label="Close" onPress={() => navigation.goBack()} />
-        </View>
-      </SafeAreaView>
       <FlatList
         data={shown}
         keyExtractor={(e) => e.url}
@@ -907,8 +885,6 @@ export function PullRequestScreen({
 
 const styles = StyleSheet.create({
   line: { flexDirection: "row", alignItems: "center", gap: 6 },
-  sheetHeader: { flexDirection: "row", alignItems: "center", gap: 12, paddingLeft: 16, paddingRight: 14, paddingTop: 14, paddingBottom: 10 },
-  glass: { width: 40, height: 40, borderRadius: 20, alignItems: "center", justifyContent: "center", overflow: "hidden" },
   chip: { flexDirection: "row", alignItems: "center", gap: 6, height: 34, paddingHorizontal: 14, borderRadius: 17, overflow: "hidden" },
   row: { flexDirection: "row", gap: 12, paddingLeft: 16 },
   rowBody: { flex: 1, gap: 4, paddingVertical: 10, paddingRight: 16, borderBottomWidth: StyleSheet.hairlineWidth },

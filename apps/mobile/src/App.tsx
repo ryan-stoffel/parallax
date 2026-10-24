@@ -17,9 +17,10 @@ import { createNativeStackNavigator, type NativeStackNavigationOptions } from "@
 import * as Haptics from "expo-haptics";
 import { Info, X } from "lucide-react-native";
 import { useContext, useEffect, useRef, useState } from "react";
-import { Linking, StatusBar, useColorScheme, useWindowDimensions } from "react-native";
-import { Drawer } from "react-native-drawer-layout";
+import { Linking, StatusBar, StyleSheet, useColorScheme, useWindowDimensions } from "react-native";
+import { Drawer, useDrawerProgress } from "react-native-drawer-layout";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AccountProvider, SignIn, useAccount } from "./Account";
@@ -191,7 +192,9 @@ function Shell({ children }: { children: React.ReactNode }) {
         onClose={() => toggle(false)}
         drawerType="slide"
         drawerStyle={{ width: drawerWidth, backgroundColor: c.background }}
-        overlayStyle={{ backgroundColor: scheme === "dark" ? "rgba(0, 0, 0, 0.5)" : "rgba(14, 12, 40, 0.18)" }}
+        // The dim is the main view's own (`Rounded`), so it rounds with it; the overlay only closes.
+        overlayStyle={{ backgroundColor: "transparent" }}
+        style={{ backgroundColor: c.background }}
         overlayAccessibilityLabel="Close sidebar"
         swipeEnabled={depth === 0}
         swipeEdgeWidth={width}
@@ -204,9 +207,25 @@ function Shell({ children }: { children: React.ReactNode }) {
         }
         renderDrawerContent={() => <Sidebar />}
       >
-        {children}
+        <Rounded dim={scheme === "dark" ? "rgba(0, 0, 0, 0.5)" : "rgba(14, 12, 40, 0.18)"}>{children}</Rounded>
       </Drawer>
     </SidebarControl>
+  );
+}
+
+/**
+ * The main view, whose corners round as the sidebar slides it aside, as the screen's own are, and
+ * which dims as it goes.
+ */
+function Rounded({ dim, children }: { dim: string; children: React.ReactNode }) {
+  const progress = useDrawerProgress();
+  const round = useAnimatedStyle(() => ({ borderRadius: interpolate(progress.value, [0, 1], [0, 48]) }));
+  const shade = useAnimatedStyle(() => ({ opacity: progress.value }));
+  return (
+    <Animated.View style={[{ flex: 1, overflow: "hidden", borderCurve: "continuous" }, round]}>
+      {children}
+      <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: dim }, shade]} />
+    </Animated.View>
   );
 }
 
@@ -283,7 +302,21 @@ function Main({ setup }: { setup: Setup }) {
                 headerShadowVisible: false,
               })}
             />
-            <Stack.Screen name="PullRequests" component={PullRequestList} options={{ ...sheet, headerShown: false }} />
+            <Stack.Screen
+              name="PullRequests"
+              component={PullRequestList}
+              options={({ navigation }) => ({
+                ...sheet,
+                title: "Pull requests",
+                headerLeft: () => (
+                  <GlassButton label="Close" onPress={() => navigation.goBack()}>
+                    <Icon icon={X} size={20} />
+                  </GlassButton>
+                ),
+                headerLeftBackgroundVisible: false,
+                headerShadowVisible: false,
+              })}
+            />
             <Stack.Screen name="About" component={AboutScreen} options={{ title: "About" }} />
             <Stack.Screen name="Usage" component={UsageScreen} options={{ title: "Usage" }} />
             <Stack.Screen name="Computer" component={ComputerScreen} />

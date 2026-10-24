@@ -413,9 +413,11 @@ export function Composer({
   // thread's change goes with a message only to one that takes that (`sendModel`).
   const changes = onStart ? "runOptions" in capabilities : "sendModel" in capabilities;
 
-  const shownModel = model ?? run?.model ?? "";
+  // A new thread starts on its provider's first model unless another is picked, as on the desktop.
+  // An open run without one runs on its CLI's default, which only the provider's name can stand for.
+  const shownModel = model ?? run?.model ?? (onStart ? offer.models[0]?.id : undefined) ?? "";
   const modelName =
-    offer.models.find((m) => m.id === shownModel)?.name ?? (shownModel || "Default model");
+    offer.models.find((m) => m.id === shownModel)?.name ?? (shownModel || offer.name || "Default model");
   const shownEffort = effort ?? run?.effort;
   const shownAccess = permission ?? run?.permission;
   const text = draft;
@@ -515,7 +517,7 @@ export function Composer({
           text: withFiles(text.trim(), paths),
           images,
           options: {
-            ...(changes && model !== undefined && model !== "" && { model }),
+            ...(changes && shownModel !== "" && { model: shownModel }),
             ...(moved && { account: { kind: "subscription" as const, backend: moved } }),
             ...(changes && effort && offer.efforts && { effort }),
             ...(changes && permission && offer.permissions.includes(permission) && { permission }),
@@ -622,7 +624,8 @@ export function Composer({
               onPress={() => setSheet("model")}
               style={({ pressed }) => [styles.pill, { backgroundColor: pressed ? c.hover : c.selected }]}
             >
-              <Text numberOfLines={1} style={[styles.pillText, { color: c.foreground }]}>
+              <ProviderLogo kind={offer.kind || shownProvider} size={15} color={c.foreground} />
+              <Text numberOfLines={1} style={[styles.pillText, { color: c.foreground, flexShrink: 1 }]}>
                 {shortName(modelName)}
                 {offer.efforts && shownEffort && (
                   <Text style={{ color: c.mutedForeground }}>
@@ -772,7 +775,16 @@ const styles = StyleSheet.create({
   optionBody: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, paddingRight: 18 },
   link: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 18, paddingVertical: 16 },
   round: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
-  pill: { height: 38, borderRadius: 19, paddingHorizontal: 16, justifyContent: "center", maxWidth: 230 },
+  pill: {
+    height: 38,
+    borderRadius: 19,
+    paddingLeft: 13,
+    paddingRight: 16,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    maxWidth: 240,
+  },
   pillText: { fontSize: 15 },
   steer: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 },
 });
