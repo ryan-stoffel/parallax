@@ -2383,8 +2383,8 @@ function ScopeMenu({
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
  * (ProfileMenu.tsx), then the places that open in the main pane, Browser, the permanent one
- * (PLX-964), Pull requests, and Usage, and at the far end Update when `updatable` (Update.tsx)
- * and Settings.
+ * (PLX-964), Pull requests, and Usage, and at the far end Settings, then Update when `updatable`
+ * (Update.tsx), where it has always been.
  */
 function Footer({
   listed,
@@ -2413,10 +2413,10 @@ function Footer({
         <ChartNoAxesColumn />
       </IconButton>
       <span className="flex-1" />
-      {window.parallax.updatable && <UpdateButton />}
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
       </IconButton>
+      {window.parallax.updatable && <UpdateButton />}
     </div>
   );
 }
