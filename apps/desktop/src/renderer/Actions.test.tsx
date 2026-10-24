@@ -46,6 +46,8 @@ beforeEach(() => {
     onExtensionsChanged: () => () => {},
     downloads: async () => [],
     onDownloads: () => () => {},
+    googleAccount: async () => undefined,
+    onGoogleAccount: () => () => {},
     request: () =>
       Promise.resolve({
         result: { terminals: running.map((terminalId) => ({ threadId: "t3", terminalId })) },

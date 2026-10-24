@@ -4,6 +4,7 @@ import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   BrowserAction,
   DownloadInfo,
+  GoogleAccount,
   ConnectionState,
   DeviceStreamMessage,
   Profile,
@@ -104,10 +105,16 @@ const bridge: ParallaxBridge = {
   selectBrowserTab: (id) => ipcRenderer.send("parallax:selectBrowserTab", id),
   clearBrowsingData: (what) => ipcRenderer.invoke("parallax:clearBrowsingData", what),
   downloads: () => ipcRenderer.invoke("parallax:downloads"),
+  googleAccount: () => ipcRenderer.invoke("parallax:googleAccount"),
   onDownloads(listener) {
     const forward = (_event: unknown, list: DownloadInfo[]) => listener(list);
     ipcRenderer.on("parallax:downloads", forward);
     return () => ipcRenderer.removeListener("parallax:downloads", forward);
+  },
+  onGoogleAccount(listener) {
+    const forward = (_event: unknown, account: GoogleAccount | undefined) => listener(account);
+    ipcRenderer.on("parallax:googleAccount", forward);
+    return () => ipcRenderer.removeListener("parallax:googleAccount", forward);
   },
   downloadAction: (id, action) => ipcRenderer.send("parallax:downloadAction", id, action),
   setDownloadPrefs: (prefs) => ipcRenderer.send("parallax:downloadPrefs", prefs),

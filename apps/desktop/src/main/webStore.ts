@@ -18,11 +18,17 @@ import { installExtension, removeExtension } from "./extensions";
 export const storeOrigin = "https://chromewebstore.google.com";
 
 /**
- * The user agent with Electron's and the app's tokens taken out, so pages see plain Chrome. A
+ * The user agent with Electron's and the app's tokens taken out, so pages see plain Chrome. Only
+ * the store gets it (main.ts): Cloudflare's Turnstile and Google's sign-in tell Electron from
+ * Chrome by other means, and refuse a browser whose user agent says otherwise (PLX-981). A
  * nightly's name, `Parallax (Nightly)`, arrives as `Parallax(Nightly)/<version>`.
  */
 export const chromeUserAgent = (userAgent: string) =>
   userAgent.replace(/ (?!(?:AppleWebKit|Chrome|Safari)\/)\S+\/\S+/g, "");
+
+/** The browser's user agent everywhere else: Electron's own, without the app's token. */
+export const browserUserAgent = (userAgent: string) =>
+  userAgent.replace(/ (?!(?:AppleWebKit|Chrome|Electron|Safari)\/)\S+\/\S+/g, "");
 
 /**
  * What the store shows for an extension: added, too old for Chrome to install (Manifest V2, as

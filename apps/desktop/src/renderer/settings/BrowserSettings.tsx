@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 
-import { browserLayout, pageFit, ThemeSwatches } from "../Browser";
+import { browserLayout, pageFit, ThemePicker } from "../Browser";
 import { bookmarksBar } from "../Bookmarks";
 import {
   downloadPrefs,
@@ -32,6 +32,8 @@ export function BrowserSettings() {
   const confirm = useRef<HTMLDialogElement>(null);
   const [clear, setClear] = useState({ history: true, siteData: true, cache: true });
   const [clearing, setClearing] = useState(false);
+  const [link, setLink] = useState("");
+  const [adding, setAdding] = useState(false);
 
   return (
     <>
@@ -40,9 +42,16 @@ export function BrowserSettings() {
       </PageTitle>
 
       <Section title="Appearance">
-        <Row title="Theme" description="Parallax's own colors, or Helium's and Chrome's">
-          <ThemeSwatches />
-        </Row>
+        {/* Its tiles take the row's width, under its title. */}
+        <div data-setting="theme" className="border-b border-border">
+          <div className="px-4 pt-3 pb-2">
+            <span className="block text-[13px] font-medium">Theme</span>
+            <span className="block text-[12.5px] text-muted-foreground">
+              The colors of the browser's tabs and toolbar
+            </span>
+          </div>
+          <ThemePicker />
+        </div>
         <Row title="Layout" description="Compact puts the tabs and the address bar in one row">
           <Picker
             label="Layout"
@@ -213,6 +222,46 @@ export function BrowserSettings() {
           </button>
         }
       >
+        <Row title="Add from a link" description="A Chrome Web Store page's address">
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!link.trim() || adding) return;
+              setAdding(true);
+              void window.parallax
+                .installExtension(link)
+                .then((answer) => {
+                  if (typeof answer === "string")
+                    notify({
+                      key: "extension",
+                      tone: "error",
+                      title: "Couldn't add the extension",
+                      body: answer,
+                    });
+                  else setLink("");
+                  void refresh();
+                })
+                .finally(() => setAdding(false));
+            }}
+          >
+            <input
+              aria-label="Chrome Web Store link"
+              placeholder="chromewebstore.google.com/detail/…"
+              spellCheck={false}
+              value={link}
+              onChange={(e) => setLink(e.target.value)}
+              className={rowField}
+            />
+            <button
+              type="submit"
+              disabled={adding || !link.trim()}
+              className={`${quietButton} border border-border disabled:opacity-50`}
+            >
+              {adding ? "Adding…" : "Add"}
+            </button>
+          </form>
+        </Row>
         {list?.length ? (
           list.map((extension) => (
             <Row

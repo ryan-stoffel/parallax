@@ -20,21 +20,31 @@ import { createPortal } from "react-dom";
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
-import { bookmarks, BookmarksBar, BookmarkStar, bookmarksBar, toggled } from "./Bookmarks";
 import {
+  bookmarks,
+  BookmarksBar,
+  BookmarkStar,
+  bookmarksBar,
+  findBookmark,
+  toggled,
+} from "./Bookmarks";
+import { ProfileButton } from "./BrowserProfile";
+import {
+  browserSettingsAsked,
   homeButton,
   restoreTabs,
   searchEngine,
   searchEngineName,
+  searchHomeFor,
   searchUrlFor,
 } from "./browserSettings";
-import { browserTheme, browserThemes } from "./browserTheme";
+import { browserTheme, browserThemes, colorsOf, useDark, type BrowserColors } from "./browserTheme";
 import { suggestionsFor } from "./addressSuggestions";
 import { browserHistory, titled as titled_, visited } from "./browserHistory";
 import { DownloadsButton } from "./Downloads";
 import { HistoryDialog } from "./HistoryDialog";
 import { Extensions } from "./Extensions";
-import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
+import { fitSize, MONITOR, PageFrame, type Fit, type Size } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
 import { memory, stored } from "./stored";
@@ -45,23 +55,35 @@ import {
   ArrowForward,
   ArrowUp,
   Bookmark,
-  Check,
   Close,
   CloseSmall,
   Code,
+  DeleteHistory,
+  DesktopWindows,
+  Extension,
   History,
   Home,
+  MoreVert,
+  Palette,
   Print,
   Public,
-  Rectangle,
   Refresh,
   Remove,
   Search,
-  SplitscreenTop,
+  Settings,
+  Star,
   StarFilled,
+  Tab as TabIcon,
   ZoomIn,
 } from "./symbols";
-import { IconButton, menuHeading, menuItem, MenuOption, shortcut } from "./ui";
+import {
+  IconButton,
+  Menu,
+  shortcut,
+  toolbarButton,
+  toolbarMenuDivider,
+  ToolbarMenuRow,
+} from "./ui";
 
 /** The search engine's results page for `query` (Settings › Browser), Google's by default. */
 export const searchUrl = (query: string) => searchUrlFor(searchEngine.get(), query);
@@ -98,11 +120,11 @@ export function browserUrl(address: string): string | undefined {
 }
 
 /**
- * The address bar's box, as Chrome and Helium draw it: a rounded field with an icon before the
- * text, ringed in the accent while focused. Its input takes `addressInput`.
+ * The address bar's box, as Chrome and Helium draw it: a rounded field, as tall as Helium's, with
+ * an icon before the text, ringed in the accent while focused. Its input takes `addressInput`.
  */
 export const addressBox =
-  "flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-transparent bg-[var(--browser-omnibox,var(--selected))] px-2.5 text-[13px] focus-within:border-ring focus-within:bg-background [&>svg]:size-3.5 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
+  "flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-[10px] border border-transparent bg-[var(--browser-omnibox,var(--selected))] px-3 text-[13.5px] focus-within:border-ring focus-within:bg-background [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
 export const addressInput =
   "h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint-foreground";
 
@@ -552,8 +574,21 @@ function Tab({
 }) {
   const view = useRef<WebviewTag>(null);
   const addressBar = useRef<HTMLInputElement>(null);
+  // A new tab, with no page to open, shows the search engine's home page as its new tab page
+  // (PLX-981): its address bar stays empty and focused, and the tab stays New Tab, until the user
+  // goes to another page from it. `ntp` is the same for the webview's listeners, and `homeLoaded`
+  // whether the home page has loaded, after any redirect.
+  const [newTabPage, setNewTabPage] = useState(!page && !load);
+  const ntp = useRef(newTabPage);
+  const homeLoaded = useRef(false);
+  const leaveNewTabPage = () => {
+    ntp.current = false;
+    setNewTabPage(false);
+  };
   // The first page, which mounts the webview; later pages load in it.
-  const [src, setSrc] = useState<string>();
+  const [src, setSrc] = useState<string | undefined>(() =>
+    newTabPage ? searchHomeFor(searchEngine.get()) : undefined,
+  );
   const [address, setAddress] = useState("");
   const [history, setHistory] = useState({ back: false, forward: false });
   const [error, setError] = useState<{ url: string; description: string }>();
@@ -567,7 +602,7 @@ function Tab({
   const fit = pageFit.use();
   const layout = browserLayout.use();
   const engine = searchEngine.use();
-  const home = homeButton.use();
+  const homePage = homeButton.use();
   // The address bar's suggestions while the user types in it (PLX-978), and the one picked.
   const [typed, setTyped] = useState(false);
   const [picked, setPicked] = useState(0);
@@ -648,7 +683,10 @@ function Tab({
   // A tab shown, by a click or a shortcut, takes focus to its page, as in Chrome, so the page's
   // shortcuts keep working from it.
   useEffect(() => {
-    if (shown && src) requestAnimationFrame(() => view.current?.focus());
+    if (shown && src)
+      requestAnimationFrame(() =>
+        ntp.current ? addressBar.current?.focus() : view.current?.focus(),
+      );
   }, [shown]);
 
   // Extensions see the shown tab as the active one.
@@ -664,11 +702,17 @@ function Tab({
       return;
     }
     setError(undefined);
+    leaveNewTabPage();
     setAddress(next);
     onChange({ url: next });
-    // The view shows a load's error, so the rejection needs no handling here.
-    if (view.current) view.current.loadURL(next).catch(() => {});
-    else setSrc(next);
+    // The view shows a load's error, so the rejection needs no handling here. A webview that
+    // hasn't finished attaching, such as a new tab page's, throws instead; its src opens it.
+    try {
+      if (!view.current) throw new Error("no webview yet");
+      view.current.loadURL(next).catch(() => {});
+    } catch {
+      setSrc(next);
+    }
   };
 
   useEffect(() => {
@@ -686,16 +730,28 @@ function Tab({
       setContentsId(el.getWebContentsId());
       stopAsking = onAsk(el.getWebContentsId(), (action) => {
         if (action.kind === "address") addressBar.current?.focus();
-        else if (action.kind === "icon") latest.current.onChange({ icon: action.url });
-        else if (!latest.current.local(action)) latest.current.ask(action);
+        else if (action.kind === "icon") {
+          if (!ntp.current) latest.current.onChange({ icon: action.url });
+        } else if (!latest.current.local(action)) latest.current.ask(action);
       });
     };
-    const navigated = () => {
+    const navigated = (inPage = false) => {
       const url = el.getURL();
-      setAddress(url);
       setHistory({ back: el.canGoBack(), forward: el.canGoForward() });
       setZoom(el.getZoomFactor());
-      latest.current.onChange({ url });
+      // The new tab page's own steps, its first load and its in-page ones, such as Google's
+      // `?zx=`, aren't the user's; the next page is.
+      if (ntp.current) {
+        if (inPage) return;
+        if (!homeLoaded.current) {
+          homeLoaded.current = true;
+          return;
+        }
+        leaveNewTabPage();
+      }
+      setAddress(url);
+      // A new document has no title until it says, rather than the last page's (PLX-981).
+      latest.current.onChange(inPage ? { url } : { url, title: undefined });
       // Each web page visited goes in History, not an extension's own pages.
       if (/^https?:/.test(url)) browserHistory.set(visited(browserHistory.get(), url, Date.now()));
     };
@@ -712,6 +768,7 @@ function Tab({
         setError({ url: e.validatedURL, description: e.errorDescription });
     };
     const titled = (e: PageTitleUpdatedEvent) => {
+      if (ntp.current) return;
       latest.current.onChange({ title: e.title });
       const next = titled_(browserHistory.get(), el.getURL(), e.title);
       if (next !== browserHistory.get()) browserHistory.set([...next]);
@@ -734,12 +791,13 @@ function Tab({
       // Only the first load's, shown or not, so a later one doesn't take focus.
       if (focused.current) return;
       focused.current = true;
-      if (latest.current.focusOnLoad && latest.current.shown) el.focus();
+      if (latest.current.focusOnLoad && latest.current.shown && !ntp.current) el.focus();
     };
     el.addEventListener("dom-ready", firstLoad);
-    el.addEventListener("did-navigate", navigated);
+    const navigatedTo = () => navigated();
+    el.addEventListener("did-navigate", navigatedTo);
     // An iframe's own in-page step isn't the page's, nor a visit.
-    const navigatedInPage = (e: { isMainFrame: boolean }) => e.isMainFrame && navigated();
+    const navigatedInPage = (e: { isMainFrame: boolean }) => e.isMainFrame && navigated(true);
     el.addEventListener("did-navigate-in-page", navigatedInPage);
     el.addEventListener("did-start-navigation", starting);
     el.addEventListener("did-start-loading", started);
@@ -752,7 +810,7 @@ function Tab({
       el.removeEventListener("did-attach", ready);
       el.removeEventListener("dom-ready", ready);
       el.removeEventListener("dom-ready", firstLoad);
-      el.removeEventListener("did-navigate", navigated);
+      el.removeEventListener("did-navigate", navigatedTo);
       el.removeEventListener("did-navigate-in-page", navigatedInPage);
       el.removeEventListener("did-start-navigation", starting);
       el.removeEventListener("did-start-loading", started);
@@ -765,10 +823,16 @@ function Tab({
 
   const navBar = (
     <>
-      <IconButton label="Back" disabled={!history.back} onClick={() => view.current?.goBack()}>
+      <IconButton
+        className={toolbarButton}
+        label="Back"
+        disabled={!history.back}
+        onClick={() => view.current?.goBack()}
+      >
         <ArrowBack />
       </IconButton>
       <IconButton
+        className={toolbarButton}
         label="Forward"
         disabled={!history.forward}
         onClick={() => view.current?.goForward()}
@@ -776,19 +840,25 @@ function Tab({
         <ArrowForward />
       </IconButton>
       {loading ? (
-        <IconButton label="Stop" onClick={() => view.current?.stop()}>
+        <IconButton className={toolbarButton} label="Stop" onClick={() => view.current?.stop()}>
           <Close />
         </IconButton>
       ) : (
-        <IconButton label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
+        <IconButton
+          className={toolbarButton}
+          label="Reload"
+          disabled={!src}
+          onClick={() => view.current?.reload()}
+        >
           <Refresh />
         </IconButton>
       )}
       {/* The home page, or a new tab without one (Settings › Browser › Home button). */}
-      {home.show && (
+      {homePage.show && (
         <IconButton
           label="Home"
-          onClick={() => (home.url.trim() ? open(home.url) : ask({ kind: "newTab" }))}
+          className={toolbarButton}
+          onClick={() => (homePage.url.trim() ? open(homePage.url) : ask({ kind: "newTab" }))}
         >
           <Home />
         </IconButton>
@@ -798,7 +868,7 @@ function Tab({
       <form
         // Classic's second row keeps as short as it can, since the top row's height is the
         // window's title bar (frame.ts).
-        className={`relative mx-1 ${addressBox} ${layout === "classic" ? "h-7!" : ""}`}
+        className={`relative mx-1 ${addressBox} ${layout === "classic" ? "h-8!" : ""}`}
         onSubmit={(e) => {
           e.preventDefault();
           open(suggestions[picked]?.url ?? address);
@@ -809,9 +879,9 @@ function Tab({
         <Search aria-hidden />
         <input
           ref={addressBar}
-          // A blank new tab's address bar takes focus, as in Chrome, but not a tab shown again or one
-          // opening a page, whose page takes it.
-          autoFocus={!src && !load}
+          // The new tab page's address bar takes focus, as in Chrome, but not a tab shown again or
+          // one opening a page, whose page takes it.
+          autoFocus={newTabPage}
           aria-label="Address"
           placeholder={`Search ${searchEngineName(engine)} or type a URL`}
           spellCheck={false}
@@ -905,124 +975,136 @@ function Tab({
       </form>
     </>
   );
+  // The More menu (PLX-981), and what its items do: each closes it, but zoom's, as in Chrome.
+  const menuId = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const pick = (action: () => void) => () => {
+    menu.current?.hidePopover();
+    action();
+  };
+  const settingsAt = (title?: string) =>
+    pick(() => browserSettingsAsked.set(title ? { title } : {}));
+  const bookmarked = !!page && !!findBookmark(bookmarks.get(), page.url);
+  const desktop = fit === "monitor" && !fixed;
   const toolsBar = (
     <>
       <DownloadsButton />
-      <Extensions tab={contentsId} />
-      <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
-        {/* Zoom keeps the menu open, as Chrome's does. */}
-        <div role="group" aria-label="Zoom" className={`${menuItem} hover:bg-transparent`}>
-          <ZoomIn aria-hidden />
-          <span className="flex-1">Zoom</span>
-          {(
-            [
-              ["Zoom out", -1, Remove],
-              ["Zoom in", 1, Add],
-            ] as const
-          ).map(([label, direction, Icon], i) => (
-            <span key={label} className="contents">
-              {i === 1 && (
-                <span className="w-10 text-center text-[12px] tabular-nums">
-                  {Math.round(zoom * 100)}%
-                </span>
-              )}
-              <button
-                type="button"
-                role="menuitem"
-                aria-label={label}
-                title={label}
-                disabled={!src}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  zoomTo(nextZoom(zoom, direction));
-                }}
-                className="grid size-6 place-items-center rounded-md hover:bg-hover disabled:opacity-50"
-              >
-                <Icon aria-hidden />
-              </button>
-            </span>
-          ))}
-        </div>
-        <button
-          type="button"
-          role="menuitem"
-          disabled={!src}
-          onClick={openFind}
-          className={`${menuItem} disabled:opacity-50`}
-        >
-          <Search aria-hidden />
-          Find…
-          <span className="ml-auto text-[11.5px] text-faint-foreground">{shortcut("F")}</span>
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          disabled={!src}
-          onClick={() => void view.current?.print().catch(() => {})}
-          className={`${menuItem} disabled:opacity-50`}
-        >
-          <Print aria-hidden />
-          Print…
-          <span className="ml-auto text-[11.5px] text-faint-foreground">{shortcut("P")}</span>
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          disabled={!src}
-          onClick={() => view.current?.openDevTools()}
-          className={`${menuItem} disabled:opacity-50`}
-        >
-          <Code aria-hidden />
-          Developer tools
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => ask({ kind: "history" })}
-          className={menuItem}
-        >
-          <History aria-hidden />
-          History
-          <span className="ml-auto text-[11.5px] text-faint-foreground">
-            {window.parallax.platform === "darwin" ? shortcut("Y") : "Ctrl+H"}
+      <Extensions tab={contentsId} onOpen={(url) => ask({ kind: "open", url })} />
+      <ProfileButton onOpen={(url) => ask({ kind: "open", url })} />
+      <IconButton
+        label="More"
+        className={toolbarButton}
+        popoverTarget={menuId}
+        aria-haspopup="menu"
+      >
+        <MoreVert />
+      </IconButton>
+      <Menu ref={menu} id={menuId} label="More" align="end" className="w-72 p-1.5">
+        <ToolbarMenuRow
+          icon={<TabIcon aria-hidden />}
+          label="New tab"
+          keys={shortcut("T")}
+          onClick={pick(() => ask({ kind: "newTab" }))}
+        />
+        <hr className={toolbarMenuDivider} />
+        <ToolbarMenuRow
+          icon={<History aria-hidden />}
+          label="History"
+          keys={window.parallax.platform === "darwin" ? shortcut("Y") : "Ctrl+H"}
+          onClick={pick(() => ask({ kind: "history" }))}
+        />
+        <ToolbarMenuRow
+          icon={bookmarked ? <StarFilled aria-hidden /> : <Star aria-hidden />}
+          label={bookmarked ? "Remove bookmark" : "Bookmark this tab"}
+          keys={shortcut("D")}
+          disabled={!page}
+          onClick={pick(() => local({ kind: "bookmark" }))}
+        />
+        <ToolbarMenuRow
+          icon={<Bookmark aria-hidden />}
+          label="Show bookmarks bar"
+          checked={showBookmarks}
+          onClick={pick(() => bookmarksBar.set(!showBookmarks))}
+        />
+        <hr className={toolbarMenuDivider} />
+        <ToolbarMenuRow
+          icon={<Extension aria-hidden />}
+          label="Extensions"
+          onClick={settingsAt("Extensions")}
+        />
+        <ToolbarMenuRow
+          icon={<DeleteHistory aria-hidden />}
+          label="Delete browsing data…"
+          onClick={settingsAt("Clear browsing data")}
+        />
+        <hr className={toolbarMenuDivider} />
+        <div role="group" aria-label="Zoom" className="flex h-9 items-center gap-3 pr-1 pl-2.5">
+          <ZoomIn aria-hidden className="size-[18px] shrink-0 text-muted-foreground" />
+          <span className="flex-1 text-[13px]">Zoom</span>
+          <span className="flex items-center rounded-lg bg-selected">
+            {(
+              [
+                ["Zoom out", -1, Remove],
+                ["Zoom in", 1, Add],
+              ] as const
+            ).map(([label, direction, Icon], i) => (
+              <span key={label} className="contents">
+                {i === 1 && (
+                  <span className="w-11 text-center text-[12.5px] tabular-nums">
+                    {Math.round(zoom * 100)}%
+                  </span>
+                )}
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-label={label}
+                  title={label}
+                  disabled={!src}
+                  onClick={() => zoomTo(nextZoom(zoom, direction))}
+                  className="grid size-7 place-items-center rounded-lg text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-[18px]"
+                >
+                  <Icon aria-hidden />
+                </button>
+              </span>
+            ))}
           </span>
-        </button>
-        <button
-          type="button"
-          role="menuitemcheckbox"
-          aria-checked={showBookmarks}
-          onClick={() => bookmarksBar.set(!showBookmarks)}
-          className={menuItem}
-        >
-          <Bookmark aria-hidden />
-          Show bookmarks bar
-          {showBookmarks && <Check aria-hidden className="ml-auto size-3.5" />}
-        </button>
-        <div className="my-1 h-px bg-border" />
-        <p className={menuHeading}>Layout</p>
-        <MenuOption
-          option={{
-            value: "compact",
-            label: "Compact",
-            icon: <Rectangle aria-hidden />,
-            description: "Tabs and the address bar in one row",
-          }}
-          checked={layout === "compact"}
-          onClick={() => browserLayout.set("compact")}
+        </div>
+        <hr className={toolbarMenuDivider} />
+        <ToolbarMenuRow
+          icon={<Search aria-hidden />}
+          label="Find…"
+          keys={shortcut("F")}
+          disabled={!src}
+          onClick={pick(openFind)}
         />
-        <MenuOption
-          option={{
-            value: "classic",
-            label: "Classic",
-            icon: <SplitscreenTop aria-hidden />,
-            description: "Tabs over the address bar",
-          }}
-          checked={layout === "classic"}
-          onClick={() => browserLayout.set("classic")}
+        <ToolbarMenuRow
+          icon={<Print aria-hidden />}
+          label="Print…"
+          keys={shortcut("P")}
+          disabled={!src}
+          onClick={pick(() => void view.current?.print().catch(() => {}))}
         />
-        <div className="my-1 h-px bg-border" />
-        <ThemeSwatches menu />
-      </ViewMenu>
+        {/* The page laid out as on a monitor, scaled to fit, rather than at the room it has. */}
+        <ToolbarMenuRow
+          icon={<DesktopWindows aria-hidden />}
+          label="Desktop site"
+          checked={desktop}
+          onClick={pick(() => refit(desktop ? "panel" : "monitor"))}
+        />
+        <ToolbarMenuRow
+          icon={<Code aria-hidden />}
+          label="Developer tools"
+          disabled={!src}
+          onClick={pick(() => view.current?.openDevTools())}
+        />
+        <hr className={toolbarMenuDivider} />
+        <ToolbarMenuRow
+          icon={<Palette aria-hidden />}
+          label="Customize"
+          onClick={settingsAt("Theme")}
+        />
+        <ToolbarMenuRow icon={<Settings aria-hidden />} label="Settings" onClick={settingsAt()} />
+      </Menu>
     </>
   );
   // Compact draws the shown tab's toolbar into its browser's top bar, around the tabs; each tab's
@@ -1064,7 +1146,7 @@ function Tab({
           {into(slots.end, toolsBar, "shrink-0")}
         </>
       ) : (
-        <div className="flex h-8 shrink-0 items-center gap-0.5 px-2 pb-1">
+        <div className="flex h-10 shrink-0 items-center gap-0.5 px-2 pb-1">
           {navBar}
           {toolsBar}
         </div>
@@ -1152,25 +1234,13 @@ function Tab({
             </>
           )}
         </PageFrame>
-        {(error || !src) && (
+        {error && (
           <div className="solid absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background px-8 pb-16 text-center">
-            {error ? (
-              <>
-                <TriangleAlert aria-hidden className="mb-1 size-5 text-faint-foreground" />
-                <p role="alert" className="text-[13px] font-medium text-foreground">
-                  Can't open {error.url}
-                </p>
-                <p className="text-[12.5px] break-all text-muted-foreground">{error.description}</p>
-              </>
-            ) : (
-              <>
-                <Public aria-hidden className="mb-1 size-5 text-faint-foreground" />
-                <p className="text-[13px] font-medium text-foreground">Open a page</p>
-                <p className="text-[12.5px] text-muted-foreground">
-                  Search Google, or type an address such as a dev server's localhost:5173.
-                </p>
-              </>
-            )}
+            <TriangleAlert aria-hidden className="mb-1 size-5 text-faint-foreground" />
+            <p role="alert" className="text-[13px] font-medium text-foreground">
+              Can't open {error.url}
+            </p>
+            <p className="text-[12.5px] break-all text-muted-foreground">{error.description}</p>
           </div>
         )}
       </div>
@@ -1238,7 +1308,7 @@ export function BrowserTabBar({ scope }: { scope: string }) {
             />
           ))}
         </div>
-        <IconButton label="New tab" onClick={browser.newTab}>
+        <IconButton label="New tab" className={toolbarButton} onClick={browser.newTab}>
           <Add />
         </IconButton>
       </div>
@@ -1265,15 +1335,15 @@ function BrowserTab({
   onClose: () => void;
 }) {
   const icon = tab.icon ? (
-    <img src={tab.icon} alt="" className="size-3.5 shrink-0" />
+    <img src={tab.icon} alt="" className="size-4 shrink-0" />
   ) : tab.Logo ? (
-    <tab.Logo aria-hidden className="size-3.5 shrink-0" />
+    <tab.Logo aria-hidden className="size-4 shrink-0" />
   ) : (
-    <Public aria-hidden className="size-3.5 shrink-0" />
+    <Public aria-hidden className="size-4 shrink-0" />
   );
   return (
     <div
-      className={`group flex h-8 w-60 min-w-9 shrink items-center rounded-lg text-[12.5px] ${selected ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+      className={`group flex h-9 w-60 min-w-10 shrink items-center rounded-[10px] text-[13px] ${selected ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
     >
       <button
         type="button"
@@ -1283,7 +1353,7 @@ function BrowserTab({
         onClick={onSelect}
         // A middle click closes a tab, as in Chrome.
         onAuxClick={(e) => e.button === 1 && !tab.agent && onClose()}
-        className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2.5 text-left"
+        className="flex h-full min-w-0 flex-1 items-center gap-2.5 pl-3 text-left"
       >
         {icon}
         <span className="truncate">{tab.title}</span>
@@ -1293,7 +1363,7 @@ function BrowserTab({
           type="button"
           aria-label={`Close ${tab.title}`}
           onClick={onClose}
-          className={`mr-1 size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
+          className={`mr-1.5 size-6 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
         >
           <CloseSmall aria-hidden className="size-4" />
         </button>
@@ -1302,42 +1372,91 @@ function BrowserTab({
   );
 }
 
+// The theme picker's groups: the app's own colors, Helium's, then Chrome's.
+const themeGroups = [
+  { name: "Parallax", ids: ["parallax"] },
+  { name: "Helium", ids: ["helium"] },
+  { name: "Chrome", ids: browserThemes.slice(2).map((t) => t.id) },
+];
+
+// Match Parallax previews the app's own tokens, which its browser paints in.
+const appColors: BrowserColors = {
+  frame: "var(--pane)",
+  toolbar: "var(--background)",
+  tab: "var(--selected)",
+  omnibox: "var(--selected)",
+  icon: "var(--muted-foreground)",
+  text: "var(--foreground)",
+  accent: "var(--accent)",
+};
+
 /**
- * The browser's themes, as Chrome's Customize panel shows them: a swatch each, the picked one
- * ringed (browserTheme.ts). In the More menu, picking one keeps the menu open, to try another;
- * Settings › Browser shows them too, as radios.
+ * The browser's themes (PLX-981), a named tile each, grouped by where they're from. Each tile is
+ * a small browser in the theme's colors for the app's light or dark mode: its frame, the tab in
+ * front, and the toolbar with its address bar. The picked one is ringed. Settings › Browser
+ * shows it.
  */
-export function ThemeSwatches({ menu = false }: { menu?: boolean }) {
+export function ThemePicker() {
   const picked = browserTheme.use();
-  const swatches = (
-    <div
-      role={menu ? undefined : "radiogroup"}
-      aria-label="Theme"
-      className="grid grid-cols-8 gap-1.5"
-    >
-      {browserThemes.map((t) => (
-        <button
-          key={t.id}
-          type="button"
-          role={menu ? "menuitemradio" : "radio"}
-          aria-checked={picked === t.id}
-          aria-label={t.name}
-          title={t.name}
-          onClick={(e) => {
-            e.stopPropagation();
-            browserTheme.set(t.id);
-          }}
-          style={{ background: t.swatch }}
-          className={`size-6 rounded-full border border-border ${t.id === "parallax" ? "bg-[conic-gradient(#ffffff_0_50%,#1f1f2e_0_100%)]!" : ""} ${picked === t.id ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""}`}
-        />
-      ))}
-    </div>
-  );
-  if (!menu) return swatches;
+  const dark = useDark();
   return (
-    <div role="group" aria-label="Theme" className="px-2 pt-1 pb-2">
-      <p className={`${menuHeading} px-0`}>Theme</p>
-      {swatches}
+    <div
+      role="radiogroup"
+      aria-label="Theme"
+      className="flex flex-wrap gap-x-8 gap-y-4 px-4 pt-1 pb-4"
+    >
+      {/* Parallax and Helium side by side, Chrome's many on a row of their own. */}
+      {themeGroups.map((group) => (
+        <div key={group.name} className={group.ids.length > 1 ? "basis-full" : ""}>
+          <p className="mb-2 text-[12px] text-muted-foreground">{group.name}</p>
+          <div className="grid grid-cols-[repeat(auto-fill,7rem)] gap-3">
+            {group.ids.map((id) => {
+              const theme = browserThemes.find((t) => t.id === id)!;
+              const c = colorsOf(id, dark) ?? appColors;
+              const on = picked === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => browserTheme.set(id)}
+                  className="group flex flex-col gap-1.5 rounded-lg text-left focus-visible:outline-none"
+                >
+                  <span
+                    aria-hidden
+                    style={{ background: c.frame }}
+                    className={`flex h-14 w-full flex-col overflow-hidden rounded-lg border ${on ? "border-accent ring-2 ring-accent/40" : "border-border group-hover:border-faint-foreground"} group-focus-visible:ring-2 group-focus-visible:ring-ring`}
+                  >
+                    <span className="flex h-4 items-end gap-1 px-1.5">
+                      <span style={{ background: c.tab }} className="h-3 w-7 rounded-t" />
+                      <span
+                        style={{ background: c.icon }}
+                        className="mb-1 h-1 w-4 rounded-full opacity-40"
+                      />
+                    </span>
+                    <span
+                      style={{ background: c.toolbar }}
+                      className="flex flex-1 items-start gap-1 px-1.5 pt-1.5"
+                    >
+                      <span
+                        style={{ background: c.omnibox }}
+                        className="h-2.5 flex-1 rounded-full"
+                      />
+                      <span style={{ background: c.accent }} className="size-2.5 rounded-full" />
+                    </span>
+                  </span>
+                  <span
+                    className={`truncate text-[12px] ${on ? "text-foreground" : "text-muted-foreground"}`}
+                  >
+                    {theme.name}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

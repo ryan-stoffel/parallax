@@ -1,10 +1,10 @@
-import { createElement, useEffect, useId, useState } from "react";
+import { createElement, useEffect, useId, useRef, useState } from "react";
 
 import type { ExtensionInfo } from "../preload/bridge";
-import { dismiss, notify } from "./notifications";
-import { memory } from "./stored";
-import { Delete, Extension, FolderOpen } from "./symbols";
-import { IconButton, Menu, menuHeading, menuItem } from "./ui";
+import { browserSettingsAsked } from "./browserSettings";
+import { memory, stored } from "./stored";
+import { Close, Delete, Extension, Keep, KeepOff, MoreVert, Settings, Storefront } from "./symbols";
+import { IconButton, Menu, toolbarButton, toolbarMenuDivider, ToolbarMenuRow } from "./ui";
 
 // The installed extensions, shared by every tab's toolbar, read once and after each change.
 const installed = memory<ExtensionInfo[] | undefined>(undefined);
@@ -20,127 +20,223 @@ export function useExtensions() {
 }
 
 /**
- * A tab toolbar's Chrome extensions (PLX-888): electron-chrome-extensions' buttons, with their
- * badges and popups, for the tab whose webview's webContents id is `tab`, and the Extensions menu,
- * which lists them all, removes one, and adds one from a Chrome Web Store link or an unpacked
- * folder. The store's own Add to Chrome button adds one too (webStore.ts in main).
+ * The extensions unpinned from the toolbar, by id, kept on this computer. A new extension starts
+ * pinned, so it shows as soon as it's added.
  */
-export function Extensions({ tab }: { tab?: number }) {
-  const list = installed.use();
-  useEffect(() => {
-    if (!list) void refresh();
-  }, [list]);
+const unpinned = stored<string[]>("parallax.unpinnedExtensions", [], (raw, fallback) =>
+  Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : fallback,
+);
+
+// electron-chrome-extensions' toolbar actions in the page (preload.ts): their state, which the
+// hidden `browser-action-list` keeps fetching, and opening one's popup.
+interface BrowserActions {
+  getAction(id: string): unknown;
+  addEventListener(name: "update", listener: () => void): void;
+  removeEventListener(name: "update", listener: () => void): void;
+  activate(
+    partition: string,
+    details: {
+      eventType: string;
+      extensionId: string;
+      tabId: number;
+      alignment: string;
+      anchorRect: { x: number; y: number; width: number; height: number };
+    },
+  ): void;
+}
+const actions = () => (window as unknown as { browserAction?: BrowserActions }).browserAction;
+const partition = "persist:browser";
+
+/**
+ * A tab toolbar's Chrome extensions (PLX-888): the pinned ones' buttons, with their badges and
+ * popups, for the tab whose webview's webContents id is `tab`, and the Extensions menu, laid out
+ * as Chrome's (PLX-981). It lists every extension: a click opens its popup, the pin shows or
+ * hides its button, and its ⋮ removes it. Manage extensions opens Settings › Browser, which adds
+ * one from a link or a folder; the Chrome Web Store's own Add to Chrome adds one too (webStore.ts
+ * in main), and `onOpen` opens the store in a new tab.
+ */
+export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string) => void }) {
+  const { list } = useExtensions();
+  const hidden = unpinned.use();
   // An extension added or removed from the Chrome Web Store's page (PLX-962).
   useEffect(() => window.parallax.onExtensionsChanged(() => void refresh()), []);
   const menuId = useId();
-  const [link, setLink] = useState("");
-  const [busy, setBusy] = useState(false);
+  const menu = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
 
-  const added = (answer: ExtensionInfo | string | undefined) => {
-    if (typeof answer === "string")
-      notify({
-        key: "extension",
-        tone: "error",
-        title: "Couldn't add the extension",
-        body: answer,
-      });
-    else if (answer) {
-      dismiss("extension");
-      setLink("");
-    }
-    void refresh();
-  };
-  const install = () => {
-    if (!link.trim() || busy) return;
-    setBusy(true);
-    void window.parallax
-      .installExtension(link)
-      .then(added)
-      .finally(() => setBusy(false));
+  // A pinned button draws from its action's state, which the hidden list fetches, so it mounts
+  // once that's there, and its badge and icon change with it; the library updates only its own
+  // list's buttons, so these update here.
+  const [, setFetched] = useState(0);
+  useEffect(() => {
+    const update = () => {
+      setFetched((n) => n + 1);
+      bar.current
+        ?.querySelectorAll<HTMLButtonElement & { update?: () => void }>("button[is]")
+        .forEach((button) => button.update?.());
+    };
+    actions()?.addEventListener("update", update);
+    return () => actions()?.removeEventListener("update", update);
+  }, []);
+
+  const pinned =
+    list?.filter((e) => !hidden.includes(e.id) && actions()?.getAction(e.id) !== undefined) ?? [];
+  const setPinned = (id: string, pin: boolean) =>
+    unpinned.set(pin ? hidden.filter((x) => x !== id) : [...hidden, id]);
+  // Opens an extension's popup under the Extensions button, as Chrome does from its menu.
+  const activate = (id: string) => {
+    menu.current?.hidePopover();
+    const rect = bar.current?.querySelector('[aria-label="Extensions"]')?.getBoundingClientRect();
+    if (!rect) return;
+    actions()?.activate(partition, {
+      eventType: "click",
+      extensionId: id,
+      tabId: tab ?? -1,
+      alignment: "bottom left",
+      anchorRect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+    });
   };
 
   return (
-    <div className="flex shrink-0 items-center">
-      {/* The library's own element (preload.ts): a button per extension, which opens its popup
-          under it. Keyed by the list, so an extension added or removed shows at once. */}
-      {createElement("browser-action-list", {
-        key: list?.map((e) => e.id).join(),
-        partition: "persist:browser",
-        alignment: "bottom left",
-        ...(tab !== undefined && { tab: String(tab) }),
-      })}
-      <IconButton label="Extensions" popoverTarget={menuId} aria-haspopup="menu">
+    <div ref={bar} className="flex shrink-0 items-center">
+      {/* The library's own list, hidden, keeps the actions' state fetched for the buttons. */}
+      {createElement("browser-action-list", { partition, hidden: true })}
+      {pinned.map((extension) =>
+        // The library's button for one extension, which opens its popup under it. Its state
+        // is there once the list has fetched it.
+        createElement("button", {
+          is: "browser-action",
+          key: extension.id,
+          id: extension.id,
+          partition,
+          alignment: "bottom left",
+          tab: String(tab ?? -1),
+          class: "browser-action",
+        }),
+      )}
+      <IconButton
+        label="Extensions"
+        className={toolbarButton}
+        popoverTarget={menuId}
+        aria-haspopup="menu"
+      >
         <Extension />
       </IconButton>
       <Menu
+        ref={menu}
         id={menuId}
         label="Extensions"
         align="end"
-        focus='input, [role="menuitem"]'
-        className="w-72 p-1"
+        focus='[role="menuitem"]'
+        className="w-80 p-1.5"
       >
-        <p className={menuHeading}>Extensions</p>
+        <div className="flex items-center justify-between py-1 pr-0.5 pl-2.5">
+          <p className="text-[14px] font-medium">Extensions</p>
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={() => menu.current?.hidePopover()}
+            className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-[18px]"
+          >
+            <Close aria-hidden />
+          </button>
+        </div>
         {list?.length ? (
           list.map((extension) => (
-            <div key={extension.id} className={`${menuItem} group pr-1 hover:bg-transparent`}>
-              {extension.icon ? (
-                <img src={extension.icon} alt="" className="size-4 shrink-0" />
-              ) : (
-                <Extension aria-hidden />
-              )}
-              <span className="min-w-0 flex-1 truncate">{extension.name}</span>
-              <span className="shrink-0 text-[11.5px] text-faint-foreground">
-                {extension.version}
-              </span>
-              <button
-                type="button"
-                aria-label={`Remove ${extension.name}`}
-                title={`Remove ${extension.name}`}
-                onClick={() => void window.parallax.removeExtension(extension.id).then(refresh)}
-                className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100"
-              >
-                <Delete aria-hidden />
-              </button>
-            </div>
+            <ExtensionRow
+              key={extension.id}
+              extension={extension}
+              pinned={!hidden.includes(extension.id)}
+              onActivate={() => activate(extension.id)}
+              onPin={(pin) => setPinned(extension.id, pin)}
+            />
           ))
         ) : (
-          <p className="px-2 pb-2 text-[12.5px] text-muted-foreground">
+          <p className="px-2.5 pt-1 pb-2 text-[12.5px] text-muted-foreground">
             None yet. Add one from the Chrome Web Store, such as a password manager.
           </p>
         )}
-        <div className="my-1 h-px bg-border" />
-        <form
-          className="flex gap-1 p-1"
-          onSubmit={(e) => {
-            e.preventDefault();
-            install();
+        <hr className={toolbarMenuDivider} />
+        <ToolbarMenuRow
+          icon={<Storefront aria-hidden />}
+          label="Chrome Web Store"
+          onClick={() => {
+            menu.current?.hidePopover();
+            onOpen("https://chromewebstore.google.com/category/extensions");
           }}
-        >
-          <input
-            aria-label="Chrome Web Store link"
-            placeholder="Paste a Chrome Web Store link"
-            spellCheck={false}
-            value={link}
-            onChange={(e) => setLink(e.target.value)}
-            className="min-w-0 flex-1 rounded-md bg-selected px-2 py-1 text-[12.5px] placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring"
-          />
-          <button
-            type="submit"
-            disabled={busy || !link.trim()}
-            className="shrink-0 rounded-md bg-accent px-2.5 py-1 text-[12.5px] font-medium text-accent-foreground disabled:opacity-50"
-          >
-            {busy ? "Adding…" : "Add"}
-          </button>
-        </form>
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => void window.parallax.loadUnpackedExtension().then(added)}
-          className={menuItem}
-        >
-          <FolderOpen aria-hidden />
-          Load unpacked…
-        </button>
+        />
+        <ToolbarMenuRow
+          icon={<Settings aria-hidden />}
+          label="Manage extensions"
+          onClick={() => {
+            menu.current?.hidePopover();
+            browserSettingsAsked.set({ title: "Extensions" });
+          }}
+        />
+      </Menu>
+    </div>
+  );
+}
+
+/**
+ * One extension in the Extensions menu: its icon and name, which open its popup, a pin, blue
+ * while it's on the toolbar, and a ⋮ menu that removes it.
+ */
+function ExtensionRow({
+  extension,
+  pinned,
+  onActivate,
+  onPin,
+}: {
+  extension: ExtensionInfo;
+  pinned: boolean;
+  onActivate: () => void;
+  onPin: (pin: boolean) => void;
+}) {
+  const moreId = useId();
+  const rowButton =
+    "grid size-7 shrink-0 place-items-center rounded-md hover:bg-hover [&_svg]:size-[18px]";
+  return (
+    <div className="flex items-center gap-0.5 rounded-md hover:bg-hover">
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onActivate}
+        className="flex h-9 min-w-0 flex-1 items-center gap-3 pl-2.5 text-left text-[13px]"
+      >
+        {extension.icon ? (
+          <img src={extension.icon} alt="" className="size-[18px] shrink-0" />
+        ) : (
+          <Extension aria-hidden className="size-[18px] shrink-0 text-muted-foreground" />
+        )}
+        <span className="truncate">{extension.name}</span>
+      </button>
+      <button
+        type="button"
+        aria-label={pinned ? `Unpin ${extension.name}` : `Pin ${extension.name}`}
+        title={pinned ? "Unpin from toolbar" : "Pin to toolbar"}
+        aria-pressed={pinned}
+        onClick={() => onPin(!pinned)}
+        className={`${rowButton} ${pinned ? "text-accent" : "text-muted-foreground hover:text-foreground"}`}
+      >
+        {pinned ? <KeepOff aria-hidden /> : <Keep aria-hidden />}
+      </button>
+      <button
+        type="button"
+        aria-label={`More for ${extension.name}`}
+        title="More"
+        popoverTarget={moreId}
+        aria-haspopup="menu"
+        className={`${rowButton} mr-1 text-muted-foreground hover:text-foreground`}
+      >
+        <MoreVert aria-hidden />
+      </button>
+      <Menu id={moreId} label={extension.name} align="end" className="w-56 p-1.5">
+        <ToolbarMenuRow
+          icon={<Delete aria-hidden />}
+          label="Remove from Parallax"
+          onClick={() => void window.parallax.removeExtension(extension.id).then(refresh)}
+        />
       </Menu>
     </div>
   );
