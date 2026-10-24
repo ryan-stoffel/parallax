@@ -368,14 +368,16 @@ export function Composer({
   const [provider, setProvider] = useState<string>();
   // A new thread runs on its computer's default provider unless another is picked, as on the
   // desktop, so the sheet opens on that one's models.
-  const [read, setRead] = useState<{ backend?: string }>();
-  const standard = read?.backend;
   const hostId = computer?.machine.id;
+  // Read for this computer: another's stays until it's replaced, which a change of computer does.
+  const [stored, setRead] = useState<{ hostId: string; backend?: string }>();
+  const read = stored?.hostId === hostId ? stored : undefined;
+  const standard = read?.backend;
   const online = !!computer?.connected;
   useEffect(() => {
     if (!onStart || !hostId || !online) return;
     let live = true;
-    void defaultBackend(hostId, "worker").then((backend) => live && setRead({ backend }));
+    void defaultBackend(hostId, "worker").then((backend) => live && setRead({ hostId, backend }));
     return () => {
       live = false;
     };
