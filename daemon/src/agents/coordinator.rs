@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentRun, ErrorKind, ProjectAutonomy, ProjectPermission, ProjectStartParams, Role, RunId,
+    AgentRun, ErrorKind, ProjectAutonomy, ProjectId, ProjectPermission, ProjectStartParams, Role,
+    RunId,
 };
 use parallax_store::{RunFields, RunState};
 use tracing::info;
@@ -143,6 +144,35 @@ pub(crate) async fn start(
     daemon.agents.spawn(actor);
     super::wake::hand_over(&daemon, run_id, handed);
     run
+}
+
+/// `coordinator/fresh`: ends `project`'s coordinator's session, so its next message starts its
+/// next epoch from the packet (PLX-937, decision 0079).
+pub(crate) async fn fresh(
+    daemon: &Arc<Daemon>,
+    project: ProjectId,
+) -> Result<AgentRun, ErrorObject> {
+    let current = store(daemon, move |db| {
+        if db
+            .get_project(project.into())
+            .map_err(|e| store_error(&e))?
+            .is_none()
+        {
+            return Err(ErrorObject::parallax(
+                ErrorKind::ProjectNotFound,
+                format!("no project has id {project}"),
+            ));
+        }
+        coordinator_of(db, project.into())
+    })
+    .await?;
+    let Some(run) = current else {
+        return Err(ErrorObject::parallax(
+            ErrorKind::RunNotFound,
+            format!("project {project} has no coordinator"),
+        ));
+    };
+    super::ask(daemon, run, |reply| super::actor::Command::Fresh { reply }).await
 }
 
 /// `project`'s coordinator: its newest no-write run. `project/start` with a new run id replaces it

@@ -51,6 +51,7 @@ pub(crate) mod compact;
 pub(crate) mod convert;
 pub(crate) mod coordinator;
 pub(crate) mod handoff;
+pub(crate) mod packet;
 mod placement;
 mod resume;
 pub(crate) mod review;
@@ -1470,16 +1471,29 @@ pub(crate) async fn send(
     daemon: Arc<Daemon>,
     params: AgentSendParams,
 ) -> Result<AgentRun, ErrorObject> {
-    let delivery = match params.delivery.unwrap_or_default() {
-        AgentDelivery::Queue => Delivery::Queue,
-        AgentDelivery::Steer => Delivery::Steer,
-        AgentDelivery::Unknown => {
-            return Err(ErrorObject::invalid_params(
-                "delivery must be queue or steer",
-            ));
-        }
-    };
+    let delivery = delivery_of(&params)?;
     send_with(daemon, params, delivery).await
+}
+
+/// `agent/send` of plxd's own message, such as a scheduled task's, which isn't the user's
+/// (PLX-937): its text reaches the CLI as it is.
+pub(crate) async fn send_from_parallax(
+    daemon: Arc<Daemon>,
+    params: AgentSendParams,
+) -> Result<AgentRun, ErrorObject> {
+    let delivery = delivery_of(&params)?;
+    deliver(daemon, params, delivery, true).await
+}
+
+/// How `params` asks to be delivered.
+fn delivery_of(params: &AgentSendParams) -> Result<Delivery, ErrorObject> {
+    match params.delivery.unwrap_or_default() {
+        AgentDelivery::Queue => Ok(Delivery::Queue),
+        AgentDelivery::Steer => Ok(Delivery::Steer),
+        AgentDelivery::Unknown => Err(ErrorObject::invalid_params(
+            "delivery must be queue or steer",
+        )),
+    }
 }
 
 /// `agent/send` with `delivery`, which its params' `delivery` can't say for a restart (0059).
@@ -1487,6 +1501,16 @@ pub(crate) async fn send_with(
     daemon: Arc<Daemon>,
     params: AgentSendParams,
     delivery: Delivery,
+) -> Result<AgentRun, ErrorObject> {
+    deliver(daemon, params, delivery, false).await
+}
+
+/// [`send_with`], saying whether the message is plxd's own ([`Queued::parallax`]).
+async fn deliver(
+    daemon: Arc<Daemon>,
+    params: AgentSendParams,
+    delivery: Delivery,
+    parallax: bool,
 ) -> Result<AgentRun, ErrorObject> {
     let AgentSendParams {
         run_id,
@@ -1520,6 +1544,7 @@ pub(crate) async fn send_with(
         },
         account,
         from,
+        parallax,
     };
     ask(&daemon, run_id, |reply| Command::Send {
         message,
@@ -1664,7 +1689,7 @@ async fn continue_cut(daemon: &Arc<Daemon>, id: RunId) {
     };
     // As a steer, which starts its own turn with none running, so it goes ahead of the held
     // queue rather than waiting at its end (0060).
-    if let Err(error) = send_with(Arc::clone(daemon), params, Delivery::Steer).await {
+    if let Err(error) = deliver(Arc::clone(daemon), params, Delivery::Steer, true).await {
         warn!(run = %id, error = %error.message, "could not continue a run after a restart");
     }
 }

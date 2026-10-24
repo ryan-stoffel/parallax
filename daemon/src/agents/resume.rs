@@ -116,6 +116,11 @@ impl Resumes {
         self.revived = false;
     }
 
+    /// Whether `turn` was sent as a resume, remembering it.
+    pub fn sends(&self, turn: TurnId) -> bool {
+        self.sent == Some(turn)
+    }
+
     /// Whether `turn` was sent as a resume, forgetting it.
     pub fn was_sent(&mut self, turn: TurnId) -> bool {
         self.sent.take_if(|sent| *sent == turn).is_some()

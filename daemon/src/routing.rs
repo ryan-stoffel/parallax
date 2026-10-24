@@ -4,7 +4,8 @@
 //! (`accounts/defaults/get` and `accounts/defaults/set`, `methods::defaults`), and forces the
 //! coordinator's no-write policy regardless of what was asked for (0004). [`start`] then starts
 //! the run, and retries once on a key-account fallback if it fails signed out or rate limited
-//! (0004's fallback).
+//! (0004's fallback), and once as a new session if the session it resumes is gone and it has a
+//! [`Resume::fallback`](crate::backend::Resume::fallback) (PLX-937).
 //!
 //! # What owns calling this, and how
 //!
@@ -381,7 +382,7 @@ pub fn start(
         // its subagents get none.
         request.thread_tools = None;
     }
-    let started = backend.start(request.clone())?;
+    let started = start_resuming(&backend, request.clone())?;
 
     let fallback_id = is_subscription
         .then(|| accounts.fallback_for(provider))
@@ -548,7 +549,7 @@ async fn drive_with_fallback(
         id: to_account.clone(),
         credential,
     };
-    let Ok(started) = backend.start(request.clone()) else {
+    let Ok(started) = start_resuming(&backend, request.clone()) else {
         let _ = sink.emit(finished_failed(failure)).await;
         return;
     };
@@ -570,6 +571,81 @@ async fn drive_with_fallback(
         restart_on_new_session(&mut sink, &request, &event);
         if sink.emit(event).await.is_err() {
             return;
+        }
+    }
+}
+
+/// Starts `request` on `backend`. When it resumes a session with a
+/// [`Resume::fallback`](crate::backend::Resume::fallback) on a backend that doesn't fall back
+/// itself, as Codex does (PLX-728), a resume that fails as [`FailureKind::SessionNotFound`]
+/// starts once more as a new session with the fallback as its prompt (PLX-937), and the failed
+/// attempt's events are dropped.
+fn start_resuming(backend: &Arc<dyn Backend>, request: RunRequest) -> Result<Started, StartError> {
+    let fallback = request
+        .resume
+        .as_ref()
+        .and_then(|resume| resume.fallback.clone())
+        .filter(|_| !backend.resume_fallback());
+    let started = backend.start(request.clone())?;
+    let Some(prompt) = fallback else {
+        return Ok(started);
+    };
+    let (sink, events) = EventSink::channel(EVENT_BUFFER, usage_baseline(&request));
+    let run = Arc::new(FallbackRun::new(Arc::clone(&started.run)));
+    let fresh = RunRequest {
+        prompt,
+        resume: None,
+        ..request
+    };
+    tokio::spawn(drive_new_session(
+        sink,
+        Arc::clone(backend),
+        fresh,
+        started.events,
+        Arc::clone(&run),
+    ));
+    Ok(Started { run, events })
+}
+
+/// Forwards `current`'s events to `sink`, holding them until its session starts. If it ends as
+/// [`FailureKind::SessionNotFound`] first, drops them and starts `fresh` in its place, whose
+/// events it forwards instead. See [`start_resuming`].
+async fn drive_new_session(
+    mut sink: EventSink,
+    backend: Arc<dyn Backend>,
+    fresh: RunRequest,
+    mut current: EventStream,
+    run: Arc<FallbackRun>,
+) {
+    let mut held = Vec::new();
+    let mut fresh = Some(fresh);
+    while let Some(event) = current.next().await {
+        if fresh.is_some() {
+            match &event {
+                Event::Finished {
+                    outcome: Outcome::Failed(failure),
+                    ..
+                } if failure.failure == FailureKind::SessionNotFound => {
+                    if let Some(Ok(next)) = fresh.take().map(|fresh| backend.start(fresh)) {
+                        tracing::warn!(message = %failure.message, "could not resume a session; starting a new one");
+                        run.swap(&next.run);
+                        sink.reset_usage(Vec::new());
+                        held.clear();
+                        current = next.events;
+                        continue;
+                    }
+                }
+                Event::SessionStarted { .. } | Event::Finished { .. } => fresh = None,
+                _ => {
+                    held.push(event);
+                    continue;
+                }
+            }
+        }
+        for event in held.drain(..).chain(std::iter::once(event)) {
+            if sink.emit(event).await.is_err() {
+                return;
+            }
         }
     }
 }

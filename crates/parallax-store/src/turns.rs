@@ -6,26 +6,65 @@ use crate::Store;
 use crate::error::StoreError;
 use crate::timestamp;
 
-/// Records that `run_id`'s `turn_id` was sent with `text`, so `agent/send` stays idempotent on
-/// `turnId` across a plxd restart (#190): a fresh `Actor` after a restart has no in-memory record
-/// of what it already sent to a run's CLI. Does nothing if this `(run_id, turn_id)` is already
-/// recorded, which is what makes a retry idempotent rather than an error.
 impl Store {
+    /// Records that `run_id`'s `turn_id` was sent with `text`, so `agent/send` stays idempotent on
+    /// `turnId` across a plxd restart (#190): a fresh `Actor` after a restart has no in-memory
+    /// record of what it already sent to a run's CLI. Does nothing if this `(run_id, turn_id)` is
+    /// already recorded, which is what makes a retry idempotent rather than an error.
+    ///
     /// # Errors
     ///
     /// A database error.
     pub fn record_turn(&self, run_id: Uuid, turn_id: Uuid, text: &str) -> Result<(), StoreError> {
+        self.record_turn_from(run_id, turn_id, text, true)
+    }
+
+    /// [`Store::record_turn`], saying whether the user wrote it (PLX-937), rather than plxd, as
+    /// a wake-up, or another thread with its Parallax tools.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn record_turn_from(
+        &self,
+        run_id: Uuid,
+        turn_id: Uuid,
+        text: &str,
+        from_user: bool,
+    ) -> Result<(), StoreError> {
         self.conn.execute(
-            "INSERT INTO turns (run_id, turn_id, text, created_at) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO turns (run_id, turn_id, text, created_at, from_user)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT (run_id, turn_id) DO NOTHING",
             params![
                 run_id.to_string(),
                 turn_id.to_string(),
                 text,
-                timestamp::now()
+                timestamp::now(),
+                from_user
             ],
         )?;
         Ok(())
+    }
+
+    /// The text of `run_id`'s last `limit` turns the user wrote, oldest first. A wake-up recorded
+    /// before PLX-937 counts as the user's, so one that starts as wake-ups do is left out.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn user_turns(&self, run_id: Uuid, limit: usize) -> Result<Vec<String>, StoreError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT text FROM turns WHERE run_id = ?1 AND from_user
+                 AND substr(text, 1, 22) != 'Parallax, not the user'
+             ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+        )?;
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut texts = stmt
+            .query_map(params![run_id.to_string(), limit], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        texts.reverse();
+        Ok(texts)
     }
 
     /// Every turn recorded for `run_id`, in no particular order: what a restarted actor rebuilds

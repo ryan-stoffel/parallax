@@ -186,6 +186,11 @@ impl Wakes {
         self.since = None;
     }
 
+    /// Whether `turn` was sent as a wake-up, remembering it.
+    pub fn sends(&self, turn: TurnId) -> bool {
+        self.sent == Some(turn)
+    }
+
     /// Whether `turn` was sent as a wake-up, forgetting it.
     pub fn was_sent(&mut self, turn: TurnId) -> bool {
         self.sent.take_if(|sent| *sent == turn).is_some()

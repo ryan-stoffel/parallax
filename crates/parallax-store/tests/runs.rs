@@ -556,11 +556,12 @@ fn a_version_6_database_gains_runs_events_and_worktree_git_dirs() {
     // index (PLX-487's migration 36), the attached-thread cursors (PLX-486's migration 37), the
     // orchestrator's tables (PLX-643's migration 39), delegation's (PLX-648's migrations 42
     // and 43), the areas tables (PLX-789's migration 46 and PLX-852's 47), the project computer
-    // column (PLX-909's migration 48), or the board items table (PLX-940's migration 49).
+    // column (PLX-909's migration 48), the board items table (PLX-940's migration 49), or the
+    // coordinator sessions table (PLX-937's migration 51).
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE board_items;
+            "DROP TABLE coordinator_sessions; DROP TABLE board_items;
              DROP TABLE area_repos; DROP TABLE area_threads; DROP TABLE area_projects; DROP TABLE areas;
              DROP TABLE runs; DROP TABLE log_meta; DROP TABLE events; DROP TABLE turns;
              DROP TABLE threads; DROP TABLE repos; DROP TABLE wakes; DROP TABLE images;
@@ -664,4 +665,116 @@ fn a_version_49_database_starts_each_coordinators_cursor_at_its_newest_turn() {
     let made = store.get_run(quiet).unwrap().unwrap().created_at;
     assert_eq!(store.wake_state(quiet).unwrap().woken, Some(made));
     assert_eq!(store.wake_state(worker).unwrap(), WakeState::default());
+}
+
+/// PLX-937: a coordinator's new session ends its open epoch as not resumable, the same one changes
+/// nothing, and an epoch ended first is not ended again.
+#[test]
+fn a_new_session_ends_the_open_epoch_and_the_same_one_changes_nothing() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let store = Store::open(dir.path().join("parallax.sqlite3")).expect("open");
+    let run = Uuid::now_v7();
+    let coordinator = RunFields {
+        policy: "noWrite".to_owned(),
+        ..fields(Uuid::now_v7())
+    };
+    store.create_run(run, &coordinator, &starting()).unwrap();
+
+    assert_eq!(
+        store.begin_coordinator_session(run, "a").unwrap(),
+        Some((1, false))
+    );
+    assert_eq!(store.begin_coordinator_session(run, "a").unwrap(), None);
+    assert_eq!(
+        store.begin_coordinator_session(run, "b").unwrap(),
+        Some((2, true))
+    );
+    assert_eq!(
+        store.end_coordinator_session(run, "user-fresh").unwrap(),
+        Some(3)
+    );
+    assert_eq!(
+        store.end_coordinator_session(run, "user-fresh").unwrap(),
+        None
+    );
+    assert_eq!(
+        store.begin_coordinator_session(run, "c").unwrap(),
+        Some((3, false))
+    );
+    assert_eq!(
+        store.coordinator_sessions(run).unwrap(),
+        [
+            ("a".to_owned(), Some("not-resumable".to_owned())),
+            ("b".to_owned(), Some("user-fresh".to_owned())),
+            ("c".to_owned(), None),
+        ]
+    );
+}
+
+/// PLX-937: migration 51 makes each coordinator with a session its epoch 1, open, and gives a
+/// worker or a coordinator without a session none.
+#[test]
+fn a_version_50_database_makes_each_coordinators_session_its_first_epoch() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().join("parallax.sqlite3");
+    let store = Store::open(&path).expect("open");
+    let project = Uuid::now_v7();
+    let coordinator = RunFields {
+        policy: "noWrite".to_owned(),
+        ..fields(project)
+    };
+    let (talked, quiet, worker) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let with_session = RunState {
+        session_id: Some("session-1".to_owned()),
+        ..starting()
+    };
+    store
+        .create_run(talked, &coordinator, &with_session)
+        .unwrap();
+    store.create_run(quiet, &coordinator, &starting()).unwrap();
+    store
+        .create_run(worker, &fields(project), &with_session)
+        .unwrap();
+    drop(store);
+    let conn = Connection::open(&path).expect("open raw connection");
+    conn.execute_batch(
+        "DROP TABLE coordinator_sessions;
+         ALTER TABLE turns DROP COLUMN from_user;
+         DELETE FROM schema_version WHERE version = 51;",
+    )
+    .expect("roll the database back to version 50");
+    drop(conn);
+
+    let store = Store::open(&path).expect("open should apply migration 51");
+    assert_eq!(
+        store.coordinator_sessions(talked).unwrap(),
+        [("session-1".to_owned(), None)]
+    );
+    assert!(store.coordinator_sessions(quiet).unwrap().is_empty());
+    assert!(store.coordinator_sessions(worker).unwrap().is_empty());
+}
+
+/// PLX-937: a coordinator's last user turns, oldest first, leave out another thread's messages
+/// and plxd's own, including a wake-up recorded before turns said who wrote them.
+#[test]
+fn user_turns_are_the_users_own_newest_last() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let store = Store::open(dir.path().join("parallax.sqlite3")).expect("open");
+    let run = Uuid::now_v7();
+    let turn = |text: &str, from_user: bool| {
+        store
+            .record_turn_from(run, Uuid::now_v7(), text, from_user)
+            .unwrap();
+    };
+    turn("First.", true);
+    turn("From another thread.", false);
+    turn("Parallax, not the user: an old wake-up.", true);
+    turn("Second.", true);
+    turn("Third.", true);
+
+    assert_eq!(
+        store.user_turns(run, 10).unwrap(),
+        ["First.", "Second.", "Third."]
+    );
+    assert_eq!(store.user_turns(run, 2).unwrap(), ["Second.", "Third."]);
 }

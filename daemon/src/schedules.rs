@@ -689,14 +689,15 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
     }
 }
 
-/// `agent/send` of `text` to run `run_id`, queued behind its running turn.
+/// `agent/send` of `text` to run `run_id`, queued behind its running turn, as plxd's own
+/// message rather than the user's (PLX-937).
 async fn send(
     daemon: &Arc<Daemon>,
     run_id: RunId,
     turn_id: TurnId,
     text: String,
 ) -> Result<(), ErrorObject> {
-    crate::agents::send(
+    crate::agents::send_from_parallax(
         Arc::clone(daemon),
         AgentSendParams {
             run_id,

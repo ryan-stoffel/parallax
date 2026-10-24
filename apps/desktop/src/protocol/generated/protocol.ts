@@ -477,6 +477,12 @@ export type ParallaxRequests = {
 	 */
 	"project/start": { params: ProjectStartParams, result: AgentRunResult },
 	/**
+	 * `coordinator/fresh`: ends a Project's coordinator session, so its next message starts
+	 * a new one from the Project's state (PLX-937, 0079). Gated on the `coordinatorEpochs`
+	 * capability.
+	 */
+	"coordinator/fresh": { params: CoordinatorFreshParams, result: AgentRunResult },
+	/**
 	 * `project/update`: renames a project or sets its icon, and leaves its `updatedAt` as
 	 * it is (0032). Fails with `projectNotFound` for an unknown project. Gated on the
 	 * `projectEdit` capability, like `Project.icon`.
@@ -1003,6 +1009,7 @@ export const REQUEST_METHODS = [
 	"area/delete",
 	"thread/delete",
 	"project/start",
+	"coordinator/fresh",
 	"project/update",
 	"repo/refs",
 	"pr/view",
@@ -3801,7 +3808,15 @@ export type AgentOutputItem = { "kind": "sessionStarted",
 	/**
 	 * Whether it's finished.
 	 */
-	done: boolean, } | { "kind": "turnFinished",
+	done: boolean, } | { "kind": "epoch",
+	/**
+	 * The new session's number, from 1 for the coordinator's first.
+	 */
+	epoch: number,
+	/**
+	 * Why the last one ended.
+	 */
+	reason: CoordinatorSessionEnd, } | { "kind": "turnFinished",
 	/**
 	 * The turn's id, as its `turnStarted` had it.
 	 */
@@ -4075,6 +4090,13 @@ export type AgentToolStatus = "ok" | "error" | "denied";
  * `approvalRequested` carries it, and `agent/approve` and `approvalResolved` name it.
  */
 export type ApprovalId = string;
+
+/**
+ * Why a Project's coordinator session ended (PLX-937, decision 0079).
+ *
+ * A newer plxd may send a reason this version does not know; treat it as unknown.
+ */
+export type CoordinatorSessionEnd = "compactedOut" | "notResumable" | "userFresh" | "backendChange";
 
 /**
  * A stored image's id (PLX-191, decision 0026): a version 7 UUID that plxd generates once a
@@ -6485,6 +6507,23 @@ export type ProjectStartParams = {
 	 * since the inbox answers its permission requests (0042).
 	 */
 	approvals?: boolean,
+};
+
+/**
+ * Params of `coordinator/fresh`: ends a Project's coordinator session, so its next message
+ * starts a new one from the Project's state (PLX-937, decision 0079), behind the
+ * `coordinatorEpochs` capability.
+ *
+ * The coordinator stays the same run and thread. plxd ends its idle CLI, ends its epoch as
+ * `userFresh`, and adds an `epoch` item to its transcript. Its next message starts the next
+ * epoch from a rehydration packet. Fails with `projectNotFound` for an unknown project, `runNotFound`
+ * for one with no coordinator, and `idConflict` while the coordinator is starting or running.
+ */
+export type CoordinatorFreshParams = {
+	/**
+	 * The project.
+	 */
+	project: ProjectId,
 };
 
 /**

@@ -53,6 +53,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("connect".to_owned(), serde_json::Map::new()),
             ("contextAndFast".to_owned(), serde_json::Map::new()),
             ("coordinator".to_owned(), serde_json::Map::new()),
+            ("coordinatorEpochs".to_owned(), serde_json::Map::new()),
             ("delegation".to_owned(), serde_json::Map::new()),
             ("devices".to_owned(), serde_json::Map::new()),
             ("eventFilters".to_owned(), serde_json::Map::new()),

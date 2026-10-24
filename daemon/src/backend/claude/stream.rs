@@ -40,6 +40,10 @@ const END_CONVERSATION: &str = "EndConversation";
 /// The provider `result.modelUsage` names for Anthropic's own API, which a subscription uses.
 const FIRST_PARTY: &str = "firstParty";
 
+/// How a `result`'s `errors` start when `--resume` names a session Claude Code doesn't have, as
+/// 2.1.309 says for one it pruned.
+const NO_SESSION: &str = "No conversation found with session ID";
+
 /// `result` subtypes for limits the run set itself, which say nothing about the account.
 const RUN_LIMITS: &[&str] = &[
     "error_max_turns",
@@ -832,6 +836,13 @@ impl Translator {
             }
         }
         if failed {
+            let errors: Vec<&str> = message
+                .get("errors")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
             let failure = if RUN_LIMITS.contains(&subtype) {
                 FailureKind::VendorError
             } else if self.limit_rejected {
@@ -840,16 +851,11 @@ impl Translator {
                 kind
             } else if result.as_deref().is_some_and(signed_out) {
                 FailureKind::NotSignedIn
+            } else if errors.iter().any(|error| error.starts_with(NO_SESSION)) {
+                FailureKind::SessionNotFound
             } else {
                 FailureKind::VendorError
             };
-            let errors: Vec<&str> = message
-                .get("errors")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
             let text = match (&result, errors.is_empty()) {
                 (Some(result), _) if !result.is_empty() => result.clone(),
                 (_, false) => errors.join("; "),

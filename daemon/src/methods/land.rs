@@ -813,7 +813,7 @@ async fn send(daemon: &Arc<Daemon>, run_id: RunId, text: String) -> Result<(), E
     };
     daemon
         .agents
-        .detached(agents::send(Arc::clone(daemon), params))
+        .detached(agents::send_from_parallax(Arc::clone(daemon), params))
         .await?;
     Ok(())
 }
