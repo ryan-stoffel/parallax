@@ -1,25 +1,29 @@
 // The app's shared pieces, drawn as the desktop draws them: its colors for the appearance, the
 // Parallax mark, lucide icons (the desktop's own set), text in the system's font, its attention
-// marks, grouped lists as iOS Settings draws them, and Markdown with images that open in the
-// lightbox.
+// marks, grouped lists as iOS Settings draws them, and Markdown, with its code, tables, LaTeX,
+// and images that open in the lightbox, as the desktop's transcript renders it.
+import * as Clipboard from "expo-clipboard";
 import type { LucideIcon } from "lucide-react-native";
 import {
+  Check,
   ChevronRight,
   CircleAlert,
+  Copy,
   Eye,
   Laptop,
   MessageCircleQuestion,
   Monitor,
   Server,
 } from "lucide-react-native";
-import { marked, type Token, type Tokens } from "marked";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import type { Token, Tokens } from "marked";
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Animated,
   Easing,
   Image,
   Linking,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   useColorScheme,
@@ -46,6 +50,8 @@ import type { Attention } from "../../desktop/src/renderer/attention";
 import { onGithub } from "../../desktop/src/renderer/github";
 import { openLightbox } from "./Lightbox";
 import { deviceKind } from "./machines";
+import { highlight, lex, linkedPath, type MathToken } from "./markdown";
+import { DisplayMath, InlineMath } from "./Math";
 import { dark, font, light, type Colors } from "./theme";
 
 export const useColors = (): Colors => (useColorScheme() === "dark" ? dark : light);
@@ -575,6 +581,32 @@ export function Row({
 /** Which remote images Markdown shows: a pull request's GitHub-hosted ones, or none. */
 type Images = "github" | "none";
 
+/**
+ * What a Markdown tree's pieces share: which images show, every picture shown for the lightbox,
+ * what opens a linked file, and whether they're in a quote, or how deep in lists.
+ */
+interface MarkdownScope {
+  images: Images;
+  all: () => string[];
+  onFile?: (path: string) => void;
+  quoted: boolean;
+  depth: number;
+}
+const MarkdownContext = createContext<MarkdownScope>({ images: "none", all: () => [], quoted: false, depth: 0 });
+
+// Code's syntax colors, the desktop's --syntax-* for each appearance.
+const syntax = {
+  light: { keyword: "#2b5cff", string: "#c2410c", number: "#7c3aed", title: "#4338ca", type: "#be185d", comment: "#6e6c88" },
+  dark: { keyword: "#7b9bff", string: "#ff8a65", number: "#c4b5fd", title: "#a5b4fc", type: "#f9a8d4", comment: "#7d7c93" },
+};
+
+/** Follows a Markdown link: a file to `onFile`, a web page or email to the system, anything else nowhere. */
+function follow(href: string, onFile?: (path: string) => void) {
+  const path = linkedPath(href);
+  if (path !== undefined) onFile?.(path);
+  else if (/^(https?|mailto):/i.test(href)) void Linking.openURL(href);
+}
+
 /** A Markdown image: its picture, full width at its own shape, opening the lightbox. */
 function MarkdownImage({ src, alt, all }: { src: string; alt: string; all: () => string[] }) {
   const c = useColors();
@@ -615,55 +647,73 @@ function MarkdownImage({ src, alt, all }: { src: string; alt: string; all: () =>
   );
 }
 
-/** Inline Markdown: bold, italics, code, links, and struck text, inside a `Text`. */
-function Inline({ tokens }: { tokens?: Token[] }): ReactNode {
+/**
+ * Inline Markdown inside a `Text` of font `size`: bold, italics, struck text, code, links, math,
+ * and an image left inline as a link with its alt text, as the desktop's transcript shows one.
+ */
+function Inline({ tokens, size = 15 }: { tokens?: Token[]; size?: number }): ReactNode {
   const c = useColors();
+  const { onFile, quoted } = useContext(MarkdownContext);
   return tokens?.map((t, i) => {
     switch (t.type) {
       case "strong":
         return (
           <Text key={i} style={{ fontWeight: "600" }}>
-            <Inline tokens={t.tokens} />
+            <Inline tokens={t.tokens} size={size} />
           </Text>
         );
       case "em":
         return (
           <Text key={i} style={{ fontStyle: "italic" }}>
-            <Inline tokens={t.tokens} />
+            <Inline tokens={t.tokens} size={size} />
           </Text>
         );
       case "del":
         return (
           <Text key={i} style={{ textDecorationLine: "line-through" }}>
-            <Inline tokens={t.tokens} />
+            <Inline tokens={t.tokens} size={size} />
           </Text>
         );
       case "codespan":
         return (
-          <Text key={i} style={{ fontFamily: font.mono, fontSize: 13, backgroundColor: c.code }}>
+          <Text key={i} style={{ fontFamily: font.mono, fontSize: size * 0.86, backgroundColor: c.code }}>
             {unescape((t as Tokens.Codespan).text)}
           </Text>
         );
       case "link":
         return (
-          <Text
-            key={i}
-            style={{ color: c.accent }}
-            onPress={() => void Linking.openURL((t as Tokens.Link).href)}
-          >
-            <Inline tokens={t.tokens} />
+          <Text key={i} style={{ color: c.accent }} onPress={() => follow((t as Tokens.Link).href, onFile)}>
+            <Inline tokens={t.tokens} size={size} />
           </Text>
         );
-      case "image":
-        // Images show as blocks (`Block`); left inline, one is its alt text.
-        return (t as Tokens.Image).text;
+      case "image": {
+        const image = t as Tokens.Image;
+        return (
+          <Text key={i} style={{ color: c.accent }} onPress={() => follow(image.href, onFile)}>
+            {image.text || "Image"}
+          </Text>
+        );
+      }
+      case "math": {
+        const math = t as MathToken;
+        return (
+          <InlineMath
+            key={i}
+            tex={math.text}
+            raw={math.raw}
+            size={size}
+            color={quoted ? c.mutedForeground : c.foreground}
+          />
+        );
+      }
       case "br":
         return "\n";
+      // A task's box, which the list draws itself.
       case "checkbox":
         return null;
       case "text":
         return "tokens" in t && t.tokens ? (
-          <Inline key={i} tokens={t.tokens} />
+          <Inline key={i} tokens={t.tokens} size={size} />
         ) : (
           unescape((t as Tokens.Text).text)
         );
@@ -682,135 +732,328 @@ const imagesIn = (tokens: Token[] = []): Tokens.Image[] =>
     t.type === "image" ? [t as Tokens.Image] : "tokens" in t ? imagesIn(t.tokens) : [],
   );
 
-interface BlockProps {
-  token: Token;
-  images: Images;
-  all: () => string[];
-}
+/** A text token with the space at its start or end trimmed, where a line of text meets a block. */
+const trimmed = (t: Token | undefined, end: "start" | "end"): Token | undefined =>
+  t?.type === "text" && !("tokens" in t && t.tokens)
+    ? { ...t, text: end === "start" ? t.text.trimStart() : t.text.trimEnd() }
+    : t;
 
-function Block({ token, images, all }: BlockProps): ReactNode {
+/**
+ * A paragraph's text, with its display math and shown pictures as blocks in their places, so math
+ * centers on a line of its own, as the desktop's displayDoubleDollar sets `$$...$$` in a line.
+ */
+function Paragraph({ tokens = [] }: { tokens?: Token[] }) {
+  const { images, all, quoted } = useContext(MarkdownContext);
   const c = useColors();
-  switch (token.type) {
-    case "space":
-    // A task's box, which the list draws itself.
-    case "checkbox":
-      return null;
-    case "hr":
-      return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: c.border }} />;
-    case "heading": {
-      const size = [0, 21, 18, 16, 15, 15, 15][(token as Tokens.Heading).depth]!;
-      return (
-        <T style={{ fontSize: size, lineHeight: size * 1.35, fontWeight: "600", marginTop: 4 }}>
-          <Inline tokens={token.tokens} />
-        </T>
-      );
-    }
-    case "code":
-      return (
-        <View style={[styles.code, { backgroundColor: c.code, borderColor: c.border }]}>
-          <Text
-            selectable
-            style={{ fontFamily: font.mono, fontSize: 12, lineHeight: 18, color: c.foreground }}
-          >
-            {(token as Tokens.Code).text}
-          </Text>
-        </View>
-      );
-    case "blockquote":
-      return (
-        <View style={{ borderLeftWidth: 3, borderLeftColor: c.border, paddingLeft: 10 }}>
-          <Blocks tokens={(token as Tokens.Blockquote).tokens} images={images} all={all} />
-        </View>
-      );
-    case "list": {
-      const list = token as Tokens.List;
-      const start = typeof list.start === "number" ? list.start : 1;
-      return (
-        <View style={{ gap: 4 }}>
-          {list.items.map((item, i) => (
-            <View key={i} style={{ flexDirection: "row", gap: 8 }}>
-              <T muted style={{ minWidth: 14 }}>
-                {item.task ? (item.checked ? "☑" : "☐") : list.ordered ? `${start + i}.` : "•"}
-              </T>
-              <View style={{ flex: 1 }}>
-                <Blocks tokens={item.tokens} images={images} all={all} />
-              </View>
-            </View>
-          ))}
-        </View>
-      );
-    }
-    case "table": {
-      const table = token as Tokens.Table;
-      return (
-        <View style={[styles.code, { borderColor: c.border, padding: 0 }]}>
-          {[table.header, ...table.rows].map((row, i) => (
-            <View
-              key={i}
-              style={{
-                flexDirection: "row",
-                borderTopWidth: i ? StyleSheet.hairlineWidth : 0,
-                borderColor: c.border,
-              }}
-            >
-              {row.map((cell, j) => (
-                <T key={j} medium={i === 0} style={{ flex: 1, padding: 6, fontSize: 13 }}>
-                  <Inline tokens={cell.tokens} />
-                </T>
-              ))}
-            </View>
-          ))}
-        </View>
-      );
-    }
-    case "paragraph":
-    case "text": {
-      const tokens = "tokens" in token ? token.tokens : undefined;
-      const pictures = images === "github" ? imagesIn(tokens).filter((t) => onGithub(t.href)) : [];
-      const words = tokens?.filter((t) => t.type !== "image" || !pictures.includes(t as Tokens.Image));
-      const hasText = words?.some((t) => t.raw.trim());
-      return (
-        <View style={{ gap: 8 }}>
-          {hasText && (
-            <T selectable>
-              <Inline tokens={words} />
-            </T>
-          )}
-          {pictures.map((p, i) => (
-            <MarkdownImage key={i} src={p.href} alt={p.text} all={all} />
-          ))}
-        </View>
-      );
-    }
-    default:
-      return token.raw.trim() ? <T>{token.raw.trim()}</T> : null;
+  const pictures = images === "github" ? imagesIn(tokens).filter((t) => onGithub(t.href)) : [];
+  const parts: (Token | Token[])[] = [];
+  for (const t of tokens) {
+    const last = parts.at(-1);
+    if ((t.type === "math" && (t as MathToken).display) || pictures.includes(t as Tokens.Image)) parts.push(t);
+    else if (Array.isArray(last)) last.push(t);
+    else parts.push([t]);
   }
-}
-
-function Blocks({ tokens, images, all }: { tokens: Token[]; images: Images; all: () => string[] }) {
+  // A picture inside a link stays its link in the text, and shows after it too.
+  const nested = pictures.filter((p) => !tokens.includes(p));
   return (
-    <View style={{ gap: 10 }}>
-      {tokens.map((t, i) => (
-        <Block key={i} token={t} images={images} all={all} />
+    <View style={{ gap: 8 }}>
+      {parts.map((part, i) => {
+        if (!Array.isArray(part)) {
+          if (part.type === "image") {
+            const p = part as Tokens.Image;
+            return <MarkdownImage key={i} src={p.href} alt={p.text} all={all} />;
+          }
+          const math = part as MathToken;
+          return <DisplayMath key={i} tex={math.text} raw={math.raw} size={15} color={quoted ? c.mutedForeground : c.foreground} />;
+        }
+        if (!part.some((t) => t.raw.trim())) return null;
+        const words = [trimmed(part[0], "start"), ...part.slice(1)];
+        words.push(trimmed(words.pop(), "end"));
+        return (
+          <T key={i} selectable muted={quoted} style={{ lineHeight: 22 }}>
+            <Inline tokens={words.filter((t) => t !== undefined)} />
+          </T>
+        );
+      })}
+      {nested.map((p, i) => (
+        <MarkdownImage key={`n${i}`} src={p.href} alt={p.text} all={all} />
       ))}
     </View>
   );
 }
 
 /**
- * Markdown, as GitHub writes it: headings, lists, tables, quotes, code, and links. With `images`
- * "github", GitHub-hosted images show and open in the lightbox, as the desktop's PR panel shows
- * them; an agent's remote images stay links, as in the desktop's transcript.
+ * A code block, as the desktop's CodeBlock: a header with its fence's language and Copy, over its
+ * code in JetBrains Mono, scrolling sideways, in simple syntax colors, or a diff's lines in green
+ * and red.
  */
-export function Markdown({ text, images = "none" }: { text: string; images?: Images }) {
-  const tokens = marked.lexer(text);
+function CodeBlock({ code }: { code: Tokens.Code }) {
+  const c = useColors();
+  const colors = useColorScheme() === "dark" ? syntax.dark : syntax.light;
+  const [copied, setCopied] = useState(false);
+  const language = code.lang?.split(/\s/)[0] || undefined;
+  const copy = () =>
+    void Clipboard.setStringAsync(code.text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  const lines =
+    language === "diff" || language === "patch"
+      ? code.text.split("\n").map((line, i) => (
+          <Text
+            key={i}
+            style={{
+              color: /^\+(?!\+\+)/.test(line)
+                ? c.added
+                : /^-(?!--)/.test(line)
+                  ? c.danger
+                  : line.startsWith("@@")
+                    ? c.accent
+                    : undefined,
+            }}
+          >
+            {i ? "\n" : ""}
+            {line}
+          </Text>
+        ))
+      : highlight(code.text, language).map((p, i) => (
+          <Text key={i} style={p.kind && { color: colors[p.kind] }}>
+            {p.text}
+          </Text>
+        ));
+  return (
+    <View style={[styles.code, { backgroundColor: c.code, borderColor: c.border }]}>
+      <View style={[styles.codeHeader, { borderBottomColor: c.border }]}>
+        <Text style={{ fontFamily: font.mono, fontSize: 11.5, color: c.faintForeground }}>{language ?? "text"}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={copied ? "Copied" : "Copy code"}
+          onPress={copy}
+          hitSlop={8}
+          style={({ pressed }) => [styles.copy, pressed && { backgroundColor: c.selected }]}
+        >
+          <Icon icon={copied ? Check : Copy} size={13} color={c.faintForeground} />
+          <Text style={{ fontSize: 12, color: c.faintForeground }}>{copied ? "Copied" : "Copy"}</Text>
+        </Pressable>
+      </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10 }}
+      >
+        <Text selectable style={{ fontFamily: font.mono, fontSize: 12.5, lineHeight: 20, color: c.foreground }}>
+          {lines}
+        </Text>
+      </ScrollView>
+    </View>
+  );
+}
+
+/** A task list's box, checked in the accent color as the desktop's checkbox draws it. */
+function TaskBox({ checked }: { checked: boolean }) {
+  const c = useColors();
+  return (
+    <View
+      accessible
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      style={[
+        styles.task,
+        checked ? { backgroundColor: c.accent, borderColor: c.accent } : { borderColor: c.faintForeground },
+      ]}
+    >
+      {checked && <Icon icon={Check} size={12} strokeWidth={3} color="#ffffff" />}
+    </View>
+  );
+}
+
+// A list's bullets by how deep it's nested.
+const bullets = ["•", "◦", "▪"];
+
+/** A list: numbered, bulleted by depth, or GitHub's task list with its boxes. Items hold any blocks. */
+function List({ list }: { list: Tokens.List }) {
+  const c = useColors();
+  const scope = useContext(MarkdownContext);
+  const start = typeof list.start === "number" ? list.start : 1;
+  // Room for the widest number, so the items' text lines up.
+  const marker = list.ordered ? String(start + list.items.length - 1).length * 9 + 8 : 12;
+  return (
+    <MarkdownContext value={{ ...scope, depth: scope.depth + 1 }}>
+      <View style={{ gap: 4 }}>
+        {list.items.map((item, i) => (
+          <View key={i} style={{ flexDirection: "row", gap: 8 }}>
+            {item.task ? (
+              <TaskBox checked={!!item.checked} />
+            ) : (
+              <T
+                style={{
+                  minWidth: marker,
+                  lineHeight: 22,
+                  textAlign: list.ordered ? "right" : "center",
+                  color: c.faintForeground,
+                  fontVariant: ["tabular-nums"],
+                }}
+              >
+                {list.ordered ? `${start + i}.` : bullets[scope.depth % bullets.length]}
+              </T>
+            )}
+            <View style={{ flex: 1 }}>
+              <Blocks tokens={item.tokens} />
+            </View>
+          </View>
+        ))}
+      </View>
+    </MarkdownContext>
+  );
+}
+
+/**
+ * A table, as the desktop's: in a rounded box that scrolls sideways, its header on a fill. Each
+ * column is as wide as its widest cell, up to a wrapping width, measured once before it shows.
+ */
+function Table({ table }: { table: Tokens.Table }) {
+  const c = useColors();
+  const rows = [table.header, ...table.rows];
+  const [widths, setWidths] = useState<number[]>();
+  const measured = useRef<number[]>([]);
+  const count = useRef(0);
+  const measure = (j: number, width: number) => {
+    measured.current[j] = Math.max(measured.current[j] ?? 0, Math.ceil(width));
+    if (++count.current === rows.length * table.header.length) setWidths([...measured.current]);
+  };
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+      <View style={[styles.table, { borderColor: c.border, opacity: widths ? 1 : 0 }]}>
+        {rows.map((row, i) => (
+          <View
+            key={i}
+            style={[
+              { flexDirection: "row" },
+              i === 0 && { backgroundColor: c.hover },
+              i < rows.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+            ]}
+          >
+            {row.map((cell, j) => (
+              <View
+                key={j}
+                onLayout={widths ? undefined : (e) => measure(j, e.nativeEvent.layout.width)}
+                style={[
+                  styles.cell,
+                  widths ? { width: widths[j] } : { maxWidth: 260 },
+                  j > 0 && { borderLeftWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+                ]}
+              >
+                <T
+                  selectable
+                  style={{
+                    fontSize: 13,
+                    lineHeight: 19,
+                    fontWeight: i === 0 ? "600" : "400",
+                    textAlign: table.align[j] ?? "left",
+                  }}
+                >
+                  <Inline tokens={cell.tokens} size={13} />
+                </T>
+              </View>
+            ))}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
+  );
+}
+
+function Block({ token, first }: { token: Token; first: boolean }): ReactNode {
+  const c = useColors();
+  const scope = useContext(MarkdownContext);
+  switch (token.type) {
+    case "space":
+    case "def":
+    // A task's box, which the list draws itself.
+    case "checkbox":
+      return null;
+    case "hr":
+      return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginVertical: 8 }} />;
+    case "heading": {
+      const size = [0, 20, 17, 15, 15, 15, 15][(token as Tokens.Heading).depth]!;
+      return (
+        <T
+          selectable
+          muted={scope.quoted}
+          style={{ fontSize: size, lineHeight: size * 1.3, fontWeight: "600", letterSpacing: -0.2, marginTop: first ? 0 : 8 }}
+        >
+          <Inline tokens={token.tokens} size={size} />
+        </T>
+      );
+    }
+    case "code":
+      return <CodeBlock code={token as Tokens.Code} />;
+    case "math": {
+      const math = token as unknown as MathToken;
+      return <DisplayMath tex={math.text} raw={math.raw} size={15} color={scope.quoted ? c.mutedForeground : c.foreground} />;
+    }
+    case "blockquote":
+      return (
+        <View style={{ flexDirection: "row", gap: 11 }}>
+          <View style={{ width: 3, borderRadius: 1.5, backgroundColor: c.foreground, opacity: 0.18 }} />
+          <View style={{ flex: 1 }}>
+            <MarkdownContext value={{ ...scope, quoted: true }}>
+              <Blocks tokens={(token as Tokens.Blockquote).tokens} />
+            </MarkdownContext>
+          </View>
+        </View>
+      );
+    case "list":
+      return <List list={token as Tokens.List} />;
+    case "table":
+      // Measured again when it changes, as a streaming table grows.
+      return <Table key={token.raw} table={token as Tokens.Table} />;
+    case "paragraph":
+    case "text":
+      return <Paragraph tokens={"tokens" in token ? token.tokens : undefined} />;
+    default:
+      // Raw HTML, which agent output never renders, shows as its text.
+      return token.raw.trim() ? <T selectable>{token.raw.trim()}</T> : null;
+  }
+}
+
+function Blocks({ tokens }: { tokens: Token[] }) {
+  return (
+    <View style={{ gap: 10 }}>
+      {tokens.map((t, i) => (
+        <Block key={i} token={t} first={i === 0} />
+      ))}
+    </View>
+  );
+}
+
+/**
+ * Markdown, as GitHub writes it and the desktop's transcript renders it: headings, lists and task
+ * lists, tables, quotes, code, links, and LaTeX. With `images` "github", GitHub-hosted images show
+ * and open in the lightbox, as the desktop's PR panel shows them; an agent's remote images stay
+ * links, as in the desktop's transcript. A link to a file goes to `onFile`, with its path.
+ */
+export function Markdown({
+  text,
+  images = "none",
+  onFile,
+}: {
+  text: string;
+  images?: Images;
+  onFile?: (path: string) => void;
+}) {
+  const tokens = useMemo(() => lex(text), [text]);
   const all = () =>
     images === "github"
       ? imagesIn(tokens.flatMap((t) => ("tokens" in t ? (t.tokens ?? []) : [t])))
           .map((t) => t.href)
           .filter(onGithub)
       : [];
-  return <Blocks tokens={tokens} images={images} all={all} />;
+  return (
+    <MarkdownContext value={{ images, all, onFile, quoted: false, depth: 0 }}>
+      <Blocks tokens={tokens} />
+    </MarkdownContext>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -827,7 +1070,28 @@ const styles = StyleSheet.create({
   buttonText: { fontSize: 15, fontWeight: "500" },
   badge: { flexDirection: "row", alignItems: "center", gap: 4 },
   badgeText: { fontSize: 12, fontWeight: "500", fontVariant: ["tabular-nums"] },
-  code: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 10 },
+  code: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, overflow: "hidden" },
+  codeHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    height: 32,
+    paddingLeft: 12,
+    paddingRight: 4,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  copy: { flexDirection: "row", alignItems: "center", gap: 4, height: 24, paddingHorizontal: 6, borderRadius: 6 },
+  task: {
+    width: 16,
+    height: 16,
+    marginTop: 3,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  table: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, overflow: "hidden" },
+  cell: { paddingHorizontal: 11, paddingVertical: 6 },
   sectionTitle: { fontSize: 12, letterSpacing: 0.4, paddingHorizontal: 16 },
   footer: { fontSize: 12, lineHeight: 17, paddingHorizontal: 16 },
   group: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },

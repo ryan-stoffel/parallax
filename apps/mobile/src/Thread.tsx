@@ -2,7 +2,7 @@
 // messages in bubbles with their images and files, the agent's answers, its steps as the desktop's
 // trace lines (steps.ts words them; each opens to its input, images, and output), a finished
 // turn folded under "Worked for …", permission requests to answer, the files it presented, and
-// the composer. Images open in the lightbox.
+// the composer. Images open in the lightbox, and other files, as cards, in Quick Look.
 import { useHeaderHeight } from "@react-navigation/elements";
 import type { NativeStackHeaderItemMenuAction, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
@@ -68,6 +68,7 @@ import {
 } from "../../desktop/src/renderer/transcript";
 import { useAgentRun } from "../../desktop/src/renderer/useAgentRun";
 import { Composer } from "./Composer";
+import { FileCard, openLinked } from "./FileCard";
 import { useComputer, useFleet } from "./fleet";
 import { openLightbox } from "./Lightbox";
 import type { Screens } from "./nav";
@@ -364,7 +365,7 @@ function Steps({ work, live }: { work: Work; live: boolean }) {
   );
 }
 
-/** The files a turn presented: images as pictures that open the lightbox, others by name. */
+/** The files a turn presented: images as pictures that open the lightbox, others as cards. */
 function FilesRow({ files }: { files: DocRef[] }) {
   const c = useColors();
   const { hostId } = useContext(RowContext);
@@ -400,12 +401,7 @@ function FilesRow({ files }: { files: DocRef[] }) {
       {files
         .filter((f) => !pictures.includes(f))
         .map((f) => (
-          <View key={f.path} style={[styles.fileChip, { borderColor: c.border, backgroundColor: c.surface }]}>
-            <Icon icon={FileText} size={15} color={c.mutedForeground} />
-            <T numberOfLines={1} style={{ flex: 1, fontSize: 14 }}>
-              {f.name}
-            </T>
-          </View>
+          <FileCard key={f.path} source={{ hostId, runId: f.runId, path: f.path, name: f.name }} />
         ))}
     </View>
   );
@@ -498,9 +494,10 @@ function ApprovalCard({ item }: { item: Approval }) {
   );
 }
 
-/** The user's message: its images, its attached files by name, and its text in a bubble. */
+/** The user's message: its images, its attached files as cards, and its text in a bubble. */
 function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
   const c = useColors();
+  const { hostId } = useContext(RowContext);
   const { text, paths } = splitFiles(item.text ?? "");
   const files = paths.filter((p) => !isImagePath(p));
   return (
@@ -513,11 +510,8 @@ function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
         </View>
       )}
       {files.map((p) => (
-        <View key={p} style={[styles.fileChip, { borderColor: c.border, backgroundColor: c.surface, maxWidth: "85%" }]}>
-          <Icon icon={FileText} size={14} color={c.mutedForeground} />
-          <T numberOfLines={1} style={{ fontSize: 13 }}>
-            {p.split(/[/\\]/).pop()}
-          </T>
+        <View key={p} style={{ width: "85%" }}>
+          <FileCard source={{ hostId, path: p, name: p.split(/[/\\]/).pop() ?? p }} />
         </View>
       ))}
       {!!text.trim() && (
@@ -549,6 +543,7 @@ type Row = Item | Work;
 
 function RowView({ row, live }: { row: Row; live: boolean }) {
   const c = useColors();
+  const { hostId, runId } = useContext(RowContext);
   switch (row.kind) {
     case "work":
       if (row.done)
@@ -570,7 +565,7 @@ function RowView({ row, live }: { row: Row; live: boolean }) {
     case "user":
       return <UserRow item={row} />;
     case "assistant":
-      return <Markdown text={row.text} />;
+      return <Markdown text={row.text} onFile={(path) => void openLinked(hostId, runId, path)} />;
     case "approval":
       return <ApprovalCard item={row} />;
     case "secret":
@@ -876,14 +871,5 @@ const styles = StyleSheet.create({
   images: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   bubble: { maxWidth: "85%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9 },
   card: { borderWidth: 1, borderRadius: 16, padding: 14, gap: 10 },
-  fileChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-  },
   rule: { flex: 1, height: StyleSheet.hairlineWidth },
 });
