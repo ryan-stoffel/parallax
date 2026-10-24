@@ -13,7 +13,9 @@ use plxd::launch_agent::LaunchAgent;
 use plxd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
 use plxd::paths::{DATA_DIR_ENV, DataDir};
 use plxd::remote;
-use plxd::server::{self, Config, EXIT_ALREADY_RUNNING, Server, Shutdown, StartError};
+use plxd::server::{
+    self, Config, EXIT_ALREADY_RUNNING, EXIT_WITH_ENV, Server, Shutdown, StartError,
+};
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
 use plxd::service::{self, DEFAULT_LABEL, SERVICE_LABEL_ENV};
 use tracing::{error, info, warn};
@@ -848,11 +850,6 @@ fn catch_signals(shutdown: Shutdown) -> io::Result<()> {
     Ok(())
 }
 
-/// The pid of the dev or test app whose `plxd attach` started this `serve` (PLX-990). The app sets
-/// it under `PLXD_PATH` or `PLXD_FAKE_BACKEND`; the installed app doesn't, so its `serve` outlives
-/// it.
-const EXIT_WITH_ENV: &str = "PLXD_EXIT_WITH";
-
 /// Under [`EXIT_WITH_ENV`], stops `serve` as SIGTERM does once that process is gone, killed or
 /// not. Shutting down cancels every run, which kills its process group. A plain thread, not a
 /// blocking task, so a `serve` stopped another way never waits on it.
@@ -860,6 +857,9 @@ fn stop_with_app(shutdown: Shutdown) {
     let Ok(value) = std::env::var(EXIT_WITH_ENV) else {
         return;
     };
+    if value.is_empty() {
+        return;
+    }
     let Ok(pid) = value.parse::<u32>() else {
         warn!(%value, "{EXIT_WITH_ENV} is not a pid; not watching it");
         return;

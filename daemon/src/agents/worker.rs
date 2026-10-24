@@ -614,6 +614,11 @@ mod tests {
     }
 
     #[test]
+    fn the_app_serve_stops_with_never_reaches_an_agent() {
+        assert!(ALWAYS_SCRUBBED.contains(&crate::server::EXIT_WITH_ENV));
+    }
+
+    #[test]
     fn the_ssh_session_never_reaches_an_agent() {
         for name in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
             assert!(ALWAYS_SCRUBBED.contains(&name), "{name}");

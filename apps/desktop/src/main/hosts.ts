@@ -728,12 +728,15 @@ export const savedHost = (id: string): SshHost | undefined =>
 /**
  * A dev or test app's (`PLXD_PATH` or `PLXD_FAKE_BACKEND`) `plxd serve` stops when this app exits,
  * even when it's killed (PLX-990), unless `PLXD_EXIT_WITH` already names the process to stop
- * with, as for an e2e test that reopens the app. The installed app's outlives it.
+ * with, as for an e2e test that reopens the app. The installed app's outlives it: it passes an
+ * empty one, so a value from the shell that started the app never reaches its `serve`.
  */
-const exitWithApp =
-  !process.env["PLXD_EXIT_WITH"] && (process.env["PLXD_PATH"] || process.env["PLXD_FAKE_BACKEND"])
-    ? { PLXD_EXIT_WITH: String(process.pid) }
-    : undefined;
+const exitWithApp = {
+  PLXD_EXIT_WITH:
+    process.env["PLXD_PATH"] || process.env["PLXD_FAKE_BACKEND"]
+      ? process.env["PLXD_EXIT_WITH"] || String(process.pid)
+      : "",
+};
 
 /** The local `plxd` binary (plxd.ts). */
 const localPlxd = () =>
