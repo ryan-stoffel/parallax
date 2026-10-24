@@ -370,9 +370,9 @@ impl Devices {
             .or_else(|| running.iter().position(|d| wants(&args, d)))
             .unwrap_or(0);
         let shared = (!running.is_empty()).then(|| running.remove(shared));
-        // Never one another thread holds. A failed shutdown leaves it running rather than failing
-        // the open: `plxd mcp` has no log, and the next device_open tries again.
-        running.retain(|extra| !elsewhere.contains(&extra.id));
+        // Every other one goes, even one a thread has open, so one runs. A failed shutdown leaves
+        // it running rather than failing the open: `plxd mcp` has no log, and the next device_open
+        // tries again.
         for extra in &running {
             let _ = shutdown(&self.tools, extra.platform, &extra.id).await;
         }

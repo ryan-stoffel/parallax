@@ -300,6 +300,29 @@ async fn open_shuts_down_every_other_running_simulator_and_emulator() {
 }
 
 #[tokio::test]
+async fn two_devices_open_in_other_threads_are_reduced_to_one() {
+    let dir = TempDir::new().unwrap();
+    let tools = Toolchain {
+        ios: Ok(ios(dir.path())),
+        android: Err("Android SDK was not found.".to_owned()),
+    };
+    let list = SIMCTL_LIST.replace("Shutdown", "Booted");
+    std::fs::write(dir.path().join("list.json"), list).unwrap();
+    let folder = dir.path().join("tmp/devices");
+    std::fs::create_dir_all(&folder).unwrap();
+    for (thread, id) in [("a", "SIM-OFF"), ("b", "SIM-ON")] {
+        let sessions = json!([{"hostId": "local", "deviceId": id, "platform": "ios"}]);
+        std::fs::write(folder.join(format!("{thread}.json")), sessions.to_string()).unwrap();
+    }
+    let devices = devices(&dir, tools);
+    let opened = call(&devices, "device_open", json!({})).await.unwrap();
+    assert_eq!(opened["device"]["id"], "SIM-OFF");
+    let calls = calls(&dir);
+    assert!(calls.contains("xcrun simctl shutdown SIM-ON"), "{calls}");
+    assert!(!calls.contains("shutdown SIM-OFF"), "{calls}");
+}
+
+#[tokio::test]
 async fn two_threads_opening_at_once_boot_one_simulator() {
     let dir = TempDir::new().unwrap();
     let tools = || Toolchain {
