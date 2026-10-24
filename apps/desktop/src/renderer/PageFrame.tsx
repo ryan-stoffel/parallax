@@ -40,7 +40,9 @@ const clampSide = (n: number) => Math.min(4096, Math.max(200, Math.round(n)));
  * A browser page as a window in the panel, as on a monitor (PLX-888): laid out at `size`, scaled
  * down to fit the area, centered with blank space around it. Its bottom-right corner drags to a
  * new size, and double-clicks back to the fitted one; the size under it can be typed too. With
- * the panel fit and no size of the user's, the page simply fills the panel, as in a browser.
+ * the panel fit and no size of the user's, the page simply fills the panel, as in a browser, in a
+ * frame with rounded corners and a thin inset, as Helium draws it (PLX-966). Nothing animates its
+ * size, so resizing the panel stays snappy.
  * `children` draws the page at the scale it's given. `onArea` hears the room the page has, 0 by 0
  * while hidden.
  */
@@ -69,7 +71,7 @@ export function PageFrame({
 }) {
   const area = useRef<HTMLDivElement>(null);
   const [room, setRoom] = useState<Size>({ width: 0, height: 0 });
-  // The page fills the panel edge to edge, with no window, pill, corner, or size fields.
+  // The page fills the panel, with no window, pill, corner, or size fields.
   const bare = !fixed && fit === "panel";
   const fields = useRef(0);
   fields.current = bare ? 0 : FIELDS;
@@ -105,14 +107,14 @@ export function PageFrame({
     <div
       ref={area}
       // One tree for both looks, so switching never remounts the page, a webview included.
-      className={`flex min-h-0 flex-1 flex-col items-center justify-center transition-[padding] duration-200 ${bare ? "" : "px-3 pt-5 pb-1"}`}
+      className={`flex min-h-0 flex-1 flex-col items-center justify-center ${bare ? "px-1.5 pb-1.5" : "px-3 pt-5 pb-1"}`}
     >
       {size && (
         <div
           style={{ width: size.width * scale, height: size.height * scale }}
-          className={`group relative shrink-0 bg-background ${drag ? "" : "transition-[width,height,border-radius,box-shadow] duration-200 ease-out"} ${bare ? "" : `rounded-md shadow-lg ring-1 ring-border ${className}`}`}
+          className={`group relative shrink-0 bg-background ${bare ? "rounded-lg ring-1 ring-border" : `rounded-md shadow-lg ring-1 ring-border ${className}`}`}
         >
-          <div className={`size-full overflow-hidden ${bare ? "" : "rounded-md"}`}>
+          <div className={`size-full overflow-hidden ${bare ? "rounded-lg" : "rounded-md"}`}>
             {children(scale)}
           </div>
           {!bare && overlay}

@@ -2382,8 +2382,9 @@ function ScopeMenu({
 
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
- * (ProfileMenu.tsx), Settings, Pull requests, Usage, and Browser, the permanent one (PLX-964), then
- * Update when `updatable` (Update.tsx).
+ * (ProfileMenu.tsx), then the places that open in the main pane, Browser, the permanent one
+ * (PLX-964), Pull requests, and Usage, and at the far end Settings, then Update when `updatable`
+ * (Update.tsx), where it has always been.
  */
 function Footer({
   listed,
@@ -2400,21 +2401,21 @@ function Footer({
   return (
     <div className="flex items-center gap-1">
       <ProfileButton listed={listed} />
-      <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
-        <Settings />
-      </IconButton>
+      {onOpenBrowser && (
+        <IconButton label="Browser" aria-pressed={!!browserOpen} onClick={onOpenBrowser}>
+          <Globe />
+        </IconButton>
+      )}
       <IconButton label="Pull requests" onClick={onOpenPullRequests}>
         <GitPullRequest />
       </IconButton>
       <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />
       </IconButton>
-      {onOpenBrowser && (
-        <IconButton label="Browser" aria-pressed={!!browserOpen} onClick={onOpenBrowser}>
-          <Globe />
-        </IconButton>
-      )}
       <span className="flex-1" />
+      <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
+        <Settings />
+      </IconButton>
       {window.parallax.updatable && <UpdateButton />}
     </div>
   );
