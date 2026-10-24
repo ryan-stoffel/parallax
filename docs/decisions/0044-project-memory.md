@@ -51,7 +51,7 @@ A thread starts from zero. Each Project has a context folder (0005), where the c
 
 ### The Memory tab
 
-- The Brief, then entries grouped as Preferences, Conventions, Decisions, and Gotchas, then Knowledge. Each shows its scope and source, and can be edited, promoted, or deleted. Amended 2026-10-23 (PLX-943): a Review section after the Brief holds the entries that are stale or unused, out of their kind's group, and each entry shows when an agent last used it.
+- The Brief, then entries grouped as Preferences, Conventions, Decisions, and Gotchas, then Knowledge. Each shows its scope and source, and can be edited, promoted, or deleted. Amended 2026-10-23 (PLX-943): a Review section after the Brief holds the entries that are stale or unused, out of their kind's group, and each entry shows when an agent last used it. Amended 2026-10-23 ([0083](0083-project-surfaces.md)): the proposals lead, then the brief in place, the entries by kind, the review list, and knowledge.
 - A box takes a change in plain words ("we moved off Jest, use Vitest"). It goes to the coordinator, whose rewrite comes back as a proposal the user saves or discards.
 - The inbox's Learned lists what changed since the user last looked.
 
