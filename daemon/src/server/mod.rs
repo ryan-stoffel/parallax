@@ -832,6 +832,7 @@ impl Accepted<'_> {
                     Arc::clone(self.daemon),
                     self.stop_reading.clone(),
                     self.abort.child_token(),
+                    false,
                 );
                 self.connections.spawn(serve.instrument(span));
             }

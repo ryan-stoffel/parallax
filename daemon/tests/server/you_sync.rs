@@ -7,10 +7,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use parallax_protocol::methods::{MemoryDelete, MemoryList, MemoryRead, MemoryWrite};
+use parallax_protocol::jsonrpc::INVALID_REQUEST;
+use parallax_protocol::methods::{
+    MemoryDelete, MemoryList, MemoryRead, MemorySyncList, MemorySyncRead, MemoryWrite,
+};
 use parallax_protocol::{
     MemoryDeleteParams, MemoryFile, MemoryListParams, MemoryReadParams, MemoryScope,
-    MemoryWriteParams,
+    MemorySyncListParams, MemorySyncReadParams, MemoryWriteParams,
 };
 use plxd::tailnet::{Node, NotRunning, Status, Tailnet, Whois};
 use tokio::time::{Instant, sleep};
@@ -175,7 +178,39 @@ async fn until(what: &str, mut check: impl AsyncFnMut() -> bool) {
     }
 }
 
+/// Each host's proposals, as path and body, and that each replaces `TABS`.
+async fn proposals(a: &mut Client, b: &mut Client) -> [Vec<(String, String)>; 2] {
+    let mut each = [Vec::new(), Vec::new()];
+    for (client, found) in [a, b].into_iter().zip(&mut each) {
+        for file in list(client).await {
+            if file.path.starts_with("proposals/") {
+                assert_eq!(file.replaces.as_deref(), Some(TABS));
+                let text = body(client, &file.path).await.unwrap();
+                found.push((file.path, text));
+            }
+        }
+    }
+    each
+}
+
 const TABS: &str = "memory/preference/tabs.md";
+
+#[tokio::test]
+async fn only_another_device_over_connect_may_sync() {
+    let (mut a, _b, _online) = pair();
+    let mut local = a.start().await;
+    let list = local
+        .call::<MemorySyncList>(MemorySyncListParams {})
+        .await
+        .unwrap_err();
+    assert_eq!(list.code, INVALID_REQUEST, "{list:?}");
+    let read = MemorySyncReadParams {
+        path: TABS.to_owned(),
+    };
+    let read = local.call::<MemorySyncRead>(read).await.unwrap_err();
+    assert_eq!(read.code, INVALID_REQUEST, "{read:?}");
+    a.stop().await;
+}
 
 #[tokio::test]
 async fn concurrent_edits_keep_the_later_one_everywhere_and_the_other_as_a_proposal() {
@@ -207,21 +242,23 @@ async fn concurrent_edits_keep_the_later_one_everywhere_and_the_other_as_a_propo
             && body(&mut on_b, TABS).await.as_deref() == Some("Use spaces.")
     })
     .await;
-    // The host that saw both versions keeps a's as a proposal that replaces the entry.
-    let mut proposals = Vec::new();
-    for client in [&mut on_a, &mut on_b] {
-        for file in list(client).await {
-            if file.path.starts_with("proposals/") {
-                assert_eq!(file.replaces.as_deref(), Some(TABS));
-                proposals.push(body(client, &file.path).await.unwrap());
-            }
-        }
-    }
-    assert!(!proposals.is_empty());
-    assert!(
-        proposals.iter().all(|text| text == "Use tabs, width 4."),
-        "{proposals:?}"
+    // A host that saw both versions keeps a's, its second, as one proposal that replaces the
+    // entry. Usually that's one host; both, when they pulled each other at the same moment.
+    let kept = proposals(&mut on_a, &mut on_b).await;
+    let one = (
+        "proposals/preference-tabs-a-2.md".to_owned(),
+        "Use tabs, width 4.".to_owned(),
     );
+    assert!(!kept.iter().all(Vec::is_empty), "{kept:?}");
+    for host in &kept {
+        assert!(
+            host.is_empty() || host == std::slice::from_ref(&one),
+            "{kept:?}"
+        );
+    }
+    // More pulls see no new conflict and add none.
+    sleep(EVERY * 5).await;
+    assert_eq!(proposals(&mut on_a, &mut on_b).await, kept);
     let written_on = |files: Vec<MemoryFile>| {
         files
             .into_iter()
@@ -282,6 +319,10 @@ async fn a_host_that_was_offline_catches_up_deletions_included() {
     let expected = state(&mut on_a).await;
     let mut on_b = b.start().await;
     until("b to match a", async || state(&mut on_b).await == expected).await;
+    // a pulls from b too, and gets nothing back, the deletion included.
+    sleep(EVERY * 5).await;
+    assert_eq!(state(&mut on_a).await, expected);
+    assert_eq!(state(&mut on_b).await, expected);
 
     a.stop().await;
     b.stop().await;

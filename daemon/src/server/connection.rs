@@ -50,12 +50,14 @@ use crate::methods::{self, Context, Cursors, Delivery, Reply, Session};
 type InFlight = Arc<Mutex<HashMap<RequestId, CancellationToken>>>;
 
 /// Serves one connection until it closes. `closing` closes it at once; `stop_reading` stops
-/// reading and closes it after the requests already read are answered.
+/// reading and closes it after the requests already read are answered. `over_connect` says it
+/// came through Parallax Connect's listener and its `whois` check ([`Context::over_connect`]).
 pub(crate) async fn serve<S>(
     stream: S,
     daemon: Arc<Daemon>,
     stop_reading: CancellationToken,
     closing: CancellationToken,
+    over_connect: bool,
 ) where
     S: AsyncRead + AsyncWrite + Send + 'static,
 {
@@ -72,6 +74,7 @@ pub(crate) async fn serve<S>(
         stopped_reading: stop_reading.child_token(),
         stop_reading: stop_reading.clone(),
         closing: closing.clone(),
+        over_connect,
     };
     let stall = Stall {
         timeout: daemon.limits.idle_timeout,
@@ -117,6 +120,7 @@ struct Reader<S> {
     /// on something else ends instead of holding the drain open ([`Context::stopped_reading`]).
     stopped_reading: CancellationToken,
     closing: CancellationToken,
+    over_connect: bool,
 }
 
 impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
@@ -254,6 +258,7 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
             },
             command_id: None,
             replies: self.replies.clone(),
+            over_connect: self.over_connect,
         };
         let in_flight = Arc::clone(&self.in_flight);
         let replies = self.replies.clone();
@@ -698,6 +703,7 @@ mod tests {
             daemon,
             CancellationToken::new(),
             CancellationToken::new(),
+            false,
         ));
         let (read, mut write) = tokio::io::split(client);
         for request in requests {
@@ -830,6 +836,7 @@ mod tests {
             daemon,
             CancellationToken::new(),
             CancellationToken::new(),
+            false,
         ));
         // The read half stays open and unread, so plxd's writes back up instead of failing.
         let (_unread, mut write) = tokio::io::split(client);

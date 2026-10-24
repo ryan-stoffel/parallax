@@ -28,7 +28,7 @@ use tracing::{debug, warn};
 
 use super::corrections::{self, Change};
 use super::memory;
-use crate::methods::memory::{free_path, save};
+use crate::methods::memory::save;
 use crate::peer::{Peers, Plxd};
 use crate::server::Daemon;
 use crate::store::{StoreHandle, store_error};
@@ -197,41 +197,58 @@ fn stamp(
 
 /// Applies `remote` to You folder `dir`, where `local` is this host's version and `text` the
 /// remote's text, if it was read. Returns the row to record, and the change to tell running
-/// children of, for a file that existed here; `None` when there is nothing to do yet.
+/// children of, for a file that existed here; `None` when there is nothing to do yet. It is safe
+/// to retry: a step that fails records nothing, and the next pull writes the same files again.
 fn apply(
     dir: &Path,
     local: Option<&MemorySyncEntry>,
     remote: &MemorySyncEntry,
     text: Option<&str>,
 ) -> Result<Option<(MemorySyncEntry, Option<Change>)>, String> {
-    if !remote.deleted && text.is_none() {
+    let action = merge(local, remote);
+    // The same text, or both deleted: only the row changes, so the file keeps its `Last used:`
+    // and `Stale:` lines, and running children hear of no change.
+    let same =
+        local.is_some_and(|local| local.deleted == remote.deleted && local.hash == remote.hash);
+    if action == Action::Nothing
+        || (!same && !remote.deleted && text.is_none())
+        // A file edited on disk since the scan waits for the next pull, which records it.
+        || !unchanged(dir, &remote.path, local)
+    {
         return Ok(None);
     }
     let existed = local.is_some_and(|local| !local.deleted);
-    let (kept, other, local) = match (merge(local, remote), local) {
-        (Action::Nothing, _) => return Ok(None),
-        (Action::Resolve { remote, other }, Some(local)) => (remote, other, local),
-        (Action::Take | Action::Resolve { .. }, _) => {
-            write(dir, &remote.path, text)?;
-            let change = if remote.deleted {
-                Change::Deleted
-            } else {
-                Change::Updated
-            };
-            return Ok(Some((remote.clone(), existed.then_some(change))));
+    let (
+        Action::Resolve {
+            remote: kept,
+            other,
+        },
+        Some(local),
+    ) = (action, local)
+    else {
+        // Take the remote version.
+        if same {
+            return Ok(Some((remote.clone(), None)));
         }
+        write(dir, &remote.path, text)?;
+        let change = if remote.deleted {
+            Change::Deleted
+        } else {
+            Change::Updated
+        };
+        return Ok(Some((remote.clone(), existed.then_some(change))));
     };
-    let replaced = kept && local.hash != remote.hash;
     if other {
-        let (text, machine) = if kept {
+        let (loser, text) = if kept {
             let (bytes, _) = super::read_file(dir, &remote.path).map_err(|e| e.to_string())?;
             let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
-            (synced(&text), &local.machine.name)
+            (local, synced(&text))
         } else {
-            (text.unwrap_or_default().to_owned(), &remote.machine.name)
+            (remote, text.unwrap_or_default().to_owned())
         };
-        keep_other(dir, &remote.path, &text, machine)?;
+        keep_other(dir, &remote.path, &text, loser)?;
     }
+    let replaced = kept && !same;
     if replaced {
         write(dir, &remote.path, text)?;
     }
@@ -241,6 +258,24 @@ fn apply(
         row,
         (replaced && existed).then_some(Change::Updated),
     )))
+}
+
+/// Whether `path` in `dir` still holds `local`'s version: its text, or no file for a deletion
+/// or a path this host never had.
+fn unchanged(dir: &Path, path: &str, local: Option<&MemorySyncEntry>) -> bool {
+    let current = match super::read_file(dir, path) {
+        Ok((bytes, _)) => Some(
+            String::from_utf8(bytes)
+                .map(|text| hash(&text))
+                .unwrap_or_default(),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return false,
+    };
+    match local.filter(|local| !local.deleted) {
+        Some(local) => current.as_deref() == Some(local.hash.as_str()),
+        None => current.is_none(),
+    }
 }
 
 /// Writes `text` to `path`, or deletes it for `None`.
@@ -254,15 +289,19 @@ fn write(dir: &Path, path: &str, text: Option<&str>) -> Result<(), String> {
     }
 }
 
-/// Keeps `text`, the version of `path` written on `machine` that lost a conflict: an entry's as a
-/// proposal that replaces it, which the Memory tab saves or discards, and a knowledge file's as a
-/// copy beside it, which syncs as a file of its own, since a proposal needs a kind.
-fn keep_other(dir: &Path, path: &str, text: &str, machine: &str) -> Result<(), String> {
+/// Keeps `text`, the version `loser` of `path` that lost a conflict: an entry's as a proposal that
+/// replaces it, which the Memory tab saves or discards, and a knowledge file's as a copy beside it,
+/// which syncs as a file of its own, since a proposal needs a kind. The name comes from the
+/// losing version, its writer's node ID and counter, so a retry or another pull that sees the same
+/// conflict writes the same file again instead of adding one.
+fn keep_other(dir: &Path, path: &str, text: &str, loser: &MemorySyncEntry) -> Result<(), String> {
     let stem = Path::new(path)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .unwrap_or("entry");
-    let name = format!("{stem}-{}", memory::slug(machine));
+    let node = &loser.machine.id;
+    let version = loser.clock.get(node).copied().unwrap_or_default();
+    let tag = format!("{stem}-{}-{version}", memory::slug(node));
     let (target, text) = match memory::entry_kind(path) {
         Some(kind) => {
             let (header, body) = memory::parse(text);
@@ -278,9 +317,10 @@ fn keep_other(dir: &Path, path: &str, text: &str, machine: &str) -> Result<(), S
                 &extra,
                 body,
             );
-            (free_path(dir, "proposals", &name), text)
+            let kind = memory::kind_name(kind).unwrap_or("entry");
+            (format!("proposals/{kind}-{tag}.md"), text)
         }
-        None => (free_path(dir, "knowledge", &name), text.to_owned()),
+        None => (format!("knowledge/{tag}.md"), text.to_owned()),
     };
     save(dir, &target, &text).map(drop).map_err(|e| e.message)
 }
@@ -434,14 +474,16 @@ pub(crate) async fn run(daemon: Arc<Daemon>, every: Duration, port: u16, stop: C
         }
         tokio::select! {
             () = stop.cancelled() => return,
-            pulled = pull_all(&daemon, &peers) => if let Err(error) = pulled {
+            pulled = pull_all(&daemon, &peers, every) => if let Err(error) = pulled {
                 debug!(error = %error.message, "skipped syncing You memory");
             },
         }
     }
 }
 
-async fn pull_all(daemon: &Arc<Daemon>, peers: &Peers) -> Result<(), ErrorObject> {
+/// Scans, then pulls every online device at once, each within `every`, so a device that went to
+/// sleep mid-call can't hold up the others.
+async fn pull_all(daemon: &Arc<Daemon>, peers: &Peers, every: Duration) -> Result<(), ErrorObject> {
     let on = daemon
         .reader
         .run(&CancellationToken::new(), |db| {
@@ -456,11 +498,18 @@ async fn pull_all(daemon: &Arc<Daemon>, peers: &Peers) -> Result<(), ErrorObject
         let _sync = daemon.you_sync.lock().await;
         record(daemon, &me).await?;
     }
-    for node in status.own_peers().filter(|node| node.online) {
-        if let Err(error) = pull(daemon, &peers.client(&node.id), &me).await {
+    let pulls = status.own_peers().filter(|node| node.online).map(|node| {
+        let (client, me) = (peers.client(&node.id), &me);
+        async move {
+            let error = match time::timeout(every, pull(daemon, &client, me)).await {
+                Ok(Ok(())) => return,
+                Ok(Err(error)) => error,
+                Err(_) => format!("no answer within {every:?}"),
+            };
             debug!(device = %node.host_name, %error, "could not pull You memory");
         }
-    }
+    });
+    futures_util::future::join_all(pulls).await;
     Ok(())
 }
 
@@ -476,12 +525,14 @@ async fn pull(daemon: &Arc<Daemon>, peer: &Plxd, me: &MemoryMachine) -> Result<(
         .entries;
     let local = recorded(&daemon.store).await.map_err(|e| e.message)?;
     // A local change only makes a remote version older, so this reads every text the apply
-    // below can need.
+    // below can need. Text this host already has isn't read.
     let mut texts = HashMap::new();
     for entry in &remote {
+        let row = local.get(&entry.path);
         if entry.deleted
             || !syncs(&entry.path)
-            || merge(local.get(&entry.path), entry) == Action::Nothing
+            || row.is_some_and(|row| !row.deleted && row.hash == entry.hash)
+            || merge(row, entry) == Action::Nothing
         {
             continue;
         }
@@ -686,9 +737,70 @@ mod tests {
         assert_eq!(row.clock, clock(&[("a", 2), ("b", 1)]));
         assert!(change.is_some());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), theirs);
+        // Named for the losing version: a's, at its counter 2.
         let proposal =
-            std::fs::read_to_string(dir.path().join("proposals/tabs-a-name.md")).unwrap();
+            std::fs::read_to_string(dir.path().join("proposals/preference-tabs-a-2.md")).unwrap();
         assert!(proposal.contains("Scope: you\nReplaces: memory/preference/tabs.md\n"));
         assert!(proposal.ends_with("\nUse tabs.\n"), "{proposal}");
+    }
+
+    /// The proposals in `dir`.
+    fn proposals(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_dir(dir.join("proposals"))
+            .map(|files| {
+                let names = files.map(|file| file.unwrap().file_name().into_string().unwrap());
+                names.collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_retried_conflict_writes_the_same_one_proposal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = "memory/preference/tabs.md";
+        let file = dir.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let mine = "Title: Tabs\n\nUse spaces.\n";
+        std::fs::write(&file, mine).unwrap();
+        // The local edit is later, so the remote one becomes the proposal.
+        let local = version("a", &super::hash(mine), &[("a", 2)], 30);
+        let theirs = "Title: Tabs\n\nUse tabs.\n";
+        let remote = version("b", &super::hash(theirs), &[("a", 1), ("b", 1)], 20);
+        for _ in 0..3 {
+            let (row, change) = apply(dir.path(), Some(&local), &remote, Some(theirs))
+                .unwrap()
+                .unwrap();
+            assert_eq!((row.machine.id.as_str(), change), ("a", None));
+        }
+        assert_eq!(proposals(dir.path()), ["preference-tabs-b-1.md"]);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), mine);
+    }
+
+    #[test]
+    fn the_same_text_records_only_the_row_and_an_edit_since_the_scan_waits() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = "memory/preference/tabs.md";
+        let file = dir.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let text = "Title: Tabs\nLast used: 2026-10-23\n\nUse tabs.\n";
+        std::fs::write(&file, text).unwrap();
+        let local = version("a", &super::hash(text), &[("a", 1)], 10);
+        let merged = version("b", &super::hash(text), &[("a", 1), ("b", 1)], 20);
+        let (row, change) = apply(dir.path(), Some(&local), &merged, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!((row.clock, change), (merged.clock.clone(), None));
+        // The file keeps its `Last used:` line.
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), text);
+
+        // An edit on disk since the scan isn't overwritten.
+        std::fs::write(&file, "Title: Tabs\n\nUse tabs, width 2.\n").unwrap();
+        let theirs = "Title: Tabs\n\nUse spaces.\n";
+        let newer = version("b", &super::hash(theirs), &[("a", 1), ("b", 2)], 30);
+        assert_eq!(
+            apply(dir.path(), Some(&local), &newer, Some(theirs)),
+            Ok(None)
+        );
+        assert!(std::fs::read_to_string(&file).unwrap().contains("width 2"));
     }
 }

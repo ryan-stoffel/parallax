@@ -15,7 +15,7 @@
 
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST};
 use parallax_protocol::{
     ErrorKind, InboxKind, MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind,
     MemoryListParams, MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult,
@@ -114,6 +114,12 @@ pub(super) async fn read(
     let path = checked(&params.path, &all, "read")?.to_owned();
     let dir = scope_dir(context, params.scope).await?;
     let agent = params.from.is_some();
+    // An agent's read stamps the entry, which sync mustn't overwrite or race (0082).
+    let _sync = if agent {
+        you_lock(context, params.scope).await
+    } else {
+        None
+    };
     run_blocking(move || {
         let (bytes, mut metadata) = context::read_file(&dir, &path).map_err(io_error(&path))?;
         let mut text = String::from_utf8(bytes)
@@ -198,11 +204,13 @@ pub(super) async fn write(
         _ => content,
     };
     let written_path = path.clone();
+    let sync = you_lock(context, scope).await;
     let (file, existed) = run_blocking(move || {
         let existed = std::fs::symlink_metadata(dir.join(&written_path)).is_ok();
         Ok((save(&dir, &written_path, &text)?, existed))
     })
     .await?;
+    drop(sync);
     // A new entry corrects nothing, so only a changed one is sent to running children. Saving a
     // proposal that `replaces` an entry writes over it, so it counts as a change.
     if existed {
@@ -235,11 +243,13 @@ pub(super) async fn delete(
     let path = checked(&params.path, &allowed, "delete")?.to_owned();
     let dir = scope_dir(context, params.scope).await?;
     let deleted = path.clone();
+    let sync = you_lock(context, params.scope).await;
     run_blocking(move || {
         context::delete_file(&dir, &deleted).map_err(io_error(&deleted))?;
         Ok(MemoryDeleteResult {})
     })
     .await?;
+    drop(sync);
     context::corrections::tell(&context.daemon, params.scope, &path, None, Change::Deleted);
     Ok(MemoryDeleteResult {})
 }
@@ -327,7 +337,7 @@ pub(super) async fn propose(
     );
     let slug = memory::slug(&title);
     let file = run_blocking(move || {
-        let path = free_path(&dir, "proposals", &slug);
+        let path = free_path(&dir, &slug);
         save(&dir, &path, &text)
     })
     .await?;
@@ -341,6 +351,7 @@ pub(super) async fn sync_list(
     context: &Context,
     _: MemorySyncListParams,
 ) -> Result<MemorySyncListResult, ErrorObject> {
+    connect_only(context, "syncList")?;
     you_sync::list(&context.daemon).await
 }
 
@@ -348,7 +359,30 @@ pub(super) async fn sync_read(
     context: &Context,
     params: MemorySyncReadParams,
 ) -> Result<MemorySyncReadResult, ErrorObject> {
+    connect_only(context, "syncRead")?;
     you_sync::read(&context.daemon, params.path).await
+}
+
+/// Holds You memory's sync lock for a write to You, so a pull never overwrites it (0082).
+async fn you_lock(
+    context: &Context,
+    scope: MemoryScope,
+) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+    match scope {
+        MemoryScope::You => Some(context.daemon.you_sync.lock().await),
+        _ => None,
+    }
+}
+
+/// Refuses a sync method on a connection that didn't come over Parallax Connect (0082).
+fn connect_only(context: &Context, method: &str) -> Result<(), ErrorObject> {
+    if context.over_connect {
+        return Ok(());
+    }
+    Err(ErrorObject::new(
+        INVALID_REQUEST,
+        format!("memory/{method} is only for another of your devices over Parallax Connect"),
+    ))
 }
 
 /// Checks the entry a proposal `replaces`: only a coordinator names one, and it is an existing
@@ -535,13 +569,13 @@ pub(crate) fn save(dir: &Path, path: &str, text: &str) -> Result<MemoryFile, Err
     Ok(memory_file(path, &metadata, header))
 }
 
-/// A path in `folder` for `slug` that no file has yet in `dir`, such as a proposal's.
-pub(crate) fn free_path(dir: &Path, folder: &str, slug: &str) -> String {
+/// A proposal path for `slug` that no file has yet in `dir`.
+fn free_path(dir: &Path, slug: &str) -> String {
     let taken = |path: &str| std::fs::symlink_metadata(dir.join(path)).is_ok();
-    let mut path = format!("{folder}/{slug}.md");
+    let mut path = format!("proposals/{slug}.md");
     let mut n = 2;
     while taken(&path) {
-        path = format!("{folder}/{slug}-{n}.md");
+        path = format!("proposals/{slug}-{n}.md");
         n += 1;
     }
     path
