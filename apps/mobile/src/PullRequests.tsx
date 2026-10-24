@@ -182,7 +182,7 @@ export function PullRequestList() {
 
   return (
     <SectionList
-      style={{ backgroundColor: c.background }}
+      style={{ backgroundColor: "transparent" }}
       contentInsetAdjustmentBehavior="automatic"
       sections={sections}
       keyExtractor={(e) => e.url}

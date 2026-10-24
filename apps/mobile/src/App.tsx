@@ -25,7 +25,9 @@ import { LightboxHost } from "./Lightbox";
 import { getPrefs } from "./prefs";
 import { AddComputerScreen, ComputerScreen, SettingsScreen } from "./Settings";
 import { ThreadDetailsScreen } from "./ThreadDetails";
-import { NightlyBadge } from "./ui";
+import { SkyBanner, useColors, Wordmark } from "./ui";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { View } from "react-native";
 import { dark, light } from "./theme";
 import { ThreadScreen } from "./Thread";
 import { ThreadList } from "./ThreadList";
@@ -34,9 +36,19 @@ const Stack = createNativeStackNavigator<Screens>();
 const Tabs = createNativeBottomTabNavigator();
 const nav = createNavigationContainerRef<Screens>();
 
-/** A tab's own stack, for its large title and search bar, with the nightly tag on its left. */
+/** A tab's own stack, for its large title and search bar, under the nightly sky and wordmark. */
 function tab(title: string, Screen: React.ComponentType) {
   const Inner = createNativeStackNavigator();
+  function Sky() {
+    const c = useColors();
+    const insets = useSafeAreaInsets();
+    return (
+      <View style={{ flex: 1, backgroundColor: c.background }}>
+        <SkyBanner bar={insets.top + 54} height={insets.top + 190} />
+        <Screen />
+      </View>
+    );
+  }
   return function TabStack() {
     return (
       <Inner.Navigator
@@ -44,10 +56,11 @@ function tab(title: string, Screen: React.ComponentType) {
           headerLargeTitle: true,
           headerTransparent: true,
           headerLargeTitleShadowVisible: false,
-          headerLeft: () => <NightlyBadge />,
+          headerLeft: () => <Wordmark />,
+          contentStyle: { backgroundColor: "transparent" },
         }}
       >
-        <Inner.Screen name={title} component={Screen} options={{ title }} />
+        <Inner.Screen name={title} component={Sky} options={{ title }} />
       </Inner.Navigator>
     );
   };

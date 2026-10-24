@@ -5,7 +5,6 @@ import {
   BellOff,
   Bug,
   CircleCheck,
-  CodeXml,
   Info,
   Moon,
   Network,
@@ -28,7 +27,7 @@ import { useNav, type Screens } from "./nav";
 import { FindComputers } from "./Onboarding";
 import { setPrefs, usePrefs, type Prefs } from "./prefs";
 import { askForNotifications, notificationsOn, notify, registerWithRelay } from "./push";
-import { DeviceIcon, Dot, Row, Section, T, useColors } from "./ui";
+import { DeviceIcon, Dot, GitHubLogo, Row, Section, T, useColors } from "./ui";
 
 const REPO = "https://github.com/ryan-stoffel/parallax";
 
@@ -118,7 +117,7 @@ export function SettingsScreen() {
 
   return (
     <ScrollView
-      style={{ backgroundColor: c.background }}
+      style={{ backgroundColor: "transparent" }}
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ padding: 16, gap: 26, paddingBottom: 60 }}
     >
@@ -204,7 +203,7 @@ export function SettingsScreen() {
 
       <Section title="About">
         <Row icon={Info} title="Version" detail={`Parallax (Nightly) ${version}${build ? ` (${build})` : ""}`} />
-        <Row icon={CodeXml} title="Parallax on GitHub" chevron onPress={() => void Linking.openURL(REPO)} />
+        <Row leading={<GitHubLogo size={18} color={c.mutedForeground} />} title="Parallax on GitHub" chevron onPress={() => void Linking.openURL(REPO)} />
         <Row icon={Bug} title="Report a problem" chevron last onPress={() => void Linking.openURL(`${REPO}/issues/new`)} />
       </Section>
     </ScrollView>

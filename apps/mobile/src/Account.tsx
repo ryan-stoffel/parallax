@@ -24,7 +24,9 @@ import { base64url } from "./pairing";
 import { LockKeyhole, LogOut, UserRound } from "lucide-react-native";
 
 import { font } from "./theme";
-import { Button, Mark, NightlyBadge, Row, Section, T, useColors } from "./ui";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { Button, Mark, Row, Section, SkyBanner, T, useColors } from "./ui";
 
 // The Clerk instance and the desktop app's OAuth application there, both public (desktop:
 // main/account.ts). The phone signs in as the same application.
@@ -199,6 +201,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 export function SignIn() {
   const c = useColors();
   const { signIn } = useAccount();
+  const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const go = async (create: boolean) => {
@@ -209,12 +212,12 @@ export function SignIn() {
   };
   return (
     <View style={[styles.page, { backgroundColor: c.background }]}>
+      <SkyBanner bar={insets.top + 64} height={insets.top + 260} />
       <View style={{ flex: 1, justifyContent: "center", gap: 14 }}>
         <Mark size={56} />
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10 }}>
-          <Text style={{ fontFamily: font.brand, fontSize: 34, color: c.foreground }}>Parallax</Text>
-          <NightlyBadge />
-        </View>
+        <Text style={{ fontFamily: font.brand, fontSize: 34, color: c.foreground, marginTop: 10 }}>
+          Parallax
+        </Text>
         <T muted style={{ fontSize: 17, lineHeight: 25 }}>
           Every thread on every one of your computers, from your phone.
         </T>

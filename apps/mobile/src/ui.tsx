@@ -29,7 +29,18 @@ import {
   type TextStyle,
   type ViewStyle,
 } from "react-native";
-import Svg, { Circle, ClipPath, Defs, LinearGradient, Path, RadialGradient, Rect, Stop } from "react-native-svg";
+import Svg, {
+  Circle,
+  ClipPath,
+  Defs,
+  G,
+  LinearGradient,
+  Mask,
+  Path,
+  RadialGradient,
+  Rect,
+  Stop,
+} from "react-native-svg";
 
 import type { Attention } from "../../desktop/src/renderer/attention";
 import { onGithub } from "../../desktop/src/renderer/github";
@@ -59,57 +70,155 @@ export function Mark({ size = 22 }: { size?: number }) {
   );
 }
 
-/** "Parallax" in the brand's Sora, as the desktop's wordmark. */
-export function Wordmark({ size = 20, nightly }: { size?: number; nightly?: boolean }) {
+/** The mark and "Parallax" in the brand's Sora, as the desktop's top row shows them. */
+export function Wordmark({ size = 18 }: { size?: number }) {
   const c = useColors();
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
       <Mark size={size + 4} />
       <Text style={{ fontFamily: font.brand, fontSize: size, color: c.foreground }}>Parallax</Text>
-      {nightly && <NightlyBadge />}
     </View>
   );
 }
 
-/** The nightly channel's tag: its night sky, as the desktop's send button wears it. */
-export function NightlyBadge() {
-  return (
-    <View style={{ borderRadius: 999, overflow: "hidden" }}>
-      <NightSky width={64} height={20} />
-      <Text style={styles.nightly}>Nightly</Text>
-    </View>
-  );
-}
-
-// A few fixed stars, as the desktop's .send-sky has them.
-const stars: [number, number, number, number][] = [
-  [0.28, 0.26, 0.8, 1],
-  [0.66, 0.2, 0.6, 0.8],
-  [0.78, 0.46, 0.7, 0.7],
-  [0.4, 0.5, 0.5, 0.6],
-  [0.14, 0.64, 0.5, 0.5],
-  [0.88, 0.72, 0.5, 0.6],
+// The nightly sky, as the desktop's NightSky.tsx and index.css draw it: stars from a fixed seed,
+// so every launch draws the same sky, and clouds in three layers, back to front.
+const skyStars = (() => {
+  let seed = 7;
+  const next = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  return Array.from({ length: 34 }, () => [next() * 640, next() * 40, 0.4 + next() * 0.8, 0.4 + next() * 0.6] as const);
+})();
+const skyClouds: [number, number, number, 0 | 1 | 2][] = [
+  [60, 50, 1.1, 0],
+  [250, 49, 1.2, 0],
+  [470, 50, 1.1, 0],
+  [-6, 56, 0.9, 1],
+  [150, 55, 0.8, 1],
+  [350, 56, 1, 1],
+  [560, 55, 0.9, 1],
+  [90, 61, 0.9, 2],
+  [270, 61, 0.8, 2],
+  [450, 62, 0.9, 2],
+  [620, 61, 0.8, 2],
 ];
+// Dawn in light mode, night in dark: the sky's stops, star, glow, and each layer's lit top and body.
+const skies = {
+  light: {
+    stops: ["#c3c9fb", "#d9d6fb", "#ebe7fb"],
+    star: "#4f46e5",
+    glow: "#ec4899",
+    clouds: [["#e2e2fc", "#d3d4fa"], ["#f3f2fe", "#e6e4fc"], ["#ffffff", "#f1effd"]],
+  },
+  dark: {
+    stops: ["#070923", "#17184f", "#2a2470"],
+    star: "#ffffff",
+    glow: "#7c3aed",
+    clouds: [["#3c3a8c", "#2c2a6e"], ["#5753b4", "#43409a"], ["#8a86e4", "#6e6ac8"]],
+  },
+};
 
-/** The nightly build's sky (index.css's .send-sky): indigo, a violet glow, and stars. */
+function Cloud({ fill, dy = 0 }: { fill: string; dy?: number }) {
+  return (
+    <G fill={fill} transform={`translate(0 ${dy})`}>
+      <Circle cx={-12} cy={-2} r={7} />
+      <Circle cx={0} cy={-7} r={10} />
+      <Circle cx={14} cy={-9} r={12} />
+      <Circle cx={28} cy={-4} r={8} />
+      <Rect x={-20} y={-5} width={56} height={12} rx={6} />
+    </G>
+  );
+}
+
+/**
+ * The nightly build's sky across the top of a screen, as the desktop's sidebar wears it: the sky
+ * deepening (or paling, at dawn) into the background, with stars, a glow, and clouds along the
+ * bottom of the bar at `bar` points. Put it behind a screen's content.
+ */
+export function SkyBanner({ bar, height }: { bar: number; height: number }) {
+  const c = useColors();
+  const sky = skies[useColorScheme() === "dark" ? "dark" : "light"];
+  // The art is 640 by 56: drawn at the bar's bottom, as tall as 56 points, and cropped at the sides.
+  const art = 56;
+  return (
+    <View pointerEvents="none" style={[StyleSheet.absoluteFill, { height }]}>
+      <Svg width="100%" height={height}>
+        <Defs>
+          <LinearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0" stopColor={sky.stops[0]} />
+            <Stop offset="0.3" stopColor={sky.stops[1]} />
+            <Stop offset="0.55" stopColor={sky.stops[2]} />
+            <Stop offset="1" stopColor={c.background} />
+          </LinearGradient>
+          <RadialGradient id="glow" cx="0.75" cy="0" r="0.6">
+            <Stop offset="0" stopColor={sky.glow} stopOpacity={0.35} />
+            <Stop offset="1" stopColor={sky.glow} stopOpacity={0} />
+          </RadialGradient>
+        </Defs>
+        <Rect width="100%" height={height} fill="url(#sky)" />
+        <Rect width="100%" height={bar} fill="url(#glow)" />
+      </Svg>
+      <Svg
+        width="100%"
+        height={art}
+        viewBox="0 0 640 56"
+        preserveAspectRatio="xMidYMax slice"
+        style={{ position: "absolute", top: bar - art + 6, left: 0, right: 0 }}
+      >
+        <Defs>
+          <LinearGradient id="thin" x1="0" y1="36" x2="0" y2="52" gradientUnits="userSpaceOnUse">
+            <Stop offset="0" stopColor="#ffffff" />
+            <Stop offset="1" stopColor="#ffffff" stopOpacity={0} />
+          </LinearGradient>
+          <Mask id="clouds" maskUnits="userSpaceOnUse" x="0" y="0" width="640" height="56">
+            <Rect width={640} height={56} fill="url(#thin)" />
+          </Mask>
+        </Defs>
+        {skyStars.map(([x, y, r, o], i) => (
+          <Circle key={i} cx={x} cy={y} r={r} fill={sky.star} opacity={o} />
+        ))}
+        <G mask="url(#clouds)">
+          {([0, 1, 2] as const).map((layer) =>
+            skyClouds
+              .filter((cl) => cl[3] === layer)
+              .map(([x, y, scale]) => (
+                <G key={`${layer}${x}`} transform={`translate(${x} ${y}) scale(${scale})`}>
+                  <Cloud fill={sky.clouds[layer]![0]!} />
+                  <Cloud fill={sky.clouds[layer]![1]!} dy={2.5} />
+                </G>
+              )),
+          )}
+        </G>
+      </Svg>
+    </View>
+  );
+}
+
+/** A small night-sky tile with stars, as the desktop's send button wears it. */
 export function NightSky({ width, height }: { width: number; height: number }) {
   return (
     <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
       <Defs>
-        <LinearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+        <LinearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
           <Stop offset="0" stopColor="#070923" />
           <Stop offset="0.6" stopColor="#17184f" />
           <Stop offset="1" stopColor="#2a2470" />
         </LinearGradient>
-        <RadialGradient id="glow" cx="0.7" cy="0.1" r="0.6">
+        <RadialGradient id="tileglow" cx="0.7" cy="0.1" r="0.6">
           <Stop offset="0" stopColor="#7c3aed" stopOpacity={0.45} />
           <Stop offset="1" stopColor="#7c3aed" stopOpacity={0} />
         </RadialGradient>
       </Defs>
-      <Rect width={width} height={height} fill="url(#sky)" />
-      <Rect width={width} height={height} fill="url(#glow)" />
-      {stars.map(([x, y, r, o], i) => (
-        <Circle key={i} cx={x * width} cy={y * height} r={r} fill="#ffffff" opacity={o} />
+      <Rect width={width} height={height} fill="url(#tile)" />
+      <Rect width={width} height={height} fill="url(#tileglow)" />
+      {[
+        [0.28, 0.26, 0.8, 1],
+        [0.66, 0.2, 0.6, 0.8],
+        [0.78, 0.46, 0.7, 0.7],
+        [0.4, 0.5, 0.5, 0.6],
+        [0.14, 0.64, 0.5, 0.5],
+        [0.88, 0.72, 0.5, 0.6],
+      ].map(([x, y, r, o], i) => (
+        <Circle key={i} cx={x! * width} cy={y! * height} r={r} fill="#ffffff" opacity={o} />
       ))}
     </Svg>
   );
@@ -142,6 +251,20 @@ function MiniPc({ size = 24, color, strokeWidth = 2 }: { size?: number; color?: 
 }
 
 const deviceIcons = { laptop: Laptop, desktop: Monitor, mini: MiniPc, server: Server };
+
+/** GitHub's mark, as the desktop's logos.tsx draws it. */
+export function GitHubLogo({ size = 18, color }: { size?: number; color?: ColorValue }) {
+  const c = useColors();
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path
+        fill={(color ?? c.foreground) as string}
+        fillRule="evenodd"
+        d="M12 0c6.63 0 12 5.276 12 11.79-.001 5.067-3.29 9.567-8.175 11.187-.6.118-.825-.25-.825-.56 0-.398.015-1.665.015-3.242 0-1.105-.375-1.813-.81-2.181 2.67-.295 5.475-1.297 5.475-5.822 0-1.297-.465-2.344-1.23-3.169.12-.295.54-1.503-.12-3.125 0 0-1.005-.324-3.3 1.209a11.32 11.32 0 00-3-.398c-1.02 0-2.04.133-3 .398-2.295-1.518-3.3-1.209-3.3-1.209-.66 1.622-.24 2.83-.12 3.125-.765.825-1.23 1.887-1.23 3.169 0 4.51 2.79 5.527 5.46 5.822-.345.294-.66.81-.765 1.577-.69.31-2.415.81-3.495-.973-.225-.354-.9-1.223-1.845-1.209-1.005.015-.405.56.015.781.51.28 1.095 1.327 1.23 1.666.24.663 1.02 1.93 4.035 1.385 0 .988.015 1.916.015 2.196 0 .31-.225.664-.825.56C3.303 21.374-.003 16.867 0 11.791 0 5.276 5.37 0 12 0z"
+      />
+    </Svg>
+  );
+}
 
 /** A computer's icon, by its name, as the desktop's DeviceIcon draws it. */
 export function DeviceIcon({ name, size = 16, color }: { name: string; size?: number; color?: ColorValue }) {
@@ -503,7 +626,7 @@ function Inline({ tokens }: { tokens?: Token[] }): ReactNode {
       case "codespan":
         return (
           <Text key={i} style={{ fontFamily: font.mono, fontSize: 13, backgroundColor: c.code }}>
-            {` ${unescape((t as Tokens.Codespan).text)} `}
+            {unescape((t as Tokens.Codespan).text)}
           </Text>
         );
       case "link":
@@ -687,14 +810,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   buttonText: { fontSize: 15, fontWeight: "500" },
-  nightly: {
-    color: "#ffffff",
-    fontSize: 11,
-    fontWeight: "600",
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    textAlign: "center",
-  },
   badge: { flexDirection: "row", alignItems: "center", gap: 4 },
   badgeText: { fontSize: 12, fontWeight: "500", fontVariant: ["tabular-nums"] },
   code: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 10 },

@@ -7,19 +7,13 @@ import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
-import type { LucideIcon } from "lucide-react-native";
 import {
   ArrowUp,
-  Brain,
   Check,
-  ChevronDown,
-  FilePen,
+  ChevronLeft,
+  ChevronRight,
   FileText,
-  Hand,
-  ListChecks,
-  LockOpen,
   Plus,
-  Sparkles,
   Square,
   X,
 } from "lucide-react-native";
@@ -56,16 +50,8 @@ import { imageCaps } from "../../desktop/src/renderer/images";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import type { Computer } from "./fleet";
 import { openLightbox } from "./Lightbox";
-import { Choices } from "./Choices";
 import { Icon, NightSky, T, useColors } from "./ui";
 
-const accessIcons: Record<AgentPermission, LucideIcon> = {
-  manual: Hand,
-  edit: FilePen,
-  auto: Sparkles,
-  plan: ListChecks,
-  bypass: LockOpen,
-};
 
 /** What an instance offers: its models, whether it takes an effort, and its access levels. */
 interface Offer {
@@ -146,22 +132,160 @@ async function upload(hostId: string, name: string, data: string, chunk?: number
   }
 }
 
-/** A pill in the box's bottom row: an icon, a label, and a chevron, opening a sheet. */
-function Pill({ icon, label, onPress }: { icon?: LucideIcon; label: string; onPress: () => void }) {
+/** A model's name without its maker's, as the pill says it: "Claude Opus 5.5" is "Opus 5.5". */
+const shortName = (name: string) => name.replace(/^(Claude|OpenAI|Cursor) /, "");
+
+/** What a model offers, in a line: its context windows and fast mode. */
+function modelLine(m: Model): string | undefined {
+  const parts = [
+    m.contexts[0] && `${m.contexts[0] >= 1_000_000 ? `${m.contexts[0] / 1_000_000}M` : `${m.contexts[0] / 1000}K`} context`,
+    m.fast && "fast mode",
+    m.isNew && "new",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : undefined;
+}
+
+type Page = "model" | "all" | "effort" | "access";
+
+/**
+ * The model sheet, as Claude's app has it: the provider's models in a card, then Effort and
+ * Access rows that open their own choices, a close button and title on top.
+ */
+function ModelSheet({
+  open,
+  page,
+  onPage,
+  onClose,
+  models,
+  model,
+  onModel,
+  efforts,
+  effort,
+  onEffort,
+  permissions,
+  permission,
+  onPermission,
+}: {
+  open: boolean;
+  page: Page;
+  onPage: (page: Page) => void;
+  onClose: () => void;
+  models: Model[];
+  model: string;
+  onModel: (id: string) => void;
+  efforts: boolean;
+  effort?: AgentEffort;
+  onEffort: (effort: AgentEffort) => void;
+  permissions: AgentPermission[];
+  permission?: AgentPermission;
+  onPermission: (permission: AgentPermission) => void;
+}) {
   const c = useColors();
-  return (
+  const insets = useSafeAreaInsets();
+  const choose = (then: () => void) => {
+    void Haptics.selectionAsync();
+    then();
+  };
+  const card = [styles.card, { backgroundColor: c.surface }];
+  const option = (key: string, label: string, line: string | undefined, chosen: boolean, onPress: () => void, last: boolean) => (
+    <Pressable
+      key={key}
+      accessibilityRole="radio"
+      accessibilityState={{ selected: chosen }}
+      onPress={() => choose(onPress)}
+      style={({ pressed }) => [styles.option, pressed && { backgroundColor: c.hover }]}
+    >
+      <View style={[styles.optionBody, !last && { borderBottomColor: c.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <T style={{ fontSize: 17 }}>{label}</T>
+          {!!line && (
+            <T muted style={{ fontSize: 14, lineHeight: 19 }}>
+              {line}
+            </T>
+          )}
+        </View>
+        {chosen && <Icon icon={Check} size={20} color={c.accent} />}
+      </View>
+    </Pressable>
+  );
+  const link = (label: string, value: string, onPress: () => void) => (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
-      hitSlop={6}
-      style={({ pressed }) => [styles.pill, pressed && { backgroundColor: c.selected }]}
+      style={({ pressed }) => [...card, styles.link, pressed && { backgroundColor: c.hover }]}
     >
-      {icon && <Icon icon={icon} size={14} color={c.mutedForeground} />}
-      <Text numberOfLines={1} style={[styles.pillText, { color: c.mutedForeground }]}>
-        {label}
-      </Text>
-      <Icon icon={ChevronDown} size={13} color={c.faintForeground} />
+      <T style={{ fontSize: 17, flex: 1 }}>{label}</T>
+      <T muted style={{ fontSize: 16 }}>
+        {value}
+      </T>
+      <Icon icon={ChevronRight} size={17} color={c.faintForeground} />
     </Pressable>
+  );
+  const title = { model: "Select model", all: "More models", effort: "Effort", access: "Access" }[page];
+  // The first four, as Claude's sheet lists them, and the chosen one if it's further down.
+  const first = models.filter((m, i) => i < 4 || m.id === model);
+  const list = (shown: Model[]) => (
+    <View style={card}>
+      {shown.map((m, i) =>
+        option(m.id || "default", shortName(m.name), modelLine(m), m.id === model, () => {
+          onModel(m.id);
+          onClose();
+        }, i === shown.length - 1),
+      )}
+    </View>
+  );
+  return (
+    <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel="Close" />
+      <View style={[styles.sheet, { backgroundColor: c.sidebar, paddingBottom: insets.bottom + 12 }]}>
+        <View style={[styles.grabber, { backgroundColor: c.border }]} />
+        <View style={styles.sheetHead}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={page === "model" ? "Close" : "Back"}
+            onPress={() => (page === "model" ? onClose() : onPage("model"))}
+            style={[styles.close, { backgroundColor: c.surface, borderColor: c.border }]}
+          >
+            <Icon icon={page === "model" ? X : ChevronLeft} size={20} color={c.foreground} />
+          </Pressable>
+          <T style={{ fontSize: 17, fontWeight: "600" }}>{title}</T>
+          <View style={{ width: 40 }} />
+        </View>
+        <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ gap: 14, paddingHorizontal: 16 }}>
+          {page === "model" && (
+            <>
+              {list(first)}
+              {efforts &&
+                effort &&
+                link("Effort", effortLevels.find((l) => l.value === effort)?.name ?? effort, () => onPage("effort"))}
+              {permission && link("Access", accessLevels[permission].label, () => onPage("access"))}
+              {models.length > first.length && link("More models", "", () => onPage("all"))}
+            </>
+          )}
+          {page === "all" && list(models)}
+          {page === "effort" && (
+            <View style={card}>
+              {effortLevels.map((l, i) =>
+                option(l.value, l.name, l.blurb, l.value === effort, () => {
+                  onEffort(l.value);
+                  onPage("model");
+                }, i === effortLevels.length - 1),
+              )}
+            </View>
+          )}
+          {page === "access" && (
+            <View style={card}>
+              {permissions.map((p, i) =>
+                option(p, accessLevels[p].label, accessLevels[p].description, p === permission, () => {
+                  onPermission(p);
+                  onPage("model");
+                }, i === permissions.length - 1),
+              )}
+            </View>
+          )}
+        </ScrollView>
+      </View>
+    </Modal>
   );
 }
 
@@ -190,7 +314,7 @@ export function Composer({
   const [effort, setEffort] = useState<AgentEffort>();
   const [permission, setPermission] = useState<AgentPermission>();
   const [attached, setAttached] = useState<Attached[]>([]);
-  const [sheet, setSheet] = useState<"model" | "effort" | "access">();
+  const [sheet, setSheet] = useState<Page>();
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const connected = !!computer?.connected;
@@ -333,7 +457,7 @@ export function Composer({
           multiline
           value={text}
           onChangeText={onDraft}
-          placeholder={working ? "Steer, or queue a follow-up" : "Ask for follow-up changes"}
+          placeholder={working ? "Steer, or queue a follow-up" : "Reply"}
           placeholderTextColor={c.faintForeground}
           style={[styles.input, { color: c.foreground }]}
         />
@@ -343,27 +467,28 @@ export function Composer({
             accessibilityLabel="Attach"
             hitSlop={8}
             onPress={attach}
-            style={[styles.round, { borderColor: c.border }]}
+            style={({ pressed }) => [styles.round, { backgroundColor: pressed ? c.hover : c.selected }]}
           >
-            <Icon icon={Plus} size={17} color={c.mutedForeground} />
+            <Icon icon={Plus} size={18} color={c.foreground} />
           </Pressable>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ alignItems: "center", gap: 2 }}>
-            {changes && <Pill label={modelName} onPress={() => setSheet("model")} />}
-            {changes && offer.efforts && shownEffort && (
-              <Pill
-                icon={Brain}
-                label={effortLevels.find((l) => l.value === shownEffort)?.name ?? shownEffort}
-                onPress={() => setSheet("effort")}
-              />
-            )}
-            {changes && shownAccess && (
-              <Pill
-                icon={accessIcons[shownAccess]}
-                label={accessLevels[shownAccess].label}
-                onPress={() => setSheet("access")}
-              />
-            )}
-          </ScrollView>
+          {changes && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Model: ${modelName}`}
+              onPress={() => setSheet("model")}
+              style={({ pressed }) => [styles.pill, { backgroundColor: pressed ? c.hover : c.selected }]}
+            >
+              <Text numberOfLines={1} style={[styles.pillText, { color: c.foreground }]}>
+                {shortName(modelName)}
+                {offer.efforts && shownEffort && (
+                  <Text style={{ color: c.mutedForeground }}>
+                    {" "}
+                    {effortLevels.find((l) => l.value === shownEffort)?.name ?? shownEffort}
+                  </Text>
+                )}
+              </Text>
+            </Pressable>
+          )}
           <View style={{ flex: 1 }} />
           {working && !ready && (
             <Pressable
@@ -403,41 +528,27 @@ export function Composer({
           )}
         </View>
       </View>
-      <Choices
-        title="Model"
-        open={sheet === "model"}
-        value={shownModel}
-        options={offer.models.map((m) => ({ value: m.id, label: m.name }))}
-        onChoose={setModel}
+      <ModelSheet
+        open={!!sheet}
+        page={sheet ?? "model"}
+        onPage={setSheet}
         onClose={() => setSheet(undefined)}
-      />
-      <Choices
-        title="Reasoning"
-        open={sheet === "effort"}
-        value={shownEffort}
-        options={effortLevels.map((l) => ({ value: l.value, label: l.name, description: l.blurb }))}
-        onChoose={setEffort}
-        onClose={() => setSheet(undefined)}
-      />
-      <Choices
-        title="Access"
-        open={sheet === "access"}
-        value={shownAccess}
-        options={offer.permissions.map((p) => ({
-          value: p,
-          label: accessLevels[p].label,
-          description: accessLevels[p].description,
-          icon: accessIcons[p],
-        }))}
-        onChoose={setPermission}
-        onClose={() => setSheet(undefined)}
+        models={offer.models}
+        model={shownModel}
+        onModel={setModel}
+        efforts={offer.efforts}
+        effort={shownEffort}
+        onEffort={setEffort}
+        permissions={offer.permissions}
+        permission={shownAccess}
+        onPermission={setPermission}
       />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  box: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 22, paddingTop: 4, paddingBottom: 8 },
+  box: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 26, paddingTop: 6, paddingBottom: 10 },
   strip: { gap: 8, paddingHorizontal: 12, paddingTop: 8 },
   thumb: { width: 56, height: 56, borderRadius: 10, borderWidth: StyleSheet.hairlineWidth },
   fileChip: {
@@ -459,27 +570,34 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  input: { fontSize: 16, minHeight: 40, maxHeight: 160, paddingHorizontal: 14, paddingTop: 10 },
-  bar: { flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 8, paddingTop: 4 },
-  round: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+  input: { fontSize: 17, minHeight: 44, maxHeight: 160, paddingHorizontal: 16, paddingTop: 10 },
+  bar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingTop: 6 },
+  scrim: { flex: 1, backgroundColor: "rgba(0, 0, 0, 0.3)" },
+  sheet: { borderTopLeftRadius: 30, borderTopRightRadius: 30, paddingTop: 8 },
+  grabber: { alignSelf: "center", width: 40, height: 5, borderRadius: 3, marginBottom: 8 },
+  sheetHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+  },
+  close: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: "center",
     justifyContent: "center",
   },
-  pill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 8,
-    maxWidth: 170,
-  },
-  pillText: { fontSize: 13, fontWeight: "500", flexShrink: 1 },
+  card: { borderRadius: 20, overflow: "hidden" },
+  option: { paddingLeft: 18 },
+  optionBody: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, paddingRight: 18 },
+  link: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 18, paddingVertical: 16 },
+  round: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
+  pill: { height: 38, borderRadius: 19, paddingHorizontal: 16, justifyContent: "center", maxWidth: 230 },
+  pillText: { fontSize: 15 },
   steer: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 },
-  send: { width: 34, height: 34, borderRadius: 17, alignItems: "center", justifyContent: "center" },
+  send: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
 });
 

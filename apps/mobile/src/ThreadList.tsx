@@ -25,9 +25,23 @@ import {
   View,
 } from "react-native";
 
-import type { AgentRun, Thread } from "../../desktop/src/protocol/generated/protocol";
-import { attentionOf, snoozeChoices, snoozed, type Attention } from "../../desktop/src/renderer/attention";
-import { asksOf, groupOf, noRepo, threadProjects } from "../../desktop/src/renderer/threads";
+import * as Lucide from "lucide-react-native";
+
+import type { AgentRun, Project, Thread } from "../../desktop/src/protocol/generated/protocol";
+import {
+  attentionOf,
+  projectAttention,
+  snoozeChoices,
+  snoozed,
+  type Attention,
+} from "../../desktop/src/renderer/attention";
+import {
+  asksOf,
+  groupOf,
+  noRepo,
+  projectRuns,
+  threadProjects,
+} from "../../desktop/src/renderer/threads";
 import { Choices, type Choice } from "./Choices";
 import { useFleet, type Computer } from "./fleet";
 import { ago, useNav } from "./nav";
@@ -45,6 +59,89 @@ interface Entry {
 }
 
 const when = (t: Thread) => t.lastPromptAt ?? t.createdAt;
+
+/** A Parallax Project (0042) as the list shows it: its coordinator, threads, and attention. */
+interface ProjectEntry {
+  computer: Computer;
+  project: Project;
+  attention: Attention;
+  threads: number;
+  working: number;
+  at: string;
+}
+
+function projectsOf(computers: Computer[]): ProjectEntry[] {
+  return computers.flatMap((computer) => {
+    const { state } = computer.view;
+    const inProject = threadProjects(state);
+    return state.projects.map((project) => {
+      const runs = projectRuns(state, project.id, inProject);
+      return {
+        computer,
+        project,
+        attention: projectAttention(runs, (id) => asksOf(state, id)),
+        threads: runs.filter((r) => r.id !== project.coordinator).length,
+        working: runs.filter((r) => r.status === "running" || r.status === "starting").length,
+        at: runs.reduce((latest, r) => (r.updatedAt > latest ? r.updatedAt : latest), ""),
+      };
+    });
+  });
+}
+
+/** A Project's icon: its lucide glyph by name (`rocket` is Rocket), or a kanban board. */
+function ProjectIcon({ project, color }: { project: Project; color: string }) {
+  const name = (project.icon?.name ?? "").replace(/(^|-)(\w)/g, (_, __, ch: string) => ch.toUpperCase());
+  const Glyph = (Lucide as unknown as Record<string, LucideIcon | undefined>)[name] ?? Lucide.FolderKanban;
+  return <Icon icon={Glyph} size={16} color={color} />;
+}
+
+function ProjectRow({ entry, many }: { entry: ProjectEntry; many: boolean }) {
+  const c = useColors();
+  const nav = useNav();
+  const { project, computer, attention, threads, working } = entry;
+  const coordinator = project.coordinator;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={project.name}
+      disabled={!coordinator}
+      onPress={() => coordinator && nav.navigate("Thread", { hostId: computer.machine.id, runId: coordinator })}
+      style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
+    >
+      <View style={styles.line}>
+        <View style={[styles.projectIcon, { backgroundColor: c.selected }]}>
+          <ProjectIcon project={project} color={c.accent} />
+        </View>
+        <View style={{ flex: 1, gap: 2 }}>
+          <View style={styles.line}>
+            <T numberOfLines={1} style={{ flex: 1, fontWeight: attention === "needsYou" ? "600" : "500" }}>
+              {project.name}
+            </T>
+            {attention === "settled" ? (
+              !!entry.at && (
+                <T faint style={styles.small}>
+                  {ago(entry.at)}
+                </T>
+              )
+            ) : (
+              <AttentionBadge attention={attention} />
+            )}
+          </View>
+          <T muted numberOfLines={1} style={styles.small}>
+            {[
+              many && computer.machine.name,
+              `${threads} thread${threads === 1 ? "" : "s"}`,
+              working > 0 && `${working} working`,
+              !coordinator && "Not started",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </T>
+        </View>
+      </View>
+    </Pressable>
+  );
+}
 
 function entriesOf(computers: Computer[]): Entry[] {
   return computers.flatMap((computer) => {
@@ -148,7 +245,7 @@ function ThreadRow({ entry, many }: { entry: Entry; many: boolean }) {
 
 type Scope = "all" | `computer:${string}` | `repo:${string}`;
 type GroupBy = "day" | "repo";
-type DrawerName = "Working" | "Snoozed" | "Archived";
+type DrawerName = "Projects" | "Working" | "Snoozed" | "Archived";
 
 export function ThreadList() {
   const c = useColors();
@@ -184,6 +281,10 @@ export function ThreadList() {
   const pinned = rest.filter((e) => e.thread.pinned);
   const listed = rest.filter((e) => !e.thread.pinned);
 
+  const projects = projectsOf(computers.filter((m) => scope === "all" || scope === `computer:${m.machine.id}`))
+    .filter((p) => words.every((w) => `${p.project.name} ${p.computer.machine.name}`.toLowerCase().includes(w)))
+    .sort((a, b) => b.at.localeCompare(a.at));
+
   const groups = new Map<string, Entry[]>();
   for (const e of listed) {
     const key =
@@ -192,10 +293,15 @@ export function ThreadList() {
         : dayOf(when(e.thread), now);
     groups.set(key, [...(groups.get(key) ?? []), e]);
   }
-  const drawer = (name: DrawerName, data: Entry[]) => ({ title: name, data, drawer: true });
+  const drawer = (name: DrawerName, data: Entry[]) => ({ title: name, data: threadRows(data), drawer: true });
+  type Row = { kind: "thread"; entry: Entry } | { kind: "project"; entry: ProjectEntry };
+  const threadRows = (list: Entry[]): Row[] => list.map((entry) => ({ kind: "thread", entry }));
   const sections = [
-    ...(pinned.length ? [{ title: "Pinned", data: pinned, drawer: false }] : []),
-    ...[...groups].map(([title, data]) => ({ title, data, drawer: false })),
+    ...(projects.length && !scope.startsWith("repo:")
+      ? [{ title: "Projects", data: projects.map((entry): Row => ({ kind: "project", entry })), drawer: true }]
+      : []),
+    ...(pinned.length ? [{ title: "Pinned", data: threadRows(pinned), drawer: false }] : []),
+    ...[...groups].map(([title, data]) => ({ title, data: threadRows(data), drawer: false })),
     ...(working.length ? [drawer("Working", working)] : []),
     ...(snoozedList.length ? [drawer("Snoozed", snoozedList)] : []),
     ...(archived.length ? [drawer("Archived", archived)] : []),
@@ -275,15 +381,21 @@ export function ThreadList() {
       if (!next.delete(title)) next.add(title);
       return next;
     });
-  const drawerIcons: Record<string, LucideIcon> = { Snoozed: Clock, Archived: Archive };
+  const drawerIcons: Record<string, LucideIcon> = {
+    Projects: Lucide.FolderKanban,
+    Snoozed: Clock,
+    Archived: Archive,
+  };
 
   return (
     <>
       <SectionList
-        style={{ backgroundColor: c.background }}
+        style={{ backgroundColor: "transparent" }}
         contentInsetAdjustmentBehavior="automatic"
         sections={sections}
-        keyExtractor={(e) => `${e.computer.machine.id}:${e.thread.id}`}
+        keyExtractor={(r) =>
+          `${r.entry.computer.machine.id}:${r.kind === "thread" ? r.entry.thread.id : r.entry.project.id}`
+        }
         stickySectionHeadersEnabled={false}
         refreshControl={
           <RefreshControl
@@ -362,7 +474,13 @@ export function ThreadList() {
             </T>
           )
         }
-        renderItem={({ item }) => <ThreadRow entry={item} many={many} />}
+        renderItem={({ item }) =>
+          item.kind === "project" ? (
+            <ProjectRow entry={item.entry} many={many} />
+          ) : (
+            <ThreadRow entry={item.entry} many={many} />
+          )
+        }
         ListEmptyComponent={
           <View style={styles.empty}>
             {loading || offline.length === computers.length ? (
@@ -423,6 +541,7 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+  projectIcon: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center", marginRight: 4 },
   row: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, gap: 3 },
   line: { flexDirection: "row", alignItems: "center", gap: 6 },
   small: { fontSize: 13, lineHeight: 18 },
