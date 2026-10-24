@@ -148,6 +148,15 @@ const click = async (text: string) => {
   await act(async () => button(text)!.click());
   await settle();
 };
+/** The open editor for the file titled `title`. */
+const editor = (title: string) =>
+  document.querySelector<HTMLTextAreaElement>(`textarea[aria-label="Edit ${title}"]`);
+/** Replaces a text box's text, as typing does. */
+const typeInto = (box: HTMLTextAreaElement, text: string) =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
 
@@ -275,17 +284,8 @@ test("an edited proposal saves its new text, then goes", async () => {
   bodies = { "proposals/use-vitest.md": "Tests run on Vitest." };
   await render();
   await click("Edit");
-  const box = document.querySelector<HTMLTextAreaElement>(
-    'textarea[aria-label="Edit Use Vitest"]',
-  )!;
-  expect(box.value).toBe("Tests run on Vitest.");
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
-      box,
-      "Tests run on Vitest 4.",
-    );
-    box.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  expect(editor("Use Vitest")!.value).toBe("Tests run on Vitest.");
+  typeInto(editor("Use Vitest")!, "Tests run on Vitest 4.");
   await click("Save");
   expect(calls("memory/write")).toEqual([
     {
@@ -296,6 +296,44 @@ test("an edited proposal saves its new text, then goes", async () => {
     },
   ]);
   expect(calls("memory/delete")).toEqual([{ scope: repo, path: "proposals/use-vitest.md" }]);
+});
+
+test("a failed save of an edited proposal keeps its editor and text, and says why", async () => {
+  lists = {
+    "r-1": [file("proposals/use-vitest.md", { kind: "convention", title: "Use Vitest" })],
+  };
+  bodies = { "proposals/use-vitest.md": "Tests run on Vitest." };
+  failing = new Set(["memory/write"]);
+  await render();
+  await click("Edit");
+  typeInto(editor("Use Vitest")!, "Tests run on Vitest 4.");
+  await click("Save");
+  expect(notice()).toBe("memory/write failed");
+  expect(editor("Use Vitest")!.value).toBe("Tests run on Vitest 4.");
+  expect(calls("memory/delete")).toEqual([]);
+});
+
+test("an edited proposal with nowhere to save says so, and the notice stays", async () => {
+  lists = { "r-1": [file("proposals/loose.md", { title: "Loose note" })] };
+  await render();
+  await click("Edit");
+  await click("Save");
+  expect(notice()).toBe("This proposal has no kind.");
+  expect(editor("Loose note")).not.toBeNull();
+});
+
+test("Escape cancels an edit, and focus goes back to its Edit button", async () => {
+  lists = { "p-1": [sqlite()] };
+  await render();
+  await click("Keep SQLite");
+  await click("Edit");
+  const box = editor("Keep SQLite")!;
+  await act(async () => {
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  await settle();
+  expect(editor("Keep SQLite")).toBeNull();
+  expect(document.activeElement).toBe(button("Edit"));
 });
 
 test("savedAs: You, the folder without a repo entry, the entry it replaces, and a coordinator's brief", () => {

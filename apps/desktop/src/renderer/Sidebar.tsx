@@ -2045,11 +2045,10 @@ function Confetti() {
   );
 }
 
-/** The rest of Delete Project's warning, after "“name” goes for good", for a Project of `agents` runs. */
 /**
  * A Project favorite's status (0083): whether any of its runs works, and how many wait on the
  * user, counted from the approvals the host reports. Questions a coordinator escalates live in the
- * open Project's inbox only, so they count once plxd sends each run's state (PLX-939).
+ * open Project's inbox only, so they count once plxd sends each run's state (PLX-967).
  */
 export function projectStatus(state: ThreadsState, runs: readonly AgentRun[]) {
   return {
@@ -2058,6 +2057,7 @@ export function projectStatus(state: ThreadsState, runs: readonly AgentRun[]) {
   };
 }
 
+/** The rest of Delete Project's warning, after "“name” goes for good", for a Project of `agents` runs. */
 function projectLoss(agents: number): string {
   if (agents === 0) return ".";
   if (agents === 1)

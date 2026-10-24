@@ -1,5 +1,5 @@
 import { CircleAlert, Clock, FileText, Lightbulb } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
@@ -244,21 +244,59 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
 
 // A section's heading, and its rows grouped in one rounded list with hairlines between them, as
 // the Project tab's are.
-const heading =
-  "flex items-baseline px-1 pt-6 pb-2 text-[11px] font-medium tracking-[0.08em] text-faint-foreground uppercase";
 const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
 
-/** A section's heading: its label, how many rows it has, and a fact at its end. */
-function Heading({ label, count, end }: { label: string; count?: number; end?: string }) {
+/**
+ * A section's heading: its label and how many rows it has, then at its end a fact and `children`,
+ * such as a control for the section.
+ */
+function Heading({
+  label,
+  count,
+  end,
+  children,
+}: {
+  label: string;
+  count?: number;
+  end?: string;
+  children?: ReactNode;
+}) {
   return (
-    <h3 className={heading}>
-      {label}
-      {count !== undefined && <span className="ml-1.5 tracking-normal tabular-nums">{count}</span>}
-      {end && (
-        <span className="ml-auto text-[11.5px] font-normal tracking-normal normal-case">{end}</span>
+    <div className="flex items-baseline gap-2 px-1 pt-6 pb-2">
+      <h3 className="text-[11px] font-medium tracking-[0.08em] text-faint-foreground uppercase">
+        {label}
+        {count !== undefined && (
+          <span className="ml-1.5 tracking-normal tabular-nums">{count}</span>
+        )}
+      </h3>
+      {(end || children) && (
+        <span className="ml-auto flex items-baseline gap-2 text-[11.5px] text-faint-foreground">
+          {end}
+          {children}
+        </span>
       )}
-    </h3>
+    </div>
   );
+}
+
+/**
+ * Editing state for an editor that returns focus to the control that opened it, the `opener`,
+ * once it closes.
+ */
+function useEditing() {
+  const [editing, setEditing] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (editing || !refocus.current) return;
+    refocus.current = false;
+    opener.current?.focus();
+  }, [editing]);
+  const close = () => {
+    refocus.current = true;
+    setEditing(false);
+  };
+  return { editing, open: () => setEditing(true), close, opener };
 }
 
 /**
@@ -378,8 +416,8 @@ const field =
   "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
 
 /**
- * The Project's brief, in place: its text, which opens to edit on a click, under a heading with
- * the day it was edited. With none yet, a button opens an empty one to write.
+ * The Project's brief, in place: its text, under a heading with the day it was edited and an Edit
+ * button. With none yet, a button opens an empty one to write.
  */
 function Brief({
   project,
@@ -394,7 +432,7 @@ function Brief({
 }) {
   const [content, setContent] = useState<string>();
   const [error, setError] = useState<string>();
-  const [editing, setEditing] = useState(false);
+  const { editing, open, close, opener } = useEditing();
   // Read again whenever the listed file changes, since it's a new object for each list.
   useEffect(() => {
     if (!file) return;
@@ -415,42 +453,45 @@ function Brief({
 
   return (
     <section aria-label="Brief">
-      <Heading label="Brief" end={edited} />
+      <Heading label="Brief" end={edited}>
+        {file && !editing && (
+          <button
+            ref={opener}
+            type="button"
+            aria-label="Edit the brief"
+            disabled={content === undefined}
+            onClick={open}
+            className="rounded px-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            Edit
+          </button>
+        )}
+      </Heading>
       {editing ? (
         <Editor
           label="Brief"
           initial={content ?? ""}
-          onCancel={() => setEditing(false)}
+          onCancel={close}
           onSave={async (text) => {
             const failed = await calls.write(scope, "brief.md", text, brief);
             if (!failed) {
-              setEditing(false);
+              close();
               onChanged();
             }
             return failed;
           }}
         />
       ) : file ? (
-        <div
-          role="button"
-          tabIndex={0}
-          aria-label="Edit the brief"
-          onClick={() => content !== undefined && setEditing(true)}
-          onKeyDown={(e) => {
-            if (e.key !== "Enter" && e.key !== " ") return;
-            e.preventDefault();
-            if (content !== undefined) setEditing(true);
-          }}
-          className="context-doc -mx-1 cursor-text rounded-lg border border-transparent px-3 py-1.5 text-[13px] hover:border-border focus-visible:border-ring focus-visible:outline-none"
-        >
+        <div className="context-doc px-1 text-[13px]">
           {content !== undefined && <MarkdownText text={content} />}
         </div>
       ) : (
         <button
+          ref={opener}
           type="button"
           onClick={() => {
             setContent("");
-            setEditing(true);
+            open();
           }}
           className="px-1 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
@@ -475,8 +516,9 @@ type RowKind = "proposal" | "entry" | "review" | "document";
  * changed). A decision waits under the line: a proposal's Accept, Edit, and Dismiss, or Keep and
  * Retire for one to review, where Keep writes it over itself. A click opens its text and Edit, and
  * for an entry or document Promote and Delete. Promote and Accept ask before replacing a file
- * already at their target. Entries and proposals show as plain text, so an agent's link can't
- * hide where it goes.
+ * already at their target. An edited proposal saves its new text there, its editor staying open
+ * until that succeeds. Entries and proposals show as plain text, so an agent's link can't hide
+ * where it goes.
  */
 function MemoryRow({
   file,
@@ -504,7 +546,7 @@ function MemoryRow({
   const title = kind === "document" ? fileName(file.path) : (file.title ?? fileName(file.path));
   const [open, setOpen] = useState(false);
   const [content, setContent] = useState<string>();
-  const [editing, setEditing] = useState(false);
+  const { editing, open: startEditing, close: stopEditing, opener } = useEditing();
   const [busy, setBusy] = useState(false);
   // Why the file couldn't be read, shown in its place.
   const [error, setError] = useState<string>();
@@ -533,6 +575,7 @@ function MemoryRow({
     if (failed) changeFailed(failed);
     else dismiss("memory");
     onChanged();
+    return failed;
   };
   const move = (to: Target | undefined, done: string, text?: string) => {
     if (!to) return changeFailed("This proposal has no kind.");
@@ -576,7 +619,8 @@ function MemoryRow({
         ? dayLabel(Date.parse(file.modifiedAt), Date.now(), { month: "short", day: "numeric" })
         : undefined;
 
-  const actions = replacing ? (
+  // An edit stays open under it until the move succeeds, so a failure keeps the edited text.
+  const replace = replacing && (
     <div role="group" aria-label="Replace" className="mt-2">
       <p className="text-[12.5px] text-muted-foreground">
         {scopeLabels[replacing.to.scope.kind]} already has {replacing.to.path}. Replace it with this
@@ -586,9 +630,11 @@ function MemoryRow({
         <button
           type="button"
           disabled={busy}
-          onClick={() => {
+          onClick={async () => {
+            const { to, done, content: text } = replacing;
             setReplacing(undefined);
-            void act(() => calls.move(file, replacing.to, replacing.done, replacing.content));
+            const failed = await act(() => calls.move(file, to, done, text));
+            if (!failed && editing) stopEditing();
           }}
           className={outlineButton}
         >
@@ -599,6 +645,9 @@ function MemoryRow({
         </button>
       </div>
     </div>
+  );
+  const actions = replacing ? (
+    replace
   ) : proposal ? (
     <div className="mt-2 flex flex-wrap gap-1.5">
       <button
@@ -610,11 +659,12 @@ function MemoryRow({
         Accept
       </button>
       <button
+        ref={opener}
         type="button"
         disabled={busy}
         onClick={() => {
           setOpen(true);
-          setEditing(true);
+          startEditing();
         }}
         className={quietButton}
       >
@@ -649,9 +699,10 @@ function MemoryRow({
       </button>
       {open && (
         <button
+          ref={opener}
           type="button"
           disabled={busy || content === undefined}
-          onClick={() => setEditing(true)}
+          onClick={startEditing}
           className={quietButton}
         >
           Edit
@@ -662,9 +713,10 @@ function MemoryRow({
     open && (
       <div className="mt-2 flex flex-wrap gap-1.5">
         <button
+          ref={opener}
           type="button"
           disabled={busy || content === undefined}
-          onClick={() => setEditing(true)}
+          onClick={startEditing}
           className={outlineButton}
         >
           Edit
@@ -728,21 +780,34 @@ function MemoryRow({
             <Editor
               label={title}
               initial={content}
-              onCancel={() => setEditing(false)}
+              onCancel={() => {
+                setReplacing(undefined);
+                stopEditing();
+              }}
               onSave={async (text) => {
                 if (proposal) {
-                  setEditing(false);
-                  move(savedAs(file, repo), "Saved", text);
-                  return undefined;
+                  // The editor stays open with the text until the move succeeds.
+                  const to = savedAs(file, repo);
+                  if (!to) return "This proposal has no kind.";
+                  if (taken(to)) {
+                    setReplacing({ to, done: "Saved", content: text });
+                    return undefined;
+                  }
+                  const failed = await calls.move(file, to, "Saved", text);
+                  // A failed delete still wrote, so the list reloads either way.
+                  onChanged();
+                  if (!failed) stopEditing();
+                  return failed;
                 }
                 const failed = await calls.write(file.scope, file.path, text, file);
                 if (!failed) {
-                  setEditing(false);
+                  stopEditing();
                   onChanged();
                 }
                 return failed;
               }}
             />
+            {replace}
           </div>
         ) : (
           <>
@@ -774,7 +839,10 @@ function MemoryRow({
 const changeFailed = (body: string) =>
   notify({ key: "memory", tone: "error", title: "Couldn't change the memory", body });
 
-/** A text box with Save and Cancel, saying why in a notification when the save fails. */
+/**
+ * A text box with Save and Cancel, saying why in a notification when the save fails, which keeps
+ * the text. Escape cancels.
+ */
 function Editor({
   label,
   initial,
@@ -807,6 +875,14 @@ function Editor({
         value={text}
         disabled={busy}
         onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          // Escape cancels, unless an input method is composing; it stops here, so it doesn't
+          // also close the panel.
+          if (e.key !== "Escape" || e.nativeEvent.isComposing) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onCancel();
+        }}
         className={`${field} font-mono text-[12px]`}
       />
       <div className="mt-1 flex justify-end gap-1.5">

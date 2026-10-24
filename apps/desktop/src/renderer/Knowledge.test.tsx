@@ -67,7 +67,10 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
   if (method === "memory/list")
     return ok({ files: (params["scope"] as { kind: string }).kind === "project" ? memory : [] });
   if (method === "memory/read")
-    return ok({ file: file(params["path"] as string), content: "Ship search by Friday." });
+    return ok({
+      file: file(params["path"] as string),
+      content: "Ship search by [Friday](https://example.com/spec).",
+    });
   if (method === "providers/list") return ok({ providers });
   return ok({ run: coordinator });
 });
@@ -297,8 +300,17 @@ test("the head counts entries and documents, and the brief shows in place and ed
   );
   const brief = section("Brief");
   expect(brief.textContent).toContain("Edited Oct 1");
-  await click(brief.querySelector('[aria-label="Edit the brief"]'));
-  expect(brief.querySelector("textarea")!.value).toBe("Ship search by Friday.");
+  // The brief is content, its links working, with its own Edit button.
+  expect(brief.querySelector('a[href="https://example.com/spec"]')).not.toBeNull();
+  expect(brief.querySelector('[role="button"]')).toBeNull();
+  const edit = brief.querySelector<HTMLButtonElement>('button[aria-label="Edit the brief"]');
+  await click(edit);
+  expect(brief.querySelector("textarea")!.value).toBe(
+    "Ship search by [Friday](https://example.com/spec).",
+  );
+  await click([...brief.querySelectorAll("button")].find((b) => b.textContent === "Cancel"));
+  expect(brief.querySelector("textarea")).toBeNull();
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Edit the brief");
 });
 
 /** A provider plxd lists, which runs a Project's coordinator. */
