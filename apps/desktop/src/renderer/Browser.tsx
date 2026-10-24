@@ -1,19 +1,29 @@
-import type { DidFailLoadEvent, PageTitleUpdatedEvent, WebviewTag } from "electron";
+import type {
+  DidFailLoadEvent,
+  FoundInPageEvent,
+  PageTitleUpdatedEvent,
+  WebviewTag,
+} from "electron";
 import {
   ArrowLeft,
   ArrowRight,
   Bookmark,
   Bot,
   Check,
+  ChevronDown,
+  ChevronUp,
   Code,
   Globe,
+  Minus,
   Plus,
+  Printer,
   RectangleHorizontal,
   RotateCw,
   Rows2,
   Search,
   TriangleAlert,
   X,
+  ZoomIn,
 } from "lucide-react";
 import {
   useCallback,
@@ -29,13 +39,13 @@ import { createPortal } from "react-dom";
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
-import { BookmarksBar, BookmarkStar, bookmarksBar } from "./Bookmarks";
+import { bookmarks, BookmarksBar, BookmarkStar, bookmarksBar, toggled } from "./Bookmarks";
 import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
 import { memory, stored } from "./stored";
-import { IconButton, menuHeading, menuItem, MenuOption } from "./ui";
+import { IconButton, menuHeading, menuItem, MenuOption, shortcut } from "./ui";
 
 /** Google's results page for `query`. */
 export const searchUrl = (query: string) =>
@@ -81,9 +91,25 @@ export const addressBox =
 export const addressInput =
   "h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint-foreground";
 
+/** Whether a key press holds the OS's Mod key: Cmd on macOS, Ctrl elsewhere, and not the other. */
+const modKey = (e: { metaKey: boolean; ctrlKey: boolean }) =>
+  window.parallax.platform === "darwin" ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+
 /** A url as the address bar shows it while unfocused: without its scheme or a lone trailing slash. */
 export const shortUrl = (url: string) =>
   url.replace(/^https?:\/\//, "").replace(/^([^/?#]*)\/$/, "$1");
+
+// Chrome's page zoom levels.
+const ZOOMS = [0.25, 0.33, 0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3, 4, 5];
+
+/** The zoom after `factor`, one of Chrome's levels in `direction`, staying at either end. */
+export function nextZoom(factor: number, direction: 1 | -1): number {
+  const next =
+    direction > 0
+      ? ZOOMS.find((z) => z > factor + 0.001)
+      : ZOOMS.findLast((z) => z < factor - 0.001);
+  return next ?? factor;
+}
 
 /** How a browser lays out its bar, as Helium does (PLX-966): all in one row, or tabs over a toolbar. */
 export type BrowserLayout = "compact" | "classic";
@@ -138,6 +164,9 @@ interface OwnTab {
   id: number;
   load?: { url: string };
   restored?: boolean;
+  // Opened by the user, by a shortcut, a link, or a bookmark, so its page takes focus once it
+  // loads; an agent's preview doesn't take it from the composer.
+  focus?: boolean;
   url?: string;
   title?: string;
   icon?: string;
@@ -250,14 +279,14 @@ export function Browser({
     setTabs((all) => all.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   // A new tab after `after`, or at the end, which becomes the current one. An empty new tab
   // reuses a blank one, so they don't pile up.
-  const newTab = (url?: string, after?: number) => {
+  const newTab = (url?: string, after?: number, focus = true) => {
     const blank = !url && tabs.find((t) => !t.url && !t.load);
     if (blank) {
       setCurrent(blank.id);
       setAgentTab(undefined);
       return;
     }
-    const tab = ownTab(url);
+    const tab = { ...ownTab(url), focus };
     setTabs((all) => {
       const at = all.findIndex((t) => t.id === after);
       return at < 0 ? [...all, tab] : all.toSpliced(at + 1, 0, tab);
@@ -266,8 +295,17 @@ export function Browser({
     setAgentTab(undefined);
   };
   // Closing the last tab leaves a blank one, as the panel has no window to close.
+  // The pages of the tabs closed here, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
+  const closed = useRef<string[]>([]);
+  const reopen = () => {
+    const page = closed.current.at(-1);
+    closed.current = closed.current.slice(0, -1);
+    if (page) newTab(page, current);
+  };
   const close = (id: number) => {
     const at = tabs.findIndex((t) => t.id === id);
+    const page = tabs[at]?.url;
+    if (page) closed.current = [...closed.current.slice(-24), page];
     const rest = tabs.filter((t) => t.id !== id);
     if (!rest.length) rest.push(ownTab());
     setTabs(rest);
@@ -295,9 +333,9 @@ export function Browser({
     else if (page?.url !== undefined) {
       const tab = tabs.find((t) => t.id === current);
       if (tab && !tab.url && !tab.load) {
-        update(tab.id, { load: { url: page.url } });
+        update(tab.id, { load: { url: page.url }, focus: false });
         setAgentTab(undefined);
-      } else newTab(page.url, current);
+      } else newTab(page.url, current, false);
     }
   }, [page]);
 
@@ -356,7 +394,17 @@ export function Browser({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // Cmd/Ctrl+Shift+T anywhere in the browser's own UI too, such as a blank tab's address bar,
+    // which the page's shortcuts don't reach (links.ts).
+    <div
+      onKeyDown={(e) => {
+        if (modKey(e) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "t") {
+          e.preventDefault();
+          reopen();
+        }
+      }}
+      className="flex min-h-0 flex-1 flex-col"
+    >
       {shownTab && agent && (
         <AgentBrowser
           key={shownTab.tabId}
@@ -374,16 +422,27 @@ export function Browser({
           shown={!shownTab && t.id === current}
           page={t.url ? { url: t.url, title: t.title, icon: t.icon } : undefined}
           load={t.load}
+          focusOnLoad={!!t.focus}
           remoteHost={remoteHost}
           onChange={(patch) => update(t.id, patch)}
           onAsk={(action) => {
+            // Another of the user's tabs, from this one's place: Chrome's tab shortcuts.
+            const at = tabs.indexOf(t);
+            const show = (to: OwnTab | undefined) => {
+              if (!to) return;
+              setCurrent(to.id);
+              setAgentTab(undefined);
+            };
             if (action.kind === "open") newTab(action.url, t.id);
             else if (action.kind === "newTab") newTab();
             else if (action.kind === "closeTab") close(t.id);
-            else if (action.kind === "select") {
-              setCurrent(t.id);
-              setAgentTab(undefined);
-            }
+            else if (action.kind === "select") show(t);
+            else if (action.kind === "nextTab") show(tabs[(at + 1) % tabs.length]);
+            else if (action.kind === "previousTab")
+              show(tabs[(at - 1 + tabs.length) % tabs.length]);
+            else if (action.kind === "tab") show(tabs[action.index]);
+            else if (action.kind === "lastTab") show(tabs.at(-1));
+            else if (action.kind === "reopenTab") reopen();
           }}
         />
       ))}
@@ -439,6 +498,7 @@ export const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
 function Tab({
   scope,
   shown,
+  focusOnLoad,
   page,
   load,
   remoteHost,
@@ -447,6 +507,7 @@ function Tab({
 }: {
   scope?: string;
   shown: boolean;
+  focusOnLoad?: boolean;
   /** The page it shows, for its bookmark star (Bookmarks.tsx). */
   page?: { url: string; title?: string; icon?: string };
   load?: { url: string };
@@ -478,8 +539,58 @@ function Tab({
     setFixed(undefined);
   };
   // The latest callbacks, for the webview's listeners, which mount once per page.
-  const latest = useRef({ onChange, ask });
-  latest.current = { onChange, ask };
+  // Find in page (PLX-969): whether the bar is open, its text, and the match in front of how many.
+  const [finding, setFinding] = useState(false);
+  const [query, setQuery] = useState("");
+  const [matches, setMatches] = useState<{ active: number; total: number }>();
+  const findBar = useRef<HTMLInputElement>(null);
+  const find = (text: string, step?: 1 | -1) => {
+    const el = view.current;
+    if (!el || !src) return;
+    if (!text) {
+      el.stopFindInPage("clearSelection");
+      setMatches(undefined);
+    } else el.findInPage(text, { forward: step !== -1, findNext: step === undefined });
+  };
+  const openFind = () => {
+    setFinding(true);
+    requestAnimationFrame(() => findBar.current?.select());
+  };
+  const closeFind = () => {
+    setFinding(false);
+    setMatches(undefined);
+    view.current?.stopFindInPage("keepSelection");
+  };
+  // The page's zoom, one of Chrome's levels, which Chromium keeps for the page's site.
+  const [zoom, setZoom] = useState(1);
+  const zoomTo = (factor: number) => {
+    view.current?.setZoomFactor(factor);
+    setZoom(factor);
+  };
+  // What the tab does itself of what its page asks: find, zoom, and the bookmark star's Cmd/Ctrl+D.
+  const local = (action: BrowserAction) => {
+    if (action.kind === "find") openFind();
+    else if (action.kind === "findNext" || action.kind === "findPrevious") {
+      if (!finding) openFind();
+      find(query, action.kind === "findNext" ? 1 : -1);
+    } else if (action.kind === "zoomIn") zoomTo(nextZoom(zoom, 1));
+    else if (action.kind === "zoomOut") zoomTo(nextZoom(zoom, -1));
+    else if (action.kind === "resetZoom") zoomTo(1);
+    else if (action.kind === "bookmark") {
+      if (page) bookmarks.set(toggled(bookmarks.get(), page));
+    } else return false;
+    return true;
+  };
+  const latest = useRef({ onChange, ask, local, shown, focusOnLoad });
+  latest.current = { onChange, ask, local, shown, focusOnLoad };
+  // Whether the page has taken the focus it's due on its first load.
+  const focused = useRef(false);
+
+  // A tab shown, by a click or a shortcut, takes focus to its page, as in Chrome, so the page's
+  // shortcuts keep working from it.
+  useEffect(() => {
+    if (shown && src) requestAnimationFrame(() => view.current?.focus());
+  }, [shown]);
 
   // Extensions see the shown tab as the active one.
   useEffect(() => {
@@ -517,14 +628,17 @@ function Tab({
       stopAsking = onAsk(el.getWebContentsId(), (action) => {
         if (action.kind === "address") addressBar.current?.focus();
         else if (action.kind === "icon") latest.current.onChange({ icon: action.url });
-        else latest.current.ask(action);
+        else if (!latest.current.local(action)) latest.current.ask(action);
       });
     };
     const navigated = () => {
       setAddress(el.getURL());
       setHistory({ back: el.canGoBack(), forward: el.canGoForward() });
+      setZoom(el.getZoomFactor());
       latest.current.onChange({ url: el.getURL() });
     };
+    const found = (e: FoundInPageEvent) =>
+      setMatches({ active: e.result.activeMatchOrdinal ?? 0, total: e.result.matches ?? 0 });
     const started = () => {
       setError(undefined);
       setLoading(true);
@@ -550,6 +664,13 @@ function Tab({
     }
     el.addEventListener("did-attach", ready);
     el.addEventListener("dom-ready", ready);
+    const firstLoad = () => {
+      // Only the first load's, shown or not, so a later one doesn't take focus.
+      if (focused.current) return;
+      focused.current = true;
+      if (latest.current.focusOnLoad && latest.current.shown) el.focus();
+    };
+    el.addEventListener("dom-ready", firstLoad);
     el.addEventListener("did-navigate", navigated);
     el.addEventListener("did-navigate-in-page", navigated);
     el.addEventListener("did-start-navigation", starting);
@@ -557,10 +678,12 @@ function Tab({
     el.addEventListener("did-fail-load", failed);
     el.addEventListener("did-stop-loading", stopped);
     el.addEventListener("page-title-updated", titled);
+    el.addEventListener("found-in-page", found);
     return () => {
       stopAsking();
       el.removeEventListener("did-attach", ready);
       el.removeEventListener("dom-ready", ready);
+      el.removeEventListener("dom-ready", firstLoad);
       el.removeEventListener("did-navigate", navigated);
       el.removeEventListener("did-navigate-in-page", navigated);
       el.removeEventListener("did-start-navigation", starting);
@@ -568,6 +691,7 @@ function Tab({
       el.removeEventListener("did-fail-load", failed);
       el.removeEventListener("did-stop-loading", stopped);
       el.removeEventListener("page-title-updated", titled);
+      el.removeEventListener("found-in-page", found);
     };
   }, [src]);
 
@@ -606,8 +730,9 @@ function Tab({
         <Search aria-hidden />
         <input
           ref={addressBar}
-          // A new tab's address bar takes focus, as in Chrome, but not a tab shown again.
-          autoFocus={!src}
+          // A blank new tab's address bar takes focus, as in Chrome, but not a tab shown again or one
+          // opening a page, whose page takes it.
+          autoFocus={!src && !load}
           aria-label="Address"
           placeholder="Search Google or type a URL"
           spellCheck={false}
@@ -622,6 +747,16 @@ function Tab({
           onBlur={() => setEditing(false)}
           className={addressInput}
         />
+        {Math.abs(zoom - 1) > 0.001 && (
+          <button
+            type="button"
+            title="Reset zoom"
+            onClick={() => zoomTo(1)}
+            className="shrink-0 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground tabular-nums hover:bg-hover hover:text-foreground"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+        )}
         <BookmarkStar page={page} />
       </form>
     </>
@@ -630,6 +765,61 @@ function Tab({
     <>
       <Extensions tab={contentsId} />
       <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
+        {/* Zoom keeps the menu open, as Chrome's does. */}
+        <div role="group" aria-label="Zoom" className={`${menuItem} hover:bg-transparent`}>
+          <ZoomIn aria-hidden />
+          <span className="flex-1">Zoom</span>
+          {(
+            [
+              ["Zoom out", -1, Minus],
+              ["Zoom in", 1, Plus],
+            ] as const
+          ).map(([label, direction, Icon], i) => (
+            <span key={label} className="contents">
+              {i === 1 && (
+                <span className="w-10 text-center text-[12px] tabular-nums">
+                  {Math.round(zoom * 100)}%
+                </span>
+              )}
+              <button
+                type="button"
+                role="menuitem"
+                aria-label={label}
+                title={label}
+                disabled={!src}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  zoomTo(nextZoom(zoom, direction));
+                }}
+                className="grid size-6 place-items-center rounded-md hover:bg-hover disabled:opacity-50"
+              >
+                <Icon aria-hidden />
+              </button>
+            </span>
+          ))}
+        </div>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={!src}
+          onClick={openFind}
+          className={`${menuItem} disabled:opacity-50`}
+        >
+          <Search aria-hidden />
+          Find…
+          <span className="ml-auto text-[11.5px] text-faint-foreground">{shortcut("F")}</span>
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={!src}
+          onClick={() => void view.current?.print().catch(() => {})}
+          className={`${menuItem} disabled:opacity-50`}
+        >
+          <Printer aria-hidden />
+          Print…
+          <span className="ml-auto text-[11.5px] text-faint-foreground">{shortcut("P")}</span>
+        </button>
         <button
           type="button"
           role="menuitem"
@@ -687,7 +877,27 @@ function Tab({
   const compact = layout === "compact" && !!slots?.start && !!slots.end;
 
   return (
-    <div className={`min-h-0 flex-1 flex-col ${shown ? "flex" : "hidden"}`}>
+    // Chrome's find, bookmark, and print keys in the tab's own UI too, its address bar and find bar
+    // (which its portal's events reach here), rather than the app's Find in thread.
+    <div
+      onKeyDown={(e) => {
+        if (!modKey(e) || e.altKey) return;
+        const key = e.key.toLowerCase();
+        const action: BrowserAction | undefined =
+          key === "f" && !e.shiftKey
+            ? { kind: "find" }
+            : key === "g"
+              ? { kind: e.shiftKey ? "findPrevious" : "findNext" }
+              : key === "d" && !e.shiftKey
+                ? { kind: "bookmark" }
+                : undefined;
+        if (key === "p" && !e.shiftKey && src) void view.current?.print().catch(() => {});
+        else if (!action || !local(action)) return;
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      className={`min-h-0 flex-1 flex-col ${shown ? "flex" : "hidden"}`}
+    >
       {compact ? (
         <>
           {into(slots.start, navBar, "min-w-0 flex-1 gap-0.5")}
@@ -707,6 +917,44 @@ function Tab({
         </p>
       )}
       <div className="relative flex min-h-0 flex-1 flex-col">
+        {finding && (
+          <form
+            role="search"
+            aria-label="Find in page"
+            onSubmit={(e) => e.preventDefault()}
+            className="absolute top-1 right-3 z-20 flex items-center gap-0.5 rounded-lg border border-border bg-surface py-1 pr-1 pl-2.5 text-[12.5px] shadow-composer"
+          >
+            <input
+              ref={findBar}
+              autoFocus
+              aria-label="Find"
+              placeholder="Find in page"
+              spellCheck={false}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                find(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") find(query, e.shiftKey ? -1 : 1);
+                else if (e.key === "Escape") closeFind();
+              }}
+              className="w-44 bg-transparent outline-none placeholder:text-faint-foreground"
+            />
+            <span className="w-14 text-right text-[11.5px] text-muted-foreground tabular-nums">
+              {query && matches ? `${matches.active} of ${matches.total}` : ""}
+            </span>
+            <IconButton label="Previous match" onClick={() => find(query, -1)}>
+              <ChevronUp />
+            </IconButton>
+            <IconButton label="Next match" onClick={() => find(query, 1)}>
+              <ChevronDown />
+            </IconButton>
+            <IconButton label="Close find" onClick={closeFind}>
+              <X />
+            </IconButton>
+          </form>
+        )}
         <PageFrame
           size={pageSize}
           fixed={!!fixed}
