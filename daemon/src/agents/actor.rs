@@ -3187,8 +3187,12 @@ impl Actor {
     async fn record_turn(&mut self, turn_id: TurnId, text: String, seen: Vec<(Uuid, u64)>) {
         self.turns.insert(turn_id, text.clone());
         let (run_id, id) = (self.row.id, self.id);
+        // Not a wake-up, a usage limit's resume, or another thread's message (PLX-937).
+        let from_user = !self.senders.contains_key(&turn_id)
+            && !self.wakes.sends(turn_id)
+            && !self.resumes.sends(turn_id);
         let stored = store(&self.daemon, move |db| {
-            db.record_turn(run_id, turn_id.into(), &text)
+            db.record_turn_from(run_id, turn_id.into(), &text, from_user)
                 .map_err(|error| store_error(&error))?;
             db.record_attached_seen(run_id, &seen)
                 .map_err(|error| store_error(&error))?;

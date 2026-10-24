@@ -27,9 +27,6 @@ const MESSAGES: usize = 10;
 /// How much of a thread's last result its line shows.
 const REPORT_BYTES: usize = 300;
 
-/// How wake-ups and other plxd turns start, which aren't the user's messages.
-const PARALLAX: &str = "Parallax, not the user";
-
 /// The Project's state for a packet or a note, one field per section.
 #[derive(Debug, Default)]
 pub(super) struct State {
@@ -66,20 +63,13 @@ pub(super) async fn after_compaction(daemon: &Daemon, project: ProjectId, run: R
                 Project's state again.";
     let tail = "Your progress note is checkpoint.md in your shared context: read it with \
                 read_context.";
-    fill(head, &sections, tail, NOTE_BYTES)
+    let room = NOTE_BYTES.saturating_sub(head.len() + tail.len() + 2);
+    format!("{head}\n{}\n{tail}", fill(&sections, room))
 }
 
-/// `state` as a packet for coordinator `run`, at most [`PACKET_BYTES`], in the spec's order.
+/// `state` as a packet for coordinator `run`, at most [`PACKET_BYTES`], in the spec's order. The
+/// user's last messages take their room first, so the other sections never crowd them out.
 pub(super) fn render(state: &State, run: RunId) -> String {
-    let messages = state
-        .messages
-        .iter()
-        .map(|message| {
-            let quoted: Vec<String> = message.lines().map(|line| format!("> {line}")).collect();
-            quoted.join("\n")
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
     let sections = [
         ("Brief", state.brief.as_str()),
         ("Memory", state.memory.as_str()),
@@ -88,7 +78,6 @@ pub(super) fn render(state: &State, run: RunId) -> String {
         ("Open threads", state.threads.as_str()),
         ("Open questions", state.questions.as_str()),
         ("Landing queue", state.landing.as_str()),
-        ("The user's last messages, oldest first", messages.as_str()),
     ];
     let head = "Parallax, not the user: this is a new session of this chat. Your earlier \
                 conversation isn't in it, so here is the Project's state as Parallax keeps it. \
@@ -98,38 +87,65 @@ pub(super) fn render(state: &State, run: RunId) -> String {
         "Older conversation: thread_search and thread_read on this thread, run {run}, have it \
          word for word."
     );
-    fill(head, &sections, &tail, PACKET_BYTES)
+    let room = PACKET_BYTES.saturating_sub(head.len() + tail.len() + 2);
+    let messages = quoted(&state.messages, room);
+    let rest = fill(&sections, room - messages.len());
+    format!("{head}\n{rest}{messages}\n{tail}")
 }
 
-/// `head`, each section that has text under its title, and `tail`, in at most `cap` bytes: the
-/// section that would pass it is cut, and the ones after it are left out.
-// ponytail: cuts in order, so a long early section crowds out the user's messages; give each
-// section its own share if that bites.
-fn fill(head: &str, sections: &[(&str, &str)], tail: &str, cap: usize) -> String {
-    const CUT: &str = "\n... (cut to fit; read the rest with read_context or thread_read)";
-    let mut out = format!("{head}\n");
-    let room = cap.saturating_sub(tail.len() + 2);
-    for (title, text) in sections {
-        let text = text.trim();
-        if text.is_empty() {
-            continue;
+/// `text` under `title`, or nothing when it has no text.
+fn section(title: &str, text: &str) -> String {
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    format!("\n## {title}\n{text}\n")
+}
+
+/// The section of `messages`, oldest first, each whole and quoted, in at most `room` bytes: the
+/// newest that fit, never part of one.
+fn quoted(messages: &[String], room: usize) -> String {
+    const TITLE: &str = "The user's last messages, oldest first";
+    let quote = |message: &String| {
+        let lines: Vec<String> = message.lines().map(|line| format!("> {line}")).collect();
+        lines.join("\n")
+    };
+    let mut kept = String::new();
+    for message in messages.iter().rev() {
+        let joined = if kept.is_empty() {
+            quote(message)
+        } else {
+            format!("{}\n\n{kept}", quote(message))
+        };
+        if section(TITLE, &joined).len() > room {
+            break;
         }
-        let section = format!("\n## {title}\n{text}\n");
+        kept = joined;
+    }
+    section(TITLE, &kept)
+}
+
+/// Each of `sections` that has text, under its title, in at most `room` bytes: the one that would
+/// pass it is cut, and the ones after it are left out.
+fn fill(sections: &[(&str, &str)], room: usize) -> String {
+    const CUT: &str = "\n... (cut to fit; read the rest with read_context or thread_read)\n";
+    let mut out = String::new();
+    for (title, text) in sections {
+        let section = section(title, text);
         if out.len() + section.len() <= room {
             out.push_str(&section);
             continue;
         }
-        let mut end = room.saturating_sub(out.len() + CUT.len() + 1);
-        while !section.is_char_boundary(end) {
-            end -= 1;
+        if let Some(left) = room.checked_sub(out.len() + CUT.len()) {
+            let mut end = left;
+            while !section.is_char_boundary(end) {
+                end -= 1;
+            }
+            out.push_str(&section[..end]);
+            out.push_str(CUT);
         }
-        out.push_str(&section[..end]);
-        out.push_str(CUT);
-        out.push('\n');
         break;
     }
-    out.push('\n');
-    out.push_str(tail);
     out
 }
 
@@ -246,17 +262,15 @@ fn from_store(
         .iter()
         .find(|r| r.id == uuid::Uuid::from(run))
         .map(|r| r.fields.prompt.clone());
-    let turns = db.run_turns(run.into()).map_err(error)?;
-    state.messages = last_messages(first.into_iter().chain(turns.into_iter().map(|(_, t)| t)));
+    let turns = db.user_turns(run.into(), MESSAGES).map_err(error)?;
+    state.messages = last_messages(first.into_iter().chain(turns));
     Ok((state, threads))
 }
 
-/// The last [`MESSAGES`] of `sent`, a coordinator's messages oldest first, that the user wrote:
-/// not a blank one, and not a wake-up or another of plxd's own.
+/// The last [`MESSAGES`] of `sent`, the user's messages to a coordinator oldest first, that
+/// aren't blank.
 fn last_messages(sent: impl Iterator<Item = String>) -> Vec<String> {
-    let mut messages: Vec<String> = sent
-        .filter(|text| !text.trim().is_empty() && !text.starts_with(PARALLAX))
-        .collect();
+    let mut messages: Vec<String> = sent.filter(|text| !text.trim().is_empty()).collect();
     let skip = messages.len().saturating_sub(MESSAGES);
     messages.drain(..skip);
     messages
@@ -316,12 +330,12 @@ mod tests {
         );
     }
 
-    /// Decision 9: the user's last 10 messages, verbatim, without plxd's own turns.
+    /// Decision 9: the user's last 10 messages, not a blank one.
     #[test]
-    fn a_packet_quotes_the_users_last_ten_messages() {
+    fn a_packet_takes_the_users_last_ten_messages() {
         let sent = (1..=14).map(|n| {
             if n % 5 == 0 {
-                format!("Parallax, not the user: wake-up {n}")
+                " \n".to_owned()
             } else {
                 format!("Message {n}\nsecond line")
             }
@@ -330,25 +344,73 @@ mod tests {
         assert_eq!(messages.len(), 10);
         assert_eq!(messages[0], "Message 3\nsecond line");
         assert_eq!(messages[9], "Message 14\nsecond line");
-        assert!(messages.iter().all(|m| !m.starts_with("Parallax")));
     }
 
-    /// Decision 9: at most 24 KiB, cut where it passes the cap, with the pointer kept.
+    /// Decision 9: at most 24 KiB. The user's last 10 messages keep their room, whole, however
+    /// large the board and checkpoint, which are cut instead, with the order and pointer kept.
     #[test]
-    fn a_packet_over_the_cap_is_cut_and_keeps_the_pointer() {
+    fn a_full_packet_keeps_all_ten_messages_whole_and_cuts_the_other_sections() {
         let run = RunId::generate();
+        let messages: Vec<String> = (1..=10)
+            .map(|n| format!("Message {n}: {}\nits last line", "word ".repeat(80)))
+            .collect();
         let big = State {
+            board: "- [ ] item\n".repeat(3000),
             checkpoint: "é".repeat(PACKET_BYTES),
+            messages: messages.clone(),
             ..state()
         };
         let packet = render(&big, run);
         assert!(packet.len() <= PACKET_BYTES, "{}", packet.len());
-        assert!(packet.contains("## Board (notes.md)"));
+        for message in &messages {
+            let quoted = message
+                .lines()
+                .map(|l| format!("> {l}"))
+                .collect::<Vec<_>>();
+            assert!(packet.contains(&quoted.join("\n")), "{message} is whole");
+        }
         assert!(packet.contains("(cut to fit"));
         assert!(
-            !packet.contains("## Open threads"),
+            !packet.contains("## Checkpoint"),
             "what follows the cut is left out"
         );
+        let board = packet.find("## Board").unwrap();
+        let said = packet.find("## The user's last messages").unwrap();
+        assert!(board < said, "the spec's order");
         assert!(packet.contains("thread_search and thread_read"));
+    }
+
+    /// Messages that alone pass the cap lose the oldest, whole, never part of one.
+    #[test]
+    fn messages_over_the_cap_drop_the_oldest_whole() {
+        let messages: Vec<String> = (1..=10)
+            .map(|n| format!("Message {n} {}", "x".repeat(3 * 1024)))
+            .collect();
+        let packet = render(
+            &State {
+                messages: messages.clone(),
+                ..state()
+            },
+            RunId::generate(),
+        );
+        assert!(packet.len() <= PACKET_BYTES, "{}", packet.len());
+        let kept: Vec<&String> = messages
+            .iter()
+            .filter(|m| packet.contains(m.as_str()))
+            .collect();
+        assert!(kept.len() < 10 && !kept.is_empty(), "{}", kept.len());
+        assert_eq!(
+            kept.last().unwrap().as_str(),
+            messages[9],
+            "the newest stay"
+        );
+        for n in 1..=10 {
+            let start = format!("Message {n} ");
+            assert_eq!(
+                packet.contains(&start),
+                kept.iter().any(|m| m.starts_with(&start)),
+                "message {n} is whole or left out"
+            );
+        }
     }
 }

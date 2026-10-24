@@ -812,10 +812,12 @@ const MIGRATIONS: &[Migration] = &[
     },
     // A coordinator's provider sessions, its epochs (PLX-937, decision 0079), numbered from 1 in
     // its run; the open one has no end. A coordinator with a session becomes epoch 1, from its
-    // creation.
+    // creation. And whether each turn is the user's own, not plxd's or another thread's, for the
+    // packet's last messages; an older turn counts as the user's.
     Migration {
         version: 51,
-        sql: "CREATE TABLE coordinator_sessions (
+        sql: "ALTER TABLE turns ADD COLUMN from_user INTEGER NOT NULL DEFAULT 1;
+        CREATE TABLE coordinator_sessions (
             run_id TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
             epoch INTEGER NOT NULL,
             session_id TEXT NOT NULL,

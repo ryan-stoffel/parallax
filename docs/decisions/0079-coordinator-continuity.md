@@ -26,7 +26,10 @@ A coordinator's continuity was its provider session. Claude Code prunes a sessio
 
 ### The packet
 
-The first message of each new epoch, at most 24 KiB, then the message that starts it. In order: the brief, the memory index, the board rendered from its items, `checkpoint.md` when it exists, the open threads with their status and their history file's last result, the open questions, the landing queue with conflicts and failed checks, the user's last 10 messages verbatim, oldest first, without plxd's "Parallax, not the user" turns, and a pointer to `thread_search` and `thread_read` on the thread for older conversation. Empty sections are left out. Sections fill in order, and the one that would pass the cap is cut, with the rest left out.
+The first message of each new epoch, at most 24 KiB, then the message that starts it. In order: the brief, the memory index, the board rendered from its items, `checkpoint.md` when it exists, the open threads with their status and their history file's last result, the open questions, the landing queue with conflicts and failed checks, the user's last 10 messages verbatim, oldest first, and a pointer to `thread_search` and `thread_read` on the thread for older conversation. Empty sections are left out.
+
+- The user's messages are their own: each turn records whether the user wrote it (`turns.from_user`, migration 51), not a wake-up, a usage limit's resume, or another thread's `thread_send`. A turn recorded before counts as the user's unless it starts "Parallax, not the user".
+- The messages take their room first, whole: when the 10 alone pass the cap, the oldest are left out, never cut. The other sections fill what is left in order, and the one that would pass it is cut, with the rest left out.
 
 ### After a compaction
 
@@ -38,4 +41,4 @@ When a coordinator's CLI reports `ContextCompaction { done: true }`, its next tu
 - A new epoch is a new Claude conversation, so it records the current system prompt: it gets the current instructions and autonomy. A resume inside an epoch still has PLX-957's snapshot gap.
 - OpenCode, ACP agents, and Cursor don't report a lost session as `SessionNotFound` yet, so a resume that fails there fails as before.
 - The compaction note is kept in memory, so a restart between the compaction and the next turn drops it.
-- A long brief, board, or checkpoint can crowd the user's messages out of the packet, since sections fill in order.
+- A long brief, board, or checkpoint is cut before anything after it, since sections fill in order.

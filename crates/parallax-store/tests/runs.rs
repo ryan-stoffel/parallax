@@ -739,6 +739,7 @@ fn a_version_50_database_makes_each_coordinators_session_its_first_epoch() {
     let conn = Connection::open(&path).expect("open raw connection");
     conn.execute_batch(
         "DROP TABLE coordinator_sessions;
+         ALTER TABLE turns DROP COLUMN from_user;
          DELETE FROM schema_version WHERE version = 51;",
     )
     .expect("roll the database back to version 50");
@@ -751,4 +752,29 @@ fn a_version_50_database_makes_each_coordinators_session_its_first_epoch() {
     );
     assert!(store.coordinator_sessions(quiet).unwrap().is_empty());
     assert!(store.coordinator_sessions(worker).unwrap().is_empty());
+}
+
+/// PLX-937: a coordinator's last user turns, oldest first, leave out another thread's messages
+/// and plxd's own, including a wake-up recorded before turns said who wrote them.
+#[test]
+fn user_turns_are_the_users_own_newest_last() {
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let store = Store::open(dir.path().join("parallax.sqlite3")).expect("open");
+    let run = Uuid::now_v7();
+    let turn = |text: &str, from_user: bool| {
+        store
+            .record_turn_from(run, Uuid::now_v7(), text, from_user)
+            .unwrap();
+    };
+    turn("First.", true);
+    turn("From another thread.", false);
+    turn("Parallax, not the user: an old wake-up.", true);
+    turn("Second.", true);
+    turn("Third.", true);
+
+    assert_eq!(
+        store.user_turns(run, 10).unwrap(),
+        ["First.", "Second.", "Third."]
+    );
+    assert_eq!(store.user_turns(run, 2).unwrap(), ["Second.", "Third."]);
 }

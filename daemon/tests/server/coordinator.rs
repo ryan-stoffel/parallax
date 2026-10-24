@@ -10,16 +10,18 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::methods::{
-    AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, CoordinatorFresh, EventsSubscribe,
-    HostHealth, ProjectDelete, ProjectList, ProjectStart, ProjectUpdate, RepoAdd,
+    AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysRemove, AgentCancel, AgentEvents, AgentList,
+    AgentSend, AgentStart, CoordinatorFresh, EventsSubscribe, HostHealth, ProjectDelete,
+    ProjectList, ProjectStart, ProjectUpdate, RepoAdd,
 };
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentDelivery, AgentEventsParams, AgentListParams,
-    AgentOutputItem, AgentPermission, AgentPolicy, AgentRun, AgentSendParams, AgentStartParams,
-    AgentStatus, CoordinatorFreshParams, CoordinatorSessionEnd, CoordinatorThreadId, ErrorKind,
+    AccountChoice, AccountId, AccountsDefaultsSetParams, AccountsKeysRemoveParams,
+    AgentCancelParams, AgentDelivery, AgentEventsParams, AgentListParams, AgentOutputItem,
+    AgentPermission, AgentPolicy, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
+    CoordinatorFreshParams, CoordinatorSessionEnd, CoordinatorThreadId, ErrorKind,
     EventsEventParams, EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectCreateParams,
     ProjectDeleteParams, ProjectDeleteResult, ProjectId, ProjectListParams, ProjectPermission,
-    ProjectStartParams, ProjectUpdateParams, Provider, RepoAddParams, RepoId, RunId, TurnId,
+    ProjectStartParams, ProjectUpdateParams, Provider, RepoAddParams, RepoId, Role, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::process::{Environment, Launcher};
@@ -1559,13 +1561,14 @@ async fn deleting_an_unknown_project_or_a_repo_entry_fails() {
 /// The fake backend for epochs (PLX-937): each new session is `coordinator-<n>`, and a resume
 /// fails as a session the CLI no longer has when `lost`, keeping every request.
 struct Epochs {
+    name: &'static str,
     seen: Arc<Mutex<Vec<RunRequest>>>,
     lost: bool,
 }
 
 impl Backend for Epochs {
     fn name(&self) -> &'static str {
-        "fake"
+        self.name
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -1599,15 +1602,17 @@ impl Backend for Epochs {
     }
 }
 
+/// `fake` for Anthropic, and `other`, another backend, for `OpenAI`, sharing `seen`.
 fn epochs(lost: bool, seen: &Arc<Mutex<Vec<RunRequest>>>) -> BackendRegistry {
     let mut backends = BackendRegistry::new();
-    backends.register(
-        Provider::Anthropic,
-        Arc::new(Epochs {
+    for (provider, name) in [(Provider::Anthropic, "fake"), (Provider::Openai, "other")] {
+        let backend = Epochs {
+            name,
             seen: Arc::clone(seen),
             lost,
-        }),
-    );
+        };
+        backends.register(provider, Arc::new(backend));
+    }
     backends
 }
 
@@ -1684,6 +1689,15 @@ async fn fresh_session_starts_the_next_message_from_the_packet() {
         .unwrap()
         .run;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
+    // A thread's message through its Parallax tools isn't the user's.
+    client
+        .call::<AgentSend>(AgentSendParams {
+            from: Some(run.id),
+            ..send_params(run.id, TurnId::generate(), "From a thread.")
+        })
+        .await
+        .unwrap();
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
 
     let fresh = client
         .call::<CoordinatorFresh>(CoordinatorFreshParams {
@@ -1713,12 +1727,18 @@ async fn fresh_session_starts_the_next_message_from_the_packet() {
             if state.status == AgentStatus::Completed && state.session_id.is_some())
     })
     .await;
-    let next = seen.lock().unwrap()[1].clone();
+    let next = seen.lock().unwrap().last().unwrap().clone();
     assert_eq!(next.resume, None, "a new session");
     assert!(
         next.prompt
             .starts_with("Parallax, not the user: this is a new session")
     );
+    assert!(
+        next.prompt.contains("> Plan the README."),
+        "{}",
+        next.prompt
+    );
+    assert!(!next.prompt.contains("From a thread."), "{}", next.prompt);
     assert!(next.prompt.ends_with("\nNext."), "{}", next.prompt);
     let now = run_of(&mut client, project.id, run.id).await;
     assert_eq!(now.session_id.as_deref(), Some("coordinator-2"));
@@ -1730,5 +1750,120 @@ async fn fresh_session_starts_the_next_message_from_the_packet() {
         .await
         .unwrap_err();
     assert_eq!(kind(&unknown), ErrorKind::ProjectNotFound);
+    host.server.stop().await;
+}
+
+/// PLX-937 (0079): a coordinator moved to another backend starts its next epoch there from the
+/// packet, as a backend change, rather than handing over its transcript.
+#[tokio::test]
+async fn a_coordinator_moved_to_another_backend_starts_its_next_epoch_there() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let host = Host::start(temp_dir(), epochs(false, &seen));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    let run = client
+        .call::<ProjectStart>(start_params(project.id, "Plan the README."))
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+
+    let other = AccountChoice::Subscription {
+        backend: "other".to_owned(),
+    };
+    client
+        .call::<AgentSend>(AgentSendParams {
+            account: Some(other),
+            ..send_params(run.id, TurnId::generate(), "Go on.")
+        })
+        .await
+        .unwrap();
+    let events = until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. }
+            if state.status == AgentStatus::Completed && state.session_id.is_some())
+    })
+    .await;
+    assert!(items(&events).contains(&AgentOutputItem::Epoch {
+        epoch: 2,
+        reason: CoordinatorSessionEnd::BackendChange,
+    }));
+    let moved = seen.lock().unwrap().last().unwrap().clone();
+    assert_eq!(moved.resume, None);
+    assert!(
+        moved
+            .prompt
+            .starts_with("Parallax, not the user: this is a new session")
+    );
+    assert!(moved.prompt.ends_with("\nGo on."), "{}", moved.prompt);
+    let now = run_of(&mut client, project.id, run.id).await;
+    assert_eq!(now.backend, "other");
+    host.server.stop().await;
+}
+
+/// PLX-937 (0079): a coordinator whose session's account is gone starts its next epoch on the
+/// coordinator role's default, as not resumable, instead of refusing the message.
+#[tokio::test]
+async fn a_coordinator_whose_account_is_gone_starts_its_next_epoch_on_the_default() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let keys = Arc::new(crate::thread_tools::Keys::default());
+    let host = Host::start_with_keys(temp_dir(), epochs(false, &seen), keys);
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    subscribe(&mut client, project.id, 0).await;
+    // Two API keys: the coordinator starts on one, and the other is the role's default.
+    let (key, default) = (AccountId::generate(), AccountId::generate());
+    for id in [key, default] {
+        let params = serde_json::from_value(serde_json::json!({
+            "id": id,
+            "provider": "anthropic",
+            "label": "work",
+            "key": "sk-ant-api03-plx937-test-key",
+        }))
+        .unwrap();
+        client.call::<AccountsKeysAdd>(params).await.unwrap();
+    }
+    client
+        .call::<AccountsDefaultsSet>(AccountsDefaultsSetParams {
+            role: Role::Coordinator,
+            account: Some(AccountChoice::Key { id: default }),
+        })
+        .await
+        .unwrap();
+    let run = client
+        .call::<ProjectStart>(ProjectStartParams {
+            account: Some(AccountChoice::Key { id: key }),
+            ..start_params(project.id, "Plan the README.")
+        })
+        .await
+        .unwrap()
+        .run;
+    until(&mut client, updated_to(AgentStatus::Completed)).await;
+    client
+        .call::<AccountsKeysRemove>(AccountsKeysRemoveParams { id: key })
+        .await
+        .unwrap();
+
+    client
+        .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Go on."))
+        .await
+        .unwrap();
+    let events = until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. }
+            if state.status == AgentStatus::Completed && state.session_id.is_some())
+    })
+    .await;
+    assert!(items(&events).contains(&AgentOutputItem::Epoch {
+        epoch: 2,
+        reason: CoordinatorSessionEnd::NotResumable,
+    }));
+    let next = seen.lock().unwrap().last().unwrap().clone();
+    assert_eq!(next.resume, None);
+    assert!(
+        next.prompt
+            .starts_with("Parallax, not the user: this is a new session")
+    );
+    let now = run_of(&mut client, project.id, run.id).await;
+    assert_eq!(now.account_id, default.to_string());
     host.server.stop().await;
 }
