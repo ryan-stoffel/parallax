@@ -48,6 +48,7 @@ import {
   withVersion,
 } from "./providers";
 import { age, backendLogos } from "./Sidebar";
+import { BrowserSettings } from "./settings/BrowserSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { ConnectionSettings } from "./settings/ConnectionSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
@@ -145,6 +146,8 @@ export function Settings({
           <ThreadSettings />
         ) : section === "appearance" ? (
           <AppearanceSettings theme={theme} onThemeChange={onThemeChange} />
+        ) : section === "browser" ? (
+          <BrowserSettings />
         ) : section === "keybinds" ? (
           <KeybindSettings />
         ) : section === "providers" ? (

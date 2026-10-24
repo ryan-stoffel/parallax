@@ -1374,8 +1374,9 @@ describe("on a plxd with providers", () => {
 test("each setting the search indexes on this computer's pages is there to scroll to", async () => {
   window.parallax.openTargets = async () => [];
   window.parallax.version = async () => "1.2.3";
+  window.parallax.extensions = async () => [];
   const missing: string[] = [];
-  for (const page of ["general", "threads", "appearance", "keybinds"] as const) {
+  for (const page of ["general", "threads", "appearance", "browser", "keybinds"] as const) {
     await renderSettings(page);
     for (const e of settingsIndex.filter((e) => e.section === page))
       if (!document.querySelector(`[data-setting="${e.anchor ?? anchorOf(e.title)}"]`))

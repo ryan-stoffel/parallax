@@ -431,6 +431,28 @@ ipcMain.handle("parallax:loadUnpackedExtension", async (event) => {
 ipcMain.handle("parallax:removeExtension", (_event, id: unknown) =>
   typeof id === "string" ? removeExtension(browserSession(), id) : undefined,
 );
+// Settings › Browser's Clear browsing data (PLX-974): the browser's site data, its cache, or both,
+// keeping the extensions' own, as Chrome's does.
+ipcMain.handle("parallax:clearBrowsingData", async (_event, what: unknown) => {
+  const { siteData, cache } = (what ?? {}) as { siteData?: unknown; cache?: unknown };
+  const ses = browserSession();
+  const extensions = ses.extensions.getAllExtensions().map((e) => `chrome-extension://${e.id}`);
+  const dataTypes = [
+    ...(siteData === true
+      ? ([
+          "cookies",
+          "localStorage",
+          "indexedDB",
+          "serviceWorkers",
+          "fileSystems",
+          "webSQL",
+        ] as const)
+      : []),
+    ...(cache === true ? (["cache"] as const) : []),
+  ];
+  if (dataTypes.length)
+    await ses.clearData({ dataTypes: [...dataTypes], excludeOrigins: extensions });
+});
 // The Chrome Web Store page's install calls (webStore.ts), from its own origin only.
 ipcMain.handle("parallax:webStore", (event, method: unknown, ...args: unknown[]) =>
   event.senderFrame?.origin === storeOrigin && typeof method === "string"

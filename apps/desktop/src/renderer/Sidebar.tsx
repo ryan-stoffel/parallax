@@ -3615,6 +3615,7 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   general: Settings,
   threads: MessageSquare,
   appearance: Palette,
+  browser: Globe,
   keybinds: Keyboard,
   providers: Bot,
   usage: ChartNoAxesColumn,

@@ -10,6 +10,15 @@ import { IconButton, Menu, menuHeading, menuItem } from "./ui";
 const installed = memory<ExtensionInfo[] | undefined>(undefined);
 const refresh = () => window.parallax.extensions().then((list) => installed.set(list));
 
+/** The installed extensions, read the first time they're asked for, and how to read them again. */
+export function useExtensions() {
+  const list = installed.use();
+  useEffect(() => {
+    if (!list) void refresh();
+  }, [list]);
+  return { list, refresh };
+}
+
 /**
  * A tab toolbar's Chrome extensions (PLX-888): electron-chrome-extensions' buttons, with their
  * badges and popups, for the tab whose webview's webContents id is `tab`, and the Extensions menu,

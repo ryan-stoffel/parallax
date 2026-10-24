@@ -20,6 +20,13 @@ import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
 import { bookmarks, BookmarksBar, BookmarkStar, bookmarksBar, toggled } from "./Bookmarks";
+import {
+  homeButton,
+  restoreTabs,
+  searchEngine,
+  searchEngineName,
+  searchUrlFor,
+} from "./browserSettings";
 import { browserTheme, browserThemes } from "./browserTheme";
 import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
@@ -37,6 +44,7 @@ import {
   Close,
   CloseSmall,
   Code,
+  Home,
   Print,
   Public,
   Rectangle,
@@ -48,14 +56,13 @@ import {
 } from "./symbols";
 import { IconButton, menuHeading, menuItem, MenuOption, shortcut } from "./ui";
 
-/** Google's results page for `query`. */
-export const searchUrl = (query: string) =>
-  `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+/** The search engine's results page for `query` (Settings › Browser), Google's by default. */
+export const searchUrl = (query: string) => searchUrlFor(searchEngine.get(), query);
 
 /**
  * The page the address bar's text opens, or undefined for nothing or a scheme other than http or
  * https. A host without a scheme is https, except localhost, an IP address, or a host with a port,
- * which are http. Anything else, such as words or a single word, searches Google.
+ * which are http. Anything else, such as words or a single word, searches the search engine.
  */
 export function browserUrl(address: string): string | undefined {
   const text = address.trim();
@@ -233,7 +240,9 @@ const savedTabs = stored<Record<string, SavedTabs>>("parallax.browserTabs", {}, 
 
 /** The tabs `scope`'s browser opens with: its saved ones, or one blank tab. */
 function restored(scope: string | undefined): { tabs: OwnTab[]; current: number } {
-  const saved = scope ? savedTabs.get()[scope] : undefined;
+  // Unless the user would rather start on a new tab (Settings › Browser › On startup). Tabs keep
+  // being saved meanwhile, so turning it back on finds them.
+  const saved = scope && restoreTabs.get() ? savedTabs.get()[scope] : undefined;
   const pages = Array.isArray(saved?.tabs)
     ? saved.tabs.filter((t) => typeof t?.url === "string")
     : [];
@@ -532,6 +541,8 @@ function Tab({
   const [area, setArea] = useState<Size>(MONITOR);
   const fit = pageFit.use();
   const layout = browserLayout.use();
+  const engine = searchEngine.use();
+  const home = homeButton.use();
   const showBookmarks = bookmarksBar.use();
   const slots = toolbarSlots.use()[scope ?? ""];
   const pageSize = fixed ?? fitSize(area.width, area.height, fit);
@@ -717,6 +728,15 @@ function Tab({
           <Refresh />
         </IconButton>
       )}
+      {/* The home page, or a new tab without one (Settings › Browser › Home button). */}
+      {home.show && (
+        <IconButton
+          label="Home"
+          onClick={() => (home.url.trim() ? open(home.url) : ask({ kind: "newTab" }))}
+        >
+          <Home />
+        </IconButton>
+      )}
       {/* The address bar alone is the form, so Enter opens it whatever else the toolbar holds:
             a form with two text fields and no submit button doesn't submit on Enter. */}
       <form
@@ -735,7 +755,7 @@ function Tab({
           // opening a page, whose page takes it.
           autoFocus={!src && !load}
           aria-label="Address"
-          placeholder="Search Google or type a URL"
+          placeholder={`Search ${searchEngineName(engine)} or type a URL`}
           spellCheck={false}
           value={editing ? address : shortUrl(address)}
           onChange={(e) => setAddress(e.target.value)}
@@ -865,7 +885,7 @@ function Tab({
           onClick={() => browserLayout.set("classic")}
         />
         <div className="my-1 h-px bg-border" />
-        <ThemePicker />
+        <ThemeSwatches menu />
       </ViewMenu>
     </>
   );
@@ -1147,32 +1167,41 @@ function BrowserTab({
 }
 
 /**
- * The More menu's themes, as Chrome's Customize panel shows them: a swatch each, the picked one
- * ringed. Picking one keeps the menu open, to try another (browserTheme.ts).
+ * The browser's themes, as Chrome's Customize panel shows them: a swatch each, the picked one
+ * ringed (browserTheme.ts). In the More menu, picking one keeps the menu open, to try another;
+ * Settings › Browser shows them too, as radios.
  */
-function ThemePicker() {
+export function ThemeSwatches({ menu = false }: { menu?: boolean }) {
   const picked = browserTheme.use();
+  const swatches = (
+    <div
+      role={menu ? undefined : "radiogroup"}
+      aria-label="Theme"
+      className="grid grid-cols-8 gap-1.5"
+    >
+      {browserThemes.map((t) => (
+        <button
+          key={t.id}
+          type="button"
+          role={menu ? "menuitemradio" : "radio"}
+          aria-checked={picked === t.id}
+          aria-label={t.name}
+          title={t.name}
+          onClick={(e) => {
+            e.stopPropagation();
+            browserTheme.set(t.id);
+          }}
+          style={{ background: t.swatch }}
+          className={`size-6 rounded-full border border-border ${t.id === "parallax" ? "bg-[conic-gradient(#ffffff_0_50%,#1f1f2e_0_100%)]!" : ""} ${picked === t.id ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""}`}
+        />
+      ))}
+    </div>
+  );
+  if (!menu) return swatches;
   return (
     <div role="group" aria-label="Theme" className="px-2 pt-1 pb-2">
       <p className={`${menuHeading} px-0`}>Theme</p>
-      <div className="grid grid-cols-8 gap-1.5">
-        {browserThemes.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            role="menuitemradio"
-            aria-checked={picked === t.id}
-            aria-label={t.name}
-            title={t.name}
-            onClick={(e) => {
-              e.stopPropagation();
-              browserTheme.set(t.id);
-            }}
-            style={{ background: t.swatch }}
-            className={`size-6 rounded-full border border-border ${t.id === "parallax" ? "bg-[conic-gradient(#ffffff_0_50%,#1f1f2e_0_100%)]!" : ""} ${picked === t.id ? "ring-2 ring-accent ring-offset-2 ring-offset-surface" : ""}`}
-          />
-        ))}
-      </div>
+      {swatches}
     </div>
   );
 }

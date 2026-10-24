@@ -130,6 +130,7 @@ export type SettingsSection =
   | "general"
   | "threads"
   | "appearance"
+  | "browser"
   | "keybinds"
   | "providers"
   | "sourceControl"

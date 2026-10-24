@@ -196,6 +196,8 @@ export interface ParallaxBridge {
    * from the Chrome Web Store's own button (PLX-962). Returns the unsubscribe function.
    */
   onExtensionsChanged(listener: () => void): () => void;
+  /** Clears the browser's site data, its cache, or both, keeping extensions' own (PLX-974). */
+  clearBrowsingData(what: { siteData: boolean; cache: boolean }): Promise<void>;
   /** Tells extensions which browser tab is shown, by its webview's webContents id. */
   selectBrowserTab(webContentsId: number): void;
   /**
