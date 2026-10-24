@@ -185,14 +185,18 @@ pub(super) async fn write(
         _ => content,
     };
     let written_path = path.clone();
-    let (file, existed) = run_blocking(move || {
-        let existed = std::fs::symlink_metadata(dir.join(&written_path)).is_ok();
-        Ok((save(&dir, &written_path, &text)?, existed))
+    let (file, changed) = run_blocking(move || {
+        let target = dir.join(&written_path);
+        let existed = std::fs::symlink_metadata(&target).is_ok();
+        let before = std::fs::read_to_string(&target).ok();
+        let changed = existed && before.is_none_or(|before| reads_differently(&before, &text));
+        Ok((save(&dir, &written_path, &text)?, changed))
     })
     .await?;
-    // A new entry corrects nothing, so only a changed one is sent to running children. Saving a
+    // A new entry corrects nothing, and neither does a rewrite that only re-dates one, as the
+    // Knowledge tab's Keep does, so only a changed one is sent to running children. Saving a
     // proposal that `replaces` an entry writes over it, so it counts as a change.
-    if existed {
+    if changed {
         context::corrections::tell(
             &context.daemon,
             scope,
@@ -487,6 +491,14 @@ async fn scope_dir(context: &Context, scope: MemoryScope) -> Result<PathBuf, Err
         }
     };
     run_blocking(move || context::ensure(dir).map_err(io_error(""))).await
+}
+
+/// Whether rewriting `before` as `after` changes what an agent reads of it: its title or its
+/// body. A new date, writer, or source alone doesn't.
+fn reads_differently(before: &str, after: &str) -> bool {
+    let (old, old_body) = memory::parse(before);
+    let (new, new_body) = memory::parse(after);
+    old.title != new.title || old_body != new_body
 }
 
 /// Writes `text` to `path` in `dir` within the shared context caps, and returns it.
