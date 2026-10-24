@@ -22,6 +22,7 @@ import {
 import { useState, type ComponentProps, type ReactNode } from "react";
 
 import { Browser, BrowserTabBar } from "./Browser";
+import { useBrowserTheme } from "./browserTheme";
 import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
 import { lookOf, numberOf, type PullRequests } from "./PullRequests";
@@ -215,6 +216,7 @@ export function SidePanel({
       recent: [...panel.recent.filter(([t, at]) => t !== s || at !== thread), [s, thread]],
     }));
 
+  const browserStyle = useBrowserTheme();
   const available = project
     ? surfaces
     : ["Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
@@ -342,7 +344,8 @@ export function SidePanel({
         e.preventDefault();
         openView(next);
       }}
-      style={expanded ? undefined : { width }}
+      // While browsing, the browser's theme paints the column, its top bar included.
+      style={{ ...(!expanded && { width }), ...(browsing && browserStyle) }}
       className={`relative flex min-w-0 flex-col bg-pane ${expanded ? "flex-1" : "shrink-0 border-l border-border"}`}
     >
       {!expanded && onResize && <PanelResize side="right" width={width} onResize={onResize} />}

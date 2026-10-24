@@ -116,5 +116,8 @@ export default defineConfig({
   test: {
     root: ".",
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
+    // Its ES modules import each other without file extensions, which only a bundler resolves,
+    // so tests bundle it too (browserTheme.ts).
+    server: { deps: { inline: ["@material/material-color-utilities"] } },
   },
 });

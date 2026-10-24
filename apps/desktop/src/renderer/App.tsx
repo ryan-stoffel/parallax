@@ -53,6 +53,7 @@ import { PullRequestsPage, type PrEntry } from "./PullRequestsPage";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { Browser, BrowserTabBar } from "./Browser";
+import { useBrowserTheme } from "./browserTheme";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
 import {
@@ -169,6 +170,7 @@ export function App() {
   // The page shown in place of the chat, if any: Pull requests, or the sidebar's permanent browser
   // (PLX-964). Opening a thread or Settings closes it.
   const [mainPage, setMainPage] = useState<"pullRequests" | "browser">();
+  const browserStyle = useBrowserTheme();
   // The permanent browser mounts the first time it opens and stays, so its pages keep running.
   const [browserPage, setBrowserPage] = useState(false);
   if (mainPage === "browser" && !browserPage) setBrowserPage(true);
@@ -1013,7 +1015,12 @@ export function App() {
 
       {/* An expanded side panel takes the main pane's place. */}
       <OpenDocumentContext value={openDoc}>
-        <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
+        <main
+          hidden={expanded}
+          // The permanent browser's theme paints the pane while it shows (browserTheme.ts).
+          style={!settings && mainPage === "browser" ? browserStyle : undefined}
+          className="flex min-w-0 flex-1 flex-col bg-pane"
+        >
           {settings ? (
             <>
               <TopBar className={topBarInset}>
