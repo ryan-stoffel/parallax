@@ -5,6 +5,7 @@ import {
   Columns2,
   Folder,
   GitFork,
+  Globe,
   X,
   PanelBottom,
   PanelLeftOpen,
@@ -220,6 +221,11 @@ export function App() {
       setPanelOpen(true);
       setBrowse({ agentTab: last.tabId });
     }
+  };
+  // The top bar's Browser button: the side panel, on its Browser view as the user left it (PLX-962).
+  const openBrowser = () => {
+    setPanelOpen(true);
+    setBrowse({});
   };
   // The device the side panel's Device view last showed for an agent (PLX-886).
   const [showDevice, setShowDevice] = useState<{ deviceId?: string }>();
@@ -824,6 +830,7 @@ export function App() {
       // A new thread waits for an open dialog, the picker included, to close.
       const dialog = !!document.querySelector("dialog[open]");
       if (command === "panel") setPanelOpen((open) => !open);
+      else if (command === "browser" && !settings) openBrowser();
       else if (command === "sidebar") setSidebarOpen((open) => !open);
       else if (command === "terminal" && folder) toggleDrawer();
       else if (command === "newThread") {
@@ -1079,6 +1086,9 @@ export function App() {
                       <PanelBottom />
                     </IconButton>
                   )}
+                  <IconButton label="Browser" command="browser" onClick={openBrowser}>
+                    <Globe />
+                  </IconButton>
                   {/* Shown only while the panel is closed; the panel's top bar has it otherwise. */}
                   {!panelOpen && (
                     <IconButton

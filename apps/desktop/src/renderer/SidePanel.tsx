@@ -131,7 +131,8 @@ const unopened: Scoped = { tabs: [], recent: [], listing: false };
  * for the hidden main pane's top-left corner. `agents`, `knowledge`, `files`, and `changesView` are
  * those views, such as a Project's, in place of their empty states. `remoteHost` is the open host's name when
  * it's an SSH host. `terminal` draws the Terminal view, told whether it's shown and given its empty
- * state. Each new `browse` opens the Browser view at its url, or at one of `agentTabs`. `pullRequests` are the open thread's
+ * state. Each new `browse` opens the Browser view at its url, or at one of `agentTabs`, or as it
+ * was, which is the only way it opens. `pullRequests` are the open thread's
  * linked pull requests (PLX-319): its URLs, each one's read, the Pull requests view, and each one's
  * view, shown in a `#n` tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
  * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
@@ -214,9 +215,10 @@ export function SidePanel({
       recent: [...panel.recent.filter(([t, at]) => t !== s || at !== thread), [s, thread]],
     }));
 
+  // Browser opens from its own button in the main pane's top bar, not this list (PLX-962).
   const available = project
-    ? surfaces
-    : ["Browser", "Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
+    ? surfaces.filter((s) => s !== browserSurface)
+    : ["Device", "Terminal", "Files", "Changes", "Pull requests"].map((name) =>
         surfaces.find((s) => s.name === name)!,
       );
   const nameOf = (s: Surface) => (!project && s.name === "Changes" ? "Diff" : s.name);

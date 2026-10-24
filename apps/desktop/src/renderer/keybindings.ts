@@ -7,6 +7,7 @@ export type Command =
   | "noRepoThread"
   | "sidebar"
   | "panel"
+  | "browser"
   | "terminal"
   | "open"
   | "settings"
@@ -31,6 +32,7 @@ export const commands: { id: Command; name: string; defaults: string[]; elsewher
   { id: "noRepoThread", name: "New thread without a repository", defaults: ["Mod+Shift+KeyN"] },
   { id: "sidebar", name: "Toggle sidebar", defaults: ["Mod+KeyS"] },
   { id: "panel", name: "Toggle side panel", defaults: ["Mod+Alt+KeyB"] },
+  { id: "browser", name: "Open browser", defaults: ["Mod+Shift+KeyB"] },
   { id: "terminal", name: "Toggle terminal", defaults: ["Mod+KeyJ", "Ctrl+Shift+Backquote"] },
   { id: "open", name: "Open folder in default app", defaults: ["Mod+Alt+KeyO"] },
   { id: "settings", name: "Open Settings", defaults: ["Mod+Comma"] },
