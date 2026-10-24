@@ -52,7 +52,8 @@ export type BrowserShortcut =
   | (typeof browserShortcuts)[keyof typeof browserShortcuts]
   | (typeof shiftShortcuts)[keyof typeof shiftShortcuts]
   | "nextTab"
-  | "previousTab";
+  | "previousTab"
+  | "history";
 
 /**
  * What a key press in a side panel browser's page does, as Chrome's shortcuts do (PLX-969), or
@@ -86,6 +87,8 @@ export function browserShortcut(
   const mod = mac ? input.meta && !input.control : input.control && !input.meta;
   if (!mod || input.alt) return undefined;
   const key = input.key.toLowerCase();
+  // History is Cmd+Y on macOS and Ctrl+H elsewhere, as in Chrome (PLX-976).
+  if (key === (mac ? "y" : "h") && !input.shift) return "history";
   if (input.shift) return shiftShortcuts[key as keyof typeof shiftShortcuts];
   return browserShortcuts[key as keyof typeof browserShortcuts];
 }

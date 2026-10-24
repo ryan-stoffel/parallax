@@ -28,7 +28,9 @@ import {
   searchUrlFor,
 } from "./browserSettings";
 import { browserTheme, browserThemes } from "./browserTheme";
+import { browserHistory, titled as titled_, visited } from "./browserHistory";
 import { DownloadsButton } from "./Downloads";
+import { HistoryDialog } from "./HistoryDialog";
 import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
@@ -45,6 +47,7 @@ import {
   Close,
   CloseSmall,
   Code,
+  History,
   Home,
   Print,
   Public,
@@ -308,6 +311,8 @@ export function Browser({
   // Closing the last tab leaves a blank one, as the panel has no window to close.
   // The pages of the tabs closed here, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
   const closed = useRef<string[]>([]);
+  // History (PLX-976), one for the browser, which any of its tabs opens.
+  const history = useRef<HTMLDialogElement>(null);
   const reopen = () => {
     const page = closed.current.at(-1);
     closed.current = closed.current.slice(0, -1);
@@ -405,17 +410,32 @@ export function Browser({
   );
 
   return (
-    // Cmd/Ctrl+Shift+T anywhere in the browser's own UI too, such as a blank tab's address bar,
-    // which the page's shortcuts don't reach (links.ts).
+    // Cmd/Ctrl+Shift+T and History anywhere in the browser's own UI too, such as a blank tab's
+    // address bar, which the page's shortcuts don't reach (links.ts).
     <div
       onKeyDown={(e) => {
-        if (modKey(e) && e.shiftKey && !e.altKey && e.key.toLowerCase() === "t") {
-          e.preventDefault();
-          reopen();
-        }
+        const key = e.key.toLowerCase();
+        const mac = window.parallax.platform === "darwin";
+        if (!modKey(e) || e.altKey) return;
+        if (e.shiftKey && key === "t") reopen();
+        else if (!e.shiftKey && key === (mac ? "y" : "h")) history.current?.showModal();
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
       }}
       className="flex min-h-0 flex-1 flex-col"
     >
+      <HistoryDialog
+        ref={history}
+        onOpen={(url, inNewTab) => {
+          const tab = tabs.find((t) => t.id === current);
+          if (inNewTab || !tab) newTab(url, current);
+          else {
+            update(tab.id, { load: { url } });
+            setAgentTab(undefined);
+          }
+        }}
+      />
       {shownTab && agent && (
         <AgentBrowser
           key={shownTab.tabId}
@@ -454,6 +474,7 @@ export function Browser({
             else if (action.kind === "tab") show(tabs[action.index]);
             else if (action.kind === "lastTab") show(tabs.at(-1));
             else if (action.kind === "reopenTab") reopen();
+            else if (action.kind === "history") history.current?.showModal();
           }}
         />
       ))}
@@ -645,10 +666,13 @@ function Tab({
       });
     };
     const navigated = () => {
-      setAddress(el.getURL());
+      const url = el.getURL();
+      setAddress(url);
       setHistory({ back: el.canGoBack(), forward: el.canGoForward() });
       setZoom(el.getZoomFactor());
-      latest.current.onChange({ url: el.getURL() });
+      latest.current.onChange({ url });
+      // Each web page visited goes in History, not an extension's own pages.
+      if (/^https?:/.test(url)) browserHistory.set(visited(browserHistory.get(), url, Date.now()));
     };
     const found = (e: FoundInPageEvent) =>
       setMatches({ active: e.result.activeMatchOrdinal ?? 0, total: e.result.matches ?? 0 });
@@ -662,7 +686,11 @@ function Tab({
       if (e.isMainFrame && e.errorCode !== -3)
         setError({ url: e.validatedURL, description: e.errorDescription });
     };
-    const titled = (e: PageTitleUpdatedEvent) => latest.current.onChange({ title: e.title });
+    const titled = (e: PageTitleUpdatedEvent) => {
+      latest.current.onChange({ title: e.title });
+      const next = titled_(browserHistory.get(), el.getURL(), e.title);
+      if (next !== browserHistory.get()) browserHistory.set([...next]);
+    };
     // A new page has no icon until it says, rather than the last page's.
     const leaving = () => latest.current.onChange({ icon: undefined });
     const starting = (e: { isMainFrame: boolean; isInPlace: boolean }) => {
@@ -685,7 +713,9 @@ function Tab({
     };
     el.addEventListener("dom-ready", firstLoad);
     el.addEventListener("did-navigate", navigated);
-    el.addEventListener("did-navigate-in-page", navigated);
+    // An iframe's own in-page step isn't the page's, nor a visit.
+    const navigatedInPage = (e: { isMainFrame: boolean }) => e.isMainFrame && navigated();
+    el.addEventListener("did-navigate-in-page", navigatedInPage);
     el.addEventListener("did-start-navigation", starting);
     el.addEventListener("did-start-loading", started);
     el.addEventListener("did-fail-load", failed);
@@ -698,7 +728,7 @@ function Tab({
       el.removeEventListener("dom-ready", ready);
       el.removeEventListener("dom-ready", firstLoad);
       el.removeEventListener("did-navigate", navigated);
-      el.removeEventListener("did-navigate-in-page", navigated);
+      el.removeEventListener("did-navigate-in-page", navigatedInPage);
       el.removeEventListener("did-start-navigation", starting);
       el.removeEventListener("did-start-loading", started);
       el.removeEventListener("did-fail-load", failed);
@@ -852,6 +882,18 @@ function Tab({
         >
           <Code aria-hidden />
           Developer tools
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => ask({ kind: "history" })}
+          className={menuItem}
+        >
+          <History aria-hidden />
+          History
+          <span className="ml-auto text-[11.5px] text-faint-foreground">
+            {window.parallax.platform === "darwin" ? shortcut("Y") : "Ctrl+H"}
+          </span>
         </button>
         <button
           type="button"

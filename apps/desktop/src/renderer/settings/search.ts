@@ -231,7 +231,7 @@ export const settingsIndex: SettingEntry[] = [
   ...entries("browser", "Privacy", [
     [
       "Clear browsing data",
-      "Cookies and other site data, cached images and files",
+      "Browsing history, cookies and other site data, cached images and files",
       "cache cookies history delete privacy",
     ],
   ]),

@@ -111,3 +111,19 @@ test("a browser page takes Chrome's find, print, bookmark, and tab shortcuts", (
   expect(browserShortcut(press("PageUp", { control: true }), "linux")).toBe("previousTab");
   expect(browserShortcut(press("PageUp", { control: true }), "darwin")).toBeUndefined();
 });
+
+test("History is Cmd+Y on macOS and Ctrl+H elsewhere", () => {
+  const press = (key: string, mods: Partial<Record<"meta" | "control", boolean>>) => ({
+    type: "keyDown",
+    key,
+    meta: false,
+    control: false,
+    alt: false,
+    shift: false,
+    ...mods,
+  });
+  expect(browserShortcut(press("y", { meta: true }), "darwin")).toBe("history");
+  expect(browserShortcut(press("h", { control: true }), "win32")).toBe("history");
+  expect(browserShortcut(press("h", { meta: true }), "darwin")).toBeUndefined();
+  expect(browserShortcut(press("y", { control: true }), "linux")).toBeUndefined();
+});

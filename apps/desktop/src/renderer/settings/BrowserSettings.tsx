@@ -10,6 +10,7 @@ import {
   searchEngines,
   setDownloadPrefs,
 } from "../browserSettings";
+import { browserHistory } from "../browserHistory";
 import { useExtensions } from "../Extensions";
 import { notify } from "../notifications";
 import { ConfirmDialog, Picker } from "../ui";
@@ -29,7 +30,7 @@ export function BrowserSettings() {
   const downloadsTo = downloadPrefs.use();
   const { list, refresh } = useExtensions();
   const confirm = useRef<HTMLDialogElement>(null);
-  const [clear, setClear] = useState({ siteData: true, cache: true });
+  const [clear, setClear] = useState({ history: true, siteData: true, cache: true });
   const [clearing, setClearing] = useState(false);
 
   return (
@@ -153,6 +154,13 @@ export function BrowserSettings() {
       </Section>
 
       <Section title="Privacy">
+        <Row title="Browsing history" description="Every page in History">
+          <Switch
+            label="Browsing history"
+            checked={clear.history}
+            onChange={(history) => setClear({ ...clear, history })}
+          />
+        </Row>
         <Row title="Cookies and other site data" description="Signs you out of most sites">
           <Switch
             label="Cookies and other site data"
@@ -173,7 +181,7 @@ export function BrowserSettings() {
         >
           <button
             type="button"
-            disabled={clearing || (!clear.siteData && !clear.cache)}
+            disabled={clearing || (!clear.history && !clear.siteData && !clear.cache)}
             onClick={() => confirm.current?.showModal()}
             className={`${quietButton} border border-border disabled:opacity-50`}
           >
@@ -242,19 +250,33 @@ export function BrowserSettings() {
         onConfirm={() => {
           confirm.current?.close();
           setClearing(true);
+          if (clear.history) browserHistory.set([]);
           void window.parallax
-            .clearBrowsingData(clear)
+            .clearBrowsingData({ siteData: clear.siteData, cache: clear.cache })
             .then(() =>
               notify({ key: "browsing-data", tone: "success", title: "Browsing data cleared" }),
             )
             .finally(() => setClearing(false));
         }}
       >
-        {[clear.siteData && "Cookies and other site data", clear.cache && "cached images and files"]
-          .filter(Boolean)
-          .join(" and ")}{" "}
+        {listed(
+          [
+            clear.history && "browsing history",
+            clear.siteData && "cookies and other site data",
+            clear.cache && "cached images and files",
+          ].filter((x): x is string => !!x),
+        )}{" "}
         go for every browser in Parallax. Extensions keep their own.
       </ConfirmDialog>
     </>
   );
+}
+
+/** "a, b, and c", capitalized: what Clear browsing data clears, for its confirm. */
+function listed(items: string[]): string {
+  const text =
+    items.length < 3
+      ? items.join(" and ")
+      : `${items.slice(0, -1).join(", ")}, and ${items.at(-1)}`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
