@@ -1,6 +1,6 @@
 # 0005: Shared context is a daemon-owned folder outside the repo
 
-- Status: accepted; the context watcher's backend on Linux and Windows (inotify, `ReadDirectoryChangesW`) is in [0023](0023-cross-platform.md); memory's files, and who writes them, are in [0044](0044-project-memory.md)
+- Status: accepted; the context watcher's backend on Linux and Windows (inotify, `ReadDirectoryChangesW`) is in [0023](0023-cross-platform.md); memory's files, and who writes them, are in [0044](0044-project-memory.md); for the You scope, "the host's version wins" is superseded by [0082](0082-you-memory-across-machines.md), where no host is the source of truth
 - Date: 2026-09-23
 - Issue: #16
 

@@ -35,7 +35,7 @@ Not chosen:
 ### Identity and access
 
 - **A machine is its Tailscale node ID.** Its name is its `deviceName` (0056), or its Tailscale host name when that is unset, as of the write.
-- **Who may sync** is 0056's rule, both ways, with nothing added. A Connect peer can already call `memory/read` and `memory/write`, so sync grants no new access.
+- **Who may sync:** the dialing plxd runs 0056's device filter. The answering plxd serves `memory/syncList` and `memory/syncRead` only on a connection that arrived over its Connect listener and passed 0056's `tailscale whois` check. It refuses them on every other connection: the local socket, `plxd attach` over SSH, and paired remote and relay sessions.
 - **Pull only.** A plxd reads its peers and writes only its own folder.
 
 ### Entry versions
@@ -44,11 +44,13 @@ A store table, `you_entries`, keeps one row per path: `hash` (SHA-256 of the syn
 
 **A scan finds local changes.** It compares the folder with the table: a file whose hash differs from its row, a new file, or a row whose file is gone. Each one bumps this machine's counter and records this machine as the writer, at the file's modified time, or now for a deletion. plxd scans before each pull and before it answers a peer's `memory/syncList`. That one scan covers `memory/write`, `memory/delete`, an edit on disk, and an edit made while plxd was down.
 
+**Sync never overwrites a local write.** `memory/write`, `memory/delete`, and the `Last used:` stamp on You take the same lock as the scan and the apply. Before replacing or deleting a file, the apply checks that the file still has its recorded hash. A file edited on disk since the scan is left for the next pull, which sees it as a local change.
+
 Tombstones are never removed. Each is one small row, and a host offline for months must not bring a deleted entry back.
 
 ### Pull
 
-While `connect` is on, every 60 seconds from a minute after plxd starts, plxd scans, then for each online Connect device that advertises `youSync`:
+While `connect` is on, every 60 seconds from a minute after plxd starts, plxd scans, then pulls each online Connect device that advertises `youSync`. It pulls the devices at once, each within 60 seconds, so a device that went to sleep mid-call can't hold up the others:
 
 1. `memory/syncList {}` returns every row.
 2. For each row whose clock this host's doesn't cover, `memory/syncRead { path }` returns the synced text, which must match the row's hash. A mismatch waits for the next pull.
@@ -61,18 +63,19 @@ A path outside `memory/<kind>/` and `knowledge/`, or text over the shared contex
 Compare the local clock with the remote one:
 
 - **Equal, or local covers remote:** nothing.
-- **Remote covers local (last writer per entry):** plxd takes the remote version, writing the file or deleting it, and takes its row. "Later" is decided by the clocks, not wall time, so a host with a wrong clock can't drop an edit.
+- **Remote covers local (last writer per entry):** plxd takes the remote version, writing the file or deleting it, and takes its row. When the remote text is the text this host has, it takes only the row, so the host keeps its `Last used:` and `Stale:` lines, and running children hear of no change. "Later" is decided by the clocks, not wall time, so a host with a wrong clock can't drop an edit.
 - **Concurrent** (neither covers the other):
   - **Same text, or both deleted:** plxd keeps it and merges the clocks.
   - **An edit against a deletion:** the edit is kept, since keeping it loses nothing.
-  - **Two different edits, a proposal:** plxd keeps the version written later, ties going to the higher node ID, so every host picks the same one. The other version becomes `proposals/<slug>-<machine name>.md` on this host, with `Scope: you` and `Replaces: <entry path>`, which the Memory tab already shows with Save and Discard. A knowledge file has no kind for a proposal, so its other version becomes `knowledge/<name>-<machine name>.md` instead, a file of its own that syncs like any other.
+  - **Two different edits, a proposal:** plxd keeps the version written later, ties going to the higher node ID, so every host picks the same one. The other version becomes a proposal on this host, with `Scope: you` and `Replaces: <entry path>`, which the Memory tab already shows with Save and Discard. A knowledge file has no kind for a proposal, so its other version becomes a copy beside it in `knowledge/`, a file of its own that syncs like any other.
+  - The proposal's or copy's name comes from the losing version: the entry's kind and name, then the node ID that wrote it and that node's counter, such as `proposals/preference-tabs-nb2-3.md`. A retry, or a later pull that sees the same conflict, writes the same file over itself instead of adding another.
+  - Every host that sees both versions before it receives the merged row writes the proposal: usually the first host to pull, and sometimes two that pull each other at the same moment, or a third that pulls both sides first. Each host keeps at most one per losing version. Resolving it on one host leaves the others' copies, which the user discards.
 
 In each concurrent case the kept row takes the merged clock (pointwise maximum). It covers both versions, so every other host takes it as a newer version, with no second conflict. Saving the proposal is a local write, which reaches every host the same way. Discarding it deletes only the proposal.
 
 ### What the user sees
 
 - `MemoryFile` gains `machine` (`{ id, name }`) for a You entry whose file matches its row: the computer that last wrote it. The Memory panel shows "Written on {name}" beside its source.
-- A conflict proposal is named for the machine whose version it holds.
 - There is no new setting. You syncs while `connect` is on.
 
 ### Protocol
@@ -85,14 +88,15 @@ In each concurrent case the kept row takes the merged clock (pointwise maximum).
 
 - Unit tests on the clock comparison, the merge rules, and the synced text with `Last used:` and `Stale:` left out.
 - Server tests with two plxds on loopback and a fake tailnet:
-  - **Conflict:** an entry written on A reaches B, showing A as its machine. Both edit it while apart. Once they reconnect, both hold the later edit, and the other edit is a proposal.
-  - **Offline catch-up:** B stops. A adds, edits, and deletes entries. B restarts on its data folder and matches A after a pull, the deletion included.
+  - **Conflict:** an entry written on A reaches B, showing A as its machine. Both edit it while apart. Once they reconnect, both hold the later edit, and the other edit is a proposal, at most one per host, which more pulls don't add to.
+  - **Offline catch-up:** B stops. A adds, edits, and deletes entries. B restarts on its data folder and matches A after a pull, the deletion included, and A still matches after more pulls.
+  - **Connect only:** a client on the local socket is refused `memory/syncList` and `memory/syncRead`.
 
 ## Consequences
 
 - You converges among Connect devices within about a minute of an edit, whenever two of them are online. An offline host catches up from any peer when it returns.
 - Two computers that are never online at the same time never converge, and hosts reached only by SSH or LAN pairing keep their own You.
-- A conflict proposal is only on the host that saw both versions. The entry itself converges everywhere.
+- The entry itself converges everywhere, but a conflict proposal stays on the hosts that saw both versions, sometimes more than one.
 - "Written on" is missing for up to a minute after an edit, until the next scan records it.
 - Any of the user's untagged tailnet devices can read all of You, as it already can through Connect.
 - The mobile app reads You through the host it connects to and syncs nothing itself.
