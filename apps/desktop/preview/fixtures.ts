@@ -1697,6 +1697,8 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     },
     content,
   });
+  // The day an agent last read an entry, `days` ago, as its header gives it (PLX-943).
+  const usedAgo = (days: number) => new Date(now - days * 864e5).toISOString().slice(0, 10);
   const memory: Record<string, MemoryDoc[]> = {
     you: [
       memoryDoc(
@@ -1706,6 +1708,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         {
           kind: "preference",
           title: "Plain UI copy, no exclamation marks",
+          lastUsed: usedAgo(2),
           source: "user",
           writer: "user",
         },
@@ -1717,6 +1720,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         {
           kind: "preference",
           title: "Ask before adding dependencies",
+          lastUsed: usedAgo(0),
           source: "user",
           writer: "user",
         },
@@ -1742,6 +1746,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         {
           kind: "convention",
           title: "Renderer reaches plxd only through window.parallax",
+          lastUsed: usedAgo(3),
           source: "docs/decisions/0022-desktop-app.md",
           writer: "user",
         },
@@ -1753,6 +1758,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         {
           kind: "gotcha",
           title: "Sandboxes can't download crates",
+          lastUsed: usedAgo(6),
           source: `thread ${ids.updater}`,
           writer: "user",
         },
@@ -1829,6 +1835,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
         {
           kind: "gotcha",
           title: "Land the palette before inbox read state",
+          lastUsed: usedAgo(0),
           source: ids.coordinator,
           writer: `coordinator ${ids.coordinator}`,
         },
