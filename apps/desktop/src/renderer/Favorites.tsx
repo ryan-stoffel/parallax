@@ -288,7 +288,7 @@ export function Favorites({
                   {f.project.waiting > 0 && (
                     <span
                       aria-hidden
-                      className="absolute -top-1.5 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-warning px-1 text-[10px] leading-none font-semibold text-background tabular-nums ring-2 ring-sidebar"
+                      className="absolute -top-1.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-warning px-1 text-[10px] leading-none font-semibold text-background tabular-nums ring-2 ring-sidebar"
                     >
                       {f.project.waiting}
                     </span>
