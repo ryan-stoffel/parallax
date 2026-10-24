@@ -1,7 +1,7 @@
 name: CI
 
 # Pull requests only: develop and main take changes only through PRs that passed these checks, so a
-# push there runs just release.yml's build.
+# push to develop runs just rust-cache.yml, which saves the Rust caches these jobs restore.
 on:
   pull_request:
 
@@ -18,9 +18,35 @@ defaults:
     shell: bash
 
 jobs:
+  # Whether the PR changes Rust or anything the rust job builds or runs (PLX-961). The checkout is
+  # the PR merged into its base, so its first parent is the base.
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.diff.outputs.rust }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: List the changed files
+        id: diff
+        run: |
+          git diff --name-only HEAD^1 HEAD | tee "$RUNNER_TEMP/changed"
+          rust_inputs='^(daemon/|crates/|sidecar/|relay/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|rustfmt\.toml$|clippy\.toml$|apps/desktop/src/protocol/generated/|scripts/ci/(check-rust|check-ssh-attach|ssh-localhost)|\.github/workflows/ci\.yml$)'
+          if grep -qE "$rust_inputs" "$RUNNER_TEMP/changed"; then
+            echo rust=true >> "$GITHUB_OUTPUT"
+          else
+            echo rust=false >> "$GITHUB_OUTPUT"
+          fi
+
   # plxd on every OS and arch its hosts run (0023): macOS arm64, Linux x86_64 and arm64 (PLX-17),
-  # and Windows x86_64 and arm64 (PLX-21).
+  # and Windows x86_64 and arm64 (PLX-21). Only when the PR changes Rust.
   rust:
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -57,9 +83,12 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
+      # rust-cache.yml saves this on develop. A PR can't read another PR's caches, so saving here
+      # would only fill the cache quota.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: ${{ runner.os }}-${{ runner.arch }}
+          shared-key: test-${{ runner.os }}-${{ runner.arch }}
+          save-if: false
 
       # What Claude Code's worker sandbox needs on Linux (0013): bubblewrap, socat, and the AppArmor
       # profile from Claude Code's docs that lets bwrap make user namespaces. Plus a pinned Claude
@@ -169,8 +198,39 @@ jobs:
         run: |
           scripts/ci/check-ssh-attach "$RUNNER_TEMP\\ssh-status" "$(cygpath -w "$PWD/target/debug/plxd.exe")"
 
-      # The e2e job's plxd, so it doesn't build its own (PLX-25). The feature only changes the
-      # plxd crate, so this rebuilds just that.
+  # The e2e and load jobs' plxd, with the fake backend (PLX-25). Its own job so those start without
+  # waiting for the rust job's tests, and run on PRs that skip it (PLX-961).
+  plxd:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/*
+            !~/.rustup/toolchains/stable-*
+          key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      # As in the rust job, rust-cache.yml saves this on develop.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: plxd-${{ runner.os }}-${{ runner.arch }}
+          save-if: false
+
       - name: Build plxd with the fake backend
         run: cargo build -p plxd --locked --features fake-backend
 
@@ -297,9 +357,9 @@ jobs:
         run: scripts/ci/check-mobile
 
   # The app against a plxd running its fake backend, with Playwright (PLX-16), on the OSes the app
-  # job covers, with the plxd the rust job built for that OS (PLX-25).
+  # job covers, with the plxd the plxd job built for that OS (PLX-25).
   e2e:
-    needs: rust
+    needs: plxd
     strategy:
       fail-fast: false
       matrix:
@@ -363,12 +423,12 @@ jobs:
           electron_config_cache: ${{ runner.temp }}/electron
         run: scripts/ci/e2e-app
 
-  # 30 fake-backend threads streaming through the rust job's Linux plxd, subscribed as the app did
+  # 30 fake-backend threads streaming through the plxd job's Linux plxd, subscribed as the app did
   # before PLX-454 and, with --filtered, as it does since. Each run fails when a daemon number falls
   # outside its set in scripts/bench/budgets.json (PLX-452). App frame times under xvfb are too
   # noisy to gate.
   load:
-    needs: rust
+    needs: plxd
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -456,16 +516,18 @@ jobs:
   # Branch protection requires this job's name, ci, as the only check (#6). Renaming it blocks every merge.
   ci:
     if: always()
-    needs: [actionlint, app, e2e, load, mobile, relay, rust]
+    needs: [actionlint, app, changes, e2e, load, mobile, plxd, relay, rust]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Require every job to succeed
+      # rust is skipped when the PR changes no Rust. A job is also skipped when a job it needs
+      # fails, but that job fails this check.
+      - name: Require every job to succeed or be skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: |
           jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
-          if ! jq -e 'to_entries | all(.value.result == "success")' <<< "$NEEDS" > /dev/null; then
-            echo "::error::Every job in ci.yml must succeed."
+          if ! jq -e 'to_entries | all(.value.result == "success" or .value.result == "skipped")' <<< "$NEEDS" > /dev/null; then
+            echo "::error::Every job in ci.yml must succeed or be skipped."
             exit 1
           fi

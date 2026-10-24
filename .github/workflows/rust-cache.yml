@@ -1,0 +1,106 @@
+name: Rust cache
+
+# Saves the Rust caches ci.yml's rust and plxd jobs restore (PLX-961). A PR can read its base
+# branch's caches but not another PR's, so they're saved here, on develop, and ci.yml saves none.
+# rust-cache keeps dependencies only and keys on Cargo.lock, so a push that hits the saved key
+# builds nothing.
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # The rust job's clippy and test builds, on its OSes.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    # rust-cache keys on CARGO_* variables, so these match ci.yml's.
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/*
+            !~/.rustup/toolchains/stable-*
+          key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      # The Windows arm64 image may not ship rustup.
+      - name: Install rustup
+        if: runner.os == 'Windows'
+        run: |
+          if ! command -v rustup > /dev/null; then
+            arch=$([ "$RUNNER_ARCH" = ARM64 ] && echo aarch64 || echo x86_64)
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/rustup-init.exe" \
+              "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe"
+            "$RUNNER_TEMP/rustup-init.exe" -y --default-toolchain none --profile minimal --no-modify-path
+            printf '%s\\.cargo\\bin\n' "$USERPROFILE" >> "$GITHUB_PATH"
+          fi
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        id: cache
+        with:
+          shared-key: test-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build for clippy and the tests
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked --no-run
+
+  # The plxd job's fake-backend build, on its OSes.
+  plxd:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cache Rust toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.rustup/toolchains/*
+            !~/.rustup/toolchains/stable-*
+          key: rustup-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        id: cache
+        with:
+          shared-key: plxd-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build plxd with the fake backend
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cargo build -p plxd --locked --features fake-backend
