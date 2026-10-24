@@ -246,6 +246,8 @@ export function App() {
     setPanelOpen(true);
     setShowDevice({ deviceId });
   };
+  // Each new one shows the open Project's Project tab, when the sidebar opens a Project.
+  const [showHome, setShowHome] = useState<object>();
   // The pull request the side panel last opened, or with no URL its Pull requests view.
   const [showPr, setShowPr] = useState<{ url?: string }>();
   // A message the PR view handed the open thread's chat, until the chat takes it.
@@ -382,7 +384,7 @@ export function App() {
     connected && !!project && "inbox" in connection.capabilities,
     answerable,
   );
-  // The Project's context files, which both its side panel tabs read.
+  // The Project's context files, which its Project tab reads.
   const context = useProjectContext(host.id, project?.id ?? "", connected && !!project);
   const needs = useMemo(
     () => new Set(inbox.items.filter((i) => !i.seenAt && i.kind === "needsYou").map((i) => i.run)),
@@ -989,6 +991,8 @@ export function App() {
               // A draft opened from the list isn't in the folder either.
               if (next.kind === "new") startIn.set(null);
               openOnHost(hostId, next);
+              // A Project opens on its coordinator's chat and the Project tab (0083).
+              if (next.kind === "project") setShowHome({});
             }}
             onOpenProject={openProject}
             onOpenSettings={openSettings}
@@ -1468,6 +1472,7 @@ export function App() {
         }
         pullRequest={showPr}
         showDevice={showDevice}
+        showProject={showHome}
         device={(shown) => (
           <DevicePanel hostId={host.id} runId={threadRun?.id} shown={shown} request={showDevice} />
         )}
@@ -1590,9 +1595,8 @@ export function App() {
                   ? agents.runs.find((r) => r.id === project.coordinator)
                   : undefined
               }
-              context={context}
+              titles={threads.state.titles}
               memory={!!memory}
-              inbox={project ? inbox : undefined}
               expanded={panelExpanded}
             />
           )

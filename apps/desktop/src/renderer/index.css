@@ -1789,6 +1789,36 @@ body {
     rotate: 360deg;
   }
 }
+/* A working Project's square in the sidebar: a streak of Parallax blue runs around its edge, clear
+   of the icon or image inside. The mask keeps only a 1.5px border of the turning gradient. */
+@property --sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.project-working {
+  position: absolute;
+  inset: 0;
+  padding: 1.5px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(
+    from var(--sweep),
+    transparent 0turn 0.55turn,
+    color-mix(in srgb, var(--mark-blue) 30%, transparent) 0.8turn,
+    var(--mark-blue) 1turn
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: project-sweep 2s linear infinite;
+}
+@keyframes project-sweep {
+  to {
+    --sweep: 1turn;
+  }
+}
 .mark-done .mark-disc {
   fill: var(--added);
 }
@@ -1842,6 +1872,7 @@ body {
 }
 :root.reduce-motion {
   .mark-working,
+  .project-working,
   .mark-done-animate :is(.mark-disc, .mark-check) {
     animation: none;
   }

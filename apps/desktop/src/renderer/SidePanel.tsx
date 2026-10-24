@@ -136,7 +136,8 @@ const unopened: Scoped = { tabs: [], recent: [], listing: false };
  * view, shown in a `#n` tab, colored by its state, only while the thread links it. Each new `pullRequest` opens that URL's tab, or without
  * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
  * shown only while its thread, `documents.runId`, is open, as a pull request's is. `device` draws
- * the Device view (PLX-886), told whether it's shown, and each new `showDevice` opens it.
+ * the Device view (PLX-886), told whether it's shown, and each new `showDevice` opens it. Each new
+ * `showProject` shows an open Project's Project tab.
  */
 export function SidePanel({
   scope,
@@ -164,6 +165,7 @@ export function SidePanel({
   project,
   device,
   showDevice,
+  showProject,
 }: {
   scope: string;
   width?: number;
@@ -199,6 +201,8 @@ export function SidePanel({
   project?: { home: ReactNode; waiting: number };
   device?: (shown: boolean) => ReactNode;
   showDevice?: object;
+  /** A new request shows an open Project's Project tab. */
+  showProject?: object;
 }) {
   // Each scope's panel. A thread shows the last view it showed that's still open, else the last one
   // its scope showed, else the list.
@@ -280,6 +284,11 @@ export function SidePanel({
   if (showDevice !== deviceShown) {
     setDeviceShown(showDevice);
     if (showDevice) openView(deviceSurface);
+  }
+  const [projectShown, setProjectShown] = useState(showProject);
+  if (showProject !== projectShown) {
+    setProjectShown(showProject);
+    if (showProject && project) setActive(overview);
   }
   const [prOpened, setPrOpened] = useState(pullRequest);
   if (pullRequest !== prOpened) {

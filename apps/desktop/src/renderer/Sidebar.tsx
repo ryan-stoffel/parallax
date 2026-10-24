@@ -137,6 +137,7 @@ import {
   threadProjects,
   type ForkChoice,
   type ProjectChange,
+  type ThreadsState,
   type ThreadsView,
 } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
@@ -1668,6 +1669,7 @@ export function ThreadList({
         <ProjectIcon icon={p.kind === "project" ? p.project.icon : undefined} className="size-5" />
       ),
       attention: p.attention,
+      project: p.kind === "project" ? projectStatus(p.view.state, p.runs) : undefined,
       selected: p.key === openKey,
       badge: modHeld && listed.indexOf(p) >= 0 && listed.indexOf(p) < 9 && (
         <RowBadge index={listed.indexOf(p)} />
@@ -2068,6 +2070,18 @@ function Confetti() {
       ))}
     </span>
   );
+}
+
+/**
+ * A Project favorite's status (0083): whether any of its runs works, and how many wait on the
+ * user, counted from the approvals the host reports. Questions a coordinator escalates live in the
+ * open Project's inbox only, so they count once plxd sends each run's state (PLX-967).
+ */
+export function projectStatus(state: ThreadsState, runs: readonly AgentRun[]) {
+  return {
+    working: runs.some((r) => isRunning(r.status)),
+    waiting: runs.filter((r) => asksOf(state, r.id) > 0).length,
+  };
 }
 
 /** The rest of Delete Project's warning, after "“name” goes for good", for a Project of `agents` runs. */

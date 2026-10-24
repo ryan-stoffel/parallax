@@ -1,7 +1,7 @@
 // Opens a view from the URL's hash, since the app's views are plain state with no routes:
 // it clicks through the UI as a person would, once each step's button is on screen.
 //
-//   #project=parallax                     a Project, by its sidebar name
+//   #project=parallax                     a Project, by its favorite's name
 //   #project=parallax&panel=Agents        and a side panel view, by its name
 //   #project=parallax&agent=Scheduler     and a child's chat, by the start of its Overview row
 //   #thread=Rework the updater            a plain thread, by its title
@@ -59,10 +59,8 @@ export function openFromHash() {
   const project = params.get("project");
   if (project)
     steps.push(() =>
-      byText(
-        document.querySelector('ul[aria-label="Projects"]'),
-        "button, a, [role=button]",
-        project,
+      [...document.querySelectorAll<HTMLElement>('ul[aria-label="Favorites"] button')].find(
+        (el) => el.getAttribute("aria-label")?.toLowerCase() === project.toLowerCase(),
       ),
     );
   const thread = params.get("thread");
