@@ -706,7 +706,8 @@ function Tab({
     setAddress(next);
     onChange({ url: next });
     // The view shows a load's error, so the rejection needs no handling here. A webview that
-    // hasn't finished attaching, such as a new tab page's, throws instead; its src opens it.
+    // hasn't finished attaching, such as a new tab page's, throws instead, and would still load
+    // its first page: a new webview opens this one (its key is its src).
     try {
       if (!view.current) throw new Error("no webview yet");
       view.current.loadURL(next).catch(() => {});
@@ -1219,6 +1220,7 @@ function Tab({
                 // React drops a `true` attribute it doesn't know, so allowpopups is the empty
                 // string. The page lays out at the frame's size, drawn at its scale.
                 <webview
+                  key={src}
                   ref={view}
                   src={src}
                   {...{ allowpopups: "" as unknown as boolean }}
