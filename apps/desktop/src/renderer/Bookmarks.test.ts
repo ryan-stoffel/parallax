@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import {
+  countIn,
   findBookmark,
   folderList,
   moved,
@@ -37,6 +38,8 @@ test("bookmarks move into folders, nested ones too, and a folder goes with what 
   ]);
   // Back to the bar.
   expect(findBookmark(moved(tree, a.url, undefined), a.url)).toEqual({ bookmark: a });
+  expect(countIn(tree, work)).toBe(1);
+  expect(countIn(tree, "missing")).toBe(-1);
   expect(removedFolder(tree, work)).toEqual([]);
 });
 
@@ -49,6 +52,8 @@ test("a bookmark saved before its page's icon arrived gets it later", () => {
     url: "https://a.com/",
     icon,
   });
-  // One that has an icon keeps it.
-  expect(withIcon(tree, "https://b.com/", icon)[1]).toEqual(tree[1]);
+  // One that has an icon keeps it, and an icon too large to keep changes nothing, both handing
+  // back the same tree, so setting it doesn't loop.
+  expect(withIcon(tree, "https://b.com/", icon)).toBe(tree);
+  expect(withIcon(tree, "https://a.com/", `${icon}${"A".repeat(20_000)}`)).toBe(tree);
 });

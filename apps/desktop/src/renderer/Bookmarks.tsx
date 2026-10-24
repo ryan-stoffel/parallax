@@ -22,7 +22,7 @@ import {
 import { createPortal } from "react-dom";
 
 import { stored } from "./stored";
-import { Menu, menuItem, menuPanel, openOnContextMenu } from "./ui";
+import { ConfirmDialog, Menu, menuItem, menuPanel, openOnContextMenu } from "./ui";
 
 // The browser's bookmarks (PLX-968): one tree, shared by every browser, a thread's, a Project's,
 // and the permanent one, and kept on this computer. Its top level is the bookmarks bar, and a
@@ -172,14 +172,35 @@ export const renamedBookmark = (nodes: readonly BookmarkNode[], url: string, tit
 export const renamedFolder = (nodes: readonly BookmarkNode[], id: string, title: string) =>
   changed(nodes, isId(id), (node) => ({ ...node, title }));
 
-/** `nodes` with the bookmark of `url` given `icon`, when it has none and the icon is small. */
-export function withIcon(nodes: readonly BookmarkNode[], url: string, icon: string | undefined) {
-  if (!icon || icon.length > MAX_ICON) return [...nodes];
+/**
+ * `nodes` with the bookmark of `url` given `icon`, when it has none and the icon is small, or
+ * `nodes` itself when that changes nothing, so setting it again doesn't loop.
+ */
+export function withIcon(
+  nodes: readonly BookmarkNode[],
+  url: string,
+  icon: string | undefined,
+): readonly BookmarkNode[] {
+  const found = findBookmark(nodes, url);
+  if (!icon || icon.length > MAX_ICON || !found || found.bookmark.icon) return nodes;
   return changed(
     nodes,
     (node) => isUrl(url)(node) && !(node as Bookmark).icon,
     (node) => ({ ...node, icon }),
   );
+}
+
+/** How many bookmarks folder `id` holds, its folders' included. */
+export function countIn(nodes: readonly BookmarkNode[], id: string): number {
+  const count = (list: readonly BookmarkNode[]): number =>
+    list.reduce((n, node) => n + (isFolder(node) ? count(node.children) : 1), 0);
+  for (const node of nodes) {
+    if (!isFolder(node)) continue;
+    if (node.id === id) return count(node.children);
+    const inner = countIn(node.children, id);
+    if (inner >= 0) return inner;
+  }
+  return -1;
 }
 
 /** Every folder, depth first, with how deep it is, for a folder picker. */
@@ -219,8 +240,9 @@ export function BookmarkStar({ page }: { page?: Bookmark }) {
   const found = page ? findBookmark(tree, page.url) : undefined;
   const editorId = useId();
   useEffect(() => {
-    if (found && !found.bookmark.icon && page?.icon)
-      bookmarks.set(withIcon(bookmarks.get(), found.bookmark.url, page.icon));
+    if (!found || !page?.icon) return;
+    const next = withIcon(bookmarks.get(), found.bookmark.url, page.icon);
+    if (next !== bookmarks.get()) bookmarks.set([...next]);
   }, [found, page?.icon]);
   return (
     <>
@@ -372,7 +394,15 @@ function BookmarkEditor({
 }
 
 /** Folder `folderId`'s editor, a popover with the id `id`: its name, and Delete folder. */
-function FolderEditor({ id, folderId }: { id: string; folderId?: string }) {
+function FolderEditor({
+  id,
+  folderId,
+  onDelete,
+}: {
+  id: string;
+  folderId?: string;
+  onDelete: (id: string) => void;
+}) {
   const tree = bookmarks.use();
   const folder = folderId ? folderList(tree).find((f) => f.id === folderId) : undefined;
   return (
@@ -408,8 +438,8 @@ function FolderEditor({ id, folderId }: { id: string; folderId?: string }) {
             <button
               type="button"
               onClick={(e) => {
-                bookmarks.set(removedFolder(bookmarks.get(), folder.id));
                 closePopover(e);
+                onDelete(folder.id);
               }}
               className="rounded-md px-2.5 py-1 text-muted-foreground hover:bg-hover hover:text-foreground"
             >
@@ -448,6 +478,15 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
   const folderEditorId = useId();
   const [target, setTarget] = useState<Target>({});
   const [editing, setEditing] = useState<Target>({});
+  // A folder with bookmarks in it asks before it goes, with them.
+  const confirm = useRef<HTMLDialogElement>(null);
+  const [deleting, setDeleting] = useState<{ id: string; count: number }>();
+  const deleteFolder = (id: string) => {
+    const count = countIn(bookmarks.get(), id);
+    if (count <= 0) return bookmarks.set(removedFolder(bookmarks.get(), id));
+    setDeleting({ id, count });
+    confirm.current?.showModal();
+  };
   const chips = useRef(new Map<string, HTMLElement>());
   // The context menu's anchor, moved under what was right-clicked.
   const anchor = useRef<HTMLButtonElement>(null);
@@ -570,10 +609,7 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
             <MenuButton icon={<Pencil />} onClick={() => edit({ folder: target.folder })}>
               Rename…
             </MenuButton>
-            <MenuButton
-              icon={<Trash2 />}
-              onClick={() => bookmarks.set(removedFolder(bookmarks.get(), target.folder!))}
-            >
+            <MenuButton icon={<Trash2 />} onClick={() => deleteFolder(target.folder!)}>
               Delete folder
             </MenuButton>
             <div role="separator" className="my-1 h-px bg-border" />
@@ -586,7 +622,19 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
       {createPortal(
         <>
           <BookmarkEditor id={editorId} url={editing.url} title="Edit bookmark" />
-          <FolderEditor id={folderEditorId} folderId={editing.folder} />
+          <FolderEditor id={folderEditorId} folderId={editing.folder} onDelete={deleteFolder} />
+          <ConfirmDialog
+            ref={confirm}
+            title="Delete this folder?"
+            action="Delete folder"
+            onConfirm={() => {
+              if (deleting) bookmarks.set(removedFolder(bookmarks.get(), deleting.id));
+              confirm.current?.close();
+            }}
+          >
+            Its {deleting?.count === 1 ? "bookmark goes" : `${deleting?.count} bookmarks go`} with
+            it.
+          </ConfirmDialog>
         </>,
         document.body,
       )}
