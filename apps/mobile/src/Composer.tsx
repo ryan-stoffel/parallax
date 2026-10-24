@@ -7,20 +7,12 @@ import { File } from "expo-file-system";
 import * as Haptics from "expo-haptics";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
-import {
-  ArrowUp,
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  FileText,
-  Plus,
-  Square,
-  X,
-} from "lucide-react-native";
+import { Asset, type AssetMetadata } from "expo-media-library";
+import { Check, ChevronLeft, ChevronRight, FileText, Plus, X } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import {
-  ActionSheetIOS,
   Image,
+  Keyboard,
   Modal,
   Pressable,
   ScrollView,
@@ -48,16 +40,20 @@ import { imageCaps } from "../../desktop/src/renderer/images";
 import { defaultBackend } from "../../desktop/src/renderer/settings/shared";
 import type { ThreadStart } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
+import { AttachSheet } from "./AttachSheet";
 import type { Computer } from "./fleet";
 import { openLightbox } from "./Lightbox";
 import { ProviderLogo } from "./logos";
 import { allAccess, useOffers, type Offer } from "./offers";
-import { Icon, NightOrb, T, useColors } from "./ui";
+import { SendButton } from "./SendButton";
+import { Icon, T, useColors } from "./ui";
 
-
-/** A file picked to send: an image (shown, and sent as one), or any other file. */
+/**
+ * A file picked to send: an image (shown, and sent as one), with the library photo's id when it was
+ * tapped in the attach sheet, or any other file.
+ */
 type Attached =
-  | { kind: "image"; key: string; image: PromptImage; uri: string }
+  | { kind: "image"; key: string; image: PromptImage; uri: string; asset?: string }
   | { kind: "file"; key: string; name: string; uri: string; size: number };
 
 // The longest edge a photo is sent at, as the desktop's `readImage`: Anthropic refuses larger
@@ -65,7 +61,10 @@ type Attached =
 const MAX_EDGE = 2000;
 
 /** A picked photo as an image plxd takes: at most 2000 px on its long edge, as JPEG. */
-async function photo(asset: ImagePicker.ImagePickerAsset): Promise<Attached> {
+async function photo(
+  asset: Pick<ImagePicker.ImagePickerAsset, "uri" | "width" | "height">,
+  libraryId?: string,
+): Promise<Attached> {
   const long = Math.max(asset.width, asset.height);
   const context = ImageManipulator.manipulate(asset.uri);
   if (long > MAX_EDGE)
@@ -80,6 +79,7 @@ async function photo(asset: ImagePicker.ImagePickerAsset): Promise<Attached> {
     key: uuidv7(),
     uri: rendered.uri,
     image: { mediaType: "image/jpeg", data: rendered.base64 ?? "" },
+    ...(libraryId && { asset: libraryId }),
   };
 }
 
@@ -400,6 +400,9 @@ export function Composer({
   const [permission, setPermission] = useState<AgentPermission>();
   const [attached, setAttached] = useState<Attached[]>([]);
   const [sheet, setSheet] = useState<Page>();
+  const [attaching, setAttaching] = useState(false);
+  // Library photos tapped in the attach sheet and still being read, shown as attached already.
+  const [pending, setPending] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const connected = !!computer?.connected;
@@ -418,41 +421,69 @@ export function Composer({
   const text = draft;
   const ready = !!(text.trim() || attached.length) && !!computer && !sending;
 
-  async function pickPhotos(camera: boolean) {
+  const maxImages = caps?.maxImages ?? 10;
+
+  /** Attaches photos from the library's picker or the camera. Resolves to whether any were. */
+  async function pickPhotos(camera: boolean): Promise<boolean> {
     const options: ImagePicker.ImagePickerOptions = {
       mediaTypes: ["images"],
       quality: 1,
       allowsMultipleSelection: !camera,
-      selectionLimit: caps?.maxImages ?? 10,
+      selectionLimit: maxImages,
     };
-    const picked = camera
-      ? await ImagePicker.launchCameraAsync(options)
-      : await ImagePicker.launchImageLibraryAsync(options);
-    if (picked.canceled) return;
-    const photos = await Promise.all(picked.assets.map(photo));
-    setAttached((a) => [...a, ...photos]);
+    try {
+      const picked = camera
+        ? await ImagePicker.launchCameraAsync(options)
+        : await ImagePicker.launchImageLibraryAsync(options);
+      if (picked.canceled) return false;
+      const photos = await Promise.all(picked.assets.map((a) => photo(a)));
+      setAttached((a) => [...a, ...photos]);
+      return true;
+    } catch (e) {
+      setError((e as Error).message);
+      return false;
+    }
   }
 
-  async function pickFiles() {
+  /** Attaches files from the document picker. Resolves to whether any were. */
+  async function pickFiles(): Promise<boolean> {
     const picked = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
-    if (picked.canceled) return;
+    if (picked.canceled) return false;
     setAttached((a) => [
       ...a,
       ...picked.assets.map(
         (f): Attached => ({ kind: "file", key: uuidv7(), name: f.name, uri: f.uri, size: f.size ?? 0 }),
       ),
     ]);
+    return true;
   }
 
-  function attach() {
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options: ["Photo library", "Take photo", "Files", "Cancel"], cancelButtonIndex: 3 },
-      (i) => {
-        if (i === 0) void pickPhotos(false);
-        if (i === 1) void pickPhotos(true);
-        if (i === 2) void pickFiles();
-      },
-    );
+  /** Attaches a recent photo tapped in the attach sheet, or takes it off when it's attached. */
+  async function toggleRecent(p: AssetMetadata) {
+    if (pending.includes(p.id)) return;
+    const had = attached.find((a) => a.kind === "image" && a.asset === p.id);
+    if (had) return setAttached((a) => a.filter((x) => x !== had));
+    if (attached.filter((a) => a.kind === "image").length + pending.length >= maxImages) {
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return setError(`A message takes up to ${maxImages} photos.`);
+    }
+    setPending((x) => [...x, p.id]);
+    try {
+      const asset = new Asset(p.id);
+      const picked = await photo(
+        {
+          uri: await asset.getUri(),
+          width: p.width ?? (await asset.getWidth()),
+          height: p.height ?? (await asset.getHeight()),
+        },
+        p.id,
+      );
+      setAttached((a) => [...a, picked]);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setPending((x) => x.filter((id) => id !== p.id));
+    }
   }
 
   async function send(steer: boolean) {
@@ -576,7 +607,10 @@ export function Composer({
             accessibilityRole="button"
             accessibilityLabel="Attach"
             hitSlop={8}
-            onPress={attach}
+            onPress={() => {
+              Keyboard.dismiss();
+              setAttaching(true);
+            }}
             style={({ pressed }) => [styles.round, { backgroundColor: pressed ? c.hover : c.selected }]}
           >
             <Icon icon={Plus} size={18} color={c.foreground} />
@@ -601,17 +635,14 @@ export function Composer({
           )}
           <View style={{ flex: 1 }} />
           {working && !ready && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Stop"
+            <SendButton
+              stop
+              label="Stop"
               onPress={() => {
                 void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                 onStop();
               }}
-              style={[styles.send, { backgroundColor: c.foreground }]}
-            >
-              <Icon icon={Square} size={12} color={c.background} strokeWidth={3} />
-            </Pressable>
+            />
           )}
           {working && ready && (
             <Pressable
@@ -625,19 +656,19 @@ export function Composer({
             </Pressable>
           )}
           {(!working || ready) && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={working ? "Queue" : "Send"}
-              disabled={!ready}
-              onPress={() => void send(false)}
-              style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }]}
-            >
-              <NightOrb size={38} />
-              <Icon icon={ArrowUp} size={18} color={ready ? "#ffffff" : "rgba(255, 255, 255, 0.45)"} strokeWidth={2.5} />
-            </Pressable>
+            <SendButton label={working ? "Queue" : "Send"} disabled={!ready} onPress={() => void send(false)} />
           )}
         </View>
       </View>
+      <AttachSheet
+        open={attaching}
+        onClose={() => setAttaching(false)}
+        selected={[...attached.flatMap((a) => (a.kind === "image" && a.asset ? [a.asset] : [])), ...pending]}
+        onToggle={(p) => void toggleRecent(p)}
+        onPhotos={() => pickPhotos(false)}
+        onCamera={() => pickPhotos(true)}
+        onFiles={pickFiles}
+      />
       <ModelSheet
         open={!!sheet}
         page={sheet ?? "model"}
@@ -744,6 +775,5 @@ const styles = StyleSheet.create({
   pill: { height: 38, borderRadius: 19, paddingHorizontal: 16, justifyContent: "center", maxWidth: 230 },
   pillText: { fontSize: 15 },
   steer: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 },
-  send: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
 });
 
