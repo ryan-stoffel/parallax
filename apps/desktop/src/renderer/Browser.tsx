@@ -96,6 +96,10 @@ export const pageFit = stored<Fit>("parallax.pageFit", "panel", (raw, f) =>
   raw === "monitor" || raw === "panel" ? raw : f,
 );
 
+// The narrowest bar that holds the compact row: the address bar's 192 px, a tab and New tab, the
+// extensions and More, and room for a couple of extensions' buttons.
+const COMPACT_WIDTH = 460;
+
 // The compact layout's slots in each browser's top bar, by scope: before its tabs, for back,
 // forward, reload, and the address bar, and after them, for the extensions and More. The shown
 // tab draws its toolbar into them.
@@ -753,7 +757,22 @@ function Tab({
  */
 export function BrowserTabBar({ scope }: { scope: string }) {
   const browser = browserTabs.use()[scope];
-  const compact = browserLayout.use() === "compact";
+  // The bar's width, which its parent sets, so it doesn't change with what the bar holds.
+  const bar = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(Infinity);
+  useEffect(() => {
+    const el = bar.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => setWidth(entry!.contentRect.width));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [browser !== undefined]);
+  // Compact only while one row holds it all, so nothing slides under the buttons after the bar;
+  // a narrower bar, and an agent's tab, whose own toolbar is a row of its own, get the classic row.
+  const compact =
+    browserLayout.use() === "compact" &&
+    width >= COMPACT_WIDTH &&
+    !browser?.selected.startsWith("a:");
   // Stable per scope, so React doesn't detach and reattach the slots on every render.
   const start = useCallback(
     (el: HTMLDivElement | null) => {
@@ -771,8 +790,8 @@ export function BrowserTabBar({ scope }: { scope: string }) {
   );
   if (!browser) return null;
   return (
-    <div className="flex min-w-0 flex-1 items-center gap-1">
-      {/* In a narrow panel the address bar keeps room to read, and the tabs room for one. */}
+    <div ref={bar} className="flex min-w-0 flex-1 items-center gap-1">
+      {/* The address bar keeps room to read, and the tabs room for one. */}
       {compact && <div ref={start} className="flex min-w-48 flex-[3] items-center" />}
       <div className={`flex min-w-16 items-center gap-0.5 ${compact ? "flex-[2]" : "flex-1"}`}>
         <div
