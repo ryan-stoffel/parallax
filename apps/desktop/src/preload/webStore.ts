@@ -63,14 +63,26 @@ if (location?.origin === "https://chromewebstore.google.com") {
     onUninstalled: event(uninstalled),
   };
 
+  // Chrome's user agent, which the store reads to enable Add to Chrome. The browser's own keeps
+  // Electron's token (main.ts).
+  const { navigator } = globalThis as unknown as { navigator: { userAgent: string } };
+  const userAgent = navigator.userAgent.replace(/ Electron\/\S+/, "");
+
   contextBridge.executeInMainWorld({
-    func: (store: object, manage: object) => {
-      const scope = globalThis as { chrome?: Record<string, object | undefined> };
+    func: (store: object, manage: object, agent: string) => {
+      const scope = globalThis as {
+        chrome?: Record<string, object | undefined>;
+        Navigator: { prototype: object };
+      };
       const chrome = (scope.chrome ??= {});
       chrome["webstorePrivate"] = store;
       chrome["management"] = Object.assign(chrome["management"] ?? {}, manage);
       chrome["runtime"] ??= {};
+      Object.defineProperty(scope.Navigator.prototype, "userAgent", {
+        get: () => agent,
+        configurable: true,
+      });
     },
-    args: [webstorePrivate, management],
+    args: [webstorePrivate, management, userAgent],
   });
 }

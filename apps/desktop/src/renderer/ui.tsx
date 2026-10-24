@@ -16,6 +16,7 @@ import {
 } from "react";
 
 import { commandOf, keybindingOf, useShortcutLabel, type Command } from "./keybindings";
+import { Check as CheckSymbol } from "./symbols";
 
 /**
  * A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere, and
@@ -119,6 +120,13 @@ export function IconButton({
 }
 
 /**
+ * A browser toolbar's button, at Helium's size: 32 px, with a 20 px icon (PLX-981). It goes in an
+ * IconButton's `className`, which replaces its own.
+ */
+export const toolbarButton =
+  "grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-5";
+
+/**
  * Set up GitHub, beside a pull request action that failed because `gh` is missing or signed out
  * on the host (PLX-423). It opens Settings > Source control on that host.
  */
@@ -208,6 +216,42 @@ export const popoverBeside = "w-[min(26rem,90vw)] [position-area:top_span-left]"
 /** A row in a menu panel. */
 export const menuItem =
   "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
+
+/** The rule between a browser menu's groups, edge to edge. */
+export const toolbarMenuDivider = "-mx-1.5 my-1.5 border-border";
+
+/**
+ * A row in the browser toolbar's menus, as Helium's (PLX-981): its icon, label, and shortcut, or
+ * a check while `checked`, which makes it a checkbox.
+ */
+export function ToolbarMenuRow({
+  icon,
+  label,
+  keys,
+  checked,
+  className = "",
+  ...props
+}: {
+  icon: ReactNode;
+  label: ReactNode;
+  keys?: string;
+  checked?: boolean;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type="button"
+      role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
+      aria-checked={checked}
+      className={`flex h-8 w-full items-center gap-3 rounded-md px-2.5 text-left text-[13px] enabled:hover:bg-hover disabled:opacity-40 [&_svg]:size-[18px] [&_svg]:shrink-0 [&>svg:first-child]:text-muted-foreground ${className}`}
+      {...props}
+    >
+      {icon}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {keys && <span className="shrink-0 pl-3 text-[12px] text-faint-foreground">{keys}</span>}
+      {checked && <CheckSymbol aria-hidden className="text-accent" />}
+    </button>
+  );
+}
 
 /** A split row's chevron, after a thin divider from its main part. */
 export const splitChevron =

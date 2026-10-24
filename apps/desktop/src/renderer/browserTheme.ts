@@ -31,8 +31,6 @@ type Seeded = { seed: string; variant: "tonal" | "neutral" };
 export interface BrowserTheme {
   id: string;
   name: string;
-  /** Its swatch's color, as Chrome's picker draws it. */
-  swatch: string;
   colors?: Fixed | Seeded;
 }
 
@@ -47,11 +45,10 @@ const chromeDark: BrowserColors = {
 };
 
 export const browserThemes: readonly BrowserTheme[] = [
-  { id: "parallax", name: "Match Parallax", swatch: "transparent" },
+  { id: "parallax", name: "Match Parallax" },
   {
     id: "helium",
     name: "Helium",
-    swatch: "#EDEDED",
     colors: {
       // One surface for frame and toolbar; the address bar and the tab in front a grey over it.
       light: {
@@ -77,7 +74,6 @@ export const browserThemes: readonly BrowserTheme[] = [
   {
     id: "default",
     name: "Default",
-    swatch: "#D3E3FD",
     colors: {
       light: {
         frame: "#D3E3FD",
@@ -94,7 +90,6 @@ export const browserThemes: readonly BrowserTheme[] = [
   {
     id: "grey",
     name: "Grey",
-    swatch: "#E3E3E3",
     colors: {
       light: {
         frame: "#E3E3E3",
@@ -126,7 +121,6 @@ export const browserThemes: readonly BrowserTheme[] = [
   ).map(([id, name, seed, variant]) => ({
     id,
     name,
-    swatch: seededColors({ seed, variant }, false).frame,
     colors: { seed, variant },
   })),
 ];
@@ -234,10 +228,13 @@ const subscribeDark = (listener: () => void) => {
 };
 const isDark = () => document.documentElement.classList.contains("dark");
 
+/** Whether the app paints dark now. */
+export const useDark = () => useSyncExternalStore(subscribeDark, isDark);
+
 /** The style a browser's UI takes for the picked theme in the app's mode, or none for the app's. */
 export function useBrowserTheme(): CSSProperties | undefined {
   const id = browserTheme.use();
-  const dark = useSyncExternalStore(subscribeDark, isDark);
+  const dark = useDark();
   const colors = colorsOf(id, dark);
   return colors && themeStyle(colors);
 }

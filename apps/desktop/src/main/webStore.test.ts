@@ -3,23 +3,15 @@ import { expect, test, vi } from "vite-plus/test";
 vi.mock("electron", () => ({ app: {} }));
 vi.mock("electron-chrome-extensions", () => ({ ElectronChromeExtensions: class {} }));
 
-const { chromeUserAgent, storeStatus } = await import("./webStore");
+const { browserUserAgent, storeStatus } = await import("./webStore");
 
-test("the browser's user agent is Chrome's, without Electron's and the app's tokens", () => {
+test("the browser's user agent is Electron's, without the app's token", () => {
   expect(
-    chromeUserAgent(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) parallax-desktop/0.0.0 Chrome/144.0.7559.60 Electron/44.4.5 Safari/537.36",
+    browserUserAgent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Parallax(Nightly)/2610.12304.11500-nightly Chrome/144.0.7559.60 Electron/44.4.5 Safari/537.36",
     ),
   ).toBe(
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.7559.60 Safari/537.36",
-  );
-  // A nightly's name has parentheses.
-  expect(
-    chromeUserAgent(
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Parallax(Nightly)/2610.12304.11500-nightly Chrome/144.0.7559.60 Electron/44.4.5 Safari/537.36",
-    ),
-  ).toBe(
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.7559.60 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.7559.60 Electron/44.4.5 Safari/537.36",
   );
 });
 

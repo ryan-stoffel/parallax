@@ -1813,6 +1813,8 @@ export const mockBridge: ParallaxBridge = {
   clearBrowsingData: () => delay(undefined),
   downloads: () => delay([]),
   onDownloads: () => () => {},
+  googleAccount: () => delay(undefined),
+  onGoogleAccount: () => () => {},
   downloadAction: () => {},
   setDownloadPrefs: () => {},
   updatable: false,

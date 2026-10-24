@@ -9,7 +9,7 @@ import {
 import { installExtension, removeExtension } from "./extensions";
 
 // The Chrome Web Store's install button in the side panel's browser (PLX-962). The store enables
-// Add to Chrome only for a Chrome user agent, and installs through `chrome.webstorePrivate` and
+// Add to Chrome only for a Chrome user agent, which its preload gives its pages, and installs through `chrome.webstorePrivate` and
 // `chrome.management`, which Chrome gives its pages alone. The webStore preload fills those in on
 // the store's pages and asks main here, which installs through the same download as a pasted store
 // link (extensions.ts), so either way an extension lands in one folder and one list. The calls
@@ -18,11 +18,13 @@ import { installExtension, removeExtension } from "./extensions";
 export const storeOrigin = "https://chromewebstore.google.com";
 
 /**
- * The user agent with Electron's and the app's tokens taken out, so pages see plain Chrome. A
- * nightly's name, `Parallax (Nightly)`, arrives as `Parallax(Nightly)/<version>`.
+ * The browser's user agent: Electron's own, without the app's token. Cloudflare's Turnstile and
+ * Google's sign-in tell Electron from Chrome by other means, and refuse a browser whose user agent
+ * claims plain Chrome (PLX-981); the store's pages read Chrome's from their preload. A nightly's
+ * name, `Parallax (Nightly)`, arrives as `Parallax(Nightly)/<version>`.
  */
-export const chromeUserAgent = (userAgent: string) =>
-  userAgent.replace(/ (?!(?:AppleWebKit|Chrome|Safari)\/)\S+\/\S+/g, "");
+export const browserUserAgent = (userAgent: string) =>
+  userAgent.replace(/ (?!(?:AppleWebKit|Chrome|Electron|Safari)\/)\S+\/\S+/g, "");
 
 /**
  * What the store shows for an extension: added, too old for Chrome to install (Manifest V2, as

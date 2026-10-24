@@ -200,6 +200,10 @@ export interface ParallaxBridge {
   downloads(): Promise<DownloadInfo[]>;
   /** Calls `listener` with the downloads as they change. Returns the unsubscribe function. */
   onDownloads(listener: (downloads: DownloadInfo[]) => void): () => void;
+  /** The Google account signed in to the browser, for its profile button (PLX-981). */
+  googleAccount(): Promise<GoogleAccount | undefined>;
+  /** Calls `listener` with the account as it signs in or out. Returns the unsubscribe function. */
+  onGoogleAccount(listener: (account: GoogleAccount | undefined) => void): () => void;
   /** Opens a download, shows it in its folder, or cancels it; or, without an id, clears the finished. */
   downloadAction(id: string | undefined, action: "open" | "show" | "cancel" | "clear"): void;
   /** Where downloads go, the OS's folder when empty, and whether to ask each time. */
@@ -776,6 +780,13 @@ export type BrowserAction =
     }
   // Cmd/Ctrl+1 to 8's tab, from 0 (PLX-969).
   | { kind: "tab"; index: number };
+
+/** A Google account signed in to the browser (googleAccount.ts in main); `picture` is inline. */
+export interface GoogleAccount {
+  name: string;
+  email: string;
+  picture?: string;
+}
 
 /** One of the browser's downloads (PLX-975), as main tracks it (downloads.ts). */
 export interface DownloadInfo {

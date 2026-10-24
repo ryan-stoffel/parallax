@@ -53,6 +53,8 @@ import { PullRequestsPage, type PrEntry } from "./PullRequestsPage";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { Browser, BrowserTabBar } from "./Browser";
+import { browserSettingsAsked } from "./browserSettings";
+import { anchorOf } from "./settings/search";
 import { useBrowserTheme } from "./browserTheme";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
@@ -187,6 +189,13 @@ export function App() {
     setSettingsHost(hostId);
     setSettingsFocus(undefined);
   };
+  // Settings › Browser, from the browser's menus (Browser.tsx).
+  const askedSettings = browserSettingsAsked.use();
+  useEffect(() => {
+    if (!askedSettings) return;
+    openSettings("browser");
+    if (askedSettings.title) setSettingsFocus({ anchor: anchorOf(askedSettings.title) });
+  }, [askedSettings]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // What each chat's right column shows, if anything: the side panel's views, or the browser,
   // which is apart from them (PLX-962). Each host's chats stay independent when switching.

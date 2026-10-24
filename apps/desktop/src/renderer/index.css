@@ -2059,24 +2059,48 @@ body {
   }
 }
 
-/* The side panel browser's extension buttons (Extensions.tsx), electron-chrome-extensions'
-   element, drawn like the toolbar's IconButtons. */
-browser-action-list {
-  display: flex;
-  gap: 2px;
+/* The browser's pinned extension buttons (Extensions.tsx), electron-chrome-extensions'
+   `<button is="browser-action">`, drawn like the toolbar's buttons (ui.tsx's toolbarButton). The
+   library styles them only inside its own list. */
+.browser-action {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 20px;
 }
-browser-action-list::part(action) {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  background-size: 16px;
-}
-browser-action-list::part(action):hover {
+.browser-action:hover {
   background-color: var(--hover);
 }
-browser-action-list::part(badge) {
+.browser-action.no-icon::after {
+  content: attr(data-letter);
+  position: absolute;
+  inset: 6px;
+  display: grid;
+  place-items: center;
   border-radius: 4px;
-  font-size: 9px;
+  background: var(--selected);
+  color: var(--foreground);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.browser-action .badge {
+  position: absolute;
+  right: 1px;
+  bottom: 2px;
+  max-width: 100%;
+  height: 13px;
+  padding: 0 3px;
+  overflow: hidden;
+  border-radius: 4px;
+  font-size: 9.5px;
+  line-height: 13px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px var(--browser-toolbar, var(--background));
 }
 
 /* A device settling into the Device view (PLX-886). */
