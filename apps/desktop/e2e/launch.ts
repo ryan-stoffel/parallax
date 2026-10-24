@@ -24,13 +24,16 @@ export interface Launched {
  * Launches the app with a plxd of its own, whose workers play `script`, a fake backend script in
  * this folder or at an absolute path. `bin`, when given, goes first on PATH. `recordVideo`, when
  * given, records the window as Playwright's option of that name does. `dataDir`, when given, is
- * an earlier launch's, for plxd to start from its data again.
+ * an earlier launch's, for plxd to start from its data again. plxd stops when the app exits
+ * (PLX-990), unless `outliveApp`, for a test that reopens the app on a plxd still running: then it
+ * stops when this test process exits, or at `close`.
  */
 export async function launch(
   script: string,
   bin?: string,
   recordVideo?: { dir: string; size?: { width: number; height: number } },
   dataDir = mkdtempSync(path.join(tmpdir(), "parallax-e2e-")),
+  outliveApp = false,
 ): Promise<Launched> {
   if (!existsSync(plxd)) throw new Error(`no plxd at ${plxd}; see the top of launch.ts`);
   const env: NodeJS.ProcessEnv = {
@@ -48,6 +51,8 @@ export async function launch(
   // As in scripts/ci/launch-app: these would run Electron as Node, or load the dev server.
   delete env["ELECTRON_RUN_AS_NODE"];
   delete env["PLX_DEV_SERVER_URL"];
+  delete env["PLXD_EXIT_WITH"];
+  if (outliveApp) env["PLXD_EXIT_WITH"] = String(process.pid);
   // Unset variables are undefined in `process.env`, and launch skips them.
   // Its own userData too, so a local run never shares the developer's app profile or hosts.
   const userData = `--user-data-dir=${mkdtempSync(path.join(tmpdir(), "parallax-e2e-app-"))}`;
@@ -105,7 +110,11 @@ export async function stopServe(dataDir: string) {
   // Never pid 0 or below, which process.kill reads as a whole process group.
   if (Number.isSafeInteger(pid) && pid > 1) {
     // A dev or test serve stops by itself once its app has exited (PLX-990), so it may be gone.
-    if (alive(pid)) process.kill(pid, "SIGTERM");
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+    }
     // Seeding or reopening this data directory must wait until SQLite has closed on Windows.
     await expect.poll(() => alive(pid)).toBe(false);
     // Windows reports the process gone before it has unmapped plxd.sqlite3-shm, and opening the

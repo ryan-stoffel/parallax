@@ -11,7 +11,8 @@ test.afterAll(() => close(launched));
 // plxd runs the shell (PLX-637), so quitting the app leaves it running, and the next launch shows
 // what it printed and types into the same shell.
 test("a thread's terminal keeps running, with its output, after the app quits and reopens", async () => {
-  launched = await launch("agent.json");
+  // plxd has to outlive the app here.
+  launched = await launch("agent.json", undefined, undefined, undefined, true);
   let { page } = launched;
   const shot = (name: string) => page.screenshot({ path: test.info().outputPath(`${name}.png`) });
   await expect
@@ -51,7 +52,7 @@ test("a thread's terminal keeps running, with its output, after the app quits an
   await expect(terminal).toContainText("still here-reloaded");
 
   await launched.app.close();
-  launched = await launch("agent.json", undefined, undefined, launched.dataDir);
+  launched = await launch("agent.json", undefined, undefined, launched.dataDir, true);
   ({ page } = launched);
   await page.getByText("Tidy up the README").first().click();
   await page.getByRole("button", { name: "Show terminal" }).click();
