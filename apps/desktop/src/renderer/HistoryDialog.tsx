@@ -23,7 +23,8 @@ export function HistoryDialog({
     <dialog
       ref={ref}
       aria-label="History"
-      onToggle={(e) => setOpen(e.newState === "open")}
+      // Its own toggles, not the confirm's inside it, whose toggle bubbles up here too.
+      onToggle={(e) => e.target === e.currentTarget && setOpen(e.newState === "open")}
       className="m-auto flex h-[min(42rem,85vh)] w-[min(44rem,90vw)] flex-col rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/40 not-open:hidden"
     >
       {open && <HistoryList onOpen={onOpen} />}
