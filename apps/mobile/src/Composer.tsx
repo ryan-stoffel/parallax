@@ -368,13 +368,14 @@ export function Composer({
   const [provider, setProvider] = useState<string>();
   // A new thread runs on its computer's default provider unless another is picked, as on the
   // desktop, so the sheet opens on that one's models.
-  const [standard, setStandard] = useState<string>();
+  const [read, setRead] = useState<{ backend?: string }>();
+  const standard = read?.backend;
   const hostId = computer?.machine.id;
   const online = !!computer?.connected;
   useEffect(() => {
     if (!onStart || !hostId || !online) return;
     let live = true;
-    void defaultBackend(hostId, "worker").then((b) => live && setStandard(b));
+    void defaultBackend(hostId, "worker").then((backend) => live && setRead({ backend }));
     return () => {
       live = false;
     };
@@ -474,14 +475,15 @@ export function Composer({
       } else if (files.length) throw new Error(`${computer.machine.name}'s Parallax can't take files.`);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       if (onStart) {
+        // The provider shown when it isn't the default: one picked, or another when the default's is
+        // off. Until the default is read, only one picked, so a default API key isn't passed over.
+        const moved = read ? (offer.id !== standard ? offer.id : undefined) : provider;
         const failed = await onStart({
           text: withFiles(text.trim(), paths),
           images,
           options: {
             ...(changes && model !== undefined && model !== "" && { model }),
-            // The provider shown, which is the default's unless another was picked or it's off.
-            ...(offer.id &&
-              offer.id !== standard && { account: { kind: "subscription" as const, backend: offer.id } }),
+            ...(moved && { account: { kind: "subscription" as const, backend: moved } }),
             ...(changes && effort && offer.efforts && { effort }),
             ...(changes && permission && offer.permissions.includes(permission) && { permission }),
           },
