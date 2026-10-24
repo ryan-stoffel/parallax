@@ -2,7 +2,9 @@ import type { DidFailLoadEvent, PageTitleUpdatedEvent, WebviewTag } from "electr
 import {
   ArrowLeft,
   ArrowRight,
+  Bookmark,
   Bot,
+  Check,
   Code,
   Globe,
   Plus,
@@ -27,6 +29,7 @@ import { createPortal } from "react-dom";
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
+import { BookmarksBar, BookmarkStar, bookmarksBar } from "./Bookmarks";
 import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
@@ -369,6 +372,7 @@ export function Browser({
           key={t.id}
           scope={scope}
           shown={!shownTab && t.id === current}
+          page={t.url ? { url: t.url, title: t.title, icon: t.icon } : undefined}
           load={t.load}
           remoteHost={remoteHost}
           onChange={(patch) => update(t.id, patch)}
@@ -435,6 +439,7 @@ export const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
 function Tab({
   scope,
   shown,
+  page,
   load,
   remoteHost,
   onChange,
@@ -442,6 +447,8 @@ function Tab({
 }: {
   scope?: string;
   shown: boolean;
+  /** The page it shows, for its bookmark star (Bookmarks.tsx). */
+  page?: { url: string; title?: string; icon?: string };
   load?: { url: string };
   remoteHost?: string;
   onChange: (patch: Partial<OwnTab>) => void;
@@ -463,6 +470,7 @@ function Tab({
   const [area, setArea] = useState<Size>(MONITOR);
   const fit = pageFit.use();
   const layout = browserLayout.use();
+  const showBookmarks = bookmarksBar.use();
   const slots = toolbarSlots.use()[scope ?? ""];
   const pageSize = fixed ?? fitSize(area.width, area.height, fit);
   const refit = (next: Fit) => {
@@ -614,6 +622,7 @@ function Tab({
           onBlur={() => setEditing(false)}
           className={addressInput}
         />
+        <BookmarkStar page={page} />
       </form>
     </>
   );
@@ -630,6 +639,17 @@ function Tab({
         >
           <Code aria-hidden />
           Developer tools
+        </button>
+        <button
+          type="button"
+          role="menuitemcheckbox"
+          aria-checked={showBookmarks}
+          onClick={() => bookmarksBar.set(!showBookmarks)}
+          className={menuItem}
+        >
+          <Bookmark aria-hidden />
+          Show bookmarks bar
+          {showBookmarks && <Check aria-hidden className="ml-auto size-3.5" />}
         </button>
         <div className="my-1 h-px bg-border" />
         <p className={menuHeading}>Layout</p>
@@ -679,6 +699,7 @@ function Tab({
           {toolsBar}
         </div>
       )}
+      <BookmarksBar onOpen={(url, newTab) => (newTab ? ask({ kind: "open", url }) : open(url))} />
       {remoteHost && (
         <p className="border-b border-border px-3 py-1.5 text-[12px] text-muted-foreground">
           Pages load on this computer, so localhost isn't {remoteHost}. Forwarding its ports isn't
