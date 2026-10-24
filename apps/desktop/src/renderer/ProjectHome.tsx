@@ -1,29 +1,30 @@
-import { ArrowUp, ChevronRight, CircleAlert, LoaderCircle } from "lucide-react";
-import { useState } from "react";
+import {
+  ArrowUp,
+  BookOpen,
+  ChevronLeft,
+  CircleAlert,
+  CircleCheck,
+  LoaderCircle,
+  MessageCircleQuestion,
+} from "lucide-react";
+import { useState, type ReactNode } from "react";
 
 import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";
 import { runAttention, type Attention } from "./attention";
-import { DoneMark } from "./AttentionMark";
+import { WorkingMark } from "./AttentionMark";
+import { AllFiles, board, ContextBody, ContextReader, type ProjectContext } from "./ContextPanel";
 import { questionOf, type InboxView } from "./Inbox";
-import { Loader } from "./Loader";
-import { locale } from "./locale";
+import { dayLabel, locale } from "./locale";
 import { notify } from "./notifications";
 import { OpenHint } from "./OpenHint";
-import type { ProjectAgentsView } from "./ProjectAgents";
-import { instanceLogo } from "./providers";
-import { age, backendLogos, ProjectIcon } from "./Sidebar";
-import { titleOf } from "./threads";
-import type { Approval } from "./transcript";
 import { clockOptions } from "./prefs";
+import type { ProjectAgentsView } from "./ProjectAgents";
+import { age, ProjectIcon } from "./Sidebar";
+import { titleOf } from "./threads";
+import { IconButton } from "./ui";
+import type { Approval } from "./transcript";
 
 type Group = "waiting" | "working" | "ready" | "resolved";
-
-const groups: { key: Group; label: string; empty?: string }[] = [
-  { key: "waiting", label: "Waiting on you", empty: "Questions, failures, and approvals." },
-  { key: "working", label: "Working" },
-  { key: "ready", label: "Done" },
-  { key: "resolved", label: "Resolved" },
-];
 
 interface Row {
   run: AgentRun;
@@ -37,14 +38,21 @@ interface Row {
   approval?: Approval;
 }
 
+const dayMs = 24 * 60 * 60 * 1000;
+
 /**
- * A Project's home in the side panel, built as Claude's and Cursor's Projects are: the Project and
- * a line on where it stands, then each child once, grouped Waiting on you, Working, Done, and
- * Resolved (folded). A child's row is its title and what it last reported, from the inbox (0043),
- * which this view stands in for: a question takes its answer in place, and opening a child marks
- * what it reported read. A child is Done while its finish is unread, and Resolved once read.
+ * A Project's home in the side panel, set like Cursor's project page. Its head is the Project's
+ * icon, name, and how many of its threads are open, a chip for each open state, and a book that
+ * opens All files, its context folder as a tree. Then where it stands: the coordinator's status
+ * board, its tasks as circles and its pull requests, issues, and other files linked. Then Running:
+ * the children working or waiting on the user, each with what it last said, a question taking its
+ * answer in place. Then the log: each finished child once, newest first, under its day, with its
+ * diff and the time it finished. A finish is bright until it's opened, which marks what it reported
+ * read (0043).
  */
 export function ProjectHome({
+  hostId,
+  context,
   project,
   agents,
   titles = {},
@@ -52,6 +60,9 @@ export function ProjectHome({
   answerable,
   onOpen,
 }: {
+  hostId: string;
+  /** The Project's context files: its status board, and all of them behind the book. */
+  context: ProjectContext;
   project: Project;
   agents: ProjectAgentsView;
   titles?: Readonly<Record<string, string>>;
@@ -59,97 +70,203 @@ export function ProjectHome({
   answerable: boolean;
   onOpen: (runId: string) => void;
 }) {
-  const [resolvedOpen, setResolvedOpen] = useState(false);
+  const [openPath, setOpenPath] = useState<string>();
+  const [browsing, setBrowsing] = useState(false);
   const rows = rowsOf(project, agents, inbox, answerable, titles);
-  const of = (g: Group) => rows.filter((r) => r.group === g);
-  const waiting = of("waiting").length;
-  const working = of("working").length;
+  const live = rows.filter((r) => r.group === "working" || r.group === "waiting");
+  const log = rows.filter((r) => r.group === "ready" || r.group === "resolved");
   const open = (row: Row) => {
     onOpen(row.run.id);
     const read = row.unread.filter((i) => i.kind !== "needsYou").map((i) => i.id);
     if (read.length) void inbox.seen(read);
   };
+  const answer = (row: Row) => (text: string) =>
+    row.question
+      ? inbox.answer(
+          row.unread.find((i) => i.kind === "needsYou")!,
+          row.question,
+          text,
+        )
+      : Promise.resolve(undefined);
 
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-      <header className="relative flex items-start gap-3 px-2.5 pt-4 pb-5">
-        <div className="min-w-0 flex-1">
-          <h2 className="flex items-center gap-2.5 font-mono text-[17px] tracking-tight">
-            <ProjectIcon icon={project.icon} className="size-5" />
-            <span className="truncate">{project.name}</span>
-          </h2>
-          <p className="mt-1.5 text-[13px] text-muted-foreground">
-            {waiting > 0
-              ? `${waiting} ${waiting === 1 ? "thing is" : "things are"} waiting on you.`
-              : "Nothing is waiting on you."}
-            {working > 0 && ` ${working} working.`}
-          </p>
+  const { files, error } = context;
+  const opened = files.find((f) => f.path === openPath);
+  const notes = files.find((f) => f.path === board);
+
+  if (opened)
+    return (
+      <ContextReader
+        hostId={hostId}
+        project={project.id}
+        files={files}
+        file={opened}
+        onOpen={setOpenPath}
+        onBack={() => setOpenPath(undefined)}
+      />
+    );
+  if (browsing)
+    return (
+      <div className="flex min-h-0 flex-1 flex-col">
+        <button
+          type="button"
+          onClick={() => setBrowsing(false)}
+          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+        >
+          <ChevronLeft aria-hidden className="size-4 shrink-0" />
+          <span className="truncate">{project.name}</span>
+        </button>
+        <div className="min-h-0 flex-1 overflow-y-auto px-2">
+          <h3 className={`${sectionHeading} px-2.5`}>All files</h3>
+          <AllFiles files={files} onOpen={setOpenPath} />
         </div>
-        <Activity runs={rows.map((r) => r.run)} items={inbox.items} />
+      </div>
+    );
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
+      <header className="flex items-center gap-3 px-1 pt-5">
+        <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border bg-surface">
+          <ProjectIcon icon={project.icon} className="size-5" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="truncate font-brand text-[19px] leading-tight font-semibold tracking-tight">
+            {project.name}
+          </h2>
+          <p className="mt-0.5 text-[12.5px] text-muted-foreground">{openLine(rows)}</p>
+        </div>
+        {files.length > 0 && (
+          <span className="ml-auto self-start">
+            <IconButton label="All files" onClick={() => setBrowsing(true)}>
+              <BookOpen />
+            </IconButton>
+          </span>
+        )}
       </header>
-      {groups.map((g) => {
-        const list = of(g.key);
-        if (list.length === 0 && !g.empty) return null;
-        const folded = g.key === "resolved" && !resolvedOpen;
-        return (
-          <section key={g.key} aria-label={g.label} className="mb-1.5">
-            <h3>
-              <button
-                type="button"
-                disabled={g.key !== "resolved"}
-                aria-expanded={g.key === "resolved" ? resolvedOpen : undefined}
-                onClick={() => setResolvedOpen(!resolvedOpen)}
-                className="flex w-full items-center gap-2 rounded-lg bg-selected/60 px-2.5 py-1.5 text-left text-[13px] text-foreground/85 enabled:hover:bg-selected"
-              >
-                {g.key === "resolved" && (
-                  <ChevronRight
-                    aria-hidden
-                    className={`size-3.5 text-faint-foreground transition-transform ${resolvedOpen ? "rotate-90" : ""}`}
-                  />
-                )}
-                {g.label}
-                <span className="font-mono text-[11.5px] text-faint-foreground tabular-nums">
-                  {list.length}
-                </span>
-                {g.key === "waiting" && list.length > 0 && (
-                  <span aria-hidden className="ml-auto size-1.5 rounded-full bg-warning" />
-                )}
-              </button>
-            </h3>
-            {list.length === 0 ? (
-              <p className="px-2.5 pt-2 pb-1 text-[12.5px] text-faint-foreground">{g.empty}</p>
-            ) : (
-              !folded && (
-                <ul className="pt-1">
-                  {list.map((row) => (
-                    <ChildRow
-                      key={row.run.id}
-                      row={row}
-                      onOpen={() => open(row)}
-                      onAnswer={(text) =>
-                        row.question
-                          ? inbox.answer(
-                              row.unread.find((i) => i.kind === "needsYou")!,
-                              row.question,
-                              text,
-                            )
-                          : Promise.resolve(undefined)
-                      }
-                    />
-                  ))}
-                </ul>
-              )
-            )}
-          </section>
-        );
-      })}
+      <OpenCounts rows={rows} />
+      <section aria-label="Where it stands" className="px-1">
+        {notes ? (
+          <ContextBody
+            hostId={hostId}
+            project={project.id}
+            files={files}
+            file={notes}
+            onOpen={setOpenPath}
+          />
+        ) : (
+          <p className="pt-5 text-[12.5px] text-muted-foreground">
+            The coordinator keeps a status board here once it starts on the work.
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="pt-1.5 text-[12.5px] text-danger">
+            {error}
+          </p>
+        )}
+      </section>
+      {live.length > 0 && (
+        <section aria-label="Running">
+          <h3 className={sectionHeading}>Running</h3>
+          <ul className={group}>
+            {live.map((row) => (
+              <LiveRow key={row.run.id} row={row} onOpen={() => open(row)} onAnswer={answer(row)} />
+            ))}
+          </ul>
+        </section>
+      )}
+      {daysOf(log).map(({ label, rows }) => (
+        <section key={label} aria-label={label}>
+          <h3 className={sectionHeading}>{label}</h3>
+          <ul className={group}>
+            {rows.map((row) => (
+              <LogRow key={row.run.id} row={row} onOpen={() => open(row)} />
+            ))}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }
 
+// A section's heading, and its rows grouped in one rounded list with hairlines between them.
+const sectionHeading =
+  "px-1 pt-6 pb-2 text-[11px] font-medium tracking-[0.08em] text-faint-foreground uppercase";
+const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
+
 /**
- * Each child of `project` once, newest first, with its group on the Project tab: Waiting on you
- * (a question, an approval, or an unread failure), Working, Done (unread news), or Resolved.
+ * How many of a Project's threads are open, working, waiting, or done but unread, and how many
+ * finished in the last week.
+ */
+export function openLine(rows: readonly Pick<Row, "group" | "run">[], now = Date.now()): string {
+  const open = rows.filter((r) => r.group !== "resolved").length;
+  const done = rows.filter(
+    (r) =>
+      (r.group === "ready" || r.group === "resolved") &&
+      now - Date.parse(r.run.updatedAt) < 7 * dayMs,
+  ).length;
+  const first = open > 0 ? `${open} open ${open === 1 ? "thread" : "threads"}` : "No open threads";
+  return done > 0 ? `${first} · ${done} done this week` : first;
+}
+
+/**
+ * The open threads by state, as a row of chips under the head, each with its rows' icon: working,
+ * needing the user, and done but unread. Only states with threads show.
+ */
+function OpenCounts({ rows }: { rows: readonly Row[] }) {
+  const count = (g: Group) => rows.filter((r) => r.group === g).length;
+  const chips = [
+    { label: "working", n: count("working"), icon: <WorkingMark /> },
+    {
+      label: count("waiting") === 1 ? "needs you" : "need you",
+      n: count("waiting"),
+      icon: <MessageCircleQuestion className="text-warning" />,
+    },
+    { label: "to review", n: count("ready"), icon: <CircleCheck className="text-added" /> },
+  ].filter((c) => c.n > 0);
+  if (chips.length === 0) return null;
+  return (
+    <ul aria-label="Open threads" className="mt-3 flex flex-wrap gap-1.5 px-1">
+      {chips.map((c) => (
+        <li
+          key={c.label}
+          className="flex h-6 items-center gap-1.5 rounded-full border border-border bg-surface pr-2.5 pl-2 text-[12px] text-muted-foreground [&_svg]:size-3.5"
+        >
+          <span aria-hidden className="grid">
+            {c.icon}
+          </span>
+          <span className="font-medium text-foreground tabular-nums">{c.n}</span>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Finished rows under their day, Today, Yesterday, or the date, newest first. */
+function daysOf(rows: readonly Row[]): { label: string; rows: Row[] }[] {
+  const days: { label: string; rows: Row[] }[] = [];
+  for (const row of rows.toSorted((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt))) {
+    const label = dayLabel(Date.parse(row.run.updatedAt));
+    if (days.at(-1)?.label === label) days.at(-1)!.rows.push(row);
+    else days.push({ label, rows: [row] });
+  }
+  return days;
+}
+
+/** 1234 as "1.2k", for a diff's counts in a row. */
+const short = (n: number) => (n < 1000 ? `${n}` : `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`);
+
+/**
+ * A title without a Conventional Commit prefix, which plxd's thread titles often lead with:
+ * "fix(GH-27): x" reads "x". Any other title is left as it is.
+ */
+export const plainTitle = (title: string) =>
+  /^(?:feat|fix|chore|docs|test|refactor|perf|build|ci|style|revert)(?:\([^)]+\))?!?: +(\S.*)$/.exec(
+    title,
+  )?.[1] ?? title;
+
+/**
+ * Each child of `project` once, newest first, with its group: waiting on the user (a question, an
+ * approval, or an unread failure) or working, which the Project tab shows in Running; or finished,
+ * ready while its news is unread and resolved once read, which it shows in the log.
  */
 function rowsOf(
   project: Project,
@@ -213,7 +330,11 @@ function subjectOf(row: Row): string | undefined {
   return text.startsWith(`${row.title}: `) ? text.slice(row.title.length + 2) : text;
 }
 
-function ChildRow({
+/**
+ * A child that works or waits on the user: its mark, its title, and what it last said; or, waiting,
+ * Needs you, and its question to answer in place.
+ */
+function LiveRow({
   row,
   onOpen,
   onAnswer,
@@ -222,66 +343,36 @@ function ChildRow({
   onOpen: () => void;
   onAnswer: (text: string) => Promise<string | undefined>;
 }) {
-  const Logo = backendLogos[row.run.backend] ?? instanceLogo(row.run.backend);
-  const unread = row.unread.length > 0;
+  const waiting = row.group === "waiting";
+  const failed = row.attention === "failed";
   const asking = row.question && row.question.status !== "answered";
-  const subject = subjectOf(row);
+  const state = waiting ? (failed ? "Failed" : "Needs you") : "Working";
   return (
     <li>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="group flex w-full min-w-0 items-start gap-3 rounded-lg px-2.5 py-2 text-left hover:bg-hover"
-      >
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span
-            className={`truncate text-[13.5px] ${unread || row.group === "working" ? "text-foreground" : "text-muted-foreground"}`}
-          >
-            {row.title}
-          </span>
-          {!asking && (
-            <span className="line-clamp-2 text-[12.5px] leading-snug text-faint-foreground">
-              {row.group === "working" && !subject ? (
-                <span className="flex items-center gap-1.5 text-working">
-                  <Loader kind="matrix" variant="ripple" size={11} />
-                  Working
-                </span>
-              ) : (
-                (subject ??
-                (row.attention === "failed" ? (
-                  "Failed"
-                ) : (
-                  <span className="flex items-center gap-1.5 text-added [&_svg]:size-3">
-                    <DoneMark animate={false} />
-                    Done
-                  </span>
-                )))
-              )}
-            </span>
-          )}
-        </span>
-        <span className="flex shrink-0 items-center gap-2 pt-0.5">
-          {row.run.diff && row.group === "waiting" && (
-            <span className="font-mono text-[11px] tabular-nums">
-              <span className="text-added">+{row.run.diff.insertions}</span>{" "}
-              <span className="text-danger">−{row.run.diff.deletions}</span>
-            </span>
-          )}
-          <span className="flex items-center gap-1.5 [&_svg]:size-3.5">
-            {Logo && <Logo aria-hidden />}
-            <Mark row={row} unread={unread} />
-          </span>
-          {/* The age gives way to an arrow on hover: the row opens that chat. */}
-          <span className="relative grid w-7 place-items-end">
-            <span className="font-mono text-[11px] text-faint-foreground tabular-nums transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0">
+      <ChildButton
+        icon={
+          !waiting ? (
+            <WorkingMark />
+          ) : failed ? (
+            <CircleAlert className="text-danger" />
+          ) : (
+            <MessageCircleQuestion className="text-warning" />
+          )
+        }
+        title={plainTitle(row.title)}
+        state={state}
+        detail={asking ? undefined : subjectOf(row)}
+        end={
+          waiting ? (
+            <span className={failed ? "text-danger" : "text-warning"}>{state}</span>
+          ) : (
+            <span className="font-mono tabular-nums">
               {age(row.latest?.createdAt ?? row.run.updatedAt)}
             </span>
-            <span className="absolute inset-0 flex items-center justify-end">
-              <OpenHint />
-            </span>
-          </span>
-        </span>
-      </button>
+          )
+        }
+        onOpen={onOpen}
+      />
       {asking && row.question && (
         <QuestionBox
           question={row.question.question}
@@ -293,21 +384,102 @@ function ChildRow({
   );
 }
 
-/** A row's state beside its provider: working, waiting, failed, done, or done and read. */
-function Mark({ row, unread }: { row: Row; unread: boolean }) {
-  if (row.group === "working") return <Loader kind="matrix" variant="scan" size={11} />;
-  if (row.group === "waiting")
-    return row.attention === "failed" ? (
-      <CircleAlert aria-label="Failed" className="text-danger" />
-    ) : (
-      <span aria-label="Waiting on you" className="grid size-3.5 place-items-center">
-        <span className="size-1.5 rounded-full bg-warning" />
-      </span>
-    );
+/**
+ * A finished child in the log: its check, its title, its diff, and when it finished. Bright while
+ * what it reported is unread; dim once read.
+ */
+function LogRow({ row, onOpen }: { row: Row; onOpen: () => void }) {
+  const unread = row.group === "ready";
+  const failed = row.attention === "failed";
+  const diff = row.run.diff;
   return (
-    <span aria-label="Done" className={unread ? "text-added" : "text-faint-foreground"}>
-      <DoneMark animate={false} />
-    </span>
+    <li>
+      <ChildButton
+        icon={
+          failed ? (
+            <CircleAlert className={unread ? "text-danger" : "text-danger/50"} />
+          ) : (
+            <CircleCheck className={unread ? "text-added" : "text-faint-foreground/60"} />
+          )
+        }
+        title={plainTitle(row.title)}
+        dim={!unread}
+        state={failed ? "Failed" : "Done"}
+        detail={
+          diff
+            ? `${diff.files} ${diff.files === 1 ? "file" : "files"}, +${short(diff.insertions)} −${short(diff.deletions)}`
+            : failed
+              ? "Failed"
+              : undefined
+        }
+        end={
+          <span aria-hidden className="font-mono tabular-nums">
+            {new Date(row.run.updatedAt).toLocaleTimeString(locale(), clockOptions())}
+          </span>
+        }
+        onOpen={onOpen}
+      />
+    </li>
+  );
+}
+
+/**
+ * A child's row: its state's icon, its title, a line under it, and one thing at its end, which
+ * gives way on hover to the arrow that says the row opens its chat. Screen readers hear `state`
+ * after the title in place of the icon.
+ */
+function ChildButton({
+  icon,
+  title,
+  dim = false,
+  state,
+  detail,
+  end,
+  onOpen,
+}: {
+  icon: ReactNode;
+  title: string;
+  dim?: boolean;
+  state: string;
+  detail?: string;
+  end: ReactNode;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group flex w-full min-w-0 items-start gap-3 px-3 py-2.5 text-left hover:bg-hover"
+    >
+      <span aria-hidden className="mt-0.5 shrink-0 [&_svg]:size-4">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span
+          data-title
+          className={`block truncate text-[13.5px] leading-5 font-medium ${dim ? "text-muted-foreground" : "text-foreground"}`}
+        >
+          {title}
+        </span>
+        <span className="sr-only">{state}</span>
+        {detail && (
+          <span className="block truncate text-[12px] leading-5 text-muted-foreground">
+            {detail}
+          </span>
+        )}
+      </span>
+      <span className="relative shrink-0 pt-0.5 text-[11.5px] text-faint-foreground">
+        <span
+          aria-hidden
+          className="transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
+        >
+          {end}
+        </span>
+        <span className="absolute inset-0 flex items-center justify-end">
+          <OpenHint />
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -335,7 +507,7 @@ function QuestionBox({
     else setText("");
   };
   return (
-    <div className="mx-2.5 mb-2 overflow-hidden rounded-xl border border-border bg-surface">
+    <div className="mr-3 mb-3 ml-10 overflow-hidden rounded-lg border border-border bg-background">
       <p className="px-3.5 pt-3 pb-2.5 text-[13px] leading-snug text-foreground">{question}</p>
       <div className="flex flex-col gap-1 px-1.5 pb-1.5">
         {assumption && (
@@ -385,58 +557,5 @@ function QuestionBox({
         </form>
       </div>
     </div>
-  );
-}
-
-// The activity chart's span and columns: the last three hours, ten minutes a column.
-const columns = 18;
-const columnMs = 10 * 60 * 1000;
-const rows = 5;
-
-const clock = (at: number) => new Date(at).toLocaleTimeString(locale(), clockOptions());
-
-/**
- * The Project's pulse as a dot matrix: a column every ten minutes over the last three hours, lit
- * as high as how many agents started and reported then. Hovering a column says when and what.
- */
-function Activity({ runs, items }: { runs: readonly AgentRun[]; items: readonly InboxItem[] }) {
-  const [hover, setHover] = useState<number>();
-  const now = Date.now();
-  const started = Array.from({ length: columns }, () => 0);
-  const reported = Array.from({ length: columns }, () => 0);
-  const add = (counts: number[], at: string) => {
-    const back = Math.floor((now - Date.parse(at)) / columnMs);
-    if (back >= 0 && back < columns) counts[columns - 1 - back]! += 1;
-  };
-  for (const r of runs) add(started, r.createdAt);
-  for (const i of items) add(reported, i.createdAt);
-  const total = started.map((n, c) => n + reported[c]!);
-  const most = Math.max(1, ...total);
-  const label = (c: number) => {
-    const end = now - (columns - 1 - c) * columnMs;
-    const parts = [
-      started[c] && `${started[c]} started`,
-      reported[c] && `${reported[c]} ${reported[c] === 1 ? "update" : "updates"}`,
-    ].filter(Boolean);
-    return `${c === columns - 1 ? "Now" : clock(end - columnMs)}: ${parts.length ? parts.join(", ") : "quiet"}`;
-  };
-  return (
-    <figure className="relative shrink-0 pt-0.5" onMouseLeave={() => setHover(undefined)}>
-      <div className="grid grid-flow-col grid-rows-5 gap-[3px]">
-        {total.flatMap((n, c) => {
-          const lit = n === 0 ? 0 : Math.max(1, Math.round((n / most) * rows));
-          return Array.from({ length: rows }, (_, r) => (
-            <span
-              key={`${c}/${r}`}
-              onMouseEnter={() => setHover(c)}
-              className={`size-[4px] rounded-[1px] transition-opacity ${hover !== undefined && hover !== c ? "opacity-40" : ""} ${rows - r <= lit ? (c === columns - 1 ? "bg-accent" : "bg-foreground/50") : "bg-foreground/10"}`}
-            />
-          ));
-        })}
-      </div>
-      <figcaption className="absolute top-full right-0 mt-1.5 whitespace-nowrap font-mono text-[10.5px] text-faint-foreground tabular-nums">
-        {hover === undefined ? "Last 3 hours" : label(hover)}
-      </figcaption>
-    </figure>
   );
 }

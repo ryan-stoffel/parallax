@@ -2668,17 +2668,21 @@ const projectTab = () =>
     b.textContent?.startsWith("Project"),
   );
 const home = () => document.querySelector<HTMLElement>("#side-panel")!;
-/** The titles of a Project tab group's children, in order. */
-const groupTitles = (group: string) =>
-  [...home().querySelectorAll(`section[aria-label="${group}"] li > button`)].map(
-    (b) => b.querySelector("span span")?.textContent,
-  );
+/** The titles of the children under `root`, in order. */
+const titlesIn = (root: ParentNode | null) =>
+  [...(root?.querySelectorAll("li > button [data-title]") ?? [])].map((t) => t.textContent);
+/** The children in the Project tab's Running, and in its log of finished ones. */
+const runningTitles = () => titlesIn(home().querySelector('section[aria-label="Running"]'));
+const logTitles = () => titlesIn(home()).filter((t) => !runningTitles().includes(t));
 const childButton = (title: string) =>
   [...home().querySelectorAll("li > button")].find(
-    (b) => b.querySelector("span span")?.textContent === title,
+    (b) => b.querySelector("[data-title]")?.textContent === title,
   );
+/** Whether a finished child's title is dimmed, as it is once what it reported is read. */
+const dim = (title: string) =>
+  childButton(title)!.querySelector("[data-title]")!.classList.contains("text-muted-foreground");
 
-test("a Project opens its side panel on the Project tab: its children once each in Waiting on you, Working, Done, and Resolved, folded, with the header's count on the tab", async () => {
+test("a Project opens its side panel on the Project tab: who works and waits in Running, then the finished ones in its log, with the header's count on the tab", async () => {
   capabilities = { coordinator: {}, inbox: {} };
   serveInbox();
   const subscribe = vi.spyOn(window.parallax, "subscribe");
@@ -2693,16 +2697,15 @@ test("a Project opens its side panel on the Project tab: its children once each 
   expect(projectTab()!.getAttribute("aria-current")).toBe("true");
   expect(projectTab()!.textContent).toBe("Project2");
   expect(home().querySelector("h2")!.textContent).toBe("ember");
-  expect(home().textContent).toContain("2 things are waiting on you. 1 working.");
-  expect(groupTitles("Waiting on you")).toEqual(["Fix the login bug", "Cut the release"]);
-  expect(groupTitles("Working")).toEqual(["Write the docs"]);
-  expect(groupTitles("Done")).toEqual(["Add the tests"]);
-  // Resolved is folded until opened.
-  expect(groupTitles("Resolved")).toEqual([]);
-  const resolved = home().querySelector('section[aria-label="Resolved"] h3 button')!;
-  expect(resolved.getAttribute("aria-expanded")).toBe("false");
-  await click(resolved);
-  expect(groupTitles("Resolved")).toEqual(["Bump the version"]);
+  expect(home().querySelector("header p")!.textContent).toBe("4 open threads · 2 done this week");
+  expect(
+    [...home().querySelectorAll('[aria-label="Open threads"] li')].map((c) => c.textContent),
+  ).toEqual(["1working", "2need you", "1to review"]);
+  expect(runningTitles()).toEqual(["Fix the login bug", "Write the docs", "Cut the release"]);
+  // The log has each finished child once, bright until what it reported is read.
+  expect(logTitles()).toEqual(["Add the tests", "Bump the version"]);
+  expect(dim("Add the tests")).toBe(false);
+  expect(dim("Bump the version")).toBe(true);
   // A row says what its child last reported, without its title. Without `questions`, a question
   // is only that line.
   expect(childButton("Fix the login bug")!.textContent).toContain(
@@ -2712,28 +2715,53 @@ test("a Project opens its side panel on the Project tab: its children once each 
   // The words inbox and mail aren't shown.
   expect(home().textContent).not.toMatch(/inbox|mail/i);
 
-  // The activity chart covers the last three hours, and names a column on hover.
-  const chart = home().querySelector("figure")!;
-  expect(chart.querySelector("figcaption")!.textContent).toBe("Last 3 hours");
-  await act(async () =>
-    chart
-      .querySelectorAll("span")
-      .item(chart.querySelectorAll("span").length - 1)!
-      .dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
-  );
-  expect(chart.querySelector("figcaption")!.textContent).toBe("Now: 5 started");
-
   // Opening a child opens its chat and marks what it reported read, but not its question.
   await click(childButton("Add the tests"));
   expect(crumbs()).toEqual(["This Mac", "ember", "Add the tests"]);
   expect(calls("inbox/seen")).toEqual([{ project: "p-ember", items: ["i-tests"] }]);
-  expect(groupTitles("Done")).toEqual([]);
+  expect(dim("Add the tests")).toBe(true);
   await click(childButton("Fix the login bug"));
   expect(calls("inbox/seen")).toEqual([
     { project: "p-ember", items: ["i-tests"] },
     { project: "p-ember", items: ["i-login-done"] },
   ]);
-  expect(groupTitles("Waiting on you")).toEqual(["Fix the login bug", "Cut the release"]);
+  expect(runningTitles()).toEqual(["Fix the login bug", "Write the docs", "Cut the release"]);
+});
+
+test("the Project tab leads with the coordinator's board, and its book opens All files, a file in place, and back", async () => {
+  capabilities = { coordinator: {}, inbox: {} };
+  serveInbox();
+  const file = (path: string) => ({ path, size: 10, modifiedAt: "2026-09-29T11:00:00Z" });
+  answers["context/list"] = () => ({ result: { files: [file("notes.md"), file("plan.md")] } });
+  answers["context/read"] = (p) => ({
+    result: {
+      file: file(p["path"] as string),
+      content: p["path"] === "notes.md" ? "## Now\n- [ ] **Ship it**: today" : "# The plan",
+    },
+  });
+  await renderApp();
+  await openEmber();
+  const board = home().querySelector('[aria-label="Where it stands"] [aria-label="notes.md"]')!;
+  expect(board.querySelector("strong")!.textContent).toBe("Ship it");
+  expect(board.querySelector("h4")!.textContent).toBe("Now");
+
+  await click(home().querySelector('button[aria-label="All files"]'));
+  const listed = () =>
+    [...home().querySelectorAll('ul[aria-label="All files"] button')].map(
+      (b) => b.querySelector(".font-mono")!.textContent,
+    );
+  expect(listed()).toEqual(["notes.md", "plan.md"]);
+  await click(
+    [...home().querySelectorAll('ul[aria-label="All files"] button')].find((b) =>
+      b.textContent?.startsWith("plan.md"),
+    ),
+  );
+  expect(home().querySelector('article[aria-label="plan.md"]')!.textContent).toContain("The plan");
+  // Back from the file goes to All files, and back from there to the tab's head and board.
+  await click([...home().querySelectorAll("button")].find((b) => b.textContent === "plan.md"));
+  expect(listed()).toEqual(["notes.md", "plan.md"]);
+  await click([...home().querySelectorAll("button")].find((b) => b.textContent === "ember"));
+  expect(home().querySelector("h2")!.textContent).toBe("ember");
 });
 
 test("the side panel's one full screen button fills the window from any tab, and Knowledge sits beside the Project tab", async () => {
@@ -2799,7 +2827,7 @@ test("a question on the Project tab offers the child's pick as choice 1 and a fr
     { question: "q-1", text: "dark" },
   ]);
   expect(calls("inbox/seen")).toEqual([{ project: "p-ember", items: ["i-needs"] }]);
-  expect(groupTitles("Waiting on you")).toEqual(["Cut the release"]);
+  expect(runningTitles()).toEqual(["Write the docs", "Cut the release"]);
   expect(projectTab()!.textContent).toBe("Project1");
 });
 
@@ -2874,7 +2902,7 @@ test("a new Needs you item notifies with Open Project, from the OS while the win
   await act(async () => notes[0]!.onclick?.());
   await settle();
   expect(crumbs()).toEqual(["This Mac", "ember"]);
-  expect(groupTitles("Waiting on you")).toEqual(["Write the docs"]);
+  expect(runningTitles()).toEqual(["Write the docs"]);
   expect(childButton("Write the docs")!.textContent).toContain("asks which tone");
   act(() => toast()!.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
 });
