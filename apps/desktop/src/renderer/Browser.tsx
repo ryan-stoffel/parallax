@@ -572,8 +572,6 @@ function Tab({
   const [typed, setTyped] = useState(false);
   const [picked, setPicked] = useState(0);
   const suggestionsId = useId();
-  const allBookmarks = bookmarks.use();
-  const visits = browserHistory.use();
   const typedUrl = typed ? browserUrl(address) : undefined;
   const suggestions =
     typed && typedUrl
@@ -586,8 +584,10 @@ function Tab({
                 title: `${address.trim()} — Search ${searchEngineName(engine)}`,
               }
             : { kind: "go", url: typedUrl, title: shortUrl(typedUrl) },
-          allBookmarks,
-          visits,
+          // Read, not subscribed to: typing renders the tab anyway, and every tab subscribing
+          // would redraw them all on each visit any browser makes.
+          bookmarks.get(),
+          browserHistory.get(),
         )
       : [];
   const showBookmarks = bookmarksBar.use();
