@@ -1789,6 +1789,7 @@ export const mockBridge: ParallaxBridge = {
   removeExtension: () => delay(undefined),
   onExtensionsChanged: () => () => {},
   selectBrowserTab: () => {},
+  clearBrowsingData: () => delay(undefined),
   updatable: false,
   firstRun: onboarding,
   locale: undefined,

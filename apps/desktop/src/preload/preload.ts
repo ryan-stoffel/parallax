@@ -101,6 +101,7 @@ const bridge: ParallaxBridge = {
     return () => ipcRenderer.removeListener("parallax:extensionsChanged", forward);
   },
   selectBrowserTab: (id) => ipcRenderer.send("parallax:selectBrowserTab", id),
+  clearBrowsingData: (what) => ipcRenderer.invoke("parallax:clearBrowsingData", what),
   updatable: process.argv.includes("--parallax-updatable"),
   firstRun: process.argv.includes("--parallax-first-run"),
   locale: validLocale(

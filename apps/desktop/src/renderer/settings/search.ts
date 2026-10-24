@@ -6,6 +6,7 @@ export const settingsSections: { id: SettingsSection; name: string; keywords?: s
   { id: "general", name: "General", keywords: "preferences basics" },
   { id: "threads", name: "Threads", keywords: "chats conversations defaults" },
   { id: "appearance", name: "Appearance", keywords: "look theme style display" },
+  { id: "browser", name: "Browser", keywords: "web chrome helium tabs pages internet" },
   { id: "keybinds", name: "Keybinds", keywords: "shortcuts hotkeys keyboard" },
   { id: "providers", name: "Providers", keywords: "agents models accounts ai" },
   { id: "usage", name: "Usage", keywords: "tokens cost spend limits stats" },
@@ -38,8 +39,9 @@ export const anchorOf = (title: string) =>
     .replace(/^-|-$/g, "");
 
 /**
- * Every setting, by page. Keep in step with the pages: Settings.test.tsx checks those on General,
- * Threads, Appearance, and Keybinds render.
+ * Every setting, by page, in the nav's order, which breaks ties in search. Keep in step with the
+ * pages: Settings.test.tsx checks those on General, Threads, Appearance, Browser, and Keybinds
+ * render.
  */
 export const settingsIndex: SettingEntry[] = [
   // General
@@ -200,6 +202,37 @@ export const settingsIndex: SettingEntry[] = [
       "diff colors colorblind red green blue orange",
     ],
     ["Usage in the composer", "A ring, a row, or nothing", "ring inline limits context meter"],
+  ]),
+  // Browser (PLX-974)
+  ...entries("browser", "Appearance", [
+    ["Theme", "Helium's and Chrome's colors, or Parallax's own", "color colour palette dark light"],
+    ["Layout", "Compact puts the tabs and the address bar in one row", "compact classic toolbar"],
+    ["Show bookmarks bar", "Under the toolbar, while there are bookmarks", "favorites"],
+    ["Page size", "Desktop lays a page out as on a monitor", "zoom fit monitor"],
+  ]),
+  ...entries("browser", "Search engine", [
+    ["Search engine", "What the address bar searches with", "google duckduckgo bing brave kagi"],
+  ]),
+  ...entries("browser", "On startup", [
+    ["Continue where you left off", "Each browser opens the tabs it had", "restore session tabs"],
+  ]),
+  ...entries("browser", "Home button", [
+    ["Show home button", "In the toolbar, beside Reload", "homepage"],
+    ["Home page", "Empty opens a new tab", "homepage start page url"],
+  ]),
+  ...entries("browser", "Privacy", [
+    [
+      "Clear browsing data",
+      "Cookies and other site data, cached images and files",
+      "cache cookies history delete privacy",
+    ],
+  ]),
+  ...entries("browser", undefined, [
+    [
+      "Extensions",
+      "Installed extensions, and Load unpacked",
+      "chrome web store add-ons plugins load unpacked",
+    ],
   ]),
   // Keybinds
   ...entries("keybinds", undefined, [
