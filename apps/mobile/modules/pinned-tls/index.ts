@@ -20,6 +20,7 @@ const native = requireNativeModule<{
   tailnetAddress(): string | null;
   authorize(url: string): Promise<string>;
   appVersion(): { version: string; build: string };
+  preview(url: string): Promise<void>;
   send(id: string, text: string): void;
   close(id: string): void;
   addListener(event: "onSocket", listener: (event: SocketEvent) => void): unknown;
@@ -35,6 +36,9 @@ export const privateFile = (name: string) => native.privateFile(name);
  * `parallax://` callback URL Clerk sent the sheet to, or rejects with code `ERR_CANCELED`.
  */
 export const authorize = (url: string) => native.authorize(url);
+
+/** Shows the file at `url` (`file://`) in Quick Look, whose share button saves or sends it. */
+export const preview = (url: string) => native.preview(url);
 
 /** This build's version and build number. */
 export const appVersion = () => native.appVersion();

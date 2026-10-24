@@ -12,8 +12,17 @@ export type Screens = {
   ComputerSettings: { id: string; page: SettingsPage };
   Provider: { id: string; instance: string };
   PullRequest: { hostId: string; runId: string; url: string };
+  /** The repository, then computer, picker for a new thread, as a sheet. */
   NewThread: undefined;
-  StartThread: { hostId: string; groupId: string };
+  /** A new thread's page, the app's home: with no params, where the last new thread started. */
+  StartThread: { hostId?: string; groupId?: string } | undefined;
+  /** Search every thread, as a sheet. */
+  Search: undefined;
+  /** Settings, as a sheet, which pushes Computer, ComputerSettings, Provider, Usage, and AddComputer. */
+  Settings: undefined;
+  Usage: undefined;
+  /** Every pull request, as a sheet, which pushes PullRequest. */
+  PullRequests: undefined;
   AddComputer: undefined;
 };
 

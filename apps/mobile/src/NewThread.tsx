@@ -156,7 +156,7 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
 }
 
 export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<Screens, "StartThread">) {
-  const { hostId, groupId } = route.params;
+  const { hostId = "", groupId = noRepo } = route.params ?? {};
   const c = useColors();
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();

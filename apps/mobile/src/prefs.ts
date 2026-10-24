@@ -1,4 +1,5 @@
-// What this phone keeps of the user's choices: which notifications to show, and the appearance.
+// What this phone keeps of the user's choices: which notifications to show, the appearance, and
+// where the last new thread started.
 // One file, out of backups like the rest of the app's (machines.ts), read once at launch.
 import { File } from "expo-file-system";
 import { useSyncExternalStore } from "react";
@@ -10,6 +11,8 @@ export interface Prefs {
   /** Which kinds of notification show. */
   notify: { needsYou: boolean; done: boolean; failed: boolean };
   appearance: "system" | "light" | "dark";
+  /** The computer and repository (or no repo) the last new thread started in, where the next goes. */
+  lastStart?: { hostId: string; groupId: string };
 }
 
 const defaults: Prefs = { notify: { needsYou: true, done: true, failed: true }, appearance: "system" };

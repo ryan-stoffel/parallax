@@ -48,6 +48,14 @@
           "microphonePermission": false
         }
       ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Parallax shows your recent photos so you can attach them to your messages.",
+          "savePhotosPermission": false,
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
       "./plugins/withSceneLifecycle"
     ],
     "experiments": {

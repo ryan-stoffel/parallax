@@ -3,13 +3,14 @@
 // Native's fetch and WebSocket can't pin a certificate, so the app reaches plxd through this. It
 // also opens Parallax Connect's plain TCP connections over Tailscale (0056), finds hosts over
 // mDNS, signs in to the Parallax account as the desktop does (0067), keeps the app running briefly
-// in the background, and supplies secure random bytes, a backup-free file location, this phone's
-// tailnet address, and the build's version.
+// in the background, shows a file in Quick Look, and supplies secure random bytes, a backup-free
+// file location, this phone's tailnet address, and the build's version.
 import AuthenticationServices
 import CryptoKit
 import ExpoModulesCore
 import Foundation
 import Network
+import QuickLook
 import UIKit
 
 /// Accepts the server's certificate only when its SHA-256 is `pin`. With no pin, as pairing's first
@@ -96,6 +97,8 @@ public class PinnedTlsModule: Module {
   private var auth: ASWebAuthenticationSession?
   private let anchor = AuthAnchor()
   private var background: UIBackgroundTaskIdentifier = .invalid
+  /// The file Quick Look shows, kept while its preview is up.
+  private let look = Look()
 
   public func definition() -> ModuleDefinition {
     Name("PinnedTls")
@@ -220,6 +223,19 @@ public class PinnedTlsModule: Module {
       session.presentationContextProvider = self.anchor
       self.auth = session
       if !session.start() { promise.reject("ERR_CANCELED", "Sign-in couldn't open.") }
+    }.runOnQueue(.main)
+
+    /// Shows the file at `url` (`file://`) in Quick Look over the app: a PDF, an image, a document,
+    /// with iOS's own share button to save or send it.
+    AsyncFunction("preview") { (url: String) in
+      guard let file = URL(string: url) else { return }
+      self.look.file = file
+      let preview = QLPreviewController()
+      preview.dataSource = self.look
+      var top = UIApplication.shared.connectedScenes
+        .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController }.first
+      while let presented = top?.presentedViewController { top = presented }
+      top?.present(preview, animated: true)
     }.runOnQueue(.main)
 
     /// This build's version and build number, as its Info.plist has them.
@@ -375,5 +391,14 @@ public class PinnedTlsModule: Module {
     guard let socket = lock.withLock({ sockets.removeValue(forKey: id) }) else { return }
     socket.session.invalidateAndCancel()
     sendEvent("onSocket", ["id": id, "type": "close"])
+  }
+}
+
+/// The one file a Quick Look preview shows.
+private final class Look: NSObject, QLPreviewControllerDataSource {
+  var file: URL?
+  func numberOfPreviewItems(in controller: QLPreviewController) -> Int { file == nil ? 0 : 1 }
+  func previewController(_ controller: QLPreviewController, previewItemAt index: Int) -> QLPreviewItem {
+    file! as NSURL
   }
 }
