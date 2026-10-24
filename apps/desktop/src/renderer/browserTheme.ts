@@ -47,6 +47,7 @@ const chromeDark: BrowserColors = {
 };
 
 export const browserThemes: readonly BrowserTheme[] = [
+  { id: "parallax", name: "Match Parallax", swatch: "transparent" },
   {
     id: "helium",
     name: "Helium",
@@ -128,11 +129,10 @@ export const browserThemes: readonly BrowserTheme[] = [
     swatch: seededColors({ seed, variant }, false).frame,
     colors: { seed, variant },
   })),
-  { id: "parallax", name: "Match Parallax", swatch: "transparent" },
 ];
 
-/** The theme every browser uses, kept on this computer. Helium's until the user picks another. */
-export const browserTheme = stored<string>("parallax.browserTheme", "helium", (raw, fallback) =>
+/** The theme every browser uses, kept on this computer. The app's own until the user picks another. */
+export const browserTheme = stored<string>("parallax.browserTheme", "parallax", (raw, fallback) =>
   browserThemes.some((t) => t.id === raw) ? (raw as string) : fallback,
 );
 
