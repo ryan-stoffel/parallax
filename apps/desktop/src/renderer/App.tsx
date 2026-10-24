@@ -52,6 +52,7 @@ import {
 import { PullRequestsPage, type PrEntry } from "./PullRequestsPage";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
+import { Browser, BrowserTabBar } from "./Browser";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
 import {
@@ -165,16 +166,20 @@ export function App() {
   const [settingsHost, setSettingsHost] = useState<string>();
   // The setting Settings' search picked last, to scroll to; a new object each pick.
   const [settingsFocus, setSettingsFocus] = useState<{ anchor: string }>();
-  // The Pull requests page shows in place of the chat; opening a thread or Settings closes it.
-  const [prsOpen, setPrsOpen] = useState(false);
+  // The page shown in place of the chat, if any: Pull requests, or the sidebar's permanent browser
+  // (PLX-964). Opening a thread or Settings closes it.
+  const [mainPage, setMainPage] = useState<"pullRequests" | "browser">();
+  // The permanent browser mounts the first time it opens and stays, so its pages keep running.
+  const [browserPage, setBrowserPage] = useState(false);
+  if (mainPage === "browser" && !browserPage) setBrowserPage(true);
 
-  useEffect(() => setPrsOpen(false), [selection]);
+  useEffect(() => setMainPage(undefined), [selection]);
   // A folder's New thread files only what starts from the New thread screen it opens.
   useEffect(() => {
     if (selection.kind !== "new") startIn.set(null);
   }, [selection.kind]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
-    setPrsOpen(false);
+    setMainPage(undefined);
     setSettings(section);
     setSettingsHost(hostId);
     setSettingsFocus(undefined);
@@ -976,6 +981,8 @@ export function App() {
             host={host}
             selection={selection}
             onSelect={(hostId, next) => {
+              // The open row, picked again, leaves Pull requests or the browser too.
+              setMainPage(undefined);
               // A draft opened from the list isn't in the folder either.
               if (next.kind === "new") startIn.set(null);
               openOnHost(hostId, next);
@@ -984,7 +991,12 @@ export function App() {
             onOpenSettings={openSettings}
             onOpenPullRequests={() => {
               setSettings(null);
-              setPrsOpen(true);
+              setMainPage("pullRequests");
+            }}
+            browserOpen={!settings && mainPage === "browser"}
+            onOpenBrowser={() => {
+              setSettings(null);
+              setMainPage("browser");
             }}
             onDelete={deleteThread}
             onNewThread={() => picker.current?.showModal()}
@@ -1017,7 +1029,12 @@ export function App() {
                 focus={settingsFocus}
               />
             </>
-          ) : prsOpen ? (
+          ) : mainPage === "browser" ? (
+            <TopBar className={topBarInset}>
+              {showSidebar}
+              <BrowserTabBar scope="permanent" />
+            </TopBar>
+          ) : mainPage === "pullRequests" ? (
             <>
               <TopBar className={topBarInset}>
                 {showSidebar}
@@ -1026,7 +1043,7 @@ export function App() {
               <PullRequestsPage
                 entries={prEntries}
                 onOpenThread={(e) => {
-                  setPrsOpen(false);
+                  setMainPage(undefined);
                   openOnHost(e.hostId, { kind: "thread", threadId: e.runId });
                 }}
               />
@@ -1405,6 +1422,14 @@ export function App() {
                 />
               </div>
             </>
+          )}
+          {browserPage && (
+            <div
+              hidden={!!settings || mainPage !== "browser"}
+              className="flex min-h-0 flex-1 flex-col"
+            >
+              <Browser scope="permanent" remoteHost={host.id === localId ? undefined : host.name} />
+            </div>
           )}
           {/* Outside the views, so the terminals live on behind Settings. */}
           <TerminalDrawer

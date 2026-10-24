@@ -26,6 +26,7 @@ import {
   GitFork,
   GitMerge,
   GitPullRequest,
+  Globe,
   HardDrive,
   Keyboard,
   Layers,
@@ -268,6 +269,9 @@ interface ThreadListProps {
   onOpenSettings: (section: SettingsSection) => void;
   /** Opens the Pull requests page, in place of the main pane. */
   onOpenPullRequests: () => void;
+  /** Opens the permanent browser, in place of the main pane (PLX-964), and whether it's open. */
+  onOpenBrowser?: () => void;
+  browserOpen?: boolean;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   /** New thread, which opens Mod+N's picker of the repository it goes in. */
@@ -499,6 +503,8 @@ export function ThreadList({
   onOpenProject,
   onOpenSettings,
   onOpenPullRequests,
+  onOpenBrowser,
+  browserOpen,
   onDelete,
   onNewThread,
   onNewFolderThread,
@@ -1890,6 +1896,8 @@ export function ThreadList({
           listed={hosts}
           onOpenSettings={onOpenSettings}
           onOpenPullRequests={onOpenPullRequests}
+          {...(onOpenBrowser && { onOpenBrowser })}
+          {...(browserOpen !== undefined && { browserOpen })}
         />
       </div>
     </>
@@ -2374,13 +2382,19 @@ function ScopeMenu({
 
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
- * (ProfileMenu.tsx), Settings, Pull requests, and Usage, then Update when `updatable` (Update.tsx).
+ * (ProfileMenu.tsx), Settings, Pull requests, Usage, and Browser, the permanent one (PLX-964), then
+ * Update when `updatable` (Update.tsx).
  */
 function Footer({
   listed,
   onOpenSettings,
   onOpenPullRequests,
-}: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests"> & {
+  onOpenBrowser,
+  browserOpen,
+}: Pick<
+  ThreadListProps,
+  "onOpenSettings" | "onOpenPullRequests" | "onOpenBrowser" | "browserOpen"
+> & {
   listed: HostThreads[];
 }) {
   return (
@@ -2395,6 +2409,11 @@ function Footer({
       <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />
       </IconButton>
+      {onOpenBrowser && (
+        <IconButton label="Browser" aria-pressed={!!browserOpen} onClick={onOpenBrowser}>
+          <Globe />
+        </IconButton>
+      )}
       <span className="flex-1" />
       {window.parallax.updatable && <UpdateButton />}
     </div>

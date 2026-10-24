@@ -7,7 +7,6 @@ import {
   FolderTree,
   GitCompare,
   GitPullRequest,
-  Globe,
   SquareKanban,
   Maximize2,
   Minimize2,
@@ -22,7 +21,7 @@ import {
 } from "lucide-react";
 import { useState, type ComponentProps, type ReactNode } from "react";
 
-import { Browser, browserTabs, type BrowserTabFace } from "./Browser";
+import { Browser, BrowserTabBar } from "./Browser";
 import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
 import { lookOf, numberOf, type PullRequests } from "./PullRequests";
@@ -222,8 +221,6 @@ export function SidePanel({
         surfaces.find((s) => s.name === name)!,
       );
   const nameOf = (s: Surface) => (!project && s.name === "Changes" ? "Diff" : s.name);
-  // The browser's page tabs, which take the top bar while browsing (Browser.tsx).
-  const browser = browserTabs.use()[scope];
   // The browser mounts the first time it shows, and stays.
   if (browsing && !scopes[scope]?.browsed) update(() => ({ browsed: true }));
   // A Project pins its Overview and Knowledge first, without close buttons.
@@ -352,28 +349,7 @@ export function SidePanel({
       <TopBar className={`window-controls-inset px-2 ${topBarClassName}`}>
         {leading}
         {browsing ? (
-          browser && (
-            <>
-              <div
-                role="tablist"
-                aria-label="Browser tabs"
-                className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
-              >
-                {browser.tabs.map((tab) => (
-                  <BrowserTab
-                    key={tab.key}
-                    tab={tab}
-                    selected={tab.key === browser.selected}
-                    onSelect={() => browser.select(tab.key)}
-                    onClose={() => browser.close(tab.key)}
-                  />
-                ))}
-              </div>
-              <IconButton label="New tab" onClick={browser.newTab}>
-                <Plus />
-              </IconButton>
-            </>
-          )
+          <BrowserTabBar scope={scope} />
         ) : (
           <>
             <ul aria-label="Open views" className="flex min-w-0 gap-0.5 overflow-x-auto">
@@ -514,60 +490,5 @@ export function SidePanel({
         </nav>
       )}
     </aside>
-  );
-}
-
-/**
- * One of the browser's tabs in the top bar, as Chrome draws one: its icon, title, and close
- * button. The one in front keeps room for its title while the others shrink to their icons. An
- * agent's tab has its provider's logo and no close button, since the agent closes it.
- */
-function BrowserTab({
-  tab,
-  selected,
-  onSelect,
-  onClose,
-}: {
-  tab: BrowserTabFace;
-  selected: boolean;
-  onSelect: () => void;
-  onClose: () => void;
-}) {
-  const icon = tab.icon ? (
-    <img src={tab.icon} alt="" className="size-3.5 shrink-0" />
-  ) : tab.Logo ? (
-    <tab.Logo aria-hidden className="size-3.5 shrink-0" />
-  ) : (
-    <Globe aria-hidden className="size-3.5 shrink-0" />
-  );
-  return (
-    <div
-      className={`group flex h-8 max-w-48 flex-1 items-center rounded-lg text-[12.5px] ${selected ? "min-w-28 bg-selected text-foreground" : "min-w-8 text-muted-foreground hover:bg-hover hover:text-foreground"}`}
-    >
-      <button
-        type="button"
-        role="tab"
-        aria-selected={selected}
-        title={tab.agent ? `${tab.agent}: ${tab.url ?? ""}` : tab.url}
-        onClick={onSelect}
-        // A middle click closes a tab, as in Chrome.
-        onAuxClick={(e) => e.button === 1 && !tab.agent && onClose()}
-        className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left ${selected ? "pl-2.5" : "justify-center px-2 group-hover:justify-start"}`}
-      >
-        {icon}
-        <span className="truncate">{tab.title}</span>
-      </button>
-      {!tab.agent && (
-        <button
-          type="button"
-          aria-label={`Close ${tab.title}`}
-          onClick={onClose}
-          // A narrow tab has no room for it until hovered or focused, as in Chrome.
-          className={`mr-1.5 size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
-        >
-          <X aria-hidden className="size-3" />
-        </button>
-      )}
-    </div>
   );
 }
