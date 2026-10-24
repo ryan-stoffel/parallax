@@ -582,8 +582,8 @@ test("saves a repository action and runs it in the drawer, opening its preview (
   await page.getByRole("log", { name: "Transcript" }).click({ position: { x: 8, y: 8 } });
   await page.keyboard.press("ControlOrMeta+Shift+k");
   await expect(terminal).toContainText(/git version [\s\S]*git version /);
-  // With the side panel closed, whichever way it shows, its button hides it.
-  await page.getByRole("button", { name: "Hide side panel" }).click();
+  // The preview opened the browser, apart from the side panel, and its own button hides it.
+  await page.locator("#side-panel").getByRole("button", { name: "Hide browser" }).click();
   await settled(panel);
   const toggle = page.getByRole("button", { name: "Thread details", exact: true });
   if ((await toggle.getAttribute("aria-pressed")) === "true") await toggle.click();

@@ -1072,6 +1072,14 @@ export function App() {
                       onToggle={details.toggle}
                     />
                   )}
+                  <IconButton
+                    label={pane === "browser" ? "Hide browser" : "Browser"}
+                    command="browser"
+                    aria-pressed={pane === "browser"}
+                    onClick={toggleBrowser}
+                  >
+                    <Globe />
+                  </IconButton>
                   {folder && (
                     <IconButton
                       label={drawerOpen ? "Hide terminal" : "Show terminal"}
@@ -1083,14 +1091,6 @@ export function App() {
                       <PanelBottom />
                     </IconButton>
                   )}
-                  <IconButton
-                    label={pane === "browser" ? "Hide browser" : "Browser"}
-                    command="browser"
-                    aria-pressed={pane === "browser"}
-                    onClick={toggleBrowser}
-                  >
-                    <Globe />
-                  </IconButton>
                   {/* Shown only while the panel's views are hidden; their top bar has it otherwise. */}
                   {!panelOpen && (
                     <IconButton
