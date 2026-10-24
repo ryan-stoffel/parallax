@@ -13,7 +13,7 @@ import {
   Pin,
   SquarePen,
 } from "lucide-react-native";
-import { useLayoutEffect, useState } from "react";
+import { useState } from "react";
 import {
   ActionSheetIOS,
   ActivityIndicator,
@@ -44,6 +44,7 @@ import {
 } from "../../desktop/src/renderer/threads";
 import { Choices, type Choice } from "./Choices";
 import { useFleet, type Computer } from "./fleet";
+import { ScreenTitle, SkyButton, TabScreen } from "./TabScreen";
 import { ago, useNav } from "./nav";
 import { AttentionBadge, DeviceIcon, Icon, T, useColors } from "./ui";
 
@@ -340,38 +341,6 @@ export function ThreadList() {
   ];
   const scopeLabel = scopes.find((s) => s.value === scope)?.label;
 
-  useLayoutEffect(() => {
-    nav.setOptions({
-      headerSearchBarOptions: {
-        placeholder: "Search threads",
-        onChangeText: (e) => setQuery(e.nativeEvent.text),
-        onCancelButtonPress: () => setQuery(""),
-      },
-      headerRight: () => (
-        <View style={{ flexDirection: "row", gap: 16, paddingHorizontal: 4 }}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`Filter, showing ${scopeLabel}`}
-            hitSlop={10}
-            onPress={() => setFilter("scope")}
-          >
-            <View>
-              <Icon icon={ListFilter} size={18} color="#ffffff" />
-              {scope !== "all" && <View style={[styles.filterDot, { backgroundColor: c.accent }]} />}
-            </View>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="New thread"
-            hitSlop={10}
-            onPress={() => nav.navigate("NewThread")}
-          >
-            <Icon icon={SquarePen} size={18} color="#ffffff" />
-          </Pressable>
-        </View>
-      ),
-    });
-  }, [nav, c, scope, scopeLabel]);
 
   const offline = computers.filter((m) => !m.connected);
   const loading = computers.some((m) => m.connected && m.view.loading);
@@ -388,10 +357,24 @@ export function ThreadList() {
   };
 
   return (
-    <>
+    <TabScreen
+      search={{ value: query, onChange: setQuery, placeholder: "Search threads" }}
+      actions={
+        <>
+          <SkyButton
+            icon={ListFilter}
+            label={`Filter, showing ${scopeLabel}`}
+            marked={scope !== "all"}
+            onPress={() => setFilter("scope")}
+          />
+          <SkyButton icon={SquarePen} label="New thread" onPress={() => nav.navigate("NewThread")} />
+        </>
+      }
+    >
       <SectionList
         style={{ backgroundColor: "transparent" }}
-        contentInsetAdjustmentBehavior="automatic"
+        contentInsetAdjustmentBehavior="never"
+        keyboardDismissMode="on-drag"
         sections={sections}
         keyExtractor={(r) =>
           `${r.entry.computer.machine.id}:${r.kind === "thread" ? r.entry.thread.id : r.entry.project.id}`
@@ -408,7 +391,9 @@ export function ThreadList() {
           />
         }
         ListHeaderComponent={
-          scope !== "all" || offline.length > 0 ? (
+          <>
+            <ScreenTitle>Threads</ScreenTitle>
+            {(scope !== "all" || offline.length > 0) && (
             <View style={styles.header}>
               {scope !== "all" && (
                 <Pressable
@@ -434,7 +419,8 @@ export function ThreadList() {
                 </View>
               )}
             </View>
-          ) : null
+            )}
+          </>
         }
         renderSectionHeader={({ section }) =>
           section.drawer ? (
@@ -486,7 +472,7 @@ export function ThreadList() {
             )}
           </View>
         }
-        contentContainerStyle={{ paddingBottom: 40 }}
+        contentContainerStyle={{ paddingBottom: 120 }}
       />
       <Choices
         title="Filter threads"
@@ -505,7 +491,7 @@ export function ThreadList() {
         onChoose={(v) => (v.startsWith("group:") ? setGroupBy(v.slice(6) as GroupBy) : setScope(v as Scope))}
         onClose={() => setFilter(undefined)}
       />
-    </>
+    </TabScreen>
   );
 }
 

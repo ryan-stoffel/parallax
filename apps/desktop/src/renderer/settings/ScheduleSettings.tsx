@@ -1,41 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 
-import type { Schedule, ScheduledTask } from "../../protocol/generated/protocol";
+import type { ScheduledTask } from "../../protocol/generated/protocol";
 import { useConnection } from "../ConnectionStatus";
 import { describeError } from "../errors";
 import { localId, useHosts } from "../hosts";
 import { notify } from "../notifications";
 import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
+import { nextLabel, scheduleLabel } from "./shared";
 
-const weekdayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
-/** A trigger in a few words, as T3 Code's `scheduleLabel`: "Every 60 min", "Weekdays at 09:00". */
-export function scheduleLabel(schedule: Schedule): string {
-  if (schedule.type === "webhook") return "On webhook";
-  if (schedule.type === "interval") {
-    const minutes = schedule.everyMs / 60_000;
-    return Number.isInteger(minutes)
-      ? `Every ${minutes} min`
-      : `Every ${Math.round(schedule.everyMs / 1000)} sec`;
-  }
-  const weekdays = schedule.weekdays ?? [];
-  const days =
-    weekdays.length === 0
-      ? "Daily"
-      : weekdays.length === 5 && weekdays.every((day) => day >= 1 && day <= 5)
-        ? "Weekdays"
-        : weekdays.map((day) => weekdayNames[day]).join(", ");
-  return `${days} at ${schedule.timeOfDay}`;
-}
-
-/** When a task runs next, from `now`: "in 5m", "in 3h", "in 2d". */
-export function nextLabel(at: string, now = Date.now()): string {
-  const minutes = Math.ceil((new Date(at).getTime() - now) / 60_000);
-  if (minutes < 2) return "in under a minute";
-  if (minutes < 60) return `in ${minutes}m`;
-  const hours = Math.round(minutes / 60);
-  return hours < 24 ? `in ${hours}h` : `in ${Math.round(hours / 24)}d`;
-}
+export { nextLabel, scheduleLabel };
 
 /**
  * Settings > Schedules: a host's scheduled tasks (0063), which agents create with

@@ -42,6 +42,7 @@ import type {
   PullRequest,
 } from "../../desktop/src/protocol/generated/protocol";
 import { useComputer, useFleet, type Computer } from "./fleet";
+import { ScreenTitle, TabScreen } from "./TabScreen";
 import { ago, useNav, type Screens } from "./nav";
 import { font } from "./theme";
 import { githubText } from "../../desktop/src/renderer/github";
@@ -181,9 +182,11 @@ export function PullRequestList() {
   ].filter((s) => s.data.length);
 
   return (
+    <TabScreen>
     <SectionList
       style={{ backgroundColor: "transparent" }}
-      contentInsetAdjustmentBehavior="automatic"
+      contentInsetAdjustmentBehavior="never"
+      ListHeaderComponent={<ScreenTitle>Pull requests</ScreenTitle>}
       sections={sections}
       keyExtractor={(e) => e.url}
       stickySectionHeadersEnabled={false}
@@ -212,8 +215,9 @@ export function PullRequestList() {
           </T>
         </View>
       }
-      contentContainerStyle={{ paddingBottom: 40 }}
+      contentContainerStyle={{ paddingBottom: 120 }}
     />
+    </TabScreen>
   );
 }
 

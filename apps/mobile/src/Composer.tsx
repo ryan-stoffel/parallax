@@ -17,7 +17,7 @@ import {
   Square,
   X,
 } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   ActionSheetIOS,
   Image,
@@ -37,64 +37,21 @@ import type {
   AgentPermission,
   AgentRun,
   PromptImage,
-  ProvidersListResult,
 } from "../../desktop/src/protocol/generated/protocol";
 import { encodedImage, withFiles } from "../../desktop/src/renderer/attachments";
 import {
   accessLevels,
   effortLevels,
-  instanceModels,
-  models as builtIn,
   type Model,
 } from "../../desktop/src/renderer/catalog";
 import { imageCaps } from "../../desktop/src/renderer/images";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import type { Computer } from "./fleet";
 import { openLightbox } from "./Lightbox";
+import { ProviderLogo } from "./logos";
+import { allAccess, useOffers, type Offer } from "./offers";
 import { Icon, NightOrb, T, useColors } from "./ui";
 
-
-/**
- * A provider instance a thread can run on, as the desktop's catalog has it (models.ts): its
- * models, whether it takes an effort, and its access levels.
- */
-interface Offer {
-  id: string;
-  name: string;
-  models: Model[];
-  efforts: boolean;
-  permissions: AgentPermission[];
-}
-
-const allAccess: AgentPermission[] = ["manual", "edit", "auto", "plan", "bypass"];
-
-/** The provider instances on `computer` (`providers/list`), or on an older plxd, the built-in three. */
-function useOffers(computer: Computer | undefined): Offer[] {
-  const [listed, setListed] = useState<ProvidersListResult>();
-  const id = computer?.machine.id;
-  const providers = computer?.connected && "providers" in (computer.view.capabilities ?? {});
-  useEffect(() => {
-    if (!id || !providers) return;
-    void window.parallax.request(id, "providers/list", { refresh: false }).then((answer) => {
-      if (!("error" in answer)) setListed(answer.result as ProvidersListResult);
-    });
-  }, [id, providers]);
-  if (listed)
-    return listed.providers
-      .filter((info) => info.instance.enabled)
-      .map((info) => ({
-        id: info.instance.id,
-        name: info.instance.name,
-        models: instanceModels(info),
-        efforts: info.efforts,
-        permissions: info.permissions,
-      }));
-  return [
-    { id: "claude", name: "Claude", efforts: true, permissions: allAccess },
-    { id: "codex", name: "Codex", efforts: true, permissions: ["manual", "edit", "auto", "bypass"] },
-    { id: "cursor", name: "Cursor", efforts: false, permissions: ["edit", "plan", "auto", "bypass"] },
-  ].map((o) => ({ ...o, models: builtIn.filter((m) => m.provider === o.id) }) as Offer);
-}
 
 /** A file picked to send: an image (shown, and sent as one), or any other file. */
 type Attached =
@@ -211,7 +168,15 @@ function ModelSheet({
     then();
   };
   const card = [styles.card, { backgroundColor: c.surface }];
-  const option = (key: string, label: string, line: string | undefined, chosen: boolean, onPress: () => void, last: boolean) => (
+  const option = (
+    key: string,
+    label: string,
+    line: string | undefined,
+    chosen: boolean,
+    onPress: () => void,
+    last: boolean,
+    leading?: React.ReactNode,
+  ) => (
     <Pressable
       key={key}
       accessibilityRole="radio"
@@ -219,6 +184,7 @@ function ModelSheet({
       onPress={() => choose(onPress)}
       style={({ pressed }) => [styles.option, pressed && { backgroundColor: c.hover }]}
     >
+      {leading && <View style={styles.leading}>{leading}</View>}
       <View style={[styles.optionBody, !last && { borderBottomColor: c.border, borderBottomWidth: StyleSheet.hairlineWidth }]}>
         <View style={{ flex: 1, gap: 2 }}>
           <T style={{ fontSize: 17 }}>{label}</T>
@@ -232,12 +198,13 @@ function ModelSheet({
       </View>
     </Pressable>
   );
-  const link = (label: string, value: string, onPress: () => void) => (
+  const link = (label: string, value: string, onPress: () => void, leading?: React.ReactNode) => (
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
       style={({ pressed }) => [...card, styles.link, pressed && { backgroundColor: c.hover }]}
     >
+      {leading}
       <T style={{ fontSize: 17, flex: 1 }}>{label}</T>
       <T muted style={{ fontSize: 16 }}>
         {value}
@@ -293,7 +260,12 @@ function ModelSheet({
           {page === "model" && (
             <>
               {offers.length > 1 &&
-                link("Provider", offers.find((o) => o.id === provider)?.name ?? provider, () => onPage("provider"))}
+                link(
+                  "Provider",
+                  offers.find((o) => o.id === provider)?.name ?? provider,
+                  () => onPage("provider"),
+                  <ProviderLogo kind={offers.find((o) => o.id === provider)?.kind} size={20} />,
+                )}
               {list(first)}
               {efforts &&
                 effort &&
@@ -321,6 +293,7 @@ function ModelSheet({
                         onPage("model");
                       },
                       i === offers.length - 1,
+                      <ProviderLogo kind={o.kind} size={24} />,
                     )}
                   </View>
                 );
@@ -376,7 +349,7 @@ export function Composer({
   const offers = useOffers(computer);
   const [provider, setProvider] = useState<string>();
   const shownProvider = provider ?? run?.backend;
-  const fallback: Offer = { id: "", name: "", models: [], efforts: true, permissions: allAccess };
+  const fallback: Offer = { id: "", name: "", kind: "", models: [], efforts: true, permissions: allAccess };
   const offer = offers.find((o) => o.id === shownProvider) ?? offers[0] ?? fallback;
   // Another provider takes a message only on a plxd that moves runs (`sendAccount`), as on the desktop.
   const moves = "sendAccount" in (computer?.view.capabilities ?? {});
@@ -593,14 +566,10 @@ export function Composer({
               accessibilityLabel={working ? "Queue" : "Send"}
               disabled={!ready}
               onPress={() => void send(false)}
-              style={({ pressed }) => [
-                styles.send,
-                !ready && { backgroundColor: c.selected },
-                pressed && { opacity: 0.8 },
-              ]}
+              style={({ pressed }) => [styles.send, pressed && { opacity: 0.8 }]}
             >
-              {ready && <NightOrb size={38} />}
-              <Icon icon={ArrowUp} size={18} color={ready ? "#ffffff" : c.faintForeground} strokeWidth={2.5} />
+              <NightOrb size={38} />
+              <Icon icon={ArrowUp} size={18} color={ready ? "#ffffff" : "rgba(255, 255, 255, 0.45)"} strokeWidth={2.5} />
             </Pressable>
           )}
         </View>
@@ -666,9 +635,18 @@ const styles = StyleSheet.create({
   },
   input: { fontSize: 17, minHeight: 44, maxHeight: 160, paddingHorizontal: 16, paddingTop: 10 },
   bar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingTop: 6 },
-  scrim: { flex: 1, backgroundColor: "rgba(0, 0, 0, 0.3)" },
+  // Taps outside close the sheet; the screen behind stays as it is, not dimmed.
+  scrim: { flex: 1 },
   // Floating, rounded on every corner, as iOS 26's sheets and Claude's are.
-  sheet: { marginHorizontal: 8, borderRadius: 38, paddingTop: 8, overflow: "hidden" },
+  sheet: {
+    marginHorizontal: 8,
+    borderRadius: 38,
+    paddingTop: 8,
+    shadowColor: "#000000",
+    shadowOpacity: 0.18,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 8 },
+  },
   grabber: { alignSelf: "center", width: 40, height: 5, borderRadius: 3, marginBottom: 8 },
   sheetHead: {
     flexDirection: "row",
@@ -686,9 +664,10 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   card: { borderRadius: 20, overflow: "hidden" },
-  option: { paddingLeft: 18 },
-  optionBody: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, paddingRight: 18 },
-  link: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 18, paddingVertical: 16 },
+  option: { flexDirection: "row", alignItems: "center", paddingLeft: 18 },
+  leading: { width: 32, height: 32, borderRadius: 9, alignItems: "center", justifyContent: "center", marginRight: 12 },
+  optionBody: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, paddingRight: 18 },
+  link: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 18, paddingVertical: 16 },
   round: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
   pill: { height: 38, borderRadius: 19, paddingHorizontal: 16, justifyContent: "center", maxWidth: 230 },
   pillText: { fontSize: 15 },

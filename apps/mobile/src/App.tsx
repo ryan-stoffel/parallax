@@ -3,15 +3,13 @@
 // connections, thread lists, and transcripts are the desktop renderer's (fleet.tsx).
 import {
   createNavigationContainerRef,
-  useFocusEffect,
-  useIsFocused,
   DarkTheme,
   DefaultTheme,
   NavigationContainer,
 } from "@react-navigation/native";
 import { createNativeBottomTabNavigator } from "@react-navigation/bottom-tabs/unstable";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useColorScheme } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
@@ -26,61 +24,25 @@ import { alertFor, notify, onOpened, phaseOf, type Phase } from "./push";
 import { LightboxHost } from "./Lightbox";
 import { getPrefs } from "./prefs";
 import { AddComputerScreen, ComputerScreen, SettingsScreen } from "./Settings";
+import { ComputerSettingsScreen } from "./SettingsComputer";
+import { ProviderScreen } from "./SettingsProviders";
 import { ThreadDetailsScreen } from "./ThreadDetails";
-import { SkyBanner, useColors, Wordmark } from "./ui";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { StatusBar, StyleSheet, View } from "react-native";
 import { dark, light } from "./theme";
 import { ThreadScreen } from "./Thread";
 import { ThreadList } from "./ThreadList";
+import { UsageScreen } from "./Usage";
 
 const Stack = createNativeStackNavigator<Screens>();
 const Tabs = createNativeBottomTabNavigator();
 const nav = createNavigationContainerRef<Screens>();
 
-/** A tab's own stack, for its large title and search bar, under the nightly sky and wordmark. */
+/** A tab's own stack, whose screen draws its own header on the nightly sky (TabScreen.tsx). */
 function tab(title: string, Screen: React.ComponentType) {
   const Inner = createNativeStackNavigator();
-  function Sky() {
-    const c = useColors();
-    const insets = useSafeAreaInsets();
-    // The sky only while this tab is in front: a screen pushed over it would see it through its own
-    // header, whose glass buttons iOS then tints dark.
-    const focused = useIsFocused();
-    // Light status bar text over the night sky while this tab shows; the system's on other screens.
-    useFocusEffect(
-      useCallback(() => {
-        StatusBar.setBarStyle("light-content", true);
-        return () => StatusBar.setBarStyle("default", true);
-      }, []),
-    );
-    return (
-      // The list first, which iOS's large title collapses with as it scrolls, the sky under it.
-      <View style={{ flex: 1 }}>
-        <Screen />
-        <View
-          pointerEvents="none"
-          style={[StyleSheet.absoluteFill, { zIndex: -1, backgroundColor: c.background }]}
-        >
-          {focused && <SkyBanner bar={insets.top + 54} solid={insets.top + 54 + 52} fade={96} />}
-        </View>
-      </View>
-    );
-  }
   return function TabStack() {
     return (
-      <Inner.Navigator
-        screenOptions={{
-          headerLargeTitle: true,
-          headerTransparent: true,
-          headerLargeTitleShadowVisible: false,
-          // White over the night sky, in either appearance.
-          headerLeft: () => <Wordmark color="#ffffff" />,
-          headerLargeTitleStyle: { color: "#ffffff" },
-          contentStyle: { backgroundColor: "transparent" },
-        }}
-      >
-        <Inner.Screen name={title} component={Sky} options={{ title }} />
+      <Inner.Navigator screenOptions={{ headerShown: false }}>
+        <Inner.Screen name={title} component={Screen} />
       </Inner.Navigator>
     );
   };
@@ -88,6 +50,7 @@ function tab(title: string, Screen: React.ComponentType) {
 
 const ThreadsTab = tab("Threads", ThreadList);
 const PullRequestsTab = tab("Pull requests", PullRequestList);
+const UsageTab = tab("Usage", UsageScreen);
 const SettingsTab = tab("Settings", SettingsScreen);
 
 function Home() {
@@ -111,6 +74,11 @@ function Home() {
         name="PullRequestsTab"
         component={PullRequestsTab}
         options={{ title: "Pull requests", tabBarIcon: { type: "sfSymbol", name: "arrow.triangle.branch" } }}
+      />
+      <Tabs.Screen
+        name="UsageTab"
+        component={UsageTab}
+        options={{ title: "Usage", tabBarIcon: { type: "sfSymbol", name: "chart.bar" } }}
       />
       <Tabs.Screen
         name="SettingsTab"
@@ -161,15 +129,22 @@ function Alerts() {
 
 /**
  * Links into the app: `parallax://threads`, `prs`, and `settings` for the tabs,
- * `parallax://thread/<computer>/<thread>`, and a thread's pull request at
+ * `parallax://thread/<computer>/<thread>`, its details at `details/<computer>/<thread>`, a computer's
+ * settings at `computer/<computer>` and its pages at `computer/<computer>/<page>`, and a
+ * thread's pull request at
  * `parallax://pr/<computer>/<thread>?url=<its URL>`.
  */
 const linking = {
   prefixes: ["parallax://"],
   config: {
     screens: {
-      Tabs: { screens: { ThreadsTab: "threads", PullRequestsTab: "prs", SettingsTab: "settings" } },
+      Tabs: {
+        screens: { ThreadsTab: "threads", PullRequestsTab: "prs", UsageTab: "usage", SettingsTab: "settings" },
+      },
       Thread: "thread/:hostId/:runId",
+      ThreadDetails: "details/:hostId/:runId",
+      Computer: "computer/:id",
+      ComputerSettings: "computer/:id/:page",
       PullRequest: "pr/:hostId/:runId",
     },
   },
@@ -214,6 +189,8 @@ function Main({ setup }: { setup: Setup }) {
             options={{ presentation: "formSheet", title: "Thread details", sheetAllowedDetents: [0.6, 0.95] }}
           />
           <Stack.Screen name="Computer" component={ComputerScreen} />
+          <Stack.Screen name="ComputerSettings" component={ComputerSettingsScreen} />
+          <Stack.Screen name="Provider" component={ProviderScreen} />
           <Stack.Screen
             name="NewThread"
             component={NewThreadScreen}

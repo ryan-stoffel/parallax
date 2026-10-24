@@ -1,20 +1,31 @@
 // Settings: the account, the computers (each with its own page: status, default, reconnect,
-// remove), notifications by kind with a test, appearance, Tailscale, and about.
+// remove, and its settings, SettingsComputer.tsx), notifications by kind with a test, appearance,
+// Tailscale, and about. What the desktop's Settings keeps on the desktop itself, such as its
+// window, fonts, shortcuts, editors, terminal, and updates, stays there.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import {
   BellOff,
+  Bot,
   Bug,
+  CalendarClock,
   CircleCheck,
+  GitBranch,
+  HardDrive,
   Info,
+  KeyRound,
+  MessagesSquare,
   Moon,
+  MousePointerClick,
   Network,
   Plus,
   RefreshCw,
   Send,
   Smartphone,
+  SquareTerminal,
   Star,
   Sun,
   Trash2,
+  type LucideIcon,
 } from "lucide-react-native";
 import { useEffect, useState } from "react";
 import { Alert, AppState, Linking, Pressable, ScrollView, Switch, View } from "react-native";
@@ -27,6 +38,9 @@ import { useNav, type Screens } from "./nav";
 import { FindComputers } from "./Onboarding";
 import { setPrefs, usePrefs, type Prefs } from "./prefs";
 import { askForNotifications, notificationsOn, notify, registerWithRelay } from "./push";
+import { pages, type SettingsPage } from "./settingsLogic";
+import { can } from "./SettingsParts";
+import { ScreenTitle, TabScreen } from "./TabScreen";
 import { DeviceIcon, Dot, GitHubLogo, Row, Section, T, useColors } from "./ui";
 
 const REPO = "https://github.com/ryan-stoffel/parallax";
@@ -116,101 +130,119 @@ export function SettingsScreen() {
   );
 
   return (
-    <ScrollView
-      style={{ backgroundColor: "transparent" }}
-      contentInsetAdjustmentBehavior="automatic"
-      contentContainerStyle={{ padding: 16, gap: 26, paddingBottom: 60 }}
-    >
-      <Profile />
-
-      <Section
-        title="Computers"
-        footer="New threads start on the default computer. Your other computers with Parallax Connect on join on their own."
+    <TabScreen>
+      <ScrollView
+        style={{ backgroundColor: "transparent" }}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={{ paddingBottom: 120 }}
       >
-        {computers.map((m) => (
-          <Row
-            key={m.machine.id}
-            leading={<DeviceIcon name={m.machine.name} size={18} color={c.mutedForeground} />}
-            title={m.machine.name}
-            detail={status(m)}
-            chevron
-            onPress={() => nav.navigate("Computer", { id: m.machine.id })}
-            right={
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                {m.machine.id === defaultId && <T style={{ fontSize: 12, color: c.accent }}>Default</T>}
-                <StatusDot m={m} />
-              </View>
+        <ScreenTitle>Settings</ScreenTitle>
+        <View style={{ padding: 16, paddingTop: 8, gap: 26 }}>
+          <Profile />
+
+          <Section
+            title="Computers"
+            footer="New threads start on the default computer. Your other computers with Parallax Connect on join on their own."
+          >
+            {computers.map((m) => (
+              <Row
+                key={m.machine.id}
+                leading={<DeviceIcon name={m.machine.name} size={18} color={c.mutedForeground} />}
+                title={m.machine.name}
+                detail={status(m)}
+                chevron
+                onPress={() => nav.navigate("Computer", { id: m.machine.id })}
+                right={
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    {m.machine.id === defaultId && <T style={{ fontSize: 12, color: c.accent }}>Default</T>}
+                    <StatusDot m={m} />
+                  </View>
+                }
+              />
+            ))}
+            <Row icon={Plus} iconColor={c.accent} title="Add computer" last onPress={() => nav.navigate("AddComputer")} />
+          </Section>
+
+          <Section
+            title="Notifications"
+            footer={
+              on
+                ? `While Parallax is open, or for about 30 seconds after you leave it. ${relay ?? "It also notifies while closed."}`
+                : undefined
             }
-          />
-        ))}
-        <Row icon={Plus} iconColor={c.accent} title="Add computer" last onPress={() => nav.navigate("AddComputer")} />
-      </Section>
+          >
+            {!on ? (
+              <Row
+                icon={BellOff}
+                title="Turn on notifications"
+                detail="Hear when a thread needs you, finishes, or fails."
+                chevron
+                last
+                onPress={() => void askForNotifications().then((ok) => (ok ? check() : Linking.openSettings()))}
+              />
+            ) : (
+              <>
+                {kind("needsYou", "Needs you", "A thread asks for your approval.")}
+                {kind("done", "Finished", "A thread's turn is done.")}
+                {kind("failed", "Failed", "A thread's turn failed.")}
+                <Row
+                  icon={Send}
+                  iconColor={c.accent}
+                  title="Send a test notification"
+                  last
+                  onPress={() => {
+                    notify("done", "", "test", "Parallax", computers[0]?.machine.name ?? "this phone");
+                    Alert.alert("Sent", "Leave the app within a few seconds to see it as a banner.");
+                  }}
+                />
+              </>
+            )}
+          </Section>
 
-      <Section
-        title="Notifications"
-        footer={
-          on
-            ? `While Parallax is open, or for about 30 seconds after you leave it. ${relay ?? "It also notifies while closed."}`
-            : undefined
-        }
-      >
-        {!on ? (
-          <Row
-            icon={BellOff}
-            title="Turn on notifications"
-            detail="Hear when a thread needs you, finishes, or fails."
-            chevron
-            last
-            onPress={() => void askForNotifications().then((ok) => (ok ? check() : Linking.openSettings()))}
-          />
-        ) : (
-          <>
-            {kind("needsYou", "Needs you", "A thread asks for your approval.")}
-            {kind("done", "Finished", "A thread's turn is done.")}
-            {kind("failed", "Failed", "A thread's turn failed.")}
+          <Section title="Appearance">
+            {look("system", "Match the system", Smartphone)}
+            {look("light", "Light", Sun)}
+            {look("dark", "Dark", Moon, true)}
+          </Section>
+
+          <Section title="Tailscale">
             <Row
-              icon={Send}
-              iconColor={c.accent}
-              title="Send a test notification"
+              icon={Network}
+              title={address ? "Connected" : "Not connected"}
+              detail={address ? `This phone is ${address}` : "Open Tailscale to reach your computers."}
+              right={<Dot color={address ? c.added : c.faintForeground} />}
               last
-              onPress={() => {
-                notify("done", "", "test", "Parallax", computers[0]?.machine.name ?? "this phone");
-                Alert.alert("Sent", "Leave the app within a few seconds to see it as a banner.");
-              }}
+              onPress={address ? undefined : () => void Linking.openURL("tailscale://").catch(() => {})}
             />
-          </>
-        )}
-      </Section>
+          </Section>
 
-      <Section title="Appearance">
-        {look("system", "Match the system", Smartphone)}
-        {look("light", "Light", Sun)}
-        {look("dark", "Dark", Moon, true)}
-      </Section>
+          <AccountSection />
 
-      <Section title="Tailscale">
-        <Row
-          icon={Network}
-          title={address ? "Connected" : "Not connected"}
-          detail={address ? `This phone is ${address}` : "Open Tailscale to reach your computers."}
-          right={<Dot color={address ? c.added : c.faintForeground} />}
-          last
-          onPress={address ? undefined : () => void Linking.openURL("tailscale://").catch(() => {})}
-        />
-      </Section>
-
-      <AccountSection />
-
-      <Section title="About">
-        <Row icon={Info} title="Version" detail={`Parallax (Nightly) ${version}${build ? ` (${build})` : ""}`} />
-        <Row leading={<GitHubLogo size={18} color={c.mutedForeground} />} title="Parallax on GitHub" chevron onPress={() => void Linking.openURL(REPO)} />
-        <Row icon={Bug} title="Report a problem" chevron last onPress={() => void Linking.openURL(`${REPO}/issues/new`)} />
-      </Section>
-    </ScrollView>
+          <Section title="About">
+            <Row icon={Info} title="Version" detail={`Parallax (Nightly) ${version}${build ? ` (${build})` : ""}`} />
+            <Row leading={<GitHubLogo size={18} color={c.mutedForeground} />} title="Parallax on GitHub" chevron onPress={() => void Linking.openURL(REPO)} />
+            <Row icon={Bug} title="Report a problem" chevron last onPress={() => void Linking.openURL(`${REPO}/issues/new`)} />
+          </Section>
+        </View>
+      </ScrollView>
+    </TabScreen>
   );
 }
 
-/** One computer: its status, version, address, and Make default, Reconnect, and Remove. */
+/** Each of a computer's settings pages' icon. */
+const pageIcons: Record<SettingsPage, LucideIcon> = {
+  providers: Bot,
+  accounts: KeyRound,
+  threads: MessagesSquare,
+  schedules: CalendarClock,
+  sourceControl: GitBranch,
+  computerUse: MousePointerClick,
+  scripts: SquareTerminal,
+  connections: Network,
+  storage: HardDrive,
+};
+
+/** One computer: its status, version, address, its settings pages, and Make default, Reconnect, and Remove. */
 export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Screens, "Computer">) {
   const c = useColors();
   const m = useComputer(route.params.id);
@@ -234,6 +266,22 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Scr
         <Row title="System" detail={m.machine.os || "Unknown"} />
         <Row title={m.machine.paired ? "Paired on this Wi‑Fi" : "Tailscale address"} detail={m.machine.address} last />
       </Section>
+      {m.connected && (
+        <Section title="Settings" footer={`Saved on ${m.machine.name}, for every device that reaches it.`}>
+          {(Object.keys(pages) as SettingsPage[])
+            .filter((page) => page !== "computerUse" || can(m, "computerUse"))
+            .map((page, i, all) => (
+              <Row
+                key={page}
+                icon={pageIcons[page]}
+                title={pages[page]}
+                chevron
+                last={i === all.length - 1}
+                onPress={() => navigation.navigate("ComputerSettings", { id: m.machine.id, page })}
+              />
+            ))}
+        </Section>
+      )}
       <Section>
         <Row
           icon={Star}

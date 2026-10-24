@@ -1,7 +1,7 @@
 import { ChevronDown, Folder, House, MessagesSquare, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
-import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";
+import type { PromptImage, Repo, Role } from "../protocol/generated/protocol";
 import { CloneDialog } from "./AddDialog";
 import { parseProgress } from "./CloneProgress";
 import { TranscriptView } from "./AgentChat";
@@ -17,6 +17,7 @@ import type { RunOptions } from "./models";
 import { dismiss, notify, update } from "./notifications";
 import { newThreadPrefs } from "./prefs";
 import { RefMenu } from "./RefMenu";
+import { accountOptions, type AccountOption } from "./settings/shared";
 import { RunTargetMenu, type Workspace } from "./RunTargetMenu";
 import { attachThreads, ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import {
@@ -30,6 +31,8 @@ import {
 import { ariaKeyshortcut, bindingsOf, useShortcutLabel } from "./keybindings";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
+
+export { accountOptions, type AccountOption };
 
 // The picker's value that opens the folder picker instead of choosing a group.
 const addRepository = "add-repository";
@@ -85,42 +88,6 @@ type Attempt = ThreadStart & {
   /** Started with Cmd/Ctrl+Enter, leaving New Thread open. */
   background: boolean;
 };
-
-/** An account a worker or coordinator can run on, as the account chooser lists it. */
-export interface AccountOption {
-  label: string;
-  account: AccountChoice;
-}
-
-/**
- * The host's accounts a thread or a Project's coordinator can run on: its signed-in Claude Code
- * login, then its Anthropic key accounts. Resolves to plxd's error, for people, when either list
- * fails.
- */
-export async function accountOptions(hostId: string): Promise<AccountOption[] | string> {
-  const [clis, keys] = await Promise.all([
-    window.parallax.request(hostId, "accounts/list", {}),
-    window.parallax.request(hostId, "accounts/keys/list", {}),
-  ]);
-  if ("error" in clis) return describeError(clis.error);
-  if ("error" in keys) return describeError(keys.error);
-  // ponytail: mirrors plxd's backend registry, where only Claude runs workers today. PLX-99 has
-  // plxd report which accounts can run a thread, so this stops hard-coding it.
-  return [
-    ...clis.result.clis
-      .filter((c) => c.cli === "claude" && c.signedIn)
-      .map((c) => ({
-        label: "Claude Code",
-        account: { kind: "subscription", backend: c.cli } as const,
-      })),
-    ...keys.result.accounts
-      .filter((k) => k.provider === "anthropic")
-      .map((k) => ({
-        label: `${k.label} (API key)`,
-        account: { kind: "key", id: k.id } as const,
-      })),
-  ];
-}
 
 /**
  * The backend the host's new runs in `role` run on: its default's, or Claude's with no default,

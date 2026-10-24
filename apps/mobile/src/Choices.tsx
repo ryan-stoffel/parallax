@@ -92,7 +92,8 @@ export function Choices<V extends string>({
 }
 
 const styles = StyleSheet.create({
-  scrim: { flex: 1, backgroundColor: "rgba(0, 0, 0, 0.3)" },
+  // Taps outside close the sheet; the screen behind stays as it is, not dimmed.
+  scrim: { flex: 1 },
   // Floating, rounded on every corner, as iOS 26's sheets are.
   sheet: {
     marginHorizontal: 8,
@@ -100,7 +101,10 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     paddingTop: 8,
     paddingBottom: 16,
-    overflow: "hidden",
+    shadowColor: "#000000",
+    shadowOpacity: 0.18,
+    shadowRadius: 30,
+    shadowOffset: { width: 0, height: 8 },
   },
   grabber: { alignSelf: "center", width: 36, height: 5, borderRadius: 3, marginBottom: 10 },
   choice: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 20, paddingVertical: 12 },

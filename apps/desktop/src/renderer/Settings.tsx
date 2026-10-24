@@ -11,15 +11,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { HOME_VARS, NPM_INSTALLS, npmInstallLine, type ThemePreference } from "../preload/bridge";
 import {
-  HOME_VARS,
-  NPM_INSTALLS,
-  npmInstallLine,
-  type RpcError,
-  type ThemePreference,
-} from "../preload/bridge";
-import {
-  ErrorCodes,
   type AccountUsage,
   type CliKind,
   type DetectedCli,
@@ -68,6 +61,13 @@ import {
   Switch,
 } from "./settings/parts";
 import { ComputerSettings } from "./settings/ComputerSettings";
+import {
+  accountsError,
+  capitalized,
+  cliInfo,
+  instanceStatus,
+  providerNames,
+} from "./settings/shared";
 import { ProviderModels } from "./settings/ProviderModels";
 import { ScheduleSettings } from "./settings/ScheduleSettings";
 import { ScriptSettings } from "./settings/ScriptSettings";
@@ -168,44 +168,6 @@ export function Settings({
       </div>
     </div>
   );
-}
-
-/**
- * The vendor CLIs plxd detects (0004), by `CliKind`: where each says how to install it, and the
- * provider its API keys are for. Not Cursor's: 0004 rules out `CURSOR_API_KEY` as a fallback.
- */
-const cliInfo: Record<string, { name: string; install: string; keyProvider?: Provider }> = {
-  claude: {
-    name: "Claude Code",
-    install: "https://code.claude.com/docs/en/setup",
-    keyProvider: "anthropic",
-  },
-  codex: {
-    name: "Codex",
-    install: "https://learn.chatgpt.com/docs/codex/cli",
-    keyProvider: "openai",
-  },
-  cursor: {
-    name: "Cursor",
-    install: "https://cursor.com/docs/cli/installation",
-  },
-};
-
-const providerNames: Record<string, string> = {
-  anthropic: "Anthropic",
-  openai: "OpenAI",
-};
-
-/**
- * A failed accounts request, for people. A plxd without these methods is too old. A keychain
- * failure shows plxd's message, which names the fix on that host's OS.
- */
-function accountsError(error: RpcError): string {
-  if (error.code === ErrorCodes.MethodNotFound)
-    return "Update plxd on this host to manage its accounts here.";
-  if (error.data?.kind === "keychainUnavailable")
-    return `This host's keychain isn't available: ${error.message}.`;
-  return describeError(error);
 }
 
 /** A CLI's state in a few words: "Signed in · Max", "Not signed in", "Not installed". */
@@ -632,26 +594,6 @@ function ProviderPane({
       </Section>
     </div>
   );
-}
-
-/** A plan a CLI reports in lowercase ("max") capitalized; an email as it is. */
-const capitalized = (text: string) =>
-  text.includes("@") ? text : text.charAt(0).toUpperCase() + text.slice(1);
-
-/**
- * An instance's state, as its list row says it: "Authenticated · Max", or "Authenticated" when the
- * agent gives an email rather than a plan, or what it needs, from plxd's note, such as
- * "Not authenticated · Add your API key".
- */
-function instanceStatus(info: ProviderInfo): string {
-  const why = info.note ? ` · ${info.note}` : "";
-  // plxd's note only names the missing program, which the pane says.
-  if (!info.installed) return "Not installed";
-  if (info.signedIn === false) return `Not authenticated${why}`;
-  if (info.signedIn !== true) return info.note ?? "Ready";
-  return info.account && !info.account.includes("@")
-    ? `Authenticated · ${capitalized(info.account)}`
-    : "Authenticated";
 }
 
 /** The kinds Install puts on a host: with the vendor's own script (main's terminal.ts), or Cursor's SDK with plxd. */

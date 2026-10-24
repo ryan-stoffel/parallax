@@ -2,11 +2,15 @@
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 
+import type { SettingsPage } from "./settingsLogic";
+
 export type Screens = {
   Tabs: undefined;
   Thread: { hostId: string; runId: string };
   ThreadDetails: { hostId: string; runId: string };
   Computer: { id: string };
+  ComputerSettings: { id: string; page: SettingsPage };
+  Provider: { id: string; instance: string };
   PullRequest: { hostId: string; runId: string; url: string };
   NewThread: undefined;
   AddComputer: undefined;
