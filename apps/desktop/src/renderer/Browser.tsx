@@ -8,6 +8,7 @@ import { Bot, TriangleAlert } from "lucide-react";
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type ComponentType,
@@ -28,6 +29,7 @@ import {
   searchUrlFor,
 } from "./browserSettings";
 import { browserTheme, browserThemes } from "./browserTheme";
+import { suggestionsFor } from "./addressSuggestions";
 import { browserHistory, titled as titled_, visited } from "./browserHistory";
 import { DownloadsButton } from "./Downloads";
 import { HistoryDialog } from "./HistoryDialog";
@@ -56,6 +58,7 @@ import {
   Remove,
   Search,
   SplitscreenTop,
+  StarFilled,
   ZoomIn,
 } from "./symbols";
 import { IconButton, menuHeading, menuItem, MenuOption, shortcut } from "./ui";
@@ -565,6 +568,28 @@ function Tab({
   const layout = browserLayout.use();
   const engine = searchEngine.use();
   const home = homeButton.use();
+  // The address bar's suggestions while the user types in it (PLX-978), and the one picked.
+  const [typed, setTyped] = useState(false);
+  const [picked, setPicked] = useState(0);
+  const suggestionsId = useId();
+  const typedUrl = typed ? browserUrl(address) : undefined;
+  const suggestions =
+    typed && typedUrl
+      ? suggestionsFor(
+          address,
+          typedUrl === searchUrl(address.trim())
+            ? {
+                kind: "search",
+                url: typedUrl,
+                title: `${address.trim()} — Search ${searchEngineName(engine)}`,
+              }
+            : { kind: "go", url: typedUrl, title: shortUrl(typedUrl) },
+          // Read, not subscribed to: typing renders the tab anyway, and every tab subscribing
+          // would redraw them all on each visit any browser makes.
+          bookmarks.get(),
+          browserHistory.get(),
+        )
+      : [];
   const showBookmarks = bookmarksBar.use();
   const slots = toolbarSlots.use()[scope ?? ""];
   const pageSize = fixed ?? fitSize(area.width, area.height, fit);
@@ -773,10 +798,12 @@ function Tab({
       <form
         // Classic's second row keeps as short as it can, since the top row's height is the
         // window's title bar (frame.ts).
-        className={`mx-1 ${addressBox} ${layout === "classic" ? "h-7!" : ""}`}
+        className={`relative mx-1 ${addressBox} ${layout === "classic" ? "h-7!" : ""}`}
         onSubmit={(e) => {
           e.preventDefault();
-          open(address);
+          open(suggestions[picked]?.url ?? address);
+          setTyped(false);
+          addressBar.current?.blur();
         }}
       >
         <Search aria-hidden />
@@ -788,17 +815,82 @@ function Tab({
           aria-label="Address"
           placeholder={`Search ${searchEngineName(engine)} or type a URL`}
           spellCheck={false}
+          role="combobox"
+          aria-expanded={suggestions.length > 0}
+          aria-controls={suggestionsId}
+          aria-activedescendant={suggestions.length ? `${suggestionsId}-${picked}` : undefined}
           value={editing ? address : shortUrl(address)}
-          onChange={(e) => setAddress(e.target.value)}
+          onChange={(e) => {
+            setAddress(e.target.value);
+            setTyped(true);
+            setPicked(0);
+          }}
+          onKeyDown={(e) => {
+            // Keys an input method is composing with are its own.
+            if (!suggestions.length || e.nativeEvent.isComposing) return;
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const step = e.key === "ArrowDown" ? 1 : -1;
+              setPicked((picked + step + suggestions.length) % suggestions.length);
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              setTyped(false);
+            }
+          }}
           onFocus={(e) => {
             setEditing(true);
             // The full url replaces the short one first, so select it once it renders.
             const input = e.target;
             requestAnimationFrame(() => input.select());
           }}
-          onBlur={() => setEditing(false)}
+          onBlur={() => {
+            setEditing(false);
+            setTyped(false);
+          }}
           className={addressInput}
         />
+        {/* Chrome's suggestions as the address is typed (addressSuggestions.ts). */}
+        {suggestions.length > 0 && (
+          <ul
+            id={suggestionsId}
+            role="listbox"
+            aria-label="Suggestions"
+            className="absolute inset-x-0 top-full z-50 mt-1 rounded-lg border border-border bg-surface p-1 shadow-composer"
+          >
+            {suggestions.map((s, i) => {
+              const Icon = { go: Public, search: Search, bookmark: StarFilled, history: History }[
+                s.kind
+              ];
+              return (
+                <li
+                  key={`${s.kind}:${s.url}`}
+                  id={`${suggestionsId}-${i}`}
+                  role="option"
+                  aria-selected={i === picked}
+                  // Before the address bar loses focus, which would close the list.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    // A left click only, not a right click for a menu.
+                    if (e.button !== 0) return;
+                    open(s.url);
+                    setTyped(false);
+                    addressBar.current?.blur();
+                  }}
+                  onMouseEnter={() => setPicked(i)}
+                  className={`flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] ${i === picked ? "bg-hover" : ""}`}
+                >
+                  <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="truncate">{s.title}</span>
+                  {s.kind !== "search" && s.kind !== "go" && (
+                    <span className="shrink-0 truncate text-[12px] text-faint-foreground">
+                      {shortUrl(s.url)}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
         {Math.abs(zoom - 1) > 0.001 && (
           <button
             type="button"

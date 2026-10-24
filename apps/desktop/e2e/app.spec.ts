@@ -572,7 +572,8 @@ test("saves a repository action and runs it in the drawer, opening its preview (
   const panel = page.locator("#thread-details");
   const terminal = page.getByRole("group", { name: "Terminal", exact: true });
   await expect(terminal).toContainText("git version ");
-  await expect(page.getByRole("textbox", { name: "Address" })).toHaveValue(
+  // The address bar is a combobox, for its suggestions (PLX-978).
+  await expect(page.getByRole("combobox", { name: "Address" })).toHaveValue(
     // Short while unfocused, full while focused.
     new RegExp(`^(http://)?${preview.slice("http://".length, -1).replaceAll(".", "\\.")}/?$`),
   );

@@ -641,7 +641,18 @@ body {
 }
 :is([data-platform="darwin"], [data-platform="win32"])
   .titlebar
-  :is(button, a, input, select, textarea, fieldset, [role="tab"], [popover], browser-action-list) {
+  :is(
+    button,
+    a,
+    input,
+    select,
+    textarea,
+    fieldset,
+    [role="tab"],
+    [role="listbox"],
+    [popover],
+    browser-action-list
+  ) {
   -webkit-app-region: no-drag;
 }
 /* Room for the traffic lights, where a row starts at the window's left edge. */
