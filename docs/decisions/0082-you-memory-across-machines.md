@@ -48,7 +48,7 @@ Tombstones are never removed. Each is one small row, and a host offline for mont
 
 ### Pull
 
-While `connect` is on, at start and every 60 seconds, plxd scans, then for each online Connect device that advertises `youSync`:
+While `connect` is on, every 60 seconds from a minute after plxd starts, plxd scans, then for each online Connect device that advertises `youSync`:
 
 1. `memory/syncList {}` returns every row.
 2. For each row whose clock this host's doesn't cover, `memory/syncRead { path }` returns the synced text, which must match the row's hash. A mismatch waits for the next pull.
@@ -65,7 +65,7 @@ Compare the local clock with the remote one:
 - **Concurrent** (neither covers the other):
   - **Same text, or both deleted:** plxd keeps it and merges the clocks.
   - **An edit against a deletion:** the edit is kept, since keeping it loses nothing.
-  - **Two different edits, a proposal:** plxd keeps the version written later, ties going to the higher node ID, so every host picks the same one. The other version becomes `proposals/<slug>-<machine name>.md` on this host, with `Scope: you` and `Replaces: <entry path>`, which the Memory tab already shows with Save and Discard.
+  - **Two different edits, a proposal:** plxd keeps the version written later, ties going to the higher node ID, so every host picks the same one. The other version becomes `proposals/<slug>-<machine name>.md` on this host, with `Scope: you` and `Replaces: <entry path>`, which the Memory tab already shows with Save and Discard. A knowledge file has no kind for a proposal, so its other version becomes `knowledge/<name>-<machine name>.md` instead, a file of its own that syncs like any other.
 
 In each concurrent case the kept row takes the merged clock (pointwise maximum). It covers both versions, so every other host takes it as a newer version, with no second conflict. Saving the proposal is a local write, which reaches every host the same way. Discarding it deletes only the proposal.
 
