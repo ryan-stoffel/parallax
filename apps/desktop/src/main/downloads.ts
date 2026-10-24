@@ -51,9 +51,15 @@ function send(now = false) {
 /** Takes over the browser session's downloads. */
 export function startDownloads(session: Session) {
   session.on("will-download", (_event, item) => {
-    // Without a path, Electron asks where to save, which is what "ask" wants.
-    if (!prefs.ask)
-      item.setSavePath(uniquePath(prefs.dir || app.getPath("downloads"), item.getFilename()));
+    const dir = prefs.dir || app.getPath("downloads");
+    // A path a running download holds is taken too, since Electron makes its file only later, so
+    // two of the same name started together don't write over each other.
+    const held = (file: string) =>
+      existsSync(file) ||
+      [...downloads.values()].some((d) => d.info.state === "progressing" && d.info.path === file);
+    // Without a path, Electron asks where to save, which is what "ask" wants, starting in `dir`.
+    if (prefs.ask) item.setSaveDialogOptions({ defaultPath: path.join(dir, item.getFilename()) });
+    else item.setSavePath(uniquePath(dir, item.getFilename(), held));
     const id = String(++lastId);
     const info: DownloadInfo = {
       id,
@@ -62,6 +68,7 @@ export function startDownloads(session: Session) {
       state: "progressing",
       received: 0,
       total: item.getTotalBytes(),
+      ...(item.getSavePath() && { path: item.getSavePath() }),
     };
     downloads.set(id, { item, info });
     const update = () => {
@@ -71,9 +78,10 @@ export function startDownloads(session: Session) {
       info.total = item.getTotalBytes();
       info.paused = item.isPaused();
     };
+    // Chromium resumes an interrupted download by itself, which then reads as running again.
     item.on("updated", (_e, state) => {
       update();
-      if (state === "interrupted") info.state = "interrupted";
+      info.state = state;
       send();
     });
     item.once("done", (_e, state) => {

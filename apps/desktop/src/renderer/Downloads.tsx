@@ -95,6 +95,7 @@ export function DownloadsButton() {
           <p className={menuHeading}>Downloads</p>
           <button
             type="button"
+            role="menuitem"
             onClick={() => window.parallax.downloadAction(undefined, "clear")}
             className="rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-hover hover:text-foreground"
           >
@@ -106,12 +107,15 @@ export function DownloadsButton() {
             key={d.id}
             className="group flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-hover"
           >
+            {/* Every row's name is a menu item the arrow keys reach, opening only a finished file. */}
             <button
               type="button"
               role="menuitem"
-              disabled={d.state !== "completed"}
+              aria-disabled={d.state !== "completed"}
               title={d.state === "completed" ? `Open ${d.name}` : d.url}
-              onClick={() => window.parallax.downloadAction(d.id, "open")}
+              onClick={() =>
+                d.state === "completed" && window.parallax.downloadAction(d.id, "open")
+              }
               className="flex min-w-0 flex-1 flex-col text-left"
             >
               <span
@@ -131,6 +135,7 @@ export function DownloadsButton() {
             </button>
             {d.state === "progressing" ? (
               <IconButton
+                role="menuitem"
                 label={`Cancel ${d.name}`}
                 onClick={() => window.parallax.downloadAction(d.id, "cancel")}
               >
@@ -140,6 +145,7 @@ export function DownloadsButton() {
               d.path &&
               d.state === "completed" && (
                 <IconButton
+                  role="menuitem"
                   label={`Show ${d.name} in folder`}
                   onClick={() => window.parallax.downloadAction(d.id, "show")}
                 >
