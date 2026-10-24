@@ -22,7 +22,7 @@ Projects v2 (PLX-934) makes a Project one coordinator thread you stay in for mon
 
 | Surface | Design | Ships with |
 | --- | --- | --- |
-| Sidebar Project | The favorite's square (0075) keeps its icon, and shows the working ring while any of its runs works and the Waiting on you count in place of the needs-you dot. Opening it from the sidebar shows the coordinator chat with the Project tab. | PLX-948 |
+| Sidebar Project | The favorite's square (0075) keeps its icon. While any of its runs works, a streak of Parallax blue runs around the square's edge, clear of its icon or uploaded image, and the Waiting on you count sits on the square's top right corner in place of the needs-you dot. Opening it from the sidebar shows the coordinator chat with the Project tab. | PLX-948 |
 | Knowledge tab | A head (name in Sora, entry and document counts); proposals first as To review, each with Accept, Edit, and Dismiss; the brief in place, edited on a click; memory grouped by kind, each row ending in Last used; the entries unused for 60 days or stale, with Keep and Retire; then knowledge documents. | PLX-948 |
 | Coordinator chat | Epoch dividers, inline question and approval cards, `@thread` in the composer, a Listening pill, and the agents bar by state. | PLX-942, PLX-944 |
 | Project tab | A head with the open count and the state counts as plain text; Waiting on you above the board only when something waits; the board as linked items; threads grouped by the six states; Pull requests, Library, and Scheduled tabs; All files behind the book. | PLX-939, PLX-940, PLX-941 |

@@ -33,7 +33,7 @@ test("a Project works while any run does, and counts the runs waiting on an appr
 let unmount = () => {};
 afterEach(() => act(() => unmount()));
 
-test("a Project's square shows its working ring and waiting count in place of a dot", () => {
+test("a Project's square shows its working streak and waiting count in place of a dot", () => {
   window.parallax = { platform: "darwin" } as Partial<ParallaxBridge> as ParallaxBridge;
   const favorite = (key: string, project: Favorite["project"]): Favorite => ({
     key,
@@ -65,8 +65,8 @@ test("a Project's square shows its working ring and waiting count in place of a 
   };
   const [busy, quiet] = [...document.querySelectorAll<HTMLButtonElement>("button[data-row]")];
   expect(busy!.getAttribute("aria-description")).toBe("working, 2 waiting on you");
-  expect(busy!.querySelector(".mark-working")).not.toBeNull();
+  expect(busy!.querySelector(".project-working")).not.toBeNull();
   expect(busy!.textContent).toBe("2");
   expect(quiet!.getAttribute("aria-description")).toBeNull();
-  expect(quiet!.querySelector(".mark-working, .dot-in")).toBeNull();
+  expect(quiet!.querySelector(".project-working, .dot-in")).toBeNull();
 });

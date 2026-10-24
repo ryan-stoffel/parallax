@@ -12,7 +12,6 @@ import {
 } from "react";
 
 import type { Attention } from "./attention";
-import { WorkingMark } from "./AttentionMark";
 import { draggedPin, pinDragType, setDraggedPin } from "./pins";
 import { MenuKey } from "./Sidebar";
 import { shownRows } from "./SidebarParts";
@@ -200,7 +199,7 @@ export function Favorites({
           const row = draggedThread(e.dataTransfer);
           if (row) onPinRow(row.hostId, row.runId);
         }}
-        className={`grid rounded-[12px] px-0.5 transition-[background-color,box-shadow] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none mb-2 grid-cols-[repeat(auto-fit,minmax(40px,1fr))] gap-1.5 ${over ? "bg-accent/6 shadow-[0_0_0_1.5px_color-mix(in_srgb,var(--accent)_45%,transparent)]" : ""}`}
+        className={`grid rounded-[12px] px-0.5 pt-1.5 transition-[background-color,box-shadow] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none mb-2 grid-cols-[repeat(auto-fit,minmax(40px,1fr))] gap-1.5 ${over ? "bg-accent/6 shadow-[0_0_0_1.5px_color-mix(in_srgb,var(--accent)_45%,transparent)]" : ""}`}
       >
         {items.map((f) => (
           <li
@@ -285,18 +284,11 @@ export function Favorites({
               {f.icon}
               {f.project ? (
                 <>
-                  {f.project.working && (
-                    <span
-                      aria-hidden
-                      className="absolute top-[3px] left-[3px] grid [&_svg]:size-2.5"
-                    >
-                      <WorkingMark />
-                    </span>
-                  )}
+                  {f.project.working && <span aria-hidden className="project-working" />}
                   {f.project.waiting > 0 && (
                     <span
                       aria-hidden
-                      className="absolute top-[3px] right-[5px] font-mono text-[10.5px] leading-3 font-semibold text-warning tabular-nums"
+                      className="absolute -top-1.5 -right-1 grid h-4 min-w-4 place-items-center rounded-full bg-warning px-1 text-[10px] leading-none font-semibold text-background tabular-nums ring-2 ring-sidebar"
                     >
                       {f.project.waiting}
                     </span>
