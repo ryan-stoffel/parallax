@@ -45,6 +45,7 @@ import {
   type Model,
 } from "../../desktop/src/renderer/catalog";
 import { imageCaps } from "../../desktop/src/renderer/images";
+import type { ThreadStart } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import type { Computer } from "./fleet";
 import { openLightbox } from "./Lightbox";
@@ -326,23 +327,39 @@ function ModelSheet({
   );
 }
 
+/** What a new thread starts with: the prompt, its images, and the run's options. */
+export interface Start {
+  text: string;
+  images: PromptImage[];
+  options: ThreadStart["options"];
+}
+
+/**
+ * The message box of thread `runId`, whose messages go through its computer's outbox, or with
+ * `onStart`, of a new thread, which it starts.
+ */
 export function Composer({
   computer,
   runId,
   run,
-  working,
+  working = false,
   draft,
   onDraft,
-  onStop,
+  onStop = () => {},
+  onStart,
+  placeholder,
   bottom,
 }: {
   computer: Computer | undefined;
-  runId: string;
-  run: AgentRun | undefined;
-  working: boolean;
+  runId?: string;
+  run?: AgentRun;
+  working?: boolean;
   draft: string;
   onDraft: (text: string) => void;
-  onStop: () => void;
+  onStop?: () => void;
+  /** Starts a new thread with the message. Resolves to why it couldn't, for people. */
+  onStart?: (start: Start) => Promise<string | undefined>;
+  placeholder?: string;
   bottom: number;
 }) {
   const c = useColors();
@@ -372,7 +389,9 @@ export function Composer({
   const capabilities = computer?.view.capabilities ?? {};
   const caps = imageCaps(computer?.state);
   // A new model, effort, or access goes with a message only to a plxd that takes it.
-  const changes = "sendModel" in capabilities;
+  // A new thread's model, effort, and access go to a plxd that takes them (`runOptions`); an open
+  // thread's change goes with a message only to one that takes that (`sendModel`).
+  const changes = onStart ? "runOptions" in capabilities : "sendModel" in capabilities;
 
   const shownModel = model ?? run?.model ?? "";
   const modelName =
@@ -440,9 +459,25 @@ export function Composer({
           paths.push(await upload(hostId, f.name, await new File(f.uri).base64(), chunk));
       } else if (files.length) throw new Error(`${computer.machine.name}'s Parallax can't take files.`);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (onStart) {
+        const failed = await onStart({
+          text: withFiles(text.trim(), paths),
+          images,
+          options: {
+            ...(changes && model !== undefined && model !== "" && { model }),
+            ...(provider && { account: { kind: "subscription" as const, backend: provider } }),
+            ...(changes && effort && offer.efforts && { effort }),
+            ...(changes && permission && offer.permissions.includes(permission) && { permission }),
+          },
+        });
+        if (failed) throw new Error(failed);
+        onDraft("");
+        setAttached([]);
+        return;
+      }
       computer.outbox.add({
         id: uuidv7(),
-        threadId: runId,
+        threadId: runId!,
         text: withFiles(text.trim(), paths),
         steer,
         ...(images.length && { images }),
@@ -512,7 +547,7 @@ export function Composer({
           multiline
           value={text}
           onChangeText={onDraft}
-          placeholder={working ? "Steer, or queue a follow-up" : "Reply"}
+          placeholder={placeholder ?? (working ? "Steer, or queue a follow-up" : "Reply")}
           placeholderTextColor={c.faintForeground}
           style={[styles.input, { color: c.foreground }]}
         />
@@ -600,6 +635,7 @@ export function Composer({
         // As on the desktop: another provider only where plxd moves runs, and for a Project's
         // coordinator (a `noWrite` run), only one that can run a coordinator.
         canMove={(id) =>
+          !!onStart ||
           id === run?.backend ||
           (moves && (run?.policy !== "noWrite" || !!offers.find((o) => o.id === id)?.coordinator))
         }

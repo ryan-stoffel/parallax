@@ -4,7 +4,7 @@
 // turn folded under "Worked for …", permission requests to answer, the files it presented, and
 // the composer. Images open in the lightbox.
 import { useHeaderHeight } from "@react-navigation/elements";
-import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import type { NativeStackHeaderItemMenuAction, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
@@ -12,7 +12,6 @@ import {
   Bot,
   Brain,
   ChevronRight,
-  Ellipsis,
   FilePlus,
   FileText,
   FoldVertical,
@@ -32,7 +31,6 @@ import {
 } from "lucide-react-native";
 import { createContext, useContext, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
 import {
-  ActionSheetIOS,
   Alert,
   FlatList,
   Image,
@@ -625,6 +623,9 @@ function WorkingFor({ since }: { since?: string }) {
   );
 }
 
+type MenuIcon = Extract<NativeStackHeaderItemMenuAction["icon"], { type: "sfSymbol" }>;
+type SFSymbol = MenuIcon["name"];
+
 export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Screens, "Thread">) {
   const { hostId, runId } = route.params;
   const c = useColors();
@@ -655,39 +656,13 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
 
   const working = isRunning(transcript.run?.status) && !transcript.turnDone;
 
-  function menu() {
-    const actions: [string, () => void][] = [
-      ["Thread details", () => navigation.navigate("ThreadDetails", { hostId, runId })],
-      ...prs.map((url): [string, () => void] => [
-        `Pull request #${url.split("/").pop()}`,
-        () => navigation.navigate("PullRequest", { hostId, runId, url }),
-      ]),
-      [
-        "Rename",
-        () =>
-          Alert.prompt("Rename thread", undefined, (next) => void computer?.view.update(runId, { title: next.trim() }), "plain-text", title),
-      ],
-      [thread?.pinned ? "Unpin" : "Pin", () => void computer?.view.update(runId, { pinned: !thread?.pinned })],
-      ...(run?.branch ? [["Copy branch name", () => void Clipboard.setStringAsync(run.branch!)] as [string, () => void]] : []),
-      ...(working ? [["Stop", () => void cancel()] as [string, () => void]] : []),
-      [
-        thread?.archived ? "Unarchive" : "Archive",
-        () => {
-          void computer?.view.archive(runId, !thread?.archived);
-          if (!thread?.archived) navigation.goBack();
-        },
-      ],
-    ];
-    ActionSheetIOS.showActionSheetWithOptions(
-      {
-        title,
-        options: [...actions.map(([label]) => label), "Cancel"],
-        cancelButtonIndex: actions.length,
-        destructiveButtonIndex: working ? actions.length - 2 : undefined,
-      },
-      (i) => actions[i]?.[1](),
-    );
-  }
+  const rename = () =>
+    Alert.prompt("Rename thread", undefined, (next) => void computer?.view.update(runId, { title: next.trim() }), "plain-text", title);
+  const archive = () => {
+    void computer?.view.archive(runId, !thread?.archived);
+    if (!thread?.archived) navigation.goBack();
+  };
+  const symbol = (name: SFSymbol): MenuIcon => ({ type: "sfSymbol" as const, name });
 
   useLayoutEffect(() => {
     const subtitle = [computers.length > 1 && computer?.machine.name, run?.branch].filter(Boolean).join(" · ");
@@ -704,11 +679,88 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           )}
         </View>
       ),
-      headerRight: () => (
-        <Pressable accessibilityRole="button" accessibilityLabel="Thread actions" hitSlop={10} onPress={menu}>
-          <Icon icon={Ellipsis} size={22} color={c.foreground} />
-        </Pressable>
-      ),
+      // A native menu, in sections as iOS's own apps group theirs.
+      unstable_headerRightItems: () => [
+        {
+          type: "menu",
+          label: "Thread actions",
+          icon: symbol("ellipsis"),
+          menu: {
+            title,
+            items: [
+              {
+                type: "submenu",
+                label: "Thread",
+                inline: true,
+                items: [
+                  {
+                    type: "action",
+                    label: "Thread details",
+                    icon: symbol("info.circle"),
+                    onPress: () => navigation.navigate("ThreadDetails", { hostId, runId }),
+                  },
+                  ...prs.map((url) => ({
+                    type: "action" as const,
+                    label: `Pull request #${url.split("/").pop()}`,
+                    icon: symbol("arrow.triangle.pull"),
+                    onPress: () => navigation.navigate("PullRequest", { hostId, runId, url }),
+                  })),
+                ],
+              },
+              {
+                type: "submenu",
+                label: "Edit",
+                inline: true,
+                items: [
+                  { type: "action", label: "Rename", icon: symbol("pencil"), onPress: rename },
+                  {
+                    type: "action",
+                    label: thread?.pinned ? "Unpin" : "Pin",
+                    icon: symbol(thread?.pinned ? "pin.slash" : "pin"),
+                    onPress: () => void computer?.view.update(runId, { pinned: !thread?.pinned }),
+                  },
+                  ...(run?.branch
+                    ? [
+                        {
+                          type: "action" as const,
+                          label: "Copy branch name",
+                          description: run.branch,
+                          icon: symbol("doc.on.doc"),
+                          onPress: () => void Clipboard.setStringAsync(run.branch!),
+                        },
+                      ]
+                    : []),
+                ],
+              },
+              {
+                type: "submenu",
+                label: "End",
+                inline: true,
+                items: [
+                  ...(working
+                    ? [
+                        {
+                          type: "action" as const,
+                          label: "Stop",
+                          icon: symbol("stop.circle"),
+                          destructive: true,
+                          onPress: () => void cancel(),
+                        },
+                      ]
+                    : []),
+                  {
+                    type: "action",
+                    label: thread?.archived ? "Unarchive" : "Archive",
+                    icon: symbol(thread?.archived ? "tray.and.arrow.up" : "archivebox"),
+                    destructive: !thread?.archived,
+                    onPress: archive,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
     });
   });
 

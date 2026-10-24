@@ -1,8 +1,8 @@
 // Every computer's threads, as the desktop's sidebar lists a host's: pinned first, then the rest
 // grouped by day or by repository, each with its attention badge (Working, Needs you, Done,
 // Failed), and drawers for those working, snoozed, and archived. The filter narrows it to one
-// computer or repository, the search bar to titles, repositories, and branches, and a long press
-// pins, snoozes, renames, or archives a thread.
+// computer or repository, the search bar to titles, repositories, and branches. A swipe left
+// archives a thread, and a long press pins, snoozes, renames, or archives it.
 import type { LucideIcon } from "lucide-react-native";
 import {
   Archive,
@@ -13,21 +13,23 @@ import {
   Pin,
   SquarePen,
 } from "lucide-react-native";
-import { useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
   Pressable,
   RefreshControl,
+  ScrollView,
   SectionList,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from "react-native";
 
 import * as Lucide from "lucide-react-native";
 
-import type { AgentRun, Project, Thread } from "../../desktop/src/protocol/generated/protocol";
+import type { AgentRun, Project, ProjectIcon, Repo, Thread } from "../../desktop/src/protocol/generated/protocol";
 import {
   attentionOf,
   projectAttention,
@@ -44,9 +46,10 @@ import {
 } from "../../desktop/src/renderer/threads";
 import { Choices, type Choice } from "./Choices";
 import { useFleet, type Computer } from "./fleet";
+import { ProjectGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
 import { ScreenTitle, SkyButton, TabScreen } from "./TabScreen";
 import { ago, useNav } from "./nav";
-import { AttentionBadge, DeviceIcon, Icon, T, useColors } from "./ui";
+import { AttentionBadge, Icon, T, useColors } from "./ui";
 
 /** One thread as the list shows it. */
 interface Entry {
@@ -56,6 +59,8 @@ interface Entry {
   attention: Attention;
   title: string;
   repo?: string;
+  /** Its repository, for the icon. */
+  source?: Repo;
   repoId: string;
 }
 
@@ -89,13 +94,6 @@ function projectsOf(computers: Computer[]): ProjectEntry[] {
   });
 }
 
-/** A Project's icon: its lucide glyph by name (`rocket` is Rocket), or a kanban board. */
-function ProjectIcon({ project, color }: { project: Project; color: string }) {
-  const name = (project.icon?.name ?? "").replace(/(^|-)(\w)/g, (_, __, ch: string) => ch.toUpperCase());
-  const Glyph = (Lucide as unknown as Record<string, LucideIcon | undefined>)[name] ?? Lucide.FolderKanban;
-  return <Icon icon={Glyph} size={16} color={color} />;
-}
-
 function ProjectRow({ entry, many }: { entry: ProjectEntry; many: boolean }) {
   const c = useColors();
   const nav = useNav();
@@ -110,9 +108,15 @@ function ProjectRow({ entry, many }: { entry: ProjectEntry; many: boolean }) {
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
     >
       <View style={styles.line}>
-        <View style={[styles.projectIcon, { backgroundColor: c.selected }]}>
-          <ProjectIcon project={project} color={c.accent} />
-        </View>
+        {project.icon?.image ? (
+          <View style={styles.projectIcon}>
+            <ProjectGlyph icon={project.icon} size={30} />
+          </View>
+        ) : (
+          <View style={[styles.projectIcon, { backgroundColor: c.selected }]}>
+            <ProjectGlyph icon={project.icon} size={16} />
+          </View>
+        )}
         <View style={{ flex: 1, gap: 2 }}>
           <View style={styles.line}>
             <T numberOfLines={1} style={{ flex: 1, fontWeight: attention === "needsYou" ? "600" : "500" }}>
@@ -153,13 +157,15 @@ function entriesOf(computers: Computer[]): Entry[] {
       .map((thread) => {
         const run = state.runs[thread.id];
         const group = groupOf(state, thread);
+        const source = group === noRepo ? undefined : state.repos.find((r) => r.id === group);
         return {
           computer,
           thread,
           run,
           attention: attentionOf(thread, run, asksOf(state, thread.id)),
           title: state.titles[thread.id] ?? "New thread",
-          repo: group === noRepo ? undefined : state.repos.find((r) => r.id === group)?.name,
+          repo: source?.name,
+          source,
           repoId: `${computer.machine.id}/${group}`,
         };
       });
@@ -176,7 +182,62 @@ function dayOf(at: string, now = Date.now()) {
   return days <= 0 ? "Today" : days === 1 ? "Yesterday" : days < 7 ? "Earlier this week" : "Older";
 }
 
-function ThreadRow({ entry, many }: { entry: Entry; many: boolean }) {
+const SWIPE = 88;
+
+/** A row a swipe left slides open on an action, as iOS Mail's are. */
+function Swipe({
+  label,
+  icon,
+  color,
+  onPress,
+  children,
+}: {
+  label: string;
+  icon: LucideIcon;
+  color: string;
+  onPress: () => void;
+  children: ReactNode;
+}) {
+  const { width } = useWindowDimensions();
+  const view = useRef<ScrollView>(null);
+  return (
+    <ScrollView
+      ref={view}
+      horizontal
+      bounces={false}
+      directionalLockEnabled
+      showsHorizontalScrollIndicator={false}
+      snapToOffsets={[0, SWIPE + 8]}
+      decelerationRate="fast"
+    >
+      <View style={{ width }}>{children}</View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        onPress={() => {
+          view.current?.scrollTo({ x: 0, animated: false });
+          onPress();
+        }}
+        style={[styles.swipe, { backgroundColor: color }]}
+      >
+        <Icon icon={icon} size={20} color="#ffffff" />
+        <T medium style={{ color: "#ffffff", fontSize: 13 }}>
+          {label}
+        </T>
+      </Pressable>
+    </ScrollView>
+  );
+}
+
+function ThreadRow({
+  entry,
+  many,
+  shared,
+}: {
+  entry: Entry;
+  many: boolean;
+  shared: ReadonlyMap<string, ProjectIcon>;
+}) {
   const c = useColors();
   const nav = useNav();
   const { thread, run, computer, title, repo, attention } = entry;
@@ -208,9 +269,17 @@ function ThreadRow({ entry, many }: { entry: Entry; many: boolean }) {
   }
 
   return (
+    <Swipe
+      label={thread.archived ? "Unarchive" : "Archive"}
+      icon={thread.archived ? Lucide.ArchiveRestore : Archive}
+      color={c.projectViolet}
+      onPress={() => void view.archive(thread.id, !thread.archived)}
+    >
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={title}
+      accessibilityActions={[{ name: "archive", label: thread.archived ? "Unarchive" : "Archive" }]}
+      onAccessibilityAction={() => void view.archive(thread.id, !thread.archived)}
       onPress={() => nav.navigate("Thread", { hostId: computer.machine.id, runId: thread.id })}
       onLongPress={actions}
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
@@ -229,7 +298,7 @@ function ThreadRow({ entry, many }: { entry: Entry; many: boolean }) {
         )}
       </View>
       <View style={styles.line}>
-        {many && <DeviceIcon name={computer.machine.name} size={12} color={c.faintForeground} />}
+        <RepoIcon repo={entry.source} shared={shared} size={14} />
         <T muted numberOfLines={1} style={{ ...styles.small, flex: 1 }}>
           {[many && computer.machine.name, repo ?? "No repo", run?.branch].filter(Boolean).join(" · ")}
         </T>
@@ -241,6 +310,7 @@ function ThreadRow({ entry, many }: { entry: Entry; many: boolean }) {
         )}
       </View>
     </Pressable>
+    </Swipe>
   );
 }
 
@@ -259,6 +329,7 @@ export function ThreadList() {
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set(["Snoozed", "Archived"]));
   const [refreshing, setRefreshing] = useState(false);
   const many = computers.length > 1;
+  const shared = useSharedIcons();
 
   const all = entriesOf(computers);
   const now = Date.now();
@@ -287,12 +358,14 @@ export function ThreadList() {
     .sort((a, b) => b.at.localeCompare(a.at));
 
   const groups = new Map<string, Entry[]>();
+  const groupRepos = new Map<string, Repo | undefined>();
   for (const e of listed) {
     const key =
       groupBy === "repo"
         ? `${e.repo ?? "No repo"}${many ? ` · ${e.computer.machine.name}` : ""}`
         : dayOf(when(e.thread), now);
     groups.set(key, [...(groups.get(key) ?? []), e]);
+    if (groupBy === "repo") groupRepos.set(key, e.source);
   }
   const drawer = (name: DrawerName, data: Entry[]) => ({ title: name, data: threadRows(data), drawer: true });
   type Row = { kind: "thread"; entry: Entry } | { kind: "project"; entry: ProjectEntry };
@@ -302,7 +375,7 @@ export function ThreadList() {
       ? [{ title: "Projects", data: projects.map((entry): Row => ({ kind: "project", entry })), drawer: true }]
       : []),
     ...(pinned.length ? [{ title: "Pinned", data: threadRows(pinned), drawer: false }] : []),
-    ...[...groups].map(([title, data]) => ({ title, data: threadRows(data), drawer: false })),
+    ...[...groups].map(([title, data]) => ({ title, data: threadRows(data), drawer: false, repo: groupRepos.get(title) })),
     ...(working.length ? [drawer("Working", working)] : []),
     ...(snoozedList.length ? [drawer("Snoozed", snoozedList)] : []),
     ...(archived.length ? [drawer("Archived", archived)] : []),
@@ -448,6 +521,13 @@ export function ThreadList() {
                 <Icon icon={ChevronRight} size={14} color={c.faintForeground} />
               </View>
             </Pressable>
+          ) : groupBy === "repo" && section.title !== "Pinned" ? (
+            <View style={[styles.line, styles.section]}>
+              <RepoIcon repo={"repo" in section ? section.repo : undefined} shared={shared} size={16} />
+              <T muted medium style={{ fontSize: 13 }}>
+                {section.title}
+              </T>
+            </View>
           ) : (
             <T muted medium style={styles.section}>
               {section.title}
@@ -458,7 +538,7 @@ export function ThreadList() {
           item.kind === "project" ? (
             <ProjectRow entry={item.entry} many={many} />
           ) : (
-            <ThreadRow entry={item.entry} many={many} />
+            <ThreadRow entry={item.entry} many={many} shared={shared} />
           )
         }
         ListEmptyComponent={
@@ -521,6 +601,15 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   projectIcon: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center", marginRight: 4 },
+  swipe: {
+    width: SWIPE,
+    marginRight: 8,
+    marginVertical: 2,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
   row: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, gap: 3 },
   line: { flexDirection: "row", alignItems: "center", gap: 6 },
   small: { fontSize: 13, lineHeight: 18 },

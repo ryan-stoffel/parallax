@@ -17,7 +17,7 @@ import { AccountProvider, SignIn, useAccount } from "./Account";
 import { useFleet, FleetProvider } from "./fleet";
 import { loadSetup, probe, saveSetup, type Setup } from "./machines";
 import type { Screens } from "./nav";
-import { NewThreadScreen } from "./NewThread";
+import { NewThreadScreen, StartThreadScreen } from "./NewThread";
 import { Loading, Onboarding } from "./Onboarding";
 import { PullRequestList, PullRequestScreen } from "./PullRequests";
 import { alertFor, notify, onOpened, phaseOf, type Phase } from "./push";
@@ -132,7 +132,8 @@ function Alerts() {
  * `parallax://thread/<computer>/<thread>`, its details at `details/<computer>/<thread>`, a computer's
  * settings at `computer/<computer>` and its pages at `computer/<computer>/<page>`, and a
  * thread's pull request at
- * `parallax://pr/<computer>/<thread>?url=<its URL>`.
+ * `parallax://pr/<computer>/<thread>?url=<its URL>`, and a new thread's picker at `new` and its
+ * page at `new/<computer>/<repo>`.
  */
 const linking = {
   prefixes: ["parallax://"],
@@ -146,6 +147,8 @@ const linking = {
       Computer: "computer/:id",
       ComputerSettings: "computer/:id/:page",
       PullRequest: "pr/:hostId/:runId",
+      NewThread: "new",
+      StartThread: "new/:hostId/:groupId",
     },
   },
 };
@@ -196,6 +199,7 @@ function Main({ setup }: { setup: Setup }) {
             component={NewThreadScreen}
             options={{ presentation: "formSheet", title: "New thread", sheetAllowedDetents: [0.92] }}
           />
+          <Stack.Screen name="StartThread" component={StartThreadScreen} />
           <Stack.Screen
             name="AddComputer"
             component={AddComputerScreen}

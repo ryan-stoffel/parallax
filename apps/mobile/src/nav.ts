@@ -13,6 +13,7 @@ export type Screens = {
   Provider: { id: string; instance: string };
   PullRequest: { hostId: string; runId: string; url: string };
   NewThread: undefined;
+  StartThread: { hostId: string; groupId: string };
   AddComputer: undefined;
 };
 
