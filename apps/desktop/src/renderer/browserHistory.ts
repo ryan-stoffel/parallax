@@ -57,9 +57,16 @@ export function byDay(
 ): { day: string; visits: Visit[] }[] {
   const start = (time: number) => new Date(time).setHours(0, 0, 0, 0);
   const today = start(now);
-  const groups: { day: string; visits: Visit[] }[] = [];
+  const year = new Date(now).getFullYear();
+  const groups: { day: string; start: number; visits: Visit[] }[] = [];
   for (const visit of visits) {
     const day = start(visit.time);
+    const group = groups.at(-1);
+    if (group?.start === day) {
+      group.visits.push(visit);
+      continue;
+    }
+    // A day's name once per day, not per visit, as History can hold thousands.
     const name =
       day === today
         ? "Today"
@@ -69,13 +76,9 @@ export function byDay(
               weekday: "long",
               month: "long",
               day: "numeric",
-              ...(new Date(day).getFullYear() !== new Date(now).getFullYear() && {
-                year: "numeric",
-              }),
+              ...(new Date(day).getFullYear() !== year && { year: "numeric" }),
             });
-    const group = groups.at(-1);
-    if (group?.day === name) group.visits.push(visit);
-    else groups.push({ day: name, visits: [visit] });
+    groups.push({ day: name, start: day, visits: [visit] });
   }
-  return groups;
+  return groups.map(({ day, visits: list }) => ({ day, visits: list }));
 }

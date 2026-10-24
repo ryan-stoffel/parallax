@@ -713,7 +713,9 @@ function Tab({
     };
     el.addEventListener("dom-ready", firstLoad);
     el.addEventListener("did-navigate", navigated);
-    el.addEventListener("did-navigate-in-page", navigated);
+    // An iframe's own in-page step isn't the page's, nor a visit.
+    const navigatedInPage = (e: { isMainFrame: boolean }) => e.isMainFrame && navigated();
+    el.addEventListener("did-navigate-in-page", navigatedInPage);
     el.addEventListener("did-start-navigation", starting);
     el.addEventListener("did-start-loading", started);
     el.addEventListener("did-fail-load", failed);
@@ -726,7 +728,7 @@ function Tab({
       el.removeEventListener("dom-ready", ready);
       el.removeEventListener("dom-ready", firstLoad);
       el.removeEventListener("did-navigate", navigated);
-      el.removeEventListener("did-navigate-in-page", navigated);
+      el.removeEventListener("did-navigate-in-page", navigatedInPage);
       el.removeEventListener("did-start-navigation", starting);
       el.removeEventListener("did-start-loading", started);
       el.removeEventListener("did-fail-load", failed);
