@@ -425,8 +425,9 @@ const mediaTypes: Record<string, string> = {
 /** A presented picture, read from the run's folder with `agent/file`, as a data URL. */
 async function readPicture(hostId: string, f: DocRef): Promise<string | undefined> {
   const type = mediaTypes[f.name.split(".").pop()?.toLowerCase() ?? ""] ?? "image/png";
-  // Whole 3-byte groups a slice, so the slices' base64 joins into the whole's.
-  const slice = 786_432;
+  // Whole 3-byte groups a slice, so the slices' base64 joins into the whole's, and no more than
+  // the desktop's 256 KiB `pieceBytes`, so a slice arrives within the heartbeat's 10 s on a slow link.
+  const slice = 262_143;
   let data = "";
   for (let offset = 0; ; offset += slice) {
     const answer = await window.parallax.request(hostId, "agent/file", {
@@ -610,6 +611,9 @@ function RowView({ row, live }: { row: Row; live: boolean }) {
   }
 }
 
+/** No computer's outbox: one array, since a new one each render would never settle. */
+const noMessages: never[] = [];
+
 /** The line while a turn goes: how long it has worked, ticking. */
 function WorkingFor({ since }: { since?: string }) {
   const c = useColors();
@@ -711,7 +715,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const outbox = computer?.outbox;
   const waiting = useSyncExternalStore(
     (listener) => outbox?.subscribe(listener) ?? (() => {}),
-    () => outbox?.messages ?? [],
+    () => outbox?.messages ?? noMessages,
   );
   const logged = new Set(transcript.items.map((i) => (i.kind === "user" ? i.turnId : undefined)));
   const pending = waiting.filter((m) => m.threadId === runId && !logged.has(m.id));

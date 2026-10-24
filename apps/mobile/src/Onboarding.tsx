@@ -15,7 +15,7 @@ import {
 
 import { tailnetAddress } from "../modules/pinned-tls";
 import type { Saved } from "./host";
-import { probe, type Machine, type Setup } from "./machines";
+import { pairedId, probe, type Machine, type Setup } from "./machines";
 import { Pairing } from "./PairScreen";
 import { askForNotifications } from "./push";
 import { font } from "./theme";
@@ -27,7 +27,7 @@ const TAILSCALE_APP = "https://apps.apple.com/app/tailscale/id1470499037";
 
 /** A LAN-paired computer as a machine (0065). */
 export const pairedMachine = (saved: Saved): Machine => ({
-  id: `paired-${saved.fingerprint.slice(0, 16)}`,
+  id: pairedId(saved),
   name: saved.name,
   os: "",
   address: saved.routes[0] ?? "",

@@ -12,7 +12,7 @@ import type { ConnectionState, ParallaxBridge } from "../../desktop/src/preload/
 import type { ConnectDevicesResult, TailnetDevice } from "../../desktop/src/protocol/generated/protocol";
 import { WebHost } from "../../desktop/src/renderer/webBridge";
 import { PinnedSocket, privateFile } from "../modules/pinned-tls";
-import { pairedSocket, type Saved } from "./host";
+import { loadSaved, pairedSocket, type Saved } from "./host";
 
 export const CONNECT_PORT = 7340;
 
@@ -36,12 +36,23 @@ export interface Setup {
 
 const setupFile = new File(privateFile("machines.json"));
 
-export function loadSetup(): Setup {
+/** A LAN-paired computer's id, from its certificate's fingerprint. */
+export const pairedId = (saved: Saved) => `paired-${saved.fingerprint.slice(0, 16)}`;
+
+/**
+ * The saved setup, with a LAN-paired computer's session put back from the Keychain, where
+ * `saveSetup` leaves it. A paired computer whose session is gone, as after a revoke, drops out.
+ */
+export async function loadSetup(): Promise<Setup> {
+  let setup: Setup = { machines: [] };
   try {
-    return setupFile.exists ? (JSON.parse(setupFile.textSync()) as Setup) : { machines: [] };
-  } catch {
-    return { machines: [] };
-  }
+    if (setupFile.exists) setup = JSON.parse(setupFile.textSync()) as Setup;
+  } catch {}
+  const saved = await loadSaved().catch(() => null);
+  const machines = setup.machines.flatMap((m) =>
+    !m.id.startsWith("paired-") ? [m] : saved && m.id === pairedId(saved) ? [{ ...m, paired: saved }] : [],
+  );
+  return { ...setup, machines };
 }
 
 // A paired computer's session lives in the Keychain (host.ts), never in this file.
@@ -168,6 +179,11 @@ export class Fleet {
     const host = this.hosts.get(id);
     this.hosts.delete(id);
     host?.close();
+  }
+
+  /** Ends every connection, as when the app signs out. */
+  close(): void {
+    for (const id of [...this.hosts.keys()]) this.remove(id);
   }
 
   /** After the phone wakes: checks each connection, and retries the failed ones now. */

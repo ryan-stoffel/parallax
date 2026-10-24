@@ -221,6 +221,11 @@ export class WebHost {
     clearTimeout(this.retryTimer);
     this.setState({ status: "connecting" });
     const socket = await this.open();
+    // Closed while it opened: the socket it got goes too.
+    if (this.closed) {
+      if (!("error" in socket)) socket.close();
+      return;
+    }
     if ("error" in socket) {
       if (socket.error !== "revoked") return this.fail(socket.error);
       return this.signedOut();

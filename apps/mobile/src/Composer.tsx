@@ -115,8 +115,9 @@ async function photo(asset: ImagePicker.ImagePickerAsset): Promise<Attached> {
  * (0074). Resolves to its path there, or rejects with why not.
  */
 async function upload(hostId: string, name: string, data: string, chunk?: number): Promise<string> {
-  // Pieces of whole 3-byte groups, so each piece's base64 is a slice of the whole's.
-  const piece = chunk ? Math.floor(Math.min(chunk, 786_432) / 3) * 4 : data.length;
+  // Pieces of whole 3-byte groups, so each piece's base64 is a slice of the whole's, and at most the
+  // desktop's 256 KiB `pieceBytes`, so a piece sends within the heartbeat's 10 s on a slow link.
+  const piece = chunk ? Math.floor(Math.min(chunk, 262_144) / 3) * 4 : data.length;
   let uploadId: string | undefined;
   for (let at = 0; ; at += piece) {
     const last = at + piece >= data.length;

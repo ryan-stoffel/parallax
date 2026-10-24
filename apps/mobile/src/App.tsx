@@ -225,16 +225,17 @@ const devComputer = __DEV__ ? process.env.EXPO_PUBLIC_DEV_COMPUTER : undefined;
 
 function Gate() {
   const { user } = useAccount();
-  const [setup, setSetup] = useState(loadSetup);
+  const [setup, setSetup] = useState<Setup>();
   useEffect(() => {
-    if (devComputer && setup.machines.length === 0)
-      void probe(devComputer).then((machines) => {
-        const next = { machines, defaultId: machines[0]?.id };
-        saveSetup(next);
-        setSetup(next);
-      });
+    void loadSetup().then(async (loaded) => {
+      if (!devComputer || loaded.machines.length) return setSetup(loaded);
+      const machines = await probe(devComputer).catch(() => []);
+      const next = { machines, defaultId: machines[0]?.id };
+      saveSetup(next);
+      setSetup(next);
+    });
   }, []);
-  if (user === undefined) return <Loading />;
+  if (user === undefined || !setup) return <Loading />;
   if (!user && !devComputer) return <SignIn />;
   if (setup.machines.length === 0)
     return (

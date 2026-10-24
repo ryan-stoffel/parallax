@@ -121,8 +121,10 @@ export function FleetProvider({
   const fleetRef = useRef<Fleet>(null);
   const [fleet] = useState(() => {
     const made = new Fleet(async (m) => {
-      // A LAN-paired computer revoked this phone.
+      // A LAN-paired computer revoked this phone: its connection ends, so pairing again
+      // connects afresh under the same id.
       await forget();
+      fleetRef.current?.remove(m.id);
       update((s) => ({ ...s, machines: s.machines.filter((x) => x.id !== m.id) }));
     }, initial.machines);
     fleetRef.current = made;
@@ -165,6 +167,8 @@ export function FleetProvider({
     return () => {
       listener();
       awake.remove();
+      // Signed out: this provider's connections end with it.
+      fleet.close();
     };
   }, [fleet, outboxes]);
 
