@@ -193,7 +193,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         onOpen={() => toggle(true)}
         onClose={() => toggle(false)}
         drawerType="slide"
-        drawerStyle={{ width: drawerWidth, backgroundColor: c.background }}
+        drawerStyle={{ width: drawerWidth, backgroundColor: "transparent" }}
         // The dim is the main view's own (`Rounded`), so it rounds with it; the overlay only closes.
         overlayStyle={{ backgroundColor: "transparent" }}
         style={{ backgroundColor: "transparent" }}

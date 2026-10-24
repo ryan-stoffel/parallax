@@ -337,8 +337,8 @@ const BAR = 56;
 const FADE = 28;
 
 /**
- * The sidebar's sky across the whole screen, behind the sidebar and the main view, so the main
- * view's rounded corners show sky where they meet it, not the page.
+ * The sidebar's sky and page, across the whole screen behind the sidebar and the main view: one
+ * sky, so the main view's rounded corners show its sky where they meet it, not an edge.
  */
 export function SidebarSky() {
   const insets = useSafeAreaInsets();
@@ -459,9 +459,9 @@ export function Sidebar() {
   const bar = insets.top + BAR;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    // Clear, over `SidebarSky`: one sky across the screen, with no seam where the main view meets it.
+    <View style={{ flex: 1 }}>
       <View style={{ height: bar + FADE }}>
-        <SkyBanner bar={bar} solid={bar} fade={FADE} />
         <View style={[styles.top, { marginTop: insets.top }]}>
           <Pressable
             accessibilityRole="button"
