@@ -6,30 +6,33 @@ import {
   Code,
   Globe,
   Plus,
+  RectangleHorizontal,
   RotateCw,
+  Rows2,
   Search,
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ComponentType, type SVGProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+  type SVGProps,
+} from "react";
+import { createPortal } from "react-dom";
 
 import type { BrowserAction } from "../preload/bridge";
 import type { PreviewTab } from "../protocol/generated/protocol";
 import { AgentBrowser, type Driver } from "./AgentBrowser";
 import { Extensions } from "./Extensions";
-import {
-  browserFit,
-  fitSize,
-  MONITOR,
-  PageFrame,
-  ViewMenu,
-  type Fit,
-  type Size,
-} from "./PageFrame";
+import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
 import { memory, stored } from "./stored";
-import { IconButton, menuItem } from "./ui";
+import { IconButton, menuHeading, menuItem, MenuOption } from "./ui";
 
 /** Google's results page for `query`. */
 export const searchUrl = (query: string) =>
@@ -78,6 +81,32 @@ export const addressInput =
 /** A url as the address bar shows it while unfocused: without its scheme or a lone trailing slash. */
 export const shortUrl = (url: string) =>
   url.replace(/^https?:\/\//, "").replace(/^([^/?#]*)\/$/, "$1");
+
+/** How a browser lays out its bar, as Helium does (PLX-966): all in one row, or tabs over a toolbar. */
+export type BrowserLayout = "compact" | "classic";
+export const browserLayout = stored<BrowserLayout>("parallax.browserLayout", "compact", (raw, f) =>
+  raw === "compact" || raw === "classic" ? raw : f,
+);
+
+/**
+ * How the user's own pages fit: the room they have, as in any browser, until they pick Desktop.
+ * The agent's tabs keep `browserFit`, whose default is a monitor (PageFrame.tsx).
+ */
+export const pageFit = stored<Fit>("parallax.pageFit", "panel", (raw, f) =>
+  raw === "monitor" || raw === "panel" ? raw : f,
+);
+
+// The compact layout's slots in each browser's top bar, by scope: before its tabs, for back,
+// forward, reload, and the address bar, and after them, for the extensions and More. The shown
+// tab draws its toolbar into them.
+const toolbarSlots = memory<Readonly<Record<string, { start?: HTMLElement; end?: HTMLElement }>>>(
+  {},
+);
+function setSlot(scope: string, side: "start" | "end", el: HTMLElement | undefined) {
+  const all = toolbarSlots.get();
+  if (all[scope]?.[side] === el) return;
+  toolbarSlots.set({ ...all, [scope]: { ...all[scope], [side]: el } });
+}
 
 // Each tab's handler for what its page asks (main.ts), by its webview's webContents id, behind one
 // listener however many tabs there are.
@@ -334,6 +363,7 @@ export function Browser({
       {tabs.map((t) => (
         <Tab
           key={t.id}
+          scope={scope}
           shown={!shownTab && t.id === current}
           load={t.load}
           remoteHost={remoteHost}
@@ -399,12 +429,14 @@ export const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
  * asks of the tab list, such as opening a tab.
  */
 function Tab({
+  scope,
   shown,
   load,
   remoteHost,
   onChange,
   onAsk: ask,
 }: {
+  scope?: string;
   shown: boolean;
   load?: { url: string };
   remoteHost?: string;
@@ -425,10 +457,12 @@ function Tab({
   // The page's size: the one the user set, or the panel's fit (PageFrame.tsx).
   const [fixed, setFixed] = useState<Size>();
   const [area, setArea] = useState<Size>(MONITOR);
-  const fit = browserFit.use();
+  const fit = pageFit.use();
+  const layout = browserLayout.use();
+  const slots = toolbarSlots.use()[scope ?? ""];
   const pageSize = fixed ?? fitSize(area.width, area.height, fit);
   const refit = (next: Fit) => {
-    browserFit.set(next);
+    pageFit.set(next);
     setFixed(undefined);
   };
   // The latest callbacks, for the webview's listeners, which mount once per page.
@@ -525,70 +559,122 @@ function Tab({
     };
   }, [src]);
 
+  const navBar = (
+    <>
+      <IconButton label="Back" disabled={!history.back} onClick={() => view.current?.goBack()}>
+        <ArrowLeft />
+      </IconButton>
+      <IconButton
+        label="Forward"
+        disabled={!history.forward}
+        onClick={() => view.current?.goForward()}
+      >
+        <ArrowRight />
+      </IconButton>
+      {loading ? (
+        <IconButton label="Stop" onClick={() => view.current?.stop()}>
+          <X />
+        </IconButton>
+      ) : (
+        <IconButton label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
+          <RotateCw />
+        </IconButton>
+      )}
+      {/* The address bar alone is the form, so Enter opens it whatever else the toolbar holds:
+            a form with two text fields and no submit button doesn't submit on Enter. */}
+      <form
+        // Classic's second row keeps as short as it can, since the top row's height is the
+        // window's title bar (frame.ts).
+        className={`mx-1 ${addressBox} ${layout === "classic" ? "h-7!" : ""}`}
+        onSubmit={(e) => {
+          e.preventDefault();
+          open(address);
+        }}
+      >
+        <Search aria-hidden />
+        <input
+          ref={addressBar}
+          // A new tab's address bar takes focus, as in Chrome, but not a tab shown again.
+          autoFocus={!src}
+          aria-label="Address"
+          placeholder="Search Google or type a URL"
+          spellCheck={false}
+          value={editing ? address : shortUrl(address)}
+          onChange={(e) => setAddress(e.target.value)}
+          onFocus={(e) => {
+            setEditing(true);
+            // The full url replaces the short one first, so select it once it renders.
+            const input = e.target;
+            requestAnimationFrame(() => input.select());
+          }}
+          onBlur={() => setEditing(false)}
+          className={addressInput}
+        />
+      </form>
+    </>
+  );
+  const toolsBar = (
+    <>
+      <Extensions tab={contentsId} />
+      <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
+        <button
+          type="button"
+          role="menuitem"
+          disabled={!src}
+          onClick={() => view.current?.openDevTools()}
+          className={`${menuItem} disabled:opacity-50`}
+        >
+          <Code aria-hidden />
+          Developer tools
+        </button>
+        <div className="my-1 h-px bg-border" />
+        <p className={menuHeading}>Layout</p>
+        <MenuOption
+          option={{
+            value: "compact",
+            label: "Compact",
+            icon: <RectangleHorizontal aria-hidden />,
+            description: "Tabs and the address bar in one row",
+          }}
+          checked={layout === "compact"}
+          onClick={() => browserLayout.set("compact")}
+        />
+        <MenuOption
+          option={{
+            value: "classic",
+            label: "Classic",
+            icon: <Rows2 aria-hidden />,
+            description: "Tabs over the address bar",
+          }}
+          checked={layout === "classic"}
+          onClick={() => browserLayout.set("classic")}
+        />
+      </ViewMenu>
+    </>
+  );
+  // Compact draws the shown tab's toolbar into its browser's top bar, around the tabs; each tab's
+  // stays mounted there, hidden behind the shown one's. Classic gives it a row under the tabs.
+  const into = (slot: HTMLElement | undefined, bar: ReactNode, className: string) =>
+    slot &&
+    createPortal(
+      <div className={shown ? `flex items-center ${className}` : "hidden"}>{bar}</div>,
+      slot,
+    );
+  const compact = layout === "compact" && !!slots?.start && !!slots.end;
+
   return (
     <div className={`min-h-0 flex-1 flex-col ${shown ? "flex" : "hidden"}`}>
-      <div className="flex items-center gap-0.5 border-b border-border px-2 pb-2">
-        <IconButton label="Back" disabled={!history.back} onClick={() => view.current?.goBack()}>
-          <ArrowLeft />
-        </IconButton>
-        <IconButton
-          label="Forward"
-          disabled={!history.forward}
-          onClick={() => view.current?.goForward()}
-        >
-          <ArrowRight />
-        </IconButton>
-        {loading ? (
-          <IconButton label="Stop" onClick={() => view.current?.stop()}>
-            <X />
-          </IconButton>
-        ) : (
-          <IconButton label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
-            <RotateCw />
-          </IconButton>
-        )}
-        {/* The address bar alone is the form, so Enter opens it whatever else the toolbar holds:
-            a form with two text fields and no submit button doesn't submit on Enter. */}
-        <form
-          className={`mx-1 ${addressBox}`}
-          onSubmit={(e) => {
-            e.preventDefault();
-            open(address);
-          }}
-        >
-          <Search aria-hidden />
-          <input
-            ref={addressBar}
-            autoFocus
-            aria-label="Address"
-            placeholder="Search Google or type a URL"
-            spellCheck={false}
-            value={editing ? address : shortUrl(address)}
-            onChange={(e) => setAddress(e.target.value)}
-            onFocus={(e) => {
-              setEditing(true);
-              // The full url replaces the short one first, so select it once it renders.
-              const input = e.target;
-              requestAnimationFrame(() => input.select());
-            }}
-            onBlur={() => setEditing(false)}
-            className={addressInput}
-          />
-        </form>
-        <Extensions tab={contentsId} />
-        <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!src}
-            onClick={() => view.current?.openDevTools()}
-            className={`${menuItem} disabled:opacity-50`}
-          >
-            <Code aria-hidden />
-            Developer tools
-          </button>
-        </ViewMenu>
-      </div>
+      {compact ? (
+        <>
+          {into(slots.start, navBar, "min-w-0 flex-1 gap-0.5")}
+          {into(slots.end, toolsBar, "shrink-0")}
+        </>
+      ) : (
+        <div className="flex h-8 shrink-0 items-center gap-0.5 px-2 pb-1">
+          {navBar}
+          {toolsBar}
+        </div>
+      )}
       {remoteHost && (
         <p className="border-b border-border px-3 py-1.5 text-[12px] text-muted-foreground">
           Pages load on this computer, so localhost isn't {remoteHost}. Forwarding its ports isn't
@@ -660,41 +746,64 @@ function Tab({
 }
 
 /**
- * A browser's tabs as its top bar draws them, Chrome style, with New tab after them: the tabs the
- * browser under `scope` publishes (`browserTabs`). The side panel and the permanent browser's page
- * show it.
+ * A browser's top bar, as Helium draws it (PLX-966): its tabs with New tab after them, the tabs
+ * the browser under `scope` publishes (`browserTabs`). In the compact layout the shown tab's back,
+ * forward, reload, and address bar come before them, and its extensions and More after. The side
+ * panel and the permanent browser's page show it.
  */
 export function BrowserTabBar({ scope }: { scope: string }) {
   const browser = browserTabs.use()[scope];
+  const compact = browserLayout.use() === "compact";
+  // Stable per scope, so React doesn't detach and reattach the slots on every render.
+  const start = useCallback(
+    (el: HTMLDivElement | null) => {
+      setSlot(scope, "start", el ?? undefined);
+      return () => setSlot(scope, "start", undefined);
+    },
+    [scope],
+  );
+  const end = useCallback(
+    (el: HTMLDivElement | null) => {
+      setSlot(scope, "end", el ?? undefined);
+      return () => setSlot(scope, "end", undefined);
+    },
+    [scope],
+  );
   if (!browser) return null;
   return (
-    <>
-      <div
-        role="tablist"
-        aria-label="Browser tabs"
-        className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
-      >
-        {browser.tabs.map((tab) => (
-          <BrowserTab
-            key={tab.key}
-            tab={tab}
-            selected={tab.key === browser.selected}
-            onSelect={() => browser.select(tab.key)}
-            onClose={() => browser.close(tab.key)}
-          />
-        ))}
+    <div className="flex min-w-0 flex-1 items-center gap-1">
+      {/* In a narrow panel the address bar keeps room to read, and the tabs room for one. */}
+      {compact && <div ref={start} className="flex min-w-48 flex-[3] items-center" />}
+      <div className={`flex min-w-16 items-center gap-0.5 ${compact ? "flex-[2]" : "flex-1"}`}>
+        <div
+          role="tablist"
+          aria-label="Browser tabs"
+          className="flex min-w-0 items-center gap-0.5 overflow-x-auto"
+        >
+          {browser.tabs.map((tab) => (
+            <BrowserTab
+              key={tab.key}
+              tab={tab}
+              selected={tab.key === browser.selected}
+              onSelect={() => browser.select(tab.key)}
+              onClose={() => browser.close(tab.key)}
+            />
+          ))}
+        </div>
+        <IconButton label="New tab" onClick={browser.newTab}>
+          <Plus />
+        </IconButton>
       </div>
-      <IconButton label="New tab" onClick={browser.newTab}>
-        <Plus />
-      </IconButton>
-    </>
+      {compact && <div ref={end} className="flex shrink-0 items-center" />}
+    </div>
   );
 }
 
 /**
- * One of the browser's tabs in the top bar, as Chrome draws one: its icon, title, and close
- * button. The one in front keeps room for its title while the others shrink to their icons. An
- * agent's tab has its provider's logo and no close button, since the agent closes it.
+ * One of the browser's tabs in the top bar, as Helium draws one: its icon, title, and close
+ * button, every tab the same width, shrinking together as more open. The close button shows on
+ * the one in front and on hover. An agent's tab has its provider's logo and no close button,
+ * since the agent closes it.
  */
 function BrowserTab({
   tab,
@@ -716,7 +825,7 @@ function BrowserTab({
   );
   return (
     <div
-      className={`group flex h-8 max-w-48 flex-1 items-center rounded-lg text-[12.5px] ${selected ? "min-w-28 bg-selected text-foreground" : "min-w-8 text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+      className={`group flex h-8 w-60 min-w-9 shrink items-center rounded-lg text-[12.5px] ${selected ? "bg-selected text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
     >
       <button
         type="button"
@@ -726,7 +835,7 @@ function BrowserTab({
         onClick={onSelect}
         // A middle click closes a tab, as in Chrome.
         onAuxClick={(e) => e.button === 1 && !tab.agent && onClose()}
-        className={`flex h-full min-w-0 flex-1 items-center gap-2 text-left ${selected ? "pl-2.5" : "justify-center px-2 group-hover:justify-start"}`}
+        className="flex h-full min-w-0 flex-1 items-center gap-2 pl-2.5 text-left"
       >
         {icon}
         <span className="truncate">{tab.title}</span>
@@ -736,8 +845,7 @@ function BrowserTab({
           type="button"
           aria-label={`Close ${tab.title}`}
           onClick={onClose}
-          // A narrow tab has no room for it until hovered or focused, as in Chrome.
-          className={`mr-1.5 size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
+          className={`mr-1 size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
         >
           <X aria-hidden className="size-3" />
         </button>
