@@ -1,6 +1,6 @@
 # 0065: Parallax is reachable from any device, through LAN pairing, SSH install, a web client, a hosted relay, and a mobile app
 
-- Status: accepted; its relay section is replaced by [0068](0068-relay.md); amends PLAN.md's non-goal on hosted services, extends [0007](0007-editor-plxd-protocol.md) (a WebSocket transport beside `plxd attach`) and [0056](0056-parallax-connect.md), and records PLX-642's SSH install, and builds on [0037](0037-accounts.md)'s accounts
+- Status: accepted; its relay section is replaced by [0068](0068-relay.md); its mobile section is amended by PLX-983 (Connect over Tailscale); amends PLAN.md's non-goal on hosted services, extends [0007](0007-editor-plxd-protocol.md) (a WebSocket transport beside `plxd attach`) and [0056](0056-parallax-connect.md), and records PLX-642's SSH install, and builds on [0037](0037-accounts.md)'s accounts
 - Date: 2026-10-09
 - Issue: PLX-636, for PLX-641, PLX-642, PLX-651, PLX-652, and PLX-653
 
@@ -60,6 +60,7 @@ Ryan chose all of it for Parallax on 2026-10-09 (PLX-635), with one change from 
 ### Mobile
 
 - `apps/mobile`, Expo, iOS first. It runs the renderer's client code itself rather than a copy (the generated protocol, `WebHost`, and the threads and transcript hooks), which Metro reads from `apps/desktop/src`; no separate package was needed. Amended 2026-10-11 by PLX-653, on Ryan's call: mobile does take the LAN route. A small native module (`apps/mobile/modules/pinned-tls`) does HTTPS and the WebSocket over URLSession, trusting only the pinned fingerprint, and the phone pairs as `plxd dial` does, with SPAKE2 vouching for the certificate it reached, not as a browser does. It finds hosts over mDNS or by a typed address, keeps its DPoP key and session in the Keychain, and tries the routes plxd reports, tailnet included, against the same pin. It queues messages while offline, and gets push and Live Activities through the relay only. Push waits on the relay (PLX-652) and Ryan's APNs key.
+- Amended 2026-10-24 by PLX-983: the phone reaches the user's computers the way the desktop reaches its other Connect devices (0056): plain TCP to port 7340 on each computer's Tailscale address, which plxd lets in by `tailscale whois` as the same user's untagged node, so nothing is paired. Onboarding takes any one computer's name or address and lists the rest with `connect/devices`, as the desktop's discovery does, and the phone keeps one connection per computer. LAN pairing stays for a computer without Tailscale. The phone signs in first with the desktop's Clerk OAuth application (0067), PKCE in an ASWebAuthenticationSession that returns to `parallax://oauth/callback`: a loopback redirect, as the desktop's, loads a plain-HTTP page that iOS 27 interrupts with a "Not Secure" warning. While the app runs it notifies itself of runs that need the user, finish, or fail. Push while it's closed still waits on the relay and the APNs key (PLX-984).
 
 ## Consequences
 

@@ -1,49 +1,462 @@
-// One thread, as the desktop's transcript shows it: the user's messages in bubbles, the agent's
-// text, its tools in a line each, permission requests to answer, and a composer that queues a
-// message or, while the agent works, steers it now. Messages go through the outbox, and wait in
-// plxd's queue while the agent works, as the desktop's QueueStrip shows them.
-import { useState, useSyncExternalStore } from "react";
+// One thread, on any computer, as the desktop's transcript shows it (AgentChat.tsx): the user's
+// messages in bubbles with their images and files, the agent's answers, its steps as the desktop's
+// trace lines (steps.ts words them; each opens to its input, images, and output), a finished
+// turn folded under "Worked for …", permission requests to answer, the files it presented, and
+// the composer. Images open in the lightbox.
+import { useHeaderHeight } from "@react-navigation/elements";
+import type { NativeStackScreenProps } from "@react-navigation/native-stack";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
+import type { LucideIcon } from "lucide-react-native";
 import {
-  ActivityIndicator,
+  Bot,
+  Brain,
+  ChevronRight,
+  Ellipsis,
+  FilePlus,
+  FileText,
+  FoldVertical,
+  Globe,
+  Hammer,
+  Hand,
+  KeyRound,
+  ListChecks,
+  MousePointerClick,
+  Pencil,
+  Plug,
+  RotateCcw,
+  Search,
+  Sparkles,
+  SquareTerminal,
+  WifiOff,
+} from "lucide-react-native";
+import { createContext, useContext, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import {
+  ActionSheetIOS,
+  Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Pressable,
   StyleSheet,
-  TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { splitFiles, isImagePath } from "../../desktop/src/renderer/attachments";
+import { attentionOf } from "../../desktop/src/renderer/attention";
+import { loadImage } from "../../desktop/src/renderer/images";
+import {
+  activity,
+  inputText,
+  stepLabel,
+  summarize,
+  toolKind,
+  type Kind,
+} from "../../desktop/src/renderer/steps";
+import { asksOf } from "../../desktop/src/renderer/threads";
 import {
   failureText,
-  field,
+  groupWork,
+  isMedia,
   isRunning,
   statusLabel,
+  subagentRuns,
+  workedFor,
   type Approval,
+  type DocRef,
   type Item,
+  type Work,
 } from "../../desktop/src/renderer/transcript";
 import { useAgentRun } from "../../desktop/src/renderer/useAgentRun";
-import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
-import { HOST } from "./host";
-import type { Outbox } from "./outbox";
+import { Composer } from "./Composer";
+import { useComputer, useFleet } from "./fleet";
+import { openLightbox } from "./Lightbox";
+import type { Screens } from "./nav";
+import { setViewing } from "./push";
 import { font } from "./theme";
-import { Button, Markdown, SwipeBack, T, useColors } from "./ui";
+import {
+  AttentionBadge,
+  Button,
+  duration,
+  Icon,
+  Mark,
+  Markdown,
+  T,
+  useColors,
+  useSeconds,
+  WorkingMark,
+} from "./ui";
 
-/** What a tool call or permission request is about, in a few words: its command, file, or url. */
-const about = (input: Parameters<typeof field>[0]) =>
-  field(input, "description") ??
-  field(input, "command") ??
-  field(input, "file_path") ??
-  field(input, "url") ??
-  "";
+/** Each kind of work's icon, as the desktop's `icons` (AgentChat.tsx). */
+const kindIcons: Record<Exclude<Kind, "plxd">, LucideIcon> = {
+  thinking: Brain,
+  shell: SquareTerminal,
+  reading: FileText,
+  searching: Search,
+  editing: Pencil,
+  writing: FilePlus,
+  fetching: Globe,
+  agent: Bot,
+  skill: Sparkles,
+  mcp: Plug,
+  computer: MousePointerClick,
+  planning: ListChecks,
+  working: Hammer,
+  compacting: FoldVertical,
+};
 
-function ApprovalCard({ item, runId }: { item: Approval; runId: string }) {
+/** A kind's icon at trace size: Parallax's own calls wear its mark. */
+function KindIcon({ kind, color }: { kind: Kind; color: string }) {
+  return kind === "plxd" ? <Mark size={15} /> : <Icon icon={kindIcons[kind]} size={15} color={color} />;
+}
+
+/** The thread, as the rows below need it: where it runs, and which rows are open. */
+interface RowContextValue {
+  hostId: string;
+  runId: string;
+  root?: string;
+  open: ReadonlySet<string>;
+  toggle: (key: string) => void;
+}
+const RowContext = createContext<RowContextValue>(null!);
+
+type TraceStatus = "running" | "error" | "pending" | undefined;
+
+/** One trace line, as the desktop's TraceLine: an icon, a title, and how it went. */
+function TraceLine({
+  icon,
+  title,
+  description,
+  status,
+  openKey,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description?: string;
+  status?: TraceStatus;
+  /** The key that opens it, when it opens. */
+  openKey?: string;
+}) {
   const c = useColors();
+  const { open, toggle } = useContext(RowContext);
+  const color = status === "error" ? c.danger : c.mutedForeground;
+  const line = (
+    <View style={[styles.line, status === "pending" && { opacity: 0.6 }]}>
+      <View style={styles.traceIcon}>{icon}</View>
+      <T numberOfLines={1} style={{ ...styles.trace, color, flexShrink: 1 }}>
+        {title}
+      </T>
+      {!!description && (
+        <T style={{ ...styles.trace, color: status === "error" ? c.danger : c.faintForeground }}>
+          {description}
+        </T>
+      )}
+      {openKey && (
+        <View style={{ transform: [{ rotate: open.has(openKey) ? "90deg" : "0deg" }] }}>
+          <Icon icon={ChevronRight} size={14} color={c.faintForeground} />
+        </View>
+      )}
+    </View>
+  );
+  if (!openKey) return line;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ expanded: open.has(openKey) }}
+      onPress={() => toggle(openKey)}
+      hitSlop={4}
+    >
+      {line}
+    </Pressable>
+  );
+}
+
+/** What an open line shows, indented under it behind a rule. */
+function Opened({ openKey, children }: { openKey: string; children: React.ReactNode }) {
+  const c = useColors();
+  const { open } = useContext(RowContext);
+  if (!open.has(openKey)) return null;
+  return <View style={[styles.opened, { borderLeftColor: c.border }]}>{children}</View>;
+}
+
+/** A labeled block of a call's input or output, as the desktop's `Block`. */
+function Block({ label, text }: { label: string; text: string }) {
+  const c = useColors();
+  return (
+    <View style={{ gap: 4 }}>
+      <T faint style={{ fontSize: 12 }}>
+        {label}
+      </T>
+      <View style={[styles.block, { backgroundColor: c.code, borderColor: c.border }]}>
+        <T selectable style={{ fontFamily: font.mono, fontSize: 11.5, lineHeight: 17 }} numberOfLines={60}>
+          {text}
+        </T>
+      </View>
+    </View>
+  );
+}
+
+/** One of a run's images (`agent/image`), as a thumbnail that opens the lightbox with its set. */
+function RunImage({ id, ids, size = 120 }: { id: string; ids: string[]; size?: number }) {
+  const c = useColors();
+  const { hostId, runId } = useContext(RowContext);
+  const [uri, setUri] = useState<string>();
+  useEffect(() => void loadImage(hostId, runId, id).then(setUri), [hostId, runId, id]);
+  return (
+    <Pressable
+      accessibilityRole="imagebutton"
+      accessibilityLabel="Image"
+      onPress={() =>
+        void Promise.all(ids.map((i) => loadImage(hostId, runId, i))).then((uris) =>
+          openLightbox(
+            uris.flatMap((u) => (u ? [{ uri: u }] : [])),
+            Math.max(0, ids.indexOf(id)),
+          ),
+        )
+      }
+    >
+      <Image
+        source={uri ? { uri } : undefined}
+        style={{ width: size, height: size, borderRadius: 10, backgroundColor: c.code }}
+        resizeMode="cover"
+      />
+    </Pressable>
+  );
+}
+
+/** How a call went: its line's status, and in words when it failed or never finished. */
+const statuses: Record<string, { status?: TraceStatus; said?: string }> = {
+  running: { status: "running" },
+  ok: {},
+  error: { status: "error", said: "Failed" },
+  denied: { status: "error", said: "Denied" },
+  none: { status: "pending", said: "No result" },
+};
+
+function ToolCall({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: boolean }) {
+  const c = useColors();
+  const { root } = useContext(RowContext);
+  const status = item.status ?? (live ? "running" : "none");
+  // A status newer than this app reads as no result.
+  const look = statuses[status] ?? statuses["none"]!;
+  return (
+    <View>
+      <TraceLine
+        icon={status === "running" ? <WorkingMark size={14} /> : <KindIcon kind={toolKind(item.name)} color={look.status === "error" ? c.danger : c.mutedForeground} />}
+        title={stepLabel(item, root, status === "running")}
+        description={look.said}
+        status={look.status}
+        openKey={item.key}
+      />
+      <Opened openKey={item.key}>
+        {item.input !== undefined && <Block label="Input" text={inputText(item.input)} />}
+        {!!item.images?.length && (
+          <View style={{ gap: 4 }}>
+            <T faint style={{ fontSize: 12 }}>
+              Images
+            </T>
+            <View style={styles.images}>
+              {item.images.map((id) => (
+                <RunImage key={id} id={id} ids={item.images!} />
+              ))}
+            </View>
+          </View>
+        )}
+        {item.output !== undefined && <Block label="Output" text={item.output} />}
+      </Opened>
+    </View>
+  );
+}
+
+/** A step that isn't a call: a thought, a checklist, or a notice. */
+function StepRow({ item, live }: { item: Item; live: boolean }) {
+  const c = useColors();
+  switch (item.kind) {
+    case "tool":
+      return <ToolCall item={item} live={live} />;
+    case "reasoning":
+      return (
+        <View>
+          <TraceLine icon={<KindIcon kind="thinking" color={c.mutedForeground} />} title="Thought" openKey={item.key} />
+          <Opened openKey={item.key}>
+            <T muted style={{ fontSize: 13.5, lineHeight: 20 }}>
+              {item.text.trim()}
+            </T>
+          </Opened>
+        </View>
+      );
+    case "todo":
+      return (
+        <View>
+          <TraceLine icon={<KindIcon kind="planning" color={c.mutedForeground} />} title="Updated the plan" openKey={item.key} />
+          <Opened openKey={item.key}>
+            {item.items.map((todo, i) => (
+              <T
+                key={i}
+                muted
+                style={{
+                  fontSize: 13.5,
+                  textDecorationLine: todo.status === "completed" ? "line-through" : "none",
+                }}
+              >
+                {todo.status === "completed" ? "✓" : todo.status === "inProgress" ? "›" : "○"} {todo.text}
+              </T>
+            ))}
+          </Opened>
+        </View>
+      );
+    default:
+      return <RowView row={item} live={live} />;
+  }
+}
+
+/** A finished turn's items with each run of steps between its messages as one `Work`. */
+function stepRuns(items: readonly Item[]): (Item | Work)[] {
+  const out: (Item | Work)[] = [];
+  let run: Item[] = [];
+  const flush = () => {
+    out.push(...subagentRuns(run));
+    run = [];
+  };
+  for (const item of items)
+    if (["reasoning", "tool", "todo", "notice"].includes(item.kind)) run.push(item);
+    else {
+      flush();
+      out.push(item);
+    }
+  flush();
+  return out;
+}
+
+/** A run of steps: one alone as its row, several as their summary, or what's under way now. */
+function Steps({ work, live }: { work: Work; live: boolean }) {
+  const c = useColors();
+  const { root } = useContext(RowContext);
+  const only = work.items.length === 1 ? work.items[0]! : undefined;
+  const last = work.items.findLast((i) => i.kind !== "notice");
+  const active = live && last?.kind === "tool" && last.status === undefined;
+  if (only && !active) return <StepRow item={only} live={live} />;
+  const now = active ? activity(last) : undefined;
+  const summary = summarize(work.items);
+  return (
+    <View>
+      {now ? (
+        <TraceLine
+          icon={<WorkingMark size={14} />}
+          title={now.detail ? `${now.label} ${now.detail.replace(`${root}/`, "")}` : now.label}
+          status="running"
+          openKey={work.key}
+        />
+      ) : (
+        <TraceLine
+          icon={<KindIcon kind={summary.kind} color={summary.failures ? c.danger : c.mutedForeground} />}
+          title={summary.label}
+          description={summary.failures ? `${summary.failures} failed` : undefined}
+          status={summary.failures ? "error" : undefined}
+          openKey={work.key}
+        />
+      )}
+      <Opened openKey={work.key}>
+        {work.items.map((item) => (
+          <StepRow key={item.key} item={item} live={live} />
+        ))}
+      </Opened>
+    </View>
+  );
+}
+
+/** The files a turn presented: images as pictures that open the lightbox, others by name. */
+function FilesRow({ files }: { files: DocRef[] }) {
+  const c = useColors();
+  const { hostId } = useContext(RowContext);
+  const pictures = files.filter((f) => isMedia(f.kind) && !/\.(mp4|webm|mov)$/i.test(f.name));
+  const [uris, setUris] = useState<Record<string, string>>({});
+  useEffect(() => {
+    for (const f of pictures)
+      void readPicture(hostId, f).then((uri) => uri && setUris((u) => ({ ...u, [f.path]: uri })));
+  }, [hostId, files.map((f) => f.path).join()]);
+  return (
+    <View style={{ gap: 8 }}>
+      <View style={styles.images}>
+        {pictures.map((f, i) => (
+          <Pressable
+            key={f.path}
+            accessibilityRole="imagebutton"
+            accessibilityLabel={f.name}
+            onPress={() =>
+              openLightbox(
+                pictures.flatMap((p) => (uris[p.path] ? [{ uri: uris[p.path]!, name: p.name }] : [])),
+                i,
+              )
+            }
+          >
+            <Image
+              source={uris[f.path] ? { uri: uris[f.path] } : undefined}
+              style={{ width: 150, height: 150, borderRadius: 12, backgroundColor: c.code }}
+              resizeMode="cover"
+            />
+          </Pressable>
+        ))}
+      </View>
+      {files
+        .filter((f) => !pictures.includes(f))
+        .map((f) => (
+          <View key={f.path} style={[styles.fileChip, { borderColor: c.border, backgroundColor: c.surface }]}>
+            <Icon icon={FileText} size={15} color={c.mutedForeground} />
+            <T numberOfLines={1} style={{ flex: 1, fontSize: 14 }}>
+              {f.name}
+            </T>
+          </View>
+        ))}
+    </View>
+  );
+}
+
+const mediaTypes: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+};
+
+/** A presented picture, read from the run's folder with `agent/file`, as a data URL. */
+async function readPicture(hostId: string, f: DocRef): Promise<string | undefined> {
+  const type = mediaTypes[f.name.split(".").pop()?.toLowerCase() ?? ""] ?? "image/png";
+  // Whole 3-byte groups a slice, so the slices' base64 joins into the whole's.
+  const slice = 786_432;
+  let data = "";
+  for (let offset = 0; ; offset += slice) {
+    const answer = await window.parallax.request(hostId, "agent/file", {
+      runId: f.runId,
+      path: f.path,
+      side: "working",
+      offset,
+      length: slice,
+    });
+    if ("error" in answer) return undefined;
+    const file = answer.result as { exists: boolean; content?: string; size?: number };
+    if (!file.exists || file.content == null) return undefined;
+    data += file.content;
+    if (offset + slice >= (file.size ?? 0)) break;
+  }
+  return `data:${type};base64,${data}`;
+}
+
+function ApprovalCard({ item }: { item: Approval }) {
+  const c = useColors();
+  const { hostId, runId } = useContext(RowContext);
   const [answering, setAnswering] = useState(false);
   const [error, setError] = useState<string>();
   const { request, resolved } = item;
+  const kind = toolKind(request.toolName);
+  const detail = inputText(request.input ?? "").slice(0, 600);
   async function answer(decision: "allow" | "deny") {
     setAnswering(true);
-    const reply = await window.parallax.request(HOST, "agent/approve", {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const reply = await window.parallax.request(hostId, "agent/approve", {
       runId,
       approvalId: request.approvalId,
       decision,
@@ -53,26 +466,29 @@ function ApprovalCard({ item, runId }: { item: Approval; runId: string }) {
   }
   if (resolved)
     return (
-      <T muted style={styles.small}>
-        {resolved.decision === "allowed"
-          ? "Allowed"
-          : resolved.decision === "denied"
-            ? "Denied"
-            : "Ended:"}{" "}
-        {request.toolName}
-      </T>
+      <TraceLine
+        icon={<Icon icon={Hand} size={15} color={c.mutedForeground} />}
+        title={`${resolved.decision === "allowed" ? "Allowed" : resolved.decision === "denied" ? "Denied" : "Ended"} ${request.toolName}`}
+      />
     );
   return (
-    <View style={[styles.card, { borderColor: c.border, backgroundColor: c.surface }]}>
-      <T medium>Allow {request.toolName}?</T>
-      {!!about(request.input) && (
-        <T muted style={{ fontFamily: font.mono, fontSize: 13 }}>
-          {about(request.input)}
+    <View style={[styles.card, { borderColor: c.warning, backgroundColor: c.surface }]}>
+      <View style={styles.line}>
+        <KindIcon kind={kind} color={c.warning} />
+        <T medium style={{ flex: 1 }}>
+          Allow {request.toolName}?
         </T>
+      </View>
+      {!!detail && detail !== "{}" && (
+        <View style={[styles.block, { backgroundColor: c.code, borderColor: c.border }]}>
+          <T style={{ fontFamily: font.mono, fontSize: 12, lineHeight: 17 }} numberOfLines={10}>
+            {detail}
+          </T>
+        </View>
       )}
-      <View style={styles.buttons}>
-        <Button label="Deny" disabled={answering} onPress={() => void answer("deny")} />
-        <Button label="Allow" primary disabled={answering} onPress={() => void answer("allow")} />
+      <View style={{ flexDirection: "row", gap: 10 }}>
+        <Button label="Deny" style={{ flex: 1 }} disabled={answering} onPress={() => void answer("deny")} />
+        <Button label="Allow" primary style={{ flex: 1 }} disabled={answering} onPress={() => void answer("allow")} />
       </View>
       {error && (
         <T alert style={{ color: c.danger, fontSize: 13 }}>
@@ -83,46 +499,108 @@ function ApprovalCard({ item, runId }: { item: Approval; runId: string }) {
   );
 }
 
-function Row({ item, runId }: { item: Item; runId: string }) {
+/** The user's message: its images, its attached files by name, and its text in a bubble. */
+function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
   const c = useColors();
-  switch (item.kind) {
-    case "user":
-      return (
-        <View style={[styles.bubble, { backgroundColor: c.selected }]}>
-          <T>{item.text ?? "A message"}</T>
+  const { text, paths } = splitFiles(item.text ?? "");
+  const files = paths.filter((p) => !isImagePath(p));
+  return (
+    <View style={{ alignItems: "flex-end", gap: 6 }}>
+      {!!item.images?.length && (
+        <View style={[styles.images, { justifyContent: "flex-end" }]}>
+          {item.images.map((id) => (
+            <RunImage key={id} id={id} ids={item.images!} size={96} />
+          ))}
         </View>
-      );
-    case "assistant":
-      return <Markdown text={item.text} />;
-    case "tool":
-      return (
-        <T
-          numberOfLines={1}
-          muted
-          style={{ ...styles.small, ...(item.status === "error" && { color: c.danger }) }}
-        >
-          {item.name ?? "Tool"}{" "}
-          <T style={{ ...styles.small, fontFamily: font.mono, color: c.faintForeground }}>
-            {about(item.input)}
+      )}
+      {files.map((p) => (
+        <View key={p} style={[styles.fileChip, { borderColor: c.border, backgroundColor: c.surface, maxWidth: "85%" }]}>
+          <Icon icon={FileText} size={14} color={c.mutedForeground} />
+          <T numberOfLines={1} style={{ fontSize: 13 }}>
+            {p.split(/[/\\]/).pop()}
           </T>
-        </T>
-      );
+        </View>
+      ))}
+      {!!text.trim() && (
+        <View style={[styles.bubble, { backgroundColor: c.selected }]}>
+          <T selectable style={{ fontSize: 15, lineHeight: 22 }}>
+            {item.text === null ? "A message" : text}
+          </T>
+        </View>
+      )}
+    </View>
+  );
+}
+
+function Divider({ icon, label }: { icon: LucideIcon; label: string }) {
+  const c = useColors();
+  return (
+    <View style={styles.line}>
+      <View style={[styles.rule, { backgroundColor: c.border }]} />
+      <Icon icon={icon} size={13} color={c.faintForeground} />
+      <T faint style={{ fontSize: 12 }}>
+        {label}
+      </T>
+      <View style={[styles.rule, { backgroundColor: c.border }]} />
+    </View>
+  );
+}
+
+type Row = Item | Work;
+
+function RowView({ row, live }: { row: Row; live: boolean }) {
+  const c = useColors();
+  switch (row.kind) {
+    case "work":
+      if (row.done)
+        return (
+          <View>
+            <TraceLine
+              icon={null}
+              title={workedFor(row.startedAt, row.endedAt)}
+              openKey={row.key}
+            />
+            <Opened openKey={row.key}>
+              {stepRuns(row.items).map((r) =>
+                r.kind === "work" ? <Steps key={r.key} work={r} live={false} /> : <RowView key={r.key} row={r} live={false} />,
+              )}
+            </Opened>
+          </View>
+        );
+      return <Steps work={row} live={live} />;
+    case "user":
+      return <UserRow item={row} />;
+    case "assistant":
+      return <Markdown text={row.text} />;
     case "approval":
-      return <ApprovalCard item={item} runId={runId} />;
+      return <ApprovalCard item={row} />;
+    case "secret":
+      return (
+        <TraceLine
+          icon={<Icon icon={KeyRound} size={15} color={c.warning} />}
+          title={row.status ? `Secret ${row.request.label}: ${row.status}` : `Asks for ${row.request.label}. Answer it on your computer.`}
+        />
+      );
+    case "files":
+      return <FilesRow files={row.files} />;
     case "notice":
       return (
-        <T muted style={styles.small}>
-          {item.text}
+        <T muted style={{ fontSize: 13.5 }}>
+          {row.text}
         </T>
       );
+    case "compaction":
+      return <Divider icon={FoldVertical} label={row.done ? "Compacted the conversation" : "Compacting…"} />;
+    case "epoch":
+      return <Divider icon={RotateCcw} label="New session" />;
     case "end":
       return (
-        <View style={styles.end}>
+        <View style={styles.line}>
           <View style={[styles.rule, { backgroundColor: c.border }]} />
-          <T muted style={styles.small}>
-            {item.outcome.status === "failed"
-              ? `Failed: ${failureText(item.outcome.failure)}`
-              : statusLabel(item.outcome.status)}
+          <T faint style={{ fontSize: 12 }}>
+            {row.outcome.status === "failed"
+              ? `Failed: ${failureText(row.outcome.failure)}`
+              : statusLabel(row.outcome.status)}
           </T>
           <View style={[styles.rule, { backgroundColor: c.border }]} />
         </View>
@@ -132,193 +610,224 @@ function Row({ item, runId }: { item: Item; runId: string }) {
   }
 }
 
-export function ThreadScreen({
-  runId,
-  title,
-  connected,
-  status,
-  outbox,
-  drafts,
-  onBack,
-}: {
-  runId: string;
-  title: string;
-  connected: boolean;
-  /** Why the host isn't connected, for people, or undefined while it is. */
-  status?: string;
-  outbox: Outbox;
-  /** Unsent text, by thread. */
-  drafts: Map<string, string>;
-  onBack: () => void;
-}) {
+/** The line while a turn goes: how long it has worked, ticking. */
+function WorkingFor({ since }: { since?: string }) {
   const c = useColors();
-  const { transcript, error, queue } = useAgentRun(HOST, runId, connected);
-  const [text, setText] = useState(drafts.get(runId) ?? "");
-  // The draft outlives this screen, so going back and returning keeps it.
-  const edit = (next: string) => {
-    setText(next);
-    drafts.set(runId, next);
-  };
-  const waiting = useSyncExternalStore(
-    (listener) => outbox.subscribe(listener),
-    () => outbox.messages,
+  return (
+    <View style={styles.line}>
+      <WorkingMark />
+      <T style={{ ...styles.trace, color: c.accent }}>Working for {duration(useSeconds(since))}</T>
+    </View>
   );
-  const working = isRunning(transcript.run?.status) && !transcript.turnDone;
-  const logged = new Set(transcript.items.map((i) => (i.kind === "user" ? i.turnId : undefined)));
-  const pending = waiting.filter((m) => m.threadId === runId && !logged.has(m.id));
+}
 
-  function send(steer: boolean) {
-    if (!text.trim()) return;
-    outbox.add({ id: uuidv7(), threadId: runId, text: text.trim(), steer });
-    edit("");
+export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Screens, "Thread">) {
+  const { hostId, runId } = route.params;
+  const c = useColors();
+  const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
+  const computer = useComputer(hostId);
+  const { drafts, computers } = useFleet();
+  const connected = !!computer?.connected;
+  const { transcript, error, queue, cancel, held } = useAgentRun(hostId, runId, connected);
+  const [draft, setDraft] = useState(drafts.get(runId) ?? "");
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const state = computer?.view.state;
+  const thread = state?.threads.find((t) => t.id === runId);
+  const run = state?.runs[runId];
+  const title = state?.titles[runId] ?? "Thread";
+  const prs = run?.pullRequests ?? [];
+  const attention = thread && state ? attentionOf(thread, run, asksOf(state, runId)) : "settled";
+
+  // Its own notifications don't show while it's open, and it counts as seen.
+  useEffect(() => {
+    setViewing(runId);
+    return () => setViewing(undefined);
+  }, [runId]);
+  const updatedAt = run?.updatedAt;
+  useEffect(() => {
+    if (connected && thread && updatedAt) void computer.view.update(runId, { seen: true });
+  }, [connected, updatedAt, runId, !!thread]);
+
+  const working = isRunning(transcript.run?.status) && !transcript.turnDone;
+
+  function menu() {
+    const actions: [string, () => void][] = [
+      ["Thread details", () => navigation.navigate("ThreadDetails", { hostId, runId })],
+      ...prs.map((url): [string, () => void] => [
+        `Pull request #${url.split("/").pop()}`,
+        () => navigation.navigate("PullRequest", { hostId, runId, url }),
+      ]),
+      [
+        "Rename",
+        () =>
+          Alert.prompt("Rename thread", undefined, (next) => void computer?.view.update(runId, { title: next.trim() }), "plain-text", title),
+      ],
+      [thread?.pinned ? "Unpin" : "Pin", () => void computer?.view.update(runId, { pinned: !thread?.pinned })],
+      ...(run?.branch ? [["Copy branch name", () => void Clipboard.setStringAsync(run.branch!)] as [string, () => void]] : []),
+      ...(working ? [["Stop", () => void cancel()] as [string, () => void]] : []),
+      [
+        thread?.archived ? "Unarchive" : "Archive",
+        () => {
+          void computer?.view.archive(runId, !thread?.archived);
+          if (!thread?.archived) navigation.goBack();
+        },
+      ],
+    ];
+    ActionSheetIOS.showActionSheetWithOptions(
+      {
+        title,
+        options: [...actions.map(([label]) => label), "Cancel"],
+        cancelButtonIndex: actions.length,
+        destructiveButtonIndex: working ? actions.length - 2 : undefined,
+      },
+      (i) => actions[i]?.[1](),
+    );
   }
 
-  return (
-    <SwipeBack onBack={onBack}>
-      <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: c.background }}>
-        <View style={[styles.header, { borderColor: c.border }]}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-            onPress={onBack}
-            hitSlop={12}
-          >
-            <T style={{ fontSize: 30, lineHeight: 32, color: c.accent }}>‹</T>
-          </Pressable>
-          <T medium numberOfLines={1} style={{ flex: 1 }}>
+  useLayoutEffect(() => {
+    const subtitle = [computers.length > 1 && computer?.machine.name, run?.branch].filter(Boolean).join(" · ");
+    navigation.setOptions({
+      headerTitle: () => (
+        <View style={{ alignItems: "center", maxWidth: 240 }}>
+          <T medium numberOfLines={1} style={{ fontSize: 16, fontWeight: "600" }}>
             {title}
           </T>
+          {!!subtitle && (
+            <T faint numberOfLines={1} style={{ fontSize: 12, lineHeight: 15 }}>
+              {subtitle}
+            </T>
+          )}
         </View>
-        {status && (
-          <T muted style={{ ...styles.small, paddingHorizontal: 20, paddingTop: 6 }}>
-            {status}
-          </T>
+      ),
+      headerRight: () => (
+        <Pressable accessibilityRole="button" accessibilityLabel="Thread actions" hitSlop={10} onPress={menu}>
+          <Icon icon={Ellipsis} size={22} color={c.foreground} />
+        </Pressable>
+      ),
+    });
+  });
+
+  const outbox = computer?.outbox;
+  const waiting = useSyncExternalStore(
+    (listener) => outbox?.subscribe(listener) ?? (() => {}),
+    () => outbox?.messages ?? [],
+  );
+  const logged = new Set(transcript.items.map((i) => (i.kind === "user" ? i.turnId : undefined)));
+  const pending = waiting.filter((m) => m.threadId === runId && !logged.has(m.id));
+  const rows = groupWork(transcript.items.filter((i) => i.kind !== "session" && i.kind !== "modelSwitch"));
+  // When the current turn's prompt went, for "Working for".
+  const since = transcript.items.findLast((i) => i.kind === "user")?.at;
+
+  const edit = (next: string) => {
+    setDraft(next);
+    drafts.set(runId, next);
+  };
+  const context: RowContextValue = {
+    hostId,
+    runId,
+    root: run?.worktreePath,
+    open,
+    toggle: (key) =>
+      setOpen((o) => {
+        const next = new Set(o);
+        if (!next.delete(key)) next.add(key);
+        return next;
+      }),
+  };
+
+  return (
+    <RowContext value={context}>
+      <KeyboardAvoidingView
+        behavior="padding"
+        keyboardVerticalOffset={headerHeight}
+        style={{ flex: 1, backgroundColor: c.background }}
+      >
+        {!connected && (
+          <View style={[styles.banner, { backgroundColor: c.selected }]}>
+            <Icon icon={WifiOff} size={14} color={c.mutedForeground} />
+            <T muted style={{ fontSize: 13 }}>
+              {computer ? `Reconnecting to ${computer.machine.name}…` : "This computer was removed."}
+            </T>
+          </View>
         )}
         <FlatList
           inverted
-          data={[...transcript.items].reverse()}
+          data={[...rows].reverse()}
           keyExtractor={(i) => i.key}
           contentContainerStyle={styles.transcript}
+          keyboardDismissMode="interactive"
           accessibilityLabel="Transcript"
           ListHeaderComponent={
             <View style={{ gap: 14, marginTop: 14 }}>
-              {queue.map((m) => (
+              {[
+                ...queue.map((m) => ({ id: m.id, text: m.text, note: held ? "Held" : "Queued" })),
+                ...pending.map((m) => ({
+                  id: m.id,
+                  text: m.text,
+                  note: `${connected ? "Sending…" : "Waiting for connection"}${m.steer ? " · steer" : ""}`,
+                })),
+              ].map((m) => (
                 <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
                   <View style={[styles.bubble, { backgroundColor: c.selected, opacity: 0.6 }]}>
-                    <T>{m.text}</T>
+                    <T>{splitFiles(m.text).text}</T>
                   </View>
-                  <T muted style={{ fontSize: 12 }}>
-                    Queued
+                  <T faint style={{ fontSize: 12 }}>
+                    {m.note}
                   </T>
                 </View>
               ))}
-              {pending.map((m) => (
-                <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
-                  <View style={[styles.bubble, { backgroundColor: c.selected, opacity: 0.6 }]}>
-                    <T>{m.text}</T>
-                  </View>
-                  <T muted style={{ fontSize: 12 }}>
-                    {connected ? "Sending…" : "Waiting for connection"}
-                    {m.steer ? " · steer" : ""}
-                  </T>
-                </View>
-              ))}
-              {working && (
-                <View style={styles.working}>
-                  <ActivityIndicator size="small" color={c.accent} />
-                  <T muted style={styles.small}>
-                    Working
-                  </T>
-                </View>
+              {working && <WorkingFor since={since} />}
+              {!working && attention !== "settled" && attention !== "working" && (
+                <AttentionBadge attention={attention} />
               )}
               {error && (
-                <T alert style={{ ...styles.small, color: c.danger }}>
+                <T alert style={{ fontSize: 13, color: c.danger }}>
                   {error}
                 </T>
               )}
             </View>
           }
-          renderItem={({ item }) => (
-            <View style={{ marginTop: 14 }}>
-              <Row item={item} runId={runId} />
+          renderItem={({ item, index }) => (
+            <View style={{ marginTop: item.kind === "user" ? 22 : 12 }}>
+              <RowView row={item} live={working && index < 3} />
             </View>
           )}
         />
-        <View style={[styles.composer, { borderColor: c.border, backgroundColor: c.surface }]}>
-          <TextInput
-            accessibilityLabel="Message"
-            multiline
-            value={text}
-            onChangeText={edit}
-            placeholder="Reply, add detail, or steer what it does next"
-            placeholderTextColor={c.faintForeground}
-            style={[styles.input, { color: c.foreground }]}
-          />
-          <View style={styles.actions}>
-            {working && (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => send(true)}
-                style={[styles.steer, { borderColor: c.border }]}
-              >
-                <T style={{ fontSize: 14 }}>Steer now</T>
-              </Pressable>
-            )}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={working ? "Queue" : "Send"}
-              onPress={() => send(false)}
-              style={[styles.send, { backgroundColor: c.accent, opacity: text.trim() ? 1 : 0.4 }]}
-            >
-              <T style={{ color: "#ffffff", fontSize: 18, lineHeight: 20 }}>↑</T>
-            </Pressable>
-          </View>
-        </View>
+        <Composer
+          computer={computer}
+          runId={runId}
+          run={run}
+          working={working}
+          draft={draft}
+          onDraft={edit}
+          onStop={() => void cancel()}
+          bottom={Math.max(insets.bottom, 8)}
+        />
       </KeyboardAvoidingView>
-    </SwipeBack>
+    </RowContext>
   );
 }
 
 const styles = StyleSheet.create({
-  header: {
+  banner: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 8 },
+  transcript: { paddingHorizontal: 18, paddingVertical: 12 },
+  line: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 24 },
+  traceIcon: { width: 16, alignItems: "center" },
+  trace: { fontSize: 14, lineHeight: 20 },
+  opened: { marginTop: 6, marginBottom: 4, marginLeft: 7, borderLeftWidth: 1, paddingLeft: 14, gap: 8 },
+  block: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
+  images: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  bubble: { maxWidth: "85%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9 },
+  card: { borderWidth: 1, borderRadius: 16, padding: 14, gap: 10 },
+  fileChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 60,
-    paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  transcript: { paddingHorizontal: 20, paddingVertical: 16 },
-  bubble: {
-    alignSelf: "flex-end",
-    maxWidth: "85%",
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  small: { fontSize: 13, lineHeight: 19 },
-  card: { borderWidth: 1, borderRadius: 14, padding: 14, gap: 8 },
-  buttons: { flexDirection: "row", gap: 8, justifyContent: "flex-end" },
-  end: { flexDirection: "row", alignItems: "center", gap: 10 },
-  rule: { flex: 1, height: StyleSheet.hairlineWidth },
-  working: { flexDirection: "row", alignItems: "center", gap: 8 },
-  composer: {
-    marginHorizontal: 12,
-    marginBottom: 28,
-    borderWidth: 1,
-    borderRadius: 24,
-    padding: 12,
     gap: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
-  input: {
-    fontFamily: font.regular,
-    fontSize: 16,
-    minHeight: 44,
-    maxHeight: 140,
-    paddingHorizontal: 6,
-  },
-  actions: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", gap: 8 },
-  steer: { borderWidth: 1, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 7 },
-  send: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center" },
+  rule: { flex: 1, height: StyleSheet.hairlineWidth },
 });

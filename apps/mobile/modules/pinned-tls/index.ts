@@ -1,4 +1,5 @@
-// The JS side of PinnedTlsModule.swift: HTTPS and WebSocket to plxd, pinned to its certificate.
+// The JS side of PinnedTlsModule.swift: HTTPS and WebSocket to plxd, pinned to its certificate,
+// and Parallax Connect's TCP over Tailscale.
 import { requireNativeModule } from "expo";
 
 type SocketEvent = { id: string; type: "open" | "message" | "close"; data?: string };
@@ -15,6 +16,10 @@ const native = requireNativeModule<{
   ): Promise<{ status: number; body: string; fingerprint: string }>;
   discover(seconds: number): Promise<{ name: string; route: string }[]>;
   open(id: string, url: string, pin: string): void;
+  openTcp(id: string, host: string, port: number): void;
+  tailnetAddress(): string | null;
+  authorize(url: string): Promise<string>;
+  appVersion(): { version: string; build: string };
   send(id: string, text: string): void;
   close(id: string): void;
   addListener(event: "onSocket", listener: (event: SocketEvent) => void): unknown;
@@ -24,6 +29,18 @@ export const randomBytes = (count: number) => native.randomBytes(count);
 
 /** The `file://` URL of `name` in a folder of Application Support kept out of backups. */
 export const privateFile = (name: string) => native.privateFile(name);
+
+/**
+ * Signs in on Clerk's page in a sheet, as the desktop does in a browser (0067). Resolves to the
+ * `parallax://` callback URL Clerk sent the sheet to, or rejects with code `ERR_CANCELED`.
+ */
+export const authorize = (url: string) => native.authorize(url);
+
+/** This build's version and build number. */
+export const appVersion = () => native.appVersion();
+
+/** This phone's Tailscale address, or null while Tailscale isn't connected. */
+export const tailnetAddress = () => native.tailnetAddress();
 
 /** The computers showing a pairing code on this network, by name, found over mDNS in `seconds`. */
 export const discover = (seconds: number) => native.discover(seconds);
@@ -58,7 +75,10 @@ native.addListener("onSocket", ({ id, type, data }) => {
 
 let nextId = 0;
 
-/** A WebSocket, as much of one as `WebHost` uses, trusting only the certificate `pin`. */
+/**
+ * A WebSocket, as much of one as `WebHost` uses: to `url`, trusting only the certificate `pin`,
+ * or with `tcp`, Connect's newline-delimited JSON-RPC to plxd's port 7340 on a tailnet address.
+ */
 export class PinnedSocket {
   readyState: number = WebSocket.CONNECTING;
   onopen?: () => void;
@@ -66,9 +86,12 @@ export class PinnedSocket {
   onclose?: () => void;
   private readonly id = String(++nextId);
 
-  constructor(url: string, pin: string) {
+  constructor(url: string, pin: string);
+  constructor(tcp: { host: string; port: number });
+  constructor(target: string | { host: string; port: number }, pin?: string) {
     sockets.set(this.id, this);
-    native.open(this.id, url, pin);
+    if (typeof target === "string") native.open(this.id, target, pin!);
+    else native.openTcp(this.id, target.host, target.port);
   }
 
   send(text: string) {

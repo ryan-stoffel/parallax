@@ -69,45 +69,38 @@ import { encodedImage, uploadFiles, withFiles, type UploadCaps } from "./uploads
 import { ModelMenu } from "./ModelMenu";
 import { dismiss, notify } from "./notifications";
 import { behaviorPrefs, newThreadPrefs, usageView } from "./prefs";
+import { accessLevels } from "./catalog";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
 import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
 import { draggedThread, threadDragType } from "./threadDrag";
 import { menuItem, Picker, type PickerOption } from "./ui";
 
-// One set of access levels for every provider (0054), from most to least supervised. Each backend
-// maps the ones it can honor, and a thread is full Claude Code in every mode (0034). A project's
-// worker keeps its sandbox in every mode but Full access (0013). What would prompt comes to the
-// chat as approval cards (PLX-196), unless the run can't send them (`manualDenied`).
+// The access levels (catalog.ts), each with its icon.
 export const accessOptions: Record<AgentPermission, PickerOption> = {
   manual: {
     value: "manual",
-    label: "Supervised",
+    ...accessLevels.manual,
     icon: <Hand />,
-    description: "Asks you before commands and file changes.",
   },
   edit: {
     value: "edit",
-    label: "Auto-accept edits",
+    ...accessLevels.edit,
     icon: <FilePen />,
-    description: "Accepts file edits, asks before other actions.",
   },
   auto: {
     value: "auto",
-    label: "Auto",
+    ...accessLevels.auto,
     icon: <Sparkles />,
-    description: "The provider approves routine actions for you and blocks the risky ones.",
   },
   plan: {
     value: "plan",
-    label: "Plan",
+    ...accessLevels.plan,
     icon: <ListChecks />,
-    description: "Explores and writes a plan without editing files.",
   },
   bypass: {
     value: "bypass",
-    label: "Full access",
+    ...accessLevels.bypass,
     icon: <LockOpen />,
-    description: "Runs commands and edits files without asking.",
   },
 };
 

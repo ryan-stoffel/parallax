@@ -1,193 +1,240 @@
-// The app: pairing until a computer is paired, then its threads, one thread, and settings. The
-// connection, thread list, and transcripts are the desktop renderer's (host.ts).
-import { reloadAppAsync } from "expo";
-import { Fragment, useEffect, useState } from "react";
-import { Alert, AppState, ScrollView, StyleSheet, View } from "react-native";
+// The app: sign in, then onboarding until a computer is found, then the tabs (Threads, Pull
+// requests, Settings) over every computer, with threads and pull requests pushed on top. The
+// connections, thread lists, and transcripts are the desktop renderer's (fleet.tsx).
+import {
+  createNavigationContainerRef,
+  DarkTheme,
+  DefaultTheme,
+  NavigationContainer,
+} from "@react-navigation/native";
+import { createNativeBottomTabNavigator } from "@react-navigation/bottom-tabs/unstable";
+import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { useEffect, useRef, useState } from "react";
+import { useColorScheme } from "react-native";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 
-import type { ConnectionState } from "../../desktop/src/preload/bridge";
-import { useThreads } from "../../desktop/src/renderer/threads";
-import { connect, forget, HOST, loadOutbox, loadSaved, saveOutbox, type Saved } from "./host";
-import { Outbox, type Outgoing, type Sent } from "./outbox";
-import { Pairing } from "./PairScreen";
-import { registerForPush } from "./push";
+import { AccountProvider, SignIn, useAccount } from "./Account";
+import { useFleet, FleetProvider } from "./fleet";
+import { loadSetup, probe, saveSetup, type Setup } from "./machines";
+import type { Screens } from "./nav";
+import { NewThreadScreen } from "./NewThread";
+import { Loading, Onboarding } from "./Onboarding";
+import { PullRequestList, PullRequestScreen } from "./PullRequests";
+import { alertFor, notify, onOpened, phaseOf, type Phase } from "./push";
+import { LightboxHost } from "./Lightbox";
+import { getPrefs } from "./prefs";
+import { AddComputerScreen, ComputerScreen, SettingsScreen } from "./Settings";
+import { ThreadDetailsScreen } from "./ThreadDetails";
+import { NightlyBadge } from "./ui";
+import { dark, light } from "./theme";
 import { ThreadScreen } from "./Thread";
 import { ThreadList } from "./ThreadList";
-import { Button, SwipeBack, T, useColors } from "./ui";
 
-// Clerk's JS, about 1.6 MB of the bundle, only in a build with EXPO_PUBLIC_CLERK=1: a release
-// build inlines the variable, and Metro folds the require away when it's off. Metro's cache doesn't
-// key on it, so start Metro with --clear after changing it.
-const account: typeof import("./Account") | undefined =
-  process.env.EXPO_PUBLIC_CLERK === "1" ? require("./Account") : undefined;
+const Stack = createNativeStackNavigator<Screens>();
+const Tabs = createNativeBottomTabNavigator();
+const nav = createNavigationContainerRef<Screens>();
 
-/**
- * The connection's state, for people, or undefined while connected. A retry keeps showing why the
- * last try failed, such as another computer answering, rather than only "Connecting".
- */
-function describe(state: ConnectionState, name: string, failed?: string): string | undefined {
-  if (state.status === "connected") return undefined;
-  if (failed) return `${failed} Trying again.`;
-  return state.status === "connecting" ? `Connecting to ${name}…` : `Not connected to ${name}.`;
+/** A tab's own stack, for its large title and search bar, with the nightly tag on its left. */
+function tab(title: string, Screen: React.ComponentType) {
+  const Inner = createNativeStackNavigator();
+  return function TabStack() {
+    return (
+      <Inner.Navigator
+        screenOptions={{
+          headerLargeTitle: true,
+          headerTransparent: true,
+          headerLargeTitleShadowVisible: false,
+          headerLeft: () => <NightlyBadge />,
+        }}
+      >
+        <Inner.Screen name={title} component={Screen} options={{ title }} />
+      </Inner.Navigator>
+    );
+  };
 }
 
-/** Forgets the paired computer and starts the app over at pairing. */
-const unpair = () => forget().then(() => reloadAppAsync());
+const ThreadsTab = tab("Threads", ThreadList);
+const PullRequestsTab = tab("Pull requests", PullRequestList);
+const SettingsTab = tab("Settings", SettingsScreen);
 
-function Connected({ saved }: { saved: Saved }) {
-  const c = useColors();
-  const [host] = useState(() => connect(saved, unpair));
-  const [state, setState] = useState<ConnectionState>(host.state);
-  const [failed, setFailed] = useState<string>();
-  const [openId, setOpenId] = useState<string>();
-  const [settings, setSettings] = useState(false);
-  const [push, setPush] = useState<string>();
-  const [drafts] = useState(() => new Map<string, string>());
-  const connected = state.status === "connected";
-  const view = useThreads(HOST, connected ? state.capabilities : undefined, undefined, () => {});
+function Home() {
+  const { computers } = useFleet();
+  const needs = computers.reduce(
+    (n, m) => n + Object.values(m.view.state.approvals).filter((t) => t.items.some((i) => i.kind === "approval" && !i.resolved)).length,
+    0,
+  );
+  return (
+    <Tabs.Navigator screenOptions={{ headerShown: false }}>
+      <Tabs.Screen
+        name="ThreadsTab"
+        component={ThreadsTab}
+        options={{
+          title: "Threads",
+          tabBarIcon: { type: "sfSymbol", name: "bubble.left.and.bubble.right" },
+          tabBarBadge: needs || undefined,
+        }}
+      />
+      <Tabs.Screen
+        name="PullRequestsTab"
+        component={PullRequestsTab}
+        options={{ title: "Pull requests", tabBarIcon: { type: "sfSymbol", name: "arrow.triangle.branch" } }}
+      />
+      <Tabs.Screen
+        name="SettingsTab"
+        component={SettingsTab}
+        options={{ title: "Settings", tabBarIcon: { type: "sfSymbol", name: "gearshape" } }}
+      />
+    </Tabs.Navigator>
+  );
+}
 
-  const [outbox] = useState(() => {
-    const box: Outbox = new Outbox(loadOutbox(), send, saveOutbox, refused);
-    async function send(m: Outgoing): Promise<Sent> {
-      if (host.state.status !== "connected") return "offline";
-      const answer = await host.request("orchestration/dispatch", {
-        type: "message.dispatch",
-        threadId: m.threadId,
-        messageId: m.id,
-        commandId: m.id,
-        text: m.text,
-        dispatchMode: { type: m.steer ? "steer_active" : "queue_after_active" },
-      });
-      if (!("error" in answer)) return "sent";
-      // The connection dropped or the answer was lost: it waits, and goes again with its id, on
-      // the next connection or, after a timeout, in a few seconds.
-      if (host.state.status !== "connected") return "offline";
-      if (answer.error.code === -32800) {
-        setTimeout(() => void box.drain(), 5_000);
-        return "offline";
-      }
-      return { error: answer.error };
+/**
+ * Notifies when a thread on any computer starts needing the user, or finishes or fails, and
+ * opens the thread a tapped notification is about.
+ */
+function Alerts() {
+  const { computers } = useFleet();
+  const phases = useRef(new Map<string, Phase>());
+  const latest = useRef(computers);
+  latest.current = computers;
+
+  for (const m of computers) {
+    // A list still loading would look like every run starting over.
+    if (!m.connected || m.view.loading) continue;
+    const { state } = m.view;
+    for (const t of state.threads) {
+      if (t.archived) continue;
+      const key = `${m.machine.id}:${t.id}`;
+      const asks = state.approvals[t.id]?.items.filter((i) => i.kind === "approval" && !i.resolved).length ?? 0;
+      const now = phaseOf(state.runs[t.id], asks);
+      const alert = alertFor(phases.current.get(key), now);
+      phases.current.set(key, now);
+      if (alert && getPrefs().notify[alert]) notify(alert, m.machine.id, t.id, state.titles[t.id] ?? "A thread", m.machine.name);
     }
-    function refused(m: Outgoing, error: { message: string }) {
-      Alert.alert("Message not sent", `“${m.text}”: ${error.message}`);
-    }
-    return box;
-  });
+  }
 
-  useEffect(() => {
-    const listener = (_: string, next: ConnectionState) => {
-      setState(next);
-      if (next.status === "failed") setFailed(next.error.message);
-      if (next.status === "connected") setFailed(undefined);
-    };
-    host.stateListeners.add(listener);
-    // A phone that slept may have lost its socket: check it, or try again now.
-    const awake = AppState.addEventListener("change", (s) => {
-      if (s !== "active") return;
-      host.heartbeat();
-      host.retry();
-    });
-    void registerForPush(saved.fingerprint).then(setPush);
-    return () => {
-      host.stateListeners.delete(listener);
-      awake.remove();
-    };
-  }, [host, saved.fingerprint]);
+  useEffect(
+    () =>
+      onOpened(({ hostId, runId }) => {
+        const owner =
+          hostId ??
+          latest.current.find((m) => m.view.state.threads.some((t) => t.id === runId))?.machine.id;
+        if (owner && nav.isReady()) nav.navigate("Thread", { hostId: owner, runId });
+      }),
+    [],
+  );
+  return null;
+}
 
-  useEffect(() => {
-    if (connected) void outbox.drain();
-  }, [connected, outbox]);
+/**
+ * Links into the app: `parallax://threads`, `prs`, and `settings` for the tabs,
+ * `parallax://thread/<computer>/<thread>`, and a thread's pull request at
+ * `parallax://pr/<computer>/<thread>?url=<its URL>`.
+ */
+const linking = {
+  prefixes: ["parallax://"],
+  config: {
+    screens: {
+      Tabs: { screens: { ThreadsTab: "threads", PullRequestsTab: "prs", SettingsTab: "settings" } },
+      Thread: "thread/:hostId/:runId",
+      PullRequest: "pr/:hostId/:runId",
+    },
+  },
+};
 
-  const status = describe(state, saved.name, failed);
-  if (settings)
-    return (
-      <SwipeBack onBack={() => setSettings(false)}>
-        <ScrollView
-          style={{ backgroundColor: c.background }}
-          contentContainerStyle={styles.settings}
-          keyboardShouldPersistTaps="handled"
-          automaticallyAdjustKeyboardInsets
-          keyboardDismissMode="interactive"
+function Main({ setup }: { setup: Setup }) {
+  const scheme = useColorScheme();
+  const c = scheme === "dark" ? dark : light;
+  const base = scheme === "dark" ? DarkTheme : DefaultTheme;
+  const theme = {
+    ...base,
+    colors: {
+      ...base.colors,
+      primary: c.accent,
+      background: c.background,
+      card: c.surface,
+      text: c.foreground,
+      border: c.border,
+      notification: c.markCoral,
+    },
+    fonts: {
+      regular: { fontFamily: "System", fontWeight: "400" as const },
+      medium: { fontFamily: "System", fontWeight: "500" as const },
+      bold: { fontFamily: "System", fontWeight: "600" as const },
+      heavy: { fontFamily: "System", fontWeight: "700" as const },
+    },
+  };
+  return (
+    <FleetProvider setup={setup}>
+      <NavigationContainer ref={nav} theme={theme} linking={linking}>
+        <Alerts />
+        <LightboxHost />
+        <Stack.Navigator
+          screenOptions={{ headerBackButtonDisplayMode: "minimal" }}
         >
-          <Button label="Done" onPress={() => setSettings(false)} />
-          <T medium style={{ fontSize: 20 }}>
-            {saved.name}
-          </T>
-          <T muted>{status ?? "Connected"}</T>
-          <T muted style={{ fontSize: 13 }}>
-            {saved.routes.join(" · ")}
-          </T>
-          <T medium style={styles.heading}>
-            Notifications
-          </T>
-          <T muted>{push ?? "On"}</T>
-          {account && (
-            <>
-              <T medium style={styles.heading}>
-                Parallax account
-              </T>
-              <account.Account />
-            </>
-          )}
-          <View style={{ marginTop: 24 }}>
-            <Button label="Unpair this phone" onPress={() => void unpair()} />
-          </View>
-        </ScrollView>
-      </SwipeBack>
-    );
-  const open = openId ? view.state.threads.find((t) => t.id === openId) : undefined;
-  if (open)
+          <Stack.Screen name="Tabs" component={Home} options={{ headerShown: false }} />
+          <Stack.Screen name="Thread" component={ThreadScreen} />
+          <Stack.Screen name="PullRequest" component={PullRequestScreen} />
+          <Stack.Screen
+            name="ThreadDetails"
+            component={ThreadDetailsScreen}
+            options={{ presentation: "formSheet", title: "Thread details", sheetAllowedDetents: [0.6, 0.95] }}
+          />
+          <Stack.Screen name="Computer" component={ComputerScreen} />
+          <Stack.Screen
+            name="NewThread"
+            component={NewThreadScreen}
+            options={{ presentation: "formSheet", title: "New thread", sheetAllowedDetents: [0.92] }}
+          />
+          <Stack.Screen
+            name="AddComputer"
+            component={AddComputerScreen}
+            options={{ presentation: "formSheet", headerShown: false, sheetAllowedDetents: [0.92] }}
+          />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </FleetProvider>
+  );
+}
+
+/**
+ * A development build's shortcut for the simulator, which scripts can't tap: with
+ * EXPO_PUBLIC_DEV_COMPUTER set to a computer's address, it skips the account and finds the
+ * computers from that one. A release build inlines `__DEV__` as false and drops it.
+ */
+const devComputer = __DEV__ ? process.env.EXPO_PUBLIC_DEV_COMPUTER : undefined;
+
+function Gate() {
+  const { user } = useAccount();
+  const [setup, setSetup] = useState(loadSetup);
+  useEffect(() => {
+    if (devComputer && setup.machines.length === 0)
+      void probe(devComputer).then((machines) => {
+        const next = { machines, defaultId: machines[0]?.id };
+        saveSetup(next);
+        setSetup(next);
+      });
+  }, []);
+  if (user === undefined) return <Loading />;
+  if (!user && !devComputer) return <SignIn />;
+  if (setup.machines.length === 0)
     return (
-      <ThreadScreen
-        key={open.id}
-        runId={open.id}
-        title={view.state.titles[open.id] ?? "New thread"}
-        connected={connected}
-        status={status}
-        outbox={outbox}
-        drafts={drafts}
-        onBack={() => setOpenId(undefined)}
+      <Onboarding
+        onDone={(next) => {
+          saveSetup(next);
+          setSetup(next);
+        }}
       />
     );
-  return (
-    <ThreadList
-      view={view}
-      name={saved.name}
-      status={status}
-      onOpen={(t) => setOpenId(t.id)}
-      onSettings={() => setSettings(true)}
-    />
-  );
+  return <Main setup={setup} />;
 }
 
 export default function App() {
-  const c = useColors();
-  const [saved, setSaved] = useState<Saved | null>();
-  const [unreadable, setUnreadable] = useState<string>();
-  const load = () => {
-    setUnreadable(undefined);
-    loadSaved().then(setSaved, (e: Error) => setUnreadable(e.message));
-  };
-  useEffect(load, []);
-  const Provider = account?.AccountProvider ?? Fragment;
   return (
-    <Provider>
-      <View style={{ flex: 1, backgroundColor: c.background }}>
-        {unreadable && (
-          <View style={styles.settings}>
-            <T alert style={{ color: c.danger }}>
-              Parallax couldn't read this phone's Keychain: {unreadable}
-            </T>
-            <Button label="Try again" onPress={load} />
-          </View>
-        )}
-        {saved === null && <Pairing onPaired={setSaved} />}
-        {saved && <Connected saved={saved} />}
-      </View>
-    </Provider>
+    <SafeAreaProvider>
+      <AccountProvider>
+        <Gate />
+      </AccountProvider>
+    </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  settings: { padding: 24, paddingTop: 72, gap: 8, alignItems: "stretch" },
-  heading: { marginTop: 20 },
-});

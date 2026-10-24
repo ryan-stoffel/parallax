@@ -1,14 +1,10 @@
-// The paired computer: pairing with its code, its credential in the Keychain, and the connection
-// to its plxd, which is the desktop's WebHost over a pinned socket. `window.parallax` answers for
-// it as the web client's bridge does, so the desktop's threads and transcript hooks run unchanged.
+// A computer paired on the LAN (0065), for one without Parallax Connect: pairing with its code,
+// its credential in the Keychain, and the pinned socket to its plxd's remote listener, which
+// machines.ts connects a WebHost over.
 
-import { File } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
 
-import type { ParallaxBridge } from "../../desktop/src/preload/bridge";
-import { WebHost } from "../../desktop/src/renderer/webBridge";
-import { PinnedSocket, privateFile, request } from "../modules/pinned-tls";
-import type { Outgoing } from "./outbox";
+import { PinnedSocket, request } from "../modules/pinned-tls";
 import {
   base64url,
   confirmation,
@@ -20,8 +16,6 @@ import {
   thumbprint,
 } from "./pairing";
 
-/** The one host, as the web client names its own (webBridge.ts). */
-export const HOST = "local";
 const PORT = 7341;
 const KEY = "host";
 
@@ -44,24 +38,8 @@ export async function loadSaved(): Promise<Saved | null> {
   return raw ? (JSON.parse(raw) as Saved) : null;
 }
 
-/** The outbox (outbox.ts) of the paired computer, out of backups, as its credential is. */
-const outboxFile = new File(privateFile("outbox.json"));
-
-export function loadOutbox(): Outgoing[] {
-  try {
-    return outboxFile.exists ? (JSON.parse(outboxFile.textSync()) as Outgoing[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-export const saveOutbox = (messages: Outgoing[]) => outboxFile.write(JSON.stringify(messages));
-
-/** Forgets the paired computer, and the messages that were waiting to reach it. */
-export async function forget() {
-  if (outboxFile.exists) outboxFile.delete();
-  await SecureStore.deleteItemAsync(KEY, keychain);
-}
+/** Forgets the paired computer. */
+export const forget = () => SecureStore.deleteItemAsync(KEY, keychain);
 
 /** `route` with plxd's port when it has none: `10.0.0.2` is `10.0.0.2:7341`. */
 export const withPort = (route: string) => (route.includes(":") ? route : `${route}:${PORT}`);
@@ -123,8 +101,6 @@ export async function pair(route: string, code: string, label: string): Promise<
     token: String(finished["accessToken"]),
     key: base64url(secret),
   };
-  // Anything still waiting was for the computer paired before.
-  if (outboxFile.exists) outboxFile.delete();
   await SecureStore.setItemAsync(KEY, JSON.stringify(saved), keychain);
   return saved;
 }
@@ -133,7 +109,7 @@ export async function pair(route: string, code: string, label: string): Promise<
  * Opens `/ws` on the first of the host's routes that answers with its certificate, with a 30 s
  * ticket for the session, as the web client's `openSocket` does.
  */
-async function openSocket(saved: Saved): Promise<WebSocket | { error: string }> {
+export async function pairedSocket(saved: Saved): Promise<WebSocket | { error: string }> {
   const secret = fromBase64url(saved.key);
   let error = `Couldn't reach ${saved.name}. Check that it's on and on this network.`;
   for (const route of saved.routes) {
@@ -165,25 +141,4 @@ async function openSocket(saved: Saved): Promise<WebSocket | { error: string }> 
     };
   }
   return { error };
-}
-
-/**
- * Connects to `saved`'s plxd and answers `window.parallax` for it, with what the desktop's hooks
- * use. `signedOut` hears that the host revoked this phone.
- */
-export function connect(saved: Saved, signedOut: () => Promise<void>): WebHost {
-  const host = new WebHost(() => openSocket(saved), signedOut);
-  window.parallax = {
-    request: (_: string, method: string, params: unknown) => host.request(method, params),
-    subscribe: (_, params, listener) => host.subscribe(params, listener),
-    watch: (_: string, params: never, listener: never) => host.watch(params, listener),
-    connectionState: async () => host.state,
-    onConnectionState(listener) {
-      host.stateListeners.add(listener);
-      return () => host.stateListeners.delete(listener);
-    },
-    retry: async () => host.retry(),
-  } as Partial<ParallaxBridge> as ParallaxBridge;
-  void host.connect();
-  return host;
 }

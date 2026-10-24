@@ -1,220 +1,284 @@
-// Sign-in with Clerk (PLX-702, 0067), which App.tsx bundles only when the build sets
-// EXPO_PUBLIC_CLERK=1. Pairing doesn't need it; the relay (PLX-652) will. Clerk's JS only:
-// package.json keeps its native module and UI out of the build, which would add about 23 MB.
-// The Clerk app asks for an email and a password, and a sign-up for a first and last name and
-// the code Clerk emails. Deleting the account is here because the App Store requires it of an
-// app that makes one.
-import { ClerkProvider, useClerk, useSignIn, useSignUp, useUser } from "@clerk/expo";
+// The Parallax account (0067), signed in as the desktop app signs in: the app is an OAuth client
+// of Clerk, with PKCE. Clerk's hosted page does the rest (GitHub, Google, Apple, email, sign-up,
+// and consent) in a sheet that shares Safari's cookies, and sends it back to `REDIRECT`, which
+// the sheet hands to the app (modules/pinned-tls). A loopback redirect, as the desktop's, would
+// load a plain-HTTP page, which iOS 27 warns about. The refresh token and the last userinfo stay in the
+// Keychain on this phone only; the access token, a JWT good for a day, stays in memory. The
+// account's name, password, and deletion are on Clerk's account pages, since an OAuth token
+// can't change the user.
+import { sha256 } from "@noble/hashes/sha2.js";
+import { randomBytes, utf8ToBytes } from "@noble/hashes/utils.js";
 import * as SecureStore from "expo-secure-store";
-import { useEffect, useState, type ReactNode } from "react";
-import { Alert, Modal, Pressable, StyleSheet, TextInput, View } from "react-native";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import { Alert, Linking, Pressable, StyleSheet, Text, View } from "react-native";
 
+import { authorize } from "../modules/pinned-tls";
 import { keychain } from "./host";
+import { base64url } from "./pairing";
+import { LockKeyhole, LogOut, UserRound } from "lucide-react-native";
+
 import { font } from "./theme";
-import { Button, T, useColors } from "./ui";
+import { Button, Mark, NightlyBadge, Row, Section, T, useColors } from "./ui";
 
-/** The development instance's publishable key, which is public (desktop: main/account.ts). */
+// The Clerk instance and the desktop app's OAuth application there, both public (desktop:
+// main/account.ts). The phone signs in as the same application.
 const PUBLISHABLE_KEY = "pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk";
+const CLIENT_ID = "SXDueyOLOJ2v4Vmq";
+const SCOPES = "profile email offline_access";
+const KEY = "account";
+/** Where Clerk sends the sign-in back: one of the OAuth application's redirect URIs. */
+const REDIRECT = "parallax://oauth/callback";
 
-/** Clerk's client token, in the Keychain on this phone only, as host.ts keeps plxd's. */
-const tokenCache = {
-  getToken: (key: string) => SecureStore.getItemAsync(key, keychain),
-  saveToken: (key: string, token: string) => SecureStore.setItemAsync(key, token, keychain),
-  clearToken: (key: string) => SecureStore.deleteItemAsync(key, keychain),
-};
+/** The Frontend API a publishable key names: base64 of `<host>$` after `pk_test_` or `pk_live_`. */
+const API = `https://${atob(PUBLISHABLE_KEY.replace(/^pk_(test|live)_/, "")).replace(/\$$/, "")}`;
+/** Clerk's Account Portal beside it: `<slug>.accounts.dev`, or `accounts.<domain>`. */
+const PORTAL = API.replace("://clerk.", "://accounts.").replace(/\.clerk\.accounts\.dev$/, ".accounts.dev");
+
+/** What Clerk's userinfo says of the user, as much as the app shows. */
+export interface User {
+  email?: string;
+  given_name?: string;
+  family_name?: string;
+}
+
+interface Session {
+  refreshToken: string;
+  user: User;
+}
+
+/** A failed call to Clerk. `revoked` when Clerk refused the refresh token itself. */
+class ClerkError extends Error {
+  constructor(
+    message: string,
+    readonly revoked = false,
+  ) {
+    super(message);
+  }
+}
+
+async function token(params: Record<string, string>) {
+  const res = await fetch(`${API}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ client_id: CLIENT_ID, ...params }).toString(),
+  });
+  const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!res.ok || typeof body["access_token"] !== "string") {
+    const why = [body["error_description"], body["error"]].find((v) => typeof v === "string");
+    throw new ClerkError(String(why ?? `Clerk answered ${res.status}.`), body["error"] === "invalid_grant");
+  }
+  const expiresIn = typeof body["expires_in"] === "number" ? body["expires_in"] : 3600;
+  return {
+    access: { token: body["access_token"], expiresAt: Date.now() + expiresIn * 1000 },
+    refreshToken: typeof body["refresh_token"] === "string" ? body["refresh_token"] : undefined,
+  };
+}
+
+async function userinfo(bearer: string): Promise<User> {
+  const res = await fetch(`${API}/oauth/userinfo`, { headers: { Authorization: `Bearer ${bearer}` } });
+  if (!res.ok) throw new ClerkError(`Clerk answered ${res.status}.`);
+  const { email, given_name, family_name } = (await res.json()) as User;
+  return { email, given_name, family_name };
+}
+
+interface AccountValue {
+  /** Undefined while the Keychain is read, null signed out. */
+  user: User | null | undefined;
+  signIn: (create: boolean) => Promise<string | undefined>;
+  signOut: () => Promise<void>;
+  /** A current access token, for Parallax Relay, or undefined signed out. */
+  accessToken: () => Promise<string | undefined>;
+}
+
+const AccountContext = createContext<AccountValue | null>(null);
+export const useAccount = () => useContext(AccountContext)!;
 
 export function AccountProvider({ children }: { children: ReactNode }) {
+  const [session, setSession] = useState<Session | null>();
+  const [access, setAccess] = useState<{ token: string; expiresAt: number }>();
+
+  const save = async (next: Session | null) => {
+    setSession(next);
+    if (next) await SecureStore.setItemAsync(KEY, JSON.stringify(next), keychain);
+    else await SecureStore.deleteItemAsync(KEY, keychain);
+  };
+
+  useEffect(() => {
+    void SecureStore.getItemAsync(KEY, keychain).then(
+      (raw) => setSession(raw ? (JSON.parse(raw) as Session) : null),
+      () => setSession(null),
+    );
+  }, []);
+
+  const value: AccountValue = {
+    user: session === undefined ? undefined : (session?.user ?? null),
+
+    async signIn(create) {
+      const verifier = base64url(randomBytes(32));
+      const state = base64url(randomBytes(16));
+      const params = new URLSearchParams({
+        response_type: "code",
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT,
+        scope: SCOPES,
+        state,
+        code_challenge: base64url(sha256(utf8ToBytes(verifier))),
+        code_challenge_method: "S256",
+      });
+      const page = `${API}/oauth/authorize?${params.toString()}`;
+      // Create an account starts on Clerk's sign-up page, which then continues the same sign-in.
+      const url = create ? `${PORTAL}/sign-up?redirect_url=${encodeURIComponent(page)}` : page;
+      let callback: string;
+      try {
+        callback = await authorize(url);
+      } catch (e) {
+        return (e as { code?: string }).code === "ERR_CANCELED" ? undefined : (e as Error).message;
+      }
+      // React Native's URL has no searchParams.
+      const query = callback.split("?")[1] ?? "";
+      const answer = new Map(
+        query.split("&").map((pair) => pair.split("=").map((p) => decodeURIComponent(p.replaceAll("+", " "))) as [string, string]),
+      );
+      const code = answer.get("code");
+      if (answer.get("state") !== state || !code)
+        return answer.get("error_description") ?? "Sign-in didn't finish. Try again.";
+      try {
+        const fresh = await token({
+          grant_type: "authorization_code",
+          code,
+          code_verifier: verifier,
+          redirect_uri: REDIRECT,
+        });
+        if (!fresh.refreshToken) return "Clerk sent no refresh token.";
+        const user = await userinfo(fresh.access.token);
+        setAccess(fresh.access);
+        await save({ refreshToken: fresh.refreshToken, user });
+        return undefined;
+      } catch (e) {
+        return (e as Error).message;
+      }
+    },
+
+    async signOut() {
+      const held = session;
+      setAccess(undefined);
+      await save(null);
+      // Revokes this phone's refresh token only: other devices stay signed in.
+      if (held)
+        await fetch(`${API}/oauth/token/revoke`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ client_id: CLIENT_ID, token: held.refreshToken }).toString(),
+        }).catch(() => undefined);
+    },
+
+    async accessToken() {
+      if (access && access.expiresAt - 60_000 > Date.now()) return access.token;
+      if (!session) return undefined;
+      try {
+        const fresh = await token({ grant_type: "refresh_token", refresh_token: session.refreshToken });
+        setAccess(fresh.access);
+        if (fresh.refreshToken) await save({ ...session, refreshToken: fresh.refreshToken });
+        return fresh.access.token;
+      } catch (e) {
+        // Revoked, such as by signing out everywhere: signed out here too.
+        if (e instanceof ClerkError && e.revoked) await save(null);
+        return undefined;
+      }
+    },
+  };
+  return <AccountContext value={value}>{children}</AccountContext>;
+}
+
+export function SignIn() {
+  const c = useColors();
+  const { signIn } = useAccount();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const go = async (create: boolean) => {
+    setBusy(true);
+    setError(undefined);
+    setError(await signIn(create));
+    setBusy(false);
+  };
   return (
-    <ClerkProvider publishableKey={PUBLISHABLE_KEY} tokenCache={tokenCache}>
-      {children}
-    </ClerkProvider>
+    <View style={[styles.page, { backgroundColor: c.background }]}>
+      <View style={{ flex: 1, justifyContent: "center", gap: 14 }}>
+        <Mark size={56} />
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginTop: 10 }}>
+          <Text style={{ fontFamily: font.brand, fontSize: 34, color: c.foreground }}>Parallax</Text>
+          <NightlyBadge />
+        </View>
+        <T muted style={{ fontSize: 17, lineHeight: 25 }}>
+          Every thread on every one of your computers, from your phone.
+        </T>
+      </View>
+      <View style={{ gap: 12 }}>
+        <Button
+          label={busy ? "Signing in…" : "Sign in"}
+          primary
+          disabled={busy}
+          onPress={() => void go(false)}
+        />
+        <Pressable
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={() => void go(true)}
+          style={{ alignSelf: "center", padding: 10 }}
+        >
+          <T style={{ fontSize: 15, color: c.accent }}>Create an account</T>
+        </Pressable>
+        {error && (
+          <T alert style={{ color: c.danger, fontSize: 14, textAlign: "center" }}>
+            {error}
+          </T>
+        )}
+      </View>
+    </View>
   );
 }
 
-type Step = "signIn" | "signUp" | "verify";
-type Answer = Promise<{ error: { message: string } | null }>;
-
-export function Account() {
-  const c = useColors();
-  const { user } = useUser();
-  const { signOut } = useClerk();
-  const { signIn } = useSignIn();
-  const { signUp } = useSignUp();
-  const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<Step>("signIn");
-  const [form, setForm] = useState({ first: "", last: "", email: "", password: "", code: "" });
-  const [busy, setBusy] = useState(false);
-  // Signing in or up finishes the sheet, and a sign-out or deletion starts it over.
-  const signedIn = !!user;
-  useEffect(() => {
-    setOpen(false);
-    setStep("signIn");
-  }, [signedIn]);
-  const [error, setError] = useState<string>();
-
-  /** Runs Clerk's steps in order, stopping at the first error, which it shows. */
-  async function run(...steps: (() => Answer)[]) {
-    setBusy(true);
-    setError(undefined);
-    try {
-      for (const step of steps) {
-        const { error } = await step();
-        if (error) return setError(error.message);
-      }
-      return true;
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const input = [styles.input, { color: c.foreground, borderColor: c.border }];
-  const field = (key: keyof typeof form, label: string, secure = false) => (
-    <TextInput
-      key={key}
-      accessibilityLabel={label}
-      placeholder={label}
-      placeholderTextColor={c.faintForeground}
-      onChangeText={(value) => setForm((f) => ({ ...f, [key]: value }))}
-      autoCapitalize={key === "first" || key === "last" ? "words" : "none"}
-      autoCorrect={false}
-      secureTextEntry={secure}
-      keyboardType={key === "email" ? "email-address" : key === "code" ? "number-pad" : "default"}
-      textContentType={key === "code" ? "oneTimeCode" : key === "password" ? "password" : undefined}
-      style={input}
-    />
-  );
-
-  if (user)
-    return (
-      <View style={styles.box}>
-        <T>Signed in as {user.primaryEmailAddress?.emailAddress}</T>
-        <View style={styles.row}>
-          <Button label="Sign out" onPress={() => void signOut()} />
-          <Button
-            label="Delete account"
-            onPress={() =>
-              Alert.alert("Delete your Parallax account?", "This can't be undone.", [
-                { text: "Cancel", style: "cancel" },
-                { text: "Delete", style: "destructive", onPress: () => void user.delete() },
-              ])
-            }
-          />
-        </View>
-      </View>
-    );
-
-  const { first, last, email, password, code } = form;
-  // Closing starts over, rather than reopening on a code that may have expired.
-  const close = () => {
-    setOpen(false);
-    setStep("signIn");
-  };
+/** Settings' account section: who's signed in, their account page, and Sign out. */
+export function AccountSection() {
+  const { user, signOut } = useAccount();
+  const name = [user?.given_name, user?.family_name].filter(Boolean).join(" ");
   return (
-    <>
-      <Button label="Sign in" onPress={() => setOpen(true)} />
-      <Modal
-        visible={open}
-        presentationStyle="pageSheet"
-        animationType="slide"
-        onRequestClose={close}
-      >
-        <View style={[styles.sheet, { backgroundColor: c.background }]}>
-          <View style={styles.row}>
-            <T medium style={{ fontSize: 20, flex: 1 }}>
-              Parallax account
-            </T>
-            <Pressable accessibilityRole="button" onPress={close} hitSlop={12}>
-              <T style={{ color: c.accent }}>Close</T>
-            </Pressable>
-          </View>
-          {step === "signUp" && field("first", "First name")}
-          {step === "signUp" && field("last", "Last name")}
-          {step !== "verify" && field("email", "Email")}
-          {step !== "verify" && field("password", "Password", true)}
-          {step === "verify" && (
-            <>
-              <T muted>Enter the code Clerk sent to {email}.</T>
-              {field("code", "Code")}
-            </>
-          )}
-          {step === "signIn" && (
-            <Button
-              label="Continue"
-              primary
-              disabled={busy}
-              onPress={() =>
-                void run(
-                  () => signIn.password({ identifier: email.trim(), password }),
-                  () => signIn.finalize(),
-                )
-              }
-            />
-          )}
-          {step === "signUp" && (
-            <Button
-              label="Create account"
-              primary
-              disabled={busy}
-              onPress={() =>
-                void run(
-                  () =>
-                    signUp.create({
-                      emailAddress: email.trim(),
-                      password,
-                      firstName: first.trim(),
-                      lastName: last.trim(),
-                    }),
-                  () => signUp.verifications.sendEmailCode(),
-                ).then((ok) => ok && setStep("verify"))
-              }
-            />
-          )}
-          {step === "verify" && (
-            <Button
-              label="Verify"
-              primary
-              disabled={busy}
-              onPress={() =>
-                void run(
-                  () => signUp.verifications.verifyEmailCode({ code: code.trim() }),
-                  () => signUp.finalize(),
-                )
-              }
-            />
-          )}
-          {step !== "verify" && (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => setStep(step === "signIn" ? "signUp" : "signIn")}
-            >
-              <T style={{ fontSize: 14, color: c.accent }}>
-                {step === "signIn" ? "Create an account" : "I have an account"}
-              </T>
-            </Pressable>
-          )}
-          {error && (
-            <T alert style={{ color: c.danger, fontSize: 13 }}>
-              {error}
-            </T>
-          )}
-        </View>
-      </Modal>
-    </>
+    <Section title="Parallax account">
+      <Row
+        icon={UserRound}
+        title={name || "Signed in"}
+        detail={user?.email}
+        chevron
+        onPress={() => void Linking.openURL(`${PORTAL}/user`)}
+      />
+      <Row
+        icon={LockKeyhole}
+        title="Security and account deletion"
+        chevron
+        onPress={() => void Linking.openURL(`${PORTAL}/user/security`)}
+      />
+      <Row
+        icon={LogOut}
+        title="Sign out"
+        destructive
+        last
+        onPress={() =>
+          Alert.alert("Sign out of Parallax?", "Your computers stay on this phone.", [
+            { text: "Cancel", style: "cancel" },
+            { text: "Sign out", style: "destructive", onPress: () => void signOut() },
+          ])
+        }
+      />
+    </Section>
   );
 }
 
 const styles = StyleSheet.create({
-  box: { gap: 10 },
-  sheet: { flex: 1, padding: 24, gap: 10 },
-  row: { flexDirection: "row", gap: 8 },
-  input: {
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontFamily: font.regular,
-    fontSize: 16,
-  },
+  page: { flex: 1, padding: 28, paddingTop: 80, paddingBottom: 56 },
 });
