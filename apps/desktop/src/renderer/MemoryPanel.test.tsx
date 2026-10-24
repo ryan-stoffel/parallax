@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import type { MemoryFile, MemoryScope } from "../protocol/generated/protocol";
-import { MemoryPanel, nextScope, savedAs, sectionsOf, type Memory } from "./MemoryPanel";
+import { MemoryPanel, nextScope, savedAs, sectionsOf, sourceOf, type Memory } from "./MemoryPanel";
 import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -148,6 +148,15 @@ const click = async (text: string) => {
   await act(async () => button(text)!.click());
   await settle();
 };
+/** The open editor for the file titled `title`. */
+const editor = (title: string) =>
+  document.querySelector<HTMLTextAreaElement>(`textarea[aria-label="Edit ${title}"]`);
+/** Replaces a text box's text, as typing does. */
+const typeInto = (box: HTMLTextAreaElement, text: string) =>
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(box, text);
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
 
@@ -160,21 +169,55 @@ test("watches the Repo and Project folders for context.changed, without their ru
 });
 
 test("entries show when an agent last read them, and the ones to review get their own section", async () => {
+  vi.useFakeTimers({ now: Date.parse("2026-10-21T12:00:00Z"), toFake: ["Date"] });
   lists = {
     "p-1": [
       file("memory/decision/vitest.md", { title: "Use Vitest", lastUsed: "2026-10-20" }),
+      file("memory/decision/sqlite.md", { title: "Keep SQLite", lastUsed: "2026-10-02" }),
       file("memory/gotcha/old.md", { title: "Old trap", date: "2026-01-02", unused: true }),
     ],
   };
   await render();
-  const review = document.querySelector('[aria-label="Review"]')?.textContent;
+  const review = document.querySelector('[aria-label="Unused or stale"]')?.textContent;
   expect(review).toContain("Old trap");
-  expect(review).toContain("Not used yet");
+  expect(review).toContain("Project · not used since Jan 2");
   expect(review).not.toContain("Use Vitest");
-  expect(document.querySelector('[aria-label="Decisions"]')?.textContent).toContain(
-    "Last used 2026-10-20",
-  );
+  const decisions = document.querySelector('[aria-label="Decisions"]')?.textContent;
+  expect(decisions).toContain("Last used yesterday");
+  expect(decisions).toContain("Last used Oct 2");
   expect(document.querySelector('[aria-label="Gotchas"]')).toBeNull();
+  vi.useRealTimers();
+});
+
+test("a row names where it came from: a thread's title for its run, else the file it names", () => {
+  const titles = { "t-1": "Move to Vitest" };
+  const from = (source?: string) => sourceOf(memory(project, "memory/x.md", { source }), titles);
+  expect(from("thread t-1")).toBe("Move to Vitest");
+  expect(from("run t-2")).toBeUndefined();
+  expect(from("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b")).toBeUndefined();
+  expect(from("user")).toBeUndefined();
+  expect(from("AGENTS.md")).toBe("AGENTS.md");
+});
+
+test("one to review is kept by writing it over itself, or retired", async () => {
+  // PLX-407's stale flag puts it up for review (PLX-943).
+  lists = { "p-1": [{ ...sqlite(), title: "One writer", stale: true } as MemoryFile] };
+  bodies = { "memory/decision/sqlite.md": "One writer." };
+  await render();
+  const review = document.querySelector('[aria-label="Unused or stale"]')!;
+  expect(review.textContent).toContain("Decision · Project · names a file that's gone");
+  await click("Keep");
+  expect(calls("memory/write")).toEqual([
+    {
+      scope: project,
+      path: "memory/decision/sqlite.md",
+      content: "One writer.",
+      title: "One writer",
+      source: "user",
+    },
+  ]);
+  await click("Retire");
+  expect(calls("memory/delete")).toEqual([{ scope: project, path: "memory/decision/sqlite.md" }]);
 });
 
 test("a proposal saves as an entry at its folder's scope, keeping its title and source", async () => {
@@ -190,10 +233,11 @@ test("a proposal saves as an entry at its folder's scope, keeping its title and 
   };
   bodies = { "proposals/use-vitest.md": "Tests run on Vitest." };
   await render();
-  expect(document.querySelector('[aria-label="Proposals"]')?.textContent).toContain("Use Vitest");
+  expect(document.querySelector('[aria-label="To review"]')?.textContent).toContain(
+    "Use VitestConvention · Repo",
+  );
 
-  await click("Use Vitest");
-  await click("Save");
+  await click("Accept");
   expect(calls("memory/write")).toEqual([
     {
       scope: repo,
@@ -220,8 +264,7 @@ test("a coordinator's proposal saves at the scope it names", async () => {
   };
   bodies = { "proposals/use-vitest.md": "Tests run on Vitest." };
   await render();
-  await click("Use Vitest");
-  await click("Save");
+  await click("Accept");
   expect(calls("memory/write")).toEqual([
     {
       scope: repo,
@@ -232,6 +275,65 @@ test("a coordinator's proposal saves at the scope it names", async () => {
     },
   ]);
   expect(calls("memory/delete")).toEqual([{ scope: project, path: "proposals/use-vitest.md" }]);
+});
+
+test("an edited proposal saves its new text, then goes", async () => {
+  lists = {
+    "r-1": [file("proposals/use-vitest.md", { kind: "convention", title: "Use Vitest" })],
+  };
+  bodies = { "proposals/use-vitest.md": "Tests run on Vitest." };
+  await render();
+  await click("Edit");
+  expect(editor("Use Vitest")!.value).toBe("Tests run on Vitest.");
+  typeInto(editor("Use Vitest")!, "Tests run on Vitest 4.");
+  await click("Save");
+  expect(calls("memory/write")).toEqual([
+    {
+      scope: repo,
+      path: "memory/convention/use-vitest.md",
+      content: "Tests run on Vitest 4.",
+      title: "Use Vitest",
+    },
+  ]);
+  expect(calls("memory/delete")).toEqual([{ scope: repo, path: "proposals/use-vitest.md" }]);
+});
+
+test("a failed save of an edited proposal keeps its editor and text, and says why", async () => {
+  lists = {
+    "r-1": [file("proposals/use-vitest.md", { kind: "convention", title: "Use Vitest" })],
+  };
+  bodies = { "proposals/use-vitest.md": "Tests run on Vitest." };
+  failing = new Set(["memory/write"]);
+  await render();
+  await click("Edit");
+  typeInto(editor("Use Vitest")!, "Tests run on Vitest 4.");
+  await click("Save");
+  expect(notice()).toBe("memory/write failed");
+  expect(editor("Use Vitest")!.value).toBe("Tests run on Vitest 4.");
+  expect(calls("memory/delete")).toEqual([]);
+});
+
+test("an edited proposal with nowhere to save says so, and the notice stays", async () => {
+  lists = { "r-1": [file("proposals/loose.md", { title: "Loose note" })] };
+  await render();
+  await click("Edit");
+  await click("Save");
+  expect(notice()).toBe("This proposal has no kind.");
+  expect(editor("Loose note")).not.toBeNull();
+});
+
+test("Escape cancels an edit, and focus goes back to its Edit button", async () => {
+  lists = { "p-1": [sqlite()] };
+  await render();
+  await click("Keep SQLite");
+  await click("Edit");
+  const box = editor("Keep SQLite")!;
+  await act(async () => {
+    box.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  await settle();
+  expect(editor("Keep SQLite")).toBeNull();
+  expect(document.activeElement).toBe(button("Edit"));
 });
 
 test("savedAs: You, the folder without a repo entry, the entry it replaces, and a coordinator's brief", () => {
@@ -245,23 +347,22 @@ test("savedAs: You, the folder without a repo entry, the entry it replaces, and 
   expect(savedAs(proposal({ writer: "thread t-1" }))).toBeUndefined();
 });
 
-test("an entry shows its scope, source, and stale mark, and promotes to the next scope", async () => {
+test("an entry shows its scope and source, and promotes to the next scope", async () => {
   lists = {
     "p-1": [
-      file("memory/decision/sqlite.md", { kind: "decision", title: "Keep SQLite", source: "user" }),
+      file("memory/decision/sqlite.md", {
+        kind: "decision",
+        title: "Keep SQLite",
+        source: "AGENTS.md",
+      }),
     ],
   };
-  // PLX-407's flag, which puts it in Review (PLX-943).
-  (lists["p-1"]![0] as Memory).stale = true;
   bodies = { "memory/decision/sqlite.md": "One writer." };
   await render();
-  const decisions = document.querySelector('[aria-label="Review"]')!;
-  expect(decisions.textContent).toContain("Keep SQLite");
-  expect(decisions.textContent).toContain("Stale");
-  expect(decisions.textContent).toContain("Project");
+  const decisions = document.querySelector('[aria-label="Decisions"]')!;
+  expect(decisions.textContent).toContain("Keep SQLiteProject · from AGENTS.mdNot used yet");
 
   await click("Keep SQLite");
-  expect(decisions.textContent).toContain("From user");
   await click("Promote to Repo");
   expect(calls("memory/write")).toEqual([
     {
@@ -269,7 +370,7 @@ test("an entry shows its scope, source, and stale mark, and promotes to the next
       path: "memory/decision/sqlite.md",
       content: "One writer.",
       title: "Keep SQLite",
-      source: "user",
+      source: "AGENTS.md",
     },
   ]);
   expect(calls("memory/delete")).toEqual([{ scope: project, path: "memory/decision/sqlite.md" }]);

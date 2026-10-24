@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { CircleAlert, Clock, FileText, Lightbulb } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import { outlineButton, quietButton } from "./Approval";
 import { describeError } from "./errors";
+import { dayLabel } from "./locale";
 import { dismiss, notify } from "./notifications";
 
 /**
@@ -13,11 +15,11 @@ import { dismiss, notify } from "./notifications";
 export type Memory = MemoryFile & { scope: MemoryScope; stale?: boolean };
 
 /** The entry groups, in 0044's order. A kind a newer plxd adds isn't shown. */
-export const kindGroups: { kind: MemoryKind; label: string }[] = [
-  { kind: "preference", label: "Preferences" },
-  { kind: "convention", label: "Conventions" },
-  { kind: "decision", label: "Decisions" },
-  { kind: "gotcha", label: "Gotchas" },
+export const kindGroups: { kind: MemoryKind; label: string; one: string }[] = [
+  { kind: "preference", label: "Preferences", one: "Preference" },
+  { kind: "convention", label: "Conventions", one: "Convention" },
+  { kind: "decision", label: "Decisions", one: "Decision" },
+  { kind: "gotcha", label: "Gotchas", one: "Gotcha" },
 ];
 
 const scopeLabels: Record<MemoryScope["kind"], string> = {
@@ -71,6 +73,35 @@ export const changeMessage = (text: string) =>
   `From the Memory tab, the user asks for this change to memory:\n\n> ${text.split("\n").join("\n> ")}\n\nFind the entries it affects, and propose your rewrite for the user to save or discard there, rather than writing it yourself.`;
 
 const fileName = (path: string) => path.slice(path.lastIndexOf("/") + 1).replace(/\.md$/, "");
+
+/** "today", "yesterday", or "Oct 20": the day of `at`, in milliseconds. */
+const dayWords = (at: number, now = Date.now()) => {
+  const label = dayLabel(at, now, { month: "short", day: "numeric" });
+  return label === "Today" || label === "Yesterday" ? label.toLowerCase() : label;
+};
+
+/** The day of `date`, `YYYY-MM-DD` as an entry's header gives it, in words (`dayWords`). */
+export function dayOf(date: string, now = Date.now()): string {
+  const [y, m, d] = date.split("-").map(Number);
+  if (!y || !m || !d) return date;
+  return dayWords(new Date(y, m - 1, d).getTime(), now);
+}
+
+/**
+ * Where a file came from, in words: the title of the thread whose run id its source names, or the
+ * file or note it names. None for the user, or a run with no title here.
+ */
+export function sourceOf(
+  file: Memory,
+  titles: Readonly<Record<string, string>> = {},
+): string | undefined {
+  const source = file.source;
+  if (!source || source === "user") return undefined;
+  const id = source.replace(/^(?:run|thread|coordinator) /, "");
+  if (titles[id]) return titles[id];
+  const runId = id !== source || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id);
+  return runId ? undefined : source;
+}
 
 /** Where a file goes: Promote's next scope, or a proposal's entry. */
 interface Target {
@@ -129,18 +160,28 @@ function memoryCalls(hostId: string) {
     return "error" in answer ? describeError(answer.error) : undefined;
   };
   /**
-   * Writes `file`'s body at `to`, then deletes it, but only once the write succeeds. A failed
-   * delete says the write, `done`, happened.
+   * Writes `content`, or else `file`'s body, at `to`, then deletes `file`, but only once the write
+   * succeeds. A failed delete says the write, `done`, happened.
    */
-  const move = async (file: Memory, to: Target, done: string): Result => {
-    const body = await read(file);
-    if (typeof body === "string") return body;
-    const failed = await write(to.scope, to.path, body.content, file);
+  const move = async (file: Memory, to: Target, done: string, content?: string): Result => {
+    let text = content;
+    if (text === undefined) {
+      const body = await read(file);
+      if (typeof body === "string") return body;
+      text = body.content;
+    }
+    const failed = await write(to.scope, to.path, text, file);
     if (failed) return failed;
     const left = await remove(file);
     return left && `${done}, but couldn't remove it from ${scopeLabels[file.scope.kind]}: ${left}`;
   };
-  return { read, write, remove, move };
+  /** Writes an entry over itself, which dates it today, so it leaves the review list. */
+  const keep = async (file: Memory): Result => {
+    const body = await read(file);
+    if (typeof body === "string") return body;
+    return write(file.scope, file.path, body.content, file);
+  };
+  return { read, write, remove, move, keep };
 }
 
 /**
@@ -201,20 +242,77 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
   return { files, error, reload: () => setGeneration((g) => g + 1) };
 }
 
+// A section's heading, and its rows grouped in one rounded list with hairlines between them, as
+// the Project tab's are.
+const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
+
 /**
- * The side panel's Memory view (0044) for a Project, or for a thread's repository. It shows the
- * Project's brief, then entries to review, then the rest grouped Preferences, Conventions,
- * Decisions, and Gotchas, then
- * knowledge, from the You, Repo, and Project scopes; then the proposals waiting for the user. Each
- * opens to its text, to edit, promote, or delete it, or for a proposal to save or discard it.
- * Show it only on a plxd with `memory`, and key it by host and folder. `start` and `footer` are
- * the Knowledge view's: what it shows before the list, given the listed files, and the box under
- * it.
+ * A section's heading: its label and how many rows it has, then at its end a fact and `children`,
+ * such as a control for the section.
+ */
+function Heading({
+  label,
+  count,
+  end,
+  children,
+}: {
+  label: string;
+  count?: number;
+  end?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex items-baseline gap-2 px-1 pt-6 pb-2">
+      <h3 className="text-[11px] font-medium tracking-[0.08em] text-faint-foreground uppercase">
+        {label}
+        {count !== undefined && (
+          <span className="ml-1.5 tracking-normal tabular-nums">{count}</span>
+        )}
+      </h3>
+      {(end || children) && (
+        <span className="ml-auto flex items-baseline gap-2 text-[11.5px] text-faint-foreground">
+          {end}
+          {children}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Editing state for an editor that returns focus to the control that opened it, the `opener`,
+ * once it closes.
+ */
+function useEditing() {
+  const [editing, setEditing] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
+  useEffect(() => {
+    if (editing || !refocus.current) return;
+    refocus.current = false;
+    opener.current?.focus();
+  }, [editing]);
+  const close = () => {
+    refocus.current = true;
+    setEditing(false);
+  };
+  return { editing, open: () => setEditing(true), close, opener };
+}
+
+/**
+ * The side panel's Memory view (0044, 0083) for a Project, or for a thread's repository, from the
+ * You, Repo, and Project scopes: the proposals waiting for the user first, then the Project's
+ * brief in place, the entries by kind, the ones to review (unused for 60 days, or stale), and
+ * knowledge documents. Every row is a mark, a title, one muted line, and one thing at its end, and
+ * opens to its text and actions. Show it only on a plxd with `memory`, and key it by host and
+ * folder. `titles` names the threads a source's run id points at. `start` and `footer` are the
+ * Knowledge view's: what it shows before the list, given the listed files, and the box under it.
  */
 export function MemoryPanel({
   hostId,
   project,
   repo,
+  titles,
   start,
   footer,
 }: {
@@ -223,6 +321,8 @@ export function MemoryPanel({
   project?: string;
   /** The repo entry whose memory is the Repo scope, if there is one. */
   repo?: string;
+  /** Threads' titles by run id. */
+  titles?: Readonly<Record<string, string>>;
   /** Before everything, scrolling with it, given the listed files (none until they load). */
   start?: (files: readonly Memory[]) => ReactNode;
   /** Under the list, such as a box that sends a change to the coordinator. */
@@ -233,77 +333,76 @@ export function MemoryPanel({
   const sections = files && sectionsOf(files);
   const taken = ({ scope, path }: Target) =>
     !!files?.some((f) => f.path === path && sameScope(f.scope, scope));
-  const row = (file: Memory, title?: string) => (
+  const row = (file: Memory, kind: RowKind) => (
     <MemoryRow
       key={`${file.scope.kind}/${file.path}`}
       file={file}
-      title={title}
+      kind={kind}
+      titles={titles}
       calls={calls}
-      next={file.path === "brief.md" ? undefined : nextScope(file.scope, repo)}
+      next={nextScope(file.scope, repo)}
       repo={repo}
       taken={taken}
       onChanged={reload}
     />
   );
+  const entries = sections?.entries.filter((g) => g.files.length > 0) ?? [];
   const empty =
     sections &&
     !sections.brief &&
     sections.review.length === 0 &&
-    sections.entries.every((g) => g.files.length === 0) &&
+    entries.length === 0 &&
     sections.knowledge.length === 0 &&
     sections.proposals.length === 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
         {start?.(files ?? [])}
-        {project && (
-          <section aria-label="Brief">
-            <h3 className={sectionHeading}>Brief</h3>
-            {sections?.brief ? (
-              <ul>{row(sections.brief, "Goal, scope, and constraints")}</ul>
-            ) : (
-              <BriefStart project={project} calls={calls} onChanged={reload} />
-            )}
+        {sections && sections.proposals.length > 0 && (
+          <section aria-label="To review">
+            <Heading label="To review" count={sections.proposals.length} />
+            <ul className={group}>{sections.proposals.map((f) => row(f, "proposal"))}</ul>
+          </section>
+        )}
+        {project && sections && (
+          <Brief project={project} file={sections.brief} calls={calls} onChanged={reload} />
+        )}
+        {entries.length > 0 && (
+          <section aria-label="Memory">
+            <Heading label="Memory" />
+            {entries.map((g, i) => (
+              <section key={g.kind} aria-label={g.label} className={i > 0 ? "pt-4" : undefined}>
+                <h4 className="flex items-baseline px-1 pb-2 text-[12px] text-muted-foreground">
+                  {g.label}
+                  <span className="ml-1.5 text-faint-foreground tabular-nums">
+                    {g.files.length}
+                  </span>
+                </h4>
+                <ul className={group}>{g.files.map((f) => row(f, "entry"))}</ul>
+              </section>
+            ))}
           </section>
         )}
         {sections && sections.review.length > 0 && (
-          <section aria-label="Review">
-            <h3 className={sectionHeading}>Review</h3>
-            <p className="px-2.5 pb-1 text-[11.5px] text-faint-foreground">
-              Stale, or unused by agents for 60 days. Edit or delete what no longer holds.
-            </p>
-            <ul>{sections.review.map((f) => row(f))}</ul>
+          <section aria-label="Unused or stale">
+            <Heading label="Unused or stale" count={sections.review.length} />
+            <ul className={group}>{sections.review.map((f) => row(f, "review"))}</ul>
           </section>
-        )}
-        {sections?.entries.map(
-          (g) =>
-            g.files.length > 0 && (
-              <section key={g.kind} aria-label={g.label}>
-                <h3 className={sectionHeading}>{g.label}</h3>
-                <ul>{g.files.map((f) => row(f))}</ul>
-              </section>
-            ),
         )}
         {sections && sections.knowledge.length > 0 && (
-          <section aria-label="Knowledge">
-            <h3 className={sectionHeading}>Knowledge</h3>
-            <ul>{sections.knowledge.map((f) => row(f, fileName(f.path)))}</ul>
-          </section>
-        )}
-        {sections && sections.proposals.length > 0 && (
-          <section aria-label="Proposals">
-            <h3 className={sectionHeading}>Proposals</h3>
-            <ul>{sections.proposals.map((f) => row(f))}</ul>
+          <section aria-label="Documents">
+            <Heading label="Documents" count={sections.knowledge.length} />
+            <ul className={group}>{sections.knowledge.map((f) => row(f, "document"))}</ul>
           </section>
         )}
         {empty && (
-          <p className="px-2.5 py-2 text-[12.5px] text-muted-foreground">
+          <p className="px-1 pt-6 text-[12.5px] text-muted-foreground">
             No memory yet. Agents propose lasting facts as they work.
           </p>
         )}
         {error && (
-          <p role="alert" className="px-2.5 py-2 text-[12.5px] text-danger">
+          <p role="alert" className="px-1 pt-6 text-[12.5px] text-danger">
             {error}
           </p>
         )}
@@ -313,62 +412,118 @@ export function MemoryPanel({
   );
 }
 
-const sectionHeading = "px-2.5 pt-3 pb-1 text-[12.5px] text-muted-foreground";
-const badge = "shrink-0 text-[11.5px] text-faint-foreground";
 const field =
   "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
 
-/** A Project with no brief yet: a button that opens an empty one to write. */
-function BriefStart({
+/**
+ * The Project's brief, in place: its text, under a heading with the day it was edited and an Edit
+ * button. With none yet, a button opens an empty one to write.
+ */
+function Brief({
   project,
+  file,
   calls,
   onChanged,
 }: {
   project: string;
+  file?: Memory;
   calls: ReturnType<typeof memoryCalls>;
   onChanged: () => void;
 }) {
-  const [writing, setWriting] = useState(false);
-  if (!writing)
-    return (
-      <button
-        type="button"
-        onClick={() => setWriting(true)}
-        className="px-2.5 py-1 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-      >
-        Write the Project's goal, scope, and constraints
-      </button>
-    );
-  const brief: Memory = {
-    scope: { kind: "project", id: project },
-    path: "brief.md",
-    size: 0,
-    modifiedAt: "",
-  };
+  const [content, setContent] = useState<string>();
+  const [error, setError] = useState<string>();
+  const { editing, open, close, opener } = useEditing();
+  // Read again whenever the listed file changes, since it's a new object for each list.
+  useEffect(() => {
+    if (!file) return;
+    let stopped = false;
+    void calls.read(file).then((read) => {
+      if (stopped) return;
+      if (typeof read === "string") return setError(read);
+      setContent(read.content);
+      setError(undefined);
+    });
+    return () => {
+      stopped = true;
+    };
+  }, [file, calls]);
+  const scope: MemoryScope = { kind: "project", id: project };
+  const brief: Memory = file ?? { scope, path: "brief.md", size: 0, modifiedAt: "" };
+  const edited = file && `Edited ${dayWords(Date.parse(file.modifiedAt))}`;
+
   return (
-    <Editor
-      label="Brief"
-      initial=""
-      onCancel={() => setWriting(false)}
-      onSave={async (content) => {
-        const failed = await calls.write(brief.scope, brief.path, content, brief);
-        if (!failed) onChanged();
-        return failed;
-      }}
-    />
+    <section aria-label="Brief">
+      <Heading label="Brief" end={edited}>
+        {file && !editing && (
+          <button
+            ref={opener}
+            type="button"
+            aria-label="Edit the brief"
+            disabled={content === undefined}
+            onClick={open}
+            className="rounded px-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+          >
+            Edit
+          </button>
+        )}
+      </Heading>
+      {editing ? (
+        <Editor
+          label="Brief"
+          initial={content ?? ""}
+          onCancel={close}
+          onSave={async (text) => {
+            const failed = await calls.write(scope, "brief.md", text, brief);
+            if (!failed) {
+              close();
+              onChanged();
+            }
+            return failed;
+          }}
+        />
+      ) : file ? (
+        <div className="context-doc px-1 text-[13px]">
+          {content !== undefined && <MarkdownText text={content} />}
+        </div>
+      ) : (
+        <button
+          ref={opener}
+          type="button"
+          onClick={() => {
+            setContent("");
+            open();
+          }}
+          className="px-1 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Write the Project's goal, scope, and constraints
+        </button>
+      )}
+      {error && (
+        <p role="alert" className="px-1 pt-1 text-[12px] text-danger">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 
+/** What a row is: a proposal, an entry, one to review, or a knowledge document. */
+type RowKind = "proposal" | "entry" | "review" | "document";
+
 /**
- * One memory file: its title, stale mark, last use for an entry, scope, and source, opening to its
- * text and actions.
- * The brief only edits. A proposal saves or discards. Promote and Save ask
- * before replacing a file already at their target. Entries and proposals show as plain text, so an
- * agent's link can't hide where it goes.
+ * One memory file as a row: a mark, its title, one muted line (its kind, scope, and source, or
+ * why it's up for review), and its end (when an agent last read an entry, or when a document
+ * changed). A decision waits under the line: a proposal's Accept, Edit, and Dismiss, or Keep and
+ * Retire for one to review, where Keep writes it over itself. A click opens its text and Edit, and
+ * for an entry or document Promote and Delete. Promote and Accept ask before replacing a file
+ * already at their target. An edited proposal saves its new text there, its editor staying open
+ * until that succeeds. Entries and proposals show as plain text, so an agent's link can't hide
+ * where it goes.
  */
 function MemoryRow({
   file,
-  title = file.title ?? fileName(file.path),
+  kind,
+  titles,
   calls,
   next,
   repo,
@@ -376,7 +531,8 @@ function MemoryRow({
   onChanged,
 }: {
   file: Memory;
-  title?: string;
+  kind: RowKind;
+  titles?: Readonly<Record<string, string>>;
   calls: ReturnType<typeof memoryCalls>;
   /** Where Promote moves it, or absent for none. */
   next?: MemoryScope;
@@ -386,18 +542,16 @@ function MemoryRow({
   taken: (target: Target) => boolean;
   onChanged: () => void;
 }) {
-  const brief = file.path === "brief.md";
-  const proposal = file.path.startsWith("proposals/");
-  const entry = file.path.startsWith("memory/");
-  const plain = proposal || entry;
+  const proposal = kind === "proposal";
+  const title = kind === "document" ? fileName(file.path) : (file.title ?? fileName(file.path));
   const [open, setOpen] = useState(false);
   const [content, setContent] = useState<string>();
-  const [editing, setEditing] = useState(false);
+  const { editing, open: startEditing, close: stopEditing, opener } = useEditing();
   const [busy, setBusy] = useState(false);
   // Why the file couldn't be read, shown in its place.
   const [error, setError] = useState<string>();
-  // A Promote or Save waiting on Replace, since its target is taken.
-  const [replacing, setReplacing] = useState<{ to: Target; done: string }>();
+  // A move waiting on Replace, since its target is taken, with the text an edit gave it.
+  const [replacing, setReplacing] = useState<{ to: Target; done: string; content?: string }>();
 
   // Read again whenever the listed file changes, since it's a new object for each list.
   useEffect(() => {
@@ -421,161 +575,262 @@ function MemoryRow({
     if (failed) changeFailed(failed);
     else dismiss("memory");
     onChanged();
+    return failed;
   };
-  const move = (to: Target | undefined, done: string) => {
+  const move = (to: Target | undefined, done: string, text?: string) => {
     if (!to) return changeFailed("This proposal has no kind.");
-    if (taken(to)) return setReplacing({ to, done });
-    void act(() => calls.move(file, to, done));
+    if (taken(to)) return setReplacing({ to, done, content: text });
+    void act(() => calls.move(file, to, done, text));
   };
 
-  return (
-    <li className="list-none rounded-lg hover:bg-hover/50">
+  const kindName = kindGroups.find((g) => g.kind === file.kind)?.one;
+  const scope = proposal ? (savedAs(file, repo)?.scope ?? file.scope) : file.scope;
+  const from = sourceOf(file, titles);
+  const why = file.stale
+    ? "names a file that's gone"
+    : file.lastUsed
+      ? `last used ${dayOf(file.lastUsed)}`
+      : file.date
+        ? `not used since ${dayOf(file.date)}`
+        : "not used yet";
+  const line = [
+    proposal ? (kindName ?? "Brief") : kind === "review" ? kindName : undefined,
+    scopeLabels[scope.kind],
+    kind === "review" ? why : from && `from ${from}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const mark = {
+    proposal: <Lightbulb className="text-warning" />,
+    review: file.stale ? (
+      <CircleAlert className="text-warning" />
+    ) : (
+      <Clock className="text-faint-foreground" />
+    ),
+    document: <FileText className="text-faint-foreground" />,
+    entry: undefined,
+  }[kind];
+  const end =
+    kind === "entry"
+      ? file.lastUsed
+        ? `Last used ${dayOf(file.lastUsed)}`
+        : "Not used yet"
+      : kind === "document"
+        ? dayLabel(Date.parse(file.modifiedAt), Date.now(), { month: "short", day: "numeric" })
+        : undefined;
+
+  // An edit stays open under it until the move succeeds, so a failure keeps the edited text.
+  const replace = replacing && (
+    <div role="group" aria-label="Replace" className="mt-2">
+      <p className="text-[12.5px] text-muted-foreground">
+        {scopeLabels[replacing.to.scope.kind]} already has {replacing.to.path}. Replace it with this
+        one?
+      </p>
+      <div className="mt-1 flex gap-1.5">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            const { to, done, content: text } = replacing;
+            setReplacing(undefined);
+            const failed = await act(() => calls.move(file, to, done, text));
+            if (!failed && editing) stopEditing();
+          }}
+          className={outlineButton}
+        >
+          Replace
+        </button>
+        <button type="button" onClick={() => setReplacing(undefined)} className={quietButton}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+  const actions = replacing ? (
+    replace
+  ) : proposal ? (
+    <div className="mt-2 flex flex-wrap gap-1.5">
       <button
         type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left"
+        disabled={busy}
+        onClick={() => move(savedAs(file, repo), "Saved")}
+        className={outlineButton}
       >
-        <span className="min-w-0 flex-1 truncate text-[13px]">{title}</span>
-        {file.stale && (
-          <span className={`${badge} text-warning`} title="It names a file that's gone">
-            Stale
-          </span>
-        )}
-        {entry && (
-          <span className={badge} title="When an agent last read it">
-            {file.lastUsed ? `Last used ${file.lastUsed}` : "Not used yet"}
-          </span>
-        )}
-        <span className={badge}>{scopeLabels[file.scope.kind]}</span>
+        Accept
+      </button>
+      <button
+        ref={opener}
+        type="button"
+        disabled={busy}
+        onClick={() => {
+          setOpen(true);
+          startEditing();
+        }}
+        className={quietButton}
+      >
+        Edit
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void act(() => calls.remove(file))}
+        className={quietButton}
+      >
+        Dismiss
+      </button>
+    </div>
+  ) : kind === "review" ? (
+    <div className="mt-2 flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void act(() => calls.keep(file))}
+        className={outlineButton}
+      >
+        Keep
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void act(() => calls.remove(file))}
+        className={quietButton}
+      >
+        Retire
       </button>
       {open && (
-        <div className="px-2.5 pb-2">
-          {file.source && (
-            <p className="truncate pb-1 text-[11.5px] text-faint-foreground" title={file.source}>
-              From {file.source}
-            </p>
+        <button
+          ref={opener}
+          type="button"
+          disabled={busy || content === undefined}
+          onClick={startEditing}
+          className={quietButton}
+        >
+          Edit
+        </button>
+      )}
+    </div>
+  ) : (
+    open && (
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <button
+          ref={opener}
+          type="button"
+          disabled={busy || content === undefined}
+          onClick={startEditing}
+          className={outlineButton}
+        >
+          Edit
+        </button>
+        {next && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              move({ scope: next, path: file.path }, `Copied to ${scopeLabels[next.kind]}`)
+            }
+            className={quietButton}
+          >
+            Promote to {scopeLabels[next.kind]}
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void act(() => calls.remove(file))}
+          className={quietButton}
+        >
+          Delete
+        </button>
+      </div>
+    )
+  );
+
+  return (
+    <li className="flex items-start gap-3 px-3 py-2.5">
+      {mark && (
+        <span aria-hidden className="mt-0.5 shrink-0 [&_svg]:size-4">
+          {mark}
+        </span>
+      )}
+      <div className="min-w-0 flex-1">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen(!open)}
+          className="group flex w-full min-w-0 items-start gap-3 text-left"
+        >
+          <span className="min-w-0 flex-1">
+            <span
+              className={`block truncate text-[13.5px] leading-5 font-medium group-hover:text-foreground ${kind === "review" ? "text-muted-foreground" : "text-foreground"}`}
+            >
+              {title}
+            </span>
+            {line && (
+              <span className="block truncate text-[12px] leading-5 text-muted-foreground">
+                {line}
+              </span>
+            )}
+          </span>
+          {end && (
+            <span className="shrink-0 text-[11.5px] leading-5 text-faint-foreground">{end}</span>
           )}
-          {editing ? (
+        </button>
+        {editing && content !== undefined ? (
+          <div className="mt-2">
             <Editor
               label={title}
-              initial={content ?? ""}
-              onCancel={() => setEditing(false)}
+              initial={content}
+              onCancel={() => {
+                setReplacing(undefined);
+                stopEditing();
+              }}
               onSave={async (text) => {
+                if (proposal) {
+                  // The editor stays open with the text until the move succeeds.
+                  const to = savedAs(file, repo);
+                  if (!to) return "This proposal has no kind.";
+                  if (taken(to)) {
+                    setReplacing({ to, done: "Saved", content: text });
+                    return undefined;
+                  }
+                  const failed = await calls.move(file, to, "Saved", text);
+                  // A failed delete still wrote, so the list reloads either way.
+                  onChanged();
+                  if (!failed) stopEditing();
+                  return failed;
+                }
                 const failed = await calls.write(file.scope, file.path, text, file);
                 if (!failed) {
-                  setEditing(false);
+                  stopEditing();
                   onChanged();
                 }
                 return failed;
               }}
             />
-          ) : (
-            <>
-              {content !== undefined &&
-                (plain ? (
-                  <p className="font-mono text-[12px] whitespace-pre-wrap select-text">{content}</p>
-                ) : (
-                  <div className="context-doc text-[13px]">
-                    <MarkdownText text={content} />
-                  </div>
-                ))}
-              {replacing ? (
-                <div role="group" aria-label="Replace" className="mt-1.5">
-                  <p className="text-[12.5px] text-muted-foreground">
-                    {scopeLabels[replacing.to.scope.kind]} already has {replacing.to.path}. Replace
-                    it with this one?
-                  </p>
-                  <div className="mt-1 flex gap-1.5">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setReplacing(undefined);
-                        void act(() => calls.move(file, replacing.to, replacing.done));
-                      }}
-                      className={outlineButton}
-                    >
-                      Replace
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setReplacing(undefined)}
-                      className={quietButton}
-                    >
-                      Cancel
-                    </button>
-                  </div>
+            {replace}
+          </div>
+        ) : (
+          <>
+            {open &&
+              content !== undefined &&
+              (kind === "document" ? (
+                <div className="context-doc mt-1.5 text-[13px]">
+                  <MarkdownText text={content} />
                 </div>
               ) : (
-                <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  {proposal ? (
-                    <>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => move(savedAs(file, repo), "Saved")}
-                        className={outlineButton}
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void act(() => calls.remove(file))}
-                        className={quietButton}
-                      >
-                        Discard
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        disabled={busy || content === undefined}
-                        onClick={() => setEditing(true)}
-                        className={outlineButton}
-                      >
-                        Edit
-                      </button>
-                      {next && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() =>
-                            move(
-                              { scope: next, path: file.path },
-                              `Copied to ${scopeLabels[next.kind]}`,
-                            )
-                          }
-                          className={quietButton}
-                        >
-                          Promote to {scopeLabels[next.kind]}
-                        </button>
-                      )}
-                      {!brief && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void act(() => calls.remove(file))}
-                          className={quietButton}
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </>
-                  )}
-                </div>
-              )}
-            </>
-          )}
-          {error && (
-            <p role="alert" className="mt-1 text-[12px] text-danger">
-              {error}
-            </p>
-          )}
-        </div>
-      )}
+                <p className="mt-1.5 font-mono text-[12px] whitespace-pre-wrap select-text">
+                  {content}
+                </p>
+              ))}
+            {actions}
+          </>
+        )}
+        {error && (
+          <p role="alert" className="mt-1 text-[12px] text-danger">
+            {error}
+          </p>
+        )}
+      </div>
     </li>
   );
 }
@@ -584,7 +839,10 @@ function MemoryRow({
 const changeFailed = (body: string) =>
   notify({ key: "memory", tone: "error", title: "Couldn't change the memory", body });
 
-/** A text box with Save and Cancel, saying why in a notification when the save fails. */
+/**
+ * A text box with Save and Cancel, saying why in a notification when the save fails, which keeps
+ * the text. Escape cancels.
+ */
 function Editor({
   label,
   initial,
@@ -617,6 +875,14 @@ function Editor({
         value={text}
         disabled={busy}
         onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          // Escape cancels, unless an input method is composing; it stops here, so it doesn't
+          // also close the panel.
+          if (e.key !== "Escape" || e.nativeEvent.isComposing) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onCancel();
+        }}
         className={`${field} font-mono text-[12px]`}
       />
       <div className="mt-1 flex justify-end gap-1.5">

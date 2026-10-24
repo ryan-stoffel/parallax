@@ -228,3 +228,67 @@ async fn a_changed_or_deleted_entry_reaches_running_children_as_a_queued_message
     );
     host.server.stop().await;
 }
+
+/// The Knowledge tab's Keep writes an entry over itself with its own title and body, which only
+/// re-dates it and drops its last use. Running children read nothing new, so none is told.
+#[tokio::test]
+async fn keeping_an_entry_tells_no_running_child() {
+    let busy = vec![init("s-1"), text("Working"), Step::Hang];
+    let host = Host::start(temp_dir(), fake(busy));
+    let mut client = host.client().await;
+    let project = create(&mut client, project_params(host.dir.path())).await;
+    let path = "memory/decision/vitest.md";
+    let scope = MemoryScope::Project { id: project.id };
+    let kept = entry(scope, path, "Use Vitest", "We use Vitest.");
+    client.call::<MemoryWrite>(kept.clone()).await.unwrap();
+    // An old date and a last use, as an entry up for review has.
+    let file = host
+        .dir
+        .path()
+        .join("context")
+        .join(project.id.to_string())
+        .join(path);
+    let old = std::fs::read_to_string(&file).unwrap();
+    let date = old.lines().find(|line| line.starts_with("Date: ")).unwrap();
+    let old = old.replace(date, "Date: 2026-01-02\nLast used: 2026-01-03");
+    std::fs::write(&file, old).unwrap();
+    subscribe(&mut client, project.id, 0).await;
+    client
+        .call::<AgentStart>(start_params(project.id, "Work for a while"))
+        .await
+        .unwrap();
+    until(
+        &mut client,
+        has_item(AgentOutputItem::Text {
+            message_id: None,
+            text: "Working".to_owned(),
+        }),
+    )
+    .await;
+
+    let file = client.call::<MemoryWrite>(kept).await.unwrap().file;
+    assert_ne!(file.date.as_deref(), Some("2026-01-02"), "Keep re-dates it");
+    assert_eq!(file.last_used, None);
+    // A delete after it is the only message the child gets.
+    client
+        .call::<MemoryDelete>(MemoryDeleteParams {
+            scope,
+            path: path.to_owned(),
+        })
+        .await
+        .unwrap();
+    let events = until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::QueueUpdated { messages, .. } if !messages.is_empty())
+    })
+    .await;
+    let Some(ParallaxEvent::QueueUpdated { messages, .. }) = events.last().map(|e| &e.event) else {
+        unreachable!()
+    };
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        messages[0].text.contains("was deleted."),
+        "{}",
+        messages[0].text
+    );
+    host.server.stop().await;
+}

@@ -7,12 +7,10 @@ import type { ParallaxBridge, SubscriptionMessage } from "../preload/bridge";
 import type {
   AgentRun,
   ContextFile,
-  InboxItem,
   MemoryFile,
   ProviderInfo,
 } from "../protocol/generated/protocol";
 import { AllFiles, ContextBody, ContextReader, useProjectContext } from "./ContextPanel";
-import type { InboxView } from "./Inbox";
 import { KnowledgePanel } from "./Knowledge";
 import { changeMessage } from "./MemoryPanel";
 import { Notifications } from "./notifications";
@@ -53,18 +51,6 @@ const coordinator: AgentRun = {
   createdAt: "2026-10-04T10:00:00Z",
   updatedAt: "2026-10-04T10:00:00Z",
 };
-const learned = (id: string, text: string, createdAt: string) =>
-  ({ id, kind: "learned", run: "r-1", text, createdAt }) as InboxItem;
-const inbox: InboxView = {
-  items: [
-    learned("i-1", "Memory: tests run with pnpm test", "2026-10-04T11:30:00Z"),
-    learned("i-2", "Memory: the API keeps v1 paths", "2026-10-02T09:00:00Z"),
-  ],
-  questions: [],
-  seen: async () => {},
-  answer: async () => undefined,
-};
-
 let capabilities: Record<string, object>;
 let files: ContextFile[];
 let contents: Record<string, string>;
@@ -80,6 +66,11 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
   }
   if (method === "memory/list")
     return ok({ files: (params["scope"] as { kind: string }).kind === "project" ? memory : [] });
+  if (method === "memory/read")
+    return ok({
+      file: file(params["path"] as string),
+      content: "Ship search by [Friday](https://example.com/spec).",
+    });
   if (method === "providers/list") return ok({ providers });
   return ok({ run: coordinator });
 });
@@ -105,7 +96,7 @@ beforeEach(() => {
   contents = { "notes.md": board, "plan.md": "# Plan" };
   listeners = new Set();
   memory = [
-    { path: "brief.md", size: 10, modifiedAt: "2026-10-01T00:00:00Z" },
+    { path: "brief.md", size: 10, modifiedAt: "2026-10-01T12:00:00Z" },
     { path: "memory/convention/vitest.md", size: 10, modifiedAt: "2026-10-04T08:00:00Z" },
   ];
   providers = [];
@@ -145,18 +136,15 @@ const click = async (element: Element | null | undefined) => {
   await settle();
 };
 
-/** The Knowledge view, with the Project's context read as App reads it. */
+/** The Knowledge view, as App renders it. */
 function Knowledge({ host, expanded }: { host: string; expanded: boolean }) {
-  const context = useProjectContext(host, "p-1", true);
   return (
     <KnowledgePanel
       hostId={host}
       project="p-1"
       repo="r-1"
       coordinator={coordinator}
-      context={context}
       memory
-      inbox={inbox}
       expanded={expanded}
     />
   );
@@ -242,13 +230,12 @@ test("the status board reads as a project page: tasks as circles, bold leads, an
   expect(archive.disabled).toBe(true);
 });
 
-test("context and memory follow their folders' events without the runs' output", async () => {
+test("memory follows its folders' events without the runs' output", async () => {
   const subscribe = vi.spyOn(window.parallax, "subscribe");
   await render("h-shell");
-  // The Project's context, and memory's Repo and Project folders, in any order.
+  // Memory's Repo and Project folders, in any order.
   const params = subscribe.mock.calls.map(([, p]) => p);
   expect(params.map((p) => p.project ?? "").sort((a, b) => a.localeCompare(b))).toEqual([
-    "p-1",
     "p-1",
     "r-1",
   ]);
@@ -305,16 +292,25 @@ test("a context file shows tasks as circles, GitHub links with their icons, open
   expect(listed()).toEqual(["archived.md", "notes.md", "plan.md", "research.md"]);
 });
 
-test("What it knows counts what's known and new today, lists the latest learned, and the brief starts folded", async () => {
+test("the head counts entries and documents, and the brief shows in place and edits on a click", async () => {
+  memory.push({ path: "knowledge/ci.md", size: 10, modifiedAt: "2026-10-03T08:00:00Z" });
   await render("h-known");
-  // Two memory files, two context files, and two learned, four of them from the last day.
-  expect(section("What it knows").textContent).toContain("6 things, 4 new today");
-  expect(
-    [...document.querySelectorAll('[aria-label="Learned lately"] li')].map((li) => li.textContent),
-  ).toEqual(["tests run with pnpm test30m", "the API keeps v1 paths2d"]);
-  expect(
-    request.mock.calls.some(([, m, p]) => m === "memory/read" && p["path"] === "brief.md"),
-  ).toBe(false);
+  expect(document.querySelector("header")!.textContent).toBe(
+    "KnowledgeWhat this Project's agents know: 1 memory entry, 1 document.",
+  );
+  const brief = section("Brief");
+  expect(brief.textContent).toContain("Edited Oct 1");
+  // The brief is content, its links working, with its own Edit button.
+  expect(brief.querySelector('a[href="https://example.com/spec"]')).not.toBeNull();
+  expect(brief.querySelector('[role="button"]')).toBeNull();
+  const edit = brief.querySelector<HTMLButtonElement>('button[aria-label="Edit the brief"]');
+  await click(edit);
+  expect(brief.querySelector("textarea")!.value).toBe(
+    "Ship search by [Friday](https://example.com/spec).",
+  );
+  await click([...brief.querySelectorAll("button")].find((b) => b.textContent === "Cancel"));
+  expect(brief.querySelector("textarea")).toBeNull();
+  expect(document.activeElement?.getAttribute("aria-label")).toBe("Edit the brief");
 });
 
 /** A provider plxd lists, which runs a Project's coordinator. */
