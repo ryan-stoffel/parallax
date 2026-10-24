@@ -1,16 +1,4 @@
 import {
-  ChevronRight,
-  ChevronsRight,
-  Folder,
-  FolderPlus,
-  Globe,
-  PanelTop,
-  Pencil,
-  Star,
-  Trash2,
-  X,
-} from "lucide-react";
-import {
   useEffect,
   useId,
   useLayoutEffect,
@@ -22,6 +10,19 @@ import {
 import { createPortal } from "react-dom";
 
 import { stored } from "./stored";
+import {
+  ChevronRight,
+  CloseSmall,
+  CreateNewFolder,
+  Delete,
+  DoubleArrowRight,
+  Edit,
+  Folder,
+  Public,
+  Star,
+  StarFilled,
+  Tab,
+} from "./symbols";
 import { ConfirmDialog, Menu, menuItem, menuPanel, openOnContextMenu } from "./ui";
 
 // The browser's bookmarks (PLX-968): one tree, shared by every browser, a thread's, a Project's,
@@ -256,7 +257,7 @@ export function BookmarkStar({ page }: { page?: Bookmark }) {
         onClick={() => page && !found && bookmarks.set(toggled(bookmarks.get(), page))}
         className="-mr-1 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-0 aria-pressed:text-accent [&_svg]:size-3.5"
       >
-        <Star aria-hidden className={found ? "fill-current" : ""} />
+        {found ? <StarFilled aria-hidden /> : <Star aria-hidden />}
       </button>
       {/* Outside the address bar's form, so Enter here doesn't open the address. */}
       {createPortal(
@@ -365,7 +366,7 @@ function BookmarkEditor({
               onClick={() => setAdding(true)}
               className="flex items-center gap-1.5 self-start text-muted-foreground hover:text-foreground [&_svg]:size-3.5"
             >
-              <FolderPlus aria-hidden />
+              <CreateNewFolder aria-hidden />
               New folder
             </button>
           )}
@@ -575,7 +576,7 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
             popoverTarget={moreId}
             className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
           >
-            <ChevronsRight aria-hidden />
+            <DoubleArrowRight aria-hidden />
           </button>
           <NodeMenu
             id={moreId}
@@ -589,14 +590,14 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
       <Menu id={menuId} label="Bookmarks bar" className="w-48 p-1">
         {target.url && (
           <>
-            <MenuButton icon={<PanelTop />} onClick={() => onOpen(target.url!, true)}>
+            <MenuButton icon={<Tab />} onClick={() => onOpen(target.url!, true)}>
               Open in new tab
             </MenuButton>
-            <MenuButton icon={<Pencil />} onClick={() => edit({ url: target.url })}>
+            <MenuButton icon={<Edit />} onClick={() => edit({ url: target.url })}>
               Edit…
             </MenuButton>
             <MenuButton
-              icon={<Trash2 />}
+              icon={<Delete />}
               onClick={() => bookmarks.set(removedBookmark(bookmarks.get(), target.url!))}
             >
               Remove
@@ -606,16 +607,16 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
         )}
         {target.folder && (
           <>
-            <MenuButton icon={<Pencil />} onClick={() => edit({ folder: target.folder })}>
+            <MenuButton icon={<Edit />} onClick={() => edit({ folder: target.folder })}>
               Rename…
             </MenuButton>
-            <MenuButton icon={<Trash2 />} onClick={() => deleteFolder(target.folder!)}>
+            <MenuButton icon={<Delete />} onClick={() => deleteFolder(target.folder!)}>
               Delete folder
             </MenuButton>
             <div role="separator" className="my-1 h-px bg-border" />
           </>
         )}
-        <MenuButton icon={<FolderPlus />} onClick={addFolder}>
+        <MenuButton icon={<CreateNewFolder />} onClick={addFolder}>
           Add folder
         </MenuButton>
       </Menu>
@@ -776,7 +777,7 @@ function NodeMenu({
               }}
               className="grid size-5 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground"
             >
-              <X aria-hidden className="size-3" />
+              <CloseSmall aria-hidden className="size-4" />
             </span>
           </button>
         ),
@@ -822,5 +823,5 @@ const BookmarkIcon = ({ bookmark }: { bookmark: Bookmark }) =>
   bookmark.icon ? (
     <img src={bookmark.icon} alt="" className="size-3.5 shrink-0" />
   ) : (
-    <Globe aria-hidden className="size-3.5 shrink-0" />
+    <Public aria-hidden className="size-3.5 shrink-0" />
   );

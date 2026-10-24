@@ -1,7 +1,8 @@
-import { EllipsisVertical, Monitor, PanelRight, Scaling } from "lucide-react";
+import { Monitor, PanelRight, Scaling } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import { stored } from "./stored";
+import { MoreVert } from "./symbols";
 import { IconButton, Menu, menuHeading, MenuOption } from "./ui";
 
 /** A page's size in CSS pixels. */
@@ -250,7 +251,7 @@ export function ViewMenu({
   return (
     <>
       <IconButton label="More" popoverTarget={id} aria-haspopup="menu">
-        <EllipsisVertical />
+        <MoreVert />
       </IconButton>
       <Menu ref={menu} id={id} label="More" align="end" className="w-68 p-1">
         <p className={menuHeading}>View</p>
