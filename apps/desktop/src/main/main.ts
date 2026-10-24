@@ -67,6 +67,7 @@ import {
   startExtensions,
 } from "./extensions";
 import { answerStore, chromeUserAgent, storeOrigin } from "./webStore";
+import { downloadAction, downloadList, setDownloadPrefs, startDownloads } from "./downloads";
 import {
   browserShortcut,
   type BrowserShortcut,
@@ -431,6 +432,15 @@ ipcMain.handle("parallax:loadUnpackedExtension", async (event) => {
 ipcMain.handle("parallax:removeExtension", (_event, id: unknown) =>
   typeof id === "string" ? removeExtension(browserSession(), id) : undefined,
 );
+// The browser's downloads (PLX-975, downloads.ts).
+ipcMain.handle("parallax:downloads", () => downloadList());
+ipcMain.on("parallax:downloadAction", (_event, id: unknown, action: unknown) => {
+  if (typeof action === "string") downloadAction(typeof id === "string" ? id : undefined, action);
+});
+ipcMain.on("parallax:downloadPrefs", (_event, prefs: unknown) => {
+  const { dir, ask } = (prefs ?? {}) as { dir?: unknown; ask?: unknown };
+  setDownloadPrefs({ dir: typeof dir === "string" ? dir : "", ask: ask === true });
+});
 // Settings › Browser's Clear browsing data (PLX-974): the browser's site data, its cache, or both,
 // keeping the extensions' own, as Chrome's does.
 ipcMain.handle("parallax:clearBrowsingData", async (_event, what: unknown) => {
@@ -807,6 +817,7 @@ void app.whenReady().then(async () => {
   );
   // Before any window, so a page's content scripts are there when it loads.
   startExtensions(browserSession, tellTab);
+  startDownloads(browserSession);
   await loadExtensions(browserSession);
   startHosts(startAccount(), () => updateState.available?.version ?? app.getVersion());
   startStorage();

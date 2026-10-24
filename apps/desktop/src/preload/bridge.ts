@@ -196,6 +196,14 @@ export interface ParallaxBridge {
    * from the Chrome Web Store's own button (PLX-962). Returns the unsubscribe function.
    */
   onExtensionsChanged(listener: () => void): () => void;
+  /** The browser's downloads, the newest first (PLX-975). */
+  downloads(): Promise<DownloadInfo[]>;
+  /** Calls `listener` with the downloads as they change. Returns the unsubscribe function. */
+  onDownloads(listener: (downloads: DownloadInfo[]) => void): () => void;
+  /** Opens a download, shows it in its folder, or cancels it; or, without an id, clears the finished. */
+  downloadAction(id: string | undefined, action: "open" | "show" | "cancel" | "clear"): void;
+  /** Where downloads go, the OS's folder when empty, and whether to ask each time. */
+  setDownloadPrefs(prefs: { dir: string; ask: boolean }): void;
   /** Clears the browser's site data, its cache, or both, keeping extensions' own (PLX-974). */
   clearBrowsingData(what: { siteData: boolean; cache: boolean }): Promise<void>;
   /** Tells extensions which browser tab is shown, by its webview's webContents id. */
@@ -767,6 +775,21 @@ export type BrowserAction =
     }
   // Cmd/Ctrl+1 to 8's tab, from 0 (PLX-969).
   | { kind: "tab"; index: number };
+
+/** One of the browser's downloads (PLX-975), as main tracks it (downloads.ts). */
+export interface DownloadInfo {
+  id: string;
+  /** Its file's name, once saved; the server's until then. */
+  name: string;
+  url: string;
+  /** Where it saves, once known. */
+  path?: string;
+  state: "progressing" | "completed" | "cancelled" | "interrupted";
+  received: number;
+  /** Its size in bytes, or 0 when the server doesn't say. */
+  total: number;
+  paused?: boolean;
+}
 
 /**
  * A Chrome extension in the side panel's browser: its name, its toolbar icon as a data url, and

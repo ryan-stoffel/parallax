@@ -2,7 +2,14 @@ import { useRef, useState } from "react";
 
 import { browserLayout, pageFit, ThemeSwatches } from "../Browser";
 import { bookmarksBar } from "../Bookmarks";
-import { homeButton, restoreTabs, searchEngine, searchEngines } from "../browserSettings";
+import {
+  downloadPrefs,
+  homeButton,
+  restoreTabs,
+  searchEngine,
+  searchEngines,
+  setDownloadPrefs,
+} from "../browserSettings";
 import { useExtensions } from "../Extensions";
 import { notify } from "../notifications";
 import { ConfirmDialog, Picker } from "../ui";
@@ -19,6 +26,7 @@ export function BrowserSettings() {
   const engine = searchEngine.use();
   const restore = restoreTabs.use();
   const home = homeButton.use();
+  const downloadsTo = downloadPrefs.use();
   const { list, refresh } = useExtensions();
   const confirm = useRef<HTMLDialogElement>(null);
   const [clear, setClear] = useState({ siteData: true, cache: true });
@@ -105,6 +113,41 @@ export function BrowserSettings() {
             value={home.url}
             onChange={(e) => homeButton.set({ ...home, url: e.target.value })}
             className={rowField}
+          />
+        </Row>
+      </Section>
+
+      <Section title="Downloads">
+        <Row title="Location" description={downloadsTo.dir || "Your Downloads folder"}>
+          {downloadsTo.dir && (
+            <button
+              type="button"
+              className={quietButton}
+              onClick={() => setDownloadPrefs({ ...downloadsTo, dir: "" })}
+            >
+              Reset
+            </button>
+          )}
+          <button
+            type="button"
+            className={`${quietButton} border border-border`}
+            onClick={() =>
+              void window.parallax.pickFolder().then((dir) => {
+                if (dir) setDownloadPrefs({ ...downloadsTo, dir });
+              })
+            }
+          >
+            Change…
+          </button>
+        </Row>
+        <Row
+          title="Ask where to save each file before downloading"
+          description="Off, each file goes straight to the location"
+        >
+          <Switch
+            label="Ask where to save each file before downloading"
+            checked={downloadsTo.ask}
+            onChange={(ask) => setDownloadPrefs({ ...downloadsTo, ask })}
           />
         </Row>
       </Section>

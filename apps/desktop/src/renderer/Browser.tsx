@@ -28,6 +28,7 @@ import {
   searchUrlFor,
 } from "./browserSettings";
 import { browserTheme, browserThemes } from "./browserTheme";
+import { DownloadsButton } from "./Downloads";
 import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./PageFrame";
 import { backendLogos } from "./Sidebar";
@@ -784,6 +785,7 @@ function Tab({
   );
   const toolsBar = (
     <>
+      <DownloadsButton />
       <Extensions tab={contentsId} />
       <ViewMenu fit={fit} fixed={!!fixed} size={pageSize} onFit={refit}>
         {/* Zoom keeps the menu open, as Chrome's does. */}
