@@ -826,7 +826,8 @@ function Tab({
             setPicked(0);
           }}
           onKeyDown={(e) => {
-            if (!suggestions.length) return;
+            // Keys an input method is composing with are its own.
+            if (!suggestions.length || e.nativeEvent.isComposing) return;
             if (e.key === "ArrowDown" || e.key === "ArrowUp") {
               e.preventDefault();
               const step = e.key === "ArrowDown" ? 1 : -1;
@@ -869,6 +870,8 @@ function Tab({
                   // Before the address bar loses focus, which would close the list.
                   onMouseDown={(e) => {
                     e.preventDefault();
+                    // A left click only, not a right click for a menu.
+                    if (e.button !== 0) return;
                     open(s.url);
                     setTyped(false);
                     addressBar.current?.blur();
