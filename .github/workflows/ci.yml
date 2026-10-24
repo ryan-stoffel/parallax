@@ -34,8 +34,8 @@ jobs:
       - name: List the changed files
         id: diff
         run: |
-          git diff --name-only HEAD^1 HEAD | tee "$RUNNER_TEMP/changed"
-          rust_inputs='^(daemon/|crates/|sidecar/|relay/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|rustfmt\.toml$|clippy\.toml$|apps/desktop/src/protocol/generated/|scripts/ci/(check-rust|check-ssh-attach|ssh-localhost)|\.github/workflows/ci\.yml$)'
+          git diff --name-only --no-renames HEAD^1 HEAD | tee "$RUNNER_TEMP/changed"
+          rust_inputs='^(daemon/|crates/|sidecar/|relay/|packages/clerk-verify/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|rustfmt\.toml$|clippy\.toml$|apps/desktop/src/protocol/generated/|apps/desktop/\.node-version$|\.gitattributes$|scripts/ci/(check-rust|check-ssh-attach|ssh-localhost)|\.github/workflows/ci\.yml$)'
           if grep -qE "$rust_inputs" "$RUNNER_TEMP/changed"; then
             echo rust=true >> "$GITHUB_OUTPUT"
           else
