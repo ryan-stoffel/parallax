@@ -219,7 +219,7 @@ pub(super) fn failure_kind(kind: FailureKind) -> AgentFailureKind {
         FailureKind::RateLimited => AgentFailureKind::RateLimited,
         FailureKind::PolicyViolation => AgentFailureKind::PolicyViolation,
         FailureKind::UnexpectedApiKey => AgentFailureKind::UnexpectedApiKey,
-        FailureKind::VendorError => AgentFailureKind::VendorError,
+        FailureKind::VendorError | FailureKind::SessionNotFound => AgentFailureKind::VendorError,
         FailureKind::Crashed => AgentFailureKind::Crashed,
         FailureKind::SpawnFailed => AgentFailureKind::SpawnFailed,
         FailureKind::Internal | FailureKind::Other => AgentFailureKind::Internal,

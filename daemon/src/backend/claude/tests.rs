@@ -2788,6 +2788,21 @@ fn retries_and_rejected_limits_name_a_failed_turn_s_kind_until_it_ends() {
     );
 }
 
+/// PLX-937: `--resume` with a session Claude Code no longer has fails as a lost session, as
+/// 2.1.309 reports it, before any `init`.
+#[test]
+fn a_resume_of_a_session_claude_code_lost_fails_as_session_not_found() {
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    let lost = br#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"session_id":"gone","errors":["No conversation found with session ID: gone"]}"#;
+    translator.line(lost);
+    let failure = translator.last_failure.as_ref().unwrap();
+    assert_eq!(failure.failure, FailureKind::SessionNotFound);
+    assert_eq!(
+        failure.message,
+        "No conversation found with session ID: gone"
+    );
+}
+
 /// A coordinator's request at `cwd`, whose plxd tools make it full Claude Code (0027).
 fn coordinator(cwd: &Path) -> RunRequest {
     RunRequest {

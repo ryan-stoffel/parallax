@@ -481,6 +481,27 @@ pub enum AgentTodoStatus {
     Unknown,
 }
 
+/// Why a Project's coordinator session ended (PLX-937, decision 0079).
+///
+/// A newer plxd may send a reason this version does not know; treat it as unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum CoordinatorSessionEnd {
+    /// The provider compacted it out. plxd never ends one for compaction (decision 1 of the
+    /// Projects spec), so none ends this way yet.
+    CompactedOut,
+    /// It couldn't be resumed: the provider lost it, or its account is gone.
+    NotResumable,
+    /// The user asked for a fresh session with `coordinator/fresh`.
+    UserFresh,
+    /// The coordinator moved to another backend, which can't resume it.
+    BackendChange,
+    /// A reason this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
 /// One item of an agent's checklist.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -611,6 +632,14 @@ pub enum AgentOutputItem {
     ContextCompaction {
         /// Whether it's finished.
         done: bool,
+    },
+    /// A Project's coordinator session ended, and the next one, epoch `epoch`, starts from the
+    /// Project's state (PLX-937, decision 0079). Behind the `coordinatorEpochs` capability.
+    Epoch {
+        /// The new session's number, from 1 for the coordinator's first.
+        epoch: u32,
+        /// Why the last one ended.
+        reason: CoordinatorSessionEnd,
     },
     /// A turn ended.
     TurnFinished {

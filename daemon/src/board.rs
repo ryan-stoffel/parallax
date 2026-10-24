@@ -182,7 +182,7 @@ fn not_found(id: u64) -> ErrorObject {
 }
 
 /// `project`'s items, oldest first.
-fn items(db: &Store, project: ProjectId) -> Result<Vec<BoardItem>, ErrorObject> {
+pub(crate) fn items(db: &Store, project: ProjectId) -> Result<Vec<BoardItem>, ErrorObject> {
     db.board_items(project.into())
         .map_err(|e| store_error(&e))?
         .into_iter()

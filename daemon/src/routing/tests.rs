@@ -897,3 +897,80 @@ fn key_accounts_keep_the_startup_backend_when_its_instance_is_turned_off() {
         .expect("the key account's backend");
     assert!(Arc::ptr_eq(&kept, &backend));
 }
+
+// ---------------------------------------------------------------------------------------------
+// start() and a lost session's new one (PLX-937)
+// ---------------------------------------------------------------------------------------------
+
+/// A request resuming `s-1`, with a packet to start a new session with if it's gone.
+fn resuming() -> RunRequest {
+    RunRequest {
+        resume: Some(Resume {
+            fallback: Some("packet".into()),
+            ..Resume::new("s-1")
+        }),
+        ..request(&root())
+    }
+}
+
+fn session(id: &str) -> Event {
+    Event::SessionStarted {
+        session_id: id.into(),
+        model: None,
+        api_key_source: None,
+    }
+}
+
+fn said(text: &str) -> Event {
+    Event::Text {
+        message_id: None,
+        text: text.into(),
+    }
+}
+
+/// `resuming()` started on a backend playing `attempts`: its events and each attempt's request.
+async fn run_resuming(attempts: Vec<Vec<Event>>) -> (Vec<Event>, Vec<RunRequest>) {
+    let backend = Arc::new(ScriptedBackend::new(attempts));
+    let resolved = resolved_subscription(backend.clone());
+    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
+    let mut started = start(keys, &FixedAccounts::default(), resolved, resuming()).unwrap();
+    (rest(&mut started.events).await, backend.calls())
+}
+
+#[tokio::test]
+async fn a_lost_session_starts_once_as_a_new_one_with_the_fallback() {
+    let lost = finished(Outcome::Failed(failure(FailureKind::SessionNotFound)));
+    let done = finished(Outcome::Completed { result: None });
+    let (events, calls) = run_resuming(vec![
+        vec![said("from the lost attempt"), lost],
+        vec![session("s-2"), said("Picked up."), done.clone()],
+    ])
+    .await;
+
+    assert_eq!(
+        events,
+        [session("s-2"), said("Picked up."), done],
+        "the failed attempt's events are dropped"
+    );
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[1].resume, None);
+    assert_eq!(calls[1].prompt, "packet");
+}
+
+#[tokio::test]
+async fn any_other_resume_failure_passes_through_without_a_new_session() {
+    let limited = finished(Outcome::Failed(failure(FailureKind::RateLimited)));
+    let (events, calls) = run_resuming(vec![vec![said("held"), limited.clone()]]).await;
+
+    assert_eq!(events, [said("held"), limited]);
+    assert_eq!(calls.len(), 1);
+}
+
+#[tokio::test]
+async fn a_new_session_that_is_also_lost_is_not_started_again() {
+    let lost = finished(Outcome::Failed(failure(FailureKind::SessionNotFound)));
+    let (events, calls) = run_resuming(vec![vec![lost.clone()], vec![lost.clone()]]).await;
+
+    assert_eq!(events, [lost]);
+    assert_eq!(calls.len(), 2, "one new session, never a second");
+}

@@ -87,8 +87,9 @@ pub use agent::{
     AgentOutputItem, AgentPermission, AgentPolicy, AgentRequestUsage, AgentResumeNowParams,
     AgentRun, AgentRunResult, AgentRunState, AgentSendParams, AgentStartParams, AgentStatus,
     AgentStopTaskParams, AgentStopTaskResult, AgentSubagentStatus, AgentTodoItem, AgentTodoStatus,
-    AgentToolStatus, AgentWaitParams, AgentWaitResult, AgentWaitUntil, CoordinatorThreadId,
-    DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId, SecretStatus, TurnId,
+    AgentToolStatus, AgentWaitParams, AgentWaitResult, AgentWaitUntil, CoordinatorSessionEnd,
+    CoordinatorThreadId, DiffSummary, ImageId, ImageMediaType, LoggedEvent, PromptImage, RunId,
+    SecretStatus, TurnId,
 };
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
@@ -192,10 +193,10 @@ pub use preview::{
     PreviewTab,
 };
 pub use project::{
-    Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
-    ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectIcon,
-    ProjectId, ProjectListParams, ProjectListResult, ProjectPermission, ProjectStartParams,
-    ProjectUpdateParams, ProjectUpdateResult,
+    CoordinatorFreshParams, Project, ProjectAutonomy, ProjectCreateParams, ProjectCreateResult,
+    ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult,
+    ProjectIcon, ProjectId, ProjectListParams, ProjectListResult, ProjectPermission,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult,
 };
 pub use provider::{
     CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,

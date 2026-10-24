@@ -356,6 +356,21 @@ pub struct ProjectStartParams {
     pub approvals: bool,
 }
 
+/// Params of `coordinator/fresh`: ends a Project's coordinator session, so its next message
+/// starts a new one from the Project's state (PLX-937, decision 0079), behind the
+/// `coordinatorEpochs` capability.
+///
+/// The coordinator stays the same run and thread. plxd ends its idle CLI, ends its epoch as
+/// `userFresh`, and adds an `epoch` item to its transcript. Its next message starts the next
+/// epoch from a rehydration packet. Fails with `projectNotFound` for an unknown project, `runNotFound`
+/// for one with no coordinator, and `idConflict` while the coordinator is starting or running.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordinatorFreshParams {
+    /// The project.
+    pub project: ProjectId,
+}
+
 /// Params of `project/fromThreads`: makes a Project from threads (0042), behind the
 /// `projectFromThreads` capability.
 ///

@@ -56,8 +56,9 @@ use parallax_protocol::{AcceptId, AgentMerge, CliKind};
 use parallax_protocol::{
     AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
     AgentApproveParams, AgentApproveResult, AgentBackgroundTask, AgentFailureKind, AgentOutcome,
-    AgentOutputItem, AgentRun, ApprovalId, DiffSummary, ErrorKind, GitStatus, ImageId, InboxKind,
-    ParallaxEvent, ProjectId, PromptImage, QueueResult, QueuedMessage, Role, RunId, TurnId,
+    AgentOutputItem, AgentRun, ApprovalId, CoordinatorSessionEnd, DiffSummary, ErrorKind,
+    GitStatus, ImageId, InboxKind, ParallaxEvent, ProjectId, PromptImage, QueueResult,
+    QueuedMessage, Role, RunId, TurnId,
 };
 use parallax_store::{
     QueuedRow, Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree,
@@ -91,6 +92,7 @@ use crate::server::Daemon;
 use crate::store::Tx;
 use crate::worktree::{RunFolder, github_pr_urls};
 
+mod epoch;
 mod git;
 mod placed;
 mod revert;
@@ -272,6 +274,11 @@ pub(super) enum Command {
     },
     /// `provider-session.detach` (0060): releases the run's session, after its turn if one runs.
     Detach,
+    /// `coordinator/fresh` (PLX-937): ends a coordinator's session, so its next message starts
+    /// the next epoch.
+    Fresh {
+        reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
+    },
 }
 
 impl Command {
@@ -286,6 +293,7 @@ impl Command {
             | Self::AutoResume { reply, .. }
             | Self::Place { reply, .. }
             | Self::Revert { reply, .. }
+            | Self::Fresh { reply }
             | Self::Join { reply, .. } => {
                 let _ = reply.send(Err(error));
             }
@@ -355,6 +363,9 @@ pub(super) struct Queued {
     pub account: Option<AccountChoice>,
     /// The thread that sent it through its Parallax tools (0041).
     pub from: Option<RunId>,
+    /// plxd's own message, not the user's, such as a scheduled task's or a pull request watch's,
+    /// which a coordinator's packet leaves out of the user's messages (PLX-937).
+    pub parallax: bool,
 }
 
 /// What a stored [`Queued`] keeps beside its text, as its row's JSON. `held` is the queue's:
@@ -367,6 +378,7 @@ struct QueuedExtra {
     options: RunOptions,
     account: Option<AccountChoice>,
     from: Option<RunId>,
+    parallax: bool,
     held: bool,
 }
 
@@ -378,6 +390,7 @@ impl Queued {
             options: self.options.clone(),
             account: self.account.clone(),
             from: self.from,
+            parallax: self.parallax,
             held,
         };
         QueuedRow {
@@ -401,6 +414,7 @@ impl Queued {
                 options: extra.options,
                 account: extra.account,
                 from: extra.from,
+                parallax: extra.parallax,
             },
             extra.held,
         ))
@@ -509,6 +523,10 @@ struct Batch {
     since: Option<Instant>,
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts about a run's actor, not states of one thing"
+)]
 pub(super) struct Actor {
     daemon: Arc<Daemon>,
     id: RunId,
@@ -579,6 +597,12 @@ pub(super) struct Actor {
     /// The cursor of the turn the live CLI is finishing ([`Event::TurnCursor`]), until its
     /// `TurnFinished` item carries it.
     cursor: Option<String>,
+    /// The messages plxd sent as its own ([`Queued::parallax`]), by turn id, until they're
+    /// recorded as sent.
+    parallax_turns: HashSet<TurnId>,
+    /// Whether a coordinator's provider compacted its session since its last turn began, so the
+    /// next one carries the Project's state again (PLX-937). Lost on a restart.
+    compacted: bool,
 }
 
 impl Actor {
@@ -629,6 +653,8 @@ impl Actor {
             pr_calls: HashSet::new(),
             senders: HashMap::new(),
             cursor: None,
+            parallax_turns: HashSet::new(),
+            compacted: false,
         }
     }
 
@@ -1020,6 +1046,9 @@ impl Actor {
                 if let Some(from) = from {
                     self.senders.insert(turn_id, from);
                 }
+                if message.parallax {
+                    self.parallax_turns.insert(turn_id);
+                }
                 let answer = self.send(message, delivery).await;
                 if answer.is_err() && from.is_some() {
                     self.senders.remove(&turn_id);
@@ -1143,6 +1172,9 @@ impl Actor {
                 let _ = reply.send(self.rename_branch(&slug).await);
             }
             Command::Detach => self.release(),
+            Command::Fresh { reply } => {
+                let _ = reply.send(self.fresh().await);
+            }
         }
     }
 
@@ -2089,6 +2121,7 @@ impl Actor {
             options,
             account,
             from: _,
+            parallax: _,
         } = queued;
         let changes = self.changes(options);
         self.resume(turn_id, text, images, threads, changes, account)
@@ -2204,6 +2237,8 @@ impl Actor {
             }
         }
         let (mut follow_up, seen) = queued.follow_up(&self.daemon, self.id).await?;
+        let compacted = self.compacted;
+        follow_up.text = self.after_compaction(follow_up.text).await;
         // A new model or mode the session takes on this turn ([`Actor::restarting`]), which the
         // run keeps once the CLI has the message.
         let mut changes = self.changes(queued.options.clone());
@@ -2216,6 +2251,8 @@ impl Actor {
             Some(live) => live.run.send(follow_up),
             None => Err(SendError::Finished),
         };
+        // The next turn carries the note instead.
+        self.compacted |= compacted && sent.is_err();
         if sent.is_ok()
             && changes != RunOptions::default()
             && let Some((_, backend)) = self
@@ -2421,6 +2458,7 @@ impl Actor {
                 options,
                 account,
                 from: _,
+                parallax: _,
             } = next;
             let changes = self.changes(options);
             let why = match self
@@ -2607,6 +2645,9 @@ impl Actor {
                             if let Some(from) = queued.from {
                                 self.senders.insert(queued.turn_id, from);
                             }
+                            if queued.parallax {
+                                self.parallax_turns.insert(queued.turn_id);
+                            }
                             self.queue_held |= held;
                             self.queued.push_back(queued);
                         }
@@ -2723,13 +2764,17 @@ impl Actor {
         } else {
             Role::Worker
         };
+        let full = super::full_claude_code(&self.row.fields, changes.permission);
+        // Why a coordinator's session ends here, so its next one starts from the packet instead
+        // of failing (0079).
+        let mut epoch_end = None;
         let (prepared, repo_path) = match prepare(
             &self.daemon,
             self.project,
             self.id,
             Some(account),
             role,
-            super::full_claude_code(&self.row.fields, changes.permission),
+            full,
         )
         .await
         {
@@ -2740,28 +2785,44 @@ impl Actor {
                         .parallax_data()
                         .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
             {
-                return Err(not_resumable(format!(
-                    "its session's account {} no longer exists",
-                    self.row.state.account_id
-                )));
+                if role != Role::Coordinator {
+                    return Err(not_resumable(format!(
+                        "its session's account {} no longer exists",
+                        self.row.state.account_id
+                    )));
+                }
+                // Its session went with its account: the role's default takes over.
+                epoch_end = Some(CoordinatorSessionEnd::NotResumable);
+                prepare(&self.daemon, self.project, self.id, None, role, full).await?
             }
             Err(error) => return Err(error),
         };
         let backend = prepared.resolved.backend().name();
         let from = self.row.fields.backend.clone();
-        if backend != from && !moving {
+        if backend != from && role == Role::Coordinator {
+            epoch_end = Some(CoordinatorSessionEnd::BackendChange);
+        } else if backend != from && !moving {
             return Err(not_resumable(format!(
                 "its session ran on {from}, but its account now runs on {backend}"
             )));
         }
-        let session_id = session_id.filter(|_| backend == from);
+        let session_id = session_id.filter(|_| backend == from && epoch_end.is_none());
         let paths = self.checkout_paths(&repo_path).await?;
         let attached = attached::prompt(&self.daemon, self.id, &threads, &text).await?;
-        let (sent, seen) = (attached.text, attached.seen);
+        let (mut sent, seen) = (attached.text, attached.seen);
         // The run's fields before it moves, to move it back if its new CLI doesn't start.
         let moved_from = self
             .store_options(prepared.resolved.backend(), changes)
             .await?;
+        if let Some(reason) = epoch_end {
+            self.end_epoch(reason).await;
+        }
+        if session_id.is_some() {
+            sent = self.after_compaction(sent).await;
+        } else {
+            // A new session starts from the packet, which has it all.
+            self.compacted = false;
+        }
         let message = text;
         let opening = self.opening(session_id, from, sent, &prepared).await;
         let (prompt, resume, handoff) = match opening {
@@ -2819,6 +2880,7 @@ impl Actor {
             options: RunOptions::default(),
             account: None,
             from: None,
+            parallax: false,
         };
         if self.live_open() && !changing {
             match self.hand_over(&queued).await? {
@@ -2951,12 +3013,16 @@ impl Actor {
             let prompt = Self::first_message(&text, &prepared.place)?;
             return Ok((prompt, None, None));
         }
+        let coordinator = self.is_coordinator();
         if let Some(session_id) = session_id {
             info!(run = %self.id, "resuming an agent run's session");
             // ponytail: every Codex resume reads the run's whole log for a fallback it rarely
             // uses; build it only after `thread/resume` fails if long threads make this slow.
-            // The fallback never fails a resume that would succeed without it.
-            let fallback = if prepared.resolved.backend().resume_fallback() {
+            // The fallback never fails a resume that would succeed without it. A coordinator's
+            // is its packet, on every backend (0079).
+            let fallback = if coordinator {
+                Some(self.packet(&text).await)
+            } else if prepared.resolved.backend().resume_fallback() {
                 match self.handoff_prompt(&from, &text, &prepared.place).await {
                     Ok(prompt) => Some(prompt),
                     Err(error) => {
@@ -2990,6 +3056,9 @@ impl Actor {
         }
         let to = prepared.resolved.backend().name();
         info!(run = %self.id, from, to, "starting a new session for an agent run");
+        if coordinator {
+            return Ok((self.packet(&text).await, None, None));
+        }
         let prompt = self.handoff_prompt(&from, &text, &prepared.place).await?;
         Ok((prompt, None, Some(from)))
     }
@@ -3137,8 +3206,13 @@ impl Actor {
     async fn record_turn(&mut self, turn_id: TurnId, text: String, seen: Vec<(Uuid, u64)>) {
         self.turns.insert(turn_id, text.clone());
         let (run_id, id) = (self.row.id, self.id);
+        // Not plxd's own, a wake-up, a usage limit's resume, or another thread's (PLX-937).
+        let from_user = !self.parallax_turns.remove(&turn_id)
+            && !self.senders.contains_key(&turn_id)
+            && !self.wakes.sends(turn_id)
+            && !self.resumes.sends(turn_id);
         let stored = store(&self.daemon, move |db| {
-            db.record_turn(run_id, turn_id.into(), &text)
+            db.record_turn_from(run_id, turn_id.into(), &text, from_user)
                 .map_err(|error| store_error(&error))?;
             db.record_attached_seen(run_id, &seen)
                 .map_err(|error| store_error(&error))?;
@@ -3600,6 +3674,7 @@ impl Actor {
                 }
                 self.row.state.session_id = Some(session_id.clone());
                 self.save().await;
+                self.began_session(session_id.clone()).await;
             }
             Event::AccountFallback {
                 from_account,
@@ -3660,6 +3735,9 @@ impl Actor {
             _ => {
                 if matches!(event, Event::TurnStarted { .. }) {
                     self.wake_session().await;
+                }
+                if matches!(event, Event::ContextCompaction { done: true }) {
+                    self.compacted = self.is_coordinator();
                 }
                 self.track_work(&event);
                 if self.track_turns(&event).await {
@@ -4383,6 +4461,7 @@ mod tests {
             options,
             account: None,
             from: None,
+            parallax: false,
         }
     }
 

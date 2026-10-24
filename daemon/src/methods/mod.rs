@@ -259,6 +259,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ProjectList => |p| project::list(context, p),
         ProjectCreate => |p| project::create(context, p),
         ProjectStart => |p| project::start(context, p),
+        CoordinatorFresh => |p| project::fresh(context, p),
         ProjectUpdate => |p| project::update(context, p),
         ProjectDelete => |p| project::delete(context, p),
         ProjectFromThreads => |p| project::from_threads(context, p),

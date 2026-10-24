@@ -38,6 +38,7 @@ import {
   PencilLine,
   Pin,
   Plus,
+  RotateCcw,
   Search,
   Server,
   Settings,
@@ -1620,6 +1621,24 @@ export function ThreadList({
         : []),
       ...(can("projectAutonomy")
         ? [{ label: "Autonomy…", icon: <Bot aria-hidden />, run: open("autonomy") }]
+        : []),
+      // Its coordinator's next message starts a new session from the Project's state (0079).
+      ...(can("coordinatorEpochs") && project.coordinator
+        ? [
+            {
+              label: "Fresh session",
+              icon: <RotateCcw aria-hidden />,
+              run: async () => {
+                const answer = await window.parallax.request(item.host.id, "coordinator/fresh", {
+                  project: project.id,
+                });
+                actionFailed(
+                  "error" in answer ? answer.error.message : undefined,
+                  "Couldn't start a fresh session",
+                );
+              },
+            },
+          ]
         : []),
       ...(can("projectDelete")
         ? [

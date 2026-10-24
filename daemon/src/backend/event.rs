@@ -427,6 +427,10 @@ pub enum FailureKind {
     UnexpectedApiKey,
     /// The CLI reported an error of its own, such as Claude's `error_max_turns`.
     VendorError,
+    /// The session the run resumes is gone, such as one Claude Code pruned (PLX-937). Routing
+    /// starts a new session with [`Resume::fallback`](super::Resume::fallback) when the run has
+    /// one.
+    SessionNotFound,
     /// The process died from a signal, or exited unsuccessfully without saying why.
     Crashed,
     /// A process the run needed could not be started.

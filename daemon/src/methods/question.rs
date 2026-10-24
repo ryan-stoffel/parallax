@@ -316,7 +316,7 @@ async fn tell(
     context
         .daemon
         .agents
-        .detached(agents::send(daemon, params))
+        .detached(agents::send_from_parallax(daemon, params))
         .await
         .map_err(|error| {
             ErrorObject::internal_error(format!(

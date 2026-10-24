@@ -810,6 +810,26 @@ const MIGRATIONS: &[Migration] = &[
         )
         WHERE run_id IN (SELECT id FROM runs WHERE policy = 'noWrite');",
     },
+    // A coordinator's provider sessions, its epochs (PLX-937, decision 0079), numbered from 1 in
+    // its run; the open one has no end. A coordinator with a session becomes epoch 1, from its
+    // creation. And whether each turn is the user's own, not plxd's or another thread's, for the
+    // packet's last messages; an older turn counts as the user's.
+    Migration {
+        version: 51,
+        sql: "ALTER TABLE turns ADD COLUMN from_user INTEGER NOT NULL DEFAULT 1;
+        CREATE TABLE coordinator_sessions (
+            run_id TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+            epoch INTEGER NOT NULL,
+            session_id TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            end_reason TEXT,
+            PRIMARY KEY (run_id, epoch)
+        );
+        INSERT INTO coordinator_sessions (run_id, epoch, session_id, started_at)
+            SELECT id, 1, session_id, created_at FROM runs
+            WHERE policy = 'noWrite' AND session_id IS NOT NULL;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
