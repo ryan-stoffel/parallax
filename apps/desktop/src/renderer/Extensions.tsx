@@ -1,9 +1,9 @@
-import { FolderOpen, Puzzle, Trash2 } from "lucide-react";
 import { createElement, useEffect, useId, useState } from "react";
 
 import type { ExtensionInfo } from "../preload/bridge";
 import { dismiss, notify } from "./notifications";
 import { memory } from "./stored";
+import { Delete, Extension, FolderOpen } from "./symbols";
 import { IconButton, Menu, menuHeading, menuItem } from "./ui";
 
 // The installed extensions, shared by every tab's toolbar, read once and after each change.
@@ -61,7 +61,7 @@ export function Extensions({ tab }: { tab?: number }) {
         ...(tab !== undefined && { tab: String(tab) }),
       })}
       <IconButton label="Extensions" popoverTarget={menuId} aria-haspopup="menu">
-        <Puzzle />
+        <Extension />
       </IconButton>
       <Menu
         id={menuId}
@@ -77,7 +77,7 @@ export function Extensions({ tab }: { tab?: number }) {
               {extension.icon ? (
                 <img src={extension.icon} alt="" className="size-4 shrink-0" />
               ) : (
-                <Puzzle aria-hidden />
+                <Extension aria-hidden />
               )}
               <span className="min-w-0 flex-1 truncate">{extension.name}</span>
               <span className="shrink-0 text-[11.5px] text-faint-foreground">
@@ -90,7 +90,7 @@ export function Extensions({ tab }: { tab?: number }) {
                 onClick={() => void window.parallax.removeExtension(extension.id).then(refresh)}
                 className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100"
               >
-                <Trash2 aria-hidden />
+                <Delete aria-hidden />
               </button>
             </div>
           ))

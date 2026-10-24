@@ -4,27 +4,7 @@ import type {
   PageTitleUpdatedEvent,
   WebviewTag,
 } from "electron";
-import {
-  ArrowLeft,
-  ArrowRight,
-  Bookmark,
-  Bot,
-  Check,
-  ChevronDown,
-  ChevronUp,
-  Code,
-  Globe,
-  Minus,
-  Plus,
-  Printer,
-  RectangleHorizontal,
-  RotateCw,
-  Rows2,
-  Search,
-  TriangleAlert,
-  X,
-  ZoomIn,
-} from "lucide-react";
+import { Bot, TriangleAlert } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -45,6 +25,26 @@ import { fitSize, MONITOR, PageFrame, ViewMenu, type Fit, type Size } from "./Pa
 import { backendLogos } from "./Sidebar";
 import { instanceLogo, instanceName } from "./providers";
 import { memory, stored } from "./stored";
+import {
+  Add,
+  ArrowBack,
+  ArrowDown,
+  ArrowForward,
+  ArrowUp,
+  Bookmark,
+  Check,
+  Close,
+  CloseSmall,
+  Code,
+  Print,
+  Public,
+  Rectangle,
+  Refresh,
+  Remove,
+  Search,
+  SplitscreenTop,
+  ZoomIn,
+} from "./symbols";
 import { IconButton, menuHeading, menuItem, MenuOption, shortcut } from "./ui";
 
 /** Google's results page for `query`. */
@@ -698,22 +698,22 @@ function Tab({
   const navBar = (
     <>
       <IconButton label="Back" disabled={!history.back} onClick={() => view.current?.goBack()}>
-        <ArrowLeft />
+        <ArrowBack />
       </IconButton>
       <IconButton
         label="Forward"
         disabled={!history.forward}
         onClick={() => view.current?.goForward()}
       >
-        <ArrowRight />
+        <ArrowForward />
       </IconButton>
       {loading ? (
         <IconButton label="Stop" onClick={() => view.current?.stop()}>
-          <X />
+          <Close />
         </IconButton>
       ) : (
         <IconButton label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
-          <RotateCw />
+          <Refresh />
         </IconButton>
       )}
       {/* The address bar alone is the form, so Enter opens it whatever else the toolbar holds:
@@ -771,8 +771,8 @@ function Tab({
           <span className="flex-1">Zoom</span>
           {(
             [
-              ["Zoom out", -1, Minus],
-              ["Zoom in", 1, Plus],
+              ["Zoom out", -1, Remove],
+              ["Zoom in", 1, Add],
             ] as const
           ).map(([label, direction, Icon], i) => (
             <span key={label} className="contents">
@@ -816,7 +816,7 @@ function Tab({
           onClick={() => void view.current?.print().catch(() => {})}
           className={`${menuItem} disabled:opacity-50`}
         >
-          <Printer aria-hidden />
+          <Print aria-hidden />
           Print…
           <span className="ml-auto text-[11.5px] text-faint-foreground">{shortcut("P")}</span>
         </button>
@@ -847,7 +847,7 @@ function Tab({
           option={{
             value: "compact",
             label: "Compact",
-            icon: <RectangleHorizontal aria-hidden />,
+            icon: <Rectangle aria-hidden />,
             description: "Tabs and the address bar in one row",
           }}
           checked={layout === "compact"}
@@ -857,7 +857,7 @@ function Tab({
           option={{
             value: "classic",
             label: "Classic",
-            icon: <Rows2 aria-hidden />,
+            icon: <SplitscreenTop aria-hidden />,
             description: "Tabs over the address bar",
           }}
           checked={layout === "classic"}
@@ -945,13 +945,13 @@ function Tab({
               {query && matches ? `${matches.active} of ${matches.total}` : ""}
             </span>
             <IconButton label="Previous match" onClick={() => find(query, -1)}>
-              <ChevronUp />
+              <ArrowUp />
             </IconButton>
             <IconButton label="Next match" onClick={() => find(query, 1)}>
-              <ChevronDown />
+              <ArrowDown />
             </IconButton>
             <IconButton label="Close find" onClick={closeFind}>
-              <X />
+              <Close />
             </IconButton>
           </form>
         )}
@@ -1004,7 +1004,7 @@ function Tab({
               </>
             ) : (
               <>
-                <Globe aria-hidden className="mb-1 size-5 text-faint-foreground" />
+                <Public aria-hidden className="mb-1 size-5 text-faint-foreground" />
                 <p className="text-[13px] font-medium text-foreground">Open a page</p>
                 <p className="text-[12.5px] text-muted-foreground">
                   Search Google, or type an address such as a dev server's localhost:5173.
@@ -1079,7 +1079,7 @@ export function BrowserTabBar({ scope }: { scope: string }) {
           ))}
         </div>
         <IconButton label="New tab" onClick={browser.newTab}>
-          <Plus />
+          <Add />
         </IconButton>
       </div>
       {compact && <div ref={end} className="flex shrink-0 items-center" />}
@@ -1109,7 +1109,7 @@ function BrowserTab({
   ) : tab.Logo ? (
     <tab.Logo aria-hidden className="size-3.5 shrink-0" />
   ) : (
-    <Globe aria-hidden className="size-3.5 shrink-0" />
+    <Public aria-hidden className="size-3.5 shrink-0" />
   );
   return (
     <div
@@ -1135,7 +1135,7 @@ function BrowserTab({
           onClick={onClose}
           className={`mr-1 size-5 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
         >
-          <X aria-hidden className="size-3" />
+          <CloseSmall aria-hidden className="size-4" />
         </button>
       )}
     </div>
