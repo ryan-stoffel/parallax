@@ -10,11 +10,15 @@ const MAX_EVENTS = 5000;
 /** How long the pointer rests on a thread's row before its watch opens. */
 const PREFETCH_MS = 120;
 
-/** One thread's watch: its last snapshot and every event since, and who shows it. */
+/**
+ * One thread's watch: its last snapshot and every event since, who shows it, and whether anyone
+ * has, unlike one only prefetched.
+ */
 type Entry = {
   messages: ThreadMessage[];
   listeners: Set<(messages: ThreadMessage[]) => void>;
   stop: () => void;
+  shown: boolean;
 };
 
 /**
@@ -39,15 +43,39 @@ function close(entries: Map<string, Entry>, key: string) {
   entries.delete(key);
 }
 
-/** Closes the least recently used closed threads' watches beyond `KEPT`. */
+/** Closes the least recently used closed threads' watches beyond `KEPT`, prefetched ones aside. */
 function trim(entries: Map<string, Entry>) {
-  let idle = [...entries].filter(([, e]) => e.listeners.size === 0).length;
+  const kept = (e: Entry) => e.shown && e.listeners.size === 0;
+  let idle = [...entries.values()].filter(kept).length;
   for (const [key, e] of entries) {
     if (idle <= KEPT) return;
-    if (e.listeners.size > 0) continue;
+    if (!kept(e)) continue;
     close(entries, key);
     idle--;
   }
+}
+
+/** Thread `threadId`'s entry, opening its watch if it has none, now the most recently used. */
+function open(entries: Map<string, Entry>, hostId: string, threadId: string): Entry {
+  const key = keyOf(hostId, threadId);
+  const found = entries.get(key);
+  if (found) {
+    entries.delete(key);
+    entries.set(key, found);
+    return found;
+  }
+  const e: Entry = { messages: [], listeners: new Set(), stop: () => {}, shown: false };
+  e.stop = window.parallax.watch(hostId, { threadId }, (message) => {
+    if (message.type === "snapshot") e.messages = [message];
+    else e.messages.push(message);
+    // An error ended it, as when its host's connection closed, so the next to show the thread
+    // opens it again.
+    if (message.type === "error" && entries.get(key) === e) entries.delete(key);
+    else if (e.listeners.size === 0 && e.messages.length > MAX_EVENTS) close(entries, key);
+    for (const l of e.listeners) l([message]);
+  });
+  entries.set(key, e);
+  return e;
 }
 
 /**
@@ -63,39 +91,32 @@ export function watchThread(
 ): () => void {
   const entries = current();
   const key = keyOf(hostId, threadId);
-  let entry = entries.get(key);
-  if (entry) entries.delete(key);
-  else {
-    const e: Entry = { messages: [], listeners: new Set(), stop: () => {} };
-    e.stop = window.parallax.watch(hostId, { threadId }, (message) => {
-      if (message.type === "snapshot") e.messages = [message];
-      else e.messages.push(message);
-      // An error ended it, so the next to show the thread opens it again.
-      if (message.type === "error" && entries.get(key) === e) entries.delete(key);
-      else if (e.listeners.size === 0 && e.messages.length > MAX_EVENTS) close(entries, key);
-      for (const l of e.listeners) l([message]);
-    });
-    entry = e;
-  }
-  entries.set(key, entry);
-  entry.listeners.add(listener);
-  if (entry.messages.length > 0) listener([...entry.messages]);
-  const e = entry;
+  const e = open(entries, hostId, threadId);
+  e.shown = true;
+  e.listeners.add(listener);
+  if (e.messages.length > 0) listener([...e.messages]);
   return () => {
-    if (!e.listeners.delete(listener) || e.listeners.size > 0) return;
+    if (!e.listeners.delete(listener) || e.listeners.size > 0 || entries.get(key) !== e) return;
+    if (e.messages.length > MAX_EVENTS) return close(entries, key);
     // The most recently used: last in line to close.
-    if (entries.get(key) === e) {
-      entries.delete(key);
-      entries.set(key, e);
-    }
+    entries.delete(key);
+    entries.set(key, e);
     trim(entries);
   };
 }
 
-/** Opens thread `threadId`'s watch once the pointer rests on its row, so a click shows it at once. */
+/**
+ * Opens thread `threadId`'s watch once the pointer rests on its row, so a click shows it at once.
+ * Only the latest row's stays prefetched, so resting on rows never closes threads the user opened.
+ */
 export function prefetchThread(hostId: string, threadId: string) {
   clearTimeout(pending);
-  pending = setTimeout(() => watchThread(hostId, threadId, () => {})(), PREFETCH_MS);
+  pending = setTimeout(() => {
+    const entries = current();
+    const key = keyOf(hostId, threadId);
+    for (const [k, e] of entries) if (k !== key && !e.shown) close(entries, k);
+    open(entries, hostId, threadId);
+  }, PREFETCH_MS);
 }
 
 /** Cancels a prefetch whose row the pointer left. */

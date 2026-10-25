@@ -260,11 +260,17 @@ export class Connection {
     this.connect();
   }
 
-  /** Stops for good: kills the child and drops every subscription. */
+  /**
+   * Stops for good: kills the child and drops every subscription. Each watch ends with an error,
+   * so whoever keeps one opens it again on the host's next connection.
+   */
   dispose(): void {
     this.subscriptions.clear();
+    const watches = [...this.watches];
     this.watches.clear();
     this.teardown();
+    const error = { code: ErrorCodes.InternalError, message: "The connection to this host closed" };
+    for (const watch of watches) watch.listener({ type: "error", error });
     for (const done of this.reconnectWaiters) done();
   }
 

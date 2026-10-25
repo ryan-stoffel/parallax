@@ -1,7 +1,7 @@
 import { beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { WatchMessage } from "../preload/bridge";
-import { watchThread, type ThreadMessage } from "./threadWatches";
+import { prefetchThread, watchThread, type ThreadMessage } from "./threadWatches";
 
 let opened: { threadId: string; send: (m: ThreadMessage) => void; stopped: boolean }[];
 
@@ -54,4 +54,23 @@ test("a watch that ended with an error opens again", () => {
   opened[0]!.send({ type: "error", error: { code: 1, message: "gone" } } as ThreadMessage);
   watchThread("h", "t", () => {});
   expect(opened).toHaveLength(2);
+});
+
+test("a thread closed with more than 5000 events since its snapshot stops being watched", () => {
+  const stop = watchThread("h", "t", () => {});
+  opened[0]!.send(snapshot);
+  for (let seq = 2; seq <= 5002; seq++) opened[0]!.send(event(seq));
+  stop();
+  expect(opened[0]!.stopped).toBe(true);
+});
+
+test("only the latest prefetched row stays watched, and prefetching closes no thread shown", () => {
+  vi.useFakeTimers();
+  for (let i = 0; i < 6; i++) watchThread("h", `t${i}`, () => {})();
+  for (let i = 0; i < 3; i++) {
+    prefetchThread("h", `p${i}`);
+    vi.advanceTimersByTime(120);
+  }
+  expect(opened.filter((w) => w.stopped).map((w) => w.threadId)).toEqual(["p0", "p1"]);
+  vi.useRealTimers();
 });
