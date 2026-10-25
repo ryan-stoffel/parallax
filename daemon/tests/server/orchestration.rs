@@ -447,9 +447,10 @@ async fn a_snapshot_carries_only_the_newest_events_and_history_the_rest() {
     let waiting = TurnId::generate();
     dispatch(&mut client, message(thread, waiting, "Later")).await;
     // Each edit is one `queue.updated` of over 4 KiB: 48 of them are well past the cap.
+    let mut last = 0;
     for i in 0..48 {
         let text = format!("{i} {}", "x".repeat(4096));
-        dispatch(&mut client, edit(thread, waiting, &text)).await;
+        last = dispatch(&mut client, edit(thread, waiting, &text)).await;
     }
 
     let seen = snapshot(&mut client, thread).await;
@@ -458,6 +459,7 @@ async fn a_snapshot_carries_only_the_newest_events_and_history_the_rest() {
         .iter()
         .map(|event| serde_json::to_vec(&event.event).unwrap().len())
         .sum();
+    assert_eq!(seen.events.last().map(|event| event.seq), Some(last));
     assert!(seen.more, "older events remain");
     assert!(bytes <= 128 * 1024, "the snapshot carried {bytes} bytes");
     let first = seen.events.first().unwrap().seq;
