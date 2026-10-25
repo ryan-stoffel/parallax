@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{
-    AgentList, AgentStart, PrAct, PrDiff, PrView, RepoAdd, ThreadList, ThreadStart,
+    AgentList, AgentStart, PrAct, PrDiff, PrView, ThreadList, ThreadStart,
 };
 use parallax_protocol::{
     AgentListParams, AgentStatus, ErrorKind, ParallaxEvent, PrActParams, PrAction, PrState,
-    PrViewParams, ProjectId, RepoAddParams, RepoId, RunId, ThreadListParams,
+    PrViewParams, ProjectId, RunId, ThreadListParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{Event, ToolStatus};
@@ -246,14 +246,7 @@ async fn merging_with_pr_act_archives_the_thread_before_the_next_sweep() {
     let repo = real_repo(work.path());
     let host = start(temp_dir(), opening(), &tools);
     let mut client = host.client().await;
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: repo.to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&repo).await;
     subscribe(
         &mut client,
         ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),

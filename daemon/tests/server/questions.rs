@@ -31,7 +31,7 @@ use crate::coordinator::{
     coordinator_launches, nth_launch, roles, spawn, start_params as coordinator_params,
 };
 use crate::inbox::added;
-use crate::mcp::{Mcp, mcp_command};
+use crate::mcp::{Mcp, every_callers_tools, mcp_command};
 use crate::support::{PATIENCE, kind, project_update, temp_dir};
 
 /// A question shaped like plxd's own wake-up, to check it comes out quoted.
@@ -99,16 +99,7 @@ async fn tool_names(mcp: &mut Mcp) -> Vec<String> {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap().to_owned())
         .collect();
-    let last = [
-        html::TOOLS,
-        files::TOOLS,
-        preview::TOOLS,
-        device::TOOLS,
-        triggers::TOOLS,
-        delegation::TOOLS,
-        plxd::mcp::COMPUTER_TOOLS,
-    ]
-    .concat();
+    let last = every_callers_tools();
     let devices = names.split_off(names.len() - last.len());
     assert_eq!(devices, last, "every caller's last tools");
     names

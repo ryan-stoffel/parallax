@@ -8,14 +8,13 @@ use std::time::Duration;
 
 use parallax_protocol::methods::{
     AgentAccept, AgentCommit, AgentEvents, AgentList, AgentSend, AgentWait, OrchestrationDispatch,
-    RepoAdd, TaskDelegate, ThreadDelete, ThreadList, ThreadStart,
+    TaskDelegate, ThreadDelete, ThreadList, ThreadStart,
 };
 use parallax_protocol::{
     AcceptId, AgentAcceptParams, AgentCommitParams, AgentDelivery, AgentEventsParams,
     AgentListParams, AgentOutputItem, AgentPermission, AgentSendParams, AgentStatus,
-    AgentWaitParams, AgentWaitUntil, ErrorKind, OrchestrationCommand, ParallaxEvent, RepoAddParams,
-    RepoId, RunId, TaskDelegateParams, Thread, ThreadDeleteParams, ThreadListParams,
-    ThreadStartParams, TurnId,
+    AgentWaitParams, AgentWaitUntil, ErrorKind, OrchestrationCommand, ParallaxEvent, RepoId, RunId,
+    TaskDelegateParams, Thread, ThreadDeleteParams, ThreadListParams, ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
 use plxd::mcp::MAX_CALLS;
@@ -29,7 +28,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::time::{Instant, sleep};
 
 use crate::agents::{Conn, Host, end_turn, fake, git, init, real_repo, send_params, text};
-use crate::mcp::{Mcp, mcp_command};
+use crate::mcp::{Mcp, every_callers_tools, mcp_command};
 use crate::support::{PATIENCE, temp_dir};
 use crate::threads::start_params;
 
@@ -50,14 +49,7 @@ fn hang() -> Vec<Step> {
 
 /// A thread the user started in a new repo entry under `repos`, which the tools are bound to.
 async fn caller(client: &mut Conn, repos: &TempDir) -> (RunId, RepoId) {
-    let repo = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: real_repo(repos.path()).to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let repo = client.add(&real_repo(repos.path())).await;
     let started = client
         .call::<ThreadStart>(start_params(Some(repo.id), "Plan the work."))
         .await
@@ -138,21 +130,7 @@ async fn a_thread_launches_waits_on_reads_searches_and_messages_a_child() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
     let memory: &[&str] = &["memory_read", "memory_propose"];
-    assert_eq!(
-        names,
-        [
-            TOOLS,
-            memory,
-            html::TOOLS,
-            files::TOOLS,
-            preview::TOOLS,
-            device::TOOLS,
-            triggers::TOOLS,
-            delegation::TOOLS,
-            plxd::mcp::COMPUTER_TOOLS,
-        ]
-        .concat()
-    );
+    assert_eq!(names, [TOOLS, memory, &every_callers_tools(),].concat());
 
     let child = mcp
         .ok(

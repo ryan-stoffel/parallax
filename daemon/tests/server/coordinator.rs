@@ -4,7 +4,7 @@
 //! (0042).
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -12,7 +12,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::methods::{
     AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysRemove, AgentCancel, AgentEvents, AgentList,
     AgentSend, AgentStart, CoordinatorFresh, EventsSubscribe, HostHealth, ProjectDelete,
-    ProjectList, ProjectStart, ProjectUpdate, RepoAdd, ScheduleRun, ScheduleSave,
+    ProjectList, ProjectStart, ProjectUpdate, ScheduleRun, ScheduleSave,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AccountsDefaultsSetParams, AccountsKeysRemoveParams,
@@ -21,8 +21,8 @@ use parallax_protocol::{
     CoordinatorFreshParams, CoordinatorSessionEnd, CoordinatorThreadId, ErrorKind,
     EventsEventParams, EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectCreateParams,
     ProjectDeleteParams, ProjectDeleteResult, ProjectId, ProjectListParams, ProjectPermission,
-    ProjectStartParams, ProjectUpdateParams, Provider, RepoAddParams, RepoId, Role, RunId,
-    Schedule, ScheduleIdParams, ScheduleSaveParams, TurnId,
+    ProjectStartParams, ProjectUpdateParams, Provider, Role, RunId, Schedule, ScheduleIdParams,
+    ScheduleSaveParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::process::{Environment, Launcher};
@@ -1490,27 +1490,13 @@ async fn deleting_an_unknown_project_or_a_repo_entry_fails() {
     let host = Host::start(temp_dir(), fake(Vec::new()));
     let mut client = host.client().await;
     let work = temp_dir();
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: real_repo(work.path()).to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&real_repo(work.path())).await;
     let scope = ProjectId::try_from(Uuid::from(entry.id)).unwrap();
     for project in [ProjectId::generate(), scope] {
         let error = delete(&mut client, project).await.unwrap_err();
         assert_eq!(kind(&error), ErrorKind::ProjectNotFound, "{project}");
     }
-    let listed = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: entry.path.clone(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let listed = client.add(Path::new(&entry.path)).await;
     assert_eq!(listed.id, entry.id, "the repo entry stays");
     host.server.stop().await;
 }

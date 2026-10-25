@@ -24,8 +24,8 @@ use parallax_protocol::{
     AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
     CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
     HostHealthParams, ImageId, ImageMediaType, InitializeResult, ParallaxEvent, Project,
-    ProjectCreateParams, ProjectDeleteParams, ProjectId, PromptImage, Provider, RepoAddParams,
-    RepoId, RunId, TurnId, UsageGetParams,
+    ProjectCreateParams, ProjectDeleteParams, ProjectId, PromptImage, Provider, Repo,
+    RepoAddParams, RepoId, RunId, TurnId, UsageGetParams,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -309,6 +309,17 @@ impl Conn {
                 other => panic!("expected a response, got {other:?}"),
             }
         }
+    }
+
+    /// Adds the repository at `path` as a repo entry, and returns the entry.
+    pub(crate) async fn add(&mut self, path: &Path) -> Repo {
+        self.call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: path.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo
     }
 
     /// Sends a request without waiting for its response, which [`Conn::responses`] collects.
@@ -1397,14 +1408,7 @@ async fn runs_plxd_cannot_start_are_refused() {
     // A Codex run `agent/start` makes on a repo entry isn't a thread, so it is refused: Codex
     // runs only threads (0035).
     let work = temp_dir();
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: real_repo(work.path()).to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&real_repo(work.path())).await;
     let on_entry = client
         .call::<AgentStart>(AgentStartParams {
             account: Some(AccountChoice::Subscription {

@@ -4,13 +4,13 @@
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{
-    AgentApprove, AgentCancel, AgentEvents, AgentStart, EventsSubscribe, ProjectStart, RepoAdd,
+    AgentApprove, AgentCancel, AgentEvents, AgentStart, EventsSubscribe, ProjectStart,
 };
 use parallax_protocol::{
     AccountChoice, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
     AgentApproveResult, AgentCancelParams, AgentEventsParams, AgentOutcome, AgentOutputItem,
     AgentStartParams, AgentStatus, ApprovalId, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    ParallaxEvent, ProjectId, ProjectStartParams, RepoAddParams, RepoId, RunId,
+    ParallaxEvent, ProjectId, ProjectStartParams, RunId,
 };
 use plxd::backend::fake::{AskedApproval, Step};
 use serde_json::{Value, json};
@@ -266,14 +266,7 @@ async fn a_run_started_without_approvals_never_asks_outside_a_project() {
 
     let mut client = host.client().await;
     let work = temp_dir();
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: real_repo(work.path()).to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&real_repo(work.path())).await;
     let scope = ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap();
     subscribe(&mut client, scope, 0).await;
     let params = start_params(scope, "Run the tests");

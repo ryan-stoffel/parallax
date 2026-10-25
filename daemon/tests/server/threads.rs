@@ -17,7 +17,7 @@ use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentCancelParams, AgentEffort, AgentEventsParams,
     AgentListParams, AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
     EventsSubscribeParams, HostHealthParams, ImageMediaType, ParallaxEvent, ProjectIcon, ProjectId,
-    PromptImage, Provider, Repo, RepoAddParams, RepoCloneParams, RepoId, RepoRefsParams,
+    PromptImage, Provider, RepoAddParams, RepoCloneParams, RepoId, RepoRefsParams,
     RepoRemoteParams, RepoUpdateParams, RunId, SpaceCreateParams, SpaceDeleteParams,
     ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams,
     ThreadUpdateParams, TurnId,
@@ -257,16 +257,6 @@ impl Conn {
 
     async fn list(&mut self) -> ThreadListResult {
         self.call::<ThreadList>(ThreadListParams {}).await.unwrap()
-    }
-
-    async fn add(&mut self, path: &Path) -> Repo {
-        self.call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: path.to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo
     }
 }
 

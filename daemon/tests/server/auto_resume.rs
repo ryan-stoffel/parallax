@@ -7,14 +7,12 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::methods::{
-    AgentCancel, AgentList, AgentResumeNow, AgentSend, AgentStart, HostSettingsGet, RepoAdd,
-    ThreadStart,
+    AgentCancel, AgentList, AgentResumeNow, AgentSend, AgentStart, HostSettingsGet, ThreadStart,
 };
 use parallax_protocol::{
     AgentBackgroundKind, AgentBackgroundTask, AgentCancelParams, AgentListParams, AgentOutputItem,
     AgentPermission, AgentResumeNowParams, AgentRunState, AgentStatus, ErrorKind,
-    EventsEventParams, HostSettingsGetParams, ParallaxEvent, ProjectId, Provider, RepoAddParams,
-    RepoId, RunId, TurnId,
+    EventsEventParams, HostSettingsGetParams, ParallaxEvent, ProjectId, Provider, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{
@@ -334,14 +332,7 @@ async fn a_plain_thread_waits_only_with_the_host_setting_on() {
     assert!(!settings.auto_resume, "off by default");
 
     let checkout = temp_dir();
-    let repo = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: real_repo(checkout.path()).to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let repo = client.add(&real_repo(checkout.path())).await;
     let scope = ProjectId::try_from(uuid::Uuid::from(repo.id)).unwrap();
     subscribe(&mut client, scope, 0).await;
     let start = crate::open_pr::thread(Some(repo.id));

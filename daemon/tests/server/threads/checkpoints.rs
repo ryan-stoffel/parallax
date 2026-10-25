@@ -13,6 +13,7 @@ use plxd::backend::fake::Step;
 
 use super::{Conn, Host, fake, real_repo, scope, start_params};
 use crate::agents::{end_turn, init};
+use crate::orchestration::sent;
 
 fn write(path: &str, content: &str) -> Step {
     Step::WriteFile {
@@ -58,20 +59,12 @@ async fn checkpointed(runs: &mut Conn, run: RunId, ordinal: u32) -> TurnCheckpoi
 
 async fn send(client: &mut Conn, thread_id: RunId, text: &str) {
     client
-        .call::<OrchestrationDispatch>(OrchestrationCommand::MessageDispatch {
+        .call::<OrchestrationDispatch>(sent(
             thread_id,
-            message_id: TurnId::generate(),
-            text: text.to_owned(),
-            images: Vec::new(),
-            threads: Vec::new(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            dispatch_mode: DispatchMode::QueueAfterActive,
-        })
+            TurnId::generate(),
+            text,
+            DispatchMode::QueueAfterActive,
+        ))
         .await
         .unwrap();
 }
@@ -436,20 +429,12 @@ fn counting_backend(
 async fn assert_pending_actions(client: &mut Conn, thread: RunId) {
     // While local completion is pending, no new provider turn or stale branch action is allowed.
     let pending = client
-        .call::<OrchestrationDispatch>(OrchestrationCommand::MessageDispatch {
-            thread_id: thread,
-            message_id: TurnId::generate(),
-            text: "must wait".to_owned(),
-            images: Vec::new(),
-            threads: Vec::new(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            dispatch_mode: DispatchMode::QueueAfterActive,
-        })
+        .call::<OrchestrationDispatch>(sent(
+            thread,
+            TurnId::generate(),
+            "must wait",
+            DispatchMode::QueueAfterActive,
+        ))
         .await
         .unwrap_err();
     assert_eq!(
@@ -749,22 +734,14 @@ async fn refused_steered_boundary(later: bool) {
         )
     )).await;
     client
-        .call::<OrchestrationDispatch>(OrchestrationCommand::MessageDispatch {
-            thread_id: thread,
-            message_id: TurnId::generate(),
-            text: "Steered".to_owned(),
-            images: Vec::new(),
-            threads: Vec::new(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            dispatch_mode: DispatchMode::SteerActive {
+        .call::<OrchestrationDispatch>(sent(
+            thread,
+            TurnId::generate(),
+            "Steered",
+            DispatchMode::SteerActive {
                 target_run_id: None,
             },
-        })
+        ))
         .await
         .unwrap();
     checkpointed(&mut events, thread, 2).await;

@@ -2,16 +2,15 @@
 //! a queued message to each running child when an entry changes, and stale entries after each
 //! landing.
 
+use std::path::Path;
 use std::time::Duration;
 
 use parallax_protocol::methods::{
     AgentStart, LandQueue, MemoryDelete, MemoryList, MemoryRead, MemoryWrite, ProjectUpdate,
-    RepoAdd,
 };
 use parallax_protocol::{
     AgentOutputItem, LandQueueParams, MemoryDeleteParams, MemoryFile, MemoryListParams,
     MemoryReadParams, MemoryScope, MemoryWriteParams, ParallaxEvent, ProjectUpdateParams,
-    RepoAddParams, RepoId,
 };
 use plxd::backend::fake::Step;
 
@@ -82,14 +81,7 @@ async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_mi
         ..project_update(project.id)
     };
     client.call::<ProjectUpdate>(auto_land).await.unwrap();
-    let repo = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: project.repo_path.clone(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let repo = client.add(Path::new(&project.repo_path)).await;
     let scope = MemoryScope::Project { id: project.id };
     let repo_scope = MemoryScope::Repo { id: repo.id };
     let gone = "memory/gotcha/old-module.md";

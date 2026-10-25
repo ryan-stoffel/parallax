@@ -6,12 +6,10 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::methods::{
-    AgentCancel, AgentList, AgentOpenPr, AgentStart, RepoAdd, ThreadStart,
-};
+use parallax_protocol::methods::{AgentCancel, AgentList, AgentOpenPr, AgentStart, ThreadStart};
 use parallax_protocol::{
     AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind, ParallaxEvent,
-    ProjectId, RepoAddParams, RepoId, RunId, ThreadStartParams,
+    ProjectId, RepoId, RunId, ThreadStartParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, find_program};
@@ -233,14 +231,7 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
     let repo = real_repo(work.path());
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: repo.to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&repo).await;
     subscribe(
         &mut client,
         ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),

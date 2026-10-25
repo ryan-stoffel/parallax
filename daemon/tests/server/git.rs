@@ -9,13 +9,13 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentCommit, AgentGitStatus, AgentOpenPr, AgentPush, AgentSend,
-    AgentStart, ProjectDelete, QueueList, QueueSteer, RepoAdd, ThreadDelete, ThreadStart,
+    AgentStart, ProjectDelete, QueueList, QueueSteer, ThreadDelete, ThreadStart,
 };
 use parallax_protocol::{
     AcceptId, AgentAcceptParams, AgentCancelParams, AgentCommitParams, AgentGitStatusParams,
     AgentOutputItem, AgentPushParams, AgentStatus, ErrorKind, GitStatus, ParallaxEvent,
-    ProjectDeleteParams, ProjectId, QueueListParams, QueueSteerParams, RepoAddParams, RepoId,
-    RunId, ThreadDeleteParams, ThreadStartParams, TurnId,
+    ProjectDeleteParams, ProjectId, QueueListParams, QueueSteerParams, RepoId, RunId,
+    ThreadDeleteParams, ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
 use tokio::task::JoinHandle;
@@ -127,14 +127,7 @@ async fn a_checkout_thread_commits_pushes_and_opens_a_pull_request_on_its_branch
     let origin = add_origin(&repo, work.path());
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: repo.to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&repo).await;
     subscribe(
         &mut client,
         ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
@@ -419,14 +412,7 @@ async fn a_thread_s_delete_is_refused_while_its_push_runs() {
     let (started, gate) = hold_pushes(&origin);
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: repo.to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&repo).await;
     subscribe(
         &mut client,
         ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
@@ -571,14 +557,7 @@ async fn repository_git_status_reads_checkout_without_starting_a_thread() {
     let repo = real_repo(dir.path());
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: repo.to_string_lossy().into_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&repo).await;
     fs::write(repo.join("new.txt"), "one\ntwo").unwrap();
     let answer = client
         .call::<RepoGitStatus>(RepoGitStatusParams { repo: entry.id })
@@ -610,14 +589,7 @@ async fn repository_git_status_refuses_nested_checkout_with_missing_git_director
     git(&inner, &["branch", "-m", "inner-branch"]);
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: inner.to_string_lossy().into_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&inner).await;
     let answer = client
         .call::<RepoGitStatus>(RepoGitStatusParams { repo: entry.id })
         .await

@@ -40,6 +40,20 @@ fn worker() -> Vec<Step> {
     ]
 }
 
+/// The tools every caller gets after its own (PLX-640).
+pub(crate) fn every_callers_tools() -> Vec<&'static str> {
+    [
+        html::TOOLS,
+        files::TOOLS,
+        preview::TOOLS,
+        device::TOOLS,
+        triggers::TOOLS,
+        delegation::TOOLS,
+        plxd::mcp::COMPUTER_TOOLS,
+    ]
+    .concat()
+}
+
 /// `plxd mcp --thread`, initialized.
 pub(crate) struct Mcp {
     child: Child,
@@ -229,13 +243,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
             land::TOOLS,
             board::TOOLS,
             &["memory_read", "memory_propose", "memory_write"],
-            html::TOOLS,
-            files::TOOLS,
-            preview::TOOLS,
-            device::TOOLS,
-            triggers::TOOLS,
-            delegation::TOOLS,
-            plxd::mcp::COMPUTER_TOOLS,
+            &every_callers_tools(),
         ]
         .concat()
     );
