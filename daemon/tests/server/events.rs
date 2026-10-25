@@ -10,12 +10,12 @@ use parallax_protocol::methods::{
 };
 use parallax_protocol::{
     ErrorKind, EventsEventParams, EventsSubscribeParams, EventsUnsubscribeParams, HostHealthParams,
-    ImageMediaType, ParallaxEvent, Project, ProjectIcon, ProjectId, ProjectListParams,
-    ProjectUpdateParams, PromptImage, RunId, SubscriptionId,
+    ParallaxEvent, Project, ProjectIcon, ProjectId, ProjectListParams, ProjectUpdateParams, RunId,
+    SubscriptionId,
 };
 use rustix::process::Signal;
 
-use crate::support::{Client, InProcess, Plxd, create_params, kind, temp_dir};
+use crate::support::{Client, InProcess, Plxd, create_params, kind, png, project_update, temp_dir};
 
 async fn create(client: &mut Client, dir: &Path, name: &str) -> Project {
     client
@@ -100,25 +100,13 @@ async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
     let live_subscription = subscribe(&mut live, 1).await;
 
     let edit = ProjectUpdateParams {
-        project: project.id,
         name: Some("roster".to_owned()),
         icon: Some(ProjectIcon {
             name: "rocket".to_owned(),
             color: Some("green".to_owned()),
-            image: Some(PromptImage {
-                media_type: ImageMediaType::Png,
-                data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
-            }),
+            image: Some(png()),
         }),
-        permission: None,
-        autonomy: None,
-        base_branch: None,
-        auto_land: None,
-        allow_api_keys: None,
-        max_children: None,
-        checks: None,
-        proposed_checks: None,
-        computer: None,
+        ..project_update(project.id)
     };
     let updated = editor
         .call::<ProjectUpdate>(edit.clone())

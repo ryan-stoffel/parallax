@@ -17,8 +17,8 @@ use plxd::backend::fake::Step;
 use plxd::routing::BackendRegistry;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, fake_backend, has_item, init, items, outcomes,
-    project_params, send_params, start_params, subscribe, text, until, updated_to,
+    Conn, Host, end_turn, fake, fake_backend, has_item, init, items, outcomes, send_params,
+    start_params, subscribe, text, until, updated_to,
 };
 use crate::support::{kind, temp_dir};
 
@@ -126,9 +126,7 @@ async fn reorder_cancel_and_edit(client: &mut Conn, run_id: RunId, [a, b, c]: [T
 #[tokio::test]
 async fn waiting_messages_are_edited_reordered_cancelled_and_sent_in_order_after_a_restart() {
     let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Work for a while");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -217,9 +215,7 @@ async fn waiting_messages_are_edited_reordered_cancelled_and_sent_in_order_after
 #[tokio::test]
 async fn a_message_that_cant_be_stored_is_refused() {
     let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Work for a while");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -252,9 +248,7 @@ async fn a_message_that_cant_be_stored_is_refused() {
 #[tokio::test]
 async fn compact_is_refused_on_a_backend_that_cant_compact() {
     let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Work for a while");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -277,9 +271,7 @@ async fn compact_is_refused_on_a_backend_that_cant_compact() {
 #[tokio::test]
 async fn queue_mutations_that_cant_be_stored_are_refused() {
     let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Work for a while");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -393,9 +385,7 @@ async fn a_steer_goes_into_the_running_turn_ahead_of_waiting_messages() {
         end_turn("Queued."),
     ];
     let host = Host::start(temp_dir(), fake(script));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Work for a while");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -461,9 +451,7 @@ async fn a_steer_interrupts_a_cli_that_takes_no_messages_and_resumes_with_it() {
         Arc::new(fake_backend(busy()).without_follow_ups()),
     );
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Work for a while");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -511,9 +499,7 @@ async fn a_steer_receipt_failure_retains_the_error_and_removes_the_delivered_que
             Step::Hang,
         ];
         let host = Host::start(temp_dir(), fake(script));
-        let mut client = host.client().await;
-        let project = create(&mut client, project_params(host.dir.path())).await;
-        subscribe(&mut client, project.id, 0).await;
+        let (mut client, project) = host.project_client().await;
         let params = start_params(project.id, "Work");
         let run_id = params.run_id;
         client.call::<AgentStart>(params).await.unwrap();

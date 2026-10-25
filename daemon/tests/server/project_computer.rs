@@ -13,7 +13,7 @@ use parallax_protocol::{
 
 use crate::agents::git;
 use crate::connect::FakeTailnet;
-use crate::support::{Client, InProcess, create_params, kind, temp_dir};
+use crate::support::{Client, InProcess, create_params, kind, project_update, temp_dir};
 
 /// A repository at `dir/<name>` with one commit, and `origin` set to `origin` when given.
 fn repo(dir: &Path, name: &str, origin: Option<&str>) -> PathBuf {
@@ -55,18 +55,8 @@ async fn add(client: &mut Client, dir: &Path, name: &str, origin: Option<&str>) 
 
 fn computer(project: ProjectId, computer: &str) -> ProjectUpdateParams {
     ProjectUpdateParams {
-        project,
-        name: None,
-        icon: None,
-        permission: None,
-        autonomy: None,
-        base_branch: None,
-        auto_land: None,
-        max_children: None,
-        allow_api_keys: None,
-        checks: None,
-        proposed_checks: None,
         computer: Some(computer.to_owned()),
+        ..project_update(project)
     }
 }
 

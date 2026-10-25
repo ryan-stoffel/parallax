@@ -15,8 +15,8 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::methods::{Initialize, NotificationMethod, RequestMethod};
 use parallax_protocol::{
-    Capabilities, ClientInfo, ErrorKind, InitializeParams, InitializeResult, ProjectCreateParams,
-    ProjectId, ProtocolRange,
+    Capabilities, ClientInfo, ErrorKind, ImageMediaType, InitializeParams, InitializeResult,
+    ProjectCreateParams, ProjectId, ProjectUpdateParams, PromptImage, ProtocolRange,
 };
 use plxd::paths::DataDir;
 use plxd::server::{Config, Server, Shutdown};
@@ -33,6 +33,17 @@ pub use temp::temp_dir;
 
 /// How long a test waits for anything before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(10);
+
+/// A 1x1 PNG in base64.
+pub const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+/// [`PNG`] as a prompt's or an icon's image.
+pub fn png() -> PromptImage {
+    PromptImage {
+        media_type: ImageMediaType::Png,
+        data: PNG.to_owned(),
+    }
+}
 
 /// Waits until `condition` holds, failing after [`PATIENCE`]: for what plxd does after it
 /// answers, such as an effect's cleanup (0059).
@@ -365,6 +376,24 @@ pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
         permission: None,
         autonomy: None,
         base_branch: None,
+    }
+}
+
+/// `project/update` params for `project` that change nothing, for a test to set what it changes.
+pub fn project_update(project: ProjectId) -> ProjectUpdateParams {
+    ProjectUpdateParams {
+        project,
+        name: None,
+        icon: None,
+        permission: None,
+        autonomy: None,
+        base_branch: None,
+        auto_land: None,
+        allow_api_keys: None,
+        max_children: None,
+        checks: None,
+        proposed_checks: None,
+        computer: None,
     }
 }
 

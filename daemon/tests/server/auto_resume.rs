@@ -23,8 +23,8 @@ use plxd::backend::{
 use plxd::routing::BackendRegistry;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake_backend, init, items, project_params, real_repo,
-    send_params, start_params, subscribe, until, updated_to,
+    Conn, Host, end_turn, fake_backend, init, items, real_repo, send_params, start_params,
+    subscribe, until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -174,9 +174,7 @@ async fn waiting_run(
 ) -> (Host, Conn, RunId, u64) {
     let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], seen);
     let host = host(temp_dir(), backends, Duration::from_secs(600));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
@@ -195,9 +193,7 @@ async fn a_limited_run_resumes_at_its_reset_after_a_restart() {
     let reset = in_seconds(3);
     let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], &seen);
     let host = host(temp_dir(), backends, Duration::from_secs(600));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
@@ -261,9 +257,7 @@ async fn cancelling_a_waiting_run_clears_its_timer() {
     let reset = in_seconds(3);
     let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], &seen);
     let host = host(temp_dir(), backends, Duration::from_secs(600));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
@@ -300,9 +294,7 @@ async fn with_no_reset_time_it_retries_on_a_growing_interval() {
     let backoff = Duration::from_millis(300);
     let backends = sequence(vec![limited("s-1", None)], &seen);
     let host = host(temp_dir(), backends, backoff);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
@@ -459,9 +451,7 @@ async fn started(
         sequence(scripts, seen),
         Duration::from_secs(600),
     );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await

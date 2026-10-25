@@ -433,40 +433,6 @@ fn counting_backend(
     backends
 }
 
-impl Conn {
-    async fn rollback_command(
-        &mut self,
-        command: OrchestrationCommand,
-        command_id: uuid::Uuid,
-    ) -> Result<parallax_protocol::DispatchResult, parallax_protocol::jsonrpc::ErrorObject> {
-        let mut params = serde_json::to_value(command).unwrap();
-        params.as_object_mut().unwrap().insert(
-            "commandId".to_owned(),
-            serde_json::json!(command_id.to_string()),
-        );
-        let id = parallax_protocol::jsonrpc::RequestId::String(uuid::Uuid::now_v7().to_string());
-        self.client
-            .send_message(&parallax_protocol::jsonrpc::Request {
-                id: id.clone(),
-                method: "orchestration/dispatch".to_owned(),
-                params: Some(params),
-            })
-            .await;
-        loop {
-            match self.client.next().await {
-                Some(parallax_protocol::jsonrpc::Message::Response(response)) => {
-                    assert_eq!(response.id, Some(id));
-                    return response.into_result();
-                }
-                Some(parallax_protocol::jsonrpc::Message::Notification(notification)) => {
-                    self.pending.push_back(super::event(notification));
-                }
-                other => panic!("expected response, got {other:?}"),
-            }
-        }
-    }
-}
-
 async fn assert_pending_actions(client: &mut Conn, thread: RunId) {
     // While local completion is pending, no new provider turn or stale branch action is allowed.
     let pending = client
@@ -570,7 +536,7 @@ async fn failed_restore(restart: bool) {
     let command_id = uuid::Uuid::now_v7();
     assert!(
         client
-            .rollback_command(command.clone(), command_id)
+            .command::<OrchestrationDispatch>(command.clone(), command_id)
             .await
             .is_err()
     );
@@ -584,10 +550,13 @@ async fn failed_restore(restart: bool) {
     let mut client = if restart { host.client().await } else { client };
     std::fs::remove_file(lock).unwrap();
     let first = client
-        .rollback_command(command.clone(), command_id)
+        .command::<OrchestrationDispatch>(command.clone(), command_id)
         .await
         .unwrap();
-    let again = client.rollback_command(command, command_id).await.unwrap();
+    let again = client
+        .command::<OrchestrationDispatch>(command, command_id)
+        .await
+        .unwrap();
     assert_eq!(first.seq, again.seq);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(worktree.join("a.txt").exists());
@@ -719,7 +688,7 @@ async fn an_unknown_provider_outcome_is_held_across_retry_and_restart() {
     };
     assert!(
         client
-            .rollback_command(command.clone(), uuid::Uuid::now_v7())
+            .command::<OrchestrationDispatch>(command.clone(), uuid::Uuid::now_v7())
             .await
             .is_err()
     );
@@ -727,7 +696,7 @@ async fn an_unknown_provider_outcome_is_held_across_retry_and_restart() {
     let host = host.restart(counting_backend(&calls, true)).await;
     let mut client = host.client().await;
     let refused = client
-        .rollback_command(command, uuid::Uuid::now_v7())
+        .command::<OrchestrationDispatch>(command, uuid::Uuid::now_v7())
         .await
         .unwrap_err();
     assert!(refused.message.contains("outcome is unknown"));

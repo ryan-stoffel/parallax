@@ -13,7 +13,7 @@ use parallax_protocol::{
 use rustix::process::Signal;
 use serde_json::json;
 
-use crate::support::{Client, Plxd, create_params, kind, temp_dir};
+use crate::support::{Client, PNG, Plxd, create_params, kind, project_update, temp_dir};
 
 fn icon(name: &str, color: Option<&str>) -> ProjectIcon {
     ProjectIcon {
@@ -22,9 +22,6 @@ fn icon(name: &str, color: Option<&str>) -> ProjectIcon {
         image: None,
     }
 }
-
-/// A 1x1 PNG in base64.
-const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 fn image(media_type: ImageMediaType, data: &str) -> PromptImage {
     PromptImage {
@@ -39,18 +36,9 @@ fn update(
     icon: Option<ProjectIcon>,
 ) -> ProjectUpdateParams {
     ProjectUpdateParams {
-        project,
         name: name.map(str::to_owned),
         icon,
-        permission: None,
-        autonomy: None,
-        base_branch: None,
-        auto_land: None,
-        allow_api_keys: None,
-        max_children: None,
-        checks: None,
-        proposed_checks: None,
-        computer: None,
+        ..project_update(project)
     }
 }
 

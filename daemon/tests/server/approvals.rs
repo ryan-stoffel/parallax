@@ -16,8 +16,8 @@ use plxd::backend::fake::{AskedApproval, Step};
 use serde_json::{Value, json};
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, init, items, outcomes, project_params, real_repo,
-    start_params, subscribe, until, updated_to,
+    Conn, Host, end_turn, fake, init, items, outcomes, real_repo, start_params, subscribe, until,
+    updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -67,9 +67,7 @@ fn asking(asked: AskedApproval) -> Vec<Step> {
 /// Starts a worker on `host`'s script in a new project, with a client subscribed to its events,
 /// answering its permission requests when `approvals`.
 async fn start_run(host: &Host, approvals: bool) -> (Conn, RunId) {
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = AgentStartParams {
         approvals,
         ..start_params(project.id, "Run the tests")
@@ -583,9 +581,7 @@ async fn a_coordinator_asks_too() {
         interactive: true,
     };
     let host = host(asking(plan));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = ProjectStartParams {
         project: project.id,
         run_id: RunId::generate(),
@@ -659,9 +655,7 @@ fn is_approval(item: &AgentOutputItem) -> bool {
 #[tokio::test]
 async fn run_and_shell_subscriptions_get_only_their_part_of_the_scope() {
     let host = host(asking(bash()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let mut runs = Vec::new();
     for _ in 0..2 {
         let params = AgentStartParams {

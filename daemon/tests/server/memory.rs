@@ -23,8 +23,7 @@ use plxd::backend::{RunRequest, ToolPolicy};
 use serde_json::json;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, init, project_params, real_repo, subscribe, until,
-    updated_to,
+    Conn, Host, create, end_turn, fake, init, project_params, real_repo, until, updated_to,
 };
 use crate::coordinator::{coordinator_launches, nth_launch, roles, spawn, start_params};
 use crate::mcp::{Mcp, mcp_command};
@@ -139,9 +138,7 @@ async fn project_with_coordinator(
         seen,
     );
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let coordinator = client
         .call::<ProjectStart>(start_params(project.id, "Plan."))
         .await
