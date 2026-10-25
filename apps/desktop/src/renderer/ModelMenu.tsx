@@ -122,7 +122,7 @@ export function ModelMenu({
                   <span
                     id={`${id}-${p}`}
                     role="tooltip"
-                    className="pointer-events-none invisible absolute top-1/2 left-full z-10 ml-2 w-56 -translate-y-1/2 rounded-md border border-border bg-surface px-2.5 py-1.5 text-[12px] text-foreground shadow-composer group-hover:visible"
+                    className="pointer-events-none invisible absolute top-1/2 left-full z-10 ml-2 w-56 -translate-y-1/2 rounded-md border border-border bg-surface px-2.5 py-1.5 text-meta text-foreground shadow-composer group-hover:visible"
                   >
                     {why}
                   </span>
@@ -144,7 +144,7 @@ export function ModelMenu({
               onKeyDown={(e) => {
                 if (e.key === "Enter" && shown[0]) pick(shown[0]);
               }}
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
+              className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
             />
           </label>
           <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
@@ -162,15 +162,15 @@ export function ModelMenu({
                     className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left"
                   >
                     <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2 text-[13.5px]">
+                      <span className="flex items-center gap-2 text-body">
                         {m.name}
                         {m.isNew && (
-                          <span className="rounded border border-accent px-1 text-[10.5px] font-semibold text-accent">
+                          <span className="rounded-sm border border-accent px-1 text-caption font-semibold text-accent">
                             NEW
                           </span>
                         )}
                       </span>
-                      <span className="mt-0.5 flex items-center gap-1.5 text-[12px] text-faint-foreground">
+                      <span className="mt-0.5 flex items-center gap-1.5 text-meta text-faint-foreground">
                         <ProviderLogo className="size-3" />
                         {nameOf(m.provider)}
                       </span>
@@ -185,7 +185,7 @@ export function ModelMenu({
                     aria-label={favorite ? `Unfavorite ${m.name}` : `Favorite ${m.name}`}
                     aria-pressed={favorite}
                     onClick={() => toggleFavorite(catalog.hostId, m.provider, m.id)}
-                    className="mr-1.5 grid size-7 place-items-center rounded text-faint-foreground hover:text-foreground aria-pressed:text-amber-500 [&_svg]:size-4 aria-pressed:[&_svg]:fill-current"
+                    className="mr-1.5 grid size-7 place-items-center rounded-sm text-faint-foreground hover:text-foreground aria-pressed:text-amber-500 [&_svg]:size-4 aria-pressed:[&_svg]:fill-current"
                   >
                     <Star />
                   </button>
@@ -193,7 +193,7 @@ export function ModelMenu({
               );
             })}
             {shown.length === 0 && (
-              <li className="px-2.5 py-3 text-[12.5px] text-faint-foreground">
+              <li className="px-2.5 py-3 text-body text-faint-foreground">
                 {q ? "No matching models" : "No favorites yet"}
               </li>
             )}

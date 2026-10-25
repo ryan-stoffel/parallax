@@ -445,7 +445,7 @@ export function NewThread({
             {folder ? (
               <>
                 {/* One line: only the name shrinks, truncating with an ellipsis. */}
-                <h1 className="mb-2 flex justify-center-safe text-[24px] font-medium tracking-tight whitespace-pre">
+                <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
                   What should we work on in{" "}
                   <span
                     title={folder.name}
@@ -467,7 +467,7 @@ export function NewThread({
                     popoverTarget={repoMenu}
                     aria-haspopup="menu"
                     aria-label={`Repository: ${group.id === noRepo ? "No repo" : group.name}`}
-                    className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[15px] text-muted-foreground hover:text-foreground focus-visible:text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0"
+                    className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-reading text-muted-foreground hover:text-foreground focus-visible:text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0"
                   >
                     {group.id === noRepo ? (
                       <House />
@@ -486,7 +486,7 @@ export function NewThread({
             ) : (
               <>
                 <h1
-                  className={`${repoless(group) ? "mb-7" : "mb-2"} flex justify-center-safe text-[24px] font-medium tracking-tight whitespace-pre`}
+                  className={`${repoless(group) ? "mb-7" : "mb-2"} flex justify-center-safe text-display font-medium tracking-tight whitespace-pre`}
                 >
                   {group.id === noRepo
                     ? "What should we work on "
@@ -517,13 +517,13 @@ export function NewThread({
                         onGroupChange(noRepo);
                       }}
                       aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
-                      className="group relative rounded-md text-[15px] text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
+                      className="group relative rounded-md text-reading text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
                     >
                       or start without a repo
                       {noRepoKeys && (
                         <kbd
                           aria-hidden
-                          className="pointer-events-none invisible absolute top-full left-1/2 z-20 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-[12px] text-muted-foreground group-hover:visible group-focus-visible:visible"
+                          className="pointer-events-none invisible absolute top-full left-1/2 z-20 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-meta text-muted-foreground group-hover:visible group-focus-visible:visible"
                         >
                           {noRepoKeys}
                         </kbd>
@@ -672,10 +672,10 @@ export function NewThread({
                   className="mt-3 w-full rounded-xl border border-border px-4 py-3"
                 >
                   <legend className="float-left mb-2.5 w-full">
-                    <span className="block text-[13px] font-medium">
+                    <span className="block text-body font-medium">
                       Choose an account to run this thread
                     </span>
-                    <span className="block text-[12.5px] text-muted-foreground">
+                    <span className="block text-body text-muted-foreground">
                       New threads on this host use it from now on.
                     </span>
                   </legend>
@@ -683,7 +683,7 @@ export function NewThread({
                     {choices.map((choice, i) => (
                       <label
                         key={i}
-                        className="flex items-center rounded-md border border-border px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring"
+                        className="flex items-center rounded-md border border-border px-2.5 py-1 text-body text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring"
                       >
                         <input
                           type="radio"
@@ -700,7 +700,7 @@ export function NewThread({
                     type="button"
                     disabled={choosing}
                     onClick={() => void continueWith(choices[picked]!)}
-                    className="mt-3 rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+                    className="mt-3 rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
                   >
                     Continue
                   </button>

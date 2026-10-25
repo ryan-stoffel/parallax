@@ -30,7 +30,7 @@ export function CloneProgress({
   const percent = progress?.percent;
   return (
     <div role="status" className="rounded-xl border border-border bg-surface px-3.5 py-3">
-      <div className="flex items-center gap-2 text-[13px]">
+      <div className="flex items-center gap-2 text-body">
         <LoaderCircle
           aria-hidden
           className="size-3.5 shrink-0 animate-spin text-muted-foreground"
@@ -48,7 +48,7 @@ export function CloneProgress({
               style={percent === undefined ? undefined : { width: `${percent}%` }}
             />
           </div>
-          <div className="mt-1.5 flex justify-between gap-3 text-[12px] text-muted-foreground">
+          <div className="mt-1.5 flex justify-between gap-3 text-meta text-muted-foreground">
             <span className="truncate">{progress?.phase ?? "Connecting…"}</span>
             {progress?.detail && <span className="shrink-0 tabular-nums">{progress.detail}</span>}
           </div>

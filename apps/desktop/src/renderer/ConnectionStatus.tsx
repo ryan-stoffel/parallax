@@ -76,7 +76,7 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
   const label = statusLabel(state);
 
   return (
-    <div role="status" className="px-2 py-1 text-[12px] text-muted-foreground">
+    <div role="status" className="px-2 py-1 text-meta text-muted-foreground">
       <div className="flex items-center gap-2">
         {/* As wide as the Settings icon below, so the two line up. */}
         <span aria-hidden className="grid w-4 shrink-0 place-items-center">
@@ -87,7 +87,7 @@ export function ConnectionStatus({ hostId }: { hostId: string }) {
           <button
             type="button"
             onClick={() => void window.parallax.retry(hostId)}
-            className="rounded px-1.5 text-foreground hover:bg-hover"
+            className="rounded-sm px-1.5 text-foreground hover:bg-hover"
           >
             Retry
           </button>

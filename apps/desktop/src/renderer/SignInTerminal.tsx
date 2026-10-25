@@ -29,7 +29,7 @@ export function SignInTerminal({
   return (
     <div className="flex flex-col gap-2 border-border px-4 py-3 not-last:border-b">
       <div className="flex items-center justify-between gap-4">
-        <span className="text-[12.5px] text-muted-foreground">
+        <span className="text-body text-muted-foreground">
           {install
             ? ended
               ? `${name} install ended.`
@@ -41,7 +41,7 @@ export function SignInTerminal({
         <button
           type="button"
           onClick={onClose}
-          className="-my-1 rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+          className="-my-1 rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
         >
           {ended ? "Close" : "Cancel"}
         </button>

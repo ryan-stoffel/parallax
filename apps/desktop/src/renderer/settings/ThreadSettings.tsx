@@ -143,7 +143,7 @@ function NewThreads() {
             />
           </span>
         ) : (
-          <span className="text-[13px] text-muted-foreground">No models</span>
+          <span className="text-body text-muted-foreground">No models</span>
         )}
       </Row>
       {/* A backend that maps no efforts (Cursor) has none to default. */}

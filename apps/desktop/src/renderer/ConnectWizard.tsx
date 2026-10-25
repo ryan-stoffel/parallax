@@ -116,14 +116,14 @@ export function ConnectWizard({
             />
           )}
           <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="truncate text-[15px] font-semibold">
+            <h2 id={titleId} className="truncate text-reading font-semibold">
               {!device
                 ? "Add a computer"
                 : step.kind === "done"
                   ? `${device.hostName} is set up`
                   : `Set up ${device.hostName}`}
             </h2>
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+            <p className="mt-0.5 text-body text-muted-foreground">
               {device
                 ? `${osName(device.os)} · ${device.ip}`
                 : "Your computers on Tailscale. Pick one to set up Parallax there."}
@@ -169,10 +169,10 @@ export function ConnectWizard({
                   So every computer sees its threads, and it sees theirs.
                 </Plan>
               </ul>
-              <div className="flex items-center justify-between gap-4 text-[13px]">
+              <div className="flex items-center justify-between gap-4 text-body">
                 <span>
                   <span className="block font-medium">Headless</span>
-                  <span className="block text-[12.5px] text-muted-foreground">
+                  <span className="block text-body text-muted-foreground">
                     {step.device.os === "linux"
                       ? "Linux always gets plxd only, since the app's AppImage doesn't run everywhere."
                       : "Install plxd only, without the app."}
@@ -185,10 +185,10 @@ export function ConnectWizard({
                   onChange={setHeadless}
                 />
               </div>
-              <label className="flex items-center justify-between gap-4 text-[13px]">
+              <label className="flex items-center justify-between gap-4 text-body">
                 <span>
                   <span className="block font-medium">SSH user</span>
-                  <span className="block text-[12.5px] text-muted-foreground">
+                  <span className="block text-body text-muted-foreground">
                     Empty uses your ssh config's, or your name here.
                   </span>
                 </span>
@@ -221,7 +221,7 @@ export function ConnectWizard({
               {step.kind === "failed" && (
                 <p
                   role="alert"
-                  className="flex items-center gap-2 text-[13px] text-danger [&_svg]:size-4"
+                  className="flex items-center gap-2 text-body text-danger [&_svg]:size-4"
                 >
                   <CircleX aria-hidden />
                   {step.why ?? `${step.device.hostName} wasn't set up. The terminal says why.`}
@@ -266,7 +266,7 @@ export function ConnectWizard({
                   Try again
                 </button>
               ) : (
-                <span className="text-[12.5px] text-muted-foreground">Setting up…</span>
+                <span className="text-body text-muted-foreground">Setting up…</span>
               )}
             </Footer>
           </>
@@ -281,17 +281,17 @@ export function ConnectWizard({
                   className="size-5 shrink-0 text-muted-foreground"
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-[13.5px] font-medium">{step.device.hostName}</p>
-                  <p className="truncate text-[12.5px] text-muted-foreground">
+                  <p className="truncate text-body font-medium">{step.device.hostName}</p>
+                  <p className="truncate text-body text-muted-foreground">
                     {step.headless ? "plxd" : `${app} · plxd`} · Parallax Connect on
                   </p>
                 </div>
-                <span className="flex items-center gap-1 text-[12.5px] text-added [&_svg]:size-3.5">
+                <span className="flex items-center gap-1 text-body text-added [&_svg]:size-3.5">
                   <CircleCheck aria-hidden />
                   Connected
                 </span>
               </div>
-              <p className="text-[12.5px] text-muted-foreground">
+              <p className="text-body text-muted-foreground">
                 Its threads show up in your sidebar, and this computer's show up there.
               </p>
             </div>
@@ -333,8 +333,8 @@ function Plan({ icon, title, children }: { icon: ReactNode; title: string; child
     <li className="flex gap-3 border-border px-3 py-2.5 not-last:border-b [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
       {icon}
       <span>
-        <span className="block text-[13px] font-medium">{title}</span>
-        <span className="block text-[12.5px] text-muted-foreground">{children}</span>
+        <span className="block text-body font-medium">{title}</span>
+        <span className="block text-body text-muted-foreground">{children}</span>
       </span>
     </li>
   );
@@ -358,7 +358,7 @@ function DeviceList({
   onAdd: (device: TailnetDevice) => void;
 }) {
   const note = (text: string) => (
-    <p className="px-5 pb-5 text-[13px] text-muted-foreground">{text}</p>
+    <p className="px-5 pb-5 text-body text-muted-foreground">{text}</p>
   );
   if (found === undefined) return note("Looking for your computers…");
   if (typeof found === "string") return note(`Parallax couldn't ask Tailscale: ${found}`);
@@ -394,17 +394,17 @@ function DeviceList({
               )}
               <div className="min-w-0 flex-1">
                 <p
-                  className={`truncate text-[13px] font-medium ${device.online ? "" : "text-muted-foreground"}`}
+                  className={`truncate text-body font-medium ${device.online ? "" : "text-muted-foreground"}`}
                 >
                   {device.hostName}
                 </p>
-                <p className="truncate text-[12px] text-muted-foreground">
+                <p className="truncate text-meta text-muted-foreground">
                   {osName(device.os)} · {device.ip}
                   {!device.online && " · Offline"}
                 </p>
               </div>
               {device.parallax && listed(device) ? (
-                <span className="flex items-center gap-1 text-[12.5px] text-added [&_svg]:size-3.5">
+                <span className="flex items-center gap-1 text-body text-added [&_svg]:size-3.5">
                   <CircleCheck aria-hidden />
                   Connected
                 </span>
@@ -413,7 +413,7 @@ function DeviceList({
                   Add
                 </button>
               ) : !canRun ? (
-                <span className="text-[12.5px] text-faint-foreground">Can't run Parallax</span>
+                <span className="text-body text-faint-foreground">Can't run Parallax</span>
               ) : (
                 <button
                   type="button"
@@ -428,7 +428,7 @@ function DeviceList({
           );
         })}
         {!sorted.length && (
-          <li className="px-3 py-6 text-center text-[13px] text-muted-foreground">
+          <li className="px-3 py-6 text-center text-body text-muted-foreground">
             No other computers on your tailnet yet.
           </li>
         )}
@@ -445,7 +445,7 @@ function DeviceList({
           </button>
         }
       >
-        <span className="text-[12px] text-faint-foreground">
+        <span className="text-meta text-faint-foreground">
           {found.self ? `This computer: ${found.self.hostName}` : ""}
         </span>
       </Footer>

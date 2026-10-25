@@ -63,11 +63,11 @@ export function ProfileButton({ listed }: { listed: { host: Host; view: ThreadsV
                 </span>
               )}
               <div className="min-w-0">
-                <p className="truncate text-[13px] font-medium">
+                <p className="truncate text-body font-medium">
                   {profile ? profile.name || profile.email : "Sign in to Parallax"}
                 </p>
                 {(profile?.name || !profile) && (
-                  <p role="status" className="truncate text-[12px] text-muted-foreground">
+                  <p role="status" className="truncate text-meta text-muted-foreground">
                     {profile ? profile.email : (note ?? "With GitHub, Google, Apple, or email.")}
                   </p>
                 )}
@@ -97,7 +97,7 @@ export function ProfileButton({ listed }: { listed: { host: Host; view: ThreadsV
           </>
         )}
         <div className="flex items-center justify-between px-2 py-1">
-          <span className="flex items-center gap-1.5 font-brand text-[12px] font-semibold text-faint-foreground">
+          <span className="flex items-center gap-1.5 font-brand text-meta font-semibold text-faint-foreground">
             <ParallaxMark className="size-3.5" />
             Parallax
           </span>

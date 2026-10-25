@@ -165,7 +165,7 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
             {icon(t)}
             <span className="flex-1">{nameOf(t)}</span>
             {t === current && keys && (
-              <span className="text-[11.5px] text-faint-foreground">{keys}</span>
+              <span className="text-meta text-faint-foreground">{keys}</span>
             )}
           </button>
         ))}

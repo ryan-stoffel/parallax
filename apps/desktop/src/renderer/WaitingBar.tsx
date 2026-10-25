@@ -73,18 +73,18 @@ export function WaitingBar({
         : "Waiting";
 
   return (
-    <section aria-label="Waiting on" className="text-[13px]">
+    <section aria-label="Waiting on" className="text-body">
       {compact ? (
         <button
           type="button"
           popoverTarget={`${id}-details`}
           aria-haspopup="dialog"
           title={shown.title}
-          className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+          className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
         >
           <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-foreground" />
           {verb}
-          <span className="rounded bg-hover px-1.5 text-foreground tabular-nums">
+          <span className="rounded-sm bg-hover px-1.5 text-foreground tabular-nums">
             {counted.length}
           </span>
         </button>
@@ -115,8 +115,8 @@ export function WaitingBar({
         aria-label="Waiting on"
         className={
           compact
-            ? `inset-auto m-0 mb-2 rounded-2xl border border-border bg-surface p-3 text-[12.5px] text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`
-            : `${menuPanel("end")} w-80 p-3 text-[12.5px]`
+            ? `inset-auto m-0 mb-2 rounded-2xl border border-border bg-surface p-3 text-body text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`
+            : `${menuPanel("end")} w-80 p-3 text-body`
         }
       >
         <p className="mb-2 text-muted-foreground">

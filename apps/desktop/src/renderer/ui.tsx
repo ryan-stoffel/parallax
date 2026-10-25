@@ -88,7 +88,7 @@ export function useModHeld() {
 /** The ⌘1 to ⌘9 badge on a row that Mod and its number open. */
 export function RowBadge({ index }: { index: number }) {
   return (
-    <kbd className="shrink-0 rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+    <kbd className="shrink-0 rounded-sm border border-border bg-surface px-1 font-sans text-caption leading-4 text-muted-foreground">
       {shortcut(String(index + 1))}
     </kbd>
   );
@@ -135,7 +135,7 @@ export function SetUpGithub({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="shrink-0 rounded-md border border-border px-2 py-0.5 text-[12px] font-medium text-foreground hover:bg-hover"
+      className="shrink-0 rounded-md border border-border px-2 py-0.5 text-meta font-medium text-foreground hover:bg-hover"
     >
       Set up GitHub
     </button>
@@ -144,7 +144,7 @@ export function SetUpGithub({ onClick }: { onClick: () => void }) {
 
 /** A segmented control's option: a label around a visually hidden radio. */
 export const segment =
-  "flex items-center gap-1.5 rounded-md whitespace-nowrap px-2.5 py-1 text-[12.5px] text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
+  "flex items-center gap-1.5 rounded-md whitespace-nowrap px-2.5 py-1 text-body text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
 
 /**
  * A row of radios drawn as one segmented control, named by `label`. Disabled, it stays in place
@@ -191,7 +191,7 @@ export function Segmented<T extends string>({
 // Every dropdown shares these: a quiet trigger, and a panel 8px under it with the same radius.
 /** A menu's trigger: sized to its content, highlighted on hover. */
 export const menuButton =
-  "flex items-center gap-1.5 rounded-lg py-1 pr-1.5 pl-2 text-[13.5px] text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
+  "flex items-center gap-1.5 rounded-lg py-1 pr-1.5 pl-2 text-body text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
 
 const panelAreas = {
   start: "[position-area:bottom_span-right]",
@@ -215,7 +215,7 @@ export const popoverBeside = "w-[min(26rem,90vw)] [position-area:top_span-left]"
 
 /** A row in a menu panel. */
 export const menuItem =
-  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
 
 /** The rule between a browser menu's groups, edge to edge. */
 export const toolbarMenuDivider = "-mx-1.5 my-1.5 border-border";
@@ -242,12 +242,12 @@ export function ToolbarMenuRow({
       type="button"
       role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
       aria-checked={checked}
-      className={`flex h-8 w-full items-center gap-3 rounded-md px-2.5 text-left text-[13px] enabled:hover:bg-hover disabled:opacity-40 [&_svg]:size-[18px] [&_svg]:shrink-0 [&>svg:first-child]:text-muted-foreground ${className}`}
+      className={`flex h-8 w-full items-center gap-3 rounded-md px-2.5 text-left text-body enabled:hover:bg-hover disabled:opacity-40 [&_svg]:size-[18px] [&_svg]:shrink-0 [&>svg:first-child]:text-muted-foreground ${className}`}
       {...props}
     >
       {icon}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {keys && <span className="shrink-0 pl-3 text-[12px] text-faint-foreground">{keys}</span>}
+      {keys && <span className="shrink-0 pl-3 text-meta text-faint-foreground">{keys}</span>}
       {checked && <CheckSymbol aria-hidden className="text-accent" />}
     </button>
   );
@@ -366,12 +366,12 @@ export function ConfirmDialog({
       className={`m-auto ${alternate ? "w-[30rem]" : "w-[24rem]"} rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50`}
     >
       <form method="dialog" className="px-5 pt-4 pb-4">
-        <h2 id={titleId} className={`text-[15px] font-semibold ${titleClass}`}>
+        <h2 id={titleId} className={`text-reading font-semibold ${titleClass}`}>
           {title}
         </h2>
-        <p className="mt-1.5 text-[13px] text-muted-foreground">{children}</p>
+        <p className="mt-1.5 text-body text-muted-foreground">{children}</p>
         {error && (
-          <p role="alert" className="mt-2 text-[12.5px] text-danger">
+          <p role="alert" className="mt-2 text-body text-danger">
             {error}
           </p>
         )}
@@ -379,7 +379,7 @@ export function ConfirmDialog({
           <button
             type="submit"
             value="cancel"
-            className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
+            className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
           >
             Cancel
           </button>
@@ -388,7 +388,7 @@ export function ConfirmDialog({
               type="button"
               disabled={!!busy}
               onClick={alternate.onConfirm}
-              className="rounded-md bg-selected px-3 py-1.5 text-[13px] font-medium enabled:hover:bg-hover disabled:opacity-50"
+              className="rounded-md bg-selected px-3 py-1.5 text-body font-medium enabled:hover:bg-hover disabled:opacity-50"
             >
               {alternate.action}
             </button>
@@ -397,7 +397,7 @@ export function ConfirmDialog({
             type="button"
             disabled={!!busy}
             onClick={onConfirm}
-            className="rounded-md bg-red-600 px-3 py-1.5 text-[13px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
+            className="rounded-md bg-red-600 px-3 py-1.5 text-body font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
           >
             {busy || action}
           </button>
@@ -454,13 +454,13 @@ export function MenuOption({
           {o.label}
         </span>
         {o.description && (
-          <span className="mt-0.5 block text-[12px] leading-snug text-faint-foreground">
+          <span className="mt-0.5 block text-meta leading-snug text-faint-foreground">
             {o.description}
           </span>
         )}
       </span>
       {o.hint && (
-        <span className="shrink-0 text-[11.5px] leading-5 text-faint-foreground">{o.hint}</span>
+        <span className="shrink-0 text-meta leading-5 text-faint-foreground">{o.hint}</span>
       )}
       {/* Always takes its room, so choosing never rewraps a row or resizes the menu. */}
       <span className={`grid h-5 place-items-center ${checked ? "" : "invisible"}`}>
@@ -471,15 +471,15 @@ export function MenuOption({
 }
 
 /** A small heading over a group of a menu's options. */
-export const menuHeading = "px-2 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-foreground";
+export const menuHeading = "px-2 pt-1.5 pb-1 text-meta font-medium text-faint-foreground";
 
 /** The badge on a choice that can't be picked yet, saying why, such as "Not available yet". */
 export const unavailableBadge =
-  "shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-[12px] text-amber-500";
+  "shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-meta text-amber-500";
 
 /** A form control's look, for a `field` Picker's trigger and the fields beside it. */
 export const fieldControl =
-  "flex h-8 items-center gap-2 rounded-lg border border-border bg-background px-2.5 text-[13px] text-foreground enabled:hover:border-faint-foreground/60 disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
+  "flex h-8 items-center gap-2 rounded-lg border border-border bg-background px-2.5 text-body text-foreground enabled:hover:border-faint-foreground/60 disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
 
 /**
  * A dropdown showing the chosen option, with a check beside it in the menu. The chosen option's
@@ -597,7 +597,7 @@ export function Picker({
                 const first = q ? (shown[0] ?? typed) : undefined;
                 if (e.key === "Enter" && first) choose(first);
               }}
-              className="h-7 w-full rounded-md bg-transparent px-2 text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+              className="h-7 w-full rounded-md bg-transparent px-2 text-body placeholder:text-faint-foreground focus-visible:outline-none"
             />
           </div>
         )}
@@ -621,7 +621,7 @@ export function Picker({
             </>
           )}
           {shown.length === 0 && !typed && (
-            <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No matches</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
           )}
         </div>
         {footer && <div className="border-t border-border p-1">{footer(close)}</div>}
@@ -646,7 +646,7 @@ export interface Crumb {
 export function Breadcrumb({ items }: { items: Crumb[] }) {
   return (
     <nav aria-label="Breadcrumb" className="min-w-0 overflow-x-clip">
-      <ol className="flex min-w-0 items-center gap-2 text-[13px]">
+      <ol className="flex min-w-0 items-center gap-2 text-body">
         {items.map(({ label, icon, onClick }, i) => {
           const current = i === items.length - 1 && !onClick;
           const Tag = onClick ? "button" : "span";
@@ -786,7 +786,7 @@ export function Tooltips() {
         el.style.left = `${Math.min(Math.max(tip.left - half, 8), window.innerWidth - 8 - 2 * half)}px`;
       }}
       style={{ top: tip.top, left: tip.left }}
-      className={`pointer-events-none fixed z-[1000] flex w-max max-w-80 items-center gap-2 rounded-md border border-border bg-surface px-2 py-1 text-[12px] text-foreground shadow-composer ${tip.above ? "-translate-y-full" : ""}`}
+      className={`pointer-events-none fixed z-[1000] flex w-max max-w-80 items-center gap-2 rounded-md border border-border bg-surface px-2 py-1 text-meta text-foreground shadow-composer ${tip.above ? "-translate-y-full" : ""}`}
     >
       <span className="line-clamp-3 break-words">{tip.text}</span>
       {tip.keys && <kbd className="font-sans text-muted-foreground">{tip.keys}</kbd>}

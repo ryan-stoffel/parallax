@@ -78,10 +78,10 @@ export function TypographySettings() {
           contentEditable
           suppressContentEditableWarning
           spellCheck={false}
-          className={`${preview} px-4 py-3 text-[14px] leading-relaxed`}
+          className={`${preview} px-4 py-3 text-reading leading-relaxed`}
         >
           Use <Chip icon={<Package />}>Frontend Design</Chip> to fix the flaky test in{" "}
-          <Chip icon={<span className="text-[9px] font-bold">TS</span>} tone="file">
+          <Chip icon={<span className="text-micro font-bold">TS</span>} tone="file">
             surface.test.ts
           </Chip>{" "}
           and align the header with{" "}
@@ -129,9 +129,9 @@ function DiffPreview() {
     <div
       aria-label="Diff preview"
       role="group"
-      className={`${preview} code-scroll overflow-hidden bg-code font-mono text-[12px] leading-6`}
+      className={`${preview} code-scroll overflow-hidden bg-code font-mono text-meta leading-6`}
     >
-      <div className="flex items-center gap-2 px-4 py-2 font-sans text-[13px]">
+      <div className="flex items-center gap-2 px-4 py-2 font-sans text-body">
         <span
           aria-hidden
           className="grid size-4 place-items-center rounded-full border-2 border-accent"

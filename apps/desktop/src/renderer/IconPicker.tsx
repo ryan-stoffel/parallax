@@ -130,7 +130,7 @@ export function IconPicker({
                   if (q && shown[0]) choose(withGlyph(shown[0].name));
                 }
               }}
-              className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
+              className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
             />
             {maxImageBytes !== undefined && (
               <>
@@ -223,7 +223,7 @@ export function IconPicker({
               ))}
             </div>
           ) : (
-            <p className="px-3 pt-2 pb-3 text-[12.5px] text-faint-foreground">No icons match</p>
+            <p className="px-3 pt-2 pb-3 text-body text-faint-foreground">No icons match</p>
           )}
         </>
       )}

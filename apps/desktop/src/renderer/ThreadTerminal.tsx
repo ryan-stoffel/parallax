@@ -173,7 +173,7 @@ function PooledTerminal({
         </Suspense>
       </div>
       {end && (
-        <div className="flex shrink-0 items-center gap-3 border-t border-border px-3 py-1.5 text-[12.5px]">
+        <div className="flex shrink-0 items-center gap-3 border-t border-border px-3 py-1.5 text-body">
           <span
             role={end.error ? "alert" : undefined}
             className={end.error ? "text-danger" : "text-muted-foreground"}
@@ -316,7 +316,7 @@ export function TerminalDrawer({
                   type="button"
                   aria-current={n === current.active ? "true" : undefined}
                   onClick={() => setTabsOf(current.folder.key, { ...current, active: n })}
-                  className="flex items-center gap-1.5 py-1 pl-2 text-[13px]"
+                  className="flex items-center gap-1.5 py-1 pl-2 text-body"
                 >
                   <Terminal aria-hidden className="size-3.5" />
                   Terminal {n}

@@ -779,7 +779,7 @@ export function AgentChat({
             onBack={() => onOpenSubagent?.(runId)}
           />
         ) : (
-          <div className="flex flex-1 items-center justify-center text-[13px] text-faint-foreground">
+          <div className="flex flex-1 items-center justify-center text-body text-faint-foreground">
             {error ?? (run ? "This subagent isn't in the transcript" : "Loading…")}
           </div>
         )}
@@ -899,7 +899,7 @@ export function AgentChat({
           </ForkContext>
         </ThreadLinksContext>
       ) : (
-        <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-[13px] text-faint-foreground">
+        <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-body text-faint-foreground">
           {error ? (
             <>
               <p className="font-medium text-foreground">This chat couldn't load</p>
@@ -1031,7 +1031,7 @@ function SubagentView({
         <div
           role="status"
           aria-label="Subagent"
-          className="flex min-w-0 items-center gap-2.5 rounded-3xl border border-border bg-surface py-2.5 pr-2.5 pl-4 text-[13px] text-muted-foreground"
+          className="flex min-w-0 items-center gap-2.5 rounded-2xl border border-border bg-surface py-2.5 pr-2.5 pl-4 text-body text-muted-foreground"
         >
           <ClaudeLogo aria-hidden className="size-4 shrink-0" />
           <span className="min-w-0 truncate">
@@ -1053,7 +1053,7 @@ function SubagentView({
           >
             <ArrowUpLeft aria-hidden className="size-4 text-muted-foreground" />
             Open parent
-            {keys && <kbd className="font-sans text-[11px] text-faint-foreground">{keys}</kbd>}
+            {keys && <kbd className="font-sans text-caption text-faint-foreground">{keys}</kbd>}
           </button>
         </div>
       </div>
@@ -1665,7 +1665,7 @@ export const RowView = memo(function RowView({
     case "epoch":
       // A coordinator's new session (0079): the conversation before it is no longer the agent's.
       return (
-        <div className="flex items-center gap-2 text-[12px] text-faint-foreground">
+        <div className="flex items-center gap-2 text-meta text-faint-foreground">
           <span className="h-px flex-1 bg-border" />
           <RotateCcw aria-hidden className="size-3.5" />
           <span>New session, picked up from the Project's state</span>
@@ -1675,7 +1675,7 @@ export const RowView = memo(function RowView({
     case "compaction":
       // Under way, it's the live row; done, a divider where the earlier conversation became a summary.
       return row.done ? (
-        <div className="flex items-center gap-2 text-[12px] text-faint-foreground">
+        <div className="flex items-center gap-2 text-meta text-faint-foreground">
           <span className="h-px flex-1 bg-border" />
           <FoldVertical aria-hidden className="size-3.5" />
           <span>Context compacted</span>
@@ -1712,7 +1712,7 @@ export const RowView = memo(function RowView({
               </TraceLine>
             }
           >
-            <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+            <p className="text-body leading-relaxed whitespace-pre-wrap text-muted-foreground">
               {row.text ?? (row.wake ? null : "Follow-up message")}
             </p>
           </Disclosure>
@@ -1751,7 +1751,7 @@ export const RowView = memo(function RowView({
           )}
           {/* A message of images or files alone has no bubble. */}
           {((!images?.length && !files.length) || said?.trim() !== "") && (
-            <div className="max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-[14px] leading-relaxed whitespace-pre-wrap">
+            <div className="max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-reading leading-relaxed whitespace-pre-wrap">
               {/* A follow-up from an older log, which has no text for it. */}
               {said !== undefined ? (
                 withMentions(said, known)
@@ -1802,7 +1802,7 @@ export const RowView = memo(function RowView({
             </TraceLine>
           }
         >
-          <p className="text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
+          <p className="text-body leading-relaxed whitespace-pre-wrap text-muted-foreground">
             {row.text}
           </p>
         </Disclosure>
@@ -1848,7 +1848,7 @@ export const RowView = memo(function RowView({
       return <SecretLine secret={row} />;
     case "notice":
       return (
-        <p className="flex items-start gap-2 text-[12.5px] text-muted-foreground">
+        <p className="flex items-start gap-2 text-body text-muted-foreground">
           {row.tone === "warning" ? (
             <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0" />
           ) : (
@@ -1875,7 +1875,7 @@ export const RowView = memo(function RowView({
     case "modelSwitch":
       // Where the thread moved to another model (PLX-495), as T3 Code's context handoff.
       return (
-        <div className="flex items-center gap-2 text-[12px] text-faint-foreground">
+        <div className="flex items-center gap-2 text-meta text-faint-foreground">
           <span className="h-px flex-1 bg-border" />
           <ArrowLeftRight aria-hidden className="size-3.5" />
           <span>Switched model</span>
@@ -1892,14 +1892,11 @@ export const RowView = memo(function RowView({
         // `git status` line each (0024).
         const [first, ...changed] = outcome.message.split("\n");
         return (
-          <div
-            role="alert"
-            className="rounded-lg border border-danger/30 px-3.5 py-2.5 text-[13px]"
-          >
+          <div role="alert" className="rounded-lg border border-danger/30 px-3.5 py-2.5 text-body">
             <p className="font-medium text-danger">Failed: {failureText(outcome.failure)}</p>
             <p className="mt-0.5 text-muted-foreground">{first}</p>
             {changed.length > 0 && (
-              <pre className="mt-2 max-h-60 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-[12px]">
+              <pre className="mt-2 max-h-60 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-meta">
                 {changed.join("\n")}
               </pre>
             )}
@@ -1908,7 +1905,7 @@ export const RowView = memo(function RowView({
       }
       const label = endLabels[outcome.status] ?? "Ended";
       return (
-        <div className="flex items-center gap-3 text-[12px] text-faint-foreground">
+        <div className="flex items-center gap-3 text-meta text-faint-foreground">
           <span className="h-px flex-1 bg-border" />
           {label}
           <span className="h-px flex-1 bg-border" />
@@ -2203,7 +2200,7 @@ function WorkingFor({ since }: { since?: string }) {
   // A message still on its way has no time logged yet: from when this row first showed.
   const [from] = useState(() => since ?? new Date().toISOString());
   return (
-    <p className="border-b border-border/60 pb-2 text-[13px] text-muted-foreground tabular-nums">
+    <p className="border-b border-border/60 pb-2 text-body text-muted-foreground tabular-nums">
       Working for {duration(useSeconds(since ?? from))}
     </p>
   );
@@ -2278,10 +2275,10 @@ function ToolCall({
         </TraceLine>
       }
     >
-      <div className="space-y-2 text-[12px]">
+      <div className="space-y-2 text-meta">
         {item.name && previewed.has(item.name) && isWhole(item.input) ? (
           <div>
-            <p className="mb-1 text-[11.5px] text-faint-foreground">Input</p>
+            <p className="mb-1 text-meta text-faint-foreground">Input</p>
             <RequestPreview request={{ toolName: item.name, input: item.input }} />
           </div>
         ) : (
@@ -2289,7 +2286,7 @@ function ToolCall({
         )}
         {!!item.images?.length && (
           <div>
-            <p className="mb-1 text-[11.5px] text-faint-foreground">Images</p>
+            <p className="mb-1 text-meta text-faint-foreground">Images</p>
             <MessageImages className="flex flex-wrap gap-2">
               {item.images.map((id) => (
                 <MessageImage key={id} image={id} loadImage={loadImage} />
@@ -2348,7 +2345,7 @@ function Disclosure({
 function Block({ label, children }: { label: string; children: string }) {
   return (
     <div>
-      <p className="mb-1 text-[11.5px] text-faint-foreground">{label}</p>
+      <p className="mb-1 text-meta text-faint-foreground">{label}</p>
       <pre className="max-h-80 overflow-auto rounded-xl border border-border bg-code px-3 py-2 font-mono leading-relaxed whitespace-pre-wrap text-foreground">
         {children}
       </pre>
@@ -2573,7 +2570,7 @@ function PromptMeta({
 }) {
   const [copied, copy] = useCopy();
   return (
-    <div className="flex h-6 items-center gap-1 text-[12px] text-faint-foreground opacity-0 group-focus-within/prompt:opacity-100 group-hover/prompt:opacity-100">
+    <div className="flex h-6 items-center gap-1 text-meta text-faint-foreground opacity-0 group-focus-within/prompt:opacity-100 group-hover/prompt:opacity-100">
       {at && <time dateTime={at}>{sentAt(at)}</time>}
       {text && (
         <button
@@ -2673,9 +2670,9 @@ function EditMessage({
             e.currentTarget.form?.requestSubmit();
           }
         }}
-        className="w-full resize-none rounded-2xl border border-border bg-selected px-3.5 py-2 text-[14px] leading-relaxed outline-none focus:border-accent"
+        className="w-full resize-none rounded-2xl border border-border bg-selected px-3.5 py-2 text-reading leading-relaxed outline-none focus:border-accent"
       />
-      <div className="flex items-center gap-3 text-[12.5px]">
+      <div className="flex items-center gap-3 text-body">
         <button type="button" onClick={onCancel} className="text-muted-foreground">
           Cancel
         </button>
@@ -2717,7 +2714,7 @@ function CodeBlock({
   const [copied, copy] = useCopy();
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-code">
-      <div className="flex h-8 items-center justify-between border-b border-border pr-1 pl-3 text-[11.5px] text-faint-foreground">
+      <div className="flex h-8 items-center justify-between border-b border-border pr-1 pl-3 text-meta text-faint-foreground">
         <span className="font-mono">{language ?? "text"}</span>
         <button
           type="button"
@@ -2732,7 +2729,7 @@ function CodeBlock({
       {language === "diff" || language === "patch" ? (
         <DiffLines text={text} />
       ) : (
-        <pre className="code-lines overflow-x-auto px-3.5 py-3 font-mono text-[12.5px] leading-relaxed">
+        <pre className="code-lines overflow-x-auto px-3.5 py-3 font-mono text-body leading-relaxed">
           {children}
         </pre>
       )}
@@ -2747,7 +2744,7 @@ function CodeBlock({
 function DiffLines({ text }: { text: string }) {
   let inHunk = false;
   return (
-    <div className="code-scroll overflow-x-auto py-1.5 font-mono text-[12px] leading-relaxed">
+    <div className="code-scroll overflow-x-auto py-1.5 font-mono text-meta leading-relaxed">
       {text
         .replace(/\n$/, "")
         .split("\n")

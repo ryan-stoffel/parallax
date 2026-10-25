@@ -204,7 +204,7 @@ export function ChangesPanel({
               setRevertError(undefined);
               dialog.current?.showModal();
             }}
-            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Undo2 aria-hidden className="size-3.5" />
             Edit from here
@@ -212,7 +212,7 @@ export function ChangesPanel({
         )}
       </div>
       {shown && "error" in shown && (
-        <p role="alert" className="px-3 py-2 text-[12.5px] text-danger">
+        <p role="alert" className="px-3 py-2 text-body text-danger">
           {shown.error}
         </p>
       )}
@@ -247,8 +247,8 @@ function Empty({ title, hint }: { title: string; hint: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
       <GitCompare aria-hidden className="mb-1 size-5 text-faint-foreground" />
-      <p className="text-[13px] font-medium text-foreground">{title}</p>
-      <p className="text-[12.5px] text-muted-foreground">{hint}</p>
+      <p className="text-body font-medium text-foreground">{title}</p>
+      <p className="text-body text-muted-foreground">{hint}</p>
     </div>
   );
 }

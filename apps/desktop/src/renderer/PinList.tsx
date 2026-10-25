@@ -398,7 +398,7 @@ export function PinList({
               <ul className="mt-px mb-1 ml-[15px] flex flex-col gap-px border-l border-border pl-1">
                 {tree(entry.children)}
                 {entry.children.length === 0 && (
-                  <li className="px-2 py-1 text-[12px] text-faint-foreground">Drop threads here</li>
+                  <li className="px-2 py-1 text-meta text-faint-foreground">Drop threads here</li>
                 )}
               </ul>
             </div>
@@ -435,12 +435,12 @@ export function PinList({
     >
       <ul className="flex flex-col gap-px">{tree(entries)}</ul>
       {rowOver && (
-        <div className="grow-in grid h-8 place-items-center rounded-md border border-dashed border-accent/50 bg-accent/5 text-[12px] font-medium text-accent">
+        <div className="grow-in grid h-8 place-items-center rounded-md border border-dashed border-accent/50 bg-accent/5 text-meta font-medium text-accent">
           Drop to pin
         </div>
       )}
       {pins.length === 0 && !rowOver && searching && (
-        <p className="rounded-xl border border-dashed border-border px-3 py-3 text-center text-[12px] leading-snug text-faint-foreground">
+        <p className="rounded-xl border border-dashed border-border px-3 py-3 text-center text-meta leading-snug text-faint-foreground">
           No pins match
         </p>
       )}
@@ -449,12 +449,10 @@ export function PinList({
           <span className="grid size-7 place-items-center rounded-lg bg-surface text-muted-foreground ring-1 ring-border [&_svg]:size-3.5">
             <Pin aria-hidden />
           </span>
-          <p className="mt-2.5 text-[12.5px] font-medium text-muted-foreground">
-            Keep threads close
-          </p>
-          <p className="mt-0.5 text-[12px] leading-snug text-faint-foreground">
+          <p className="mt-2.5 text-body font-medium text-muted-foreground">Keep threads close</p>
+          <p className="mt-0.5 text-meta leading-snug text-faint-foreground">
             Drag one here, or press{" "}
-            <kbd className="rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+            <kbd className="rounded-sm border border-border bg-surface px-1 font-sans text-caption leading-4 text-muted-foreground">
               P
             </kbd>{" "}
             on it.
@@ -462,7 +460,7 @@ export function PinList({
           <button
             type="button"
             onClick={() => pinHintHidden.set(true)}
-            className="mt-3 h-6 rounded-md px-2.5 text-[11.5px] font-medium text-faint-foreground transition-colors hover:bg-hover hover:text-foreground"
+            className="mt-3 h-6 rounded-md px-2.5 text-meta font-medium text-faint-foreground transition-colors hover:bg-hover hover:text-foreground"
           >
             Dismiss
           </button>
@@ -767,7 +765,7 @@ const plainSurface = {
     "bg-[color-mix(in_srgb,var(--tint)_10%,var(--selected))] shadow-[inset_0_0_0_1.5px_color-mix(in_srgb,var(--tint)_70%,transparent)]",
 };
 const rowLook =
-  "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] transition-[background-color,transform] duration-100 outline-none";
+  "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-body transition-[background-color,transform] duration-100 outline-none";
 const moreButton =
   "grid size-5.5 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/pin:opacity-100 group-has-[:focus-visible]/pin:opacity-100 hover:bg-[color-mix(in_srgb,var(--tint)_16%,transparent)] hover:text-foreground [&_svg]:size-3.5";
 const hideOnHover = "group-hover/pin:hidden group-has-[:focus-visible]/pin:hidden";
@@ -1034,7 +1032,7 @@ function FolderItem({
         {name}
       </span>
       <span
-        className={`flex shrink-0 items-center gap-1 text-[11.5px] text-faint-foreground tabular-nums ${hideOnHover}`}
+        className={`flex shrink-0 items-center gap-1 text-meta text-faint-foreground tabular-nums ${hideOnHover}`}
       >
         {top && news(top) ? (
           <Status attention={top} words />
@@ -1121,7 +1119,7 @@ function Status({ attention, words }: { attention: Attention; words?: boolean })
     setAnimate(attention === "done");
     setChanged(true);
   }
-  const look = `flex items-center gap-1 text-[11.5px] font-medium [&_svg]:size-3.5 ${changed ? "rise-in" : ""}`;
+  const look = `flex items-center gap-1 text-meta font-medium [&_svg]:size-3.5 ${changed ? "rise-in" : ""}`;
   switch (attention) {
     case "needsYou":
       return (

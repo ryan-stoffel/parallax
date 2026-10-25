@@ -93,13 +93,13 @@ export function ForkMenu({
       id={id}
       label="Fork"
       align={align}
-      className="w-64 p-1 text-[13px]"
+      className="w-64 p-1 text-body"
       onBeforeToggle={(e) => e.newState === "open" && setOpen(true)}
       onClose={() => setOpen(false)}
     >
       {open && (
         <>
-          <p className="px-2 pt-1 pb-1.5 text-[11.5px] font-medium text-faint-foreground">
+          <p className="px-2 pt-1 pb-1.5 text-meta font-medium text-faint-foreground">
             Fork into a new thread
           </p>
           <button
@@ -115,7 +115,7 @@ export function ForkMenu({
           {others.length > 0 && (
             <>
               <div className="my-1 h-px bg-border" />
-              <p className="px-2 pt-0.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
+              <p className="px-2 pt-0.5 pb-1 text-meta font-medium text-faint-foreground">
                 Or pick another model
               </p>
               <div className="max-h-56 overflow-y-auto">
@@ -135,7 +135,7 @@ export function ForkMenu({
                     >
                       <Logo aria-hidden />
                       <span className="truncate">{m.name}</span>
-                      <span className="ml-auto shrink-0 text-[12px] text-faint-foreground">
+                      <span className="ml-auto shrink-0 text-meta text-faint-foreground">
                         {where}
                       </span>
                     </button>

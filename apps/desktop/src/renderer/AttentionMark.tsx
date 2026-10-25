@@ -95,7 +95,7 @@ export function AttentionBadge({
     setChanged(true);
   }
 
-  const look = `flex items-center gap-1 text-[11.5px] font-medium [&_svg]:size-3.5 ${changed ? "rise-in" : ""}`;
+  const look = `flex items-center gap-1 text-meta font-medium [&_svg]:size-3.5 ${changed ? "rise-in" : ""}`;
   switch (attention) {
     case "working":
       return (

@@ -370,7 +370,7 @@ export function UsageInline({ data }: { data: ComposerUsageData }) {
     <div
       role="group"
       aria-label="Usage"
-      className="mx-3 flex flex-wrap items-center justify-between gap-x-5 gap-y-1.5 border-t border-border px-1.5 pt-2 pb-2.5 text-[12px] text-muted-foreground tabular-nums"
+      className="mx-3 flex flex-wrap items-center justify-between gap-x-5 gap-y-1.5 border-t border-border px-1.5 pt-2 pb-2.5 text-meta text-muted-foreground tabular-nums"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5">
         {data.windows.map((w) => {
@@ -417,8 +417,9 @@ const ringTone = {
 };
 
 /**
- * A ring by the attach button that fills with the fullest current limit window (or the thread's
- * context when no window is known), amber from 75% and red from 90%. Hovering or focusing it peeks
+ * A ring and its percent by the attach button, filled to the fullest current limit window (or the
+ * thread's context when no window is known), amber from 75% and red from 90%. The percent beside it
+ * keeps the partial ring from reading as a loading spinner. Hovering or focusing it peeks
  * at a card with every window and the thread's own measurements; a click keeps the card open.
  * Nothing shows until there is something to say.
  */
@@ -481,16 +482,16 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
         aria-controls={card}
         title={open ? undefined : summary.label}
         onClick={() => (kept ? close() : setKept(true))}
-        className={`grid size-9 place-items-center rounded-full hover:bg-hover ${open ? "bg-hover" : ""} ${ringTone[summary.tone]}`}
+        className={`flex h-7 items-center gap-1.5 rounded-full px-2 text-meta tabular-nums hover:bg-hover ${open ? "bg-hover" : ""} ${ringTone[summary.tone]}`}
       >
-        <svg aria-hidden viewBox="0 0 20 20" className="size-[17px] -rotate-90">
+        <svg aria-hidden viewBox="0 0 20 20" className="size-3.5 -rotate-90">
           <circle
             cx="10"
             cy="10"
             r="7.5"
             fill="none"
-            strokeWidth="2.25"
-            className="stroke-selected"
+            strokeWidth="3"
+            className="stroke-faint-foreground/30"
           />
           {summary.used > 0 && (
             <circle
@@ -499,20 +500,20 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
               r="7.5"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2.25"
-              strokeLinecap="round"
+              strokeWidth="3"
               pathLength={100}
               strokeDasharray={`${Math.max(summary.used, 3)} 100`}
             />
           )}
         </svg>
+        <span aria-hidden>{Math.round(summary.used)}%</span>
       </button>
       <div
         id={card}
         role="group"
         aria-label="Usage"
         hidden={!open}
-        className="absolute right-0 bottom-full z-20 mb-2 w-80 rounded-xl border border-border bg-surface p-3 text-[12.5px] text-foreground shadow-composer tabular-nums"
+        className="absolute right-0 bottom-full z-20 mb-2 w-80 rounded-xl border border-border bg-surface p-3 text-body text-foreground shadow-composer tabular-nums"
       >
         {/* One grid for every window, so their bars line up. */}
         <div className="grid grid-cols-[3.5rem_1fr_auto] items-center gap-x-2.5 gap-y-2.5 py-0.5">

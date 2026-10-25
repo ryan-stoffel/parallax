@@ -191,31 +191,34 @@
 :root.dark,
 .scheme-dark {
   color-scheme: dark;
-  --background: #0b0b10;
-  --sidebar: #121218;
-  --surface: #17171f;
-  --foreground: #ededf4;
-  --muted-foreground: #a6a5b9;
-  --faint-foreground: #878699;
-  --border: rgb(237 237 244 / 8%);
-  --hover: rgb(237 237 244 / 4.5%);
-  --selected: rgb(237 237 244 / 8%);
+  /* Neutral grays with no tint, as T3 Code's and Claude's dark modes have: the sidebar a step
+     darker than the thread, and raised surfaces (the composer, cards, menus) a step lighter. */
+  --background: #161616;
+  --sidebar: #101010;
+  --surface: #1f1f1f;
+  --foreground: #ececec;
+  --muted-foreground: #a3a3a3;
+  --faint-foreground: #8f8f8f;
+  --border: rgb(255 255 255 / 8%);
+  --hover: rgb(255 255 255 / 5%);
+  --selected: rgb(255 255 255 / 8%);
   /* The logo's blue, lifted to read on the dark, as --danger lifts its coral. */
   --accent: #5b80ff;
-  /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
-  --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
-  --primary: #ededf4;
-  --primary-foreground: #0b0b10;
+  /* The accent, darkened a little: mixed toward a black with no chroma or hue, so it keeps the
+     accent's, and dark enough for white text. */
+  --send: color-mix(in oklch, var(--accent) 84%, oklch(0 none none));
+  --primary: #ececec;
+  --primary-foreground: #161616;
   --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
-  --code: #121218;
+  --code: #101010;
   --syntax-keyword: #7b9bff;
   --syntax-string: #ff8a65;
   --syntax-number: #c4b5fd;
   --syntax-title: #a5b4fc;
   --syntax-type: #f9a8d4;
-  --syntax-comment: #7d7c93;
+  --syntax-comment: #8a8a8a;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
   --project-red: #f87171;
   --project-orange: #fb923c;
@@ -346,6 +349,12 @@
 :root.nightly .send-sky:enabled:hover {
   filter: brightness(1.15);
 }
+/* A send button with nothing to send is a plain gray circle, as it is outside a nightly. */
+:root.nightly .send-sky:disabled {
+  background: var(--selected);
+  color: var(--faint-foreground);
+  box-shadow: none;
+}
 :root.nightly:not(.reduce-motion) .night-sky .twinkle {
   animation: twinkle 4s ease-in-out infinite;
 }
@@ -421,6 +430,27 @@
    relative to the rest. The terminal takes the size itself (Terminal.tsx). */
 :is(.font-mono, pre):not(:is(.font-mono, pre, .xterm) *) {
   zoom: var(--code-zoom, 1);
+}
+
+/* The type scale (docs/decisions/0085-ui-style-guide.md): every font size is one of these. Each
+   sets only the size, so text keeps the line height around it. */
+@theme {
+  --text-*: initial;
+  --text-micro: 10px;
+  --text-caption: 11px;
+  --text-meta: 12px;
+  --text-body: 13px;
+  --text-reading: 14px;
+  --text-heading: 18px;
+  --text-display: 24px;
+  --text-hero: 40px;
+  /* The radius scale: marks, controls, rows and menus, panels and dialogs, the composer. */
+  --radius-*: initial;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
 }
 
 @theme inline {
@@ -749,7 +779,7 @@ body {
 }
 .markdown :not(pre) > code {
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--code);
   padding: 0.1em 0.35em;
   font-family: var(--font-mono);
@@ -837,7 +867,7 @@ body {
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
    paragraphs) with no gap, and code blocks drawn as the transcript's CodeBlock draws them. */
 .composer-input.markdown {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.625;
 }
 .composer-input > :first-child,
@@ -850,7 +880,7 @@ body {
   background: var(--code);
   padding: 0.75rem;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 /* The reasoning slider (EffortMenu.tsx). An invisible range takes input; the track, fill, and
@@ -2096,7 +2126,7 @@ body {
   padding: 0 3px;
   overflow: hidden;
   border-radius: 4px;
-  font-size: 9.5px;
+  font-size: 10px;
   line-height: 13px;
   white-space: nowrap;
   pointer-events: none;

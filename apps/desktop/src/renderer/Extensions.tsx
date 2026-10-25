@@ -139,7 +139,7 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
         className="w-80 p-1.5"
       >
         <div className="flex items-center justify-between py-1 pr-0.5 pl-2.5">
-          <p className="text-[14px] font-medium">Extensions</p>
+          <p className="text-reading font-medium">Extensions</p>
           <button
             type="button"
             aria-label="Close"
@@ -160,7 +160,7 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
             />
           ))
         ) : (
-          <p className="px-2.5 pt-1 pb-2 text-[12.5px] text-muted-foreground">
+          <p className="px-2.5 pt-1 pb-2 text-body text-muted-foreground">
             None yet. Add one from the Chrome Web Store, such as a password manager.
           </p>
         )}
@@ -210,7 +210,7 @@ function ExtensionRow({
         type="button"
         role="menuitem"
         onClick={onActivate}
-        className="flex h-9 min-w-0 flex-1 items-center gap-3 pl-2.5 text-left text-[13px]"
+        className="flex h-9 min-w-0 flex-1 items-center gap-3 pl-2.5 text-left text-body"
       >
         {extension.icon ? (
           <img src={extension.icon} alt="" className="size-[18px] shrink-0" />

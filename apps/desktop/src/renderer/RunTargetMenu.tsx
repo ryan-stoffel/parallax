@@ -103,12 +103,12 @@ function HostOption({
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         {/* Both cut off with "…" when long, how it connects first. */}
         <span className={`truncate ${offline ? "text-muted-foreground" : ""}`}>{host.name}</span>
-        <span className="shrink-[4] truncate text-[12px] text-faint-foreground">{note}</span>
+        <span className="shrink-[4] truncate text-meta text-faint-foreground">{note}</span>
       </span>
       {missing && (
         <span
           title={`Picking it clones ${missing} there`}
-          className="shrink-0 text-[12px] text-faint-foreground"
+          className="shrink-0 text-meta text-faint-foreground"
         >
           Clones {missing}
         </span>
@@ -197,7 +197,7 @@ export function RunTargetMenu({
               onKeyDown={(e) => {
                 if (e.key === "Enter" && shown[0]) onHostChange(shown[0].id);
               }}
-              className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+              className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
             />
           </label>
         )}
@@ -217,10 +217,10 @@ export function RunTargetMenu({
             ))}
           </div>
           {shown.length === 0 && (
-            <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No matches</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
           )}
           {hosts.length === 1 && (
-            <p className="px-2 pt-0.5 pb-1.5 text-[12px] text-faint-foreground">
+            <p className="px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
               Computers you add under Hosts show up here.
             </p>
           )}
@@ -240,7 +240,7 @@ export function RunTargetMenu({
               />
             ))}
             {checkoutUnavailable && (
-              <p className="px-2 pt-0.5 pb-1.5 text-[12px] text-faint-foreground">
+              <p className="px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
                 Local checkout {checkoutUnavailable}.
               </p>
             )}

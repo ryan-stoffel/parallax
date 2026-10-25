@@ -279,9 +279,9 @@ function cut(text: string, all: boolean) {
 
 // A box of monospace text, as code, and a diff's, whose rows reach its edges.
 const codeBox =
-  "overflow-x-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-[12px] leading-relaxed";
+  "overflow-x-auto rounded-xl border border-border bg-code px-3 py-2 font-mono text-meta leading-relaxed";
 const diffBox =
-  "code-scroll overflow-x-auto rounded-xl border border-border bg-code py-1.5 font-mono text-[12px] leading-relaxed";
+  "code-scroll overflow-x-auto rounded-xl border border-border bg-code py-1.5 font-mono text-meta leading-relaxed";
 
 /** Show all, or Show less, for a preview cut short. */
 function ShowAll({ all, onToggle, lines }: { all: boolean; onToggle: () => void; lines?: number }) {
@@ -290,7 +290,7 @@ function ShowAll({ all, onToggle, lines }: { all: boolean; onToggle: () => void;
       type="button"
       aria-expanded={all}
       onClick={onToggle}
-      className="mt-1 flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
+      className="mt-1 flex items-center gap-1 text-meta text-muted-foreground hover:text-foreground"
     >
       {all ? (
         <ChevronUp aria-hidden className="size-3.5" />
@@ -312,7 +312,7 @@ function Cut({ text, prose = false }: { text: string; prose?: boolean }) {
       <Tag
         className={
           prose
-            ? "text-[12.5px] leading-relaxed whitespace-pre-wrap text-muted-foreground"
+            ? "text-body leading-relaxed whitespace-pre-wrap text-muted-foreground"
             : `${codeBox} whitespace-pre-wrap break-words`
         }
       >
@@ -336,7 +336,7 @@ export const diffLook = {
 };
 
 /** A band across a diff: a run of unchanged lines left out, or a hunk's `@@` header. */
-export const diffBand = "bg-hover px-3 py-0.5 text-[11.5px] text-faint-foreground";
+export const diffBand = "bg-hover px-3 py-0.5 text-meta text-faint-foreground";
 
 /** One line of a diff, its sign before it. */
 export function DiffRow({ op, text }: { op: " " | "+" | "-"; text: string }) {
@@ -415,13 +415,13 @@ function Fields({ input, whole = false }: { input: Record<string, JsonValue>; wh
     <div>
       <dl
         ref={list}
-        className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-[12.5px] leading-relaxed"
+        className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-body leading-relaxed"
       >
         {shown.map(([name, value]) => (
           <div key={name} className="contents">
             <dt className="text-faint-foreground">{name}</dt>
             <dd
-              className={`break-words whitespace-pre-wrap ${typeof value === "string" ? "" : "font-mono text-[12px]"} ${all ? "" : "line-clamp-3"}`}
+              className={`break-words whitespace-pre-wrap ${typeof value === "string" ? "" : "font-mono text-meta"} ${all ? "" : "line-clamp-3"}`}
             >
               {valueText(value, all)}
             </dd>
@@ -452,7 +452,7 @@ export function RequestPreview({
   if (isObject(input) && input["truncated"] === true) {
     const bytes = typeof input["bytes"] === "number" ? input["bytes"] : 0;
     return (
-      <p className="text-[12.5px] text-muted-foreground">
+      <p className="text-body text-muted-foreground">
         Its input is too large to show ({Math.ceil(bytes / 1024)} KB). Approving runs it as asked.
       </p>
     );
@@ -466,7 +466,7 @@ export function RequestPreview({
         <div className="space-y-1.5">
           <Diff before={text("old_string") ?? ""} after={text("new_string") ?? ""} />
           {isObject(input) && input["replace_all"] === true && (
-            <p className="text-[12px] text-muted-foreground">Replaces every match in the file.</p>
+            <p className="text-meta text-muted-foreground">Replaces every match in the file.</p>
           )}
         </div>
       );
@@ -489,12 +489,12 @@ export function RequestPreview({
       return (
         <div className="space-y-1.5">
           <Diff before="" after={text("content") ?? ""} />
-          <p className="text-[12px] text-muted-foreground">Writes the whole file.</p>
+          <p className="text-meta text-muted-foreground">Writes the whole file.</p>
         </div>
       );
     case "NotebookEdit":
       return text("edit_mode") === "delete" ? (
-        <p className="text-[12.5px] text-muted-foreground">Deletes a cell.</p>
+        <p className="text-body text-muted-foreground">Deletes a cell.</p>
       ) : (
         <Diff before="" after={text("new_source") ?? ""} />
       );
@@ -531,7 +531,7 @@ function Context({ request }: { request: ApprovalRequest }) {
   const { reason, blockedPath, subagent } = request;
   if (!reason && !blockedPath && !subagent) return null;
   return (
-    <div className="space-y-0.5 text-[12px] text-muted-foreground">
+    <div className="space-y-0.5 text-meta text-muted-foreground">
       {reason && <p className="break-words">{reason}</p>}
       {blockedPath && (
         <p className="break-words">
@@ -552,11 +552,11 @@ function Context({ request }: { request: ApprovalRequest }) {
 const pinnedMaxHeight = "45vh";
 
 export const quietButton =
-  "h-7 shrink-0 rounded-md px-2.5 text-[12.5px] text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50";
+  "h-7 shrink-0 rounded-md px-2.5 text-body text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50";
 export const outlineButton =
-  "h-7 shrink-0 rounded-md border border-border px-2.5 text-[12.5px] text-foreground enabled:hover:bg-hover disabled:opacity-50";
+  "h-7 shrink-0 rounded-md border border-border px-2.5 text-body text-foreground enabled:hover:bg-hover disabled:opacity-50";
 const approveButton =
-  "h-7 shrink-0 rounded-md bg-send px-3 text-[12.5px] font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
+  "h-7 shrink-0 rounded-md bg-send px-3 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
 
 /** What a button says while its answer is on the way. */
 const pendingLabels = { allow: "Approving…", always: "Allowing…", deny: "Denying…" };
@@ -643,7 +643,7 @@ function Answers({
             setDenying(false);
             requestAnimationFrame(() => denyRef.current?.focus());
           }}
-          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
+          className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-body placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
         />
         <button
           type="button"
@@ -709,7 +709,7 @@ function statusText(state: AnswerState | undefined, count: number, plan = false)
 function Problem({ state }: { state?: AnswerState }) {
   if (state?.state === "gone")
     return (
-      <p className="text-[12.5px] text-muted-foreground">
+      <p className="text-body text-muted-foreground">
         This request is no longer waiting. It ended before your answer reached it.
       </p>
     );
@@ -746,7 +746,7 @@ function ApprovalCard({
       aria-describedby={statusId}
       className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface focus-visible:outline-none"
     >
-      <div className="flex items-center gap-2 px-4 pt-3 text-[13px]">
+      <div className="flex items-center gap-2 px-4 pt-3 text-body">
         <tool.Icon aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
         <span id={titleId} className="flex min-w-0 items-center gap-2">
           <span className="shrink-0 font-medium">{tool.label}</span>
@@ -755,7 +755,7 @@ function ApprovalCard({
               // Right to left, so the ellipsis takes the path's start; <bdi> keeps it in order.
               <span
                 title={detail.text}
-                className="truncate text-left font-mono text-[12px] text-muted-foreground [direction:rtl]"
+                className="truncate text-left font-mono text-meta text-muted-foreground [direction:rtl]"
               >
                 <bdi>{detail.text}</bdi>
               </span>
@@ -765,7 +765,7 @@ function ApprovalCard({
         </span>
         <span
           id={statusId}
-          className="ml-auto shrink-0 pl-2 text-[12px] text-muted-foreground tabular-nums"
+          className="ml-auto shrink-0 pl-2 text-meta text-muted-foreground tabular-nums"
         >
           {statusText(state, count)}
         </span>
@@ -783,7 +783,7 @@ function ApprovalCard({
           // Every rule whole, wrapping where it must, since Always allow grants all of them.
           <p
             id={rulesId}
-            className="mr-auto min-w-0 flex-1 basis-60 text-[12px] leading-relaxed text-faint-foreground"
+            className="mr-auto min-w-0 flex-1 basis-60 text-meta leading-relaxed text-faint-foreground"
           >
             Always allow adds{" "}
             {rules.map((rule, i) => (
@@ -840,22 +840,22 @@ function ComputerApprovalCard({
       <div className="flex items-start gap-3 px-4 pt-3.5">
         <span
           aria-hidden
-          className="grid size-9 shrink-0 place-items-center rounded-[10px] bg-accent/10 text-accent ring-1 ring-accent/20 ring-inset"
+          className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent/10 text-accent ring-1 ring-accent/20 ring-inset"
         >
           <MousePointerClick className="size-[18px]" />
         </span>
         <div className="min-w-0 flex-1 pt-px">
-          <p id={titleId} className="text-[13.5px] font-medium">
+          <p id={titleId} className="text-body font-medium">
             Allow Parallax to use <span className="break-words">{app}</span>?
           </p>
-          <p id={rulesId} className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
+          <p id={rulesId} className="mt-0.5 text-body leading-relaxed text-muted-foreground">
             While this thread works, Parallax can see the app's window and click, type, and scroll
             in it. Your pointer and keyboard stay yours.
           </p>
         </div>
         <span
           id={statusId}
-          className="shrink-0 pt-0.5 pl-2 text-[12px] text-muted-foreground tabular-nums"
+          className="shrink-0 pt-0.5 pl-2 text-meta text-muted-foreground tabular-nums"
         >
           {statusText(state, count)}
         </span>
@@ -918,7 +918,7 @@ function PlanApprovalCard({
         actions={
           <>
             {/* At the foot, by the buttons, where the fold can't hide it. */}
-            <span id={statusId} className="mr-auto min-w-0 text-[12px] text-muted-foreground">
+            <span id={statusId} className="mr-auto min-w-0 text-meta text-muted-foreground">
               {state?.state === "gone" ? (
                 "No longer waiting: it ended."
               ) : (
@@ -939,7 +939,7 @@ function PlanApprovalCard({
         {plan?.trim() ? (
           markdown(plan)
         ) : (
-          <p className="text-[13px] text-muted-foreground">
+          <p className="text-body text-muted-foreground">
             The plan didn't come with the request. The agent's messages above may have it.
           </p>
         )}
@@ -1112,7 +1112,7 @@ export function ApprovalQueue({
         <section aria-label="Approval requests" className="mb-3 flex min-h-0 flex-col">
           <Pinned key={key} onLeave={leave}>
             {head.from && (
-              <p className="flex min-w-0 items-center gap-1.5 px-1 text-[12px] text-muted-foreground">
+              <p className="flex min-w-0 items-center gap-1.5 px-1 text-meta text-muted-foreground">
                 <Workflow aria-hidden className="size-3 shrink-0" />
                 <span className="truncate">{head.from.label}</span>
                 {head.from.open && (
@@ -1164,9 +1164,7 @@ export function ApprovalSummary({ approval, tool }: { approval: Approval; tool: 
               <>
                 :{" "}
                 <span
-                  className={
-                    tool.label === approval.request.toolName ? "font-mono text-[12px]" : ""
-                  }
+                  className={tool.label === approval.request.toolName ? "font-mono text-meta" : ""}
                 >
                   {detail}
                 </span>
@@ -1188,7 +1186,7 @@ export function ApprovalSummary({ approval, tool }: { approval: Approval; tool: 
 export function ApprovalDetails({ approval }: { approval: Approval }) {
   const { request, resolved } = approval;
   return (
-    <div className="space-y-2 text-[12.5px]">
+    <div className="space-y-2 text-body">
       <p className="text-muted-foreground">{outcomeOf(approval).who}</p>
       {resolved?.message && (
         <p className="break-words whitespace-pre-wrap">

@@ -97,7 +97,7 @@ export function DownloadsButton() {
             type="button"
             role="menuitem"
             onClick={() => window.parallax.downloadAction(undefined, "clear")}
-            className="rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-hover hover:text-foreground"
+            className="rounded-md px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground"
           >
             Clear
           </button>
@@ -119,11 +119,11 @@ export function DownloadsButton() {
               className="flex min-w-0 flex-1 flex-col text-left"
             >
               <span
-                className={`truncate text-[13px] ${d.state === "cancelled" || d.state === "interrupted" ? "text-muted-foreground line-through" : ""}`}
+                className={`truncate text-body ${d.state === "cancelled" || d.state === "interrupted" ? "text-muted-foreground line-through" : ""}`}
               >
                 {d.name}
               </span>
-              <span className="text-[11.5px] text-muted-foreground">{downloadStatus(d)}</span>
+              <span className="text-meta text-muted-foreground">{downloadStatus(d)}</span>
               {d.state === "progressing" && d.total > 0 && (
                 <span className="mt-1 h-1 overflow-hidden rounded-full bg-border">
                   <span

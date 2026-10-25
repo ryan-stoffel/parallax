@@ -367,7 +367,7 @@ interface MenuEntry {
 
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
 export const tabItem =
-  "flex min-w-0 items-center gap-1.5 px-2 py-1 text-[13.5px] text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
+  "flex min-w-0 items-center gap-1.5 px-2 py-1 text-body text-muted-foreground [&_svg]:size-4 [&_svg]:shrink-0";
 
 /** A prompt for Stop to put back: its text and attached threads, then its images once they load. */
 export interface Unanswered {
@@ -1185,7 +1185,7 @@ export function Composer({
             setAttachError("A thread on another computer can't be attached here.");
           else addThreads([thread.runId]);
         }}
-        className={`relative z-10 rounded-3xl border bg-surface shadow-composer focus-within:border-ring ${threadOver ? "border-ring" : "border-border"}`}
+        className={`relative z-10 rounded-2xl border bg-surface shadow-composer focus-within:border-ring ${threadOver ? "border-ring" : "border-border"}`}
       >
         {menuOpen && (
           <div
@@ -1205,7 +1205,7 @@ export function Composer({
                 {entry.group && entry.group !== entries[i - 1]?.group && (
                   <div
                     role="presentation"
-                    className="px-2 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-foreground"
+                    className="px-2 pt-1.5 pb-1 text-meta font-medium text-faint-foreground"
                   >
                     {entry.group}
                   </div>
@@ -1227,15 +1227,15 @@ export function Composer({
                     {entry.label}
                   </span>
                   {entry.hint && (
-                    <span className="shrink-0 text-[12px] text-faint-foreground">{entry.hint}</span>
+                    <span className="shrink-0 text-meta text-faint-foreground">{entry.hint}</span>
                   )}
                   {entry.description && (
-                    <span className="min-w-0 truncate text-[12px] text-faint-foreground">
+                    <span className="min-w-0 truncate text-meta text-faint-foreground">
                       {entry.description}
                     </span>
                   )}
                   {entry.meta && (
-                    <span className="ml-auto shrink-0 pl-2 text-[12px] text-faint-foreground">
+                    <span className="ml-auto shrink-0 pl-2 text-meta text-faint-foreground">
                       {entry.meta}
                     </span>
                   )}
@@ -1243,7 +1243,7 @@ export function Composer({
               </ReactFragment>
             ))}
             {loading && (
-              <p role="status" className="px-2 py-1.5 text-[12px] text-faint-foreground">
+              <p role="status" className="px-2 py-1.5 text-meta text-faint-foreground">
                 {loading}
               </p>
             )}
@@ -1296,7 +1296,7 @@ export function Composer({
               />
             ))}
             {files.length > 0 && !canUpload && (
-              <span className="text-[12px] text-faint-foreground">Not sent to the agent yet</span>
+              <span className="text-meta text-faint-foreground">Not sent to the agent yet</span>
             )}
           </fieldset>
         )}
@@ -1312,7 +1312,7 @@ export function Composer({
           {!text && (
             <p
               aria-hidden
-              className="pointer-events-none absolute inset-x-5 top-4.5 truncate text-[15px] leading-relaxed text-faint-foreground"
+              className="pointer-events-none absolute inset-x-5 top-4.5 truncate text-reading leading-relaxed text-faint-foreground"
             >
               {placeholder}
             </p>
@@ -1415,7 +1415,7 @@ export function Composer({
               type="submit"
               aria-label="Send"
               disabled={!canSend}
-              className="send-sky grid size-9 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25"
+              className="send-sky grid size-9 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
             >
               <ArrowUp className="size-4.5" />
             </button>
@@ -1425,7 +1425,7 @@ export function Composer({
       </form>
       {tab && (
         // Tucked under the box, so what it shows reads as part of it.
-        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-3xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
+        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
           {tab}
         </div>
       )}

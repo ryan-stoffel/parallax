@@ -139,7 +139,7 @@ export function ThreadDetails({
         <section aria-label="Workspace" className="p-2">
           <div
             title={folder ?? "No folder yet"}
-            className="flex items-center gap-0.5 px-2 py-1.5 text-[13px]"
+            className="flex items-center gap-0.5 px-2 py-1.5 text-body"
           >
             <span aria-hidden className="shrink-0 text-muted-foreground">
               {hostIcon(host)}

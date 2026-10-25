@@ -192,7 +192,7 @@ export function ImportChats({ className = "" }: { className?: string }) {
     );
   return (
     <div className={`flex min-h-0 flex-col gap-3 ${className}`}>
-      <p className="flex items-center gap-2 text-[12.5px] text-muted-foreground [&_svg]:size-3.5">
+      <p className="flex items-center gap-2 text-body text-muted-foreground [&_svg]:size-3.5">
         <FileArchive aria-hidden className="shrink-0" />
         <span className="min-w-0 truncate">{file}</span>
         <button
@@ -268,8 +268,8 @@ function ExportDrop({
   return (
     <div className={`flex min-h-0 flex-col gap-4 overflow-y-auto ${className}`}>
       {parts.length > 0 && (
-        <div className="rounded-xl border border-border bg-surface p-4 text-[12.5px]">
-          <p className="flex items-center gap-1.5 text-[13px] font-medium [&_svg]:size-3.5">
+        <div className="rounded-xl border border-border bg-surface p-4 text-body">
+          <p className="flex items-center gap-1.5 text-body font-medium [&_svg]:size-3.5">
             <ClaudeLogo />
             That&apos;s Claude&apos;s export manifest
           </p>
@@ -304,10 +304,10 @@ function ExportDrop({
         className={`flex min-h-44 flex-col items-center justify-center rounded-xl border border-dashed px-6 py-8 text-center transition-colors ${over ? "border-accent bg-accent/8" : "border-border"}`}
       >
         <AppLogos apps={chatApps} className="mb-3" />
-        <p className="text-[13.5px] font-medium">
+        <p className="text-body font-medium">
           {parts.length ? "Now drop the downloaded .zip here" : "Drop your export's .zip here"}
         </p>
-        <p className="mt-1 text-[12.5px] text-muted-foreground">
+        <p className="mt-1 text-body text-muted-foreground">
           From ChatGPT or Claude. Each emails you a link to it once it's ready.
         </p>
         <input
@@ -326,7 +326,7 @@ function ExportDrop({
           type="button"
           disabled={reading}
           onClick={() => input.current?.click()}
-          className="mt-4 flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-3.5"
+          className="mt-4 flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-3.5"
         >
           {reading ? (
             <LoaderCircle aria-hidden className="animate-spin" />
@@ -336,7 +336,7 @@ function ExportDrop({
           {reading ? "Reading…" : "Choose .zip…"}
         </button>
       </div>
-      <div className="grid grid-cols-2 gap-3 text-[12.5px]">
+      <div className="grid grid-cols-2 gap-3 text-body">
         {[
           {
             app: chatApps[0]!,
@@ -455,7 +455,7 @@ function SessionList({
           type="button"
           disabled={busy || shownOpen.length === 0}
           onClick={() => toggle(shownOpen, !allShown)}
-          className="shrink-0 rounded-md px-2 py-1 text-[12.5px] font-medium text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50"
+          className="shrink-0 rounded-md px-2 py-1 text-body font-medium text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50"
         >
           {allShown ? "Clear" : "Select all"}
         </button>
@@ -477,7 +477,7 @@ function SessionList({
       </ul>
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0 flex-1">
-          <p role="status" className="truncate text-[12.5px] text-muted-foreground">
+          <p role="status" className="truncate text-body text-muted-foreground">
             {progress
               ? `Importing ${progress.done + 1} of ${progress.total}…`
               : count
@@ -497,7 +497,7 @@ function SessionList({
           type="button"
           disabled={busy || count === 0}
           onClick={() => void importPicked()}
-          className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-3.5"
+          className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-3.5"
         >
           {busy ? <LoaderCircle aria-hidden className="animate-spin" /> : <Download aria-hidden />}
           {count ? `Import ${count}` : "Import"}
@@ -520,7 +520,7 @@ function Notice({
   return (
     <div
       role={alert ? "alert" : "status"}
-      className={`flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 py-8 text-center text-[13px] ${alert ? "text-danger" : "text-muted-foreground"} ${className}`}
+      className={`flex min-h-40 flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 py-8 text-center text-body ${alert ? "text-danger" : "text-muted-foreground"} ${className}`}
     >
       {children}
     </div>
@@ -577,7 +577,7 @@ function SessionRow({
             />
             <span
               aria-hidden
-              className="grid size-4 shrink-0 place-items-center rounded-[5px] border border-faint-foreground/50 bg-background text-accent-foreground peer-checked:border-accent peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-ring [&_svg]:invisible peer-checked:[&_svg]:visible"
+              className="grid size-4 shrink-0 place-items-center rounded-sm border border-faint-foreground/50 bg-background text-accent-foreground peer-checked:border-accent peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-ring [&_svg]:invisible peer-checked:[&_svg]:visible"
             >
               <Check className="size-3" strokeWidth={3} />
             </span>
@@ -588,11 +588,11 @@ function SessionRow({
         </span>
         <span className="min-w-0 flex-1">
           <span
-            className={`block truncate text-[13px] font-medium ${s.thread ? "text-muted-foreground" : ""}`}
+            className={`block truncate text-body font-medium ${s.thread ? "text-muted-foreground" : ""}`}
           >
             {s.title}
           </span>
-          <span className="flex items-center gap-1 truncate text-[12px] text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
+          <span className="flex items-center gap-1 truncate text-meta text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
             {folder && (
               <>
                 <Folder aria-hidden />
@@ -604,7 +604,7 @@ function SessionRow({
           </span>
         </span>
         {s.thread && (
-          <span className="shrink-0 rounded-full bg-added/15 px-2 py-0.5 text-[11.5px] font-medium text-added">
+          <span className="shrink-0 rounded-full bg-added/15 px-2 py-0.5 text-meta font-medium text-added">
             Imported
           </span>
         )}
@@ -645,7 +645,7 @@ export function ImportButton({ what }: { what: keyof typeof imports }) {
           setOpen(true);
           dialog.current?.showModal();
         }}
-        className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] font-medium hover:bg-hover [&_svg]:size-3.5"
+        className="flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-body font-medium hover:bg-hover [&_svg]:size-3.5"
       >
         <Download aria-hidden />
         {label}
@@ -660,10 +660,10 @@ export function ImportButton({ what }: { what: keyof typeof imports }) {
           <div className="mb-4 flex items-start gap-3">
             <AppLogos apps={apps} className="mt-0.5" />
             <div className="min-w-0 flex-1">
-              <h2 id={titleId} className="font-brand text-[17px] font-semibold tracking-tight">
+              <h2 id={titleId} className="font-brand text-heading font-semibold tracking-tight">
                 {title}
               </h2>
-              <p className="mt-0.5 text-[12.5px] text-muted-foreground">{line}</p>
+              <p className="mt-0.5 text-body text-muted-foreground">{line}</p>
             </div>
             <IconButton label="Close" onClick={() => dialog.current?.close()}>
               <X aria-hidden />
@@ -683,7 +683,7 @@ export function ImportButton({ what }: { what: keyof typeof imports }) {
 export function ImportStepBody({ className = "" }: { className?: string }) {
   const [chats, setChats] = useState(false);
   const link =
-    "flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-[12.5px] font-medium text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
+    "flex items-center gap-1.5 self-start rounded-md px-1.5 py-1 text-body font-medium text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
   return (
     <div className={`flex min-h-0 flex-col gap-2 ${className}`}>
       {chats ? (

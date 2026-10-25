@@ -193,10 +193,10 @@ export function AddProviderDialog({
       >
         <div className="flex items-start gap-3 px-5 pt-4 pb-3">
           <div className="flex-1">
-            <h2 id={titleId} className="text-[15px] font-semibold">
+            <h2 id={titleId} className="text-reading font-semibold">
               Add provider
             </h2>
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+            <p className="mt-0.5 text-body text-muted-foreground">
               Add an account or configure a provider on {hostName}.
             </p>
           </div>
@@ -204,7 +204,7 @@ export function AddProviderDialog({
             <X />
           </IconButton>
         </div>
-        <ol className="flex gap-4 border-b border-border px-5 pb-3 text-[12.5px]">
+        <ol className="flex gap-4 border-b border-border px-5 pb-3 text-body">
           {steps.map((s, i) => (
             <li
               key={s}
@@ -213,7 +213,7 @@ export function AddProviderDialog({
             >
               <span
                 aria-hidden
-                className={`grid size-5 place-items-center rounded-full border text-[11px] ${i === step ? "border-accent bg-accent text-white" : "border-border"}`}
+                className={`grid size-5 place-items-center rounded-full border text-caption ${i === step ? "border-accent bg-accent text-white" : "border-border"}`}
               >
                 {i + 1}
               </span>
@@ -231,7 +231,7 @@ export function AddProviderDialog({
           )}
           {step === 1 && (
             <div className="flex flex-col gap-4">
-              <label className="text-[12.5px] text-muted-foreground">
+              <label className="text-body text-muted-foreground">
                 Display name
                 <input
                   // The native attribute, so a step's first field takes focus.
@@ -244,7 +244,7 @@ export function AddProviderDialog({
                   className={field}
                 />
               </label>
-              <label className="text-[12.5px] text-muted-foreground">
+              <label className="text-body text-muted-foreground">
                 Id
                 <input
                   value={id}
@@ -267,7 +267,7 @@ export function AddProviderDialog({
             <div className="flex flex-col gap-4">
               {draft.kind === "pi" ? (
                 <>
-                  <label className="text-[12.5px] text-muted-foreground">
+                  <label className="text-body text-muted-foreground">
                     Binary path
                     <input
                       autoFocus
@@ -286,7 +286,7 @@ export function AddProviderDialog({
                 </>
               ) : draft.kind === "opencode" ? (
                 <>
-                  <label className="text-[12.5px] text-muted-foreground">
+                  <label className="text-body text-muted-foreground">
                     Binary path
                     <input
                       autoFocus
@@ -301,7 +301,7 @@ export function AddProviderDialog({
                       Path to the OpenCode binary.
                     </span>
                   </label>
-                  <label className="text-[12.5px] text-muted-foreground">
+                  <label className="text-body text-muted-foreground">
                     Server URL
                     <input
                       type="url"
@@ -316,7 +316,7 @@ export function AddProviderDialog({
                       Leave blank to let Parallax start the server when needed.
                     </span>
                   </label>
-                  <label className="text-[12.5px] text-muted-foreground">
+                  <label className="text-body text-muted-foreground">
                     Server password
                     <input
                       type="password"
@@ -334,7 +334,7 @@ export function AddProviderDialog({
               ) : (
                 <>
                   {choices && (
-                    <div className="flex items-center justify-between gap-4 text-[12.5px] text-muted-foreground">
+                    <div className="flex items-center justify-between gap-4 text-body text-muted-foreground">
                       Version
                       <Segmented
                         label="Version"
@@ -352,7 +352,7 @@ export function AddProviderDialog({
                       />
                     </div>
                   )}
-                  <label className="text-[12.5px] text-muted-foreground">
+                  <label className="text-body text-muted-foreground">
                     Binary path
                     <input
                       autoFocus
@@ -369,7 +369,7 @@ export function AddProviderDialog({
                     )}
                   </label>
                   {homeVar && (
-                    <label className="text-[12.5px] text-muted-foreground">
+                    <label className="text-body text-muted-foreground">
                       {homeVar} path
                       <input
                         placeholder="Default"
@@ -384,7 +384,7 @@ export function AddProviderDialog({
                       </span>
                     </label>
                   )}
-                  <label className="text-[12.5px] text-muted-foreground">
+                  <label className="text-body text-muted-foreground">
                     {kindOf(draft.kind).wholeArgs ? "Arguments" : "Launch arguments"}
                     <input
                       value={args}
@@ -398,7 +398,7 @@ export function AddProviderDialog({
                 </>
               )}
               {error && (
-                <p role="alert" className="text-[12.5px] text-danger">
+                <p role="alert" className="text-body text-danger">
                   {error}
                 </p>
               )}
@@ -482,17 +482,15 @@ function ProviderStep({
             >
               <Logo className="mt-0.5 size-4 shrink-0" />
               <span className="min-w-0">
-                <span className="block truncate text-[13px] font-medium">{p.name}</span>
-                <span className="block truncate text-[12px] text-muted-foreground">{p.blurb}</span>
+                <span className="block truncate text-body font-medium">{p.name}</span>
+                <span className="block truncate text-meta text-muted-foreground">{p.blurb}</span>
               </span>
             </button>
           );
         })}
       </div>
       <div className="mt-5 mb-2 flex items-center justify-between gap-4">
-        <h3 className="text-[12.5px] font-medium text-muted-foreground">
-          Or choose from ACP Registry
-        </h3>
+        <h3 className="text-body font-medium text-muted-foreground">Or choose from ACP Registry</h3>
         <button type="button" onClick={onManual} className={quietButton}>
           Enter manually
         </button>
@@ -505,15 +503,15 @@ function ProviderStep({
           placeholder="Search agents…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+          className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
         />
       </label>
       {typeof registry === "string" ? (
-        <p role="alert" className="text-[12.5px] text-danger">
+        <p role="alert" className="text-body text-danger">
           {registry}
         </p>
       ) : !registry ? (
-        <p className="text-[12.5px] text-muted-foreground">Loading the registry…</p>
+        <p className="text-body text-muted-foreground">Loading the registry…</p>
       ) : (
         <ul aria-label="ACP Registry" className="flex flex-col">
           {agents.map((agent) => {
@@ -526,8 +524,8 @@ function ProviderStep({
               >
                 <RegistryIcon url={agent.icon} />
                 <div className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] font-medium">{agent.name}</span>
-                  <span className="block truncate text-[12px] text-muted-foreground">
+                  <span className="block truncate text-body font-medium">{agent.name}</span>
+                  <span className="block truncate text-meta text-muted-foreground">
                     {agent.description}
                   </span>
                 </div>
@@ -556,7 +554,7 @@ function ProviderStep({
             );
           })}
           {agents.length === 0 && (
-            <li className="py-2 text-[12.5px] text-faint-foreground">No matching agents</li>
+            <li className="py-2 text-body text-faint-foreground">No matching agents</li>
           )}
         </ul>
       )}
@@ -575,7 +573,7 @@ function EnvEditor({
   const set = (i: number, change: Partial<ProviderEnvVar>) =>
     onChange(env.map((v, j) => (j === i ? { ...v, ...change } : v)));
   return (
-    <fieldset className="text-[12.5px] text-muted-foreground">
+    <fieldset className="text-body text-muted-foreground">
       <legend>Environment</legend>
       {env.map((v, i) => (
         <div key={i} className="mt-1.5 flex items-center gap-2">

@@ -150,7 +150,7 @@ export function LineageSection({
             style={{ paddingLeft: `${8 + row.depth * 14}px` }}
             className="flex w-full flex-col gap-0.5 rounded-md py-2 pr-2 text-left hover:bg-hover aria-[current=page]:bg-selected"
           >
-            <span className="flex w-full min-w-0 items-center gap-2 text-[13px]">
+            <span className="flex w-full min-w-0 items-center gap-2 text-body">
               <ClaudeLogo aria-hidden className="size-3.5 shrink-0" />
               <span data-lineage-title className="min-w-0 flex-1 truncate">
                 {sub.title}
@@ -158,7 +158,7 @@ export function LineageSection({
               <Lock aria-hidden className="size-3 shrink-0 text-faint-foreground" />
               <StatusMark attention={row.attention} />
             </span>
-            <span className="w-full truncate pl-5.5 text-[11.5px] text-faint-foreground">
+            <span className="w-full truncate pl-5.5 text-meta text-faint-foreground">
               {[modelName(sub.model), subagentLabels[sub.state]].filter(Boolean).join(" · ")}
             </span>
           </button>
@@ -182,19 +182,19 @@ export function LineageSection({
           style={{ paddingLeft: `${8 + row.depth * 14}px` }}
           className="flex w-full flex-col gap-0.5 rounded-md py-2 pr-2 text-left hover:bg-hover aria-[current=page]:bg-selected"
         >
-          <span className="flex w-full min-w-0 items-center gap-2 text-[13px]">
+          <span className="flex w-full min-w-0 items-center gap-2 text-body">
             <ProviderLogo run={run} />
             <span data-lineage-title className="min-w-0 flex-1 truncate">
               {title}
             </span>
             {run && (
-              <span className="shrink-0 text-[11.5px] text-faint-foreground tabular-nums">
+              <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
                 {duration(Math.max(0, seconds))}
               </span>
             )}
             <StatusMark attention={attention} />
           </span>
-          <span className="w-full truncate pl-5.5 text-[11.5px] text-faint-foreground">
+          <span className="w-full truncate pl-5.5 text-meta text-faint-foreground">
             {[
               model,
               statusText(attention, run),
@@ -210,7 +210,7 @@ export function LineageSection({
 
   return (
     <section aria-label="Lineage" className="border-t border-border p-2">
-      <h3 className="px-2 pt-1 pb-2 text-[12px] text-muted-foreground">
+      <h3 className="px-2 pt-1 pb-2 text-meta text-muted-foreground">
         Lineage{working > 0 && ` · ${working} running`}
       </h3>
       {current.length > 0 && <ul className="flex flex-col gap-px">{current.map(rowView)}</ul>}
@@ -221,7 +221,7 @@ export function LineageSection({
             aria-expanded={expanded}
             aria-controls={previousId}
             onClick={() => setExpanded((was) => !was)}
-            className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-[12.5px] text-faint-foreground hover:bg-hover"
+            className="flex w-full items-center gap-3 rounded-md px-2 py-2 text-body text-faint-foreground hover:bg-hover"
           >
             <span className="shrink-0">Previous agents ({previous.length})</span>
             <span aria-hidden className="h-px min-w-4 flex-1 bg-border" />
@@ -237,7 +237,7 @@ export function LineageSection({
         </>
       )}
       {rows.length === 0 && (
-        <p className="px-2 py-1 text-[12px] text-faint-foreground">No child threads yet</p>
+        <p className="px-2 py-1 text-meta text-faint-foreground">No child threads yet</p>
       )}
     </section>
   );

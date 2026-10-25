@@ -263,14 +263,14 @@ function Heading({
 }) {
   return (
     <div className="flex items-baseline gap-2 px-1 pt-6 pb-2">
-      <h3 className="text-[11px] font-medium tracking-[0.08em] text-faint-foreground uppercase">
+      <h3 className="text-caption font-medium tracking-[0.08em] text-faint-foreground uppercase">
         {label}
         {count !== undefined && (
           <span className="ml-1.5 tracking-normal tabular-nums">{count}</span>
         )}
       </h3>
       {(end || children) && (
-        <span className="ml-auto flex items-baseline gap-2 text-[11.5px] text-faint-foreground">
+        <span className="ml-auto flex items-baseline gap-2 text-meta text-faint-foreground">
           {end}
           {children}
         </span>
@@ -373,7 +373,7 @@ export function MemoryPanel({
             <Heading label="Memory" />
             {entries.map((g, i) => (
               <section key={g.kind} aria-label={g.label} className={i > 0 ? "pt-4" : undefined}>
-                <h4 className="flex items-baseline px-1 pb-2 text-[12px] text-muted-foreground">
+                <h4 className="flex items-baseline px-1 pb-2 text-meta text-muted-foreground">
                   {g.label}
                   <span className="ml-1.5 text-faint-foreground tabular-nums">
                     {g.files.length}
@@ -397,12 +397,12 @@ export function MemoryPanel({
           </section>
         )}
         {empty && (
-          <p className="px-1 pt-6 text-[12.5px] text-muted-foreground">
+          <p className="px-1 pt-6 text-body text-muted-foreground">
             No memory yet. Agents propose lasting facts as they work.
           </p>
         )}
         {error && (
-          <p role="alert" className="px-1 pt-6 text-[12.5px] text-danger">
+          <p role="alert" className="px-1 pt-6 text-body text-danger">
             {error}
           </p>
         )}
@@ -413,7 +413,7 @@ export function MemoryPanel({
 }
 
 const field =
-  "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
+  "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-body placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
 
 /**
  * The Project's brief, in place: its text, under a heading with the day it was edited and an Edit
@@ -461,7 +461,7 @@ function Brief({
             aria-label="Edit the brief"
             disabled={content === undefined}
             onClick={open}
-            className="rounded px-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+            className="rounded-sm px-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
           >
             Edit
           </button>
@@ -482,7 +482,7 @@ function Brief({
           }}
         />
       ) : file ? (
-        <div className="context-doc px-1 text-[13px]">
+        <div className="context-doc px-1 text-body">
           {content !== undefined && <MarkdownText text={content} />}
         </div>
       ) : (
@@ -493,13 +493,13 @@ function Brief({
             setContent("");
             open();
           }}
-          className="px-1 text-[12.5px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          className="px-1 text-body text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
           Write the Project's goal, scope, and constraints
         </button>
       )}
       {error && (
-        <p role="alert" className="px-1 pt-1 text-[12px] text-danger">
+        <p role="alert" className="px-1 pt-1 text-meta text-danger">
           {error}
         </p>
       )}
@@ -622,7 +622,7 @@ function MemoryRow({
   // An edit stays open under it until the move succeeds, so a failure keeps the edited text.
   const replace = replacing && (
     <div role="group" aria-label="Replace" className="mt-2">
-      <p className="text-[12.5px] text-muted-foreground">
+      <p className="text-body text-muted-foreground">
         {scopeLabels[replacing.to.scope.kind]} already has {replacing.to.path}. Replace it with this
         one?
       </p>
@@ -761,19 +761,17 @@ function MemoryRow({
         >
           <span className="min-w-0 flex-1">
             <span
-              className={`block truncate text-[13.5px] leading-5 font-medium group-hover:text-foreground ${kind === "review" ? "text-muted-foreground" : "text-foreground"}`}
+              className={`block truncate text-body leading-5 font-medium group-hover:text-foreground ${kind === "review" ? "text-muted-foreground" : "text-foreground"}`}
             >
               {title}
             </span>
             {line && (
-              <span className="block truncate text-[12px] leading-5 text-muted-foreground">
+              <span className="block truncate text-meta leading-5 text-muted-foreground">
                 {line}
               </span>
             )}
           </span>
-          {end && (
-            <span className="shrink-0 text-[11.5px] leading-5 text-faint-foreground">{end}</span>
-          )}
+          {end && <span className="shrink-0 text-meta leading-5 text-faint-foreground">{end}</span>}
         </button>
         {editing && content !== undefined ? (
           <div className="mt-2">
@@ -814,11 +812,11 @@ function MemoryRow({
             {open &&
               content !== undefined &&
               (kind === "document" ? (
-                <div className="context-doc mt-1.5 text-[13px]">
+                <div className="context-doc mt-1.5 text-body">
                   <MarkdownText text={content} />
                 </div>
               ) : (
-                <p className="mt-1.5 font-mono text-[12px] whitespace-pre-wrap select-text">
+                <p className="mt-1.5 font-mono text-meta whitespace-pre-wrap select-text">
                   {content}
                 </p>
               ))}
@@ -826,7 +824,7 @@ function MemoryRow({
           </>
         )}
         {error && (
-          <p role="alert" className="mt-1 text-[12px] text-danger">
+          <p role="alert" className="mt-1 text-meta text-danger">
             {error}
           </p>
         )}
@@ -883,7 +881,7 @@ function Editor({
           e.stopPropagation();
           onCancel();
         }}
-        className={`${field} font-mono text-[12px]`}
+        className={`${field} font-mono text-meta`}
       />
       <div className="mt-1 flex justify-end gap-1.5">
         <button type="button" disabled={busy} onClick={onCancel} className={quietButton}>
