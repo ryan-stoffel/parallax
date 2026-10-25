@@ -5,6 +5,7 @@
 // control stream. Frames decode with WebCodecs onto a canvas.
 
 import type { DevicePlatform, DeviceStreamKind } from "../protocol/generated/protocol";
+import { simulatorAvcConfig } from "./avcConfig";
 
 export type DeviceStreamStatus = "connecting" | "streaming" | "error";
 
@@ -479,7 +480,8 @@ export function createDeviceStream(
               .catch(() => {});
           } else if (chunk.type === "description") {
             awaitingKey = true;
-            void configure({ codec: avcCodec(chunk.payload), description: chunk.payload }, current);
+            const description = simulatorAvcConfig(chunk.payload);
+            void configure({ codec: avcCodec(description), description }, current);
           } else decode(chunk.type === "keyframe", chunk.payload);
         }
       },
