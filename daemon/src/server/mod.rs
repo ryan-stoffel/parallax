@@ -60,9 +60,9 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 pub const EXIT_ALREADY_RUNNING: u8 = 3;
 
 /// The pid of the dev or test app whose `plxd attach` started this `serve` (PLX-990), which stops
-/// when that process does. The installed app sets it empty, so its `serve` outlives it. No process
-/// plxd starts inherits it, so an app started from an agent or a terminal never watches a pid that
-/// isn't its own.
+/// when that process does. The installed app sets it empty, so its `serve` outlives it. Agents and
+/// terminal shells don't inherit it, so an app started from one never watches a pid that isn't its
+/// own. Worktree checks, setup scripts, and device helpers still do.
 pub const EXIT_WITH_ENV: &str = "PLXD_EXIT_WITH";
 
 /// How a server runs. [`Config::new`] has the defaults from 0007.
