@@ -7,7 +7,6 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { defaultUrlTransform } from "react-markdown";
 
 import { download, failure, useDocument, useObjectUrl, type DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
@@ -30,14 +29,6 @@ export const FileRunContext = createContext<{ hostId: string; runId: string } | 
 // A Windows drive path, its backslash as written or as Markdown percent-encodes it.
 const drive = /^[a-z]:(?:[\\/]|%5c)/i;
 const isAbsolute = (path: string) => path.startsWith("/") || /^[a-z]:\//i.test(path);
-
-/**
- * react-markdown's `urlTransform` in a transcript: keeps `file:` URLs and drive paths, which can
- * name the thread's files, and leaves the rest to its default, which drops `javascript:` and every
- * other unsafe scheme.
- */
-export const keepFiles = (url: string) =>
-  /^file:/i.test(url) || drive.test(url) ? url : defaultUrlTransform(url);
 
 /**
  * The path a link or image names when it's a file rather than a web page: relative, absolute, or
@@ -125,23 +116,32 @@ export const outsideFolder =
   "This file is outside the thread's folder, so it can't be opened here.";
 
 /**
- * A link to a file in a transcript: opens it in the side panel, as a presented file's card does,
- * where it shows as a document, an image or video, or a file to download. A file outside the
- * thread's folder, or a folder that can't be read, says so in a notification. Outside a
- * transcript, only its text.
+ * In a transcript, what opens a file the agent named: in the side panel, as a presented file's
+ * card does, where it shows as a document, an image or video, or a file to download. A file outside
+ * the thread's folder, or a folder that can't be read, says so in a notification. Outside a
+ * transcript, undefined.
  */
-export function FileLink({ path, children }: { path: string; children: ReactNode }) {
+export function useOpenFile(): ((path: string) => void) | undefined {
   const run = useContext(FileRunContext);
   const open = useContext(OpenDocumentContext);
-  if (!run || !open) return <a>{children}</a>;
-  const fail = (body: string) =>
-    notify({ key: `file/${path}`, tone: "error", title: "Couldn't open the file", body });
-  const follow = (e: MouseEvent) => {
-    e.preventDefault();
+  if (!run || !open) return undefined;
+  return (path) => {
+    const fail = (body: string) =>
+      notify({ key: `file/${path}`, tone: "error", title: "Couldn't open the file", body });
     linkedFile(run.hostId, run.runId, path).then(
       (doc) => (doc ? open(doc) : fail(outsideFolder)),
       (error: unknown) => fail(error instanceof Error ? error.message : String(error)),
     );
+  };
+}
+
+/** A link to a file in a transcript, which `useOpenFile` opens. Outside a transcript, only its text. */
+export function FileLink({ path, children }: { path: string; children: ReactNode }) {
+  const openFile = useOpenFile();
+  if (!openFile) return <a>{children}</a>;
+  const follow = (e: MouseEvent) => {
+    e.preventDefault();
+    openFile(path);
   };
   // "#", so the agent's path never becomes an address the page could go to.
   return (

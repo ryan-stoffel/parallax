@@ -29,7 +29,6 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import type { Components } from "react-markdown";
 
 import type { RpcError } from "../preload/bridge";
 import type {
@@ -40,7 +39,7 @@ import type {
   PullRequest,
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
-import { githubText, numberOf, onGithub, shotName } from "./github";
+import { githubText, numberOf, shotName } from "./github";
 import { diffBand, diffLook } from "./Approval";
 import { tabItem } from "./Composer";
 import { describeError, githubProblem } from "./errors";
@@ -698,28 +697,11 @@ function Section({
   );
 }
 
-/**
- * A pull request's description and comments are GitHub's, not the agent's, so their GitHub-hosted
- * images load, unlike a transcript's remote ones, and open in the Lightbox when clicked. Any other image stays
- * a link with its alt text. ponytail: a private repository's attachments need GitHub's sign-in and
- * show broken; proxy them through `gh` if that matters.
- */
-const githubMarkdown: Components = {
-  img: ({ src, alt }) =>
-    onGithub(src) ? (
-      <img
-        src={src}
-        alt={alt ?? ""}
-        loading="lazy"
-        data-shot
-        className="max-w-full cursor-zoom-in rounded-md"
-      />
-    ) : (
-      <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
-        {alt || "Image"}
-      </a>
-    ),
-};
+// A pull request's description and comments are GitHub's, not the agent's, so their GitHub-hosted
+// images load (MarkdownText's `images`), unlike a transcript's remote ones, and open in the
+// Lightbox when clicked. Any other image stays a link with its alt text. ponytail: a private
+// repository's attachments need GitHub's sign-in and show broken; proxy them through `gh` if that
+// matters.
 
 // ponytail: "long" by length, not rendered height; measure it if this cuts the wrong ones.
 const isLong = (c: PrComment) => c.body.length > 600 || c.body.split("\n").length > 12;
@@ -743,7 +725,7 @@ function CommentCard({
       <div
         className={`mt-2 ${folded ? "max-h-48 overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]" : ""}`}
       >
-        <MarkdownText text={githubText(c.body)} components={githubMarkdown} />
+        <MarkdownText text={githubText(c.body)} images="github" />
       </div>
       {folded && (
         <button
@@ -1073,11 +1055,12 @@ export function PullRequestView({
   };
   // A screenshot opens with the others in its description or comment.
   const showShot = (target: EventTarget) => {
-    const shot = (target as Element).closest?.("img[data-shot]");
+    // GitHub's images, the only ones a pull request's Markdown loads.
+    const shot = (target as Element).closest?.(".enriched img[src^='https://']");
     if (!(shot instanceof HTMLImageElement)) return;
     const all = [
-      ...(shot.closest(".markdown") ?? shot.parentElement!).querySelectorAll<HTMLImageElement>(
-        "img[data-shot]",
+      ...(shot.closest(".enriched") ?? shot.parentElement!).querySelectorAll<HTMLImageElement>(
+        "img[src^='https://']",
       ),
     ];
     setShots({
@@ -1512,7 +1495,7 @@ export function PullRequestView({
           onToggle={() => setDescription(!description)}
         >
           {pr.body.trim() ? (
-            <MarkdownText text={githubText(pr.body)} components={githubMarkdown} />
+            <MarkdownText text={githubText(pr.body)} images="github" />
           ) : (
             <p className="text-[13px] text-faint-foreground">No description</p>
           )}

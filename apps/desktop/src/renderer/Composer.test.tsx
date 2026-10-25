@@ -245,6 +245,20 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
+test("~~ strikes, and [ ] starts a task list, sent as GitHub writes them", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press } = render(onSend);
+  type("[ ] ");
+  type("ship ~~v1~~ v2");
+  await press("Enter", { shiftKey: true });
+  type("review");
+  expect(box.querySelector("s")?.textContent).toBe("v1");
+  expect(box.querySelectorAll('ul[data-type="taskList"] > li')).toHaveLength(2);
+
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("- [ ] ship ~~v1~~ v2\n- [ ] review", {}, [], []);
+});
+
 test("insert adds its text after what's typed, as the PR view's Ask a question does", async () => {
   const onSend = vi.fn(async () => undefined);
   const root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -267,11 +281,13 @@ test("typed text that only looks like Markdown is sent as typed", async () => {
   type("rename __init__ and _private_, then a * b * c");
   await press("Enter", { shiftKey: true });
   type("--- a/file.ts");
-  expect(box.querySelector("strong, em, hr")).toBeNull();
+  await press("Enter", { shiftKey: true });
+  type("[] is empty, and a ~~ b ~~ c");
+  expect(box.querySelector("strong, em, s, hr, ul")).toBeNull();
 
   await press("Enter");
   expect(onSend).toHaveBeenCalledWith(
-    "rename __init__ and _private_, then a * b * c\n--- a/file.ts",
+    "rename __init__ and _private_, then a * b * c\n--- a/file.ts\n[] is empty, and a ~~ b ~~ c",
     {},
     [],
     [],

@@ -1,3 +1,7 @@
 # One package, as apps/desktop is (0022). Expo's native autolinking and Metro expect a flat
 # node_modules.
 nodeLinker: hoisted
+# Enriched Markdown's postinstall downloads its tree-sitter grammars and iOS math framework; without
+# them its native build leaves code highlighting and math out.
+allowBuilds:
+  react-native-enriched-markdown: true

@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { preloadParser } from "react-native-enriched-markdown";
 
 import { App } from "./App";
 import { applyTheme } from "./theme";
@@ -26,6 +27,9 @@ window.parallax.onFullScreen((full) =>
 );
 // The saved theme, before React renders anything.
 applyTheme();
+// Enriched Markdown's parser, so a message draws in its first frame once it's loaded
+// (MarkdownText). It loads in a few milliseconds, before any thread opens.
+void preloadParser();
 // A nightly build wears a night sky in the sidebar and on its send buttons (index.css).
 void window.parallax
   .version()

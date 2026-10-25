@@ -1,13 +1,14 @@
 import { ChevronLeft, Circle, CircleCheck, FileText, Folder, GitMerge } from "lucide-react";
 import { useEffect, useState, type SVGProps } from "react";
-import type { Components } from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import type { ContextFile, ParallaxEvent } from "../protocol/generated/protocol";
-import { MarkdownText } from "./AgentChat";
 import { describeError } from "./errors";
 import { dayLabel, locale } from "./locale";
 import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
+import { codeComponents, highlight } from "./AgentChat";
 
 /** The status board the coordinator keeps, as `coordinator.md` asks; the Project tab leads with it. */
 export const board = "notes.md";
@@ -97,6 +98,33 @@ function useContent(hostId: string, project: string, file: ContextFile) {
   return { content, error };
 }
 
+/**
+ * A context file's Markdown, the user's own notes, with `components` drawing the Project tab's
+ * board (its headings, task circles, and links between files). It stays on react-markdown, whose
+ * components can restyle elements, while transcripts use Enriched Markdown (MarkdownText).
+ */
+function ContextMarkdown({ text, components }: { text: string; components: Components }) {
+  return (
+    <div className="markdown">
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={highlight}
+        components={{ ...codeComponents, img: noImage, ...components }}
+      >
+        {text}
+      </Markdown>
+    </div>
+  );
+}
+
+// An agent can write a context file, so its images never load, as a transcript's don't: each is a
+// link with its alt text, which opens externally like any link.
+const noImage: Components["img"] = ({ src, alt }) => (
+  <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
+    {alt || "Image"}
+  </a>
+);
+
 /** A context file, rendered as Markdown with `components`. */
 function ContextDoc({
   hostId,
@@ -120,7 +148,7 @@ function ContextDoc({
           {error}
         </p>
       ) : (
-        content !== undefined && <MarkdownText text={content} components={components} />
+        content !== undefined && <ContextMarkdown text={content} components={components} />
       )}
     </article>
   );
@@ -153,7 +181,7 @@ export function ContextBody({
         </p>
       ) : (
         content !== undefined && (
-          <MarkdownText
+          <ContextMarkdown
             text={content}
             components={{ ...contextComponents(files, onOpen), ...boardHeadings }}
           />
@@ -261,7 +289,7 @@ const issue = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+/;
 const contextLink = /^(?:\.\/)?([^/:?#]+)$/;
 
 /**
- * How context files render beyond `MarkdownText`: tasks as an open or a check circle, GitHub pull
+ * How context files render beyond ContextMarkdown: tasks as an open or a check circle, GitHub pull
  * request and issue links with their icons, and a link to another context file as a button that
  * opens it here, off while that file doesn't exist.
  */

@@ -12,6 +12,7 @@ import type {
   ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
+import "./markdownTest";
 import {
   latestPlan,
   PlanCard,
@@ -768,7 +769,7 @@ Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
   },
 });
 
-test("a proposed plan renders its Markdown safely, folds when long, and keeps room for actions", () => {
+test("a proposed plan renders its Markdown safely, folds when long, and keeps room for actions", async () => {
   const onToggle = vi.fn();
   const plan = "## Plan\n\n1. Read <b>it</b>\n2. ![x](https://example.com/x.png)\n\n```\nls\n```";
   const proposed = (open: boolean, actions?: ReactNode) =>

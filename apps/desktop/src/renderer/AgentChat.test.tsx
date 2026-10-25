@@ -1,7 +1,5 @@
 // @vitest-environment happy-dom
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
-import { Globe } from "lucide-react";
-import { readFileSync } from "node:fs";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, onTestFinished, test, vi } from "vite-plus/test";
@@ -24,20 +22,12 @@ import type {
   ParallaxEvent,
   ThreadRun,
 } from "../protocol/generated/protocol";
-import {
-  activity,
-  AgentChat,
-  linkIcon,
-  RowView,
-  RunTab,
-  summarize,
-  TranscriptView,
-} from "./AgentChat";
+import { activity, AgentChat, RowView, RunTab, summarize, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
 import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
-import { GitHubLogo, LinearLogo } from "./logos";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
+import "./markdownTest";
 import { Notifications } from "./notifications";
 import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
@@ -159,6 +149,7 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
       <TranscriptView rows={rows} sent={new Map()} live copiedAt={copiedAt} />
     </ForkContext>,
   );
+
   const copied = [...document.querySelectorAll("[data-copied]")].map((e) => e.textContent);
   expect(copied).toEqual([
     expect.stringContaining("Plan it"),
@@ -315,7 +306,7 @@ test("another thread's message and stop name it, with the message folded away (0
   expect(document.body.textContent).toBe("Stopped by another thread: Notes.");
 });
 
-test("an assistant message renders Markdown, but never raw HTML or images", () => {
+test("an assistant message renders Markdown, but never raw HTML or images", async () => {
   row({
     kind: "assistant",
     key: "a",
@@ -327,34 +318,34 @@ test("an assistant message renders Markdown, but never raw HTML or images", () =
   const link = document.querySelector("a")!;
   expect(link.getAttribute("href")).toBe("https://example.com");
   expect(link.target).toBe("_blank");
-  // A Markdown image is a link with its alt text, which main opens only if it's https.
+  // Raw HTML is its text, and a Markdown image is a link with its alt text, which a click opens
+  // only as a file in the thread's folder (here, outside a thread, nothing).
   expect(document.querySelector("img")).toBeNull();
+  expect(document.body.textContent).toContain("<img src=x onerror=alert(1)>");
   const links = [...document.querySelectorAll("a")];
   expect(links.map((a) => a.textContent)).toEqual(["docs", "a diagram"]);
-  // Its file: source is unsafe, so it has no href at all rather than an empty one.
-  expect(links[1]!.hasAttribute("href")).toBe(false);
 });
 
-test("an assistant message typesets LaTeX, and keeps invalid LaTeX as its source", () => {
+test("an assistant message typesets LaTeX, and keeps invalid LaTeX as its source", async () => {
   row({
     kind: "assistant",
     key: "a",
     text: "Inline $x^2$ and $2 \\times 3$.\n\n$$\n\\int_0^1 x\\,dx = \\frac{1}{2}\n$$\n\nBad: $\\frac{1$",
   });
-  expect(document.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(3);
-  expect(document.querySelector(".katex-display")).not.toBeNull();
+  expect(document.querySelectorAll(".katex math").length).toBe(3);
+  expect(document.querySelectorAll('math[display="block"]')).toHaveLength(1);
   // Display math isn't a code block, so it has no Copy button.
   expect(document.querySelector('button[aria-label="Copy code"]')).toBeNull();
   expect(document.querySelector(".katex-error")).not.toBeNull();
 });
 
-test("$$...$$ within a line typesets as display math, and $...$ stays inline", () => {
+test("$$...$$ within a line typesets as display math, and $...$ stays inline", async () => {
   row({ kind: "assistant", key: "a", text: "Inline $x$.\n\n$$ F'(s) = \\frac{-2s}{(s^2+1)^2} $$" });
-  expect(document.querySelectorAll(".katex-display")).toHaveLength(1);
+  expect(document.querySelectorAll('math[display="block"]')).toHaveLength(1);
   expect(document.querySelectorAll(".katex")).toHaveLength(2);
 });
 
-test("prices and shell variables stay text, and \\(...\\) and \\[...\\] typeset", () => {
+test("prices and shell variables stay text, and \\(...\\) and \\[...\\] typeset", async () => {
   row({
     kind: "assistant",
     key: "a",
@@ -366,29 +357,22 @@ test("prices and shell variables stay text, and \\(...\\) and \\[...\\] typeset"
   // Markdown between dollars that aren't math still renders.
   expect(document.querySelector("p a")?.textContent).toBe("to");
   expect(document.querySelectorAll(".katex")).toHaveLength(3);
-  expect(document.querySelectorAll(".katex-display")).toHaveLength(1);
+  expect(document.querySelectorAll('math[display="block"]')).toHaveLength(1);
 });
 
-test("KaTeX's stylesheet styles the classes rehype-katex's KaTeX writes, so scripts shrink", () => {
-  row({ kind: "assistant", key: "a", text: "$x_i$" });
-  const script = document.querySelector(".msupsub .vlist > span > span")!;
-  const css = readFileSync(require.resolve("katex/dist/katex.min.css"), "utf8");
-  expect(css).toContain(`.${[...script.classList].slice(0, 3).join(".")}{`);
-});
-
-test("a streaming message marks its markdown, so unfinished LaTeX stays hidden until it ends", () => {
-  const unfinished = "Setup:\n\n$$\n\\begin{aligned} x &= \\frac{1";
+test("a streaming message marks its markdown, so unfinished LaTeX stays hidden until it ends", async () => {
+  const unfinished = "Setup:\n\nThen $\\frac{1$ and on";
   row({ kind: "assistant", key: "a", text: unfinished, partial: true });
-  expect(document.querySelector(".markdown.streaming .katex-error")).not.toBeNull();
+  expect(document.querySelector(".enriched.streaming .katex-error")).not.toBeNull();
   act(() => unmount());
   row({ kind: "assistant", key: "a", text: unfinished.padEnd(SPLIT_FROM, " "), partial: true });
-  expect(document.querySelector(".markdown.streaming")).not.toBeNull();
+  expect(document.querySelector(".enriched.streaming")).not.toBeNull();
   act(() => unmount());
   row({ kind: "assistant", key: "a", text: unfinished, partial: false });
-  expect(document.querySelector(".markdown.streaming")).toBeNull();
+  expect(document.querySelector(".enriched.streaming")).toBeNull();
 });
 
-test("a streaming message renders as the whole text does, at every line", () => {
+test("a streaming message renders as the whole text does, at every line", async () => {
   // Past SPLIT_FROM, so each reply renders block by block.
   const lead = "A long reply opens with a paragraph. ".repeat(30) + "\n\n";
   const replies = [
@@ -422,13 +406,23 @@ test("a streaming message renders as the whole text does, at every line", () => 
   const view = () => {
     const container = document.createElement("div");
     const root = createRoot(container);
-    return (text: string, partial: boolean) => {
+    return async (text: string, partial: boolean) => {
       const row: Item = { kind: "assistant", key: "a", text, partial };
       act(() => root.render(<RowView row={row} live={false} open={false} onToggle={() => {}} />));
-      // A streaming message differs only by its class, which hides LaTeX still arriving.
-      return container.innerHTML
-        .replaceAll(">\n<", "><")
-        .replace('"markdown streaming"', '"markdown"');
+      // A streaming message differs by its class, which hides LaTeX still arriving, and by each
+      // block's own Enriched Markdown root, whose last margin it zeroes: the elements are the same.
+      const shape = container.cloneNode(true) as HTMLElement;
+      for (const root of shape.querySelectorAll(".enrm-text")) root.replaceWith(...root.childNodes);
+      for (const styled of shape.querySelectorAll("[style]")) styled.removeAttribute("style");
+      // An element React updated keeps its attributes' first order, one it made has its own.
+      for (const el of shape.querySelectorAll("*")) {
+        const attributes = [...el.attributes]
+          .map((a) => [a.name, a.value] as const)
+          .sort(([a], [b]) => a.localeCompare(b));
+        for (const [name] of attributes) el.removeAttribute(name);
+        for (const [name, value] of attributes) el.setAttribute(name, value);
+      }
+      return shape.innerHTML.replaceAll(">\n<", "><").replace('"enriched streaming"', '"enriched"');
     };
   };
   for (const reply of replies.map((r) => lead + r)) {
@@ -438,28 +432,38 @@ test("a streaming message renders as the whole text does, at every line", () => 
       const column = n - 1 - reply.lastIndexOf("\n", n - 1);
       if (column > 4 && n < reply.length && reply[n] !== "\n") continue;
       const text = reply.slice(0, n);
-      expect(streaming(text, true), JSON.stringify(text)).toBe(view()(text, false));
+      expect(await streaming(text, true), JSON.stringify(text)).toBe(await view()(text, false));
     }
   }
   // Hundreds of renders, a few seconds when other files run alongside.
 }, 30_000);
 
-test("a short streaming message renders whole, without the split", () => {
+test("a short streaming message renders whole, without the split", async () => {
   vi.mocked(markdownBlocks).mockClear();
   const text = "Short.\n\nStill short.";
   row({ kind: "assistant", key: "a", text, partial: true });
   expect(markdownBlocks).not.toHaveBeenCalled();
-  expect(document.querySelectorAll(".markdown p")).toHaveLength(2);
+  expect(document.querySelectorAll(".enriched p")).toHaveLength(2);
   act(() => unmount());
   row({ kind: "assistant", key: "a", text: text.padEnd(SPLIT_FROM, "!"), partial: true });
   expect(markdownBlocks).toHaveBeenCalled();
+});
+
+test("a numbered list split by a code block keeps counting after it", () => {
+  row({
+    kind: "assistant",
+    key: "a",
+    text: "1. Install\n\n```sh\npnpm i\n```\n\n2. Run\n3. Check",
+  });
+  const lists = [...document.querySelectorAll(".enriched ol")];
+  expect(lists.map((ol) => ol.getAttribute("start"))).toEqual([null, "2"]);
 });
 
 test("a code block names its language, highlights it, and copies its text", async () => {
   const writeText = vi.fn(async () => {});
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   row({ kind: "assistant", key: "a", text: "```ts\nconst x = 1;\n```\n\n```\nplain\n```" });
-  const [ts, plain] = [...document.querySelectorAll(".markdown > div")];
+  const [ts, plain] = [...document.querySelectorAll(".enriched > div")];
   expect(ts!.firstElementChild!.textContent).toBe("tsCopy");
   expect(ts!.querySelector(".hljs-keyword")?.textContent).toBe("const");
   expect(plain!.firstElementChild!.textContent).toBe("textCopy");
@@ -474,7 +478,7 @@ test("a diff code block shows added and removed lines, and copies the diff", asy
   const diff = "--- a/q.sql\n+++ b/q.sql\n@@ -1,3 +1,2 @@\n-old\n--- a note\n+new\n same\n";
   row({ kind: "assistant", key: "a", text: `\`\`\`diff\n${diff}\`\`\`` });
   // The block's header, then its lines.
-  const lines = [...document.querySelector(".markdown > div")!.lastElementChild!.children];
+  const lines = [...document.querySelector(".enriched > div")!.lastElementChild!.children];
   expect(lines.map((l) => l.textContent)).toEqual([
     "--- a/q.sql",
     "+++ b/q.sql",
@@ -1900,7 +1904,7 @@ test("a thread's options change while it runs, and other providers are offered, 
   }
 });
 
-test("while a run goes, a message with work after it has no Copy bar, but an ended turn keeps it", () => {
+test("while a run goes, a message with work after it has no Copy bar, but an ended turn keeps it", async () => {
   const user: Item = { kind: "user", key: "u", text: "go" };
   const say = (key: string, text: string): Item => ({ kind: "assistant", key, text });
   const ls: Item = { kind: "tool", key: "t", callId: "1", name: "Bash", input: {}, status: "ok" };
@@ -1930,7 +1934,7 @@ const musingRow = () =>
     ),
   );
 
-test("while a run goes, its work shows as steps, the call in flight live, under how long it has gone", () => {
+test("while a run goes, its work shows as steps, the call in flight live, under how long it has gone", async () => {
   const transcript = (rows: Item[], turnDone = false) =>
     render(<TranscriptView rows={rows} sent={new Map()} live turnDone={turnDone} />);
   const user: Item = { kind: "user", key: "u", text: "go" };
@@ -2180,7 +2184,7 @@ const todoWrite = (n: number, done: number): Item[] => [
   { kind: "todo", key: `t${n}`, items: checklist(done) },
 ];
 
-test("a turn's plan is one line where it began, its updates lines in the work, its proposal a card", () => {
+test("a turn's plan is one line where it began, its updates lines in the work, its proposal a card", async () => {
   const rows: Item[] = [
     { kind: "user", key: "u", text: "go" },
     { kind: "reasoning", key: "r", text: "A plan first." },
@@ -2225,7 +2229,7 @@ test("a turn's plan is one line where it began, its updates lines in the work, i
   expect(transcriptText()).not.toContain("TodoWrite");
 });
 
-test("Claude Code's task tools make the same lines as TodoWrite, and their rows go", () => {
+test("Claude Code's task tools make the same lines as TodoWrite, and their rows go", async () => {
   // As plxd logs them from Claude Code 2.1.283: each call, with its result's text.
   const task = (
     key: string,
@@ -2419,17 +2423,6 @@ test("scrolled up from the end, Scroll to end shows over the transcript, and goe
   });
   expect(end()).toBeUndefined();
   scrollTo.mockRestore();
-});
-
-test("a web link gets its site's logo, or a globe, and other links none (PLX-330)", () => {
-  expect(linkIcon("https://github.com/ryan-stoffel/parallax/pull/470")).toBe(GitHubLogo);
-  expect(linkIcon("https://gist.github.com/x")).toBe(GitHubLogo);
-  expect(linkIcon("https://linear.app/ryanstoffel/issue/PLX-330")).toBe(LinearLogo);
-  expect(linkIcon("https://notgithub.com/x")).toBe(Globe);
-  expect(linkIcon("http://localhost:5173")).toBe(Globe);
-  expect(linkIcon("mailto:a@b.c")).toBeUndefined();
-  expect(linkIcon("archived.md")).toBeUndefined();
-  expect(linkIcon(undefined)).toBeUndefined();
 });
 
 test("queued messages track host updates, Enter queues, and Cmd+Enter steers (PLX-376)", async () => {

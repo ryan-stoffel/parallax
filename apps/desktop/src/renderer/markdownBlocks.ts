@@ -16,7 +16,11 @@ export const SPLIT_FROM = 1_000;
 // A blank line: Markdown counts only spaces and tabs as blank.
 const BLANK_LINE = /\n[ \t]*\r?\n/;
 
-type Tree = { type: string; children?: Tree[] };
+type Tree = {
+  type: string;
+  children?: Tree[];
+  position?: { start: { offset?: number }; end: { offset?: number } };
+};
 
 /** Whether a tree holds a link or footnote definition, which any block can use. */
 const defines = (node: Tree): boolean =>
@@ -42,11 +46,11 @@ const defines = (node: Tree): boolean =>
 export function markdownBlocks(text: string, previous: string[] = []): string[] {
   const blocks = text.startsWith(previous.join("")) ? previous.slice(0, -2) : [];
   const rest = text.slice(blocks.join("").length);
-  const tree = parser.parse(rest);
+  const tree: Tree = parser.parse(rest);
   if (defines(tree)) return [text];
   let start = 0;
-  tree.children.forEach((node, i) => {
-    const before = tree.children[i - 1];
+  tree.children?.forEach((node, i) => {
+    const before = tree.children![i - 1];
     if (!before || before.type === "html" || node.type === "html") return;
     const end = before.position!.end.offset!;
     // The start of its line, so an indented node keeps its indent, which a fence strips.
@@ -57,4 +61,33 @@ export function markdownBlocks(text: string, previous: string[] = []): string[] 
   });
   blocks.push(rest.slice(start));
   return blocks;
+}
+
+/** A run of Markdown: one top-level code block, or the Markdown between code blocks. */
+export interface Run {
+  code: boolean;
+  text: string;
+}
+
+/**
+ * `text` in runs: each top-level code block on its own, with its fence, and the Markdown between
+ * joined, so MarkdownText draws code as CodeBlock and the rest with Enriched Markdown, whose web
+ * renderer highlights none. Text with a definition, which any block can use, stays one run.
+ */
+export function codeRuns(text: string): Run[] {
+  const tree: Tree = parser.parse(text);
+  if (defines(tree)) return [{ code: false, text }];
+  const runs: Run[] = [];
+  let at = 0;
+  for (const node of tree.children ?? []) {
+    if (node.type !== "code") continue;
+    // The start of its line, so an indented fence keeps its indent.
+    const start = text.lastIndexOf("\n", node.position!.start.offset! - 1) + 1;
+    const end = node.position!.end.offset!;
+    if (text.slice(at, start).trim()) runs.push({ code: false, text: text.slice(at, start) });
+    runs.push({ code: true, text: text.slice(start, end) });
+    at = end;
+  }
+  if (text.slice(at).trim()) runs.push({ code: false, text: text.slice(at) });
+  return runs;
 }

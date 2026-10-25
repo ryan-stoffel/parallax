@@ -330,8 +330,8 @@ function ApprovalLine({ item }: { item: Extract<Item, { kind: "approval" }> }) {
 }
 
 /**
- * The user's message: its images, its attached files as cards, and its text in a bubble, which a
- * long press lifts into its menu.
+ * The user's message: its images, its attached files as cards, and its text, as the Markdown the
+ * composer writes, in a bubble, which a long press lifts into its menu.
  */
 function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
   const c = useColors();
@@ -356,7 +356,7 @@ function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
       {!!text.trim() && (
         <MessageMenu text={said} onEdit={editable?.key === item.key ? editable.edit : undefined}>
           <View style={[styles.bubble, { backgroundColor: c.selected }]}>
-            <T style={{ fontSize: 15, lineHeight: 22 }}>{said}</T>
+            <Markdown text={said} selectable={false} />
           </View>
         </MessageMenu>
       )}
@@ -717,7 +717,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                 {first && (
                   <View style={{ alignItems: "flex-end", gap: 4 }}>
                     <View style={[styles.bubble, styles.sent, { backgroundColor: c.selected }]}>
-                      <T style={{ fontSize: 15, lineHeight: 22 }}>{splitFiles(first).text}</T>
+                      <Markdown text={splitFiles(first).text} selectable={false} />
                     </View>
                     <T faint style={{ fontSize: 12 }}>
                       Sending…
@@ -733,7 +733,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                 ].map((m) => (
                   <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
                     <View style={[styles.bubble, styles.sent, { backgroundColor: c.selected, opacity: 0.6 }]}>
-                      <T>{splitFiles(m.text).text}</T>
+                      <Markdown text={splitFiles(m.text).text} selectable={false} />
                     </View>
                     <T faint style={{ fontSize: 12 }}>
                       {m.note}

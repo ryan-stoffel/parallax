@@ -1,0 +1,246 @@
+diff --git a/lib/module/index.web.js b/lib/module/index.web.js
+index a41f6b72cc839e2192dd9f979e7a2374fbd29b1e..ee22210da3cec430314c0041f93c234fdbcf2c47 100644
+--- a/lib/module/index.web.js
++++ b/lib/module/index.web.js
+@@ -1,5 +1,6 @@
+ "use strict";
+ 
+ export { EnrichedMarkdownText, default } from "./web/EnrichedMarkdownText.js";
++export { preloadParser } from "./web/parseMarkdown.js";
+ export { EnrichedMarkdownTextInput } from "./EnrichedMarkdownTextInput.web.js";
+ //# sourceMappingURL=index.web.js.map
+\ No newline at end of file
+diff --git a/lib/module/web/EnrichedMarkdownText.js b/lib/module/web/EnrichedMarkdownText.js
+index 0f36f61944780629c41c8cd059ddc0f0a370fb89..32d47124b236286cfd631c9d26c6d26cff73924d 100644
+--- a/lib/module/web/EnrichedMarkdownText.js
++++ b/lib/module/web/EnrichedMarkdownText.js
+@@ -3,14 +3,14 @@
+ import { useState, useEffect, useMemo, useRef } from 'react';
+ import { normalizeMarkdownStyle } from "../normalizeMarkdownStyle.web.js";
+ import { zeroTrailingMargins, parseErrorFallbackStyle, buildStyles } from "./styles.js";
+-import { parseMarkdown } from "./parseMarkdown.js";
++import { parseMarkdown, parseMarkdownSync } from "./parseMarkdown.js";
+ import { recognizeTextLinks } from "./recognizeTextLinks.js";
+ import { RenderNode } from "./renderers/index.js";
+ import { indexTaskItems, markInlineImages } from "./utils.js";
+ import { collectBlocks } from "./blockSlots.js";
+ import { useResolvedImageSources } from "../imageSources.js";
+ import { hasRenderers, useRenderedBlocks } from "../blockRenderers.js";
+-import { loadKaTeX } from "./katex.js";
++import { loadKaTeX, loadKaTeXSync } from "./katex.js";
+ import { ENRM_TEXT_CLASS, ENRM_SELECTION_BG_VAR } from "./globalStyles.js";
+ import { filterNativeOnlyProps } from "./nativeProps.js";
+ import { isDev } from "../utils/isDev.js";
+@@ -64,7 +64,35 @@ export const EnrichedMarkdownText = ({
+   linkRecognitionRef.current = linkRecognition;
+   const textLinkKey = linkRecognition?.text?.toString() ?? null;
+   const inlineCodeLinkKey = linkRecognition?.inlineCode?.toString() ?? null;
++  // Once the parser has loaded, the tree is made in this render, so the text draws in the same
++  // frame as its element and has its height when first measured. Before then, or when this
++  // parse throws, the effect below parses it.
++  const parsedNow = useMemo(() => {
++    try {
++      const result = parseMarkdownSync(markdown, {
++        underline,
++        latexMath,
++        superscript,
++        subscript,
++        highlight,
++        hardSoftBreaks,
++        preserveBlankLines,
++        admonitions
++      });
++      if (!result) return null;
++      indexTaskItems(result);
++      markInlineImages(result);
++      return {
++        collected: collectEnabled ? collectBlocks(result) : EMPTY,
++        katex: latexMath ? loadKaTeXSync() : null,
++        ast: recognizeTextLinks(result, linkRecognitionRef.current?.text, linkRecognitionRef.current?.inlineCode)
++      };
++    } catch {
++      return null;
++    }
++  }, [markdown, underline, latexMath, superscript, subscript, highlight, hardSoftBreaks, preserveBlankLines, admonitions, textLinkKey, inlineCodeLinkKey, collectEnabled]);
+   useEffect(() => {
++    if (parsedNow) return;
+     let cancelled = false;
+     const katexPromise = latexMath ? loadKaTeX() : Promise.resolve(null);
+     Promise.all([parseMarkdown(markdown, {
+@@ -98,7 +126,10 @@ export const EnrichedMarkdownText = ({
+     return () => {
+       cancelled = true;
+     };
+-  }, [markdown, underline, latexMath, superscript, subscript, highlight, hardSoftBreaks, preserveBlankLines, admonitions, textLinkKey, inlineCodeLinkKey, collectEnabled]);
++  }, [parsedNow, markdown, underline, latexMath, superscript, subscript, highlight, hardSoftBreaks, preserveBlankLines, admonitions, textLinkKey, inlineCodeLinkKey, collectEnabled]);
++  const shownAst = parsedNow ? parsedNow.ast : ast;
++  const shownCollected = parsedNow ? parsedNow.collected : collected;
++  const shownKatex = parsedNow ? parsedNow.katex : katex;
+   const callbacks = useMemo(() => ({
+     onLinkPress,
+     onLinkLongPress,
+@@ -106,7 +137,7 @@ export const EnrichedMarkdownText = ({
+     onTaskListItemPress,
+     onCodeBlockPress
+   }), [onLinkPress, onLinkLongPress, onImagePress, onTaskListItemPress, onCodeBlockPress]);
+-  const renderedBlocks = useRenderedBlocks(collected.blocks, renderers);
++  const renderedBlocks = useRenderedBlocks(shownCollected.blocks, renderers);
+   const blockSlots = useMemo(() => {
+     if (!renderersEnabled) return undefined;
+     const slots = new Map();
+@@ -118,15 +149,15 @@ export const EnrichedMarkdownText = ({
+     }
+     return slots;
+   }, [renderersEnabled, renderedBlocks]);
+-  const imageSources = useImageSources(collected.images, resolveImageSource);
++  const imageSources = useImageSources(shownCollected.images, resolveImageSource);
+   const blockDir = dir === 'ltr' || dir === 'rtl' ? undefined : 'auto';
+   const capabilities = useMemo(() => ({
+-    katex,
++    katex: shownKatex,
+     enableTaskListItemToggle,
+     blockSlots,
+     imageSources,
+     blockDir
+-  }), [katex, enableTaskListItemToggle, blockSlots, imageSources, blockDir]);
++  }), [shownKatex, enableTaskListItemToggle, blockSlots, imageSources, blockDir]);
+   const lastChildStyle = useMemo(() => allowTrailingMargin ? normalizedStyle : zeroTrailingMargins(normalizedStyle), [normalizedStyle, allowTrailingMargin]);
+   const styles = useMemo(() => buildStyles(normalizedStyle), [normalizedStyle]);
+   const lastChildStyles = useMemo(() => buildStyles(lastChildStyle), [lastChildStyle]);
+@@ -142,7 +173,7 @@ export const EnrichedMarkdownText = ({
+     } : null)
+   }), [containerStyle, selectable, selectionColor]);
+   const domProps = filterNativeOnlyProps(rest);
+-  if (parseError) {
++  if (parseError && !parsedNow) {
+     return /*#__PURE__*/_jsx("div", {
+       className: ENRM_TEXT_CLASS,
+       style: wrapperStyle,
+@@ -155,8 +186,8 @@ export const EnrichedMarkdownText = ({
+       })
+     });
+   }
+-  if (!ast) return null;
+-  const children = ast.children ?? [];
++  if (!shownAst) return null;
++  const children = shownAst.children ?? [];
+   const lastIdx = children.length - 1;
+   return /*#__PURE__*/_jsx("div", {
+     className: ENRM_TEXT_CLASS,
+diff --git a/lib/module/web/katex.js b/lib/module/web/katex.js
+index b0dbf6aee9f73208a1a2431aeb3aa7217e7bdf23..879950418fe3b14d7c211427693935ed14106d0f 100644
+--- a/lib/module/web/katex.js
++++ b/lib/module/web/katex.js
+@@ -1,6 +1,13 @@
+ "use strict";
+ 
+ let katexLoadPromise = null;
++let katexInstance = null;
++
++/** KaTeX, loaded now if it wasn't: null if not installed. */
++export function loadKaTeXSync() {
++  loadKaTeX();
++  return katexInstance;
++}
+ 
+ /** Lazily loads KaTeX. Resolves to null if not installed. */
+ export function loadKaTeX() {
+@@ -15,6 +22,7 @@ export function loadKaTeX() {
+     } catch {
+       // katex not installed — math rendering will be skipped
+     }
++    katexInstance = instance;
+     katexLoadPromise = Promise.resolve(instance);
+   }
+   return katexLoadPromise;
+diff --git a/lib/module/web/parseMarkdown.js b/lib/module/web/parseMarkdown.js
+index 93aa073c850ad125a38aedc7d162b63850d680d6..6a18658312d920ada7da12a42c2adf9d4026ac8f 100644
+--- a/lib/module/web/parseMarkdown.js
++++ b/lib/module/web/parseMarkdown.js
+@@ -16,12 +16,17 @@
+ // Caching the Promise (not the resolved value) means concurrent callers share
+ // a single WASM initialization — no duplicate loading.
+ let parserPromise = null;
++// The parser once loaded, for a parse in the render that asks for it (parseMarkdownSync).
++let loadedParser = null;
+ 
+ // SINGLE_FILE=1 inlines the WASM binary as base64 inside md4c.js, so no
+ // network fetch is needed — only a one-time decode + compile on first call.
+ function initializeParser() {
+   if (!parserPromise) {
+-    parserPromise = import('./wasm/md4c').then(module => module.default()).then(wasmModule => wasmModule.cwrap('parseMarkdown', 'string', ['string', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number'])).catch(error => {
++    parserPromise = import('./wasm/md4c').then(module => module.default()).then(wasmModule => wasmModule.cwrap('parseMarkdown', 'string', ['string', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number', 'number'])).then(parse => {
++      loadedParser = parse;
++      return parse;
++    }).catch(error => {
+       parserPromise = null;
+       throw error;
+     });
+@@ -41,6 +46,31 @@ export function preloadParser() {
+ function isASTNode(value) {
+   return typeof value === 'object' && value !== null && 'type' in value && typeof value.type === 'string';
+ }
++/**
++ * `markdown`'s tree now, once the parser has loaded (`preloadParser`), so a render can draw it in
++ * the same frame; null before then. Throws as `parseMarkdown` rejects.
++ */
++export function parseMarkdownSync(markdown, flags = {}) {
++  if (!loadedParser) return null;
++  return parseWith(loadedParser, markdown, flags);
++}
++function parseWith(parse, markdown, {
++  underline = false,
++  latexMath = true,
++  superscript = false,
++  subscript = false,
++  highlight = false,
++  hardSoftBreaks = false,
++  preserveBlankLines = false,
++  admonitions = true,
++  permissiveAutolinks = true
++}) {
++  const result = JSON.parse(parse(markdown, underline ? 1 : 0, latexMath ? 1 : 0, superscript ? 1 : 0, subscript ? 1 : 0, highlight ? 1 : 0, hardSoftBreaks ? 1 : 0, preserveBlankLines ? 1 : 0, admonitions ? 1 : 0, permissiveAutolinks ? 1 : 0));
++  if (!isASTNode(result)) {
++    throw new Error('WASM parser returned invalid AST');
++  }
++  return result;
++}
+ export async function parseMarkdown(markdown, {
+   underline = false,
+   latexMath = true,
+diff --git a/lib/module/web/renderers/ListRenderers.js b/lib/module/web/renderers/ListRenderers.js
+index 418612bb64a10be4b1278974fc5c9e25319c4002..ea6cff211ec8171998fd6570a3f0b410eeba044c 100644
+--- a/lib/module/web/renderers/ListRenderers.js
++++ b/lib/module/web/renderers/ListRenderers.js
+@@ -11,7 +11,8 @@ function ListRenderer({
+   parentType,
+   capabilities,
+   renderChildren,
+-  listTag: ListTag
++  listTag: ListTag,
++  start
+ }) {
+   const isNested = parentType === 'ListItem';
+   const hasTaskChild = !isNested && node.children?.some(child => child.attributes?.isTask === 'true');
+@@ -21,6 +22,7 @@ function ListRenderer({
+   return /*#__PURE__*/_jsx(ListTag, {
+     style: resolvedStyle,
+     dir: capabilities.blockDir,
++    start,
+     children: renderChildren(node)
+   });
+ }
+@@ -31,9 +33,12 @@ function UnorderedListRenderer(props) {
+   });
+ }
+ function OrderedListRenderer(props) {
++  // The number its first item has, which the parser keeps when it isn't 1.
++  const start = Number(props.node.attributes?.start) || undefined;
+   return /*#__PURE__*/_jsx(ListRenderer, {
+     ...props,
+-    listTag: "ol"
++    listTag: "ol",
++    start
+   });
+ }
+ function isNestedList(child) {
