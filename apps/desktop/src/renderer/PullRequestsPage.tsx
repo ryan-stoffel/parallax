@@ -115,7 +115,7 @@ export function sortRows(rows: PrRow[], sort: PrSort): PrRow[] {
 }
 
 const toolButton =
-  "flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground aria-expanded:text-foreground [&_svg]:size-4";
+  "flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground aria-expanded:text-foreground [&_svg]:size-4";
 
 /**
  * The Pull requests page, in place of the main pane: every pull request linked to a thread, on any
@@ -187,7 +187,7 @@ export function PullRequestsPage({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Escape" && setQuery("")}
-            className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </label>
         <Menu
@@ -240,7 +240,7 @@ export function PullRequestsPage({
           ))}
         </ul>
       )}
-      <p className="border-t border-border px-4 py-2 text-center text-[12.5px] text-faint-foreground">
+      <p className="border-t border-border px-4 py-2 text-center text-body text-faint-foreground">
         {rows.length === entries.length
           ? `${entries.length} linked`
           : `${rows.length} of ${entries.length} linked`}
@@ -254,8 +254,8 @@ function Empty({ title, note }: { title: string; note: string }) {
     <div className="grid flex-1 place-items-center">
       <div className="flex flex-col items-center gap-1 text-center">
         <GitPullRequest aria-hidden className="mb-2 size-6 text-faint-foreground" />
-        <h2 className="text-[15px] font-medium">{title}</h2>
-        <p className="text-[13px] text-faint-foreground">{note}</p>
+        <h2 className="text-reading font-medium">{title}</h2>
+        <p className="text-body text-faint-foreground">{note}</p>
       </div>
     </div>
   );
@@ -273,19 +273,19 @@ function Row({ entry, read, onOpen }: { entry: PrEntry; read?: Linked; onOpen: (
       >
         <Icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${color}`} />
         <span className="min-w-0 flex-1">
-          <span className="flex items-baseline gap-1.5 text-[13.5px]">
+          <span className="flex items-baseline gap-1.5 text-body">
             <span className="shrink-0 text-faint-foreground">#{numberOf(entry.url)}</span>
             <span className="min-w-0 flex-1 truncate">{pr?.title ?? entry.threadTitle}</span>
             {pr?.labels.map((l) => (
               <span
                 key={l}
-                className="shrink-0 rounded-full bg-hover px-1.5 text-[11.5px] text-muted-foreground"
+                className="shrink-0 rounded-full bg-hover px-1.5 text-meta text-muted-foreground"
               >
                 {l}
               </span>
             ))}
           </span>
-          <span className="mt-0.5 flex items-baseline gap-2 text-[12px] text-faint-foreground">
+          <span className="mt-0.5 flex items-baseline gap-2 text-meta text-faint-foreground">
             {pr ? (
               <>
                 <span className="shrink-0">{pr.repo}</span>
@@ -346,7 +346,7 @@ function Menu({
         {items.map((item, i) => (
           <div key={item.id}>
             {item.group && item.group !== items[i - 1]?.group && (
-              <p className="px-2 pt-1.5 pb-1 text-[11.5px] font-medium text-faint-foreground">
+              <p className="px-2 pt-1.5 pb-1 text-meta font-medium text-faint-foreground">
                 {item.group}
               </p>
             )}

@@ -53,7 +53,7 @@ export function ChangesDiff({
   const removed = files.reduce((n, f) => n + f.removed, 0);
   return (
     <>
-      <p className="px-3 py-2 text-[12.5px] text-muted-foreground">
+      <p className="px-3 py-2 text-body text-muted-foreground">
         {files.length === 0 ? (
           "No files changed."
         ) : (
@@ -96,7 +96,7 @@ export function ChangesDiff({
                     }}
                   />
                 ) : (
-                  <div className="font-mono text-[12px] leading-5">
+                  <div className="font-mono text-meta leading-5">
                     {row.line ? (
                       <DiffLineView line={row.line} />
                     ) : (

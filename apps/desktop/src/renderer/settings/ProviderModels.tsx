@@ -28,7 +28,7 @@ function hint(m: Model): string {
   return parts.filter(Boolean).join(" · ");
 }
 
-const groupHeading = "border-border px-4 pt-3 pb-1.5 text-[12px] font-medium text-faint-foreground";
+const groupHeading = "border-border px-4 pt-3 pb-1.5 text-meta font-medium text-faint-foreground";
 
 /**
  * An instance's models (`instanceModels`): favorites first, then all of them, each with a star, up
@@ -74,8 +74,8 @@ export function ProviderModels({
             <Star aria-hidden className={starred ? "fill-current text-amber-500" : undefined} />
           </IconButton>
           <div className="min-w-0">
-            <span className="block truncate text-[13px]">{m.name}</span>
-            <span className="block truncate font-mono text-[11.5px] text-faint-foreground">
+            <span className="block truncate text-body">{m.name}</span>
+            <span className="block truncate font-mono text-meta text-faint-foreground">
               {m.id}
               {hint(m) && <span className="ml-2 font-sans">{hint(m)}</span>}
             </span>
@@ -120,7 +120,7 @@ export function ProviderModels({
 
   return (
     <Section title="Models">
-      <p className={`${settingRow} text-[12.5px] text-muted-foreground`}>
+      <p className={`${settingRow} text-body text-muted-foreground`}>
         Favorites, visibility, and ordering are saved on this device. Custom models are saved on the
         host.
       </p>
@@ -139,7 +139,7 @@ export function ProviderModels({
           >
             {allHidden ? "Enable all" : "Disable all"}
           </button>
-          <span className="text-[12.5px] text-muted-foreground">
+          <span className="text-body text-muted-foreground">
             {list.length} {list.length === 1 ? "model" : "models"} · {favorites.length}{" "}
             {favorites.length === 1 ? "favorite" : "favorites"}
           </span>
@@ -167,7 +167,7 @@ export function ProviderModels({
           className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
         >
           <div className="grid grid-cols-2 gap-3">
-            <label className="text-[12.5px] text-muted-foreground">
+            <label className="text-body text-muted-foreground">
               Model id
               <input
                 name="id"
@@ -180,7 +180,7 @@ export function ProviderModels({
                 className={`${field} font-mono`}
               />
             </label>
-            <label className="text-[12.5px] text-muted-foreground">
+            <label className="text-body text-muted-foreground">
               Display name
               <input name="name" placeholder="GPT-OSS 120B" autoComplete="off" className={field} />
             </label>
@@ -207,7 +207,7 @@ export function ProviderModels({
           {list.map(row(list))}
         </>
       ) : (
-        <p className={`${settingRow} text-[12.5px] text-muted-foreground`}>
+        <p className={`${settingRow} text-body text-muted-foreground`}>
           plxd found no models for {info.instance.name}. Add one above.
         </p>
       )}

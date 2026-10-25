@@ -45,8 +45,8 @@ function HistoryList({ onOpen }: { onOpen: (url: string, newTab: boolean) => voi
   return (
     <>
       <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-        <h2 className="text-[15px] font-semibold">History</h2>
-        <label className="ml-4 flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg bg-[var(--browser-omnibox,var(--selected))] px-2.5 text-[13px] [&>svg]:size-4 [&>svg]:text-muted-foreground">
+        <h2 className="text-reading font-semibold">History</h2>
+        <label className="ml-4 flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg bg-[var(--browser-omnibox,var(--selected))] px-2.5 text-body [&>svg]:size-4 [&>svg]:text-muted-foreground">
           <Search aria-hidden />
           <input
             autoFocus
@@ -61,7 +61,7 @@ function HistoryList({ onOpen }: { onOpen: (url: string, newTab: boolean) => voi
           type="button"
           disabled={!visits.length}
           onClick={() => confirm.current?.showModal()}
-          className="rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50"
+          className="rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50"
         >
           Clear browsing history
         </button>
@@ -71,20 +71,20 @@ function HistoryList({ onOpen }: { onOpen: (url: string, newTab: boolean) => voi
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {!days.length && (
-          <p className="px-3 py-8 text-center text-[13px] text-muted-foreground">
+          <p className="px-3 py-8 text-center text-body text-muted-foreground">
             {visits.length ? "No visits match." : "Pages you visit show up here."}
           </p>
         )}
         {days.map(({ day, visits: list }) => (
           <section key={day} aria-label={day} className="mb-3">
-            <h3 className="px-3 py-1.5 text-[12px] font-medium text-muted-foreground">{day}</h3>
+            <h3 className="px-3 py-1.5 text-meta font-medium text-muted-foreground">{day}</h3>
             <ul>
               {list.map((v) => (
                 <li
                   key={`${v.time}:${v.url}`}
                   className="group flex items-center gap-3 rounded-md px-3 hover:bg-hover"
                 >
-                  <span className="w-16 shrink-0 text-[11.5px] text-faint-foreground tabular-nums">
+                  <span className="w-16 shrink-0 text-meta text-faint-foreground tabular-nums">
                     {timeOf.format(v.time)}
                   </span>
                   <button
@@ -95,10 +95,10 @@ function HistoryList({ onOpen }: { onOpen: (url: string, newTab: boolean) => voi
                       close(e);
                     }}
                     onAuxClick={(e) => e.button === 1 && onOpen(v.url, true)}
-                    className="flex min-w-0 flex-1 items-baseline gap-2 py-1.5 text-left text-[13px]"
+                    className="flex min-w-0 flex-1 items-baseline gap-2 py-1.5 text-left text-body"
                   >
                     <span className="truncate">{v.title || v.url.replace(/^https?:\/\//, "")}</span>
-                    <span className="shrink-0 truncate text-[12px] text-faint-foreground">
+                    <span className="shrink-0 truncate text-meta text-faint-foreground">
                       {URL.parse(v.url)?.host}
                     </span>
                   </button>

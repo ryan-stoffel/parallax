@@ -76,11 +76,11 @@ export function ThreadChip({
 }) {
   const body = (
     <>
-      <span className="flex items-center gap-1.5 text-[11.5px] text-faint-foreground">
+      <span className="flex items-center gap-1.5 text-meta text-faint-foreground">
         <look.Logo aria-hidden className="size-3.5 shrink-0" />
         {look.age ? `Thread · ${look.age}` : "Thread"}
       </span>
-      <span className="w-full truncate text-[12.5px] text-foreground">{look.title}</span>
+      <span className="w-full truncate text-body text-foreground">{look.title}</span>
     </>
   );
   const box =

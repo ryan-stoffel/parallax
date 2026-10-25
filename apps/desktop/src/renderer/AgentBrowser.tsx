@@ -175,7 +175,7 @@ export function AgentBrowser({
         <button
           type="button"
           onClick={() => send({ kind: "control", take: !state.human })}
-          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] text-foreground hover:bg-hover"
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-body text-foreground hover:bg-hover"
         >
           {state.human ? (
             <MousePointer2 aria-hidden className="size-3.5" />
@@ -206,7 +206,7 @@ export function AgentBrowser({
         }}
         className={state.human ? "ring-2 ring-ring" : "ring-2 ring-ring/40"}
         overlay={
-          <div className="pointer-events-none absolute -top-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-background px-2.5 py-1 text-[11.5px] whitespace-nowrap shadow-sm ring-1 ring-border">
+          <div className="pointer-events-none absolute -top-3 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-background px-2.5 py-1 text-meta whitespace-nowrap shadow-sm ring-1 ring-border">
             {state.human ? (
               <>
                 <MousePointer2 aria-hidden className="size-3.5" />
@@ -256,7 +256,7 @@ export function AgentBrowser({
         }
       </PageFrame>
       {(gone || !frame) && (
-        <p className="absolute inset-0 top-10 grid place-items-center text-[12.5px] text-muted-foreground">
+        <p className="absolute inset-0 top-10 grid place-items-center text-body text-muted-foreground">
           {gone ? "This tab closed." : "Waiting for the page…"}
         </p>
       )}

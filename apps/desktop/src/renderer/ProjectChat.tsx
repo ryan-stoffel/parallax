@@ -244,8 +244,8 @@ export function ProjectChat({
           <span aria-hidden className="w-full" />
           <div className="flex w-full flex-col items-center px-8 pb-[8vh]">
             <ProjectIcon icon={project.icon} className="size-10" />
-            <h2 className="mt-5 text-[18px] font-medium tracking-tight">{project.name}</h2>
-            <p className="mt-2 max-w-sm text-[14px] text-muted-foreground">
+            <h2 className="mt-5 text-heading font-medium tracking-tight">{project.name}</h2>
+            <p className="mt-2 max-w-sm text-reading text-muted-foreground">
               Describe a feature or a bug and the coordinator starts an agent on it. Send several
               back to back to run them together.
             </p>

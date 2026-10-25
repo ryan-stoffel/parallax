@@ -52,7 +52,7 @@ export function Lightbox({
       onClick={(e) => e.target === e.currentTarget && dialog.current?.close()}
       className="m-0 h-full max-h-none w-full max-w-none bg-black/90 p-0 text-white outline-none backdrop:bg-transparent backdrop:backdrop-blur-sm"
     >
-      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-end gap-3 px-4 py-3 text-[13px]">
+      <div className="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-end gap-3 px-4 py-3 text-body">
         {onDownload && (
           <button
             type="button"
@@ -94,7 +94,7 @@ export function Lightbox({
           />
         </span>
       </div>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center gap-3 px-16 py-4 text-[13px]">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center gap-3 px-16 py-4 text-body">
         <span className="min-w-0 truncate font-medium" title={image.name}>
           {image.name}
         </span>

@@ -189,11 +189,11 @@ import { PinList, type Pin as PinData } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 
 const row =
-  "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover";
+  "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-body hover:bg-hover";
 const current = "bg-selected text-foreground";
 const sectionHeading =
-  "flex h-7 items-center gap-1 px-2 text-[12px] font-medium text-faint-foreground";
-const emptyNote = "px-2 py-1 text-[12.5px] text-faint-foreground";
+  "flex h-7 items-center gap-1 px-2 text-meta font-medium text-faint-foreground";
+const emptyNote = "px-2 py-1 text-body text-faint-foreground";
 
 interface SidebarProps {
   width?: number;
@@ -215,7 +215,7 @@ export function Sidebar({
   onClose,
   onNewThread,
   children,
-  width = 256,
+  width = 288,
   onResize,
 }: SidebarProps) {
   return (
@@ -242,7 +242,7 @@ export function Sidebar({
         <button
           type="button"
           onClick={onNewThread}
-          className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-[14px] font-semibold tracking-tight text-foreground hover:bg-hover"
+          className="mr-auto flex items-center gap-1.5 rounded-md px-1 py-0.5 font-brand text-reading font-semibold tracking-tight text-foreground hover:bg-hover"
         >
           <ParallaxMark className="size-5" />
           Parallax
@@ -372,7 +372,7 @@ export function RepoIcon({ repo, big }: { repo?: Repo; big?: boolean }) {
     <span
       aria-hidden
       style={{ color: repoColor(repo, undefined) }}
-      className={`grid ${size} shrink-0 place-items-center rounded-[4px] bg-current/15 ${big ? "text-[9.5px]" : "text-[8.5px]"} leading-none font-bold`}
+      className={`grid ${size} shrink-0 place-items-center rounded-sm bg-current/15 ${big ? "text-micro" : "text-micro"} leading-none font-bold`}
     >
       {/* Drawn from the attribute, so the tile adds nothing to the text around it. */}
       <span data-initials={initials(repo.name)} className="before:content-[attr(data-initials)]" />
@@ -1498,10 +1498,10 @@ export function ThreadList({
                       : foldedGroups.filter((k) => k !== key),
                 )
               }
-              className="group/heading flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-[12px] font-medium text-muted-foreground transition-colors outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0"
+              className="group/heading flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-meta font-medium text-muted-foreground transition-colors outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0"
             >
               {g.label}
-              <span className="shrink-0 overflow-hidden rounded-full bg-foreground/[0.06] px-1.5 text-[10.5px] leading-4 text-faint-foreground">
+              <span className="shrink-0 overflow-hidden rounded-full bg-foreground/[0.06] px-1.5 text-caption leading-4 text-faint-foreground">
                 <Tick value={g.rows.length} />
               </span>
               {!open && newsDot[urgent] && (
@@ -1791,7 +1791,7 @@ export function ThreadList({
                 else first.focus();
               }
             }}
-            className="min-w-0 flex-1 truncate bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </label>
         <ScopeMenu
@@ -1821,7 +1821,7 @@ export function ThreadList({
         className="mt-2 flex min-h-0 flex-1 flex-col overflow-y-auto px-2 pb-2 *:shrink-0"
       >
         {errors.map((e) => (
-          <p key={e} role="alert" className="px-2 pb-1 text-[12px] text-danger">
+          <p key={e} role="alert" className="px-2 pb-1 text-meta text-danger">
             {e}
           </p>
         ))}
@@ -1931,13 +1931,13 @@ export function ThreadList({
 }
 
 const cardButton =
-  "mx-auto mt-3 flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1 text-[12.5px] font-medium text-foreground hover:bg-hover";
+  "mx-auto mt-3 flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1 text-body font-medium text-foreground hover:bg-hover";
 
 /** A dashed card in place of the list, for a search with no matches. */
 function EmptyCard({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="mx-1 my-3.5 flex flex-col items-center rounded-xl border border-dashed border-border px-4 py-5 text-center text-[12.5px] leading-normal text-faint-foreground">
-      <p className="text-[13px] font-semibold text-foreground">{title}</p>
+    <div className="mx-1 my-3.5 flex flex-col items-center rounded-xl border border-dashed border-border px-4 py-5 text-center text-body leading-normal text-faint-foreground">
+      <p className="text-body font-semibold text-foreground">{title}</p>
       <div className="mt-0.75">{children}</div>
     </div>
   );
@@ -1967,7 +1967,7 @@ function BulkBar({
       aria-label="Selected threads"
       className="mx-2 mt-1 mb-1.5 flex shrink-0 items-center gap-0.5 rounded-xl bg-surface py-1 pr-1 pl-3 shadow-composer ring-1 ring-border motion-safe:animate-[sidebar-rise_140ms_ease-out]"
     >
-      <span className="flex-1 text-[12px] font-semibold tabular-nums">{count} selected</span>
+      <span className="flex-1 text-meta font-semibold tabular-nums">{count} selected</span>
       <button
         type="button"
         aria-label="Archive"
@@ -2022,7 +2022,7 @@ function Toasts() {
       {list.map((t) => (
         <div
           key={t.id}
-          className="pointer-events-auto flex max-w-85 items-center gap-2.5 rounded-xl bg-foreground py-1.5 pr-1.5 pl-3 text-[12.5px] text-background shadow-composer motion-safe:animate-[sidebar-rise_160ms_ease-out]"
+          className="pointer-events-auto flex max-w-85 items-center gap-2.5 rounded-xl bg-foreground py-1.5 pr-1.5 pl-3 text-body text-background shadow-composer motion-safe:animate-[sidebar-rise_160ms_ease-out]"
         >
           <span className="min-w-0 truncate">{t.text}</span>
           {t.undo && (
@@ -2048,7 +2048,7 @@ function Toasts() {
  */
 function CaughtUp({ burst }: { burst: number }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-6 text-[12.5px] text-faint-foreground">
+    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-6 text-body text-faint-foreground">
       <span key={burst} className={`relative ${burst ? "caught-up-pop" : ""}`}>
         <CircleCheck aria-hidden className="size-5" strokeWidth={1.75} />
         {burst > 0 && <Confetti />}
@@ -2148,7 +2148,7 @@ function Drawer<T>({
           setOpened(!open);
           onOpenChange(!open);
         }}
-        className="sticky top-0 z-10 flex list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+        className="sticky top-0 z-10 flex list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-body text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
       >
         <span>
           {label}{" "}
@@ -2169,7 +2169,7 @@ function Drawer<T>({
         <button
           type="button"
           onClick={() => setPages((n) => n + 1)}
-          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+          className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-body text-muted-foreground hover:bg-hover hover:text-foreground"
         >
           <Plus aria-hidden className="size-3.5 shrink-0" />
           Show {more} more
@@ -2230,7 +2230,7 @@ function ScopeMenu({
     n > 0 && (
       <span
         title={`${n} ${n === 1 ? "needs" : "need"} you`}
-        className="grid h-4.25 min-w-4.25 place-items-center rounded-full bg-warning/15 px-1.25 text-[10.5px] font-semibold text-warning tabular-nums"
+        className="grid h-4.25 min-w-4.25 place-items-center rounded-full bg-warning/15 px-1.25 text-caption font-semibold text-warning tabular-nums"
       >
         {n}
       </span>
@@ -2238,14 +2238,14 @@ function ScopeMenu({
   const heading = (text: string, extra?: ReactNode) => (
     <p
       role="presentation"
-      className="flex items-center px-2 pt-2.5 pb-1 text-[11px] font-medium text-faint-foreground"
+      className="flex items-center px-2 pt-2.5 pb-1 text-caption font-medium text-faint-foreground"
     >
       {text}
       {extra}
     </p>
   );
   const trailing =
-    "ml-auto flex shrink-0 items-center gap-2 pl-1.5 text-[11.5px] text-faint-foreground";
+    "ml-auto flex shrink-0 items-center gap-2 pl-1.5 text-meta text-faint-foreground";
   const actionButton =
     "grid size-6 place-items-center rounded-md text-faint-foreground hover:bg-background hover:text-foreground [&_svg]:size-3.5";
 
@@ -2317,7 +2317,7 @@ function ScopeMenu({
         {outside > 0 && (
           <span
             aria-hidden
-            className="absolute -right-1 -bottom-0.75 grid h-3.25 min-w-3.25 place-items-center rounded-full bg-warning px-0.75 text-[8.5px] font-bold text-white ring-2 ring-sidebar tabular-nums"
+            className="absolute -right-1 -bottom-0.75 grid h-3.25 min-w-3.25 place-items-center rounded-full bg-warning px-0.75 text-micro font-bold text-white ring-2 ring-sidebar tabular-nums"
           >
             {outside}
           </span>
@@ -2352,7 +2352,7 @@ function ScopeMenu({
                 ?.querySelector<HTMLElement>('[role^="menuitem"]')
                 ?.click();
             }}
-            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </label>
         <div className="min-h-0 overflow-y-auto p-1.5">
@@ -2391,10 +2391,10 @@ function ScopeMenu({
             </button>
           )}
           {q && repos.length === 0 && (
-            <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No repos match</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
           )}
         </div>
-        <div className="flex shrink-0 gap-3 border-t border-border px-3.5 py-1.5 text-[11px] text-faint-foreground">
+        <div className="flex shrink-0 gap-3 border-t border-border px-3.5 py-1.5 text-caption text-faint-foreground">
           <span>↑↓ move</span>
           <span>↵ open</span>
         </div>
@@ -2465,7 +2465,7 @@ function Marked({ text, words }: { text: string; words: readonly string[] }) {
     <>
       {highlight(text, words).map((part, i) =>
         part.mark ? (
-          <mark key={i} className="rounded-[3px] bg-warning/30 px-px text-inherit">
+          <mark key={i} className="rounded-sm bg-warning/30 px-px text-inherit">
             {part.text}
           </mark>
         ) : (
@@ -2550,7 +2550,7 @@ function ProjectDialogs({
             if (next && next !== opened.project.name) void update({ name: next });
           }}
         >
-          <label className="block text-[13px] font-medium">
+          <label className="block text-body font-medium">
             Name
             <input
               aria-label="Project name"
@@ -2572,8 +2572,8 @@ function ProjectDialogs({
           onClose={close}
           onSave={() => void update({ permission: "bypass" })}
         >
-          <p className="text-[13px] font-medium">Full access</p>
-          <p className="mt-1 text-[12.5px] text-muted-foreground">
+          <p className="text-body font-medium">Full access</p>
+          <p className="mt-1 text-body text-muted-foreground">
             New agents in this Project run commands and edit files without asking, as in new
             Projects. Agents running now keep asking until they next start. Agents on Cursor, Grok
             Build, Hermes Agent, Ollama Cloud, OpenRouter, and local models need it. You can't
@@ -2632,13 +2632,13 @@ function SettingDialog({
           <button
             type="button"
             onClick={() => ref.current?.close()}
-            className="rounded-md px-3 py-1.5 text-[13px] hover:bg-hover"
+            className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
           >
             Cancel
           </button>
           <button
             type="submit"
-            className="rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90"
+            className="rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground hover:opacity-90"
           >
             {action}
           </button>
@@ -2656,37 +2656,61 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 };
 
 /**
- * A thread row's first line: its repo's icon and name, then `status`: what it asks of the user, or
- * how long ago it was prompted. Hovering or focusing the row hides the status and keeps the repo
- * name clear of the row's actions.
+ * A thread row's first line: its title, then `status`: what it asks of the user, or how long ago it
+ * was prompted. Hovering or focusing the row hides the status and keeps the title clear of the
+ * row's actions.
  */
 function RowHead({
+  title,
+  titleColor = "text-foreground",
+  status,
+}: {
+  title: ReactNode;
+  titleColor?: string;
+  status: ReactNode;
+}) {
+  return (
+    <span className="flex w-full items-center gap-2 group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
+      <span
+        data-title
+        className={`min-w-0 flex-1 truncate text-body font-medium transition-colors ${titleColor}`}
+      >
+        {title}
+      </span>
+      <span
+        data-status
+        className="shrink-0 text-meta text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
+      >
+        {status}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * Where a row's thread is, at the start of its second line: its repo's icon and name, or its
+ * pinned folder's where it has no repo, else No repo. It gives way to the branch beside it only
+ * past half the row.
+ */
+function RowPlace({
   repo,
   folder,
-  status,
   words = [],
 }: {
   repo?: Repo;
   /** The pinned folder holding it (pins.ts), named in place of No repo. */
   folder?: PinFolder;
-  status: ReactNode;
   words?: readonly string[];
 }) {
   const inFolder = folder && (!repo || repo.scratch);
   return (
-    <span className="flex w-full items-center gap-2 text-[12px] text-faint-foreground group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
-      {inFolder ? <FolderMark folder={folder} big /> : <RepoIcon repo={repo} big />}
+    <span className="flex max-w-[55%] min-w-0 shrink-0 items-center gap-1.5">
+      {inFolder ? <FolderMark folder={folder} /> : <RepoIcon repo={repo} />}
       <span className="min-w-0 truncate">
         <Marked
           text={inFolder ? folder.name : repo && !repo.scratch ? repo.name : "No repo"}
           words={words}
         />
-      </span>
-      <span
-        data-status
-        className="ml-auto shrink-0 text-[11.5px] group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
-      >
-        {status}
       </span>
     </span>
   );
@@ -2713,7 +2737,7 @@ const draftGap = "my-1 first:mt-0 last:mb-0";
 /** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
 function DraftStatus() {
   return (
-    <span className="flex items-center gap-1 text-[11.5px] font-medium text-warning [&_svg]:size-3.5">
+    <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
       <PencilLine aria-hidden />
       Draft
     </span>
@@ -2721,7 +2745,7 @@ function DraftStatus() {
 }
 
 /**
- * An unsent New Thread prompt's row (PLX-788): its repo and a Draft status, then its first line,
+ * An unsent New Thread prompt's row (PLX-788): its first line and a Draft status, then its repo,
  * outlined in the warning color and spaced off its neighbors (PLX-932). Opening it reopens New
  * Thread with it, which takes it off the list.
  */
@@ -2737,9 +2761,9 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
         onClick={onOpen}
         className="flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2 py-1.5 text-left hover:bg-hover"
       >
-        <RowHead repo={repo} status={<DraftStatus />} />
-        <span data-title className="w-full truncate text-[13px] text-foreground">
-          {title}
+        <RowHead title={title} status={<DraftStatus />} />
+        <span className="flex w-full text-meta text-faint-foreground">
+          <RowPlace repo={repo} />
         </span>
       </button>
     </li>
@@ -2747,13 +2771,14 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
 }
 
 /**
- * A thread's row (0033, 0075): its repo and status (what it asks of the user, or how long ago it
- * was prompted), its title, then its worktree or local checkout icon, branch, and git status, a
+ * A thread's row (0033, 0075): its title and status (what it asks of the user, or how long ago it
+ * was prompted), then its repo, its worktree or local checkout icon, branch, and git status, a
  * pin, linked pull requests (the number of one, or +N for more) and their checks, and provider.
  * Under a search, the words found are marked, and a match only in its messages shows a line of
- * them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
- * Archive, and more actions, which also open by right-clicking the row: native popovers, so
- * Escape and clicking away close them. Double-clicking the title renames it in place.
+ * them. Resting on it shows its card, unless it's the open thread; hovering or focusing it swaps
+ * the status for Snooze, Archive, and more actions, which also open by right-clicking the row:
+ * native popovers, so Escape and clicking away close them. Double-clicking the title renames it in
+ * place.
  */
 function ThreadRow({
   look,
@@ -2931,7 +2956,7 @@ function ThreadRow({
   const status =
     badge ??
     (run?.status === "waiting" && attention === "settled" && !thread.archived ? (
-      <span className="flex items-center gap-1 text-[11.5px] font-medium text-warning [&_svg]:size-3.5">
+      <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
         <AlarmClock aria-hidden />
         {run.resumeAt ? `Resumes ${resumeTime(run.resumeAt)}` : "Waiting"}
       </span>
@@ -2966,7 +2991,7 @@ function ThreadRow({
         else if (e.key === "Escape") endRename(undefined);
       }}
       onBlur={(e) => endRename(e.currentTarget.value)}
-      className="-mx-1 w-[calc(100%+0.5rem)] min-w-0 rounded-[5px] bg-background px-1 text-[13px] font-medium text-foreground ring-[1.5px] ring-ring focus-visible:outline-none"
+      className="-mx-1 w-[calc(100%+0.5rem)] min-w-0 rounded-sm bg-background px-1 text-body font-medium text-foreground ring-[1.5px] ring-ring focus-visible:outline-none"
     />
   ) : (
     <span
@@ -2996,7 +3021,8 @@ function ThreadRow({
       data-kind="thread"
       data-flip={rowKey}
       className={`group/row relative rounded-lg transition-colors duration-100 ${rowLook} ${drafted ? draftGap : ""} ${flash ? "row-flash" : ""}`}
-      onMouseEnter={(e) => onRest(e.currentTarget)}
+      // The open thread's card would only repeat what the thread shows.
+      onMouseEnter={(e) => !selected && onRest(e.currentTarget)}
       onMouseLeave={onLeave}
     >
       <Main
@@ -3005,7 +3031,15 @@ function ThreadRow({
         aria-description={picked ? "Selected" : undefined}
         data-row={rowKey}
         data-kind="thread"
-        onClick={renaming ? undefined : onOpen}
+        onClick={
+          renaming
+            ? undefined
+            : (e) => {
+                // Opening it hides its card, which would cover the thread it opens.
+                onLeave();
+                onOpen(e);
+              }
+        }
         onKeyDown={renaming ? undefined : onKeys}
         onContextMenu={(e) => {
           onLeave();
@@ -3017,7 +3051,7 @@ function ThreadRow({
           onLeave();
           dragThread(e.dataTransfer, hostId, thread.id);
         }}
-        className={`flex w-full cursor-pointer flex-col gap-1 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-[7px]"}`}
+        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-1.5"}`}
       >
         {look === "compact" && !nested ? (
           // One-line rows: where it is, its title, and its status.
@@ -3029,46 +3063,25 @@ function ThreadRow({
             )}
             <span
               data-title
-              className={`min-w-0 flex-1 truncate text-[13px] font-[450] transition-colors ${titleColor}`}
+              className={`min-w-0 flex-1 truncate text-body font-medium transition-colors ${titleColor}`}
             >
               {titleText}
             </span>
             <span
               data-status
-              className="shrink-0 text-[11.5px] text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
-            >
-              {status}
-            </span>
-          </span>
-        ) : nested ? (
-          <span className="flex w-full items-center gap-2 group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
-            <span
-              data-title
-              className={`min-w-0 flex-1 truncate text-[13px] font-[450] transition-colors ${titleColor}`}
-            >
-              {titleText}
-            </span>
-            <span
-              data-status
-              className="shrink-0 text-[11.5px] text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
+              className="shrink-0 text-meta text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
             >
               {status}
             </span>
           </span>
         ) : (
-          <>
-            <RowHead repo={repo} folder={folder} status={status} words={words} />
-            <span
-              data-title
-              className={`w-full truncate text-[13px] font-[450] transition-colors ${titleColor}`}
-            >
-              {titleText}
-            </span>
-          </>
+          <RowHead title={titleText} titleColor={titleColor} status={status} />
         )}
-        {/* One-line rows keep to one line under a repo's heading too. */}
-        {hasDetails && look !== "compact" && (
-          <span className="flex w-full items-center gap-2 text-[11.5px] text-faint-foreground">
+        {/* Two-line rows: the title, then where it is and its details. One-line rows keep to one
+            line under a repo's heading too, and a row under its repo's heading leaves out the repo. */}
+        {look !== "compact" && (!nested || hasDetails) && (
+          <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
+            {!nested && <RowPlace repo={repo} folder={folder} words={words} />}
             <span className="flex min-w-0 flex-1 items-center gap-1">
               {run?.checkout ? (
                 // Without a branch, the text beside it already says "Local checkout".
@@ -3132,11 +3145,12 @@ function ThreadRow({
                 <DeviceIcon icon={device.icon} className="size-3.5" />
               </span>
             )}
-            {Logo && <Logo className="size-3.5 shrink-0" />}
+            {/* In gray, so a list of rows isn't striped with providers' colors. */}
+            {Logo && <Logo className="size-3.5 shrink-0 opacity-80 grayscale" />}
           </span>
         )}
         {snippet && (
-          <span className="flex w-full min-w-0 items-center gap-1.5 text-[11.5px] text-faint-foreground">
+          <span className="flex w-full min-w-0 items-center gap-1.5 text-meta text-faint-foreground">
             <Search aria-hidden className="size-3 shrink-0" />
             <span className="min-w-0 truncate">
               <Marked text={snippet} words={words} />
@@ -3164,7 +3178,7 @@ function ThreadRow({
             onLeave();
             onArchive();
           }}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
         >
           {mainLabel}
         </button>
@@ -3201,7 +3215,7 @@ function ThreadRow({
                   onClick={choose(() => onSnooze(c.until))}
                 >
                   {c.label}
-                  <span className="ml-auto text-[12px] text-faint-foreground tabular-nums">
+                  <span className="ml-auto text-meta text-faint-foreground tabular-nums">
                     {c.label.startsWith("In") ? clock(c.until.toISOString()) : when(c.until)}
                   </span>
                 </button>
@@ -3220,12 +3234,12 @@ function ThreadRow({
                   aria-label="Snooze until"
                   value={custom}
                   onChange={(e) => setCustom(e.target.value)}
-                  className="min-w-0 flex-1 rounded-md bg-hover px-1.5 py-1 text-[12px] [color-scheme:inherit]"
+                  className="min-w-0 flex-1 rounded-md bg-hover px-1.5 py-1 text-meta [color-scheme:inherit]"
                 />
                 <button
                   type="submit"
                   disabled={!custom}
-                  className="rounded-md px-2 py-1 text-[12px] hover:bg-hover disabled:opacity-50"
+                  className="rounded-md px-2 py-1 text-meta hover:bg-hover disabled:opacity-50"
                 >
                   Custom
                 </button>
@@ -3418,7 +3432,7 @@ export function MenuKey({ children }: { children: string }) {
     <kbd
       aria-hidden
       data-key={children}
-      className="ml-auto pl-3 font-sans text-[11px] text-faint-foreground before:content-[attr(data-key)]"
+      className="ml-auto pl-3 font-sans text-caption text-faint-foreground before:content-[attr(data-key)]"
     />
   );
 }
@@ -3467,7 +3481,7 @@ function SplitGroup({
                 onClick={() => onOpen(id)}
                 className={`${row} pr-8 ${focused ? current : ""}`}
               >
-                <kbd className="shrink-0 rounded border border-border bg-surface px-1 font-sans text-[11px] leading-4 text-muted-foreground">
+                <kbd className="shrink-0 rounded-sm border border-border bg-surface px-1 font-sans text-caption leading-4 text-muted-foreground">
                   {side === 0 ? left : right}
                 </kbd>
                 <span className="min-w-0 flex-1 truncate">{title}</span>
@@ -3580,8 +3594,8 @@ function ThreadCard({
       style={{ top, left }}
       className="card-in pointer-events-none fixed z-50 w-64 rounded-lg border border-border bg-surface p-3 text-foreground shadow-composer transition-[top] duration-150 ease-out motion-reduce:transition-none"
     >
-      <p className="line-clamp-2 text-[13px] font-medium">{title}</p>
-      <ul className="mt-2 flex flex-col gap-1.5 text-[12.5px] text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 [&>li]:flex [&>li]:min-w-0 [&>li]:items-center [&>li]:gap-2">
+      <p className="line-clamp-2 text-body font-medium">{title}</p>
+      <ul className="mt-2 flex flex-col gap-1.5 text-body text-muted-foreground [&_svg]:size-3.5 [&_svg]:shrink-0 [&>li]:flex [&>li]:min-w-0 [&>li]:items-center [&>li]:gap-2">
         <li>
           {repo.icon}
           <span className="truncate">{repo.name}</span>
@@ -3734,7 +3748,7 @@ export function SettingsNav({
                 setActive((i) => (i + step + results.length) % results.length);
               } else if (e.key === "Enter" && chosen) onSection(chosen.section, chosen.anchor);
             }}
-            className="min-w-0 flex-1 bg-transparent text-[13px] placeholder:text-faint-foreground focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none [&::-webkit-search-cancel-button]:hidden"
           />
           {query ? (
             <button
@@ -3751,7 +3765,7 @@ export function SettingsNav({
           ) : (
             <kbd
               aria-hidden
-              className="grid size-6 shrink-0 place-items-center rounded-md border border-border/60 bg-background/60 font-sans text-[12px] text-faint-foreground"
+              className="grid size-6 shrink-0 place-items-center rounded-md border border-border/60 bg-background/60 font-sans text-meta text-faint-foreground"
             >
               /
             </kbd>
@@ -3784,11 +3798,11 @@ export function SettingsNav({
                     <Icon aria-hidden className="size-3.5" />
                   </span>
                   <span className="min-w-0">
-                    <span className="block truncate text-[13px] text-foreground">
+                    <span className="block truncate text-body text-foreground">
                       <Marked text={r.title} words={words} />
                     </span>
                     {r.place && (
-                      <span className="block truncate text-[11.5px] text-faint-foreground">
+                      <span className="block truncate text-meta text-faint-foreground">
                         {r.place}
                       </span>
                     )}
@@ -3797,7 +3811,7 @@ export function SettingsNav({
               );
             })}
             {results.length === 0 && (
-              <p className="px-2 py-6 text-center text-[12.5px] text-faint-foreground">
+              <p className="px-2 py-6 text-center text-body text-faint-foreground">
                 No settings match “{query.trim()}”
               </p>
             )}

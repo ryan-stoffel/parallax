@@ -133,7 +133,7 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
             className={`-ml-1 size-3.5 shrink-0 transition-transform ${shown ? "rotate-90" : ""}`}
           />
           <Folder aria-hidden className="size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{node.name}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-meta">{node.name}</span>
           {!shown && <Counts {...totals(node.children)} />}
         </button>,
         ...(shown ? rows(node.children, depth + 1) : []),
@@ -145,7 +145,7 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
       aria-label={`Turn ${ordinal}'s changed files`}
       className="mt-1 overflow-hidden rounded-xl border border-border bg-surface"
     >
-      <header className="flex h-10 items-center gap-2 border-b border-border pr-1.5 pl-3.5 text-[13px]">
+      <header className="flex h-10 items-center gap-2 border-b border-border pr-1.5 pl-3.5 text-body">
         <span className="font-medium text-foreground">
           {files.length} changed {files.length === 1 ? "file" : "files"}
         </span>
@@ -166,14 +166,14 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
           <button
             type="button"
             onClick={() => open(ordinal)}
-            className="flex h-7 items-center gap-1.5 rounded-md px-2 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+            className="flex h-7 items-center gap-1.5 rounded-md px-2 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
           >
             <FileDiff aria-hidden className="size-3.5" />
             Open diff
           </button>
         )}
       </header>
-      <div className="p-1 text-[13px]">{rows(tree, 0)}</div>
+      <div className="p-1 text-body">{rows(tree, 0)}</div>
     </section>
   );
 }
@@ -208,7 +208,7 @@ export function FileIcon({ path }: { path: string }) {
 
 function Counts({ added, removed }: { added: number; removed: number }) {
   return (
-    <span className="shrink-0 font-mono text-[12px] tabular-nums">
+    <span className="shrink-0 font-mono text-meta tabular-nums">
       <span className="text-added">+{added}</span> <span className="text-danger">−{removed}</span>
     </span>
   );

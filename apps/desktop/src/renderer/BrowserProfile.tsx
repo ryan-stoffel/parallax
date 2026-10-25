@@ -60,21 +60,21 @@ export function ProfileButton({ onOpen }: { onOpen: (url: string) => void }) {
         popoverTarget={id}
         aria-haspopup="menu"
       >
-        {signedIn ? <Avatar of={signedIn} className="size-6 text-[12px]" /> : <AccountCircle />}
+        {signedIn ? <Avatar of={signedIn} className="size-6 text-meta" /> : <AccountCircle />}
       </IconButton>
       <Menu ref={menu} id={id} label="Profile" align="end" className="w-72 p-1.5">
         <div className="mb-1 flex flex-col items-center gap-1 rounded-lg bg-selected px-3 pt-5 pb-4 text-center">
           {signedIn ? (
-            <Avatar of={signedIn} className="mb-1.5 size-14 text-[22px]" />
+            <Avatar of={signedIn} className="mb-1.5 size-14 text-display" />
           ) : (
             <span className="mb-1.5 grid size-14 place-items-center rounded-full bg-background text-muted-foreground">
               <AccountCircle aria-hidden className="size-8" />
             </span>
           )}
-          <p className="max-w-full truncate text-[14px] font-medium">
+          <p className="max-w-full truncate text-reading font-medium">
             {signedIn ? signedIn.name : "You"}
           </p>
-          <p className="max-w-full truncate text-[12.5px] text-muted-foreground">
+          <p className="max-w-full truncate text-body text-muted-foreground">
             {signedIn ? signedIn.email : "Not signed in to Google"}
           </p>
         </div>

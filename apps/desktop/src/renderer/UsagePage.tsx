@@ -350,7 +350,7 @@ const fills = ["bg-chart-1", "bg-chart-2", "bg-chart-3"];
 const card = "rounded-xl border border-border bg-surface";
 /** A strip of figures in one card, split by hairlines. */
 const strip = "grid gap-px overflow-hidden rounded-xl border border-border bg-border";
-const heading = "mb-2.5 text-[13px] font-medium text-muted-foreground";
+const heading = "mb-2.5 text-body font-medium text-muted-foreground";
 
 /** Counts a request in flight until it settles, so Refresh can show it's working. */
 type Track = <T>(request: Promise<T>) => Promise<T>;
@@ -374,7 +374,7 @@ export function UsagePage({ hosts }: { hosts: Host[] }) {
   return (
     <>
       <div className="mb-6 flex flex-wrap items-center gap-2">
-        <h1 className="mr-auto text-xl font-semibold">Usage</h1>
+        <h1 className="mr-auto text-heading font-semibold">Usage</h1>
         <Segmented label="Usage view" options={views} value={view} onChange={setView} />
         <Segmented
           label="Usage range"
@@ -578,7 +578,7 @@ function HostUsageLoader({
       (!current ? undefined : "days" in current ? undefined : usageError(current)));
   const notes = status ? [status] : (result?.problems.map((p) => p.message) ?? []);
   return notes.map((note) => (
-    <p key={note} className="mb-6 text-[13px] text-muted-foreground">
+    <p key={note} className="mb-6 text-body text-muted-foreground">
       {named && `${host.name}: `}
       {note}
     </p>
@@ -661,7 +661,7 @@ function Dashboard({
     note += ` · ${percent(summary.total.unpriced, tokensOf(summary.total))} of tokens have no reported cost`;
 
   const LeadLogo = lead?.model.backend && backends[lead.model.backend].Logo;
-  const none = <span className="text-[26px] text-faint-foreground">—</span>;
+  const none = <span className="text-display text-faint-foreground">—</span>;
   const chartTitle = today
     ? `${cost ? "Cost" : "Processed tokens"} by model today`
     : `Daily ${cost ? "cost" : "processed tokens"}`;
@@ -675,7 +675,7 @@ function Dashboard({
       <dl className={`${strip} @2xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)_minmax(0,5fr)]`}>
         <Stat label={cost ? "Total cost" : "Processed tokens"} note={note}>
           {whole > 0 ? (
-            <span className="text-[40px] font-semibold tracking-tight">{shown(summary.total)}</span>
+            <span className="text-hero font-semibold tracking-tight">{shown(summary.total)}</span>
           ) : (
             none
           )}
@@ -690,7 +690,7 @@ function Dashboard({
           }
         >
           {sessions ? (
-            <span className="text-[40px] font-semibold tracking-tight tabular-nums">
+            <span className="text-hero font-semibold tracking-tight tabular-nums">
               {sessions.total.toLocaleString(locale())}
             </span>
           ) : (
@@ -706,7 +706,7 @@ function Dashboard({
           }
         >
           {lead ? (
-            <span className="flex min-w-0 items-center gap-2.5 text-[18px] font-medium">
+            <span className="flex min-w-0 items-center gap-2.5 text-heading font-medium">
               {LeadLogo && <LeadLogo aria-hidden className="size-5 shrink-0" />}
               <span className="truncate">{lead.model.model}</span>
             </span>
@@ -732,15 +732,15 @@ function Dashboard({
             // The total spans the row while the kinds sit two to a row.
             className={`min-w-0 bg-surface px-6 py-3 ${i === 0 ? "col-span-2 @2xl:col-span-1" : ""}`}
           >
-            <dt className="truncate text-[12px] text-muted-foreground">{label}</dt>
+            <dt className="truncate text-meta text-muted-foreground">{label}</dt>
             <dd className="mt-1.5 flex items-baseline gap-2 whitespace-nowrap">
               <span
                 title={n.toLocaleString(locale())}
-                className="text-[18px] leading-none font-semibold tracking-tight tabular-nums"
+                className="text-heading leading-none font-semibold tracking-tight tabular-nums"
               >
                 {tokenCount.format(n)}
               </span>
-              <span className="truncate text-[12px] text-faint-foreground tabular-nums">
+              <span className="truncate text-meta text-faint-foreground tabular-nums">
                 {i === 0 ? "every kind" : percent(n, processed)}
               </span>
             </dd>
@@ -750,7 +750,7 @@ function Dashboard({
 
       {whole === 0 ? (
         <figure className={`${card} min-w-0 px-6 pt-5 pb-5`}>
-          <figcaption className="text-[14px] font-medium">{chartTitle}</figcaption>
+          <figcaption className="text-reading font-medium">{chartTitle}</figcaption>
           <Empty title="No vendor reported a cost in this range" plain>
             Tokens still count: see them under Tokens.
           </Empty>
@@ -758,7 +758,7 @@ function Dashboard({
       ) : today ? (
         // One day is one bar, so Today shows only how it splits.
         <figure className={`${card} min-w-0 px-6 pt-5 pb-5`}>
-          <figcaption className="text-[14px] font-medium">{chartTitle}</figcaption>
+          <figcaption className="text-reading font-medium">{chartTitle}</figcaption>
           <Split parts={parts} whole={whole} format={format} />
         </figure>
       ) : (
@@ -797,11 +797,11 @@ function Dashboard({
             const share = unreported(total) || whole === 0 ? undefined : measure(total) / whole;
             return (
               <li key={backend} aria-label={name} className={`${card} min-w-0 px-6 pt-4.5 pb-5`}>
-                <div className="flex items-center gap-2.5 text-[13.5px] font-medium">
+                <div className="flex items-center gap-2.5 text-body font-medium">
                   <Logo aria-hidden className="size-4.5 shrink-0" />
                   <span className="truncate">{name}</span>
                 </div>
-                <p className="mt-3.5 text-[26px] leading-none font-semibold tracking-tight tabular-nums">
+                <p className="mt-3.5 text-display leading-none font-semibold tracking-tight tabular-nums">
                   {shown(total)}
                 </p>
                 <div aria-hidden className="mt-4 h-1 overflow-hidden rounded-full bg-selected">
@@ -812,7 +812,7 @@ function Dashboard({
                     />
                   )}
                 </div>
-                <p className="mt-2.5 truncate text-[12.5px] text-muted-foreground">
+                <p className="mt-2.5 truncate text-body text-muted-foreground">
                   {share === undefined ? "No reported cost" : `${percent(share, 1)} of ${what}`} ·{" "}
                   {other(total)}
                 </p>
@@ -875,11 +875,11 @@ function Stat({
 }) {
   return (
     <div className="flex min-w-0 flex-col bg-surface px-6 pt-4 pb-4">
-      <dt title={title} className="text-[12.5px] text-muted-foreground">
+      <dt title={title} className="text-body text-muted-foreground">
         {label}
       </dt>
       <dd className="mt-2.5 flex h-11 min-w-0 items-center leading-none">{children}</dd>
-      <dd className="mt-1.5 text-[12.5px] text-pretty text-muted-foreground">{note}</dd>
+      <dd className="mt-1.5 text-body text-pretty text-muted-foreground">{note}</dd>
     </div>
   );
 }
@@ -926,10 +926,10 @@ function Bars({
   // A bar is rounded at its top, barely at the baseline, and its parts barely where they meet.
   const [bar, joint] =
     n > 45
-      ? ["rounded-t-[3px] rounded-b-[1px]", ""]
+      ? ["rounded-t-sm rounded-b-[1px]", ""]
       : n > 12
-        ? ["rounded-t-[5px] rounded-b-[2px]", "rounded-[2px]"]
-        : ["rounded-t-[8px] rounded-b-[3px]", "rounded-[3px]"];
+        ? ["rounded-t-sm rounded-b-[2px]", "rounded-[2px]"]
+        : ["rounded-t-lg rounded-b-sm", "rounded-sm"];
   const every = Math.ceil(n / 7);
   const dim = (part: number) =>
     picked === undefined || picked === part ? "" : "opacity-25 transition-opacity";
@@ -961,7 +961,7 @@ function Bars({
       onPointerLeave={() => setActive(focused.current)}
       className={`${card} min-w-0 px-6 pt-5 pb-5`}
     >
-      <figcaption className="text-[14px] font-medium">{title}</figcaption>
+      <figcaption className="text-reading font-medium">{title}</figcaption>
       <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
         <div />
         <div aria-hidden className="relative mt-1 mb-3 h-10">
@@ -979,7 +979,7 @@ function Bars({
         </div>
         <div
           aria-hidden
-          className="relative h-48 text-right text-[11px] text-faint-foreground tabular-nums"
+          className="relative h-48 text-right text-caption text-faint-foreground tabular-nums"
         >
           {/* Sizes the column to the widest label; the real ones sit on their lines. */}
           <span className="invisible">{tick(top, top / 4)}</span>
@@ -1008,7 +1008,7 @@ function Bars({
               className="usage-average pointer-events-none absolute inset-x-0 z-10 border-t border-dashed border-foreground/35"
               style={{ top: `${100 - (average / top) * 100}%` }}
             >
-              <span className="absolute right-0 -translate-y-1/2 rounded-md border border-border bg-surface px-1.5 py-0.5 text-[11px] text-muted-foreground tabular-nums">
+              <span className="absolute right-0 -translate-y-1/2 rounded-md border border-border bg-surface px-1.5 py-0.5 text-caption text-muted-foreground tabular-nums">
                 avg {format(average)}
               </span>
             </div>
@@ -1099,7 +1099,7 @@ function Bars({
         </div>
         <div />
         {/* Names under every few bars, counted back from the latest so it always has one. */}
-        <div aria-hidden className="relative mt-2.5 h-4 text-[11px] text-faint-foreground">
+        <div aria-hidden className="relative mt-2.5 h-4 text-caption text-faint-foreground">
           {bars.map((b, i) => {
             if ((n - 1 - i) % every !== 0) return null;
             const center = ((i + 0.5) / n) * 100;
@@ -1160,10 +1160,10 @@ function Readout({
       style={{ left: `${p}%`, translate: `-${p}% 0` }}
     >
       <p className="flex items-baseline gap-2 whitespace-nowrap">
-        <span className="text-[12px] text-muted-foreground">{name}</span>
-        <span className="text-[15px] font-semibold tabular-nums">{format(total)}</span>
+        <span className="text-meta text-muted-foreground">{name}</span>
+        <span className="text-reading font-semibold tabular-nums">{format(total)}</span>
       </p>
-      <p className="mt-1 flex max-w-full items-center gap-3 overflow-hidden text-[12px] whitespace-nowrap text-muted-foreground">
+      <p className="mt-1 flex max-w-full items-center gap-3 overflow-hidden text-meta whitespace-nowrap text-muted-foreground">
         {parts.length > 1 &&
           parts.map((part) => (
             <span key={part.part} className="flex shrink-0 items-center gap-1.5">
@@ -1210,7 +1210,7 @@ function Split({
       </div>
       <ul
         onPointerLeave={() => onPick?.(undefined)}
-        className="mt-3.5 flex flex-wrap gap-x-7 gap-y-2 text-[12.5px]"
+        className="mt-3.5 flex flex-wrap gap-x-7 gap-y-2 text-body"
       >
         {parts.map((p, k) => {
           const Logo = p.backend && backends[p.backend].Logo;
@@ -1220,7 +1220,7 @@ function Split({
               onPointerEnter={() => onPick?.(p.part)}
               className={`flex min-w-0 items-center gap-2 transition-opacity ${onPick ? "cursor-default" : ""} ${dim(p.part)}`}
             >
-              <span aria-hidden className={`size-2.5 shrink-0 rounded-[3px] ${fills[p.part]}`} />
+              <span aria-hidden className={`size-2.5 shrink-0 rounded-sm ${fills[p.part]}`} />
               {Logo && <Logo aria-hidden className="size-3.5 shrink-0" />}
               <span className="truncate text-muted-foreground">{p.name}</span>
               <span className="font-medium whitespace-nowrap tabular-nums">{format(sums[k]!)}</span>
@@ -1269,7 +1269,7 @@ function Breakdown({
   return (
     <section aria-label="Breakdown" className={`${card} min-w-0 px-6 py-4`}>
       <div className="flex items-center justify-between gap-3 pb-3">
-        <h2 className="text-[14px] font-medium">Breakdown</h2>
+        <h2 className="text-reading font-medium">Breakdown</h2>
         {unit && (
           <Segmented
             label="Breakdown by"
@@ -1282,7 +1282,7 @@ function Breakdown({
           />
         )}
       </div>
-      <div className="flex gap-2.5 border-t border-border pt-3 pb-1 text-[12px] text-faint-foreground">
+      <div className="flex gap-2.5 border-t border-border pt-3 pb-1 text-meta text-faint-foreground">
         <span>{by === "model" ? "Model" : unit}</span>
         <span className="ml-auto">{what}</span>
         <span className="w-16 text-right">Share</span>
@@ -1290,11 +1290,11 @@ function Breakdown({
       <ul>
         {(all ? rows : rows.slice(0, BREAKDOWN_ROWS)).map((r) => (
           <li key={r.key} className="border-b border-border py-3 last:border-0">
-            <div className="flex items-baseline gap-2.5 text-[13.5px]">
+            <div className="flex items-baseline gap-2.5 text-body">
               {r.icon && <span className="self-center">{r.icon}</span>}
               <span className="min-w-0 truncate">{r.name}</span>
               {/* Gives way first when the row is narrow. */}
-              <span className="min-w-0 shrink-[10] truncate text-[12px] text-faint-foreground">
+              <span className="min-w-0 shrink-[10] truncate text-meta text-faint-foreground">
                 {r.other}
               </span>
               <span className="ml-auto pl-3 font-medium whitespace-nowrap tabular-nums">
@@ -1320,7 +1320,7 @@ function Breakdown({
           type="button"
           aria-expanded={all}
           onClick={() => setAll(!all)}
-          className="mt-1 w-full border-t border-border pt-3 pb-1 text-[12.5px] font-medium text-muted-foreground hover:text-foreground"
+          className="mt-1 w-full border-t border-border pt-3 pb-1 text-body font-medium text-muted-foreground hover:text-foreground"
         >
           {all ? "Show less" : `Show ${hidden} more`}
         </button>
@@ -1334,7 +1334,7 @@ function GhostBars() {
   return (
     <div aria-hidden className="flex h-20 items-end justify-center gap-2">
       {[34, 58, 42, 76, 50, 66, 28].map((h, i) => (
-        <div key={i} className="w-4 rounded-[5px] bg-selected" style={{ height: `${h}%` }} />
+        <div key={i} className="w-4 rounded-sm bg-selected" style={{ height: `${h}%` }} />
       ))}
     </div>
   );
@@ -1355,8 +1355,8 @@ function Empty({
       className={`flex flex-col items-center px-6 text-center ${plain ? "py-8" : `${card} py-14`}`}
     >
       <GhostBars />
-      <p className="mt-6 text-[14px] font-medium">{title}</p>
-      <p className="mt-1 max-w-sm text-[13px] text-muted-foreground">{children}</p>
+      <p className="mt-6 text-reading font-medium">{title}</p>
+      <p className="mt-1 max-w-sm text-body text-muted-foreground">{children}</p>
     </div>
   );
 }
@@ -1381,7 +1381,7 @@ function DashboardSkeleton() {
           {Array.from({ length: 30 }, (_, i) => (
             <div key={i} className="flex h-full flex-1 items-end justify-center">
               <div
-                className="w-[62%] rounded-t-[5px] rounded-b-[2px] bg-selected"
+                className="w-[62%] rounded-t-sm rounded-b-[2px] bg-selected"
                 style={{ height: `${20 + 50 * Math.abs(Math.sin(i * 1.3 + 0.4))}%` }}
               />
             </div>
@@ -1518,12 +1518,12 @@ function Limits({ hosts, refresh, track }: { hosts: Host[]; refresh: number; tra
         <div className="flex flex-col gap-8">
           {accounts.map(({ accountId, limits, problem, backend, name, Logo }) => (
             <section key={accountId} aria-label={name}>
-              <h3 className="mb-3 flex items-center gap-2.5 px-1 text-[15px] font-medium">
+              <h3 className="mb-3 flex items-center gap-2.5 px-1 text-reading font-medium">
                 {Logo && <Logo aria-hidden className="size-4.5 shrink-0" />}
                 {name}
               </h3>
               {limits.length === 0 ? (
-                <p className={`${card} px-6 py-4 text-[13px] text-muted-foreground`}>
+                <p className={`${card} px-6 py-4 text-body text-muted-foreground`}>
                   {problem ? `Couldn't read its limits: ${problem}` : "No limits for this login."}
                 </p>
               ) : (
@@ -1547,7 +1547,7 @@ function Limits({ hosts, refresh, track }: { hosts: Host[]; refresh: number; tra
         hosts.map((h) => {
           const answer = answers[h.id];
           return (
-            <p key={h.id} className="text-[13px] text-muted-foreground">
+            <p key={h.id} className="text-body text-muted-foreground">
               {hosts.length > 1 && `${h.name}: `}
               {answer && "problem" in answer && answer.problem}
             </p>
@@ -1615,14 +1615,14 @@ function LimitMeter({
       className={`${card} flex min-w-0 flex-col gap-4 px-6 py-5 @2xl:flex-row @2xl:items-center @2xl:gap-8`}
     >
       <div className="shrink-0 @2xl:w-56">
-        <p className="truncate text-[14px] font-medium">{name}</p>
+        <p className="truncate text-reading font-medium">{name}</p>
         <p className="mt-1.5 flex items-baseline gap-1.5">
           <span
-            className={`text-[34px] leading-none font-semibold tracking-tight ${left === 0 ? "text-danger" : ""}`}
+            className={`text-hero leading-none font-semibold tracking-tight ${left === 0 ? "text-danger" : ""}`}
           >
             {left === undefined ? "—" : `${left}%`}
           </span>
-          <span className="text-[13px] text-muted-foreground">
+          <span className="text-body text-muted-foreground">
             {left === undefined ? "use not reported" : "left"}
           </span>
         </p>
@@ -1642,13 +1642,13 @@ function LimitMeter({
         {!!left && (
           <div className={`usage-fill h-full rounded-lg ${fill}`} style={{ width: `${left}%` }} />
         )}
-        <span className="absolute inset-y-0 left-3 flex items-center text-[12.5px] font-semibold">
+        <span className="absolute inset-y-0 left-3 flex items-center text-body font-semibold">
           {left === undefined ? "" : `${left}%`}
         </span>
         {resetsIn && (
           <span
             title={at === undefined ? undefined : `Resets ${resetTime(at, now)}`}
-            className="absolute inset-y-1.5 right-1.5 flex items-center gap-1 rounded-md bg-background/85 px-2 text-[12px] font-medium [&_svg]:size-3"
+            className="absolute inset-y-1.5 right-1.5 flex items-center gap-1 rounded-md bg-background/85 px-2 text-meta font-medium [&_svg]:size-3"
           >
             <RotateCw aria-hidden />
             {resetsIn}

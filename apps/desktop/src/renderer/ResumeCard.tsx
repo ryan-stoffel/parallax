@@ -50,11 +50,11 @@ export function ResumeCard({
   };
   const disabled = busy || !!disabledReason;
   const button =
-    "rounded-md px-2.5 py-1 text-[12.5px] font-medium enabled:hover:bg-hover disabled:opacity-50";
+    "rounded-md px-2.5 py-1 text-body font-medium enabled:hover:bg-hover disabled:opacity-50";
   return (
     <section
       aria-label="Usage limit"
-      className="flex items-center gap-3 rounded-lg border border-warning/30 px-3.5 py-2.5 text-[13px]"
+      className="flex items-center gap-3 rounded-lg border border-warning/30 px-3.5 py-2.5 text-body"
     >
       <AlarmClock aria-hidden className="size-4 shrink-0 text-warning" />
       <div className="min-w-0 flex-1">

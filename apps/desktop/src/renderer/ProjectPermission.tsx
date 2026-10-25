@@ -54,8 +54,8 @@ function Choice<T extends string>({
   const name = useId();
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="mb-1 text-[13px] font-medium">{legend}</legend>
-      <p className="text-[12.5px] text-muted-foreground">{children}</p>
+      <legend className="mb-1 text-body font-medium">{legend}</legend>
+      <p className="text-body text-muted-foreground">{children}</p>
       {options.map((m) => (
         <label
           key={m.value}
@@ -70,8 +70,8 @@ function Choice<T extends string>({
             className="mt-0.5 accent-primary"
           />
           <span>
-            <span className="block text-[13px] font-medium">{m.name}</span>
-            <span className="block text-[12px] text-muted-foreground">{m.detail}</span>
+            <span className="block text-body font-medium">{m.name}</span>
+            <span className="block text-meta text-muted-foreground">{m.detail}</span>
           </span>
         </label>
       ))}

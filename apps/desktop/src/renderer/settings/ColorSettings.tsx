@@ -109,7 +109,7 @@ export function ColorSettings({
                 key={token}
                 className={`flex h-11 cursor-pointer items-center gap-3 border-border px-4 hover:bg-hover ${i % 2 ? "" : "border-r"} ${i < Object.keys(colorTokens).length - 2 ? "border-b" : ""}`}
               >
-                <span className="min-w-0 flex-1 truncate text-[13px]">{name}</span>
+                <span className="min-w-0 flex-1 truncate text-body">{name}</span>
                 {changed[token] && (
                   <IconButton
                     label={`Reset ${name}`}
@@ -121,7 +121,7 @@ export function ColorSettings({
                     <RotateCcw />
                   </IconButton>
                 )}
-                <span className="font-mono text-[11.5px] text-muted-foreground uppercase">
+                <span className="font-mono text-meta text-muted-foreground uppercase">
                   {value?.startsWith("#") ? value : toHex(value)}
                 </span>
                 <input
@@ -137,7 +137,7 @@ export function ColorSettings({
         </div>
       ) : (
         <div className="flex flex-col gap-2 border-b border-border px-4 py-3">
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-body text-muted-foreground">
             Token names like <code>accent</code> or <code>sidebar</code>, or VS Code&apos;s color
             keys like <code>editor.background</code>, <code>sideBar.background</code>, and{" "}
             <code>focusBorder</code>. Any CSS color, including see-through ones like{" "}
@@ -152,7 +152,7 @@ export function ColorSettings({
             className={`${field} font-mono`}
           />
           {errors.length > 0 && (
-            <ul role="alert" className="text-[12.5px] text-danger">
+            <ul role="alert" className="text-body text-danger">
               {errors.map((e) => (
                 <li key={e}>{e}</li>
               ))}

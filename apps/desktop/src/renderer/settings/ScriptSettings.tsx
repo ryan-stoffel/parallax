@@ -98,7 +98,7 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
       <div className="mb-6 flex flex-wrap items-center gap-4">
         <HostPicker hosts={hosts} value={hostId} onChange={setHostId} />
         {repos.length > 0 && (
-          <span className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
+          <span className="flex items-center gap-1.5 text-reading text-muted-foreground">
             Repository
             <Picker
               label="Repository"
@@ -125,9 +125,9 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
         }
       >
         {empty ? (
-          <p className="px-4 py-3 text-[12.5px] text-muted-foreground">{empty}</p>
+          <p className="px-4 py-3 text-body text-muted-foreground">{empty}</p>
         ) : scripts.length === 0 ? (
-          <p className="px-4 py-3 text-[12.5px] text-muted-foreground">
+          <p className="px-4 py-3 text-body text-muted-foreground">
             No scripts. Add one, or import one from parallax.json.
           </p>
         ) : (
@@ -157,7 +157,7 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
                 onChange={(e) => edit(i, { command: e.target.value })}
                 className={`${field} font-mono`}
               />
-              <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12.5px] text-muted-foreground">
+              <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-body text-muted-foreground">
                 <span className="flex items-center gap-2">
                   <Switch
                     label={`Run ${script.name || "it"} on a new worktree`}
@@ -211,12 +211,12 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
       </Section>
       {!empty && (file?.error || (file?.scripts.length ?? 0) > 0) && (
         <Section title="From parallax.json">
-          <p className="border-b border-border px-4 py-3 text-[12.5px] text-muted-foreground">
+          <p className="border-b border-border px-4 py-3 text-body text-muted-foreground">
             The repository&apos;s parallax.json declares these. They run only once you import and
             save them.
           </p>
           {file?.error && (
-            <p role="alert" className="px-4 py-3 text-[12.5px] text-danger">
+            <p role="alert" className="px-4 py-3 text-body text-danger">
               {file.error}
             </p>
           )}
@@ -226,7 +226,7 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
               className="flex items-center justify-between gap-4 border-border px-4 py-3 not-last:border-b"
             >
               <div className="min-w-0">
-                <span className="block text-[13px] font-medium">
+                <span className="block text-body font-medium">
                   {script.name}
                   {scriptRoles(script) && (
                     <span className="font-normal text-muted-foreground">
@@ -235,7 +235,7 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
                     </span>
                   )}
                 </span>
-                <code className="block truncate font-mono text-[12px] text-muted-foreground">
+                <code className="block truncate font-mono text-meta text-muted-foreground">
                   {script.command}
                 </code>
               </div>

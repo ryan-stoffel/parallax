@@ -235,9 +235,9 @@ function GitHub({
           <GitHubLogo className="mt-0.5 size-5 shrink-0" />
           <div className="min-w-0">
             <span className="flex items-baseline gap-2">
-              <span className="text-[13px] font-medium">GitHub</span>
+              <span className="text-body font-medium">GitHub</span>
               {status?.version && (
-                <span className="truncate font-mono text-[11.5px] text-faint-foreground">
+                <span className="truncate font-mono text-meta text-faint-foreground">
                   gh {status.version}
                   {status.managed && " · installed by Parallax"}
                 </span>
@@ -245,13 +245,13 @@ function GitHub({
             </span>
             <span
               role={error ? "alert" : undefined}
-              className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground"
+              className="flex items-center gap-1.5 text-body text-muted-foreground"
             >
               <StatusDot tone={tone} />
               {detail}
             </span>
             {note && (
-              <span role="alert" className="mt-1 block text-[12.5px] text-warning">
+              <span role="alert" className="mt-1 block text-body text-warning">
                 {note}
               </span>
             )}
@@ -262,13 +262,13 @@ function GitHub({
       {pending && (
         <div className={`${settingRow} flex-wrap`}>
           <div className="min-w-0">
-            <span className="block text-[12.5px] text-muted-foreground">
+            <span className="block text-body text-muted-foreground">
               Enter this code at {pending.url.replace(/^https:\/\//, "")}. It expires at{" "}
               {new Date(pending.expiresAt).toLocaleTimeString(locale(), clockOptions())}.
             </span>
             <span
               aria-label="One-time code"
-              className="mt-1 block font-mono text-xl font-semibold tracking-widest select-all"
+              className="mt-1 block font-mono text-heading font-semibold tracking-widest select-all"
             >
               {pending.code}
             </span>

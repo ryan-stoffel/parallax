@@ -316,9 +316,9 @@ function BookmarkEditor({
             if (adding) addFolder();
             else closePopover(e);
           }}
-          className="flex flex-col gap-2.5 text-[12.5px]"
+          className="flex flex-col gap-2.5 text-body"
         >
-          <p className="text-[13px] font-medium">{title}</p>
+          <p className="text-body font-medium">{title}</p>
           <label className="flex flex-col gap-1">
             <span className="text-muted-foreground">Name</span>
             <input
@@ -426,7 +426,7 @@ function FolderEditor({
             e.preventDefault();
             closePopover(e);
           }}
-          className="flex flex-col gap-2.5 text-[12.5px]"
+          className="flex flex-col gap-2.5 text-body"
         >
           <label className="flex flex-col gap-1">
             <span className="text-muted-foreground">Folder name</span>
@@ -675,7 +675,7 @@ function MenuButton({
 }
 
 const chipClass =
-  "flex h-6 max-w-44 items-center gap-1.5 rounded-md px-2 text-[12px] text-muted-foreground hover:bg-hover hover:text-foreground";
+  "flex h-6 max-w-44 items-center gap-1.5 rounded-md px-2 text-meta text-muted-foreground hover:bg-hover hover:text-foreground";
 
 /** One of the bar's bookmarks or folders. A folder's opens its menu of what it holds. */
 function NodeChip({
@@ -747,9 +747,7 @@ function NodeMenu({
       align={align}
       className="max-h-96 w-64 overflow-y-auto p-1"
     >
-      {nodes.length === 0 && (
-        <p className="px-2 py-1.5 text-[12.5px] text-muted-foreground">Empty</p>
-      )}
+      {nodes.length === 0 && <p className="px-2 py-1.5 text-body text-muted-foreground">Empty</p>}
       {nodes.map((node) =>
         isFolder(node) ? (
           <SubFolder key={node.id} folder={node} onOpen={onOpen} />

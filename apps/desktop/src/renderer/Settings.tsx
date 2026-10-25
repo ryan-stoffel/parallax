@@ -325,7 +325,7 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
       </PageTitle>
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
         {picker}
-        <div className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
+        <div className="flex items-center gap-1 text-body text-muted-foreground">
           {checking ? "Checking…" : checkedAt && checkedLabel(checkedAt)}
           <IconButton
             label="Refresh"
@@ -337,13 +337,13 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
         </div>
       </div>
       {error && (
-        <p role="alert" className="mb-3 text-[12.5px] text-danger">
+        <p role="alert" className="mb-3 text-body text-danger">
           {error}
         </p>
       )}
       {!connected || !current ? (
         <>
-          <p className="mb-8 rounded-xl border border-border bg-surface px-4 py-3 text-[13px] text-muted-foreground">
+          <p className="mb-8 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
             {!connected
               ? connection
                 ? statusLabel(connection)
@@ -398,14 +398,14 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
                     {Logo && <Logo className="mt-0.5 size-4 shrink-0" />}
                     <span className="min-w-0">
                       <span className="flex items-baseline gap-2">
-                        <span className="shrink-0 text-[13px] font-medium">{name}</span>
+                        <span className="shrink-0 text-body font-medium">{name}</span>
                         {cli.version && (
-                          <span className="truncate font-mono text-[11.5px] text-faint-foreground">
+                          <span className="truncate font-mono text-meta text-faint-foreground">
                             {cli.version}
                           </span>
                         )}
                       </span>
-                      <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+                      <span className="flex items-center gap-1.5 text-body text-muted-foreground">
                         <StatusDot tone={enabled ? cliTone(cli) : "off"} />
                         {enabled ? cliStatus(cli) : "Off"}
                       </span>
@@ -525,14 +525,12 @@ function ProviderPane({
     <div id={id} role="tabpanel" aria-labelledby={tabId} hidden={hidden} className="min-w-0">
       <div className="mb-5 flex items-center gap-2.5">
         {Logo && <Logo className="size-5 shrink-0" />}
-        <h2 className="text-[15px] font-semibold">{name}</h2>
+        <h2 className="text-reading font-semibold">{name}</h2>
         {cli.version && (
-          <span className="truncate font-mono text-[12px] text-muted-foreground">
-            {cli.version}
-          </span>
+          <span className="truncate font-mono text-meta text-muted-foreground">{cli.version}</span>
         )}
         <label
-          className="ml-auto flex items-center gap-2 text-[12.5px] text-muted-foreground"
+          className="ml-auto flex items-center gap-2 text-body text-muted-foreground"
           title={last ? "One provider stays on, for new threads." : undefined}
         >
           {enabled ? "On" : "Off"}
@@ -545,7 +543,7 @@ function ProviderPane({
         </label>
       </div>
       {!enabled && (
-        <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-[12.5px] text-muted-foreground">
+        <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
           Off on this computer: new threads and model menus leave out {name}'s models. Threads
           already on {name} keep running.
         </p>
@@ -553,16 +551,14 @@ function ProviderPane({
       <Section title="Account">
         <div className={settingRow}>
           <div className="min-w-0">
-            <span className="block truncate text-[13px] font-medium">{cliStatus(cli)}</span>
+            <span className="block truncate text-body font-medium">{cliStatus(cli)}</span>
             {!cli.installed ? (
-              <span className="block truncate text-[12.5px] text-muted-foreground">
+              <span className="block truncate text-body text-muted-foreground">
                 Install {name} on this host, then refresh.
               </span>
             ) : (
               cli.signedIn === undefined &&
-              cli.note && (
-                <span className="block text-[12.5px] text-muted-foreground">{cli.note}</span>
-              )
+              cli.note && <span className="block text-body text-muted-foreground">{cli.note}</span>
             )}
           </div>
           {action}
@@ -582,13 +578,13 @@ function ProviderPane({
         <Section title="Runtime">
           <div className={settingRow}>
             <div className="min-w-0">
-              <span className="block text-[13px] font-medium">Binary</span>
-              <span className="block text-[12.5px] text-muted-foreground">
+              <span className="block text-body font-medium">Binary</span>
+              <span className="block text-body text-muted-foreground">
                 The {name} CLI plxd found on this host's PATH, which runs your agents.
               </span>
             </div>
             <span
-              className="max-w-[50%] truncate font-mono text-[12px] text-muted-foreground"
+              className="max-w-[50%] truncate font-mono text-meta text-muted-foreground"
               title={cli.path}
             >
               {cli.path ?? "Unknown"}
@@ -597,8 +593,8 @@ function ProviderPane({
           {/* A newer plxd may send kinds this doesn't know, which say nothing here. */}
           {(cli.authKind === "subscription" || cli.authKind === "apiKey") && (
             <div className={settingRow}>
-              <span className="text-[13px] font-medium">Signed in with</span>
-              <span className="text-[12.5px] text-muted-foreground">
+              <span className="text-body font-medium">Signed in with</span>
+              <span className="text-body text-muted-foreground">
                 {cli.authKind === "subscription" ? "A subscription" : "An API key"}
               </span>
             </div>
@@ -620,12 +616,12 @@ function ProviderPane({
         {offered.length ? (
           offered.map((m) => (
             <div key={m.id} className={settingRow}>
-              <span className="truncate text-[13px]">{m.name}</span>
-              <span className="truncate font-mono text-[12px] text-faint-foreground">{m.id}</span>
+              <span className="truncate text-body">{m.name}</span>
+              <span className="truncate font-mono text-meta text-faint-foreground">{m.id}</span>
             </div>
           ))
         ) : (
-          <p className={`${settingRow} text-[12.5px] text-muted-foreground`}>
+          <p className={`${settingRow} text-body text-muted-foreground`}>
             Parallax doesn't run {name} models yet.
           </p>
         )}
@@ -734,12 +730,12 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
 
   return (
     <>
-      <div className="mb-8 text-[15px]">{picker}</div>
+      <div className="mb-8 text-reading">{picker}</div>
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
-        <h1 className="text-[13px] font-medium text-muted-foreground">Providers</h1>
+        <h1 className="text-body font-medium text-muted-foreground">Providers</h1>
         {asking ? (
           // Cancel takes the trash's place and focus, so a double click or a second Enter can't remove.
-          <div className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+          <div className="flex items-center gap-2 text-body text-muted-foreground">
             <span>
               Remove <span className="font-medium text-foreground">{current.instance.name}</span>?
               Its settings and secrets leave this host; its threads keep their transcripts.
@@ -762,7 +758,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
             </button>
           </div>
         ) : (
-          <div className="flex items-center gap-1 text-[12.5px] text-muted-foreground">
+          <div className="flex items-center gap-1 text-body text-muted-foreground">
             <button
               type="button"
               aria-label="Refresh"
@@ -788,7 +784,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         )}
       </div>
       {error && (
-        <p role="alert" className="mb-3 px-1 text-[12.5px] text-danger">
+        <p role="alert" className="mb-3 px-1 text-body text-danger">
           {error}
         </p>
       )}
@@ -802,7 +798,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         />
       )}
       {!list || !current ? (
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-border px-4 py-10 text-center text-[13px] text-muted-foreground">
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-border px-4 py-10 text-center text-body text-muted-foreground">
           {!list ? (
             error ? (
               "Couldn't list this host's providers."
@@ -858,16 +854,14 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                       <Logo className="mt-0.5 size-4 shrink-0" />
                       <span className="min-w-0">
                         <span className="flex items-baseline gap-2">
-                          <span className="truncate text-[13.5px] font-medium">
-                            {instance.name}
-                          </span>
+                          <span className="truncate text-body font-medium">{instance.name}</span>
                           {info.version && (
-                            <span className="truncate font-mono text-[11.5px] text-faint-foreground">
+                            <span className="truncate font-mono text-meta text-faint-foreground">
                               {info.version}
                             </span>
                           )}
                         </span>
-                        <span className="mt-0.5 line-clamp-2 text-[12.5px] text-muted-foreground">
+                        <span className="mt-0.5 line-clamp-2 text-body text-muted-foreground">
                           {instance.enabled && tone && (
                             <span className="mr-1.5 inline-flex align-middle">
                               <StatusDot tone={tone} />
@@ -1144,9 +1138,9 @@ function InstancePane({
           <KindLogo className="size-5" />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate text-[15px] font-semibold">{instance.name}</h2>
+          <h2 className="truncate text-reading font-semibold">{instance.name}</h2>
           {/* What it is, unless its name says so, and its version. */}
-          <p className="truncate text-[12.5px] text-muted-foreground">
+          <p className="truncate text-body text-muted-foreground">
             {kind.name !== instance.name && kind.name}
             {kind.name !== instance.name && info.version && " · "}
             {info.version && <span className="font-mono">{info.version}</span>}
@@ -1154,7 +1148,7 @@ function InstancePane({
         </div>
       </div>
       {!instance.enabled && (
-        <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-[12.5px] text-muted-foreground">
+        <p className="mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
           Off on this host: new threads and model menus leave out {instance.name}'s models.
         </p>
       )}
@@ -1195,7 +1189,7 @@ function InstancePane({
                   <span
                     id={`${id}-install`}
                     role="tooltip"
-                    className="pointer-events-none invisible absolute top-full right-0 z-10 mt-2 w-max max-w-96 rounded-md border border-border bg-surface px-2.5 py-1.5 text-[12px] text-foreground shadow-composer group-hover:visible"
+                    className="pointer-events-none invisible absolute top-full right-0 z-10 mt-2 w-max max-w-96 rounded-md border border-border bg-surface px-2.5 py-1.5 text-meta text-foreground shadow-composer group-hover:visible"
                   >
                     Runs <code className="font-mono">{npmLine}</code>
                   </span>
@@ -1413,9 +1407,9 @@ function EnvSection({
       {env.map((v, i) => (
         <div key={v.name} className={settingRow}>
           <div className="min-w-0">
-            <span className="block truncate font-mono text-[12.5px]">{v.name}</span>
+            <span className="block truncate font-mono text-body">{v.name}</span>
             {v.secret && (
-              <span className="block text-[12.5px] text-muted-foreground">
+              <span className="block text-body text-muted-foreground">
                 Secret, kept in the host's keychain
               </span>
             )}
@@ -1453,7 +1447,7 @@ function EnvSection({
           className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
         >
           <div className="grid grid-cols-2 gap-3">
-            <label className="text-[12.5px] text-muted-foreground">
+            <label className="text-body text-muted-foreground">
               Name
               <input
                 name="name"
@@ -1467,7 +1461,7 @@ function EnvSection({
                 className={`${field} font-mono`}
               />
             </label>
-            <label className="text-[12.5px] text-muted-foreground">
+            <label className="text-body text-muted-foreground">
               Value
               <input
                 name="value"
@@ -1478,7 +1472,7 @@ function EnvSection({
               />
             </label>
           </div>
-          <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
+          <label className="flex items-center gap-2 text-body text-muted-foreground">
             <Switch label="Secret" checked={secret} onChange={setSecret} />
             Secret: kept in the host's keychain, and never shown again
           </label>
@@ -1529,8 +1523,8 @@ function KeyRow({
   return (
     <div className={settingRow}>
       <div className="min-w-0">
-        <span className="block truncate text-[13px] font-medium">{account.label}</span>
-        <span className="block truncate text-[12.5px] text-muted-foreground">
+        <span className="block truncate text-body font-medium">{account.label}</span>
+        <span className="block truncate text-body text-muted-foreground">
           {confirming
             ? "Remove this key? Parallax deletes it from the host's keychain."
             : `${providerNames[account.provider] ?? account.provider} API key · ${account.maskedKey}`}
@@ -1637,7 +1631,7 @@ function KeysSection({
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+          className="flex w-full items-center gap-2 rounded-b-xl px-4 py-3 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
         >
           <Plus aria-hidden />
           Add API key
@@ -1695,7 +1689,7 @@ function KeyForm({
       }}
       className="flex flex-col gap-3 border-border px-4 py-3.5 not-last:border-b"
     >
-      <label className="text-[12.5px] text-muted-foreground">
+      <label className="text-body text-muted-foreground">
         Label
         {/* Within plxd's limits (a label with a non-space, of at most 256 bytes, and a key of at
             least 20), so it never answers invalidParams. */}
@@ -1709,7 +1703,7 @@ function KeyForm({
           className={field}
         />
       </label>
-      <label className="text-[12.5px] text-muted-foreground">
+      <label className="text-body text-muted-foreground">
         API key
         <input
           name="key"

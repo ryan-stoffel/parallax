@@ -65,7 +65,7 @@ export function EffortMenu({
   const full = level === last;
   const label = context === undefined ? name : `${name} · ${tokens(context)}`;
   const names = fastMode && fastNames[fastMode];
-  const row = "mt-4 flex items-center justify-between gap-2 text-[13px] text-muted-foreground";
+  const row = "mt-4 flex items-center justify-between gap-2 text-body text-muted-foreground";
   return (
     <>
       <button
@@ -85,10 +85,10 @@ export function EffortMenu({
         className={`${menuPanel()} w-80 p-4 ${full ? "effort-full" : ""}`}
       >
         <div className="mb-4 min-w-0">
-          <div className="text-[14px]">
+          <div className="text-reading">
             Reasoning <span className="text-muted-foreground">{name}</span>
           </div>
-          <div className="truncate text-[12px] text-faint-foreground">{blurb}</div>
+          <div className="truncate text-meta text-faint-foreground">{blurb}</div>
         </div>
         <div
           className="relative"
@@ -131,7 +131,7 @@ export function EffortMenu({
           {levels.map((l, i) => (
             <span
               key={l.name}
-              className={`absolute -translate-x-1/2 text-[11.5px] transition-colors ${i === level ? "font-medium text-foreground" : "text-faint-foreground"}`}
+              className={`absolute -translate-x-1/2 text-meta transition-colors ${i === level ? "font-medium text-foreground" : "text-faint-foreground"}`}
               style={{ left: at(i) }}
             >
               {l.name}

@@ -55,12 +55,12 @@ function Segmented<T extends string | number | boolean | null>({
         onChange(options[next]![0]);
         e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[next]?.focus();
       }}
-      className="relative grid rounded-[7px] bg-foreground/[0.06] p-0.5"
+      className="relative grid rounded-md bg-foreground/[0.06] p-0.5"
       style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
     >
       <span
         aria-hidden
-        className="seg-thumb absolute inset-y-0.5 left-0.5 rounded-[5px]"
+        className="seg-thumb absolute inset-y-0.5 left-0.5 rounded-sm"
         style={{
           width: `calc((100% - 4px) / ${options.length})`,
           transform: `translateX(${at * 100}%)`,
@@ -74,7 +74,7 @@ function Segmented<T extends string | number | boolean | null>({
           aria-checked={n === at}
           tabIndex={n === at ? 0 : -1}
           onClick={() => onChange(v)}
-          className="relative h-6 rounded-[5px] px-1.5 text-[12px] font-medium whitespace-nowrap text-faint-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-checked:text-foreground"
+          className="relative h-6 rounded-sm px-1.5 text-meta font-medium whitespace-nowrap text-faint-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring aria-checked:text-foreground"
         >
           {text}
         </button>
@@ -130,7 +130,7 @@ export function TodayDivider({
             type="button"
             onClick={onClear}
             title={`Archive the ${clearable} finished ${clearable === 1 ? "thread" : "threads"} you've seen`}
-            className="group/clear flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11.5px] font-medium text-faint-foreground transition-[background-color,color,transform] duration-100 hover:bg-hover hover:text-foreground active:scale-95 [&_svg]:size-3"
+            className="group/clear flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta font-medium text-faint-foreground transition-[background-color,color,transform] duration-100 hover:bg-hover hover:text-foreground active:scale-95 [&_svg]:size-3"
           >
             <ArrowDown
               aria-hidden
@@ -185,7 +185,7 @@ export function TodayDivider({
         className={`${menuPanel("end")} pop-in w-[232px] p-3 [--pop-origin:top_right] [position-anchor:--today-divider]`}
       >
         <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2.5">
-          <span className="text-[12.5px] text-muted-foreground">Group</span>
+          <span className="text-body text-muted-foreground">Group</span>
           <Segmented
             label="Group"
             value={group}
@@ -196,7 +196,7 @@ export function TodayDivider({
             ]}
             onChange={onGroup}
           />
-          <span className="text-[12.5px] text-muted-foreground">Rows</span>
+          <span className="text-body text-muted-foreground">Rows</span>
           <Segmented
             label="Rows"
             value={compact}
@@ -208,14 +208,14 @@ export function TodayDivider({
           />
         </div>
         <hr className="-mx-3 my-3 border-border" />
-        <p className="mb-2 text-[12.5px] text-muted-foreground">Archive finished threads after</p>
+        <p className="mb-2 text-body text-muted-foreground">Archive finished threads after</p>
         <Segmented
           label="Archive finished threads after"
           value={autoHours}
           options={quietChoices}
           onChange={onAutoHours}
         />
-        <p className="mt-2 text-[11.5px] leading-snug text-faint-foreground">
+        <p className="mt-2 text-meta leading-snug text-faint-foreground">
           Only threads you've seen. Pinned threads stay.
         </p>
       </div>

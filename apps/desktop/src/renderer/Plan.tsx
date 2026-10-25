@@ -398,12 +398,12 @@ export const PlanCard = memo(function PlanCard({ items }: { items: readonly Agen
       aria-labelledby={id}
       className="rounded-xl border border-border bg-surface px-4 pt-3 pb-2.5"
     >
-      <div className="flex items-center gap-2 text-[13px]">
+      <div className="flex items-center gap-2 text-body">
         <ListChecks aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
         <span id={id} className="flex-1 font-medium">
           Plan
         </span>
-        <span className="text-[12px] text-muted-foreground tabular-nums">
+        <span className="text-meta text-muted-foreground tabular-nums">
           {done} of {items.length} done
         </span>
       </div>
@@ -425,7 +425,7 @@ function Step({ step, draw }: { step: AgentTodoItem; draw: boolean }) {
         <Marker state={state} draw={draw} />
       </span>
       <span
-        className={`min-w-0 text-[13px] leading-5 transition-colors duration-300 motion-reduce:transition-none ${stateColors[state]}`}
+        className={`min-w-0 text-body leading-5 transition-colors duration-300 motion-reduce:transition-none ${stateColors[state]}`}
       >
         <span className="sr-only">{stateLabels[state]}: </span>
         {step.text}
@@ -535,7 +535,7 @@ export function PlanStrip({
         popoverTarget={id}
         aria-expanded={open}
         title={open ? "Hide the plan" : "Show the plan"}
-        className={`flex min-w-0 items-center gap-2.5 text-left text-[13px] hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-1.5 pr-3.5 pl-4"}`}
+        className={`flex min-w-0 items-center gap-2.5 text-left text-body hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-1.5 pr-3.5 pl-4"}`}
       >
         <span className="grid size-4 shrink-0 place-items-center">
           <Marker state={now ? "now" : next ? "todo" : "done"} />
@@ -550,7 +550,7 @@ export function PlanStrip({
             "All steps done"
           )}
         </span>
-        <span className="shrink-0 text-[12px] text-muted-foreground tabular-nums">
+        <span className="shrink-0 text-meta text-muted-foreground tabular-nums">
           {done} of {items.length}
           <span className="sr-only"> done</span>
         </span>
@@ -635,16 +635,13 @@ export function ProposedPlan({
       aria-labelledby={verdict ? `${headingId} ${verdictId}` : headingId}
       className="flex flex-col overflow-x-hidden overflow-y-auto rounded-xl border border-border bg-surface"
     >
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-[13px]">
+      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-body">
         <ClipboardList aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
         <span id={headingId} className="flex-1 font-medium">
           Proposed plan
         </span>
         {verdict && (
-          <span
-            id={verdictId}
-            className="flex shrink-0 items-center gap-1.5 text-[12px] text-danger"
-          >
+          <span id={verdictId} className="flex shrink-0 items-center gap-1.5 text-meta text-danger">
             {verdict.icon}
             {verdict.label}
           </span>
@@ -678,7 +675,7 @@ export function ProposedPlan({
           type="button"
           aria-expanded={open}
           onClick={() => onToggle(id, !open)}
-          className="flex w-full items-center gap-1.5 px-4 pt-0.5 pb-3 text-[12.5px] text-muted-foreground hover:text-foreground"
+          className="flex w-full items-center gap-1.5 px-4 pt-0.5 pb-3 text-body text-muted-foreground hover:text-foreground"
         >
           {open ? (
             <ChevronUp aria-hidden className="size-3.5" />

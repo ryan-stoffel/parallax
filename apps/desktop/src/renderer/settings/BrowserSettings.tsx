@@ -45,8 +45,8 @@ export function BrowserSettings() {
         {/* Its tiles take the row's width, under its title. */}
         <div data-setting="theme" className="border-b border-border">
           <div className="px-4 pt-3 pb-2">
-            <span className="block text-[13px] font-medium">Theme</span>
-            <span className="block text-[12.5px] text-muted-foreground">
+            <span className="block text-body font-medium">Theme</span>
+            <span className="block text-body text-muted-foreground">
               The colors of the browser's tabs and toolbar
             </span>
           </div>

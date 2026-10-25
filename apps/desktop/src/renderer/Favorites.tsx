@@ -199,7 +199,7 @@ export function Favorites({
           const row = draggedThread(e.dataTransfer);
           if (row) onPinRow(row.hostId, row.runId);
         }}
-        className={`grid rounded-[12px] px-0.5 pt-1.5 transition-[background-color,box-shadow] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none mb-2 grid-cols-[repeat(auto-fit,minmax(40px,1fr))] gap-1.5 ${over ? "bg-accent/6 shadow-[0_0_0_1.5px_color-mix(in_srgb,var(--accent)_45%,transparent)]" : ""}`}
+        className={`grid rounded-xl px-0.5 pt-1.5 transition-[background-color,box-shadow] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] motion-reduce:transition-none mb-2 grid-cols-[repeat(auto-fit,minmax(40px,1fr))] gap-1.5 ${over ? "bg-accent/6 shadow-[0_0_0_1.5px_color-mix(in_srgb,var(--accent)_45%,transparent)]" : ""}`}
       >
         {items.map((f) => (
           <li
@@ -279,7 +279,7 @@ export function Favorites({
                 setMenuFor(f.key);
                 openOnContextMenu(e, triggers.current.get(f.key) ?? null);
               }}
-              className={`relative grid w-full place-items-center rounded-[10px] transition-[background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none h-11 [&_svg]:size-5 ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_14%,transparent)]" : "bg-foreground/[0.045] hover:bg-foreground/[0.08]"}`}
+              className={`relative grid w-full place-items-center rounded-xl transition-[background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none h-11 [&_svg]:size-5 ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_14%,transparent)]" : "bg-foreground/[0.045] hover:bg-foreground/[0.08]"}`}
             >
               {f.icon}
               {f.project ? (
@@ -288,7 +288,7 @@ export function Favorites({
                   {f.project.waiting > 0 && (
                     <span
                       aria-hidden
-                      className="absolute -top-1.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-warning px-1 text-[10px] leading-none font-semibold text-background tabular-nums ring-2 ring-sidebar"
+                      className="absolute -top-1.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-warning px-1 text-micro leading-none font-semibold text-background tabular-nums ring-2 ring-sidebar"
                     >
                       {f.project.waiting}
                     </span>
@@ -320,7 +320,7 @@ export function Favorites({
           </li>
         ))}
         {over && (
-          <li className="grow-in grid h-11 place-items-center rounded-[10px] border border-dashed border-accent/50 text-[11.5px] font-medium text-accent">
+          <li className="grow-in grid h-11 place-items-center rounded-xl border border-dashed border-accent/50 text-meta font-medium text-accent">
             Favorite
           </li>
         )}

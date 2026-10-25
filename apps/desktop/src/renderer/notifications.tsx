@@ -159,7 +159,7 @@ function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
       }}
       className="toast-in relative rounded-xl border border-border bg-surface py-3 pr-9 pl-3.5 text-foreground shadow-composer"
     >
-      <div className="flex items-center gap-2 text-[13.5px] font-medium">
+      <div className="flex items-center gap-2 text-body font-medium">
         {progress ? (
           <LoaderCircle
             aria-hidden
@@ -170,13 +170,13 @@ function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
         )}
         <span className="min-w-0 flex-1 truncate">{title}</span>
         {progress?.percent !== undefined && (
-          <span className="text-[12.5px] font-normal text-muted-foreground tabular-nums">
+          <span className="text-body font-normal text-muted-foreground tabular-nums">
             {progress.percent}%
           </span>
         )}
       </div>
       {body && (
-        <p className="mt-1 line-clamp-3 text-[12.5px] break-words text-muted-foreground">{body}</p>
+        <p className="mt-1 line-clamp-3 text-body break-words text-muted-foreground">{body}</p>
       )}
       {progress && (
         <div className="mt-2 h-1 overflow-hidden rounded-full bg-hover">
@@ -187,7 +187,7 @@ function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
         </div>
       )}
       {action && (
-        <div className="mt-1 text-[12.5px] text-muted-foreground">
+        <div className="mt-1 text-body text-muted-foreground">
           {"href" in action ? (
             <a href={action.href} className={link}>
               {action.label}

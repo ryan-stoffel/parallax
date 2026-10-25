@@ -63,11 +63,11 @@ export function FileCard({
       {page ? (
         <img src={page} alt="" className="mx-auto h-full w-3/4 object-cover object-top" />
       ) : (
-        <span className="line-clamp-4 p-2.5 text-[12px] leading-snug break-all text-muted-foreground">
+        <span className="line-clamp-4 p-2.5 text-meta leading-snug break-all text-muted-foreground">
           {name}
         </span>
       )}
-      <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-[11px] font-medium text-white">
+      <span className="absolute bottom-2 left-2 rounded-md bg-black/60 px-1.5 py-0.5 text-caption font-medium text-white">
         {type}
       </span>
       {progress !== undefined && (

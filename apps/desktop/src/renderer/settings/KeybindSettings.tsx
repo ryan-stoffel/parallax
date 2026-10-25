@@ -20,7 +20,7 @@ import { PageTitle, quietButton, Row, Section, settingRow } from "./parts";
 import { anchorOf } from "./search";
 
 const kbd =
-  "inline-flex items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 font-sans text-[12px] text-foreground";
+  "inline-flex items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 font-sans text-meta text-foreground";
 
 /**
  * Settings > Keybinds: every app command with its shortcuts, each removable, plus Add shortcut,
@@ -116,16 +116,16 @@ function CommandRow({ command, name }: { command: Command; name: string }) {
   return (
     <div data-setting={anchorOf(name)} className={`${settingRow} flex-wrap`}>
       <div className="min-w-0">
-        <span className="block text-[13px] font-medium">{name}</span>
+        <span className="block text-body font-medium">{name}</span>
         {refused && (
-          <span role="alert" className="block text-[12.5px] text-danger">
+          <span role="alert" className="block text-body text-danger">
             {refused}
           </span>
         )}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-1.5">
         {bindings.length === 0 && !recording && (
-          <span className="text-[12.5px] text-faint-foreground">None</span>
+          <span className="text-body text-faint-foreground">None</span>
         )}
         {bindings.map((b) => (
           <kbd key={b} className={kbd}>
@@ -139,7 +139,7 @@ function CommandRow({ command, name }: { command: Command; name: string }) {
                   bindings.filter((x) => x !== b),
                 )
               }
-              className="-mr-0.5 rounded text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3"
+              className="-mr-0.5 rounded-sm text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3"
             >
               <X aria-hidden />
             </button>
@@ -153,7 +153,7 @@ function CommandRow({ command, name }: { command: Command; name: string }) {
             placeholder="Press a shortcut"
             onKeyDown={record}
             onBlur={stop}
-            className="w-36 rounded-md border border-accent bg-background px-2 py-0.5 text-[12px] placeholder:text-muted-foreground"
+            className="w-36 rounded-md border border-accent bg-background px-2 py-0.5 text-meta placeholder:text-muted-foreground"
           />
         ) : (
           <button

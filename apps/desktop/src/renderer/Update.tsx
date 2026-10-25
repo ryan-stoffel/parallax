@@ -84,13 +84,13 @@ function ItemRow({
       {children}
       <ItemIcon item={item} />
       <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5 text-[13px]">
+        <div className="flex items-baseline gap-1.5 text-body">
           <span className="font-medium">{item.name}</span>
           {showHost && (
-            <span className="truncate text-[12px] text-muted-foreground">{item.host}</span>
+            <span className="truncate text-meta text-muted-foreground">{item.host}</span>
           )}
         </div>
-        <div className="flex flex-wrap items-center font-mono text-[11.5px] break-all text-muted-foreground">
+        <div className="flex flex-wrap items-center font-mono text-meta break-all text-muted-foreground">
           {item.from && (
             <>
               <span>{item.from}</span>
@@ -102,11 +102,11 @@ function ItemRow({
           </span>
         </div>
         {status?.state === "failed" ? (
-          <p role="alert" className="mt-0.5 text-[12px] break-words text-danger">
+          <p role="alert" className="mt-0.5 text-meta break-words text-danger">
             {status.error}
           </p>
         ) : (
-          line && <p className="mt-0.5 text-[12px] text-muted-foreground">{line}</p>
+          line && <p className="mt-0.5 text-meta text-muted-foreground">{line}</p>
         )}
       </div>
       <span className="grid size-4 shrink-0 place-items-center" aria-live="polite">
@@ -130,12 +130,12 @@ function Changelog({ available }: { available: NonNullable<UpdateState["availabl
   return (
     <div className="mt-2 rounded-md border border-border bg-background/60 p-2.5">
       <div className="mb-1 flex items-baseline justify-between gap-3">
-        <h3 className="text-[12px] font-medium">What's new in Parallax</h3>
-        <a href={available.url} className="shrink-0 text-[12px] text-accent hover:underline">
+        <h3 className="text-meta font-medium">What's new in Parallax</h3>
+        <a href={available.url} className="shrink-0 text-meta text-accent hover:underline">
           Full changelog
         </a>
       </div>
-      <p className="max-h-40 overflow-y-auto text-[12.5px] whitespace-pre-line text-muted-foreground">
+      <p className="max-h-40 overflow-y-auto text-body whitespace-pre-line text-muted-foreground">
         {available.notes || "No notes for this release."}
       </p>
     </div>
@@ -327,7 +327,7 @@ export function UpdateButton() {
       >
         {items.length > 0 ? (
           <>
-            <h2 className="text-[13.5px] font-medium">
+            <h2 className="text-body font-medium">
               {busy
                 ? "Updating…"
                 : `${items.length} ${items.length === 1 ? "update" : "updates"} available`}
@@ -358,14 +358,14 @@ export function UpdateButton() {
               </div>
             )}
             {note && !downloading && (
-              <p role="alert" className="mt-2 text-[12.5px] text-danger">
+              <p role="alert" className="mt-2 text-body text-danger">
                 {note}
               </p>
             )}
-            <p className="mt-2 text-[12px] text-muted-foreground">Click to review and update.</p>
+            <p className="mt-2 text-meta text-muted-foreground">Click to review and update.</p>
           </>
         ) : (
-          <p role="status" className="text-[12.5px] text-muted-foreground">
+          <p role="status" className="text-body text-muted-foreground">
             {answer ?? note ?? "Up to date"}
           </p>
         )}
@@ -378,10 +378,10 @@ export function UpdateButton() {
         className="m-auto w-[30rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
       >
         <div className="px-5 pt-4 pb-3">
-          <h2 id={`${id}-confirm`} className="text-[15px] font-semibold">
+          <h2 id={`${id}-confirm`} className="text-reading font-semibold">
             {settled ? "Updates finished" : busy ? "Updating…" : "Updates available"}
           </h2>
-          <p className="mt-1 text-[13px] text-muted-foreground">
+          <p className="mt-1 text-body text-muted-foreground">
             {settled
               ? Object.values(statuses).some((s) => s.state === "failed")
                 ? "Some updates failed. Try them again from Update."
@@ -417,10 +417,10 @@ export function UpdateButton() {
           )}
           {!taken && running > 0 && (
             <>
-              <p className="mt-4 text-[13px]">
+              <p className="mt-4 text-body">
                 {running} running {running === 1 ? "thread" : "threads"} will be interrupted.
               </p>
-              <label className="mt-2 flex items-center gap-2 text-[13px] text-muted-foreground">
+              <label className="mt-2 flex items-center gap-2 text-body text-muted-foreground">
                 <input
                   type="checkbox"
                   checked={continueThreads ?? restart.continueThreads}
@@ -437,7 +437,7 @@ export function UpdateButton() {
               type="button"
               value="cancel"
               onClick={() => confirm.current?.close()}
-              className="rounded-md px-3 py-1.5 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+              className="rounded-md px-3 py-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
             >
               {taken ? "Close" : "Cancel"}
             </button>
@@ -448,7 +448,7 @@ export function UpdateButton() {
             autoFocus
             disabled={busy || (!taken && chosen.length === 0)}
             onClick={() => (taken ? confirm.current?.close() : start())}
-            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
             {busy && <LoaderCircle className="size-3.5 animate-spin" />}
             {settled

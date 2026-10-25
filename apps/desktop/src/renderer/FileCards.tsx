@@ -122,7 +122,7 @@ function FileCard({
       <div aria-hidden className="pointer-events-none relative h-full shrink-0" style={{ width }}>
         {plain && (
           <div
-            className="absolute top-4 left-0 grid h-24 place-items-start justify-center rounded-[3px] bg-selected pt-6 text-muted-foreground"
+            className="absolute top-4 left-0 grid h-24 place-items-start justify-center rounded-sm bg-selected pt-6 text-muted-foreground"
             style={{ width }}
           >
             <File className="size-6" />
@@ -145,12 +145,12 @@ function FileCard({
           </>
         )}
         {!loaded && !plain && (
-          <div className="absolute top-4 left-0 h-24 rounded-[3px] bg-selected" style={{ width }} />
+          <div className="absolute top-4 left-0 h-24 rounded-sm bg-selected" style={{ width }} />
         )}
       </div>
       <div className="pointer-events-none min-w-0 flex-1">
-        <p className="truncate text-[15px] text-foreground">{titleOf(doc.name)}</p>
-        <p className="truncate text-[13px] text-muted-foreground">
+        <p className="truncate text-reading text-foreground">{titleOf(doc.name)}</p>
+        <p className="truncate text-body text-muted-foreground">
           {error ?? `${what} · ${typeOf(doc)}`}
         </p>
       </div>
@@ -158,7 +158,7 @@ function FileCard({
         type="button"
         disabled={plain ? file.share !== undefined : !loaded}
         onClick={save}
-        className="relative flex shrink-0 items-center gap-1.5 rounded-lg bg-selected px-3 py-1.5 text-[13px] text-foreground hover:bg-hover disabled:opacity-50 [&_svg]:size-3.5"
+        className="relative flex shrink-0 items-center gap-1.5 rounded-lg bg-selected px-3 py-1.5 text-body text-foreground hover:bg-hover disabled:opacity-50 [&_svg]:size-3.5"
       >
         <Download aria-hidden />
         Download
@@ -186,7 +186,7 @@ function ReadMedia({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const url = useObjectUrl(loaded?.bytes);
   if (error)
     return (
-      <p className="rounded-2xl border border-border bg-surface px-5 py-4 text-[13px] text-muted-foreground">
+      <p className="rounded-2xl border border-border bg-surface px-5 py-4 text-body text-muted-foreground">
         {doc.name} · {error}
       </p>
     );
@@ -293,7 +293,7 @@ export function DownloadButton({ name, read }: { name: string; read: () => Promi
         type="button"
         disabled={busy}
         onClick={save}
-        className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-3.5"
+        className="flex shrink-0 items-center gap-1.5 rounded-lg px-2 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-3.5"
       >
         <Download aria-hidden />
         Download
@@ -407,7 +407,7 @@ export function Thumb({
     <div
       ref={ref}
       style={{ width, height: size.height * scale }}
-      className={`overflow-hidden rounded-[3px] bg-white shadow-sm ring-1 ring-black/10 ${className}`}
+      className={`overflow-hidden rounded-sm bg-white shadow-sm ring-1 ring-black/10 ${className}`}
     />
   );
 }

@@ -76,11 +76,11 @@ export function QueueStrip({
 
   if (!messages.length) return null;
   const list = (
-    <section aria-label="Queued messages" className="text-[12.5px]">
+    <section aria-label="Queued messages" className="text-body">
       <div className="flex items-center justify-between py-2 pr-3.5 pl-4 text-faint-foreground">
         <span>
           Queued{" "}
-          <span className="ml-1 rounded bg-hover px-1.5 text-foreground">{messages.length}</span>
+          <span className="ml-1 rounded-sm bg-hover px-1.5 text-foreground">{messages.length}</span>
           {held && <span className="ml-2">Paused</span>}
         </span>
         {held ? (
@@ -261,10 +261,10 @@ export function QueueStrip({
         type="button"
         popoverTarget={id}
         title="Show the queued messages"
-        className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+        className="flex h-7 items-center gap-1.5 rounded-lg px-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
       >
         Queued
-        <span className="rounded bg-hover px-1.5 text-foreground tabular-nums">
+        <span className="rounded-sm bg-hover px-1.5 text-foreground tabular-nums">
           {messages.length}
         </span>
         {held && <span className="text-faint-foreground">Paused</span>}

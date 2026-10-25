@@ -53,16 +53,16 @@ const monthDay = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" 
 const hourName = () => new Intl.DateTimeFormat("en", { hour: "numeric", ...hourCycle() });
 
 const card = "rounded-2xl border border-border bg-surface";
-const heading = "text-[12.5px] font-medium text-muted-foreground";
+const heading = "text-body font-medium text-muted-foreground";
 const outlineButton =
-  "flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
+  "flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
 const dangerOutline =
-  "rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] text-danger hover:bg-hover";
+  "rounded-md border border-border bg-surface px-2.5 py-1 text-body text-danger hover:bg-hover";
 
 /** "Secured by Clerk", with Clerk's mark, as Clerk's own account pages sign off. */
 export function SecuredByClerk() {
   return (
-    <span className="flex items-center gap-1 text-[12px] text-faint-foreground">
+    <span className="flex items-center gap-1 text-meta text-faint-foreground">
       Secured by
       <span className="flex items-center gap-0.5 font-semibold text-muted-foreground">
         <ClerkLogo className="size-3.5" />
@@ -154,7 +154,7 @@ export function AccountDialog({
       ))}
       <div className="flex h-full">
         <nav className="flex w-52 shrink-0 flex-col gap-px border-r border-border bg-sidebar px-2 pt-4 pb-3">
-          <h2 id={titleId} className="mb-3 px-2 text-xl font-semibold">
+          <h2 id={titleId} className="mb-3 px-2 text-heading font-semibold">
             Account
           </h2>
           {tabs.map((t) => (
@@ -163,14 +163,14 @@ export function AccountDialog({
               type="button"
               aria-current={t.id === tab ? "page" : undefined}
               onClick={() => setTab(t.id)}
-              className={`flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-[13px] hover:bg-hover ${t.id === tab ? "bg-selected text-foreground" : "text-foreground/80"}`}
+              className={`flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-body hover:bg-hover ${t.id === tab ? "bg-selected text-foreground" : "text-foreground/80"}`}
             >
               <t.Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
               {t.name}
             </button>
           ))}
           <div className="mt-auto flex flex-col gap-2 px-2">
-            <span className="flex items-center gap-1.5 font-brand text-[13px] font-semibold text-muted-foreground">
+            <span className="flex items-center gap-1.5 font-brand text-body font-semibold text-muted-foreground">
               <ParallaxMark className="size-4" />
               Parallax
             </span>
@@ -179,8 +179,8 @@ export function AccountDialog({
         </nav>
         <div className="flex min-w-0 flex-1 flex-col">
           <header className="border-b border-border px-8 pt-5 pb-4">
-            <h3 className="text-[15px] font-semibold">{current.name}</h3>
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">{current.about}</p>
+            <h3 className="text-reading font-semibold">{current.name}</h3>
+            <p className="mt-0.5 text-body text-muted-foreground">{current.about}</p>
           </header>
           <div className="@container min-h-0 flex-1 overflow-y-auto px-8 pt-6 pb-10">
             {tab === "profile" ? (
@@ -283,7 +283,7 @@ function ProfileCard({
             <Avatar profile={profile} size={88} />
           </span>
           {sharing === "capturing" ? (
-            <span className="flex items-center gap-1.5 pb-1 font-brand text-[15px] font-semibold">
+            <span className="flex items-center gap-1.5 pb-1 font-brand text-reading font-semibold">
               <ParallaxMark className="size-5" />
               Parallax
             </span>
@@ -295,18 +295,18 @@ function ProfileCard({
           )}
         </div>
 
-        <h2 className="mt-3 truncate font-brand text-2xl font-semibold tracking-tight">
+        <h2 className="mt-3 truncate font-brand text-display font-semibold tracking-tight">
           {profile.name || profile.email}
         </h2>
         {profile.name && (
-          <p className="truncate text-[13px] text-muted-foreground">{profile.email}</p>
+          <p className="truncate text-body text-muted-foreground">{profile.email}</p>
         )}
         {chips.length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-1.5">
             {chips.map(({ Icon, text }) => (
               <li
                 key={text}
-                className="flex items-center gap-1.5 rounded-full bg-selected px-2.5 py-0.5 text-[12px] text-muted-foreground [&_svg]:size-3.5"
+                className="flex items-center gap-1.5 rounded-full bg-selected px-2.5 py-0.5 text-meta text-muted-foreground [&_svg]:size-3.5"
               >
                 <Icon aria-hidden />
                 {text}
@@ -338,9 +338,7 @@ function ProfileCard({
             unit="d"
           />
         </dl>
-        {hosts > 1 && (
-          <p className="mt-3 text-[12px] text-faint-foreground">Across {hosts} hosts</p>
-        )}
+        {hosts > 1 && <p className="mt-3 text-meta text-faint-foreground">Across {hosts} hosts</p>}
       </div>
     </section>
   );
@@ -391,10 +389,12 @@ function Stat({
       >
         <Icon />
       </span>
-      <dt className="mt-3 text-[12px] text-muted-foreground">{label}</dt>
-      <dd className="font-brand text-2xl font-semibold tabular-nums">
+      <dt className="mt-3 text-meta text-muted-foreground">{label}</dt>
+      <dd className="font-brand text-display font-semibold tabular-nums">
         {value.toLocaleString("en")}
-        {unit && <span className="ml-0.5 text-base font-normal text-muted-foreground">{unit}</span>}
+        {unit && (
+          <span className="ml-0.5 text-reading font-normal text-muted-foreground">{unit}</span>
+        )}
       </dd>
     </div>
   );
@@ -421,10 +421,10 @@ function Hours({ hours }: { hours: number[] }) {
   return (
     <section aria-label="When you build" className={`flex flex-col p-5 ${card}`}>
       <h2 className={heading}>When you build</h2>
-      <p className="mt-1 flex items-center gap-1.5 text-[15px] font-medium [&_svg]:size-4 [&_svg]:text-mark-coral">
+      <p className="mt-1 flex items-center gap-1.5 text-reading font-medium [&_svg]:size-4 [&_svg]:text-mark-coral">
         <Icon aria-hidden />
         {rhythmOf(busiest)}
-        <span className="text-[13px] font-normal text-muted-foreground">
+        <span className="text-body font-normal text-muted-foreground">
           · busiest around {at(busiest)}
         </span>
       </p>
@@ -438,11 +438,11 @@ function Hours({ hours }: { hours: number[] }) {
             key={hour}
             title={`${agents} ${agents === 1 ? "agent" : "agents"} at ${at(hour)}`}
             style={{ height: `${Math.max(6, (agents / max) * 100)}%` }}
-            className={`flex-1 rounded-[3px] ${hour === busiest ? "bg-accent" : agents ? "bg-accent/45" : "bg-selected"}`}
+            className={`flex-1 rounded-sm ${hour === busiest ? "bg-accent" : agents ? "bg-accent/45" : "bg-selected"}`}
           />
         ))}
       </div>
-      <div className="mt-1.5 grid grid-cols-4 text-[11px] text-faint-foreground">
+      <div className="mt-1.5 grid grid-cols-4 text-caption text-faint-foreground">
         {[0, 6, 12, 18].map((hour) => (
           <span key={hour}>{at(hour)}</span>
         ))}
@@ -466,7 +466,7 @@ function Models({ activity }: { activity: Activity }) {
             ? (models.find((m) => m.id === model)?.name ?? model)
             : `${instanceName(backend) ?? kinds[backend]?.name ?? backend} default`;
           return (
-            <li key={`${backend}/${model ?? ""}`} className="text-[13px]">
+            <li key={`${backend}/${model ?? ""}`} className="text-body">
               <div className="flex items-center gap-2">
                 {Logo && <Logo className="size-3.5 shrink-0" />}
                 <span className="min-w-0 flex-1 truncate">{name}</span>
@@ -549,13 +549,13 @@ function Heatmap({ activity, now }: { activity: Activity; now: number }) {
     <section aria-label="Activity" className={`mb-8 p-5 ${card}`}>
       <div className="mb-3 flex items-baseline justify-between gap-4">
         <h2 className={heading}>Activity</h2>
-        <p className="text-[12.5px] text-muted-foreground">
+        <p className="text-body text-muted-foreground">
           {year.toLocaleString("en")} {year === 1 ? "agent" : "agents"} in the past year
         </p>
       </div>
       <svg
         viewBox={`0 0 ${LEFT + WEEKS * CELL} ${TOP + 7 * CELL}`}
-        className="w-full fill-faint-foreground text-[9px]"
+        className="w-full fill-faint-foreground text-micro"
         role="img"
         aria-label="Agents started each day for the past year"
       >
@@ -567,16 +567,16 @@ function Heatmap({ activity, now }: { activity: Activity; now: number }) {
         ))}
         {cells}
       </svg>
-      <div className="mt-3 flex items-center justify-between gap-4 text-[12px] text-muted-foreground">
+      <div className="mt-3 flex items-center justify-between gap-4 text-meta text-muted-foreground">
         <span>
           {activity.busiest &&
             `Busiest day: ${shortDay.format(dayOf(activity.busiest.day))}, ${activity.busiest.agents} ${activity.busiest.agents === 1 ? "agent" : "agents"}`}
         </span>
         <span aria-hidden className="flex items-center gap-1 text-faint-foreground">
           Less
-          <span className="size-2.5 rounded-[3px] bg-selected" />
+          <span className="size-2.5 rounded-sm bg-selected" />
           {shades.map((s) => (
-            <span key={s} style={{ opacity: s }} className="size-2.5 rounded-[3px] bg-accent" />
+            <span key={s} style={{ opacity: s }} className="size-2.5 rounded-sm bg-accent" />
           ))}
           More
         </span>
@@ -644,13 +644,13 @@ function Tokens({
     <section aria-label="Tokens" className={`mb-8 p-5 ${card}`}>
       <div className="flex items-baseline justify-between gap-4">
         <h2 className={heading}>Tokens</h2>
-        <p className="text-[12.5px] text-muted-foreground">Past {TOKEN_DAYS} days</p>
+        <p className="text-body text-muted-foreground">Past {TOKEN_DAYS} days</p>
       </div>
       {total > 0 ? (
         <>
-          <p className="mt-1 font-brand text-2xl font-semibold tabular-nums">
+          <p className="mt-1 font-brand text-display font-semibold tabular-nums">
             {compact.format(total)}
-            <span className="ml-1 text-base font-normal text-muted-foreground">tokens</span>
+            <span className="ml-1 text-reading font-normal text-muted-foreground">tokens</span>
           </p>
           <svg
             viewBox="0 0 100 100"
@@ -675,13 +675,13 @@ function Tokens({
               vectorEffect="non-scaling-stroke"
             />
           </svg>
-          <div className="mt-2 flex justify-between text-[12px] text-faint-foreground">
+          <div className="mt-2 flex justify-between text-meta text-faint-foreground">
             <span>{monthDay.format(days[0])}</span>
             <span>Today</span>
           </div>
         </>
       ) : (
-        <p className="mt-2 text-[12.5px] text-muted-foreground">
+        <p className="mt-2 text-body text-muted-foreground">
           No usage in the past {TOKEN_DAYS} days.
         </p>
       )}
@@ -698,8 +698,8 @@ function AccountRows({ profile }: { profile: Profile }) {
     <Section title="Account settings">
       <div className={settingRow}>
         <div className="min-w-0">
-          <span className="block text-[13px] font-medium">Name</span>
-          <span className="block truncate text-[12.5px] text-muted-foreground">
+          <span className="block text-body font-medium">Name</span>
+          <span className="block truncate text-body text-muted-foreground">
             {profile.name || "Shown on your profile and in the sidebar."}
           </span>
         </div>
@@ -713,16 +713,14 @@ function AccountRows({ profile }: { profile: Profile }) {
       </div>
       <div className={settingRow}>
         <div className="min-w-0">
-          <span className="block text-[13px] font-medium">Email</span>
-          <span className="block truncate text-[12.5px] text-muted-foreground">
-            {profile.email}
-          </span>
+          <span className="block text-body font-medium">Email</span>
+          <span className="block truncate text-body text-muted-foreground">{profile.email}</span>
         </div>
       </div>
       <div className={settingRow}>
         <div className="min-w-0">
-          <span className="block text-[13px] font-medium">Sign out</span>
-          <span className="block text-[12.5px] text-muted-foreground">
+          <span className="block text-body font-medium">Sign out</span>
+          <span className="block text-body text-muted-foreground">
             Only on this computer. Your other devices stay signed in.
           </span>
         </div>
@@ -742,8 +740,8 @@ function AccountRows({ profile }: { profile: Profile }) {
 function RowText({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <span className="block text-[13px] font-medium">{title}</span>
-      <span className="block text-[12.5px] text-muted-foreground">{children}</span>
+      <span className="block text-body font-medium">{title}</span>
+      <span className="block text-body text-muted-foreground">{children}</span>
     </div>
   );
 }
@@ -778,17 +776,17 @@ function SecurityRows() {
           </button>
         </div>
         <div className="flex gap-4 border-border px-4 py-3 not-last:border-b">
-          <span className="w-40 shrink-0 text-[13px] font-medium">Active devices</span>
+          <span className="w-40 shrink-0 text-body font-medium">Active devices</span>
           <div className="min-w-0 flex-1">
             <div className="flex gap-3">
               <DeviceIcon
                 icon={localIcon}
                 className="mt-0.5 size-5 shrink-0 text-muted-foreground"
               />
-              <div className="min-w-0 text-[12.5px] leading-6 text-muted-foreground">
-                <span className="flex items-center gap-2 text-[13px] text-foreground">
+              <div className="min-w-0 text-body leading-6 text-muted-foreground">
+                <span className="flex items-center gap-2 text-body text-foreground">
                   {deviceKinds[window.parallax.platform] ?? "Computer"}
-                  <span className="rounded-md border border-border bg-selected px-1.5 text-[11.5px] leading-5 text-muted-foreground">
+                  <span className="rounded-md border border-border bg-selected px-1.5 text-meta leading-5 text-muted-foreground">
                     This device
                   </span>
                 </span>
@@ -800,7 +798,7 @@ function SecurityRows() {
             <button
               type="button"
               onClick={security}
-              className="mt-2 text-[12.5px] text-accent hover:underline"
+              className="mt-2 text-body text-accent hover:underline"
             >
               Your other devices, on Clerk
             </button>
@@ -839,13 +837,13 @@ function ConnectRows() {
   useEffect(() => window.parallax.onDevices(setDevices), []);
   if (!connect?.on)
     return (
-      <p className="text-[13px] text-muted-foreground">
+      <p className="text-body text-muted-foreground">
         Parallax Connect is off. Turn it on in Settings › Connections to add your other computers.
       </p>
     );
   if (!devices.length)
     return (
-      <p className="text-[13px] text-muted-foreground">
+      <p className="text-body text-muted-foreground">
         No computers yet. Add one from Settings › Connections.
       </p>
     );

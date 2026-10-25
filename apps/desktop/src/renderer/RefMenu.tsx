@@ -139,7 +139,7 @@ export function RefMenu({
             onKeyDown={(e) => {
               if (e.key === "Enter" && shown[0]) choose(shown[0]);
             }}
-            className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </label>
         <div className="max-h-80 overflow-y-auto p-1">
@@ -152,13 +152,13 @@ export function RefMenu({
             />
           ))}
           {(refs === undefined || typeof refs === "string" || shown.length === 0) && (
-            <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">
+            <p className="px-2 py-1.5 text-body text-faint-foreground">
               {refs === undefined ? "Loading…" : typeof refs === "string" ? refs : "No matches"}
             </p>
           )}
         </div>
         {matches.length > maxRows && (
-          <p className="border-t border-border px-3 py-2 text-[12px] text-faint-foreground">
+          <p className="border-t border-border px-3 py-2 text-meta text-faint-foreground">
             Showing {maxRows} of {matches.length} refs
           </p>
         )}

@@ -98,7 +98,7 @@ export function AgentsBar({
         popoverTarget={id}
         aria-expanded={open}
         title={open ? `Hide the ${label.toLowerCase()}` : `Show the ${label.toLowerCase()}`}
-        className={`flex min-w-0 items-center gap-2.5 text-left text-[13px] hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-1.5 pr-3.5 pl-2"}`}
+        className={`flex min-w-0 items-center gap-2.5 text-left text-body hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-1.5 pr-3.5 pl-2"}`}
       >
         {/* The providers at work, as one quiet group. */}
         <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2 [&_svg]:size-3.5">
@@ -112,7 +112,7 @@ export function AgentsBar({
               ),
             )}
           {extra > 0 && (
-            <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+            <span className="font-mono text-caption text-muted-foreground tabular-nums">
               +{extra}
             </span>
           )}
@@ -126,7 +126,7 @@ export function AgentsBar({
             <span className="truncate">{lead.title}</span>
           </span>
         )}
-        <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-muted-foreground tabular-nums">
+        <span className="flex shrink-0 items-center gap-1.5 text-meta text-muted-foreground tabular-nums">
           {waiting > 0 ? (
             <>
               <span aria-hidden className="size-1.5 rounded-full bg-warning" />
@@ -190,7 +190,7 @@ function CardGroup({
 }) {
   return (
     <section aria-label={label}>
-      <h3 className="px-2.5 pt-2 pb-1 text-[12px] text-muted-foreground">
+      <h3 className="px-2.5 pt-2 pb-1 text-meta text-muted-foreground">
         {label} <span className="text-faint-foreground tabular-nums">{items.length}</span>
       </h3>
       <ul>
@@ -205,8 +205,8 @@ function CardGroup({
                 {c.Logo ? <c.Logo aria-hidden /> : null}
               </span>
               <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="truncate text-[13px]">{c.title}</span>
-                <span className="flex min-w-0 items-center gap-2 font-mono text-[11px] text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
+                <span className="truncate text-body">{c.title}</span>
+                <span className="flex min-w-0 items-center gap-2 font-mono text-caption text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
                   <State attention={c.attention} />
                   {c.branch && (
                     <span className="flex min-w-0 items-center gap-1">
@@ -222,7 +222,7 @@ function CardGroup({
                   )}
                 </span>
               </span>
-              <span className="flex shrink-0 flex-col items-end gap-0.5 font-mono text-[11px] text-faint-foreground">
+              <span className="flex shrink-0 flex-col items-end gap-0.5 font-mono text-caption text-faint-foreground">
                 {c.updatedAt && <span className="tabular-nums">{age(c.updatedAt)}</span>}
                 {c.detail && <span>{c.detail}</span>}
               </span>

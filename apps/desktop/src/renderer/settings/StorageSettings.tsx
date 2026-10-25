@@ -40,7 +40,7 @@ export function StorageSettings() {
         What Parallax keeps on this computer, and what it takes.
       </PageTitle>
       <Section title="On this computer">
-        {!items && <p className="px-4 py-3 text-[12.5px] text-muted-foreground">Measuring…</p>}
+        {!items && <p className="px-4 py-3 text-body text-muted-foreground">Measuring…</p>}
         {items?.map((item) => (
           <Row
             key={item.id}
@@ -56,7 +56,7 @@ export function StorageSettings() {
               item.id === "cache" ? (
                 "Web pages and code the app keeps to load faster. Nothing you made."
               ) : (
-                <span className="block truncate font-mono text-[11.5px]" title={item.folder}>
+                <span className="block truncate font-mono text-meta" title={item.folder}>
                   {item.folder}
                 </span>
               )

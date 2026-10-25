@@ -172,7 +172,7 @@ export function PageFrame({
         <form
           aria-label="Page size"
           style={{ height: FIELDS }}
-          className="flex shrink-0 items-center justify-center gap-1.5 text-[12px] text-muted-foreground"
+          className="flex shrink-0 items-center justify-center gap-1.5 text-meta text-muted-foreground"
           onSubmit={(e) => {
             e.preventDefault();
             const [width, height] = [Number(draft?.width), Number(draft?.height)];
@@ -203,7 +203,7 @@ export function PageFrame({
                 onBlur={(e) => {
                   if (!e.currentTarget.form?.contains(e.relatedTarget)) setDraft(undefined);
                 }}
-                className="w-11 rounded bg-transparent px-1 py-0.5 text-center text-foreground tabular-nums hover:bg-hover focus-visible:bg-selected focus-visible:outline-2 focus-visible:outline-ring"
+                className="w-11 rounded-sm bg-transparent px-1 py-0.5 text-center text-foreground tabular-nums hover:bg-hover focus-visible:bg-selected focus-visible:outline-2 focus-visible:outline-ring"
               />
             </label>
           ))}
@@ -212,7 +212,7 @@ export function PageFrame({
             <button
               type="button"
               onClick={() => onFit(fit)}
-              className="ml-1 rounded px-1.5 py-0.5 text-foreground hover:bg-hover"
+              className="ml-1 rounded-sm px-1.5 py-0.5 text-foreground hover:bg-hover"
             >
               Fit
             </button>
