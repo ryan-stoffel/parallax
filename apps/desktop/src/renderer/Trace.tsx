@@ -37,7 +37,7 @@ export function TraceLine({
       data-slot="trace-line"
       data-status={status}
       className={cx(
-        "flex min-h-6 w-fit max-w-full min-w-0 items-center gap-2 text-sm text-muted-foreground transition-colors in-[summary:hover,button:hover]:text-foreground data-[status=error]:text-danger data-[status=error]:in-[summary:hover,button:hover]:text-danger data-[status=pending]:opacity-60",
+        "flex min-h-6 w-fit max-w-full min-w-0 items-center gap-2 text-body text-muted-foreground transition-colors in-[summary:hover,button:hover]:text-foreground data-[status=error]:text-danger data-[status=error]:in-[summary:hover,button:hover]:text-danger data-[status=pending]:opacity-60",
         className,
       )}
       {...props}

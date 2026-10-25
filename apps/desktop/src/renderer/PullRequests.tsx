@@ -272,11 +272,11 @@ export function PullRequestList({
               >
                 <Icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${color}`} />
                 <span className="min-w-0 flex-1">
-                  <span className="flex items-baseline gap-1.5 text-[13.5px]">
+                  <span className="flex items-baseline gap-1.5 text-body">
                     <span className="shrink-0 text-faint-foreground">#{numberOf(url)}</span>
                     <span className="min-w-0 flex-1 truncate">{pr?.title ?? repoOf(url)}</span>
                     {pr && (
-                      <span className="shrink-0 font-mono text-[12px]">
+                      <span className="shrink-0 font-mono text-meta">
                         <span className="text-added">+{pr.additions.toLocaleString(locale())}</span>{" "}
                         <span className="text-danger">
                           −{pr.deletions.toLocaleString(locale())}
@@ -284,7 +284,7 @@ export function PullRequestList({
                       </span>
                     )}
                   </span>
-                  <span className="mt-0.5 flex items-baseline gap-2 text-[12px] text-faint-foreground">
+                  <span className="mt-0.5 flex items-baseline gap-2 text-meta text-faint-foreground">
                     {pr ? (
                       <>
                         <span className="shrink-0">{pr.author}</span>
@@ -306,7 +306,7 @@ export function PullRequestList({
           );
         })}
       </ul>
-      <p className="border-t border-border px-4 py-2.5 text-[12.5px] text-faint-foreground">
+      <p className="border-t border-border px-4 py-2.5 text-body text-faint-foreground">
         {open} open · {prs.urls.length} linked · {synced ? `synced ${ago(synced)}` : "syncing…"}
       </p>
     </div>
@@ -347,7 +347,7 @@ export function LinkedPullRequests({
                 <Icon aria-hidden className={color} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate">{pr?.title ?? repoOf(url)}</span>
-                  <span className="mt-0.5 flex items-center gap-2 text-[12px] text-faint-foreground">
+                  <span className="mt-0.5 flex items-center gap-2 text-meta text-faint-foreground">
                     #{numberOf(url)}
                     {checks && (
                       <checks.Icon
@@ -430,18 +430,16 @@ function CheckRow({
   const [open, setOpen] = useState(false);
   const { Icon, color } = checkIcons[check.state] ?? noCheck;
   const action =
-    "-my-0.5 rounded-md px-1.5 py-0.5 text-[12px] text-muted-foreground hover:bg-hover hover:text-foreground";
+    "-my-0.5 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground";
   return (
     <li className="group/check">
-      <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] group-hover/check:bg-hover group-focus-within/check:bg-hover">
+      <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-body group-hover/check:bg-hover group-focus-within/check:bg-hover">
         <Icon aria-label={check.state} className={`size-4 shrink-0 ${color}`} />
         <span className="min-w-0 flex-1 truncate" title={check.name}>
           {check.workflow && <span className="text-faint-foreground">{check.workflow} / </span>}
           {check.name}
         </span>
-        <span className="shrink-0 text-[12px] text-faint-foreground">
-          {checkStatus(check, now)}
-        </span>
+        <span className="shrink-0 text-meta text-faint-foreground">{checkStatus(check, now)}</span>
         <span className="hidden shrink-0 items-center group-focus-within/check:flex group-hover/check:flex">
           <button
             type="button"
@@ -465,7 +463,7 @@ function CheckRow({
         </span>
       </div>
       {open && (
-        <div className="mx-2 mt-1 mb-2 rounded-lg border border-border px-3 py-2.5 text-[12.5px]">
+        <div className="mx-2 mt-1 mb-2 rounded-lg border border-border px-3 py-2.5 text-body">
           <dl className="grid grid-cols-[5.5rem_1fr] gap-y-1">
             {check.workflow && (
               <>
@@ -563,7 +561,7 @@ function ChecksList({
   );
   return (
     <>
-      <p className="px-2 pt-1 pb-2 text-[13px] font-medium">
+      <p className="px-2 pt-1 pb-2 text-body font-medium">
         {counts.map(([n, what]) => `${n} ${what}`).join(" · ") || "No checks"}
       </p>
       <ul className="flex max-h-[60vh] flex-col overflow-y-auto">
@@ -655,7 +653,7 @@ function Item({
       </span>
       <span className="min-w-0 flex-1">
         <span className="block leading-5">{label}</span>
-        {hint && <span className="block text-[12px] text-faint-foreground">{hint}</span>}
+        {hint && <span className="block text-meta text-faint-foreground">{hint}</span>}
       </span>
     </button>
   );
@@ -685,7 +683,7 @@ function Section({
           type="button"
           aria-expanded={open}
           onClick={onToggle}
-          className="flex items-center gap-1 rounded-md py-0.5 text-[13px] text-muted-foreground hover:text-foreground"
+          className="flex items-center gap-1 rounded-md py-0.5 text-body text-muted-foreground hover:text-foreground"
         >
           {title}
           <Chevron aria-hidden className="size-3.5" />
@@ -718,7 +716,7 @@ function CommentCard({
 }) {
   return (
     <div className="rounded-xl border border-border px-4 py-3">
-      <p className="text-[13px]">
+      <p className="text-body">
         <span className="font-medium">{c.author}</span>{" "}
         <span className="text-faint-foreground">{ago(c.createdAt)}</span>
       </p>
@@ -731,7 +729,7 @@ function CommentCard({
         <button
           type="button"
           onClick={onUnfold}
-          className="mt-2 text-[13px] text-muted-foreground hover:text-foreground"
+          className="mt-2 text-body text-muted-foreground hover:text-foreground"
         >
           Show full comment
         </button>
@@ -831,14 +829,14 @@ export function DiffFileView({
         onToggle={() => (viewed ? onViewed?.(false) : setFolded(!folded))}
       >
         {onViewed && (
-          <label className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
+          <label className="flex shrink-0 items-center gap-1.5 text-body text-muted-foreground">
             <input type="checkbox" checked={viewed} onChange={(e) => onViewed(e.target.checked)} />
             Viewed
           </label>
         )}
       </DiffFileHeader>
       {!shut && (
-        <div className="code-scroll pb-1 font-mono text-[12px] leading-5">
+        <div className="code-scroll pb-1 font-mono text-meta leading-5">
           {file.binary && <p className="px-3 text-faint-foreground">Binary file not shown</p>}
           {file.lines.map((line, i) => (
             <DiffLineView key={i} line={line} />
@@ -864,24 +862,24 @@ export function DiffFileHeader({
   const Chevron = shut ? ChevronRight : ChevronDown;
   return (
     <div
-      className={`flex items-center gap-2 bg-code px-3 py-2 text-[13px] ${shut ? "" : "border-b border-border"}`}
+      className={`flex items-center gap-2 bg-code px-3 py-2 text-body ${shut ? "" : "border-b border-border"}`}
     >
       <button
         type="button"
         aria-expanded={!shut}
         aria-label={`${shut ? "Show" : "Hide"} ${file.path}`}
         onClick={onToggle}
-        className="grid size-5 shrink-0 place-items-center rounded text-muted-foreground hover:bg-hover"
+        className="grid size-5 shrink-0 place-items-center rounded-sm text-muted-foreground hover:bg-hover"
       >
         <Chevron aria-hidden className="size-4" />
       </button>
       <span
-        className="min-w-0 flex-1 truncate font-mono text-[12.5px]"
+        className="min-w-0 flex-1 truncate font-mono text-body"
         title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
       >
         {file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}
       </span>
-      <span className="shrink-0 font-mono text-[12px]">
+      <span className="shrink-0 font-mono text-meta">
         <span className="text-added">+{file.added}</span>{" "}
         <span className="text-danger">−{file.removed}</span>
       </span>
@@ -952,8 +950,8 @@ function TimelineEvent({
         <Icon aria-hidden className={`size-4 ${color}`} />
       </span>
       <div className="min-w-0 flex-1 pt-0.5">
-        <p className="text-[13px]">{title}</p>
-        {sub && <p className="mt-0.5 text-[12px] text-faint-foreground">{sub}</p>}
+        <p className="text-body">{title}</p>
+        {sub && <p className="mt-0.5 text-meta text-faint-foreground">{sub}</p>}
         {children && <div className="mt-2">{children}</div>}
       </div>
     </li>
@@ -1077,7 +1075,7 @@ export function PullRequestView({
 
   if (!pr)
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-8 pb-16 text-center text-[13px]">
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-8 pb-16 text-center text-body">
         {failure ? (
           <>
             <p role="alert" className="text-danger">
@@ -1233,7 +1231,7 @@ export function PullRequestView({
       role="tab"
       aria-selected={tab === name}
       onClick={() => setTab(name)}
-      className={`rounded-lg px-2.5 py-1 text-[13px] ${tab === name ? "bg-selected font-medium" : "text-muted-foreground hover:text-foreground"}`}
+      className={`rounded-lg px-2.5 py-1 text-body ${tab === name ? "bg-selected font-medium" : "text-muted-foreground hover:text-foreground"}`}
     >
       {label}
     </button>
@@ -1242,7 +1240,7 @@ export function PullRequestView({
     <button
       type="button"
       onClick={() => setOldestFirst(!oldestFirst)}
-      className="ml-auto flex items-center gap-1 text-[12.5px] text-muted-foreground hover:text-foreground"
+      className="ml-auto flex items-center gap-1 text-body text-muted-foreground hover:text-foreground"
     >
       <ArrowDownUp aria-hidden className="size-3.5" />
       {oldestFirst ? "Oldest first" : "Newest first"}
@@ -1266,7 +1264,7 @@ export function PullRequestView({
               e.preventDefault();
               openOnGithub(pr.url);
             }}
-            className="flex min-w-0 items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground"
+            className="flex min-w-0 items-center gap-1 text-body text-muted-foreground hover:text-foreground"
           >
             <span className="truncate">{pr.repo}</span>
             <span className={`shrink-0 ${look.color}`}>#{pr.number}</span>
@@ -1274,13 +1272,13 @@ export function PullRequestView({
           </a>
           <span
             title={`${pr.comments.length} comments`}
-            className="ml-auto flex shrink-0 items-center gap-1 text-[13px] text-muted-foreground"
+            className="ml-auto flex shrink-0 items-center gap-1 text-body text-muted-foreground"
           >
             <MessageSquare aria-hidden className="size-4" />
             {pr.comments.length}
           </span>
           {open ? (
-            <div className="flex shrink-0 items-center rounded-lg bg-accent text-[13px] font-medium text-accent-foreground">
+            <div className="flex shrink-0 items-center rounded-lg bg-accent text-body font-medium text-accent-foreground">
               <button
                 type="button"
                 disabled={busy}
@@ -1302,7 +1300,7 @@ export function PullRequestView({
               </button>
             </div>
           ) : (
-            <span className={`shrink-0 text-[13px] ${look.color}`}>{look.label}</span>
+            <span className={`shrink-0 text-body ${look.color}`}>{look.label}</span>
           )}
           <button
             type="button"
@@ -1315,10 +1313,10 @@ export function PullRequestView({
             <Ellipsis />
           </button>
         </div>
-        <h2 className="mt-2 truncate text-[15px] font-semibold" title={pr.title}>
+        <h2 className="mt-2 truncate text-reading font-semibold" title={pr.title}>
           {pr.title}
         </h2>
-        <p className="mt-1 flex items-center gap-1 text-[12.5px] text-muted-foreground">
+        <p className="mt-1 flex items-center gap-1 text-body text-muted-foreground">
           {pr.author}
           <span className="min-w-0 flex-1 truncate text-faint-foreground">
             · updated {ago(pr.updatedAt)}
@@ -1334,7 +1332,7 @@ export function PullRequestView({
             {linked?.at ? `synced ${ago(linked.at)}` : "syncing…"}
           </button>
         </p>
-        <div className="mt-2 flex items-center gap-3 text-[12.5px]">
+        <div className="mt-2 flex items-center gap-3 text-body">
           <span
             className="min-w-0 flex-1 truncate font-mono text-faint-foreground"
             title={`${pr.headBranch} into ${pr.baseBranch}`}
@@ -1355,7 +1353,7 @@ export function PullRequestView({
               <span
                 id={`${id}-lines`}
                 role="tooltip"
-                className="pointer-events-none invisible absolute top-full right-0 z-20 mt-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 font-mono text-[12.5px] whitespace-nowrap shadow-composer group-hover:visible group-focus-visible:visible"
+                className="pointer-events-none invisible absolute top-full right-0 z-20 mt-1.5 rounded-lg border border-border bg-surface px-3 py-1.5 font-mono text-body whitespace-nowrap shadow-composer group-hover:visible group-focus-visible:visible"
               >
                 <table>
                   <tbody>
@@ -1394,7 +1392,7 @@ export function PullRequestView({
           type="button"
           popoverTarget={`${id}-checks`}
           aria-haspopup="dialog"
-          className="ml-auto flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-[12.5px] hover:bg-hover"
+          className="ml-auto flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-body hover:bg-hover"
         >
           <summary.Icon aria-hidden className={`size-4 shrink-0 ${summary.color}`} />
           <span className="truncate whitespace-nowrap text-muted-foreground">{summary.text}</span>
@@ -1402,7 +1400,7 @@ export function PullRequestView({
       </div>
 
       {failure && (
-        <p role="alert" className="mx-4 mt-3 flex items-center gap-2 text-[12.5px] text-danger">
+        <p role="alert" className="mx-4 mt-3 flex items-center gap-2 text-body text-danger">
           {failure}
           {setUp}
         </p>
@@ -1410,7 +1408,7 @@ export function PullRequestView({
 
       {tab === "timeline" && (
         <div className="px-4 pb-6">
-          <div className="flex items-center gap-1.5 py-3 text-[12.5px] text-muted-foreground">
+          <div className="flex items-center gap-1.5 py-3 text-body text-muted-foreground">
             <MessageSquare aria-hidden className="size-3.5" />
             {pr.comments.length} · <GitCommitHorizontal aria-hidden className="size-3.5" />
             {pr.commits?.length ?? 0}
@@ -1427,19 +1425,19 @@ export function PullRequestView({
       {tab === "code" && (
         <div className="pb-6">
           {!diff ? (
-            <p className="px-4 py-3 text-[13px] text-faint-foreground">Loading…</p>
+            <p className="px-4 py-3 text-body text-faint-foreground">Loading…</p>
           ) : diff.error ? (
-            <p role="alert" className="px-4 py-3 text-[13px] text-danger">
+            <p role="alert" className="px-4 py-3 text-body text-danger">
               {diff.error}
             </p>
           ) : (
             <>
-              <p className="border-b border-border px-4 py-2.5 text-[12.5px] text-muted-foreground">
+              <p className="border-b border-border px-4 py-2.5 text-body text-muted-foreground">
                 {files.length} {files.length === 1 ? "file" : "files"} ·{" "}
                 {files.filter((f) => viewed.has(f.path)).length} / {files.length} viewed
               </p>
               {diff.result?.truncated && (
-                <p className="border-b border-border px-4 py-2.5 text-[12.5px] text-warning">
+                <p className="border-b border-border px-4 py-2.5 text-body text-warning">
                   This diff is too large to show whole. Open it on GitHub for the rest.
                 </p>
               )}
@@ -1464,7 +1462,7 @@ export function PullRequestView({
       )}
 
       <div className={tab === "summary" ? "px-4 pb-6" : "hidden"}>
-        <dl className="mt-3 grid grid-cols-[7rem_1fr] gap-y-2.5 text-[13px]">
+        <dl className="mt-3 grid grid-cols-[7rem_1fr] gap-y-2.5 text-body">
           <dt className="flex items-center gap-2 text-muted-foreground">
             <Users aria-hidden className="size-4" />
             Reviewers
@@ -1479,7 +1477,7 @@ export function PullRequestView({
           <dd className="flex flex-wrap gap-1">
             {pr.labels.length ? (
               pr.labels.map((l) => (
-                <span key={l} className="rounded-full border border-border px-2 text-[12px]">
+                <span key={l} className="rounded-full border border-border px-2 text-meta">
                   {l}
                 </span>
               ))
@@ -1497,7 +1495,7 @@ export function PullRequestView({
           {pr.body.trim() ? (
             <MarkdownText text={githubText(pr.body)} images="github" />
           ) : (
-            <p className="text-[13px] text-faint-foreground">No description</p>
+            <p className="text-body text-faint-foreground">No description</p>
           )}
         </Section>
 
@@ -1506,7 +1504,7 @@ export function PullRequestView({
           open={comments}
           onToggle={() => setComments(!comments)}
           aside={
-            <span className="ml-auto flex items-center gap-1 text-[12.5px] text-muted-foreground">
+            <span className="ml-auto flex items-center gap-1 text-body text-muted-foreground">
               <ArrowDownUp aria-hidden className="size-3.5" />
               Newest first
             </span>
@@ -1517,7 +1515,7 @@ export function PullRequestView({
               <li key={i}>{card(c, i)}</li>
             ))}
             {pr.comments.length === 0 && (
-              <li className="text-[13px] text-faint-foreground">No comments</li>
+              <li className="text-body text-faint-foreground">No comments</li>
             )}
           </ul>
         </Section>

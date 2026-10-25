@@ -187,7 +187,7 @@ export function WorkspaceMenu({
               const first = shown[0];
               if (first?.repos[0]) choose({ hostId: first.host.id, repo: first.repos[0] });
             }}
-            className="min-w-0 flex-1 bg-transparent text-[13.5px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </label>
         <div className="max-h-96 min-h-0 overflow-y-auto p-1">
@@ -231,7 +231,7 @@ export function WorkspaceMenu({
             </>
           )}
           {q && shown.length === 0 && (
-            <p className="px-2 py-1.5 text-[12.5px] text-faint-foreground">No matches</p>
+            <p className="px-2 py-1.5 text-body text-faint-foreground">No matches</p>
           )}
         </div>
       </div>
@@ -249,7 +249,7 @@ function ListingNote({ listing }: { listing?: Listing }) {
   else if (listing.repos.length === 0) note = "No repositories yet";
   else return null;
   return (
-    <p title={note} className="line-clamp-3 px-2 pt-0.5 pb-1.5 text-[12px] text-faint-foreground">
+    <p title={note} className="line-clamp-3 px-2 pt-0.5 pb-1.5 text-meta text-faint-foreground">
       {note}
     </p>
   );

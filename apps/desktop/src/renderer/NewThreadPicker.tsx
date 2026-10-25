@@ -69,7 +69,7 @@ export function NewThreadPicker({
         setQuery("");
         setActive(0);
       }}
-      className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
+      className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
     >
       <form
         method="dialog"
@@ -122,13 +122,13 @@ export function NewThreadPicker({
               setQuery(e.target.value);
               setActive(0);
             }}
-            className="min-w-0 flex-1 bg-transparent text-[14px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-reading placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </div>
         <div className="max-h-[50vh] overflow-y-auto px-2 pb-2">
           <p
             id={`${listId}-heading`}
-            className="px-2.5 pt-1 pb-1.5 text-[12px] font-medium text-faint-foreground"
+            className="px-2.5 pt-1 pb-1.5 text-meta font-medium text-faint-foreground"
           >
             Repositories
           </p>
@@ -148,9 +148,9 @@ export function NewThreadPicker({
               >
                 <RepoIcon repo={row.repo} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[14px]">{row.name}</span>
+                  <span className="block truncate text-reading">{row.name}</span>
                   {row.repo && row.value !== noRepo && !row.space && (
-                    <span className="block truncate text-[12.5px] text-muted-foreground">
+                    <span className="block truncate text-body text-muted-foreground">
                       {row.hostName} · {row.repo.path}
                     </span>
                   )}
@@ -160,7 +160,7 @@ export function NewThreadPicker({
             ))}
           </div>
           {shown.length === 0 && (
-            <p className="px-2.5 py-2 text-[13px] text-faint-foreground">No repositories match</p>
+            <p className="px-2.5 py-2 text-body text-faint-foreground">No repositories match</p>
           )}
         </div>
         <Footer keys={[[navigate[0], "Move"], ["Enter", "Pick"], close]} />

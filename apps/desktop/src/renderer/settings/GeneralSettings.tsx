@@ -163,7 +163,7 @@ export function GeneralSettings() {
               className="w-56"
             />
           ) : (
-            targets && <span className="text-[13px] text-muted-foreground">No apps found</span>
+            targets && <span className="text-body text-muted-foreground">No apps found</span>
           )}
         </Row>
         <Row title="Terminal" description="The terminal used to open folders on this computer.">
@@ -194,7 +194,7 @@ export function GeneralSettings() {
       <Updates />
       <Section title="About">
         <Row title="Version">
-          <span className="font-mono text-[12px] text-muted-foreground">{version ?? "…"}</span>
+          <span className="font-mono text-meta text-muted-foreground">{version ?? "…"}</span>
         </Row>
         <Row
           title="Open source licenses"
@@ -212,13 +212,13 @@ export function GeneralSettings() {
         {showNotices &&
           notices.map((n) => (
             <details key={n.name} className="border-t border-border px-4 py-3">
-              <summary className="cursor-pointer text-[13px] font-medium">
+              <summary className="cursor-pointer text-body font-medium">
                 {n.name}{" "}
-                <span className="font-mono text-[12px] font-normal text-muted-foreground">
+                <span className="font-mono text-meta font-normal text-muted-foreground">
                   {n.license}
                 </span>
               </summary>
-              <pre className="mt-2 max-h-64 overflow-auto font-mono text-[11.5px] whitespace-pre-wrap text-muted-foreground">
+              <pre className="mt-2 max-h-64 overflow-auto font-mono text-meta whitespace-pre-wrap text-muted-foreground">
                 {n.text}
               </pre>
             </details>

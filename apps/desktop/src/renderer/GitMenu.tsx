@@ -227,7 +227,7 @@ export function GitMenu({
           {status ? (status.branch ?? "Detached HEAD") : (error ?? "Loading branch…")}
         </span>
         {!!status?.ahead && (
-          <span className="shrink-0 text-[11.5px] text-faint-foreground">{status.ahead} ahead</span>
+          <span className="shrink-0 text-meta text-faint-foreground">{status.ahead} ahead</span>
         )}
       </div>
       {children}
@@ -264,9 +264,7 @@ export function GitMenu({
           >
             <Icon aria-hidden />
             <span className="flex-1">{label}</span>
-            {why[action] && (
-              <span className="text-[11.5px] text-faint-foreground">{why[action]}</span>
-            )}
+            {why[action] && <span className="text-meta text-faint-foreground">{why[action]}</span>}
           </button>
         ))}
       </Menu>
@@ -278,7 +276,7 @@ export function GitMenu({
       >
         <FileDiff aria-hidden />
         <span className="flex-1">Changes</span>
-        <span className="text-[12px] text-muted-foreground">
+        <span className="text-meta text-muted-foreground">
           {status ? (
             <span className="font-mono">
               <span className="text-added">+{status.insertions ?? 0}</span>{" "}
@@ -303,10 +301,10 @@ export function GitMenu({
           }}
         >
           <div className="px-5 pt-4 pb-3">
-            <h2 id={`${id}-commit`} className="text-[15px] font-semibold">
+            <h2 id={`${id}-commit`} className="text-reading font-semibold">
               Commit changes
             </h2>
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+            <p className="mt-0.5 text-body text-muted-foreground">
               Stages every change on {status?.branch ?? "the detached HEAD"} and commits it.
             </p>
           </div>
@@ -317,21 +315,21 @@ export function GitMenu({
               onChange={(e) => setMessage(e.target.value)}
               rows={3}
               spellCheck={false}
-              className="w-full resize-none rounded-lg border border-border bg-transparent px-3 py-2 text-[13px] focus-visible:outline-2 focus-visible:outline-ring"
+              className="w-full resize-none rounded-lg border border-border bg-transparent px-3 py-2 text-body focus-visible:outline-2 focus-visible:outline-ring"
             />
           </div>
           <div className="flex items-center gap-3 border-t border-border px-5 py-3">
             <button
               type="button"
               onClick={() => dialog.current?.close()}
-              className="ml-auto shrink-0 rounded-md px-3 py-1.5 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+              className="ml-auto shrink-0 rounded-md px-3 py-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={!message.trim() || !!busy}
-              className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+              className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
             >
               {busy === "commit" ? "Committing…" : "Commit"}
             </button>

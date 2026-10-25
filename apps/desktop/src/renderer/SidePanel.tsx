@@ -321,8 +321,8 @@ export function SidePanel({
   const emptyOf = (s: Surface) => (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
       <s.icon aria-hidden className="mb-1 size-5 text-faint-foreground" />
-      <p className="text-[13px] font-medium text-foreground">{s.empty?.title}</p>
-      <p className="text-[12.5px] text-muted-foreground">{s.empty?.hint}</p>
+      <p className="text-body font-medium text-foreground">{s.empty?.title}</p>
+      <p className="text-body text-muted-foreground">{s.empty?.hint}</p>
     </div>
   );
   const viewOf = (s: Surface) =>
@@ -390,12 +390,12 @@ export function SidePanel({
                       id={`side-panel-tab-${s.key}`}
                       aria-current={s === current ? "true" : undefined}
                       onClick={() => setActive(s)}
-                      className={`flex items-center gap-1.5 py-1 pl-2 text-[13px] ${pinned.includes(s) ? "pr-2" : ""}`}
+                      className={`flex items-center gap-1.5 py-1 pl-2 text-body ${pinned.includes(s) ? "pr-2" : ""}`}
                     >
                       <Icon aria-hidden className={`size-3.5 ${look?.color ?? ""}`} />
                       {nameOf(s)}
                       {s === overview && !!project?.waiting && (
-                        <span className="font-mono text-[11px] text-warning tabular-nums">
+                        <span className="font-mono text-caption text-warning tabular-nums">
                           {project.waiting}
                         </span>
                       )}
@@ -492,7 +492,7 @@ export function SidePanel({
           aria-labelledby="side-panel-views"
           className="flex flex-1 flex-col items-center justify-center px-8 pb-16"
         >
-          <h2 id="side-panel-views" className="mb-4 text-[14px] font-medium">
+          <h2 id="side-panel-views" className="mb-4 text-reading font-medium">
             Open a view
           </h2>
           <ul className="w-full max-w-72">
@@ -502,11 +502,11 @@ export function SidePanel({
                   type="button"
                   aria-keyshortcuts={s.key}
                   onClick={() => openView(s)}
-                  className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-[13.5px] hover:bg-hover"
+                  className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-body hover:bg-hover"
                 >
                   <s.icon aria-hidden className="size-4 shrink-0" />
                   <span className="flex-1">{nameOf(s)}</span>
-                  <kbd className="grid size-6 place-items-center rounded-md bg-selected font-sans text-[11.5px] text-muted-foreground">
+                  <kbd className="grid size-6 place-items-center rounded-md bg-selected font-sans text-meta text-muted-foreground">
                     {s.key}
                   </kbd>
                 </button>

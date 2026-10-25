@@ -113,7 +113,7 @@ export function browserUrl(address: string): string | undefined {
  * an icon before the text, ringed in the accent while focused. Its input takes `addressInput`.
  */
 export const addressBox =
-  "flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-[10px] border border-transparent bg-[var(--browser-omnibox,var(--selected))] px-3 text-[13.5px] focus-within:border-ring focus-within:bg-background [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
+  "flex h-9 min-w-0 flex-1 items-center gap-2.5 rounded-xl border border-transparent bg-[var(--browser-omnibox,var(--selected))] px-3 text-body focus-within:border-ring focus-within:bg-background [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground";
 export const addressInput =
   "h-full min-w-0 flex-1 bg-transparent outline-none placeholder:text-faint-foreground";
 
@@ -966,12 +966,12 @@ function Tab({
                     addressBar.current?.blur();
                   }}
                   onMouseEnter={() => setPicked(i)}
-                  className={`flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-[13px] ${i === picked ? "bg-hover" : ""}`}
+                  className={`flex cursor-default items-center gap-2.5 rounded-md px-2 py-1.5 text-body ${i === picked ? "bg-hover" : ""}`}
                 >
                   <Icon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
                   <span className="truncate">{s.title}</span>
                   {s.kind !== "search" && s.kind !== "go" && (
-                    <span className="shrink-0 truncate text-[12px] text-faint-foreground">
+                    <span className="shrink-0 truncate text-meta text-faint-foreground">
                       {shortUrl(s.url)}
                     </span>
                   )}
@@ -985,7 +985,7 @@ function Tab({
             type="button"
             title="Reset zoom"
             onClick={() => zoomTo(1)}
-            className="shrink-0 rounded-md px-1.5 py-0.5 text-[11.5px] text-muted-foreground tabular-nums hover:bg-hover hover:text-foreground"
+            className="shrink-0 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground tabular-nums hover:bg-hover hover:text-foreground"
           >
             {Math.round(zoom * 100)}%
           </button>
@@ -1060,7 +1060,7 @@ function Tab({
         <hr className={toolbarMenuDivider} />
         <div role="group" aria-label="Zoom" className="flex h-9 items-center gap-3 pr-1 pl-2.5">
           <ZoomIn aria-hidden className="size-[18px] shrink-0 text-muted-foreground" />
-          <span className="flex-1 text-[13px]">Zoom</span>
+          <span className="flex-1 text-body">Zoom</span>
           <span className="flex items-center rounded-lg bg-selected">
             {(
               [
@@ -1070,7 +1070,7 @@ function Tab({
             ).map(([label, direction, Icon], i) => (
               <span key={label} className="contents">
                 {i === 1 && (
-                  <span className="w-11 text-center text-[12.5px] tabular-nums">
+                  <span className="w-11 text-center text-body tabular-nums">
                     {Math.round(zoom * 100)}%
                   </span>
                 )}
@@ -1173,7 +1173,7 @@ function Tab({
       )}
       <BookmarksBar onOpen={(url, newTab) => (newTab ? ask({ kind: "open", url }) : open(url))} />
       {remoteHost && (
-        <p className="border-b border-border px-3 py-1.5 text-[12px] text-muted-foreground">
+        <p className="border-b border-border px-3 py-1.5 text-meta text-muted-foreground">
           Pages load on this computer, so localhost isn't {remoteHost}. Forwarding its ports isn't
           built yet.
         </p>
@@ -1184,7 +1184,7 @@ function Tab({
             role="search"
             aria-label="Find in page"
             onSubmit={(e) => e.preventDefault()}
-            className="absolute top-1 right-3 z-20 flex items-center gap-0.5 rounded-lg border border-border bg-surface py-1 pr-1 pl-2.5 text-[12.5px] shadow-composer"
+            className="absolute top-1 right-3 z-20 flex items-center gap-0.5 rounded-lg border border-border bg-surface py-1 pr-1 pl-2.5 text-body shadow-composer"
           >
             <input
               ref={findBar}
@@ -1203,7 +1203,7 @@ function Tab({
               }}
               className="w-44 bg-transparent outline-none placeholder:text-faint-foreground"
             />
-            <span className="w-14 text-right text-[11.5px] text-muted-foreground tabular-nums">
+            <span className="w-14 text-right text-meta text-muted-foreground tabular-nums">
               {query && matches ? `${matches.active} of ${matches.total}` : ""}
             </span>
             <IconButton label="Previous match" onClick={() => find(query, -1)}>
@@ -1258,10 +1258,10 @@ function Tab({
         {error && (
           <div className="solid absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-background px-8 pb-16 text-center">
             <TriangleAlert aria-hidden className="mb-1 size-5 text-faint-foreground" />
-            <p role="alert" className="text-[13px] font-medium text-foreground">
+            <p role="alert" className="text-body font-medium text-foreground">
               Can't open {error.url}
             </p>
-            <p className="text-[12.5px] break-all text-muted-foreground">{error.description}</p>
+            <p className="text-body break-all text-muted-foreground">{error.description}</p>
           </div>
         )}
       </div>
@@ -1362,7 +1362,7 @@ function BrowserTab({
   );
   return (
     <div
-      className={`group flex h-9 w-60 min-w-10 shrink items-center rounded-[10px] text-[13px] ${selected ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
+      className={`group flex h-9 w-60 min-w-10 shrink items-center rounded-xl text-body ${selected ? "bg-[var(--browser-tab,var(--selected))] text-foreground" : "text-muted-foreground hover:bg-hover hover:text-foreground"}`}
     >
       <button
         type="button"
@@ -1427,7 +1427,7 @@ export function ThemePicker() {
       {/* Parallax and Helium side by side, Chrome's many on a row of their own. */}
       {themeGroups.map((group) => (
         <div key={group.name} className={group.ids.length > 1 ? "basis-full" : ""}>
-          <p className="mb-2 text-[12px] text-muted-foreground">{group.name}</p>
+          <p className="mb-2 text-meta text-muted-foreground">{group.name}</p>
           <div className="grid grid-cols-[repeat(auto-fill,7rem)] gap-3">
             {group.ids.map((id) => {
               const theme = browserThemes.find((t) => t.id === id)!;
@@ -1448,7 +1448,7 @@ export function ThemePicker() {
                     className={`flex h-14 w-full flex-col overflow-hidden rounded-lg border ${on ? "border-accent ring-2 ring-accent/40" : "border-border group-hover:border-faint-foreground"} group-focus-visible:ring-2 group-focus-visible:ring-ring`}
                   >
                     <span className="flex h-4 items-end gap-1 px-1.5">
-                      <span style={{ background: c.tab }} className="h-3 w-7 rounded-t" />
+                      <span style={{ background: c.tab }} className="h-3 w-7 rounded-t-sm" />
                       <span
                         style={{ background: c.icon }}
                         className="mb-1 h-1 w-4 rounded-full opacity-40"
@@ -1466,7 +1466,7 @@ export function ThemePicker() {
                     </span>
                   </span>
                   <span
-                    className={`truncate text-[12px] ${on ? "text-foreground" : "text-muted-foreground"}`}
+                    className={`truncate text-meta ${on ? "text-foreground" : "text-muted-foreground"}`}
                   >
                     {theme.name}
                   </span>

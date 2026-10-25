@@ -22,14 +22,14 @@ let page: Page;
 /**
  * Waits until Thread details, kept shown in the open thread, shows as its row's width calls for
  * (ThreadDetails.tsx): with room, docked; without it (the thread would keep under 60% of the row
- * beside the 300px card), collapsed or floating. Resizes reach it a frame later.
+ * beside the card's 268px, `DOCKED_WIDTH`), collapsed or floating. Resizes reach it a frame later.
  */
 async function settled(panel: Locator) {
   await expect
     .poll(() =>
       panel.evaluate((aside) => {
         const width = aside.parentElement!.getBoundingClientRect().width;
-        const narrow = width - 300 < width * 0.6;
+        const narrow = width - 268 < width * 0.6;
         const mode = aside.dataset["mode"];
         const ok = narrow ? mode !== "docked" : mode === "docked";
         return ok ? "settled" : "settling";

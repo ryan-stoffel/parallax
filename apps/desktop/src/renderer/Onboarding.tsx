@@ -49,13 +49,13 @@ const steps = ["Account", "Agents", "Import", "Tour", "Start"];
 const tourStep = steps.indexOf("Tour");
 
 const bigPrimary =
-  "flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[13.5px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-4";
+  "flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-4";
 const bigOutline =
-  "flex items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-4 py-2 text-[13.5px] font-medium hover:bg-hover disabled:opacity-50";
+  "flex items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-4 py-2 text-body font-medium hover:bg-hover disabled:opacity-50";
 const quiet =
-  "flex items-center gap-1 rounded-lg px-3 py-2 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4";
+  "flex items-center gap-1 rounded-lg px-3 py-2 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4";
 const small =
-  "shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-[12.5px] font-medium hover:bg-hover";
+  "shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-body font-medium hover:bg-hover";
 
 /** A plan a CLI reports in lowercase ("max") capitalized; an email as it is. */
 const capitalized = (text: string) =>
@@ -110,11 +110,11 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
         if (e.key === "ArrowRight" && slide < tour.length - 1) setSlide(slide + 1);
         if (e.key === "ArrowLeft" && slide > 0) setSlide(slide - 1);
       }}
-      className="m-auto h-[40rem] max-h-[92vh] w-[48rem] max-w-[94vw] overflow-hidden rounded-2xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50 backdrop:backdrop-blur-sm"
+      className="m-auto h-[40rem] max-h-[92vh] w-[48rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50 backdrop:backdrop-blur-sm"
     >
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between gap-4 px-5 pt-4">
-          <span className="flex w-28 items-center gap-1.5 font-brand text-[13px] font-semibold text-muted-foreground">
+          <span className="flex w-28 items-center gap-1.5 font-brand text-body font-semibold text-muted-foreground">
             <ParallaxMark className="size-4" />
             Parallax
           </span>
@@ -272,20 +272,20 @@ function AccountStep({
   return (
     <div className="flex flex-col items-center pt-4 text-center">
       <Hero />
-      <h1 id={titleId} className="font-brand text-[28px] font-semibold tracking-tight">
+      <h1 id={titleId} className="text-display font-semibold tracking-tight">
         Welcome to Parallax
       </h1>
-      <p className="mt-2 max-w-md text-[14px] text-muted-foreground">
+      <p className="mt-2 max-w-md text-reading text-muted-foreground">
         Run Claude Code, Codex, Cursor, and more side by side, on every computer you use.
       </p>
       {profile ? (
-        <div className="onboard-rise mt-9 flex items-center gap-3 rounded-2xl border border-border bg-surface py-3 pr-5 pl-3 text-left">
+        <div className="onboard-rise mt-9 flex items-center gap-3 rounded-xl border border-border bg-surface py-3 pr-5 pl-3 text-left">
           <Avatar profile={profile} size={40} />
           <div className="min-w-0">
-            <p className="truncate text-[14px] font-medium">
+            <p className="truncate text-reading font-medium">
               {profile.firstName ? `Welcome, ${profile.firstName}` : "You're signed in"}
             </p>
-            <p className="truncate text-[12.5px] text-muted-foreground">{profile.email}</p>
+            <p className="truncate text-body text-muted-foreground">{profile.email}</p>
           </div>
           <Check aria-hidden className="ml-2 size-5 text-added" />
         </div>
@@ -297,7 +297,7 @@ function AccountStep({
           <button type="button" onClick={() => void signIn(false)} className={bigOutline}>
             I already have an account
           </button>
-          <p role="status" className="mt-2 min-h-10 text-[12.5px] text-muted-foreground">
+          <p role="status" className="mt-2 min-h-10 text-body text-muted-foreground">
             {waiting
               ? "Finish in your browser, then come back here."
               : (note ?? "Your account links your computers and your phone to Parallax.")}
@@ -315,10 +315,10 @@ function AccountStep({
 function Heading({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <div className="mb-5">
-      <h1 id={id} className="font-brand text-[22px] font-semibold tracking-tight">
+      <h1 id={id} className="text-display font-semibold tracking-tight">
         {title}
       </h1>
-      <p className="mt-1 text-[13.5px] text-muted-foreground">{children}</p>
+      <p className="mt-1 text-body text-muted-foreground">{children}</p>
     </div>
   );
 }
@@ -427,10 +427,7 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
             : `None are ready on ${hostName} yet. Install or sign in to one to start a thread.`}
       </Heading>
       {connection?.status === "failed" ? (
-        <p
-          role="alert"
-          className="rounded-xl border border-border bg-surface px-4 py-3 text-[13px]"
-        >
+        <p role="alert" className="rounded-xl border border-border bg-surface px-4 py-3 text-body">
           Parallax couldn't start on {hostName}. You can set up agents later in Settings &gt;
           Providers.
         </p>
@@ -458,7 +455,7 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
             } else if (info && ready(info)) {
               line = info.account ? `Ready · ${capitalized(info.account)}` : "Ready";
               action = (
-                <span className="onboard-pop flex shrink-0 items-center gap-1 rounded-full bg-added/15 px-2.5 py-1 text-[12px] font-medium text-added [&_svg]:size-3.5">
+                <span className="onboard-pop flex shrink-0 items-center gap-1 rounded-full bg-added/15 px-2.5 py-1 text-meta font-medium text-added [&_svg]:size-3.5">
                   <Check aria-hidden />
                   Set up
                 </span>
@@ -502,15 +499,15 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="flex items-baseline gap-2">
-                    <span className="text-[13.5px] font-medium">{agent.name}</span>
+                    <span className="text-body font-medium">{agent.name}</span>
                     {info?.version && (
-                      <span className="truncate font-mono text-[11.5px] text-faint-foreground">
+                      <span className="truncate font-mono text-meta text-faint-foreground">
                         {info.version}
                       </span>
                     )}
                   </p>
                   <p
-                    className={`truncate text-[12.5px] text-muted-foreground ${looking ? "onboard-scan" : ""}`}
+                    className={`truncate text-body text-muted-foreground ${looking ? "onboard-scan" : ""}`}
                   >
                     {line}
                   </p>
@@ -611,7 +608,7 @@ function Parallel() {
             style={after(i * 120)}
             className={`onboard-rise absolute w-[11.5rem] rounded-xl border border-border bg-surface p-3 shadow-composer ${at}`}
           >
-            <p className="mb-2.5 flex items-center gap-2 text-[12px] font-medium">
+            <p className="mb-2.5 flex items-center gap-2 text-meta font-medium">
               <Logo className="size-3.5 shrink-0" />
               <span className="truncate">{title}</span>
               <span className="ml-auto size-1.5 shrink-0 animate-pulse rounded-full bg-working" />
@@ -634,7 +631,7 @@ function Parallel() {
       <Layer depth={34} className="flex items-end justify-center pb-[9%]">
         <span
           style={after(500)}
-          className="onboard-pop flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-[12px] font-medium whitespace-nowrap shadow-composer"
+          className="onboard-pop flex items-center gap-1.5 rounded-full border border-border bg-background px-3 py-1.5 text-meta font-medium whitespace-nowrap shadow-composer"
         >
           <span className="size-1.5 animate-pulse rounded-full bg-working" />3 threads, 3 worktrees
         </span>
@@ -672,13 +669,13 @@ function Delegate() {
       <Layer depth={24}>
         <div
           style={pos(200, 60)}
-          className="onboard-pop absolute -translate-1/2 rounded-2xl border border-border bg-surface px-4 py-2.5 shadow-composer"
+          className="onboard-pop absolute -translate-1/2 rounded-xl border border-border bg-surface px-4 py-2.5 shadow-composer"
         >
-          <p className="flex items-center gap-2 text-[13px] font-semibold">
+          <p className="flex items-center gap-2 text-body font-semibold">
             <ParallaxMark className="size-5" />
             Coordinator
           </p>
-          <p className="mt-0.5 text-[11.5px] text-muted-foreground">Ship the billing API</p>
+          <p className="mt-0.5 text-meta text-muted-foreground">Ship the billing API</p>
         </div>
       </Layer>
       <Layer depth={16}>
@@ -686,7 +683,7 @@ function Delegate() {
           <div key={name} style={pos(x, y)} className="absolute -translate-1/2">
             <span
               style={after(700 + i * 150)}
-              className="onboard-pop flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-[12px] font-medium shadow-composer"
+              className="onboard-pop flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1.5 text-meta font-medium shadow-composer"
             >
               <Logo className="size-3.5" />
               {name}
@@ -717,10 +714,10 @@ function Review() {
   return (
     <>
       <Layer depth={10}>
-        <div className="onboard-rise absolute top-[10%] left-1/2 w-[24rem] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-surface font-mono text-[11px] shadow-composer">
-          <p className="flex items-center justify-between border-b border-border px-3 py-2 font-sans text-[12px] font-medium">
+        <div className="onboard-rise absolute top-[10%] left-1/2 w-[24rem] -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-surface font-mono text-caption shadow-composer">
+          <p className="flex items-center justify-between border-b border-border px-3 py-2 font-sans text-meta font-medium">
             src/session.ts
-            <span className="font-mono text-[11px]">
+            <span className="font-mono text-caption">
               <span className="text-added">+3</span> <span className="text-danger">−1</span>
             </span>
           </p>
@@ -739,11 +736,11 @@ function Review() {
       <Layer depth={30}>
         <span
           style={after(1300)}
-          className="onboard-pop absolute right-[8%] bottom-[8%] flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-[12px] font-medium shadow-composer [&_svg]:size-4"
+          className="onboard-pop absolute right-[8%] bottom-[8%] flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-meta font-medium shadow-composer [&_svg]:size-4"
         >
           <GitPullRequest aria-hidden className="text-added" />
           Pull request #128
-          <span className="rounded-full bg-added/15 px-2 py-0.5 text-[11px] text-added">
+          <span className="rounded-full bg-added/15 px-2 py-0.5 text-caption text-added">
             Checks passed
           </span>
         </span>
@@ -776,11 +773,11 @@ function Anywhere() {
         <Layer key={name} depth={depth}>
           <div
             style={{ left: `${18 + i * 32}%`, ...after(i * 150) }}
-            className={`onboard-pop absolute top-1/2 flex -translate-1/2 flex-col items-center rounded-2xl border border-border bg-surface shadow-composer ${i === 1 ? "px-6 py-4" : "px-4 py-3"}`}
+            className={`onboard-pop absolute top-1/2 flex -translate-1/2 flex-col items-center rounded-xl border border-border bg-surface shadow-composer ${i === 1 ? "px-6 py-4" : "px-4 py-3"}`}
           >
             <Icon aria-hidden className={`text-accent ${i === 1 ? "size-8" : "size-6"}`} />
-            <p className="mt-2 text-[12px] font-medium whitespace-nowrap">{name}</p>
-            <p className="text-[11px] text-muted-foreground">{note}</p>
+            <p className="mt-2 text-meta font-medium whitespace-nowrap">{name}</p>
+            <p className="text-caption text-muted-foreground">{note}</p>
           </div>
         </Layer>
       ))}
@@ -824,7 +821,7 @@ function Tour({
   const { title, body, Scene } = tour[slide]!;
   return (
     <div>
-      <div className="relative h-64 overflow-hidden rounded-2xl border border-border bg-sidebar">
+      <div className="relative h-64 overflow-hidden rounded-xl border border-border bg-sidebar">
         <Layer depth={-8} className="onboard-dots">
           <span className="onboard-glow absolute top-[-20%] left-[10%] size-48 rounded-full bg-mark-blue/25 blur-3xl" />
           <span className="onboard-glow absolute right-[5%] bottom-[-30%] size-48 rounded-full bg-mark-coral/25 blur-3xl [animation-delay:-3s]" />
@@ -834,10 +831,10 @@ function Tour({
         </div>
       </div>
       <div key={`text-${slide}`} className="onboard-rise mt-6">
-        <h1 id={titleId} className="font-brand text-[22px] font-semibold tracking-tight">
+        <h1 id={titleId} className="text-display font-semibold tracking-tight">
           {title}
         </h1>
-        <p className="mt-1.5 max-w-xl text-[13.5px] text-muted-foreground">{body}</p>
+        <p className="mt-1.5 max-w-xl text-body text-muted-foreground">{body}</p>
       </div>
       <div role="tablist" aria-label="Tour" className="mt-5 flex gap-1.5">
         {tour.map((s, i) => (
@@ -861,8 +858,8 @@ function Keys({ command, name }: { command: Command; name: string }) {
   const binding = bindingsOf(command)[0];
   if (!binding) return null;
   return (
-    <span className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
-      <kbd className="rounded-md border border-border bg-surface px-1.5 py-0.5 font-sans text-[12px] text-foreground shadow-[0_1px_0_var(--border)]">
+    <span className="flex items-center gap-2 text-body text-muted-foreground">
+      <kbd className="rounded-md border border-border bg-surface px-1.5 py-0.5 font-sans text-meta text-foreground shadow-[0_1px_0_var(--border)]">
         {formatKeybinding(binding)}
       </kbd>
       {name}
@@ -882,7 +879,7 @@ function DoneStep({
 }) {
   const on = providers?.filter((p) => p.instance.enabled && ready(p)) ?? [];
   const card =
-    "onboard-rise flex items-center gap-3 rounded-2xl border border-border bg-surface p-4";
+    "onboard-rise flex items-center gap-3 rounded-xl border border-border bg-surface p-4";
   return (
     <div className="flex flex-col items-center pt-4 text-center">
       <svg aria-hidden viewBox="0 0 16 16" className="plan-check-draw mb-5 size-16 text-added">
@@ -897,10 +894,10 @@ function DoneStep({
           strokeLinejoin="round"
         />
       </svg>
-      <h1 id={titleId} className="font-brand text-[26px] font-semibold tracking-tight">
+      <h1 id={titleId} className="text-display font-semibold tracking-tight">
         {profile?.firstName ? `You're all set, ${profile.firstName}` : "You're all set"}
       </h1>
-      <p className="mt-2 max-w-md text-[13.5px] text-muted-foreground">
+      <p className="mt-2 max-w-md text-body text-muted-foreground">
         Pick a folder and tell an agent what to build. Start as many threads as you like.
       </p>
       <div className="mt-8 grid w-full max-w-lg grid-cols-2 gap-3 text-left">
@@ -911,10 +908,10 @@ function DoneStep({
             <ParallaxMark className="size-8 shrink-0" />
           )}
           <div className="min-w-0">
-            <p className="truncate text-[13px] font-medium">
+            <p className="truncate text-body font-medium">
               {profile ? profile.name || profile.email : "No account yet"}
             </p>
-            <p className="truncate text-[12px] text-muted-foreground">
+            <p className="truncate text-meta text-muted-foreground">
               {profile ? "Parallax account" : "Sign in from the profile menu"}
             </p>
           </div>
@@ -938,10 +935,10 @@ function DoneStep({
             <Bot aria-hidden className="size-8 shrink-0 text-faint-foreground" />
           )}
           <div className="min-w-0">
-            <p className="truncate text-[13px] font-medium">
+            <p className="truncate text-body font-medium">
               {on.length === 1 ? "1 agent ready" : `${on.length} agents ready`}
             </p>
-            <p className="truncate text-[12px] text-muted-foreground">
+            <p className="truncate text-meta text-muted-foreground">
               {on.length ? on.map((p) => p.instance.name).join(", ") : "Add one in Settings"}
             </p>
           </div>

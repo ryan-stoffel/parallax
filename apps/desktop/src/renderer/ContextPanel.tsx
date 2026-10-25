@@ -144,7 +144,7 @@ function ContextDoc({
       className="context-doc min-h-0 flex-1 overflow-y-auto px-4 pt-2 pb-4"
     >
       {error ? (
-        <p role="alert" className="text-[12.5px] text-danger">
+        <p role="alert" className="text-body text-danger">
           {error}
         </p>
       ) : (
@@ -176,7 +176,7 @@ export function ContextBody({
   return (
     <div aria-label={file.path} className="context-doc context-board">
       {error ? (
-        <p role="alert" className="text-[12.5px] text-danger">
+        <p role="alert" className="text-body text-danger">
           {error}
         </p>
       ) : (
@@ -255,8 +255,8 @@ export function AllFiles({
             ) : (
               <Folder aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
             )}
-            <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">{row.name}</span>
-            <span className="shrink-0 text-[11.5px] text-faint-foreground">{when(row.at)}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-body">{row.name}</span>
+            <span className="shrink-0 text-meta text-faint-foreground">{when(row.at)}</span>
           </>
         );
         const indent = { paddingLeft: 10 + row.depth * 16 };
@@ -363,7 +363,7 @@ export function ContextReader({
       <button
         type="button"
         onClick={onBack}
-        className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+        className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
       >
         <ChevronLeft aria-hidden className="size-4 shrink-0" />
         <span className="truncate">{file.path}</span>

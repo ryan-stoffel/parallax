@@ -191,31 +191,34 @@
 :root.dark,
 .scheme-dark {
   color-scheme: dark;
-  --background: #0b0b10;
-  --sidebar: #121218;
-  --surface: #17171f;
-  --foreground: #ededf4;
-  --muted-foreground: #a6a5b9;
-  --faint-foreground: #878699;
-  --border: rgb(237 237 244 / 8%);
-  --hover: rgb(237 237 244 / 4.5%);
-  --selected: rgb(237 237 244 / 8%);
+  /* Near black with no tint, as T3 Code's dark mode is: a black sidebar, the thread a step above
+     it, and raised surfaces (the composer, cards, menus) a step above that. */
+  --background: #0a0a0a;
+  --sidebar: #000000;
+  --surface: #141414;
+  --foreground: #ededed;
+  --muted-foreground: #a3a3a3;
+  --faint-foreground: #8a8a8a;
+  --border: rgb(255 255 255 / 8%);
+  --hover: rgb(255 255 255 / 5%);
+  --selected: rgb(255 255 255 / 8%);
   /* The logo's blue, lifted to read on the dark, as --danger lifts its coral. */
   --accent: #5b80ff;
-  /* The accent, darkened: mixed toward a black with no chroma or hue, so it keeps the accent's. */
-  --send: color-mix(in oklch, var(--accent) 68%, oklch(0 none none));
-  --primary: #ededf4;
-  --primary-foreground: #0b0b10;
+  /* The accent, darkened a little: mixed toward a black with no chroma or hue, so it keeps the
+     accent's, and dark enough for white text. */
+  --send: color-mix(in oklch, var(--accent) 84%, oklch(0 none none));
+  --primary: #ededed;
+  --primary-foreground: #0a0a0a;
   --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
-  --code: #121218;
+  --code: #111111;
   --syntax-keyword: #7b9bff;
   --syntax-string: #ff8a65;
   --syntax-number: #c4b5fd;
   --syntax-title: #a5b4fc;
   --syntax-type: #f9a8d4;
-  --syntax-comment: #7d7c93;
+  --syntax-comment: #8a8a8a;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
   --project-red: #f87171;
   --project-orange: #fb923c;
@@ -346,6 +349,12 @@
 :root.nightly .send-sky:enabled:hover {
   filter: brightness(1.15);
 }
+/* A send button with nothing to send is a plain gray circle, as it is outside a nightly. */
+:root.nightly .send-sky:disabled {
+  background: var(--selected);
+  color: var(--faint-foreground);
+  box-shadow: none;
+}
 :root.nightly:not(.reduce-motion) .night-sky .twinkle {
   animation: twinkle 4s ease-in-out infinite;
 }
@@ -423,9 +432,33 @@
   zoom: var(--code-zoom, 1);
 }
 
+/* The type scale (docs/decisions/0085-ui-style-guide.md): every font size is one of these. Each
+   sets only the size, so text keeps the line height around it. */
+@theme {
+  --text-*: initial;
+  --text-micro: 10px;
+  --text-caption: 11px;
+  --text-meta: 12px;
+  --text-body: 13px;
+  --text-reading: 14px;
+  --text-heading: 18px;
+  --text-display: 24px;
+  --text-hero: 40px;
+  /* The radius scale: marks, controls, rows and menus, and surfaces (panels, dialogs, the
+     composer). */
+  --radius-*: initial;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+}
+
 @theme inline {
-  /* A font the user picked in Appearance comes first. */
-  --font-sans: var(--ui-font, -apple-system), BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* A font the user picked in Appearance comes first, else Inter, the same on every OS
+     (0085). */
+  --font-sans:
+    var(--ui-font, "Inter Variable"), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
   --font-mono:
     var(--code-font, "JetBrains Mono Nerd Font"), "JetBrainsMono Nerd Font", ui-monospace,
     SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -676,6 +709,10 @@ body {
 .markdown > * + * {
   margin-top: 0.75em;
 }
+/* Bold at the scale's heaviest weight (0085), not the browser's 700. */
+.markdown :is(strong, b) {
+  font-weight: 600;
+}
 .markdown :is(h1, h2, h3, h4) {
   font-weight: 600;
   line-height: 1.3;
@@ -685,11 +722,10 @@ body {
 .markdown > :is(h1, h2, h3, h4):first-child {
   margin-top: 0;
 }
-.markdown h1 {
-  font-size: 1.35em;
-}
-.markdown h2 {
-  font-size: 1.15em;
+/* Headings on the type scale (0085): h1 and h2 at --text-heading, h3 and h4 at the text's own
+   size, set apart by weight. */
+.markdown :is(h1, h2) {
+  font-size: 18px;
 }
 .markdown :is(h3, h4) {
   font-size: 1em;
@@ -733,11 +769,12 @@ body {
 }
 .markdown :not(pre) > code {
   border: 1px solid var(--border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--code);
   padding: 0.1em 0.35em;
   font-family: var(--font-mono);
-  font-size: 0.86em;
+  /* --text-body, wherever it sits. */
+  font-size: 13px;
 }
 /* A table scrolls on its own, in a rounded box, with its header on a fill. */
 .markdown table {
@@ -863,7 +900,7 @@ body {
 /* The composer's editor (Composer.tsx): the transcript's Markdown at the box's size, lines (its
    paragraphs) with no gap, and code blocks drawn as the transcript's CodeBlock draws them. */
 .composer-input.markdown {
-  font-size: 15px;
+  font-size: 14px;
   line-height: 1.625;
 }
 .composer-input > :first-child,
@@ -891,7 +928,7 @@ body {
   background: var(--code);
   padding: 0.75rem;
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 /* The reasoning slider (EffortMenu.tsx). An invisible range takes input; the track, fill, and
@@ -2137,7 +2174,7 @@ body {
   padding: 0 3px;
   overflow: hidden;
   border-radius: 4px;
-  font-size: 9.5px;
+  font-size: 10px;
   line-height: 13px;
   white-space: nowrap;
   pointer-events: none;

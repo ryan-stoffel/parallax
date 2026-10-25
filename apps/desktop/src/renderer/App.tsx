@@ -1111,7 +1111,7 @@ export function App() {
   // The side panel is a chat's, so Settings has none.
   const chat = !settings;
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
-  const [requestedWidths, setRequestedWidths] = useState<[number, number]>([256, 416]);
+  const [requestedWidths, setRequestedWidths] = useState<[number, number]>([288, 416]);
   useEffect(() => {
     const resize = () => setViewportWidth(window.innerWidth);
     window.addEventListener("resize", resize);
@@ -1398,7 +1398,7 @@ export function App() {
                           aria-hidden
                           className={`pointer-events-none absolute inset-y-2 z-20 grid w-[calc(50%-1rem)] place-items-center rounded-xl border-2 border-dashed border-accent bg-background/85 backdrop-blur-sm ${dropSide === 0 ? "left-2" : "right-2"}`}
                         >
-                          <span className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-[13px] font-medium text-accent-foreground [&_svg]:size-4">
+                          <span className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-body font-medium text-accent-foreground [&_svg]:size-4">
                             <Columns2 />
                             {paired ? "Open here" : "Open side by side"}
                           </span>
@@ -1878,7 +1878,7 @@ function PaneHeader({
   const keys = useShortcutLabel(side === 0 ? "leftThread" : "rightThread");
   return (
     <div
-      className={`relative flex h-9 shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-4 text-[12.5px] transition-colors ${focused ? "text-foreground" : "text-faint-foreground"}`}
+      className={`relative flex h-9 shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-4 text-body transition-colors ${focused ? "text-foreground" : "text-faint-foreground"}`}
     >
       {focused && <span aria-hidden className="absolute inset-x-0 -bottom-px h-0.5 bg-accent" />}
       <span className={`flex shrink-0 ${focused ? "" : "opacity-60"}`}>
@@ -1886,7 +1886,7 @@ function PaneHeader({
       </span>
       <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
       {keys && (
-        <kbd className="shrink-0 font-sans text-[11px] text-faint-foreground tabular-nums">
+        <kbd className="shrink-0 font-sans text-caption text-faint-foreground tabular-nums">
           {keys}
         </kbd>
       )}

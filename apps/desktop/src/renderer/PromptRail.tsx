@@ -89,9 +89,9 @@ export function PromptRail({
           style={{ top: shown.middle }}
           className="pointer-events-none absolute left-full ml-2 w-80 -translate-y-1/2 rounded-xl border border-border bg-surface px-4 py-3 shadow-composer"
         >
-          <p className="line-clamp-3 text-[14px] break-words text-foreground">{prompt.text}</p>
+          <p className="line-clamp-3 text-reading break-words text-foreground">{prompt.text}</p>
           {reply && (
-            <p className="mt-1 line-clamp-3 text-[13px] leading-relaxed break-words text-muted-foreground">
+            <p className="mt-1 line-clamp-3 text-body leading-relaxed break-words text-muted-foreground">
               {reply}
             </p>
           )}
@@ -107,7 +107,7 @@ export function ScrollToEnd({ onClick }: { onClick: () => void }) {
     <button
       type="button"
       onClick={onClick}
-      className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-surface py-1.5 pr-3.5 pl-2.5 text-[13px] text-muted-foreground shadow-composer hover:text-foreground [&_svg]:size-4"
+      className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-surface py-1.5 pr-3.5 pl-2.5 text-body text-muted-foreground shadow-composer hover:text-foreground [&_svg]:size-4"
     >
       <ChevronDown aria-hidden />
       Scroll to end

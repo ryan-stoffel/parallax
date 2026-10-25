@@ -56,14 +56,14 @@ export function ConnectSettings() {
               onChange={(on) => void toggle(on)}
             />
           ) : (
-            <span className="text-[12.5px] text-muted-foreground">Checking…</span>
+            <span className="text-body text-muted-foreground">Checking…</span>
           )}
         </Row>
       </Section>
       {connect?.on && (
         <section aria-label="Computers" className="mb-8">
           <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
-            <h2 className="text-[12.5px] font-medium text-muted-foreground">Computers</h2>
+            <h2 className="text-reading font-semibold">Computers</h2>
             <button
               type="button"
               onClick={() => setAdding(true)}
@@ -86,8 +86,8 @@ export function ConnectSettings() {
           {!devices.length && (
             <div className="mt-2 flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-8 text-center">
               <Network aria-hidden className="size-6 text-faint-foreground" />
-              <p className="text-[13px] font-medium">No other computers yet</p>
-              <p className="max-w-sm text-[12.5px] text-muted-foreground">
+              <p className="text-body font-medium">No other computers yet</p>
+              <p className="max-w-sm text-body text-muted-foreground">
                 Add a computer on your tailnet. Parallax installs itself there over SSH.
               </p>
               <button type="button" className={primaryButton} onClick={() => setAdding(true)}>
@@ -234,28 +234,28 @@ function DeviceCard({
             onCancel={() => setRenaming(false)}
           />
         ) : (
-          <p className="flex items-baseline gap-2 truncate text-[14px] font-medium">
+          <p className="flex items-baseline gap-2 truncate text-reading font-medium">
             {device.name}
             {local && (
-              <span className="text-[12.5px] font-normal text-faint-foreground">This computer</span>
+              <span className="text-body font-normal text-faint-foreground">This computer</span>
             )}
           </p>
         )}
         <p
           title={state?.status === "failed" ? state.error.message : undefined}
-          className="truncate text-[12.5px] text-muted-foreground"
+          className="truncate text-body text-muted-foreground"
         >
           {details.join(" · ")}
         </p>
         {health && (
-          <p className="text-[12px] text-faint-foreground">
+          <p className="text-meta text-faint-foreground">
             {health.latency} ms · up {uptime(health.uptimeSeconds)} ·{" "}
             {health.runningAgents === 1 ? "1 agent" : `${health.runningAgents} agents`} running
             {health.store !== "ok" && ` · store ${health.store}`}
           </p>
         )}
         {enabled && state?.status === "failed" && (
-          <p className="text-[12px] text-faint-foreground">{state.error.message}</p>
+          <p className="text-meta text-faint-foreground">{state.error.message}</p>
         )}
       </div>
       {!local && (
@@ -338,9 +338,7 @@ function DeviceCard({
           >
             <DeviceIcon icon={each} />
             <span className="flex-1">{deviceIconNames[each]}</span>
-            {each === detected && (
-              <span className="text-[12px] text-faint-foreground">detected</span>
-            )}
+            {each === detected && <span className="text-meta text-faint-foreground">detected</span>}
             {each === device.icon && <Check aria-hidden />}
           </button>
         ))}
@@ -352,8 +350,8 @@ function DeviceCard({
           className="m-auto w-[24rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
         >
           <form method="dialog" className="px-5 pt-4 pb-4">
-            <h2 className="text-[15px] font-semibold">Remove {device.name} from this device?</h2>
-            <p className="mt-1.5 text-[13px] text-muted-foreground">
+            <h2 className="text-reading font-semibold">Remove {device.name} from this device?</h2>
+            <p className="mt-1.5 text-body text-muted-foreground">
               Parallax here stops connecting to it, and its threads leave this sidebar. Nothing on{" "}
               {device.name} changes, and your other computers still reach it. Add it again from Add
               computer.
@@ -364,7 +362,7 @@ function DeviceCard({
               </button>
               <button
                 type="submit"
-                className="rounded-md bg-red-600 px-3 py-1 text-[12.5px] font-medium text-white hover:opacity-90"
+                className="rounded-md bg-red-600 px-3 py-1 text-body font-medium text-white hover:opacity-90"
                 onClick={() => void window.parallax.removeDevice(device.id)}
               >
                 Remove

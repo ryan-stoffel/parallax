@@ -482,7 +482,7 @@ export function CommandMenu({
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) dialog.current?.close();
       }}
-      className="mx-auto mt-[14vh] w-[40rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
+      className="mx-auto mt-[14vh] w-[40rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
     >
       <div
         onKeyDown={(e) => {
@@ -514,7 +514,7 @@ export function CommandMenu({
             </button>
           )}
           {page !== "root" && (
-            <span className="shrink-0 rounded-md bg-selected px-1.5 py-0.5 text-[12px] text-foreground">
+            <span className="shrink-0 rounded-md bg-selected px-1.5 py-0.5 text-meta text-foreground">
               {pageTitles[page]}
             </span>
           )}
@@ -537,7 +537,7 @@ export function CommandMenu({
               setQuery(e.target.value);
               setActive(0);
             }}
-            className="min-w-0 flex-1 bg-transparent text-[14px] placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </div>
         <div
@@ -550,7 +550,7 @@ export function CommandMenu({
           {rows.map((row, i) => (
             <div key={`${row.group}/${row.id}`}>
               {row.group !== rows[i - 1]?.group && (
-                <p className="px-2.5 pt-2 pb-1.5 text-[12px] font-medium text-faint-foreground">
+                <p className="px-2.5 pt-2 pb-1.5 text-meta font-medium text-faint-foreground">
                   {row.group}
                 </p>
               )}
@@ -564,7 +564,7 @@ export function CommandMenu({
               />
             </div>
           ))}
-          {empty && <p className="px-2.5 py-3 text-[13px] text-faint-foreground">{empty}</p>}
+          {empty && <p className="px-2.5 py-3 text-body text-faint-foreground">{empty}</p>}
         </div>
         <Footer keys={[navigate, ["Enter", "Select"], close]} />
       </div>
@@ -607,15 +607,15 @@ function MenuRow({
         {row.icon}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[14px]">
+        <span className="block truncate text-body">
           {typeof row.label === "string" ? <Marked text={row.label} words={words} /> : row.label}
         </span>
         {row.hint && (
-          <span className="block truncate text-[12.5px] text-muted-foreground">{row.hint}</span>
+          <span className="block truncate text-meta text-muted-foreground">{row.hint}</span>
         )}
       </span>
       {shortcut && (
-        <kbd className="shrink-0 font-sans text-[12.5px] tracking-wider text-muted-foreground">
+        <kbd className="shrink-0 font-sans text-caption tracking-wider text-muted-foreground">
           {shortcut}
         </kbd>
       )}

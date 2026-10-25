@@ -3,7 +3,7 @@ import type { BrowserWindowConstructorOptions, TitleBarOverlay } from "electron"
 // The app's colors that native UI has to match: --background and --foreground
 // in the renderer's index.css, Parallax's pair (other color themes keep these).
 const colors = {
-  dark: { background: "#0b0b10", foreground: "#ededf4" },
+  dark: { background: "#0a0a0a", foreground: "#ededed" },
   light: { background: "#ffffff", foreground: "#1e1b4b" },
 };
 

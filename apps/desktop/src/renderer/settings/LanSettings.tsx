@@ -152,7 +152,7 @@ export function LanSettings() {
           />
         </Row>
         {on && status?.problem && (
-          <p role="alert" className={`${settingRow} text-[12.5px] text-danger`}>
+          <p role="alert" className={`${settingRow} text-body text-danger`}>
             {status.problem}
           </p>
         )}
@@ -176,7 +176,7 @@ export function LanSettings() {
                 {status?.fingerprint && (
                   <span
                     aria-label="Certificate fingerprint"
-                    className="mt-1 block font-mono text-[11.5px] break-all text-foreground"
+                    className="mt-1 block font-mono text-meta break-all text-foreground"
                   >
                     {fingerprint(status.fingerprint)}
                   </span>
@@ -278,7 +278,7 @@ export function LanSettings() {
             {showing && (
               <span
                 aria-label="Pairing code"
-                className="font-mono text-[17px] font-semibold tracking-widest"
+                className="font-mono text-heading font-semibold tracking-widest"
               >
                 {showing.code}
               </span>
@@ -321,8 +321,8 @@ export function LanSettings() {
         {!computers.length && !adding && (
           <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
             <Wifi aria-hidden className="size-6 text-faint-foreground" />
-            <p className="text-[13px] font-medium">No paired computers yet</p>
-            <p className="max-w-sm text-[12.5px] text-muted-foreground">
+            <p className="text-body font-medium">No paired computers yet</p>
+            <p className="max-w-sm text-body text-muted-foreground">
               Turn on pairing on your other computer and choose Pair a device there, then add it
               here with the code it shows.
             </p>
@@ -371,7 +371,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
         void submit();
       }}
     >
-      <p className="text-[12.5px] text-muted-foreground">{GRANTS}</p>
+      <p className="text-body text-muted-foreground">{GRANTS}</p>
       {typing ? (
         <input
           aria-label="Address"
@@ -388,11 +388,11 @@ function PairForm({ onDone }: { onDone: () => void }) {
           className="flex flex-wrap gap-1.5"
         >
           {found === undefined && (
-            <span className="text-[12.5px] text-muted-foreground">Looking for computers…</span>
+            <span className="text-body text-muted-foreground">Looking for computers…</span>
           )}
-          {typeof found === "string" && <span className="text-[12.5px] text-danger">{found}</span>}
+          {typeof found === "string" && <span className="text-body text-danger">{found}</span>}
           {Array.isArray(found) && !found.length && (
-            <span className="text-[12.5px] text-muted-foreground">
+            <span className="text-body text-muted-foreground">
               No computer on this network is showing a code.{" "}
               <button type="button" className="underline" onClick={() => void look()}>
                 Look again
@@ -441,7 +441,7 @@ function PairForm({ onDone }: { onDone: () => void }) {
         </button>
       </div>
       {error && (
-        <p role="alert" className="text-[12.5px] text-danger">
+        <p role="alert" className="text-body text-danger">
           {error}
         </p>
       )}
@@ -460,17 +460,17 @@ function LanComputer({ computer }: { computer: Host }) {
   return (
     <div className={settingRow}>
       <div className="min-w-0">
-        <span className="flex items-center gap-2 text-[13px] font-medium">
+        <span className="flex items-center gap-2 text-body font-medium">
           <StatusDot tone={tone} />
           <span className="truncate">{computer.name}</span>
         </span>
-        <span className="block truncate text-[12.5px] text-muted-foreground">
+        <span className="block truncate text-body text-muted-foreground">
           <span className="font-mono">{computer.routes?.join(", ")}</span>
           {state && ` · ${statusLabel(state)}`}
           {state?.status === "connected" && ` · plxd ${state.plxd}`}
         </span>
         {state?.status === "failed" && (
-          <span className="block text-[12.5px] text-muted-foreground">{state.error.message}</span>
+          <span className="block text-body text-muted-foreground">{state.error.message}</span>
         )}
       </div>
       <button type="button" className={quietButton} onClick={() => void remove()}>

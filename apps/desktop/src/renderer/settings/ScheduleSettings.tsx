@@ -92,7 +92,7 @@ export function ScheduleSettings() {
         action={<HostPicker hosts={hosts} value={hostId} onChange={setHostId} />}
       >
         {empty ? (
-          <p className="px-4 py-3 text-[12.5px] text-muted-foreground">{empty}</p>
+          <p className="px-4 py-3 text-body text-muted-foreground">{empty}</p>
         ) : (
           tasks?.map((task) => {
             const when = !task.enabled
@@ -113,13 +113,13 @@ export function ScheduleSettings() {
                 description={
                   <>
                     <span className="line-clamp-2">{task.prompt}</span>
-                    <span className="block text-[11.5px]">
+                    <span className="block text-meta">
                       {scheduleLabel(task.schedule)} · {when}
                       {last}
                     </span>
                     {task.webhook && (
                       <span
-                        className="block truncate font-mono text-[11.5px]"
+                        className="block truncate font-mono text-meta"
                         title={task.webhook.url ?? task.webhook.path}
                       >
                         {task.webhook.url ?? task.webhook.path}
@@ -157,7 +157,7 @@ export function ScheduleSettings() {
           })
         )}
         {error && tasks && (
-          <p role="alert" className="px-4 py-3 text-[12.5px] text-danger">
+          <p role="alert" className="px-4 py-3 text-body text-danger">
             {error}
           </p>
         )}

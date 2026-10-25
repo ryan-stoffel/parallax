@@ -90,7 +90,7 @@ function SchemePreview({ mode, theme }: { mode: Mode; theme: string }) {
 /** A theme's icon in menus: Parallax's mark, its extension's Open VSX icon, or an orb in its colors. */
 function ThemeIcon({ theme, extension }: { theme: ColorTheme; extension?: AddedExtension }) {
   if (!extension) return <ParallaxMark className="size-4" />;
-  if (extension.icon) return <img src={extension.icon} alt="" className="size-4 rounded-[3px]" />;
+  if (extension.icon) return <img src={extension.icon} alt="" className="size-4 rounded-sm" />;
   return (
     <span
       className={`scheme-${theme.mode} theme-${theme.id} theme-orb block size-4 rounded-full`}
@@ -203,7 +203,7 @@ export function AppearanceSettings({
               >
                 <SchemePreview mode={mode} theme={picked[mode]} />
               </span>
-              <span className="flex items-baseline gap-1.5 text-[12.5px]">
+              <span className="flex items-baseline gap-1.5 text-body">
                 <span className="font-medium capitalize">{mode}</span>
                 <span className="truncate text-muted-foreground">{nameOf(mode)}</span>
               </span>
@@ -231,8 +231,8 @@ export function AppearanceSettings({
         <div data-setting="installed-themes" className="px-4 py-3">
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
-              <span className="block text-[13px] font-medium">Installed themes</span>
-              <span className="block text-[12.5px] text-muted-foreground">
+              <span className="block text-body font-medium">Installed themes</span>
+              <span className="block text-meta text-muted-foreground">
                 VS Code themes from Open VSX. Each one&apos;s variants join the menus above.
               </span>
             </div>
@@ -260,8 +260,8 @@ export function AppearanceSettings({
                     />
                   )}
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px]">{e.name}</span>
-                    <span className="block truncate text-[12px] text-muted-foreground">
+                    <span className="block truncate text-body">{e.name}</span>
+                    <span className="block truncate text-meta text-muted-foreground">
                       {e.themes.map((t) => t.name).join(", ")}
                     </span>
                   </span>
@@ -346,7 +346,7 @@ export function AppearanceSettings({
                 onChange={(e) => set({ backgroundOpacity: Number(e.target.value) })}
                 className="w-40 accent-accent"
               />
-              <span className="w-9 text-right text-[12.5px] text-muted-foreground tabular-nums">
+              <span className="w-9 text-right text-body text-muted-foreground tabular-nums">
                 {appearance.backgroundOpacity}%
               </span>
             </span>

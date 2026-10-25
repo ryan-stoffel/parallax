@@ -110,7 +110,7 @@ export function ProjectHome({
         <button
           type="button"
           onClick={() => setBrowsing(false)}
-          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
         >
           <ChevronLeft aria-hidden className="size-4 shrink-0" />
           <span className="truncate">{project.name}</span>
@@ -128,10 +128,10 @@ export function ProjectHome({
           <ProjectIcon icon={project.icon} className="size-5" />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate font-brand text-[19px] leading-tight font-semibold tracking-tight">
+          <h2 className="truncate text-heading leading-tight font-semibold tracking-tight">
             {project.name}
           </h2>
-          <p className="mt-0.5 text-[12.5px] text-muted-foreground">{openLine(rows)}</p>
+          <p className="mt-0.5 text-body text-muted-foreground">{openLine(rows)}</p>
         </div>
         {files.length > 0 && (
           <span className="ml-auto self-start">
@@ -152,12 +152,12 @@ export function ProjectHome({
             onOpen={setOpenPath}
           />
         ) : (
-          <p className="pt-5 text-[12.5px] text-muted-foreground">
+          <p className="pt-5 text-body text-muted-foreground">
             The coordinator keeps a status board here once it starts on the work.
           </p>
         )}
         {error && (
-          <p role="alert" className="pt-1.5 text-[12.5px] text-danger">
+          <p role="alert" className="pt-1.5 text-body text-danger">
             {error}
           </p>
         )}
@@ -188,7 +188,7 @@ export function ProjectHome({
 
 // A section's heading, and its rows grouped in one rounded list with hairlines between them.
 const sectionHeading =
-  "px-1 pt-6 pb-2 text-[11px] font-medium tracking-[0.08em] text-faint-foreground uppercase";
+  "px-1 pt-6 pb-2 text-caption font-medium tracking-[0.08em] text-faint-foreground uppercase";
 const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
 
 /**
@@ -227,7 +227,7 @@ function OpenCounts({ rows }: { rows: readonly Row[] }) {
       {chips.map((c) => (
         <li
           key={c.label}
-          className="flex h-6 items-center gap-1.5 rounded-full border border-border bg-surface pr-2.5 pl-2 text-[12px] text-muted-foreground [&_svg]:size-3.5"
+          className="flex h-6 items-center gap-1.5 rounded-full border border-border bg-surface pr-2.5 pl-2 text-meta text-muted-foreground [&_svg]:size-3.5"
         >
           <span aria-hidden className="grid">
             {c.icon}
@@ -457,18 +457,16 @@ function ChildButton({
       <span className="min-w-0 flex-1">
         <span
           data-title
-          className={`block truncate text-[13.5px] leading-5 font-medium ${dim ? "text-muted-foreground" : "text-foreground"}`}
+          className={`block truncate text-body leading-5 font-medium ${dim ? "text-muted-foreground" : "text-foreground"}`}
         >
           {title}
         </span>
         <span className="sr-only">{state}</span>
         {detail && (
-          <span className="block truncate text-[12px] leading-5 text-muted-foreground">
-            {detail}
-          </span>
+          <span className="block truncate text-meta leading-5 text-muted-foreground">{detail}</span>
         )}
       </span>
-      <span className="relative shrink-0 pt-0.5 text-[11.5px] text-faint-foreground">
+      <span className="relative shrink-0 pt-0.5 text-meta text-faint-foreground">
         <span
           aria-hidden
           className="transition-opacity group-hover:opacity-0 group-focus-visible:opacity-0"
@@ -508,20 +506,20 @@ function QuestionBox({
   };
   return (
     <div className="mr-3 mb-3 ml-10 overflow-hidden rounded-lg border border-border bg-background">
-      <p className="px-3.5 pt-3 pb-2.5 text-[13px] leading-snug text-foreground">{question}</p>
+      <p className="px-3.5 pt-3 pb-2.5 text-body leading-snug text-foreground">{question}</p>
       <div className="flex flex-col gap-1 px-1.5 pb-1.5">
         {assumption && (
           <button
             type="button"
             disabled={busy}
             onClick={() => void send(assumption)}
-            className="group/choice flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-[12.5px] hover:bg-hover disabled:opacity-50"
+            className="group/choice flex w-full items-center gap-2.5 rounded-lg px-2 py-1.5 text-left text-body hover:bg-hover disabled:opacity-50"
           >
-            <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-[10.5px] text-muted-foreground group-hover/choice:border-foreground/25 group-hover/choice:text-foreground">
+            <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-caption text-muted-foreground group-hover/choice:border-foreground/25 group-hover/choice:text-foreground">
               1
             </span>
             <span className="min-w-0 flex-1">{assumption}</span>
-            <span className="shrink-0 text-[11.5px] text-faint-foreground">Its pick so far</span>
+            <span className="shrink-0 text-meta text-faint-foreground">Its pick so far</span>
           </button>
         )}
         <form
@@ -531,7 +529,7 @@ function QuestionBox({
           }}
           className="flex items-center gap-2.5 rounded-lg px-2 py-1 focus-within:bg-hover"
         >
-          <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-[10.5px] text-muted-foreground">
+          <span className="grid size-5 shrink-0 place-items-center rounded-md border border-border font-mono text-caption text-muted-foreground">
             {assumption ? 2 : 1}
           </span>
           <input
@@ -540,13 +538,13 @@ function QuestionBox({
             value={text}
             disabled={busy}
             onChange={(e) => setText(e.target.value)}
-            className="h-7 min-w-0 flex-1 bg-transparent text-[12.5px] placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-50"
+            className="h-7 min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-50"
           />
           <button
             type="submit"
             aria-label="Send answer"
             disabled={busy || !text.trim()}
-            className="send-sky grid size-6 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25"
+            className="send-sky grid size-6 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
           >
             {busy ? (
               <LoaderCircle className="size-3 animate-spin" />

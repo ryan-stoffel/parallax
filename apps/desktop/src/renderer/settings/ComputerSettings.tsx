@@ -74,7 +74,7 @@ export function ComputerSettings() {
       {unavailable ? (
         <Section title="Permissions">
           <div className={settingRow}>
-            <span className="text-[12.5px] text-muted-foreground">{unavailable}</span>
+            <span className="text-body text-muted-foreground">{unavailable}</span>
           </div>
         </Section>
       ) : (
@@ -109,14 +109,14 @@ export function ComputerSettings() {
             />
             {error && (
               <div className={settingRow}>
-                <span role="alert" className="text-[12.5px] text-danger">
+                <span role="alert" className="text-body text-danger">
                   {error}
                 </span>
               </div>
             )}
           </Section>
           {missing && status && (
-            <p className="-mt-6 mb-8 px-1 text-[12px] leading-relaxed text-faint-foreground">
+            <p className="-mt-6 mb-8 px-1 text-meta leading-relaxed text-faint-foreground">
               macOS lists Parallax's background service as{" "}
               <span className="font-mono text-muted-foreground">{status.program}</span> under
               Privacy & Security. Turn it on there for each permission.
@@ -125,11 +125,11 @@ export function ComputerSettings() {
           <Section title="Always allowed">
             {!status ? (
               <div className={settingRow}>
-                <span className="text-[12.5px] text-muted-foreground">Checking…</span>
+                <span className="text-body text-muted-foreground">Checking…</span>
               </div>
             ) : status.apps.length === 0 ? (
               <div className={settingRow}>
-                <span className="text-[12.5px] text-muted-foreground">
+                <span className="text-body text-muted-foreground">
                   No apps yet. When a thread asks to use an app, choose Always allow to add it here.
                 </span>
               </div>
@@ -138,7 +138,7 @@ export function ComputerSettings() {
                 <div key={app} className={settingRow}>
                   <span className="flex min-w-0 items-center gap-2.5">
                     <AppWindowMac aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-                    <span className="truncate text-[13px]">{app}</span>
+                    <span className="truncate text-body">{app}</span>
                   </span>
                   <button
                     type="button"
@@ -152,7 +152,7 @@ export function ComputerSettings() {
               ))
             )}
           </Section>
-          <p className="flex items-start gap-2 px-1 text-[12px] leading-relaxed text-faint-foreground">
+          <p className="flex items-start gap-2 px-1 text-meta leading-relaxed text-faint-foreground">
             <ShieldCheck aria-hidden className="mt-0.5 size-3.5 shrink-0" />
             Computer use never controls terminals, script runners, Parallax itself, or Keychain
             Access, and agents are told not to type passwords, pay, or send messages unless you ask.
@@ -179,11 +179,11 @@ function Permission({
       <div className="flex min-w-0 items-start gap-3">
         <Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-faint-foreground" />
         <div className="min-w-0">
-          <span className="block text-[13px] font-medium">{title}</span>
-          <span className="block text-[12.5px] text-muted-foreground">{description}</span>
+          <span className="block text-body font-medium">{title}</span>
+          <span className="block text-meta text-muted-foreground">{description}</span>
         </div>
       </div>
-      <span className="flex shrink-0 items-center gap-1.5 text-[12.5px] text-muted-foreground">
+      <span className="flex shrink-0 items-center gap-1.5 text-body text-muted-foreground">
         {granted === undefined ? (
           "Checking…"
         ) : (

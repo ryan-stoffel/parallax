@@ -138,10 +138,10 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
       >
         <header className="flex items-start gap-3">
           <div className="flex-1">
-            <h2 id={titleId} className="text-[15px] font-semibold">
+            <h2 id={titleId} className="text-reading font-semibold">
               {host ? `Edit ${host.name}` : "Add a computer over SSH"}
             </h2>
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+            <p className="mt-0.5 text-body text-muted-foreground">
               Parallax signs in with your SSH config, keys, and agent, then runs plxd there.
             </p>
           </div>
@@ -150,7 +150,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
           </IconButton>
         </header>
 
-        <label className="relative block text-[12.5px] font-medium">
+        <label className="relative block text-body font-medium">
           SSH host or alias
           <input
             name="host"
@@ -195,12 +195,10 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
                     pick(choice);
                   }}
                   onMouseEnter={() => setActive(i)}
-                  className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-[13px] ${i === active ? "bg-hover" : ""}`}
+                  className={`flex items-center justify-between rounded-md px-2.5 py-1.5 text-body ${i === active ? "bg-hover" : ""}`}
                 >
-                  <span className="truncate font-mono text-[12.5px]">{choice}</span>
-                  <span className="text-[12px] text-faint-foreground">
-                    {shortcut(String(i + 1))}
-                  </span>
+                  <span className="truncate font-mono text-body">{choice}</span>
+                  <span className="text-meta text-faint-foreground">{shortcut(String(i + 1))}</span>
                 </li>
               ))}
             </ul>
@@ -208,7 +206,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
         </label>
 
         <div className="flex gap-3">
-          <label className="flex-1 text-[12.5px] font-medium">
+          <label className="flex-1 text-body font-medium">
             Username
             <input
               name="user"
@@ -221,7 +219,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
               className={`${field} font-normal`}
             />
           </label>
-          <label className="w-28 text-[12.5px] font-medium">
+          <label className="w-28 text-body font-medium">
             Port
             <input
               name="port"
@@ -235,7 +233,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
         </div>
 
         {host && (
-          <label className="text-[12.5px] font-medium">
+          <label className="text-body font-medium">
             Name
             <input
               name="name"
@@ -248,7 +246,7 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
         )}
 
         {error && (
-          <p role="alert" className="text-[12.5px] text-danger">
+          <p role="alert" className="text-body text-danger">
             {error}
           </p>
         )}

@@ -49,8 +49,8 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const [source, setSource] = useState(false);
 
   let body: ReactNode;
-  if (error) body = <p className="p-6 text-[13px] text-muted-foreground">{error}</p>;
-  else if (!loaded) body = <p className="p-6 text-[13px] text-muted-foreground">Opening…</p>;
+  if (error) body = <p className="p-6 text-body text-muted-foreground">{error}</p>;
+  else if (!loaded) body = <p className="p-6 text-body text-muted-foreground">Opening…</p>;
   else {
     const { opened } = loaded;
     body =
@@ -77,7 +77,7 @@ function ReadView({ hostId, doc }: { hostId: string; doc: DocRef }) {
       ) : markdown ? (
         <MarkdownFile text={new TextDecoder().decode(loaded.bytes)} source={source} />
       ) : (
-        <p className="p-6 text-[13px] text-muted-foreground">
+        <p className="p-6 text-body text-muted-foreground">
           {sizeOf(loaded.bytes.length)}. Parallax can't show this kind of file, but you can download
           it.
         </p>
@@ -129,7 +129,7 @@ function Framed({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex items-center gap-1 border-b border-border px-3 py-1.5">
         {toggle}
-        <p className="min-w-0 flex-1 truncate text-[13.5px] text-foreground">
+        <p className="min-w-0 flex-1 truncate text-body text-foreground">
           {titleOf(doc.name)}
           <span className="text-muted-foreground"> · {type}</span>
         </p>
@@ -137,7 +137,7 @@ function Framed({
           type="button"
           disabled={disabled}
           onClick={onDownload}
-          className="rounded-lg bg-selected px-3 py-1 text-[13px] text-foreground hover:bg-hover disabled:opacity-40"
+          className="rounded-lg bg-selected px-3 py-1 text-body text-foreground hover:bg-hover disabled:opacity-40"
         >
           Download as {type}
         </button>
@@ -152,7 +152,7 @@ function MarkdownFile({ text, source }: { text: string; source: boolean }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
       {source ? (
-        <pre className="font-mono text-[12.5px] whitespace-pre-wrap text-foreground">{text}</pre>
+        <pre className="font-mono text-body whitespace-pre-wrap text-foreground">{text}</pre>
       ) : (
         <div className="mx-auto max-w-[760px]">
           <MarkdownText text={text} />
@@ -283,7 +283,7 @@ function Paged({
         </div>
       </div>
       {count > 0 && (
-        <span className="pointer-events-none absolute right-5 bottom-4 rounded-lg bg-black/55 px-2.5 py-1 text-[13px] text-white tabular-nums">
+        <span className="pointer-events-none absolute right-5 bottom-4 rounded-lg bg-black/55 px-2.5 py-1 text-body text-white tabular-nums">
           Page {current} / {count}
         </span>
       )}
@@ -349,7 +349,7 @@ function SheetView({ xlsx }: { xlsx: Xlsx }) {
       <div
         role="grid"
         aria-label={sheet.name}
-        className="min-h-0 flex-1 overflow-auto bg-white text-[13px] text-black"
+        className="min-h-0 flex-1 overflow-auto bg-white text-body text-black"
       >
         <table
           className="border-collapse"
@@ -416,7 +416,7 @@ function SheetView({ xlsx }: { xlsx: Xlsx }) {
               role="tab"
               aria-selected={i === index}
               onClick={() => setIndex(i)}
-              className="rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover aria-selected:bg-selected aria-selected:text-foreground"
+              className="rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover aria-selected:bg-selected aria-selected:text-foreground"
             >
               {s.name}
             </button>

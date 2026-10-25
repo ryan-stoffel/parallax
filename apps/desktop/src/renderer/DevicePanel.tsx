@@ -273,8 +273,8 @@ function Skeleton() {
   return (
     <div aria-busy className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3 p-4">
       {[0, 1, 2].map((i) => (
-        <div key={i} className="flex flex-col items-center gap-3 rounded-2xl p-3">
-          <div className="h-[180px] w-[86px] animate-pulse rounded-[18px] bg-selected" />
+        <div key={i} className="flex flex-col items-center gap-3 rounded-xl p-3">
+          <div className="h-[180px] w-[86px] animate-pulse rounded-xl bg-selected" />
           <div className="h-2.5 w-16 animate-pulse rounded-full bg-selected" />
         </div>
       ))}
@@ -297,8 +297,8 @@ function Notice({
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 px-10 pb-16 text-center [&>svg]:size-5">
       {icon}
-      <p className="text-[13.5px] font-medium">{title}</p>
-      {detail && <p className="max-w-80 text-[12.5px] text-muted-foreground">{detail}</p>}
+      <p className="text-body font-medium">{title}</p>
+      {detail && <p className="max-w-80 text-body text-muted-foreground">{detail}</p>}
       {action && <div className="mt-1">{action}</div>}
     </div>
   );
@@ -317,7 +317,7 @@ function Pill({
   dark?: boolean;
   title?: string;
 }) {
-  const look = `inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[12.5px] font-medium transition-[transform,background-color] duration-100 active:scale-95 [&_svg]:size-3.5 ${
+  const look = `inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-body font-medium transition-[transform,background-color] duration-100 active:scale-95 [&_svg]:size-3.5 ${
     dark ? "bg-white text-black hover:bg-white/90" : "bg-selected text-foreground hover:bg-hover"
   }`;
   return href ? (
@@ -457,7 +457,7 @@ function Gallery({
                   busy={!!busy[`new:${p}`]}
                   onClick={() => onCreate(p)}
                 >
-                  <div className="grid h-[180px] w-[86px] place-items-center rounded-[18px] border-[1.5px] border-dashed border-border text-muted-foreground transition-colors group-hover:border-faint-foreground group-hover:text-foreground">
+                  <div className="grid h-[180px] w-[86px] place-items-center rounded-xl border-[1.5px] border-dashed border-border text-muted-foreground transition-colors group-hover:border-faint-foreground group-hover:text-foreground">
                     <Plus aria-hidden className="size-5" />
                   </div>
                 </Card>
@@ -480,7 +480,7 @@ function Gallery({
 /** A phone outline, for a host with no devices. */
 function EmptyPhone() {
   return (
-    <div className="relative h-[132px] w-[64px] rounded-[16px] border-[1.5px] border-border">
+    <div className="relative h-[132px] w-[64px] rounded-xl border-[1.5px] border-border">
       <div className="absolute top-2 left-1/2 h-1.5 w-5 -translate-x-1/2 rounded-full bg-border" />
     </div>
   );
@@ -505,7 +505,7 @@ function Missing({
   return (
     <div
       title={why}
-      className="flex items-center gap-2.5 rounded-full bg-selected py-1 pr-1 pl-3 text-[12.5px]"
+      className="flex items-center gap-2.5 rounded-full bg-selected py-1 pr-1 pl-3 text-body"
     >
       <PlatformMark platform={platform} />
       <span className="font-medium">{title}</span>
@@ -532,7 +532,7 @@ function Warning({ text }: { text: string }) {
   const command = /`([^`]+)`/.exec(text)?.[1];
   const [copied, setCopied] = useState(false);
   return (
-    <div className="mx-4 mt-4 flex items-center gap-2.5 rounded-xl bg-warning/10 py-2 pr-2 pl-3 text-[12.5px]">
+    <div className="mx-4 mt-4 flex items-center gap-2.5 rounded-xl bg-warning/10 py-2 pr-2 pl-3 text-body">
       <TriangleAlert aria-hidden className="size-3.5 shrink-0 text-warning" />
       <span className="min-w-0 flex-1">{text.replace(/ Install it with.*$/, "")}</span>
       {command && (
@@ -544,7 +544,7 @@ function Warning({ text }: { text: string }) {
             setCopied(true);
             setTimeout(() => setCopied(false), 1_500);
           }}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-pane px-2 py-1 font-mono text-[11.5px] hover:bg-hover [&_svg]:size-3"
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-pane px-2 py-1 font-mono text-meta hover:bg-hover [&_svg]:size-3"
         >
           {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
           {command}
@@ -581,7 +581,7 @@ function Card({
       title={title}
       onClick={onClick}
       disabled={busy}
-      className="group flex w-full flex-col items-center gap-3 rounded-2xl px-2 pt-4 pb-3 outline-none transition-colors hover:bg-hover focus-visible:bg-hover disabled:pointer-events-none"
+      className="group flex w-full flex-col items-center gap-3 rounded-xl px-2 pt-4 pb-3 outline-none transition-colors hover:bg-hover focus-visible:bg-hover disabled:pointer-events-none"
     >
       <div className="relative grid h-[196px] place-items-center [perspective:900px]">
         <div
@@ -595,7 +595,7 @@ function Card({
           </div>
         )}
       </div>
-      <span className="flex max-w-full items-center gap-1.5 text-[12.5px] font-medium">
+      <span className="flex max-w-full items-center gap-1.5 text-body font-medium">
         {running && (
           <span aria-label="Running" className="size-1.5 shrink-0 rounded-full bg-added" />
         )}
@@ -609,7 +609,7 @@ function Card({
 function Thumbnail({ hostId, device }: { hostId: string; device: DeviceInfo }) {
   const chrome = useChrome(hostId, device);
   if (chrome === undefined) {
-    return <div className="h-[180px] w-[86px] animate-pulse rounded-[18px] bg-selected" />;
+    return <div className="h-[180px] w-[86px] animate-pulse rounded-xl bg-selected" />;
   }
   const art =
     chrome ??
@@ -1181,7 +1181,7 @@ function Viewer({
   const message = (text: string, action: ReactNode) => (
     <div className="flex max-w-[78%] flex-col items-center gap-3 text-center">
       <TriangleAlert aria-hidden className="size-5 text-white/70" />
-      <p className="line-clamp-4 text-[12.5px] leading-snug text-white/85">{text}</p>
+      <p className="line-clamp-4 text-body leading-snug text-white/85">{text}</p>
       {action}
     </div>
   );
@@ -1360,7 +1360,7 @@ function Viewer({
           <button
             type="button"
             popoverTarget={menuId}
-            className="flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pr-2 pl-2.5 text-[12.5px] font-medium transition-colors hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0"
+            className="flex min-w-0 items-center gap-1.5 rounded-full py-1.5 pr-2 pl-2.5 text-body font-medium transition-colors hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0"
           >
             <span className="relative text-muted-foreground">
               <PlatformMark platform={device.platform} />

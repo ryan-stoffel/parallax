@@ -140,10 +140,10 @@ export function NewProjectForm({
           <IconButton label="Back" onClick={onBack}>
             <ArrowLeft />
           </IconButton>
-          <h2 id="new-project-title" className="text-[14px] font-medium">
+          <h2 id="new-project-title" className="text-reading font-medium">
             Create Project
           </h2>
-          <p className="truncate text-[12.5px] text-muted-foreground">
+          <p className="truncate text-body text-muted-foreground">
             A focused chat where agents coordinate work.
           </p>
         </div>
@@ -173,11 +173,11 @@ export function NewProjectForm({
             onChange={(e) => setTyped(e.target.value)}
             spellCheck={false}
             autoComplete="off"
-            className="w-full bg-transparent text-center text-[22px] font-semibold placeholder:text-faint-foreground focus-visible:outline-none"
+            className="w-full bg-transparent text-center text-display font-semibold placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </div>
         <div className="mx-5 mb-3 flex items-center justify-between gap-4 rounded-lg border border-border py-1.5 pr-1.5 pl-3">
-          <span aria-hidden className="shrink-0 text-[13px]">
+          <span aria-hidden className="shrink-0 text-body">
             Workspace
           </span>
           <WorkspaceMenu
@@ -193,7 +193,7 @@ export function NewProjectForm({
         {autonomy && (
           <div className="mx-5 mb-3 rounded-lg border border-border px-3 py-2.5">
             <div className="flex items-center justify-between gap-4">
-              <span aria-hidden className="text-[13px]">
+              <span aria-hidden className="text-body">
                 Autonomy
               </span>
               <Segmented
@@ -203,7 +203,7 @@ export function NewProjectForm({
                 onChange={setAutonomy}
               />
             </div>
-            <p className="mt-1.5 text-[12px] text-muted-foreground">
+            <p className="mt-1.5 text-meta text-muted-foreground">
               {autonomyLevels.find((l) => l.value === autonomy)?.detail}
             </p>
           </div>
@@ -212,8 +212,8 @@ export function NewProjectForm({
           <label className="mx-5 mb-5 flex items-start gap-3 rounded-lg bg-selected px-3 py-2.5">
             <LockOpen aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <span className="flex-1">
-              <span className="block text-[13px] font-medium">Full access</span>
-              <span className="block text-[12px] text-muted-foreground">
+              <span className="block text-body font-medium">Full access</span>
+              <span className="block text-meta text-muted-foreground">
                 Agents in this Project run commands and edit files without asking.
               </span>
             </span>
@@ -228,14 +228,14 @@ export function NewProjectForm({
         )}
         <div className="flex items-center justify-between gap-3 border-t border-border px-5 py-3">
           {error && (
-            <p role="alert" className="min-w-0 text-[12px] text-danger">
+            <p role="alert" className="min-w-0 text-meta text-danger">
               {error}
             </p>
           )}
           <button
             type="submit"
             disabled={!workspace || !name || creating}
-            className="ml-auto shrink-0 whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+            className="ml-auto shrink-0 whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
             {creating ? "Creating…" : "Create Project"}
           </button>
@@ -255,7 +255,7 @@ export function NewProjectForm({
   );
 }
 
-const iconTile = "grid size-16 place-items-center rounded-2xl border border-border bg-background";
+const iconTile = "grid size-16 place-items-center rounded-xl border border-border bg-background";
 
 /** `project/create` on a host that isn't open. Its list has the Project once it's opened. */
 async function createOn(

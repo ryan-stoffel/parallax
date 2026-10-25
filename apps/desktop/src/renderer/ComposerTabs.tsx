@@ -20,7 +20,7 @@ export function ComposerTabs({ tabs }: { tabs: readonly ComposerTab[] }) {
     <div
       role="group"
       aria-label="Composer tabs"
-      className="relative mx-5 -mb-4 flex min-w-0 items-center overflow-hidden rounded-t-3xl border border-b-0 border-border bg-surface pr-1.5 pb-4"
+      className="relative mx-5 -mb-4 flex min-w-0 items-center overflow-hidden rounded-t-xl border border-b-0 border-border bg-surface pr-1.5 pb-4"
     >
       {tabs.map((tab, i) => (
         <div

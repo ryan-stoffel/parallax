@@ -184,7 +184,7 @@ export function useFind({
     <div
       role="search"
       aria-label="Find in thread"
-      className="absolute top-2 right-4 z-20 flex items-center gap-1 rounded-lg border border-border bg-surface p-1 pl-2.5 text-[13px] shadow-composer"
+      className="absolute top-2 right-4 z-20 flex items-center gap-1 rounded-lg border border-border bg-surface p-1 pl-2.5 text-body shadow-composer"
     >
       <input
         ref={input}
@@ -207,7 +207,7 @@ export function useFind({
       <span
         role="status"
         aria-live="polite"
-        className="min-w-14 px-1 text-right text-[12px] text-muted-foreground tabular-nums"
+        className="min-w-14 px-1 text-right text-meta text-muted-foreground tabular-nums"
       >
         {query && (hits.length ? `${at + 1}/${hits.length}` : "No results")}
       </span>

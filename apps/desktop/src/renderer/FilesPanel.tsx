@@ -190,7 +190,7 @@ export function FilesPanel({
         <button
           type="button"
           onClick={() => setOpenPath(undefined)}
-          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+          className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
         >
           <ChevronLeft aria-hidden className="size-4 shrink-0" />
           <span className="truncate">{openPath}</span>
@@ -232,11 +232,11 @@ export function FilesPanel({
               else if (e.key === "Escape") cancelDraft();
             }}
             onBlur={(e) => void save(d, e.currentTarget.value)}
-            className={`min-w-0 flex-1 rounded-md border bg-background px-1.5 py-0.5 text-[13px] text-foreground focus-visible:outline-none ${draftError ? "border-danger" : "border-ring"}`}
+            className={`min-w-0 flex-1 rounded-md border bg-background px-1.5 py-0.5 text-body text-foreground focus-visible:outline-none ${draftError ? "border-danger" : "border-ring"}`}
           />
         </div>
         {draftError && (
-          <p role="alert" style={indent} className="pr-2 pb-1 text-[12px] text-danger">
+          <p role="alert" style={indent} className="pr-2 pb-1 text-meta text-danger">
             <span className="pl-10">{draftError}</span>
           </p>
         )}
@@ -251,7 +251,7 @@ export function FilesPanel({
     const indent = { paddingLeft: `${10 + depth * 14}px` };
     if ("error" in listing)
       return (
-        <p role="alert" style={indent} className="py-1 pr-2 text-[12.5px] text-danger">
+        <p role="alert" style={indent} className="py-1 pr-2 text-body text-danger">
           {listing.error}
         </p>
       );
@@ -294,7 +294,7 @@ export function FilesPanel({
                             )
                         : undefined
                     }
-                    className={`flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-[13px] hover:bg-hover ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
+                    className={`flex w-full items-center gap-1.5 rounded-lg py-1 pr-2 text-left text-body hover:bg-hover ${target?.path === path ? "bg-hover" : ""} ${editable ? "group-has-[:focus-visible]/row:pr-8 group-hover/row:pr-8" : ""}`}
                   >
                     <ChevronRight
                       aria-hidden
@@ -327,7 +327,7 @@ export function FilesPanel({
           );
         })}
         {listing.truncated && (
-          <li style={indent} className="py-1 pr-2 text-[12.5px] text-faint-foreground">
+          <li style={indent} className="py-1 pr-2 text-body text-faint-foreground">
             More files not shown.
           </li>
         )}
@@ -397,7 +397,7 @@ export function FilesPanel({
                   onClick={choose(() => startDraft({ path: target.path }))}
                 >
                   Rename
-                  <span className="ml-auto text-[11.5px] text-faint-foreground">F2</span>
+                  <span className="ml-auto text-meta text-faint-foreground">F2</span>
                 </button>
                 <button
                   type="button"
@@ -434,8 +434,8 @@ function Empty({ title, hint }: { title: string; hint: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
       <Folder aria-hidden className="mb-1 size-5 text-faint-foreground" />
-      <p className="text-[13px] font-medium text-foreground">{title}</p>
-      <p className="text-[12.5px] text-muted-foreground">{hint}</p>
+      <p className="text-body font-medium text-foreground">{title}</p>
+      <p className="text-body text-muted-foreground">{hint}</p>
     </div>
   );
 }
@@ -504,7 +504,7 @@ function FileView({ hostId, runId, path }: { hostId: string; runId: string; path
     return (
       <pre
         aria-label={path}
-        className="code-lines min-h-0 flex-1 overflow-auto px-4 pt-2 pb-4 font-mono text-[12px] leading-[1.6] text-foreground"
+        className="code-lines min-h-0 flex-1 overflow-auto px-4 pt-2 pb-4 font-mono text-meta leading-[1.6] text-foreground"
       >
         {read.text}
       </pre>
@@ -519,7 +519,7 @@ function FileView({ hostId, runId, path }: { hostId: string; runId: string; path
     <div className="px-4 pt-2">
       <p
         role={"error" in read ? "alert" : undefined}
-        className={`text-[12.5px] ${"error" in read ? "text-danger" : "text-muted-foreground"}`}
+        className={`text-body ${"error" in read ? "text-danger" : "text-muted-foreground"}`}
       >
         {"error" in read ? read.error : read.note}
       </p>
@@ -527,7 +527,7 @@ function FileView({ hostId, runId, path }: { hostId: string; runId: string; path
         <div className="-ml-2 flex items-center gap-2 pt-1">
           <DownloadButton name={nameOf(path)} read={save} />
           {share !== undefined && (
-            <span className="text-[12.5px] text-muted-foreground tabular-nums">
+            <span className="text-body text-muted-foreground tabular-nums">
               {Math.round(share * 100)}%
             </span>
           )}

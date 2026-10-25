@@ -63,7 +63,7 @@ export function UsageLines({ usage, period }: { usage?: AccountUsage; period: Pe
   return (
     <>
       <span
-        className="block truncate text-[12.5px] text-muted-foreground"
+        className="block truncate text-body text-muted-foreground"
         title={spent && tokenBreakdown(spent)}
       >
         {describeUsage(spent, period)}
@@ -75,7 +75,7 @@ export function UsageLines({ usage, period }: { usage?: AccountUsage; period: Pe
           <span
             key={limit.window}
             title={limitDetails(limit)}
-            className={`mt-1 flex items-center gap-2 text-[12px] ${full ? "text-danger" : "text-faint-foreground"}`}
+            className={`mt-1 flex items-center gap-2 text-meta ${full ? "text-danger" : "text-faint-foreground"}`}
           >
             {used !== undefined && (
               <span

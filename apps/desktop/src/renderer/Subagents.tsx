@@ -128,15 +128,13 @@ export function SubagentRow({ sub }: { sub: Subagent }) {
       <Avatar sub={sub} state={state} />
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate text-[13px] text-foreground">{title}</span>
-          <span className="shrink-0 text-[11.5px] text-faint-foreground">
-            {subagentLabels[state]}
-          </span>
+          <span className="truncate text-body text-foreground">{title}</span>
+          <span className="shrink-0 text-meta text-faint-foreground">{subagentLabels[state]}</span>
         </span>
-        {said && <span className="truncate text-[12px] text-muted-foreground">{said}</span>}
+        {said && <span className="truncate text-meta text-muted-foreground">{said}</span>}
       </span>
       {sub.at && (
-        <span className="shrink-0 text-[12px] text-faint-foreground tabular-nums">
+        <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
           {new Date(sub.at).toLocaleTimeString(locale(), clockOptions())}
         </span>
       )}
@@ -183,8 +181,8 @@ export function SubagentCard({
           ))}
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="text-[13px] font-medium text-foreground">{subs.length} subagents</span>
-          <span className="truncate text-[12px] text-faint-foreground">
+          <span className="text-body font-medium text-foreground">{subs.length} subagents</span>
+          <span className="truncate text-meta text-faint-foreground">
             {counts.map(({ state, n }, i) => (
               <span key={state} className={state === "running" ? "text-working" : undefined}>
                 {i > 0 && ", "}
@@ -198,7 +196,7 @@ export function SubagentCard({
         ) : (
           since &&
           last > Date.parse(since) && (
-            <span className="shrink-0 text-[12px] text-faint-foreground tabular-nums">
+            <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
               {duration(Math.round((last - Date.parse(since)) / 1000))}
             </span>
           )
@@ -222,7 +220,7 @@ export function SubagentCard({
 /** How long the card's subagents have gone, ticking each second. */
 function Elapsed({ since }: { since: string }) {
   return (
-    <span className="shrink-0 text-[12px] text-faint-foreground tabular-nums">
+    <span className="shrink-0 text-meta text-faint-foreground tabular-nums">
       {duration(useSeconds(since))}
     </span>
   );

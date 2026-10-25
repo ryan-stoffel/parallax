@@ -122,8 +122,8 @@ export function ConnectionSettings() {
         {!remote.length && (
           <div className="flex flex-col items-center gap-2 px-6 py-10 text-center">
             <Server aria-hidden className="size-6 text-faint-foreground" />
-            <p className="text-[13px] font-medium">No SSH hosts yet</p>
-            <p className="max-w-sm text-[12.5px] text-muted-foreground">
+            <p className="text-body font-medium">No SSH hosts yet</p>
+            <p className="max-w-sm text-body text-muted-foreground">
               Add a machine you reach over SSH, such as a Mac mini, to run agents there. Parallax
               can install plxd on it.
             </p>
@@ -146,7 +146,7 @@ function LocalHost({ host }: { host: Host }) {
 
   return (
     <section aria-label="This computer" data-setting="this-computer" className="mb-8">
-      <div className="mb-2 flex min-h-7 items-center gap-2 text-[13px] text-muted-foreground [&_svg]:size-4">
+      <div className="mb-2 flex min-h-7 items-center gap-2 text-reading text-muted-foreground [&_svg]:size-4">
         <DeviceIcon icon={host.icon ?? "laptop"} />
         {renaming ? (
           <RenameForm
@@ -157,7 +157,7 @@ function LocalHost({ host }: { host: Host }) {
           />
         ) : (
           <>
-            <span className="font-medium text-foreground">{host.name}</span>
+            <span className="font-semibold text-foreground">{host.name}</span>
             <IconButton label="Rename this computer" onClick={() => setRenaming(true)}>
               <Pencil aria-hidden />
             </IconButton>
@@ -169,11 +169,11 @@ function LocalHost({ host }: { host: Host }) {
           title="Local plxd"
           description="Runs agents on this computer. Parallax starts it and keeps it connected."
         >
-          <span className="flex items-center gap-1.5 text-[12.5px] text-muted-foreground">
+          <span className="flex items-center gap-1.5 text-body text-muted-foreground">
             <StatusDot tone={tone(state)} />
             {state ? statusLabel(state) : "Connecting…"}
             {state?.status === "connected" && (
-              <span className="font-mono text-[12px]">· {state.plxd}</span>
+              <span className="font-mono text-meta">· {state.plxd}</span>
             )}
           </span>
         </Row>
@@ -224,17 +224,17 @@ function RemoteHost({
     <>
       <div className={settingRow}>
         <div className="min-w-0">
-          <span className="flex items-center gap-2 text-[13px] font-medium">
+          <span className="flex items-center gap-2 text-body font-medium">
             <StatusDot tone={tone(state)} />
             <span className="truncate">{host.name}</span>
           </span>
-          <span className="block truncate text-[12.5px] text-muted-foreground">
+          <span className="block truncate text-body text-muted-foreground">
             <span className="font-mono">{host.destination}</span>
             {state && ` · ${statusLabel(state)}`}
             {state?.status === "connected" && ` · plxd ${state.plxd}`}
           </span>
           {fix && (
-            <p className="mt-1 text-[12.5px] text-muted-foreground">
+            <p className="mt-1 text-body text-muted-foreground">
               {fix === "install"
                 ? `plxd isn't on ${host.name}. `
                 : `${host.name} runs plxd ${runningPlxd(state)}, older than this app. `}

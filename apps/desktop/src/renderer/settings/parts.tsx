@@ -9,23 +9,23 @@ import { anchorOf } from "./search";
 export const settingRow =
   "flex items-center justify-between gap-4 border-border px-4 py-3 not-last:border-b";
 export const quietButton =
-  "rounded-md px-2.5 py-1 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground";
+  "rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground";
 export const primaryButton =
-  "rounded-md bg-primary px-3 py-1 text-[12.5px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50";
+  "rounded-md bg-primary px-3 py-1 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50";
 export const dangerButton =
-  "rounded-md bg-red-600 px-2.5 py-1 text-[12.5px] font-medium text-white enabled:hover:opacity-90 disabled:opacity-50";
+  "rounded-md bg-red-600 px-2.5 py-1 text-body font-medium text-white enabled:hover:opacity-90 disabled:opacity-50";
 export const field =
-  "mt-1 block w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[13px] placeholder:text-faint-foreground";
+  "mt-1 block w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-body placeholder:text-faint-foreground";
 /** A field on a row's right, sized to sit beside its title. */
 export const rowField =
-  "w-56 rounded-md border border-border bg-background px-2.5 py-1 text-[13px] placeholder:text-faint-foreground";
+  "w-56 rounded-md border border-border bg-background px-2.5 py-1 text-body placeholder:text-faint-foreground";
 
 /** A page's title, and what the page is for under it. */
 export function PageTitle({ title, children }: { title: string; children?: ReactNode }) {
   return (
     <>
-      <h1 className={`text-xl font-semibold ${children ? "mb-1.5" : "mb-6"}`}>{title}</h1>
-      {children && <p className="mb-6 text-[13px] text-muted-foreground">{children}</p>}
+      <h1 className={`text-heading font-semibold ${children ? "mb-1.5" : "mb-6"}`}>{title}</h1>
+      {children && <p className="mb-6 text-body text-muted-foreground">{children}</p>}
     </>
   );
 }
@@ -43,7 +43,7 @@ export function Section({
   return (
     <section aria-label={title} data-setting={anchorOf(title)} className="mb-8 scroll-mt-6">
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
-        <h2 className="text-[12.5px] font-medium text-muted-foreground">{title}</h2>
+        <h2 className="text-reading font-semibold">{title}</h2>
         {action}
       </div>
       <div className="rounded-xl border border-border bg-(--pane-card)">{children}</div>
@@ -70,9 +70,9 @@ export function Row({
       className={settingRow}
     >
       <div className="min-w-0">
-        <span className="block text-[13px] font-medium">{title}</span>
+        <span className="block text-body font-medium">{title}</span>
         {description && (
-          <span className="block text-[12.5px] text-muted-foreground">{description}</span>
+          <span className="block text-meta text-muted-foreground">{description}</span>
         )}
       </div>
       {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}
@@ -142,12 +142,12 @@ export function HostPicker({
 }) {
   if (hosts.length < 2)
     return always ? (
-      <p className="text-[15px] text-muted-foreground">
+      <p className="text-reading text-muted-foreground">
         Applying settings on <span className="font-medium text-foreground">{hosts[0]?.name}</span>
       </p>
     ) : null;
   return (
-    <span className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
+    <span className="flex items-center gap-1.5 text-reading text-muted-foreground">
       Applying settings on
       <Picker
         label="Host"
@@ -199,7 +199,7 @@ export function RenameForm({
         autoFocus
         maxLength={64}
         onKeyDown={(e) => e.key === "Escape" && onCancel()}
-        className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-[13px] text-foreground"
+        className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-body text-foreground"
       />
       <button type="submit" className={primaryButton}>
         Save

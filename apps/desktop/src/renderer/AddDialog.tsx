@@ -36,7 +36,7 @@ import { uuidv7 } from "./uuidv7";
 import type { Workspace, WorkspaceSource } from "./WorkspaceMenu";
 
 /** A key in a palette's footer of keys. */
-const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-[11.5px] text-foreground";
+const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-meta text-foreground";
 
 type Step =
   | { kind: "menu" | "create" | "clone" | "computer" | "project" }
@@ -195,7 +195,7 @@ export function AddDialog({
 
 /** The palette's dialog. */
 const palette =
-  "mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50";
+  "mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50";
 
 /**
  * Asks where to clone a repository on `hostId`, then clones it there and registers it, as Clone
@@ -783,9 +783,9 @@ function Options({
         >
           {o.icon}
           <span className="min-w-0 flex-1">
-            <span className="block truncate text-[14px]">{o.name}</span>
+            <span className="block truncate text-reading">{o.name}</span>
             {o.detail && (
-              <span className="block truncate text-[12.5px] text-muted-foreground">{o.detail}</span>
+              <span className="block truncate text-body text-muted-foreground">{o.detail}</span>
             )}
           </span>
         </button>
@@ -800,8 +800,8 @@ function CloneSource({ name, url }: { name: string; url: string }) {
     <div className="flex items-center gap-3 px-2.5 py-2">
       <FolderGit2 className="size-5 shrink-0 text-muted-foreground" />
       <span className="min-w-0">
-        <span className="block truncate text-[14px]">{name}</span>
-        <span className="block truncate text-[12.5px] text-muted-foreground">{url}</span>
+        <span className="block truncate text-reading">{name}</span>
+        <span className="block truncate text-body text-muted-foreground">{url}</span>
       </span>
     </div>
   );
@@ -812,8 +812,8 @@ function GithubRepo({ slug }: { slug: string }) {
     <div className="flex items-center gap-3 px-2.5 py-2">
       <GitHubLogo className="size-5 shrink-0" />
       <span className="min-w-0">
-        <span className="block truncate text-[14px]">{slug}</span>
-        <span className="block truncate text-[12.5px] text-muted-foreground">
+        <span className="block truncate text-reading">{slug}</span>
+        <span className="block truncate text-body text-muted-foreground">
           https://github.com/{slug}
         </span>
       </span>
@@ -863,7 +863,7 @@ function Action({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className="flex shrink-0 items-center gap-2 rounded-lg border border-border py-1 pr-1 pl-2.5 text-[13px] enabled:hover:bg-hover disabled:opacity-50"
+      className="flex shrink-0 items-center gap-2 rounded-lg border border-border py-1 pr-1 pl-2.5 text-body enabled:hover:bg-hover disabled:opacity-50"
     >
       {label}
       <kbd className={`${kbd} text-muted-foreground`}>{keys}</kbd>
@@ -877,17 +877,17 @@ function Body({ children }: { children: ReactNode }) {
 
 function Heading({ children }: { children: ReactNode }) {
   return (
-    <p className="px-2.5 pt-1 pb-1.5 text-[12px] font-medium text-faint-foreground">{children}</p>
+    <p className="px-2.5 pt-1 pb-1.5 text-meta font-medium text-faint-foreground">{children}</p>
   );
 }
 
 function Note({ children }: { children: ReactNode }) {
-  return <p className="px-2.5 py-2 text-[13px] text-faint-foreground">{children}</p>;
+  return <p className="px-2.5 py-2 text-body text-faint-foreground">{children}</p>;
 }
 
 function Problem({ error }: { error?: string }) {
   return error ? (
-    <p role="alert" className="px-2.5 py-2 text-[12.5px] text-danger">
+    <p role="alert" className="px-2.5 py-2 text-body text-danger">
       {error}
     </p>
   ) : null;
@@ -909,7 +909,7 @@ export const close: [ReactNode, string] = ["Esc", "Close"];
 /** A palette's key hints along its bottom, as `[key, what it does]`. */
 export function Footer({ keys, children }: { keys: [ReactNode, string][]; children?: ReactNode }) {
   return (
-    <div className="flex items-center gap-4 border-t border-border bg-background/40 px-4 py-2.5 text-[12.5px] text-muted-foreground">
+    <div className="flex items-center gap-4 border-t border-border bg-background/40 px-4 py-2.5 text-body text-muted-foreground">
       {keys.map(([key, label]) => (
         <span key={label} className="flex items-center gap-1.5">
           {typeof key === "string" ? <kbd className={kbd}>{key}</kbd> : key}
@@ -922,7 +922,7 @@ export function Footer({ keys, children }: { keys: [ReactNode, string][]; childr
 }
 
 const field =
-  "min-w-0 flex-1 bg-transparent text-[14px] placeholder:text-faint-foreground focus-visible:outline-none";
+  "min-w-0 flex-1 bg-transparent text-reading placeholder:text-faint-foreground focus-visible:outline-none";
 
 const mod = () => (window.parallax.platform === "darwin" ? "⌘" : "Ctrl");
 

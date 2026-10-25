@@ -111,8 +111,8 @@ export function AgentsPanel({
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-1.5 px-8 pb-16 text-center">
           <Workflow aria-hidden className="mb-1 size-5 text-faint-foreground" />
-          <p className="text-[13px] font-medium text-foreground">No agents yet</p>
-          <p className="text-[12.5px] text-muted-foreground">
+          <p className="text-body font-medium text-foreground">No agents yet</p>
+          <p className="text-body text-muted-foreground">
             Subagents the coordinator starts show up here.
           </p>
         </div>
@@ -155,12 +155,12 @@ function AgentRow({
           ) : (
             <look.Icon aria-hidden className={`size-3.5 shrink-0 ${look.color}`} />
           )}
-          <span className="min-w-0 flex-1 truncate text-[13px]">{title}</span>
-          <span className="shrink-0 text-[11.5px] text-faint-foreground">
+          <span className="min-w-0 flex-1 truncate text-body">{title}</span>
+          <span className="shrink-0 text-meta text-faint-foreground">
             {run.coordinatorThread ? "by coordinator" : "by you"}
           </span>
         </span>
-        <span className="flex w-full items-center gap-2 pl-5.5 text-[11.5px] text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
+        <span className="flex w-full items-center gap-2 pl-5.5 text-meta text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
           {asks > 0 ? (
             <span className="shrink-0 font-medium text-foreground">Needs approval</span>
           ) : (
@@ -227,7 +227,7 @@ function StartAgent({
       }}
       className="px-3 pb-3"
     >
-      <div className="flex items-end gap-1 rounded-2xl border border-border bg-surface p-1.5 focus-within:border-ring">
+      <div className="flex items-end gap-1 rounded-xl border border-border bg-surface p-1.5 focus-within:border-ring">
         <textarea
           aria-label="New subagent's task"
           rows={2}
@@ -239,14 +239,14 @@ function StartAgent({
             void submit();
           }}
           placeholder={disabledReason ?? "Start a subagent on a task"}
-          className="block min-w-0 flex-1 resize-none bg-transparent px-2 py-1 text-[13px] leading-relaxed placeholder:text-faint-foreground focus-visible:outline-none"
+          className="block min-w-0 flex-1 resize-none bg-transparent px-2 py-1 text-body leading-relaxed placeholder:text-faint-foreground focus-visible:outline-none"
         />
         <button
           type="submit"
           aria-label="Start subagent"
           title="Start subagent"
           disabled={!canStart}
-          className="send-sky grid size-7 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25 [&_svg]:size-4"
+          className="send-sky grid size-7 shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground [&_svg]:size-4"
         >
           {starting ? <LoaderCircle className="animate-spin" /> : <ArrowUp />}
         </button>

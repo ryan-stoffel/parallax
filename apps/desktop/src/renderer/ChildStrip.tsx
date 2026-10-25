@@ -23,7 +23,7 @@ export function ChildStrip({
   return (
     <section
       aria-label="Child thread"
-      className="flex items-center gap-2.5 py-1 pr-1.5 pl-4 text-[13px]"
+      className="flex items-center gap-2.5 py-1 pr-1.5 pl-4 text-body"
     >
       {icon}
       <span className="min-w-0 flex-1 truncate text-muted-foreground">
@@ -40,11 +40,11 @@ export function ChildStrip({
         type="button"
         onClick={onBack}
         title={keys ? `Open parent (${keys})` : "Open parent"}
-        className="flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] text-muted-foreground hover:bg-hover hover:text-foreground"
+        className="flex h-7 shrink-0 items-center gap-1.5 rounded-full px-2.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
       >
         <ArrowLeft aria-hidden className="size-3.5" />
         Open parent
-        {keys && <kbd className="font-sans text-[11px] text-faint-foreground">{keys}</kbd>}
+        {keys && <kbd className="font-sans text-caption text-faint-foreground">{keys}</kbd>}
       </button>
     </section>
   );

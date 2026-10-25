@@ -157,7 +157,7 @@ export function Actions({
                 <Icon aria-hidden />
                 <span className="flex-1 truncate">{a.name}</span>
                 {a.keybinding && (
-                  <span className="text-[11.5px] text-faint-foreground">
+                  <span className="text-meta text-faint-foreground">
                     {formatKeybinding(a.keybinding)}
                   </span>
                 )}
@@ -192,10 +192,10 @@ export function Actions({
   );
 }
 
-const field = "flex flex-col gap-1.5 text-[12.5px] font-medium";
+const field = "flex flex-col gap-1.5 text-body font-medium";
 const input =
-  "w-full rounded-lg border border-border bg-transparent px-3 py-1.5 text-[13px] font-normal placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring";
-const hint = "text-[12px] font-normal text-muted-foreground";
+  "w-full rounded-lg border border-border bg-transparent px-3 py-1.5 text-body font-normal placeholder:text-faint-foreground focus-visible:outline-2 focus-visible:outline-ring";
+const hint = "text-meta font-normal text-muted-foreground";
 
 /**
  * The Add action and Edit action dialog, a native modal <dialog> open while it's mounted:
@@ -286,10 +286,10 @@ export function ActionDialog({
       >
         <div className="flex items-start gap-3 px-5 pt-4 pb-3">
           <div className="flex-1">
-            <h2 id={titleId} className="text-[15px] font-semibold">
+            <h2 id={titleId} className="text-reading font-semibold">
               {action ? "Edit action" : "Add action"}
             </h2>
-            <p className="mt-0.5 text-[12.5px] text-muted-foreground">
+            <p className="mt-0.5 text-body text-muted-foreground">
               A command for this repository, run from Thread details in the thread's terminal.
             </p>
           </div>
@@ -338,7 +338,7 @@ export function ActionDialog({
             <span
               id={`${titleId}-keys`}
               role={refused ? "alert" : undefined}
-              className={refused ? "text-[12px] font-normal text-danger" : hint}
+              className={refused ? "text-meta font-normal text-danger" : hint}
             >
               {refused ?? "Press a shortcut. Backspace clears it."}
             </span>
@@ -351,7 +351,7 @@ export function ActionDialog({
               onChange={(e) => setCommand(e.target.value)}
               rows={3}
               spellCheck={false}
-              className={`${input} resize-none font-mono text-[12.5px]`}
+              className={`${input} resize-none font-mono text-body`}
             />
           </label>
           <div className={field}>
@@ -369,12 +369,12 @@ export function ActionDialog({
             />
             <span
               id={`${titleId}-url`}
-              className={badUrl ? "text-[12px] font-normal text-danger" : hint}
+              className={badUrl ? "text-meta font-normal text-danger" : hint}
             >
               {badUrl ? "Only http and https pages open here." : "A page this action serves."}
             </span>
           </div>
-          <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-[13px] has-disabled:opacity-50">
+          <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-body has-disabled:opacity-50">
             Open preview when this action runs
             <input
               type="checkbox"
@@ -393,7 +393,7 @@ export function ActionDialog({
                 onDelete(action.id);
                 close();
               }}
-              className="shrink-0 rounded-md px-3 py-1.5 text-[13px] text-danger hover:bg-hover"
+              className="shrink-0 rounded-md px-3 py-1.5 text-body text-danger hover:bg-hover"
             >
               Delete
             </button>
@@ -401,14 +401,14 @@ export function ActionDialog({
           <button
             type="button"
             onClick={close}
-            className="ml-auto shrink-0 rounded-md px-3 py-1.5 text-[13px] text-muted-foreground hover:bg-hover hover:text-foreground"
+            className="ml-auto shrink-0 rounded-md px-3 py-1.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={!ready}
-            className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-[13px] font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+            className="shrink-0 rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
             Save action
           </button>

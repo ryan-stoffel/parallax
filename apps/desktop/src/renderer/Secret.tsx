@@ -14,7 +14,7 @@ import type { Item } from "./transcript";
 type SecretItem = Extract<Item, { kind: "secret" }>;
 
 const saveButton =
-  "h-7 shrink-0 rounded-md bg-send px-3 text-[12.5px] font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
+  "h-7 shrink-0 rounded-md bg-send px-3 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
 
 /** The oldest secret request of run `runId` still waiting, as a card with a password field. */
 export function SecretCard({
@@ -66,16 +66,16 @@ export function SecretCard({
         autoComplete="off"
         className="flex flex-col rounded-xl border border-border bg-surface"
       >
-        <div className="flex items-center gap-2 px-4 pt-3 text-[13px]">
+        <div className="flex items-center gap-2 px-4 pt-3 text-body">
           <KeyRound aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
           <span id={titleId} className="min-w-0 truncate font-medium">
             {request.label}
           </span>
-          <span className="ml-auto shrink-0 pl-2 text-[12px] text-muted-foreground">
+          <span className="ml-auto shrink-0 pl-2 text-meta text-muted-foreground">
             The agent asks for a secret
           </span>
         </div>
-        <p className="px-4 pt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">
+        <p className="px-4 pt-1.5 text-body leading-relaxed text-muted-foreground">
           {request.reason}
         </p>
         <div className="px-4 pt-2.5">
@@ -90,11 +90,11 @@ export function SecretCard({
             spellCheck={false}
             disabled={off}
             placeholder={request.placeholder ?? "Paste the secret"}
-            className="h-8 w-full rounded-md border border-border bg-background px-2.5 font-mono text-[12.5px] placeholder:font-sans placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
+            className="h-8 w-full rounded-md border border-border bg-background px-2.5 font-mono text-body placeholder:font-sans placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
           />
         </div>
         <div className="flex items-center justify-end gap-2 px-4 pt-3 pb-3">
-          <p className="mr-auto text-[12px] text-faint-foreground">
+          <p className="mr-auto text-meta text-faint-foreground">
             Kept in this host's keychain. The agent gets a one-time reference, never the value.
           </p>
           <button

@@ -91,7 +91,7 @@ export function MiniPrompt({
           e.preventDefault();
           void send();
         }}
-        className={`relative z-10 flex items-end gap-2 border border-border bg-surface shadow-composer transition-colors focus-within:border-foreground/20 ${large ? "rounded-3xl py-2.5 pr-2.5 pl-5" : "rounded-[1.25rem] py-1.5 pr-1.5 pl-3.5"}`}
+        className={`relative z-10 flex items-end gap-2 border border-border bg-surface shadow-composer transition-colors focus-within:border-foreground/20 ${large ? "rounded-xl py-2.5 pr-2.5 pl-5" : "rounded-xl py-1.5 pr-1.5 pl-3.5"}`}
       >
         <textarea
           ref={box}
@@ -114,13 +114,13 @@ export function MiniPrompt({
             e.preventDefault();
             void send();
           }}
-          className={`field-sizing-content max-h-40 min-w-0 flex-1 resize-none bg-transparent placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-60 ${large ? "py-1.5 text-[15px] leading-relaxed" : "py-1 text-[13px] leading-snug"}`}
+          className={`field-sizing-content max-h-40 min-w-0 flex-1 resize-none bg-transparent placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-60 ${large ? "py-1.5 text-reading leading-relaxed" : "py-1 text-body leading-snug"}`}
         />
         <button
           type="submit"
           aria-label="Send"
           disabled={!canSend}
-          className={`send-sky grid shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:opacity-25 ${large ? "size-9" : "size-7"}`}
+          className={`send-sky grid shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground ${large ? "size-9" : "size-7"}`}
         >
           {busy ? (
             <LoaderCircle className="size-3.5 animate-spin" />
@@ -132,7 +132,7 @@ export function MiniPrompt({
       {model && (
         // Tucked under the box, as the composer's tab is.
         <div
-          className={`tucked -mt-4 flex items-center rounded-b-2xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
+          className={`tucked -mt-4 flex items-center rounded-b-xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
         >
           <ModelPick providers={providers} models={offered} value={model} onChange={setPicked} />
         </div>
@@ -172,7 +172,7 @@ function ModelPick({
         popoverTarget={id}
         aria-haspopup="listbox"
         aria-label={`Model: ${value.name}`}
-        className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-[12px] text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3"
+        className="flex h-6 items-center gap-1.5 rounded-md px-1.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3"
       >
         {Logo && <Logo aria-hidden />}
         {value.name.replace(/^Claude /, "")}
@@ -224,10 +224,10 @@ function ModelPick({
                   onChange(m);
                   document.getElementById(id)?.hidePopover();
                 }}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] hover:bg-hover"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-body hover:bg-hover"
               >
                 <span className="min-w-0 flex-1 truncate">{m.name}</span>
-                {m.isNew && <span className="text-[11px] text-accent">New</span>}
+                {m.isNew && <span className="text-caption text-accent">New</span>}
                 {on && <Check aria-hidden className="size-3.5 text-accent" />}
               </button>
             );
