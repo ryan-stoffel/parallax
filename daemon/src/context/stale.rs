@@ -77,10 +77,7 @@ pub(crate) fn mark_folder(dir: &Path, files: &HashSet<String>) {
         if memory::entry_kind(&path).is_none() {
             continue;
         }
-        let Some(text) = super::read_file(dir, &path)
-            .ok()
-            .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
-        else {
+        let Some(text) = super::read_text(dir, &path) else {
             continue;
         };
         let missing: Vec<&str> = paths(&text).filter(|named| !exists(named, files)).collect();
@@ -137,17 +134,11 @@ fn exists(path: &str, files: &HashSet<String>) -> bool {
 /// of the header and the body are kept as they are.
 fn mark(text: &str, missing: Option<&str>) -> String {
     let (_, body) = memory::parse(text);
-    let head = &text[..text.len() - body.len()];
     let mut marked = String::new();
     if let Some(missing) = missing {
         let _ = writeln!(marked, "Stale: {missing}");
     }
-    for line in head.lines() {
-        if !line.trim().is_empty() && !line.starts_with("Stale:") {
-            marked.push_str(line);
-            marked.push('\n');
-        }
-    }
+    marked.push_str(&memory::header_lines(text, body, "Stale:"));
     if !marked.is_empty() {
         marked.push('\n');
     }

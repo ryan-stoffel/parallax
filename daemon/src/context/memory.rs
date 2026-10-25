@@ -4,8 +4,9 @@
 //!
 //! A proposal, `proposals/<slug>.md`, has the same form. A Project child's also names the scope
 //! it is for (`Scope:`), and waits in the Project's folder until its coordinator's next wake-up
-//! carries it ([`pending`]). A coordinator's names its scope too, and the entry it rewrites, if any (`Replaces:`), and waits
-//! there for the user. A coordinator's rewrite of the brief has no `Kind:` line.
+//! carries it ([`pending`]). A coordinator's names its scope too, and the entry it rewrites, if
+//! any (`Replaces:`), and waits there for the user. A coordinator's rewrite of the brief has no
+//! `Kind:` line.
 //!
 //! A Project's child starts with the brief and an [`index`] of the entries' titles ([`start`]).
 //!
@@ -155,17 +156,24 @@ pub(crate) fn used(text: &str, day: &str) -> Option<String> {
     if header.last_used.as_deref() == Some(day) {
         return None;
     }
-    let head = &text[..text.len() - body.len()];
-    let mut stamped = String::new();
-    for line in head.lines() {
-        if !line.trim().is_empty() && !line.starts_with("Last used:") {
-            stamped.push_str(line);
-            stamped.push('\n');
-        }
-    }
+    let mut stamped = header_lines(text, body, "Last used:");
     let _ = writeln!(stamped, "Last used: {day}\n");
     stamped.push_str(body);
     Some(stamped)
+}
+
+/// The header of `text`, whose body is `body`, one line each with its `\n`, leaving out blank
+/// lines and those that start with `dropped`.
+pub(crate) fn header_lines(text: &str, body: &str, dropped: &str) -> String {
+    let head = &text[..text.len() - body.len()];
+    let mut kept = String::new();
+    for line in head.lines() {
+        if !line.trim().is_empty() && !line.starts_with(dropped) {
+            kept.push_str(line);
+            kept.push('\n');
+        }
+    }
+    kept
 }
 
 /// Whether the entry with `header` has gone [`UNUSED_DAYS`] or more unread on `today`: since its
@@ -191,10 +199,7 @@ pub(crate) fn pending(dir: &Path) -> Vec<(String, String)> {
         if !path.starts_with("proposals/") {
             continue;
         }
-        let Some(text) = super::read_file(dir, &path)
-            .ok()
-            .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
-        else {
+        let Some(text) = super::read_text(dir, &path) else {
             continue;
         };
         let (header, body) = parse(&text);
@@ -258,9 +263,7 @@ pub(crate) async fn start(daemon: &Daemon, project: ProjectId) -> Result<Start, 
     let built = tokio::task::spawn_blocking(move || {
         let repo_dir = repo_path.and_then(|path| repo_dir(&data_dir, &path, &repos));
         let project_dir = data_dir.context_dir(project);
-        let brief = super::read_file(&project_dir, "brief.md")
-            .ok()
-            .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
+        let brief = super::read_text(&project_dir, "brief.md")
             .map(|brief| brief.trim().to_owned())
             .filter(|brief| !brief.is_empty());
         let you_dir = super::you_dir(&data_dir);
@@ -306,10 +309,7 @@ pub(crate) fn index(scopes: &[(&str, &Path)]) -> (String, bool) {
             .collect();
         paths.sort_by_key(|path| (path.starts_with("knowledge/"), path.clone()));
         for path in paths {
-            let text = super::read_file(dir, &path)
-                .ok()
-                .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
-                .unwrap_or_default();
+            let text = super::read_text(dir, &path).unwrap_or_default();
             let (header, _) = parse(&text);
             let kind = entry_kind(&path).and_then(kind_name).unwrap_or("knowledge");
             let path = one_line(&path, usize::MAX);

@@ -151,10 +151,7 @@ fn scan(
             continue;
         }
         seen.insert(path.clone());
-        let Some(text) = super::read_file(dir, &path)
-            .ok()
-            .and_then(|(bytes, _)| String::from_utf8(bytes).ok())
-        else {
+        let Some(text) = super::read_text(dir, &path) else {
             continue;
         };
         let hash = hash(&text);
@@ -328,8 +325,7 @@ fn keep_other(dir: &Path, path: &str, text: &str, loser: &MemorySyncEntry) -> Re
 /// The machine that wrote the text of `path` in You folder `dir` now, if `versions` records it.
 pub(crate) fn machine(dir: &Path, path: &str, versions: &Versions) -> Option<MemoryMachine> {
     let row = versions.get(path).filter(|row| !row.deleted)?;
-    let (bytes, _) = super::read_file(dir, path).ok()?;
-    let text = String::from_utf8(bytes).ok()?;
+    let text = super::read_text(dir, path)?;
     (hash(&text) == row.hash).then(|| row.machine.clone())
 }
 

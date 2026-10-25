@@ -194,13 +194,14 @@ pub(crate) async fn settled(daemon: &Arc<Daemon>, thread: Uuid) {
             ))
         })
         .await;
-    let (Some(row), Some(run), Some(worktree)) = (match rows {
+    let rows = match rows {
         Ok(rows) => rows,
         Err(error) => {
             warn!(error = %error.message, "could not read a settled thread");
             return;
         }
-    }) else {
+    };
+    let (Some(row), Some(run), Some(worktree)) = rows else {
         return;
     };
     // A thread re-engaged since keeps working there.
@@ -337,23 +338,10 @@ impl ThreadScript {
             // `release` took the hold first: the user stopped the run.
             let released =
                 script.blocking && lock(&daemon.setup_holds).remove(&script.run_id).is_none();
-            let (status, held) = match code {
-                _ if released => (ScriptStatus::Cancelled, Err(None)),
-                Some(0) => (ScriptStatus::Done, Ok(())),
-                Some(code) => (
-                    ScriptStatus::Failed,
-                    Err(Some(format!(
-                        "The {kind} script {} exited with code {code}. Its terminal {} stays open.",
-                        script.name, script.terminal_id
-                    ))),
-                ),
-                None => (
-                    ScriptStatus::Failed,
-                    Err(Some(format!(
-                        "The {kind} script {}'s terminal closed before it finished.",
-                        script.name
-                    ))),
-                ),
+            let (status, held) = if released {
+                (ScriptStatus::Cancelled, Err(None))
+            } else {
+                ended_with(&script, kind, code)
             };
             if status == ScriptStatus::Done {
                 let closing = Arc::clone(&daemon);
@@ -367,6 +355,27 @@ impl ThreadScript {
             let _ = done.send(held);
         });
         ended
+    }
+}
+
+/// How `script`, a `kind` script, ended with exit `code`, `None` when its terminal closed first.
+fn ended_with(script: &Started, kind: &str, code: Option<i32>) -> (ScriptStatus, Held) {
+    match code {
+        Some(0) => (ScriptStatus::Done, Ok(())),
+        Some(code) => (
+            ScriptStatus::Failed,
+            Err(Some(format!(
+                "The {kind} script {} exited with code {code}. Its terminal {} stays open.",
+                script.name, script.terminal_id
+            ))),
+        ),
+        None => (
+            ScriptStatus::Failed,
+            Err(Some(format!(
+                "The {kind} script {}'s terminal closed before it finished.",
+                script.name
+            ))),
+        ),
     }
 }
 

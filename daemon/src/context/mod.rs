@@ -242,6 +242,12 @@ pub(crate) fn read_file(dir: &Path, name: &str) -> io::Result<(Vec<u8>, std::fs:
     Ok((content, metadata))
 }
 
+/// `name` in `dir` as UTF-8 text, read as [`read_file`] does, or `None` when it can't be.
+pub(crate) fn read_text(dir: &Path, name: &str) -> Option<String> {
+    let (bytes, _) = read_file(dir, name).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
 /// Up to `length` bytes of `name` in `dir` from `offset`, empty past the end, and its metadata,
 /// for `context/readBytes`. Opens it as [`read_file`] does, with the same errors.
 pub(crate) fn read_slice(
