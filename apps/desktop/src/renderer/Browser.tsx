@@ -335,8 +335,9 @@ export function Browser({
     setCurrent(tab.id);
     setAgentTab(undefined);
   };
-  // Closing the last own tab hides the browser, as Chrome closes its window, unless the agent has
-  // tabs, and leaves a blank tab for when it shows again.
+  // Closing the last own tab shows the agent's tab before it, as Chrome shows a neighbor. With no
+  // agent tab either, it hides the browser, as Chrome closes its window, and leaves a blank tab for
+  // when it shows again.
   // The pages of the tabs closed here, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
   const closed = useRef<string[]>([]);
   // History (PLX-976), one for the browser, which any of its tabs opens.
@@ -351,15 +352,25 @@ export function Browser({
     const page = tabs[at]?.url;
     if (page) closed.current = [...closed.current.slice(-24), page];
     const rest = tabs.filter((t) => t.id !== id);
+    const agentLast = agent?.tabs.at(-1);
     if (!rest.length) {
-      rest.push(ownTab());
-      // The agent's tabs keep the browser open, showing the first.
-      if (agent?.tabs[0]) setAgentTab(agent.tabs[0].tabId);
-      else onEmpty?.();
+      if (agentLast) setAgentTab(agentLast.tabId);
+      else {
+        rest.push(ownTab());
+        onEmpty?.();
+      }
     }
     setTabs(rest);
-    if (id === current) setCurrent(rest[Math.min(at, rest.length - 1)]!.id);
+    if (id === current && rest.length) setCurrent(rest[Math.min(at, rest.length - 1)]!.id);
   };
+  // With no own tab left, once the agent's are gone too, a blank one shows.
+  const empty = !tabs.length && !shownTab;
+  useEffect(() => {
+    if (!empty) return;
+    const tab = ownTab();
+    setTabs([tab]);
+    setCurrent(tab.id);
+  }, [empty]);
 
   // A restored tab opens its page the first time it's shown.
   const shownOwn = tabs.find((t) => t.id === current);
