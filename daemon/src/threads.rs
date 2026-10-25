@@ -148,6 +148,13 @@ fn thread_not_found(id: RunId) -> ErrorObject {
     )
 }
 
+fn repo_not_found(id: RepoId) -> ErrorObject {
+    ErrorObject::parallax(
+        ErrorKind::RepoNotFound,
+        format!("no repo entry has id {id}"),
+    )
+}
+
 /// The repository a run's scope stands for: a project's, or a repo entry's path. For the scratch
 /// entry it is the folder that holds the scratch repositories.
 pub(crate) fn scope_path(
@@ -393,12 +400,7 @@ pub(crate) async fn start_entry(
     store(daemon, move |db| {
         db.get_repo(id.into())
             .map_err(|e| store_error(&e))?
-            .ok_or_else(|| {
-                ErrorObject::parallax(
-                    ErrorKind::RepoNotFound,
-                    format!("no repo entry has id {id}"),
-                )
-            })
+            .ok_or_else(|| repo_not_found(id))
     })
     .await
 }
@@ -1013,6 +1015,22 @@ pub(crate) async fn refs(
     Ok(RepoRefsResult { refs })
 }
 
+/// `repo/gitStatus`: the git status of repo entry `repo`'s own checkout, with no thread.
+pub(crate) async fn git_status(
+    daemon: &Arc<Daemon>,
+    params: parallax_protocol::RepoGitStatusParams,
+) -> Result<parallax_protocol::GitStatus, ErrorObject> {
+    let entry = start_entry(daemon, Some(params.repo)).await?;
+    daemon
+        .agents
+        .worktrees()
+        .status(crate::worktree::RunFolder::Checkout(Path::new(
+            &entry.fields.path,
+        )))
+        .await
+        .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))
+}
+
 /// Removes a scratch repository made for a `thread/start` or `thread/import` that didn't create
 /// its run.
 pub(crate) async fn remove_unused_scratch(daemon: &Arc<Daemon>, run_id: RunId, dir: &Path) {
@@ -1189,10 +1207,7 @@ pub(crate) async fn update_repo(
     let name = name.as_deref().map(crate::spaces::check_name).transpose()?;
     store(daemon, move |db| {
         let not_found = |error: parallax_store::StoreError| match error {
-            parallax_store::StoreError::NotFound { .. } => ErrorObject::parallax(
-                ErrorKind::RepoNotFound,
-                format!("no repo entry has id {repo}"),
-            ),
+            parallax_store::StoreError::NotFound { .. } => repo_not_found(repo),
             other => store_error(&other),
         };
         let mut changed = false;
@@ -1200,9 +1215,7 @@ pub(crate) async fn update_repo(
             let current = db
                 .get_repo(repo.into())
                 .map_err(|e| store_error(&e))?
-                .ok_or_else(|| {
-                    not_found(parallax_store::StoreError::NotFound { id: repo.into() })
-                })?;
+                .ok_or_else(|| repo_not_found(repo))?;
             if !current.fields.space {
                 return Err(ErrorObject::invalid_params("only a Space can be renamed"));
             }
@@ -1214,7 +1227,7 @@ pub(crate) async fn update_repo(
         let row = db
             .get_repo(repo.into())
             .map_err(|e| store_error(&e))?
-            .ok_or_else(|| not_found(parallax_store::StoreError::NotFound { id: repo.into() }))?;
+            .ok_or_else(|| repo_not_found(repo))?;
         let repo = repo_entry(row)?;
         if changed {
             db.stage(
@@ -1329,20 +1342,4 @@ mod tests {
         let long = format!("/{}", "p".repeat(super::MAX_PATH_BYTES));
         assert_eq!(check_path(&long).unwrap_err().code, INVALID_PARAMS);
     }
-}
-
-/// Read the registered repository checkout without creating or changing a thread.
-pub(crate) async fn git_status(
-    daemon: &Arc<Daemon>,
-    params: parallax_protocol::RepoGitStatusParams,
-) -> Result<parallax_protocol::GitStatus, ErrorObject> {
-    let entry = start_entry(daemon, Some(params.repo)).await?;
-    daemon
-        .agents
-        .worktrees()
-        .status(crate::worktree::RunFolder::Checkout(Path::new(
-            &entry.fields.path,
-        )))
-        .await
-        .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))
 }

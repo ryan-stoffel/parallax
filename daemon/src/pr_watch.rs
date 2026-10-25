@@ -20,7 +20,7 @@
 //! in a row; a rate limit only delays it. A watch goes with its run.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -100,6 +100,12 @@ const BEHIND: &str = "query($owner: String!, $name: String!, $base: String!, $he
 pub(crate) struct Watches {
     started: Notify,
     failures: Mutex<HashMap<String, u32>>,
+}
+
+impl Watches {
+    fn failures(&self) -> MutexGuard<'_, HashMap<String, u32>> {
+        self.failures.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 /// What a watch's run was last told, as T3's `ThreadPullRequestWatch`.
@@ -437,8 +443,7 @@ fn stage_watches(db: &mut Tx, run: Uuid) -> Result<(), ErrorObject> {
         .ok_or_else(|| ErrorObject::internal_error(format!("run {run} is gone")))?;
     let project = ProjectId::try_from(row.fields.project_id)
         .map_err(|_| ErrorObject::internal_error("a stored project id is not a UUIDv7"))?;
-    let run_id = RunId::try_from(run)
-        .map_err(|_| ErrorObject::internal_error(format!("run {run} has an invalid id")))?;
+    let run_id = run_id(run)?;
     let urls = urls(db, run)?;
     db.stage(
         Timestamp::now(),
@@ -446,6 +451,11 @@ fn stage_watches(db: &mut Tx, run: Uuid) -> Result<(), ErrorObject> {
         ParallaxEvent::PrWatches { run_id, urls },
     );
     Ok(())
+}
+
+fn run_id(run: Uuid) -> Result<RunId, ErrorObject> {
+    RunId::try_from(run)
+        .map_err(|_| ErrorObject::internal_error(format!("run {run} has an invalid id")))
 }
 
 /// The sweep: see the module documentation. Returns when `stop` is cancelled.
@@ -511,9 +521,7 @@ async fn sweep(daemon: &Daemon) {
     };
     daemon
         .pr_watches
-        .failures
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .failures()
         .retain(|url, _| found.contains_key(url));
     for (url, targets) in found {
         let (ended, targets): (Vec<_>, Vec<_>) =
@@ -536,11 +544,7 @@ async fn pass(daemon: &Daemon, url: &str, targets: &[Target]) {
         }
         Err(error) => {
             let failures = {
-                let mut failures = daemon
-                    .pr_watches
-                    .failures
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner);
+                let mut failures = daemon.pr_watches.failures();
                 let count = failures.entry(url.to_owned()).or_default();
                 *count += 1;
                 *count
@@ -555,22 +559,12 @@ async fn pass(daemon: &Daemon, url: &str, targets: &[Target]) {
                 for target in targets {
                     record(daemon, url, target, None, Some(text.clone()), "unreadable").await;
                 }
-                daemon
-                    .pr_watches
-                    .failures
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .remove(url);
+                daemon.pr_watches.failures().remove(url);
             }
             return;
         }
     };
-    daemon
-        .pr_watches
-        .failures
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .remove(url);
+    daemon.pr_watches.failures().remove(url);
     match detail.state.as_str() {
         "OPEN" => {}
         "CLOSED" => {
@@ -663,8 +657,7 @@ fn record_job(
         stage_watches(db, run)?;
     }
     if let Some(text) = text {
-        let run_id = RunId::try_from(run)
-            .map_err(|_| ErrorObject::internal_error(format!("run {run} has an invalid id")))?;
+        let run_id = run_id(run)?;
         let command_id = format!("pr-watch:{run}:{}", Uuid::now_v7());
         let wake = Wake {
             task: None,
@@ -684,67 +677,128 @@ fn record_job(
 /// can't hold the news back. "Passed" is told once the required checks all pass, or all checks
 /// where none is required. A remark counts when someone other than the viewer or the author wrote
 /// or edited it since.
-#[expect(
-    clippy::too_many_lines,
-    reason = "T3's evaluatePullRequestWatch, step by step"
-)]
 fn evaluate(watch: &Watch, detail: &Detail) -> Report {
     let mut changes = Vec::new();
     let head_moved = detail.head_sha != watch.head_sha;
-    // An empty list keeps the last state: GitHub can answer with one when its check read fails.
-    let mut failed_checks = if head_moved {
-        Vec::new()
-    } else {
-        watch.failed_checks.clone()
-    };
-    let mut passed = !head_moved && watch.passed;
-    let mut passed_checks = if head_moved {
-        Vec::new()
-    } else {
-        watch.passed_checks.clone()
-    };
-    if !detail.checks.is_empty() {
-        let failed: Vec<&Check> = detail
-            .checks
-            .iter()
-            .filter(|check| matches!(check.state, CheckState::Failed(_)))
-            .collect();
-        let newly: Vec<Check> = failed
-            .iter()
-            .filter(|check| !failed_checks.contains(&check.name))
-            .map(|check| (*check).clone())
-            .collect();
-        if !newly.is_empty() {
-            changes.push(Change::ChecksFailed(newly));
-        }
-        // A check that runs again leaves the list, so a rerun that fails again is told.
-        failed_checks = failed.iter().map(|check| check.name.clone()).collect();
+    let checks = checks_news(watch, detail, head_moved, &mut changes);
+    let remarks = remarks_news(watch, detail, &mut changes);
 
-        let required: Vec<&Check> = detail
-            .checks
-            .iter()
-            .filter(|check| check.required)
-            .collect();
-        let gate: Vec<&Check> = if required.is_empty() {
-            detail.checks.iter().collect()
-        } else {
-            required.clone()
-        };
-        let passed_now = gate.iter().all(|check| check.state == CheckState::Passed);
-        let names: Vec<String> = gate.iter().map(|check| check.name.clone()).collect();
-        // A required check created and finished between two passes is never seen pending.
-        let gate_grew =
-            !required.is_empty() && names.iter().any(|name| !passed_checks.contains(name));
-        if passed_now && (!passed || gate_grew) {
-            changes.push(Change::ChecksPassed {
-                count: gate.len(),
-                required: !required.is_empty(),
-            });
-        }
-        passed = passed_now;
-        passed_checks = if passed_now { names } else { Vec::new() };
+    if detail.mergeable == "CONFLICTING" && !watch.conflicting {
+        changes.push(Change::Conflicting);
     }
+    // `UNKNOWN` is GitHub still working it out after a push; only a clean answer clears it.
+    let conflicting = if detail.mergeable == "UNKNOWN" {
+        watch.conflicting
+    } else {
+        detail.mergeable == "CONFLICTING"
+    };
 
+    let comments_only = !changes.is_empty()
+        && changes
+            .iter()
+            .all(|change| matches!(change, Change::Remarks(_)));
+    let progress = head_moved || (!changes.is_empty() && !comments_only);
+    let wakes = if progress { 0 } else { watch.wakes } + u32::from(comments_only);
+    Report {
+        changes,
+        next: Watch {
+            started_at: watch.started_at,
+            head_sha: detail.head_sha.clone(),
+            failed_checks: checks.failed_checks,
+            passed: checks.passed,
+            passed_checks: checks.passed_checks,
+            remarks_through: remarks.remarks_through,
+            remark_ids: remarks.remark_ids,
+            conflicting,
+            wakes,
+        },
+        exhausted: comments_only && wakes >= WAKE_LIMIT,
+    }
+}
+
+/// What a watch's checks were told: [`Watch`]'s fields of the same names.
+struct ChecksTold {
+    failed_checks: Vec<String>,
+    passed: bool,
+    passed_checks: Vec<String>,
+}
+
+/// [`evaluate`]'s checks: adds the checks that newly failed and a newly passed gate to `changes`,
+/// and returns what the watch records of them.
+fn checks_news(
+    watch: &Watch,
+    detail: &Detail,
+    head_moved: bool,
+    changes: &mut Vec<Change>,
+) -> ChecksTold {
+    // An empty list keeps the last state: GitHub can answer with one when its check read fails.
+    let mut told = if head_moved {
+        ChecksTold {
+            failed_checks: Vec::new(),
+            passed: false,
+            passed_checks: Vec::new(),
+        }
+    } else {
+        ChecksTold {
+            failed_checks: watch.failed_checks.clone(),
+            passed: watch.passed,
+            passed_checks: watch.passed_checks.clone(),
+        }
+    };
+    if detail.checks.is_empty() {
+        return told;
+    }
+    let failed: Vec<&Check> = detail
+        .checks
+        .iter()
+        .filter(|check| matches!(check.state, CheckState::Failed(_)))
+        .collect();
+    let newly: Vec<Check> = failed
+        .iter()
+        .filter(|check| !told.failed_checks.contains(&check.name))
+        .map(|check| (*check).clone())
+        .collect();
+    if !newly.is_empty() {
+        changes.push(Change::ChecksFailed(newly));
+    }
+    // A check that runs again leaves the list, so a rerun that fails again is told.
+    told.failed_checks = failed.iter().map(|check| check.name.clone()).collect();
+
+    let required: Vec<&Check> = detail
+        .checks
+        .iter()
+        .filter(|check| check.required)
+        .collect();
+    let any_required = !required.is_empty();
+    let gate: Vec<&Check> = if any_required {
+        required
+    } else {
+        detail.checks.iter().collect()
+    };
+    let passed_now = gate.iter().all(|check| check.state == CheckState::Passed);
+    let names: Vec<String> = gate.iter().map(|check| check.name.clone()).collect();
+    // A required check created and finished between two passes is never seen pending.
+    let gate_grew = any_required && names.iter().any(|name| !told.passed_checks.contains(name));
+    if passed_now && (!told.passed || gate_grew) {
+        changes.push(Change::ChecksPassed {
+            count: gate.len(),
+            required: any_required,
+        });
+    }
+    told.passed = passed_now;
+    told.passed_checks = if passed_now { names } else { Vec::new() };
+    told
+}
+
+/// What a watch's remarks were told: [`Watch`]'s fields of the same names.
+struct RemarksTold {
+    remarks_through: Timestamp,
+    remark_ids: Vec<String>,
+}
+
+/// [`evaluate`]'s remarks: adds those someone other than the viewer or the author wrote or edited
+/// since to `changes`, and returns what the watch records of them.
+fn remarks_news(watch: &Watch, detail: &Detail, changes: &mut Vec<Change>) -> RemarksTold {
     let own = detail
         .viewer
         .as_deref()
@@ -779,37 +833,9 @@ fn evaluate(watch: &Watch, detail: &Detail) -> Report {
     if !fresh.is_empty() {
         changes.push(Change::Remarks(fresh));
     }
-
-    if detail.mergeable == "CONFLICTING" && !watch.conflicting {
-        changes.push(Change::Conflicting);
-    }
-    // `UNKNOWN` is GitHub still working it out after a push; only a clean answer clears it.
-    let conflicting = if detail.mergeable == "UNKNOWN" {
-        watch.conflicting
-    } else {
-        detail.mergeable == "CONFLICTING"
-    };
-
-    let comments_only = !changes.is_empty()
-        && changes
-            .iter()
-            .all(|change| matches!(change, Change::Remarks(_)));
-    let progress = head_moved || (!changes.is_empty() && !comments_only);
-    let wakes = if progress { 0 } else { watch.wakes } + u32::from(comments_only);
-    Report {
-        changes,
-        next: Watch {
-            started_at: watch.started_at,
-            head_sha: detail.head_sha.clone(),
-            failed_checks,
-            passed,
-            passed_checks,
-            remarks_through: latest,
-            remark_ids,
-            conflicting,
-            wakes,
-        },
-        exhausted: comments_only && wakes >= WAKE_LIMIT,
+    RemarksTold {
+        remarks_through: latest,
+        remark_ids,
     }
 }
 
@@ -832,12 +858,7 @@ fn message(url: &str, detail: &Detail, report: &Report) -> String {
                         CheckState::Failed(how) if how != "failure" => format!(" ({how})"),
                         _ => String::new(),
                     };
-                    let link = check
-                        .url
-                        .as_ref()
-                        .map(|url| format!(" {url}"))
-                        .unwrap_or_default();
-                    format!("  - {}{how}{link}", check.name)
+                    format!("  - {}{how}{}", check.name, link(check.url.as_deref()))
                 });
             }
             Change::ChecksPassed { count, required } => {
@@ -869,12 +890,7 @@ fn message(url: &str, detail: &Detail, report: &Report) -> String {
                     } else {
                         format!("\"{body}\"")
                     };
-                    let link = remark
-                        .url
-                        .as_ref()
-                        .map(|url| format!(" {url}"))
-                        .unwrap_or_default();
-                    format!("  - {who}{on}: {said}{link}")
+                    format!("  - {who}{on}: {said}{}", link(remark.url.as_deref()))
                 });
             }
             Change::Conflicting => {
@@ -898,6 +914,11 @@ fn message(url: &str, detail: &Detail, report: &Report) -> String {
             .to_owned()
     });
     lines.join("\n")
+}
+
+/// ` <url>` after a listed item, or nothing without one.
+fn link(url: Option<&str>) -> String {
+    url.map(|url| format!(" {url}")).unwrap_or_default()
 }
 
 fn listed<T>(lines: &mut Vec<String>, items: &[T], line: impl Fn(&T) -> String) {
@@ -929,8 +950,7 @@ fn snippet(body: &str) -> String {
 
 /// Reads pull request `url` with one `gh api graphql` call.
 async fn read(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
-    let (owner, name, number) = parts(url)
-        .ok_or_else(|| PrError::Gh(format!("{url:?} is not a GitHub pull request URL")))?;
+    let (owner, name, number) = parts(url)?;
     let answer = graphql(
         daemon,
         QUERY,
@@ -946,8 +966,7 @@ async fn read(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
 
 /// How many commits `base` has that `head` doesn't, in `url`'s repository.
 async fn behind(daemon: &Daemon, url: &str, base: &str, head: &str) -> Result<u64, PrError> {
-    let (owner, name, _) = parts(url)
-        .ok_or_else(|| PrError::Gh(format!("{url:?} is not a GitHub pull request URL")))?;
+    let (owner, name, _) = parts(url)?;
     let answer = graphql(
         daemon,
         BEHIND,
@@ -990,11 +1009,14 @@ async fn graphql(
 }
 
 /// `https://github.com/<owner>/<name>/pull/<number>`'s parts.
-fn parts(url: &str) -> Option<(&str, &str, u64)> {
-    let mut parts = url.strip_prefix("https://github.com/")?.split('/');
-    let (owner, name) = (parts.next()?, parts.next()?);
-    (parts.next()? == "pull").then_some(())?;
-    Some((owner, name, parts.next()?.parse().ok()?))
+fn parts(url: &str) -> Result<(&str, &str, u64), PrError> {
+    let found = || {
+        let mut parts = url.strip_prefix("https://github.com/")?.split('/');
+        let (owner, name) = (parts.next()?, parts.next()?);
+        (parts.next()? == "pull").then_some(())?;
+        Some((owner, name, parts.next()?.parse().ok()?))
+    };
+    found().ok_or_else(|| PrError::Gh(format!("{url:?} is not a GitHub pull request URL")))
 }
 
 /// `gh api graphql`'s answer to [`QUERY`].
