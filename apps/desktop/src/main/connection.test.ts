@@ -355,6 +355,18 @@ test("a watch starts from its snapshot, and resumes after its last seq on a reco
   expect(child().request("orchestration/subscribeThread").params).toEqual({ threadId: "t-1" });
 });
 
+test("a disposed connection ends each watch with an error, so its owner opens it again", () => {
+  const connection = connect();
+  child().handshake();
+  const ended = vi.fn();
+  connection.watch({ threadId: "t-1" }, ended);
+  connection.dispose();
+  expect(ended).toHaveBeenCalledWith({
+    type: "error",
+    error: { code: expect.any(Number), message: expect.any(String) },
+  });
+});
+
 test("a shell watch that plxd refuses ends with its error, and an ended watch unsubscribes", () => {
   const connection = connect();
   child().handshake();

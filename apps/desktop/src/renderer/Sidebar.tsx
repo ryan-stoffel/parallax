@@ -188,6 +188,7 @@ import { Favorites, type FavoriteAction } from "./Favorites";
 import { Fold, quietFor, shownRows, Tick, TodayDivider } from "./SidebarParts";
 import { PinList, type Pin as PinData } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
+import { cancelPrefetch, prefetchThread } from "./threadWatches";
 
 const row =
   "flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-body hover:bg-hover";
@@ -977,7 +978,10 @@ export function ThreadList({
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
-  const hideCard = () => card.current?.hide();
+  const hideCard = () => {
+    cancelPrefetch();
+    card.current?.hide();
+  };
 
   const askDelete = (item: Item) => {
     setToDelete(item);
@@ -1255,9 +1259,11 @@ export function ThreadList({
       />
     );
   };
-  // The open thread's card would only repeat what the thread shows.
+  // The open thread's card would only repeat what the thread shows. Another's watch opens, so a
+  // click shows it at once.
   const restCard = (item: Item) => (el: HTMLElement) => {
     if (item.kind !== "thread" || item.key === selectedKey) return;
+    prefetchThread(item.host.id, item.thread.id);
     card.current?.show(el, {
       title: item.title,
       run: item.run,

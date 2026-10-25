@@ -56,6 +56,7 @@ const answers: Record<string, Answer> = {
   }),
   "agent/list": () => ({ result: { runs: [run("a"), run("b"), run("c")], seq: 7 } }),
   "project/list": () => ({ result: { projects: [], seq: 7 } }),
+  "agent/events": () => ({ result: { events: [] } }),
 };
 const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
   const answer = answers[method];

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type {
@@ -10,6 +10,7 @@ import type {
   QueuedMessage,
   ThreadRun,
 } from "../protocol/generated/protocol";
+import { watchThread } from "./threadWatches";
 import { applyEvents, emptyTranscript, rebuild, type Transcript } from "./transcript";
 import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
@@ -98,7 +99,9 @@ const queuedOf = (runs: ThreadRun[]): QueuedMessage[] =>
  * page at a time with `loadOlder`, and while the newest show nothing, on their own. It opens once
  * the host connects and stays open across disconnects: a reconnect resumes after the last event,
  * and a fresh snapshot rebuilds the transcript only when the gap is too long to replay
- * (`useWatchKey`). Key the caller by host and run, so another run starts from an empty transcript.
+ * (`useWatchKey`). A run shown lately is still watched (`watchThread`), so it shows as it is now
+ * before the first paint. Key the caller by host and run, so another run starts from an empty
+ * transcript.
  */
 export function useAgentRun(hostId: string, runId: string, connected: boolean): AgentRunView {
   const [transcript, setTranscript] = useState(emptyTranscript);
@@ -139,7 +142,8 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
     [hostId, runId],
   );
 
-  useEffect(() => {
+  // A layout effect, so a run still watched shows before the first paint, not after "Loading…".
+  useLayoutEffect(() => {
     if (!watchKey) return;
     let stopped = false;
 
@@ -165,60 +169,81 @@ export function useAgentRun(hostId: string, runId: string, connected: boolean): 
         t = rebuild(t, p.events, runId);
     }
 
-    const stop = window.parallax.watch(hostId, { threadId: runId }, (message) => {
+    // A snapshot and the events since, at once for a run still watched, else one at a time.
+    const stop = watchThread(hostId, runId, (messages) => {
       if (stopped) return;
-      if (message.type === "error") {
-        failed();
-        return setError(message.error.message);
+      let t: Transcript | undefined;
+      let events: LoggedEvent[] = [];
+      let reverted = false;
+      let readRuns = false;
+      for (const message of messages) {
+        if (message.type === "error") {
+          failed();
+          return setError(message.error.message);
+        }
+        if (message.type === "snapshot") {
+          const s = message.snapshot;
+          // Its own copy, which live events go on the end of.
+          const p: Pages = {
+            events: [...s.events],
+            before: s.more ? s.events[0]?.seq : undefined,
+          };
+          pages.current = p;
+          t = rebuild({ ...emptyTranscript, run: s.thread, seq: s.seq }, s.events, runId);
+          events = [];
+          reverted = false;
+          setOlder(p.before !== undefined);
+          showQueue(queuedOf(s.runs));
+          setHeld(s.runs.some((r) => r.status === "queued" && r.queueHeld));
+          setBackground(s.background ?? []);
+          setWatching(s.watching ?? []);
+          setRuns(s.runs);
+          setError(undefined);
+          continue;
+        }
+        const event = message.event.event;
+        if (event.kind === "queue.updated" && event.runId === runId) {
+          showQueue(event.messages);
+          setHeld(!!event.held);
+        }
+        if (event.kind === "pr.watches" && event.runId === runId) setWatching(event.urls);
+        if (event.kind === "agent.background" && event.runId === runId) setBackground(event.tasks);
+        // A checkpoint captured or a revert changes the runs, and a run that started after the
+        // snapshot isn't in them yet, so it reads them again.
+        if (
+          (event.kind === "thread.checkpoint" || event.kind === "thread.reverted") &&
+          event.runId === runId
+        )
+          readRuns = true;
+        pages.current?.events.push(message.event);
+        events.push(message.event);
+        if (event.kind === "thread.reverted" && event.runId === runId) {
+          reverted = true;
+          // A message sent from here whose turn the revert undid would otherwise show as on its
+          // way, under a working row that never ends (PLX-712).
+          setSent((prev) => {
+            if (!event.turns.some((id) => prev.has(id))) return prev;
+            const next = new Map(prev);
+            for (const id of event.turns) next.delete(id);
+            return next;
+          });
+        }
       }
-      if (message.type === "snapshot") {
-        const s = message.snapshot;
-        const p: Pages = { events: s.events, before: s.more ? s.events[0]?.seq : undefined };
-        pages.current = p;
-        const t = rebuild({ ...emptyTranscript, run: s.thread, seq: s.seq }, s.events, runId);
-        setTranscript(t);
-        setOlder(p.before !== undefined);
-        showQueue(queuedOf(s.runs));
-        setHeld(s.runs.some((r) => r.status === "queued" && r.queueHeld));
-        setBackground(s.background ?? []);
-        setWatching(s.watching ?? []);
-        setRuns(s.runs);
-        setError(undefined);
-        void fill(p, t);
-        return;
-      }
-      const event = message.event.event;
-      if (event.kind === "queue.updated" && event.runId === runId) {
-        showQueue(event.messages);
-        setHeld(!!event.held);
-      }
-      if (event.kind === "pr.watches" && event.runId === runId) setWatching(event.urls);
-      if (event.kind === "agent.background" && event.runId === runId) setBackground(event.tasks);
-      // A checkpoint captured or a revert changes the runs, and a run that started after the
-      // snapshot isn't in them yet, so it reads them again.
-      if (
-        (event.kind === "thread.checkpoint" || event.kind === "thread.reverted") &&
-        event.runId === runId
-      )
+      if (readRuns)
         void window.parallax
           .request(hostId, "orchestration/threadRuns", { threadId: runId })
           .then((answer) => {
             if (!stopped && !("error" in answer)) setRuns(answer.result.runs);
           });
-      pages.current?.events.push(message.event);
-      setTranscript((prev) => applyEvents(prev, [message.event], runId));
-      if (event.kind === "thread.reverted" && event.runId === runId) {
-        // A message sent from here whose turn the revert undid would otherwise show as on its
-        // way, under a working row that never ends (PLX-712).
-        setSent((prev) => {
-          if (!event.turns.some((id) => prev.has(id))) return prev;
-          const next = new Map(prev);
-          for (const id of event.turns) next.delete(id);
-          return next;
-        });
-        const p = pages.current;
-        if (p) void fill(p, rebuild(emptyTranscript, p.events, runId));
+      const p = pages.current;
+      if (t) {
+        const shown = events.length > 0 ? applyEvents(t, events, runId) : t;
+        setTranscript(shown);
+        if (p) void fill(p, shown);
+        return;
       }
+      if (events.length > 0) setTranscript((prev) => applyEvents(prev, events, runId));
+      if (reverted && p) void fill(p, rebuild(emptyTranscript, p.events, runId));
     });
     return () => {
       stopped = true;
