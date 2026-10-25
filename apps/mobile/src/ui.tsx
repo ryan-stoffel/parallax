@@ -5,15 +5,29 @@
 import * as Clipboard from "expo-clipboard";
 import type { LucideIcon } from "lucide-react-native";
 import {
+  Bot,
+  Brain,
   Check,
   ChevronRight,
   CircleAlert,
   Copy,
   Eye,
+  FilePlus,
+  FileText,
+  FoldVertical,
+  Globe,
+  Hammer,
   Laptop,
+  ListChecks,
   MessageCircleQuestion,
   Monitor,
+  MousePointerClick,
+  Pencil,
+  Plug,
+  Search,
   Server,
+  Sparkles,
+  SquareTerminal,
 } from "lucide-react-native";
 import type { Token, Tokens } from "marked";
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -48,6 +62,7 @@ import Svg, {
 
 import type { Attention } from "../../desktop/src/renderer/attention";
 import { onGithub } from "../../desktop/src/renderer/github";
+import type { Kind } from "../../desktop/src/renderer/steps";
 import { openLightbox } from "./Lightbox";
 import { deviceKind } from "./machines";
 import { highlight, lex, linkedPath, type MathToken } from "./markdown";
@@ -241,6 +256,29 @@ function MiniPc({ size = 24, color, strokeWidth = 2 }: { size?: number; color?: 
 }
 
 const deviceIcons = { laptop: Laptop, desktop: Monitor, mini: MiniPc, server: Server };
+
+/** Each kind of work's icon, as the desktop's `icons` (AgentChat.tsx). */
+const kindIcons: Record<Exclude<Kind, "plxd">, LucideIcon> = {
+  thinking: Brain,
+  shell: SquareTerminal,
+  reading: FileText,
+  searching: Search,
+  editing: Pencil,
+  writing: FilePlus,
+  fetching: Globe,
+  agent: Bot,
+  skill: Sparkles,
+  mcp: Plug,
+  computer: MousePointerClick,
+  planning: ListChecks,
+  working: Hammer,
+  compacting: FoldVertical,
+};
+
+/** A kind of work's icon at trace size: Parallax's own calls wear its mark. */
+export function KindIcon({ kind, color }: { kind: Kind; color: string }) {
+  return kind === "plxd" ? <Mark size={15} /> : <Icon icon={kindIcons[kind]} size={15} color={color} />;
+}
 
 /** GitHub's mark, as the desktop's logos.tsx draws it. */
 export function GitHubLogo({ size = 18, color }: { size?: number; color?: ColorValue }) {

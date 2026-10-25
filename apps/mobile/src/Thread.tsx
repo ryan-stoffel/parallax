@@ -1,35 +1,15 @@
 // One thread, on any computer, as the desktop's transcript shows it (AgentChat.tsx): the user's
 // messages in bubbles with their images and files, the agent's answers, its steps as the desktop's
-// trace lines (steps.ts words them; each opens to its input, images, and output), a finished
-// turn folded under "Worked for …", permission requests to answer, the files it presented, and
-// the composer. Images open in the lightbox, and other files, as cards, in Quick Look.
+// trace lines (steps.ts words them; each opens to its input, images, and output, an edit to its
+// diff), a finished turn folded under "Worked for …" with the files it changed, the files it
+// presented, and the composer, with what waits on the user and the thread's tabs over it
+// (ThreadStrips.tsx). Images open in the lightbox, and other files, as cards, in Quick Look.
 import { useHeaderHeight } from "@react-navigation/elements";
 import type { NativeStackHeaderItemMenuAction, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
-import {
-  Bot,
-  Brain,
-  ChevronRight,
-  FilePlus,
-  FileText,
-  FoldVertical,
-  Globe,
-  Hammer,
-  Hand,
-  KeyRound,
-  ListChecks,
-  MousePointerClick,
-  Pencil,
-  Plug,
-  RotateCcw,
-  Search,
-  Sparkles,
-  SquareTerminal,
-  WifiOff,
-} from "lucide-react-native";
-import { createContext, useContext, useEffect, useLayoutEffect, useState, useSyncExternalStore } from "react";
+import { ChevronRight, FoldVertical, Hand, KeyRound, RotateCcw, WifiOff } from "lucide-react-native";
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   Alert,
   FlatList,
@@ -50,9 +30,8 @@ import {
   stepLabel,
   summarize,
   toolKind,
-  type Kind,
 } from "../../desktop/src/renderer/steps";
-import { asksOf } from "../../desktop/src/renderer/threads";
+import { asksOf, parentOf } from "../../desktop/src/renderer/threads";
 import {
   failureText,
   groupWork,
@@ -61,25 +40,29 @@ import {
   statusLabel,
   subagentRuns,
   workedFor,
-  type Approval,
   type DocRef,
   type Item,
   type Work,
 } from "../../desktop/src/renderer/transcript";
 import { useAgentRun } from "../../desktop/src/renderer/useAgentRun";
+import type { ThreadRun } from "../../desktop/src/protocol/generated/protocol";
 import { Composer } from "./Composer";
+import { DiffView, TurnChanges } from "./Diff";
+import { counts, editRows } from "./diffLogic";
 import { FileCard, openLinked } from "./FileCard";
 import { useComputer, useFleet } from "./fleet";
 import { openLightbox } from "./Lightbox";
 import type { Screens } from "./nav";
+import { DiffStats } from "./PullRequestParts";
 import { setViewing } from "./push";
+import { startedPrompt } from "./started";
 import { font } from "./theme";
+import { ThreadStrips } from "./ThreadStrips";
 import {
   AttentionBadge,
-  Button,
   duration,
   Icon,
-  Mark,
+  KindIcon,
   Markdown,
   T,
   useColors,
@@ -87,36 +70,17 @@ import {
   WorkingMark,
 } from "./ui";
 
-/** Each kind of work's icon, as the desktop's `icons` (AgentChat.tsx). */
-const kindIcons: Record<Exclude<Kind, "plxd">, LucideIcon> = {
-  thinking: Brain,
-  shell: SquareTerminal,
-  reading: FileText,
-  searching: Search,
-  editing: Pencil,
-  writing: FilePlus,
-  fetching: Globe,
-  agent: Bot,
-  skill: Sparkles,
-  mcp: Plug,
-  computer: MousePointerClick,
-  planning: ListChecks,
-  working: Hammer,
-  compacting: FoldVertical,
-};
-
-/** A kind's icon at trace size: Parallax's own calls wear its mark. */
-function KindIcon({ kind, color }: { kind: Kind; color: string }) {
-  return kind === "plxd" ? <Mark size={15} /> : <Icon icon={kindIcons[kind]} size={15} color={color} />;
-}
-
-/** The thread, as the rows below need it: where it runs, and which rows are open. */
+/**
+ * The thread, as the rows below need it: where it runs, which rows are open, and each turn's run
+ * by the turn id of its last reply, for its changed files.
+ */
 interface RowContextValue {
   hostId: string;
   runId: string;
   root?: string;
   open: ReadonlySet<string>;
   toggle: (key: string) => void;
+  replies: ReadonlyMap<string, ThreadRun>;
 }
 const RowContext = createContext<RowContextValue>(null!);
 
@@ -129,6 +93,7 @@ function TraceLine({
   description,
   status,
   openKey,
+  changed,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -136,6 +101,8 @@ function TraceLine({
   status?: TraceStatus;
   /** The key that opens it, when it opens. */
   openKey?: string;
+  /** An edit's lines added and removed. */
+  changed?: { added: number; removed: number };
 }) {
   const c = useColors();
   const { open, toggle } = useContext(RowContext);
@@ -146,6 +113,7 @@ function TraceLine({
       <T numberOfLines={1} style={{ ...styles.trace, color, flexShrink: 1 }}>
         {title}
       </T>
+      {changed && <DiffStats additions={changed.added} deletions={changed.removed} compact />}
       {!!description && (
         <T style={{ ...styles.trace, color: status === "error" ? c.danger : c.faintForeground }}>
           {description}
@@ -239,6 +207,8 @@ function ToolCall({ item, live }: { item: Extract<Item, { kind: "tool" }>; live:
   const status = item.status ?? (live ? "running" : "none");
   // A status newer than this app reads as no result.
   const look = statuses[status] ?? statuses["none"]!;
+  // An edit opens to its diff, as the desktop's does, in place of its input.
+  const diff = useMemo(() => editRows(item.name, item.input), [item.name, item.input]);
   return (
     <View>
       <TraceLine
@@ -247,9 +217,10 @@ function ToolCall({ item, live }: { item: Extract<Item, { kind: "tool" }>; live:
         description={look.said}
         status={look.status}
         openKey={item.key}
+        changed={diff && counts(diff)}
       />
       <Opened openKey={item.key}>
-        {item.input !== undefined && <Block label="Input" text={inputText(item.input)} />}
+        {diff ? <DiffView rows={diff} /> : item.input !== undefined && <Block label="Input" text={inputText(item.input)} />}
         {!!item.images?.length && (
           <View style={{ gap: 4 }}>
             <T faint style={{ fontSize: 12 }}>
@@ -440,57 +411,25 @@ async function readPicture(hostId: string, f: DocRef): Promise<string | undefine
   return `data:${type};base64,${data}`;
 }
 
-function ApprovalCard({ item }: { item: Approval }) {
+/**
+ * A permission request's line: waiting, its card pinned over the composer (ThreadStrips.tsx), then
+ * how it was answered.
+ */
+function ApprovalLine({ item }: { item: Extract<Item, { kind: "approval" }> }) {
   const c = useColors();
-  const { hostId, runId } = useContext(RowContext);
-  const [answering, setAnswering] = useState(false);
-  const [error, setError] = useState<string>();
   const { request, resolved } = item;
-  const kind = toolKind(request.toolName);
-  const detail = inputText(request.input ?? "").slice(0, 600);
-  async function answer(decision: "allow" | "deny") {
-    setAnswering(true);
-    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    const reply = await window.parallax.request(hostId, "agent/approve", {
-      runId,
-      approvalId: request.approvalId,
-      decision,
-    });
-    setAnswering(false);
-    if ("error" in reply) setError(reply.error.message);
-  }
-  if (resolved)
-    return (
-      <TraceLine
-        icon={<Icon icon={Hand} size={15} color={c.mutedForeground} />}
-        title={`${resolved.decision === "allowed" ? "Allowed" : resolved.decision === "denied" ? "Denied" : "Ended"} ${request.toolName}`}
-      />
-    );
+  const said = !resolved
+    ? "Waiting for you:"
+    : resolved.decision === "allowed"
+      ? "Allowed"
+      : resolved.decision === "denied"
+        ? "Denied"
+        : "Ended";
   return (
-    <View style={[styles.card, { borderColor: c.warning, backgroundColor: c.surface }]}>
-      <View style={styles.line}>
-        <KindIcon kind={kind} color={c.warning} />
-        <T medium style={{ flex: 1 }}>
-          Allow {request.toolName}?
-        </T>
-      </View>
-      {!!detail && detail !== "{}" && (
-        <View style={[styles.block, { backgroundColor: c.code, borderColor: c.border }]}>
-          <T style={{ fontFamily: font.mono, fontSize: 12, lineHeight: 17 }} numberOfLines={10}>
-            {detail}
-          </T>
-        </View>
-      )}
-      <View style={{ flexDirection: "row", gap: 10 }}>
-        <Button label="Deny" style={{ flex: 1 }} disabled={answering} onPress={() => void answer("deny")} />
-        <Button label="Allow" primary style={{ flex: 1 }} disabled={answering} onPress={() => void answer("allow")} />
-      </View>
-      {error && (
-        <T alert style={{ color: c.danger, fontSize: 13 }}>
-          {error}
-        </T>
-      )}
-    </View>
+    <TraceLine
+      icon={<Icon icon={Hand} size={15} color={resolved ? c.mutedForeground : c.warning} />}
+      title={`${said} ${request.toolName}`}
+    />
   );
 }
 
@@ -541,9 +480,36 @@ function Divider({ icon, label }: { icon: LucideIcon; label: string }) {
 
 type Row = Item | Work;
 
+/** How a secret request ended, by its status, as the desktop's SecretLine says it. */
+const secretOutcomes: Record<string, string> = { saved: "Saved", declined: "Declined", cancelled: "Closed" };
+
+/**
+ * Each turn's run by its last reply's row key, for its changed files: the turns by their prompt's
+ * turn id, and the first prompt's, whose row has none, by `undefined`, as the desktop's.
+ */
+function turnReplies(rows: readonly Row[], runs: readonly ThreadRun[]): Map<string, ThreadRun> {
+  const turns = new Map<string | undefined, ThreadRun>();
+  for (const r of runs) {
+    if (r.status === "rolledBack") continue;
+    turns.set(r.id, r);
+    if (r.ordinal === 1 && !r.text) turns.set(undefined, r);
+  }
+  const last = new Map<string | undefined, string>();
+  let turn: string | undefined;
+  for (const row of rows)
+    if (row.kind === "user") turn = row.turnId;
+    else if (row.kind === "assistant") last.set(turn, row.key);
+  const out = new Map<string, ThreadRun>();
+  for (const [id, key] of last) {
+    const run = turns.get(id);
+    if (run) out.set(key, run);
+  }
+  return out;
+}
+
 function RowView({ row, live }: { row: Row; live: boolean }) {
   const c = useColors();
-  const { hostId, runId } = useContext(RowContext);
+  const { hostId, runId, open, toggle, replies } = useContext(RowContext);
   switch (row.kind) {
     case "work":
       if (row.done)
@@ -564,15 +530,23 @@ function RowView({ row, live }: { row: Row; live: boolean }) {
       return <Steps work={row} live={live} />;
     case "user":
       return <UserRow item={row} />;
-    case "assistant":
-      return <Markdown text={row.text} onFile={(path) => void openLinked(hostId, runId, path)} />;
+    case "assistant": {
+      const turn = replies.get(row.key);
+      return (
+        <View>
+          <Markdown text={row.text} onFile={(path) => void openLinked(hostId, runId, path)} />
+          {turn && <TurnChanges hostId={hostId} threadId={runId} run={turn} open={open} toggle={toggle} />}
+        </View>
+      );
+    }
     case "approval":
-      return <ApprovalCard item={row} />;
+      return <ApprovalLine item={row} />;
     case "secret":
+      // Its card is pinned over the composer while it waits.
       return (
         <TraceLine
-          icon={<Icon icon={KeyRound} size={15} color={c.warning} />}
-          title={row.status ? `Secret ${row.request.label}: ${row.status}` : `Asks for ${row.request.label}. Answer it on your computer.`}
+          icon={<Icon icon={KeyRound} size={15} color={row.status ? c.mutedForeground : c.warning} />}
+          title={`${row.status ? (secretOutcomes[row.status] ?? "Ended") : "Waiting for you:"} ${row.request.label}`}
         />
       );
     case "files":
@@ -629,7 +603,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const computer = useComputer(hostId);
   const { drafts, computers } = useFleet();
   const connected = !!computer?.connected;
-  const { transcript, error, queue, cancel, held } = useAgentRun(hostId, runId, connected);
+  const { transcript, error, queue, cancel, held, background, watching, runs } = useAgentRun(hostId, runId, connected);
   const [draft, setDraft] = useState(drafts.get(runId) ?? "");
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const state = computer?.view.state;
@@ -661,20 +635,11 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const symbol = (name: SFSymbol): MenuIcon => ({ type: "sfSymbol" as const, name });
 
   useLayoutEffect(() => {
-    const subtitle = [computers.length > 1 && computer?.machine.name, run?.branch].filter(Boolean).join(" · ");
     navigation.setOptions({
-      headerTitle: () => (
-        <View style={{ alignItems: "center", maxWidth: 240 }}>
-          <T medium numberOfLines={1} style={{ fontSize: 16, fontWeight: "600" }}>
-            {title}
-          </T>
-          {!!subtitle && (
-            <T faint numberOfLines={1} style={{ fontSize: 12, lineHeight: 15 }}>
-              {subtitle}
-            </T>
-          )}
-        </View>
-      ),
+      // Only the glass buttons, over the transcript: its title is at the transcript's top.
+      headerTitle: "",
+      headerTransparent: true,
+      headerShadowVisible: false,
       // A native menu, in sections as iOS's own apps group theirs.
       unstable_headerRightItems: () => [
         {
@@ -768,6 +733,12 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const logged = new Set(transcript.items.map((i) => (i.kind === "user" ? i.turnId : undefined)));
   const pending = waiting.filter((m) => m.threadId === runId && !logged.has(m.id));
   const rows = groupWork(transcript.items.filter((i) => i.kind !== "session" && i.kind !== "modelSwitch"));
+  const replies = useMemo(() => turnReplies(rows, runs), [transcript.items, runs]);
+  // A thread started on this phone shows its prompt until the transcript has it, which plxd logs
+  // with no turn id, so it's matched by there being none.
+  const first = transcript.items.some((i) => i.kind === "user") ? undefined : startedPrompt(runId);
+  const parent = thread && state ? parentOf(state, thread) : undefined;
+  const subtitle = [computers.length > 1 && computer?.machine.name, run?.branch].filter(Boolean).join(" · ");
   // When the current turn's prompt went, for "Working for".
   const since = transcript.items.findLast((i) => i.kind === "user")?.at;
 
@@ -786,17 +757,15 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
         if (!next.delete(key)) next.add(key);
         return next;
       }),
+    replies,
   };
 
   return (
     <RowContext value={context}>
-      <KeyboardAvoidingView
-        behavior="padding"
-        keyboardVerticalOffset={headerHeight}
-        style={{ flex: 1, backgroundColor: c.background }}
-      >
+      {/* The header is transparent, so the screen starts at its top. */}
+      <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: c.background }}>
         {!connected && (
-          <View style={[styles.banner, { backgroundColor: c.selected }]}>
+          <View style={[styles.banner, { top: headerHeight, backgroundColor: c.surface, borderColor: c.border }]}>
             <Icon icon={WifiOff} size={14} color={c.mutedForeground} />
             <T muted style={{ fontSize: 13 }}>
               {computer ? `Reconnecting to ${computer.machine.name}…` : "This computer was removed."}
@@ -810,10 +779,34 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           contentContainerStyle={styles.transcript}
           keyboardDismissMode="interactive"
           accessibilityLabel="Transcript"
+          // At the transcript's top, under the header's glass buttons: the thread's title, quietly.
+          ListFooterComponent={
+            <View style={{ paddingTop: headerHeight + 4, paddingBottom: 6, gap: 2 }}>
+              <T medium numberOfLines={2} style={{ fontSize: 17, lineHeight: 23, fontWeight: "600" }}>
+                {title}
+              </T>
+              {!!subtitle && (
+                <T faint numberOfLines={1} style={{ fontSize: 13, lineHeight: 18 }}>
+                  {subtitle}
+                </T>
+              )}
+            </View>
+          }
           ListHeaderComponent={
             <View style={{ gap: 14, marginTop: 14 }}>
+              {first && (
+                <View style={{ alignItems: "flex-end", gap: 4 }}>
+                  <View style={[styles.bubble, { backgroundColor: c.selected }]}>
+                    <T selectable style={{ fontSize: 15, lineHeight: 22 }}>
+                      {splitFiles(first).text}
+                    </T>
+                  </View>
+                  <T faint style={{ fontSize: 12 }}>
+                    Sending…
+                  </T>
+                </View>
+              )}
               {[
-                ...queue.map((m) => ({ id: m.id, text: m.text, note: held ? "Held" : "Queued" })),
                 ...pending.map((m) => ({
                   id: m.id,
                   text: m.text,
@@ -846,6 +839,25 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
             </View>
           )}
         />
+        <ThreadStrips
+          hostId={hostId}
+          runId={runId}
+          items={transcript.items}
+          subagents={transcript.subagents}
+          background={background}
+          watching={watching}
+          queue={queue}
+          held={held}
+          running={isRunning(transcript.run?.status)}
+          stalled={error !== undefined || !connected}
+          connected={connected}
+          parent={
+            parent && {
+              name: state?.titles[parent.id] ?? "Thread",
+              open: () => navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId: parent.id } }] }),
+            }
+          }
+        />
         <Composer
           computer={computer}
           runId={runId}
@@ -862,7 +874,18 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
 }
 
 const styles = StyleSheet.create({
-  banner: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 16, paddingVertical: 8 },
+  banner: {
+    position: "absolute",
+    zIndex: 1,
+    alignSelf: "center",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   transcript: { paddingHorizontal: 18, paddingVertical: 12 },
   line: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 24 },
   traceIcon: { width: 16, alignItems: "center" },
@@ -871,6 +894,5 @@ const styles = StyleSheet.create({
   block: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
   images: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   bubble: { maxWidth: "85%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9 },
-  card: { borderWidth: 1, borderRadius: 16, padding: 14, gap: 10 },
   rule: { flex: 1, height: StyleSheet.hairlineWidth },
 });

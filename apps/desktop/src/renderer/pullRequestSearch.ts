@@ -1,10 +1,10 @@
 // The Pull requests page's search, filters, and sort, pure so the mobile app's pull request sheet
 // matches and orders them the same way.
 import type { PullRequest } from "../protocol/generated/protocol";
+import { numberOf } from "./github";
 import { locale } from "./locale";
 
-/** A pull request's number, from its URL. */
-export const numberOf = (url: string) => /\/pull\/(\d+)/.exec(url)?.[1] ?? "?";
+export { numberOf };
 
 /** A pull request linked to a thread, on a host. */
 export interface PrEntry {

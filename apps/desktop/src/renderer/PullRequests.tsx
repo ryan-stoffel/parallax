@@ -40,13 +40,12 @@ import type {
   PullRequest,
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
-import { githubText, onGithub, shotName } from "./github";
+import { githubText, numberOf, onGithub, shotName } from "./github";
 import { diffBand, diffLook } from "./Approval";
 import { tabItem } from "./Composer";
 import { describeError, githubProblem } from "./errors";
 import { dismiss, notify } from "./notifications";
 import { Lightbox } from "./Lightbox";
-import { numberOf } from "./pullRequestSearch";
 import { locale } from "./locale";
 import { behaviorPrefs } from "./prefs";
 import { age } from "./Sidebar";

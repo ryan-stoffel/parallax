@@ -1,6 +1,9 @@
 // A pull request's Markdown as GitHub writes it, for the desktop's PR panel and the mobile app's:
 // which images are GitHub's, its HTML images as Markdown ones, and a screenshot's name. Pure.
 
+/** A pull request's number, from its URL. */
+export const numberOf = (url: string) => /\/pull\/(\d+)/.exec(url)?.[1] ?? "?";
+
 /** Whether `src` is on GitHub's image hosts, the only remote images the app's CSP loads. */
 export const onGithub = (src: unknown): src is string =>
   typeof src === "string" && /^https:\/\/(github\.com|[\w-]+\.githubusercontent\.com)\//.test(src);
