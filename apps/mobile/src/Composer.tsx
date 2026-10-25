@@ -742,7 +742,7 @@ export function Composer({
               <Icon
                 icon={accessIcons[shownAccess]}
                 size={15}
-                color={shownAccess === "bypass" ? c.warning : c.foreground}
+                color={c.foreground}
               />
               <Text numberOfLines={1} style={[styles.pillText, { color: c.foreground, flexShrink: 1 }]}>
                 {accessShort[shownAccess]}
