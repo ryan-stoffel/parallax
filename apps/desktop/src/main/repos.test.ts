@@ -12,8 +12,29 @@ const temp = () => mkdtempSync(path.join(tmpdir(), "parallax-repos-"));
 
 test("a slug is owner/name, from a URL too, and nothing that could leave its folder", () => {
   expect(githubSlug("ryan-stoffel/photon")).toBe("ryan-stoffel/photon");
-  expect(githubSlug(" https://github.com/ryan-stoffel/photon.git ")).toBe("ryan-stoffel/photon");
-  for (const bad of ["photon", "a/b/c", "../b", "a/..", "a b/c", "-/x;rm"])
+  // Links and clone URLs, as pasted from a browser or GitHub's Code menu (PLX-1009).
+  for (const link of [
+    " https://github.com/ryan-stoffel/photon.git ",
+    "http://www.github.com/ryan-stoffel/photon/",
+    "github.com/ryan-stoffel/photon",
+    "https://github.com/ryan-stoffel/photon/tree/main/src?tab=readme#install",
+    "https://github.com/ryan-stoffel/photon#readme",
+    "git@github.com:ryan-stoffel/photon.git",
+    "ssh://git@github.com/ryan-stoffel/photon.git",
+  ])
+    expect(githubSlug(link), link).toBe("ryan-stoffel/photon");
+  for (const bad of [
+    "photon",
+    "a/b/c",
+    "../b",
+    "a/..",
+    "a b/c",
+    "-/x;rm",
+    "https://github.com/ryan-stoffel",
+    "github.com/ryan-stoffel",
+    "www.github.com/ryan-stoffel/",
+    "https://gitlab.com/ryan-stoffel/photon",
+  ])
     expect(githubSlug(bad), bad).toBeUndefined();
   expect(expandHome("~/Developer", "/home/me")).toBe(path.join("/home/me", "Developer"));
 });

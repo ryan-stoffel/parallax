@@ -267,7 +267,7 @@ const menu: {
   {
     kind: "clone",
     name: "Clone from GitHub",
-    detail: "Clone a repository by its owner/name",
+    detail: "Clone a repository by its owner/name or link",
     icon: <GitHubLogo />,
   },
   {
@@ -476,7 +476,7 @@ function CloneStep({ onBack, onNext }: { onBack: () => void; onNext: (slug: stri
         <input
           ref={autofocus}
           aria-label="Repository"
-          placeholder="owner/name"
+          placeholder="owner/name or a GitHub link"
           value={text}
           spellCheck={false}
           autoComplete="off"
@@ -493,7 +493,7 @@ function CloneStep({ onBack, onNext }: { onBack: () => void; onNext: (slug: stri
         {slug ? (
           <GithubRepo slug={slug} />
         ) : (
-          <Note>Type a GitHub repository as owner/name, or paste its URL.</Note>
+          <Note>Type a GitHub repository as owner/name, or paste a link to it.</Note>
         )}
       </Body>
       <Footer keys={[["Enter", "Next"], close]} />
