@@ -277,7 +277,10 @@ export function AgentChat({
   runId: string;
   /** The thread's title, which Open PR names the pull request after. Else, its run's. */
   title?: string;
-  /** The run's first prompt, shown until the transcript loads, so a new thread opens on it. */
+  /**
+   * The run's first prompt, shown while the transcript holds no rows: before it loads only while
+   * `going`, so a new thread opens on it.
+   */
   prompt?: string;
   /**
    * Whether the run is known to be starting or running, as one this window just started is. Until
@@ -464,8 +467,10 @@ export function AgentChat({
       (i) => !(i.kind === "notice" && i.turnId && cancelled.has(i.turnId)),
     );
     const all = [...shown, ...pending];
+    // Before the transcript loads, only a run just started shows its prompt: an older one's
+    // alone would show as all it holds.
     const listed: Row[] =
-      all.length > 0 || !prompt
+      all.length > 0 || !prompt || !(going || run)
         ? all
         : [
             going
@@ -478,7 +483,7 @@ export function AgentChat({
     const { turnId } = editing.row;
     const at = turnId ? -1 : listed.findLastIndex((r) => r.kind === "user" || r.kind === "pending");
     return listed.filter((r, i) => i !== at && !(turnId && "turnId" in r && r.turnId === turnId));
-  }, [items, sent, prompt, going, queue, cancelled, editing]);
+  }, [items, sent, prompt, going, run, queue, cancelled, editing]);
   // The user's prompts, for the composer's Up: not Parallax's wake-ups or other threads' messages.
   const history = useMemo(
     () =>

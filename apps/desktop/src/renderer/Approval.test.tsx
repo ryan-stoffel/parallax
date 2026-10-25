@@ -546,6 +546,8 @@ test("an open chat's Supervised says its requests are denied when its run starte
   act(() => unmount());
   log = [];
   append({ kind: "agent.started", runId, run: { ...run, approvals: undefined } });
+  // Another window, which watches the thread afresh.
+  window.parallax = { ...window.parallax };
   await renderChat();
   expect(manual()).toBe(
     "SupervisedAsks before edits and commands. This chat started before Parallax could show those requests, so they're denied.",

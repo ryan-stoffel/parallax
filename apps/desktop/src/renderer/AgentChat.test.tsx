@@ -1089,8 +1089,12 @@ test("opens from the thread's snapshot, appends its events, and a fresh snapshot
   await emit({ ...logged[2]!, seq: 50_001 });
   expect(transcriptText()).toContain("I'll add a README and note the build steps");
 
+  // Closed, it stays watched, so it opens again as it is now, without waiting on plxd.
   act(() => unmount());
-  expect(stop).toHaveBeenCalled();
+  expect(stop).not.toHaveBeenCalled();
+  await renderChat();
+  expect(transcriptText()).toContain("I'll add a README and note the build steps");
+  expect(watch).toHaveBeenCalledTimes(1);
 });
 
 test("the thread's subscription stays open while the host is away, so main resumes it after the last event", async () => {
@@ -2151,14 +2155,15 @@ test("a running chat that loses plxd shows no loader", async () => {
   expect(transcriptText()).toContain("Add a README");
 });
 
-test("until its transcript loads, a chat shows its first message, with the loader only if it goes", async () => {
+test("until its transcript loads, only a chat that just started shows its first message, with the loader", async () => {
   fakeBridge(8);
   // The transcript is still on its way.
   window.parallax.request = vi.fn(() => new Promise<never>(() => {}));
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" />);
   await settle();
-  expect(transcriptText()).toBe("Add a README");
-  expect(document.querySelector("[data-status=running]")).toBeNull();
+  // Its first message alone would show as all the thread holds.
+  expect(transcriptText()).toBe("");
+  expect(document.body.textContent).toContain("Loading…");
   act(() => unmount());
 
   render(<AgentChat hostId="local" runId={runId} prompt="Add a README" going />);

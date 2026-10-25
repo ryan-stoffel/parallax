@@ -350,7 +350,7 @@ test("a thread started here that finished reopens with no loader while its trans
   expect(document.querySelector("main")!.textContent).not.toContain("Working");
 });
 
-test("a finished thread opens on its prompt with no loader while its transcript loads", async () => {
+test("a finished thread opens on Loading…, not its prompt alone, while its transcript loads", async () => {
   answers["agent/list"] = () => ({
     result: { runs: [run(thread.id, "Fix the flaky test", "completed")], seq: 7 },
   });
@@ -359,7 +359,8 @@ test("a finished thread opens on its prompt with no loader while its transcript 
   await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
   await settle();
   expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the flaky test"]);
-  expect(bubble()).toBe("Fix the flaky test");
+  expect(bubble()).toBeUndefined();
+  expect(document.querySelector("main")!.textContent).toContain("Loading…");
   expect(document.querySelector("[data-status=running]")).toBeNull();
   expect(musing()).toBeUndefined();
 });
