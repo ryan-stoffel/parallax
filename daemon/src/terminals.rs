@@ -341,6 +341,8 @@ fn start(
         builder.cwd(cwd);
     }
     builder.env("TERM", "xterm-256color");
+    // An app started from this terminal stops its plxd with itself, not with ours (PLX-990).
+    builder.env_remove(crate::server::EXIT_WITH_ENV);
     for (name, value) in env {
         builder.env(name, value);
     }

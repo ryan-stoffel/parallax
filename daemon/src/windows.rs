@@ -7,6 +7,7 @@
 //! - [`this_user_sid`]: the user plxd's logon task runs as.
 //! - [`stop_inheriting_handles`]: so a process plxd starts gets only the handles it is given.
 //! - [`Job`]: the job object an agent CLI runs in.
+//! - [`wait_for_exit`]: for a dev or test `serve` to stop with its app (PLX-990).
 
 #![allow(unsafe_code)]
 
@@ -17,7 +18,7 @@ use std::ptr;
 
 use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use windows_sys::Win32::Foundation::{
-    GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation,
+    GetHandleInformation, HANDLE_FLAG_INHERIT, LocalFree, SetHandleInformation, WAIT_FAILED,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -32,8 +33,8 @@ use windows_sys::Win32::System::JobObjects::{
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 use windows_sys::Win32::System::Threading::{
-    GetCurrentProcess, GetProcessHandleCount, OpenProcess, OpenProcessToken,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, GetProcessHandleCount, INFINITE, OpenProcess, OpenProcessToken,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
 
 /// Turns a `BOOL` result into an `io::Result`, reading the error right after the call.
@@ -144,6 +145,26 @@ pub fn runs_as_this_user(pid: u32) -> io::Result<bool> {
     // SAFETY: OpenProcess returned a handle that nothing else owns.
     let process = unsafe { OwnedHandle::from_raw_handle(process) };
     Ok(user_of(process.as_raw_handle())? == user_of(current_process())?)
+}
+
+/// Blocks until process `pid` exits.
+///
+/// # Errors
+///
+/// If it can't be opened, as when it has already exited.
+pub fn wait_for_exit(pid: u32) -> io::Result<()> {
+    // SAFETY: OpenProcess has no preconditions; a null result is an error.
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if process.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: OpenProcess returned a handle that nothing else owns.
+    let process = unsafe { OwnedHandle::from_raw_handle(process) };
+    // SAFETY: the handle is open, with SYNCHRONIZE access, for the whole call.
+    if unsafe { WaitForSingleObject(process.as_raw_handle(), INFINITE) } == WAIT_FAILED {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 fn current_process() -> RawHandle {

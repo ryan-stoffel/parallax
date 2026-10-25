@@ -49,6 +49,7 @@ use zeroize::Zeroize;
 use super::event::ExitInfo;
 use super::record::Recorder;
 use crate::paths::DataDir;
+use crate::server::EXIT_WITH_ENV;
 
 /// The write end of a process's stdin.
 #[cfg(unix)]
@@ -151,8 +152,15 @@ impl Signal {
 
 /// Variables no process plxd starts inherits: the SSH session that may have started it (#96).
 /// That includes its `SSH_AUTH_SOCK`, which stops working when the session ends and which no
-/// agent needs: workers can't push, and plxd makes every commit locally (decision 0014).
-pub const ALWAYS_SCRUBBED: &[&str] = &["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"];
+/// agent needs: workers can't push, and plxd makes every commit locally (decision 0014). And
+/// [`EXIT_WITH_ENV`], the app this `serve` stops with (PLX-990).
+pub const ALWAYS_SCRUBBED: &[&str] = &[
+    "SSH_CONNECTION",
+    "SSH_CLIENT",
+    "SSH_TTY",
+    "SSH_AUTH_SOCK",
+    EXIT_WITH_ENV,
+];
 
 /// The longest stdout line a backend reads by default. Longer ones are skipped and reported. It
 /// matches 0007's frame limit, which a notification built from the line has to fit anyway.
