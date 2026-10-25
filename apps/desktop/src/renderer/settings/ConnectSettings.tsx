@@ -1,4 +1,4 @@
-import { Check, ChevronRight, Ellipsis, Network, Pencil, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronRight, Ellipsis, Network, Pencil, Plus, Trash2 } from "../icons";
 import { useEffect, useId, useRef, useState } from "react";
 
 import {

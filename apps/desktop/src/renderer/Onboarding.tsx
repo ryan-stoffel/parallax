@@ -9,8 +9,8 @@ import {
   Server,
   Smartphone,
   X,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 import {
   lazy,
   Suspense,
@@ -751,7 +751,7 @@ function Review() {
 
 /** This computer, a server, and a phone, in touch. */
 function Anywhere() {
-  const devices: { Icon: LucideIcon; name: string; note: string; depth: number }[] = [
+  const devices: { Icon: IconComponent; name: string; note: string; depth: number }[] = [
     { Icon: Server, name: "build-box", note: "Over SSH", depth: 10 },
     { Icon: Laptop, name: "This computer", note: "3 threads", depth: 24 },
     { Icon: Smartphone, name: "Your phone", note: "Following along", depth: 14 },

@@ -1,4 +1,4 @@
-import { ArrowUpRight, Check, Copy, LoaderCircle, RefreshCw } from "lucide-react";
+import { ArrowUpRight, Check, Copy, LoaderCircle, RefreshCw } from "../icons";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { RpcError } from "../../preload/bridge";

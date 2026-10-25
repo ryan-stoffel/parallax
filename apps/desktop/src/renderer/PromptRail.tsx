@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { ChevronDown } from "./icons";
 import { useRef, useState } from "react";
 
 /** One of the user's prompts in a transcript: its row, what it says, and how the agent replied. */

@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Search, Star } from "lucide-react";
+import { Check, ChevronDown, Search, Star } from "./icons";
 import { useId, useRef, useState, type ToggleEvent } from "react";
 
 import {

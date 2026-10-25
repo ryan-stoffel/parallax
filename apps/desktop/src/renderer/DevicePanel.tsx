@@ -15,7 +15,7 @@ import {
   BookOpen,
   TriangleAlert,
   Triangle,
-} from "lucide-react";
+} from "./icons";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import type {

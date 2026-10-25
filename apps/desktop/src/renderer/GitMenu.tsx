@@ -5,8 +5,8 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitPullRequestArrow,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { RpcError } from "../preload/bridge";
@@ -20,7 +20,7 @@ import { Menu, menuItem, splitChevron } from "./ui";
 
 export type GitAction = "commit" | "push" | "pr";
 
-const actions: { action: GitAction; label: string; busy: string; Icon: LucideIcon }[] = [
+const actions: { action: GitAction; label: string; busy: string; Icon: IconComponent }[] = [
   { action: "commit", label: "Commit", busy: "Committing…", Icon: GitCommitHorizontal },
   { action: "push", label: "Push", busy: "Pushing…", Icon: CloudUpload },
   { action: "pr", label: "Create PR", busy: "Creating PR…", Icon: GitPullRequestArrow },

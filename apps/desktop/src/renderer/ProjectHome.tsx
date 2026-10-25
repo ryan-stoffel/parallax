@@ -6,7 +6,7 @@ import {
   CircleCheck,
   LoaderCircle,
   MessageCircleQuestion,
-} from "lucide-react";
+} from "./icons";
 import { useState, type ReactNode } from "react";
 
 import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";

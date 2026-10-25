@@ -1,4 +1,4 @@
-import { Braces, RotateCcw } from "lucide-react";
+import { Braces, RotateCcw } from "../icons";
 import { useMemo, useState } from "react";
 
 import { IconButton, Segmented } from "../ui";

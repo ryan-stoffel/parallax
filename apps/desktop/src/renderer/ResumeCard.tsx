@@ -1,4 +1,4 @@
-import { AlarmClock } from "lucide-react";
+import { AlarmClock } from "./icons";
 import { useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";

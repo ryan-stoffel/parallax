@@ -268,9 +268,9 @@ test("a context file shows tasks as circles, GitHub links with their icons, open
     ["Open", " Unify launcher modes (#17)"],
     ["Done", " Welcome window (#12)"],
   ]);
-  expect(shown.querySelector('a[href$="/pull/12"] svg.lucide-git-merge')).not.toBeNull();
+  expect(shown.querySelector('a[href$="/pull/12"] svg[data-icon="git-merge"]')).not.toBeNull();
   const issue = shown.querySelector('a[href$="/issues/17"]')!;
-  expect(issue.querySelector("svg:not(.lucide)")).not.toBeNull();
+  expect(issue.querySelector("svg:not([data-icon])")).not.toBeNull();
   expect(issue.getAttribute("target")).toBe("_blank");
 
   // A missing file's link is off; an existing one opens in place, with a way back.

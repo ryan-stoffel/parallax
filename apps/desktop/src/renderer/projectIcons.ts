@@ -149,25 +149,28 @@ import {
   Wifi,
   Wrench,
   Zap,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
 
-/** One of the icons a Project can wear: its Lucide name, which plxd keeps (0032), and its glyph. */
+/**
+ * One of the icons a Project can wear: its name, which plxd keeps (0032), and its Hugeicons glyph
+ * (0086). The names are Lucide's, from before 0086, so stored icons keep showing.
+ */
 export interface IconChoice {
   name: string;
-  /** Its accessible name, from its Lucide name. */
+  /** Its accessible name, from its name. */
   label: string;
-  Icon: LucideIcon;
+  Icon: IconComponent;
   /** Other words a search finds it by. */
   keywords: string;
 }
 
 // The picker's icons, in its order. Each is imported by name, so the bundle holds only these and
-// never Lucide's whole set. A name is stored on the host, so a Lucide rename keeps the old name
-// here and imports the new glyph; the test checks the old name is still Lucide's alias for it.
-const icons: [name: string, Icon: LucideIcon, keywords: string][] = [
+// never Hugeicons' whole set. A name is stored on the host, so it never changes; icons.tsx maps it
+// to its glyph.
+const icons: [name: string, Icon: IconComponent, keywords: string][] = [
   ["layers", Layers, "stack project default"],
   ["folder", Folder, "directory files"],
   ["folder-git-2", FolderGit2, "repository repo"],
@@ -369,7 +372,7 @@ const colorsByKey = new Map(iconColors.map((c) => [c.key, c]));
  * How a Project's icon draws: its glyph and its color's text class. No icon is `Layers` in
  * the accent, and a name or color this app doesn't know falls back to that on its own (0032).
  */
-export function iconLook(icon?: ProjectIconValue): { Icon: LucideIcon; color: string } {
+export function iconLook(icon?: ProjectIconValue): { Icon: IconComponent; color: string } {
   return {
     Icon: iconsByName.get(icon?.name ?? "")?.Icon ?? Layers,
     color: (icon?.color && colorsByKey.get(icon.color)?.text) || "text-accent",

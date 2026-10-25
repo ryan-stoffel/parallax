@@ -1,4 +1,4 @@
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight } from "./icons";
 
 /**
  * The arrow a row shows on hover or focus to say it opens that chat. Its row needs `group`; the

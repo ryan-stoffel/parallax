@@ -7,7 +7,7 @@ import {
   FolderOpen,
   Layers,
   Search,
-} from "lucide-react";
+} from "./icons";
 import {
   useEffect,
   useId,

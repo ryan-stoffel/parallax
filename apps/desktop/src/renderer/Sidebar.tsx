@@ -49,8 +49,8 @@ import {
   SquareTerminal,
   Trash2,
   X,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 import {
   createContext,
   useContext,
@@ -3490,7 +3490,7 @@ function when(date: Date): string {
 }
 
 /** A run's status as its icon and color, in a thread's card and the Agents list. */
-export const statusLooks: Partial<Record<AgentStatus, { Icon: LucideIcon; color: string }>> = {
+export const statusLooks: Partial<Record<AgentStatus, { Icon: IconComponent; color: string }>> = {
   starting: { Icon: LoaderCircle, color: "text-emerald-500 [&_svg]:animate-spin" },
   running: { Icon: LoaderCircle, color: "text-emerald-500 [&_svg]:animate-spin" },
   completed: { Icon: CircleCheck, color: "text-muted-foreground" },
@@ -3652,7 +3652,7 @@ export function age(time: string, now = Date.now()): string {
 }
 
 /** Each Settings section's icon. */
-const sectionIcons: Record<SettingsSection, LucideIcon> = {
+const sectionIcons: Record<SettingsSection, IconComponent> = {
   general: Settings,
   threads: MessageSquare,
   appearance: Palette,

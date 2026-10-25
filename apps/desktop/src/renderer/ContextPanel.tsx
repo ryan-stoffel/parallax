@@ -1,4 +1,4 @@
-import { ChevronLeft, Circle, CircleCheck, FileText, Folder, GitMerge } from "lucide-react";
+import { ChevronLeft, Circle, CircleCheck, FileText, Folder, GitMerge } from "./icons";
 import { useEffect, useState, type SVGProps } from "react";
 import type { Components } from "react-markdown";
 

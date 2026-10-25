@@ -1,7 +1,7 @@
 // An agent's own subagents (PLX-382, 0041), such as Claude Code's Agent tool: read-only children
 // of their thread, with no run, composer, or Parallax tools. Their call's row in the transcript
 // opens one, as their chips in the top bar do, and the calls a turn made together show as one card.
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "./icons";
 import { createContext, useContext } from "react";
 
 import { duration, useSeconds } from "./AttentionMark";

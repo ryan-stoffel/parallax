@@ -480,11 +480,13 @@ test("renames the project and picks its icon from its favorite's menu, and both 
   await rocket.press("Escape");
   await expect(picker).toBeHidden();
   const icon = square.locator("svg").first();
-  await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
+  await expect(icon).toHaveAttribute("data-icon", "rocket");
+  await expect(icon).toHaveAttribute("class", /text-project-green/);
 
   // The name and icon are the host's (0032).
   await page.reload();
-  await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
+  await expect(icon).toHaveAttribute("data-icon", "rocket");
+  await expect(icon).toHaveAttribute("class", /text-project-green/);
   const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
     result: { projects: { name: string; icon?: { name: string; color?: string } }[] };
   };

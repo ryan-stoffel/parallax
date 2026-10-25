@@ -1,6 +1,6 @@
 // The sidebar's favorites (pins.ts, 0075): the Projects, and any pinned thread moved up, as squares
 // that fill the row, above the pinned threads, as Arc's favorites sit above its tabs.
-import { ArrowLeft, ArrowRight, ArrowUpRight, StarOff } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, StarOff } from "./icons";
 import {
   useId,
   useLayoutEffect,

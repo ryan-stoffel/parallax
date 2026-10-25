@@ -1,4 +1,4 @@
-import { GitFork } from "lucide-react";
+import { GitFork } from "./icons";
 import { createContext, useContext, useId, useRef, useState, type RefObject } from "react";
 
 import type { RpcError } from "../preload/bridge";

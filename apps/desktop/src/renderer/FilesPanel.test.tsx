@@ -93,7 +93,7 @@ const rows = () =>
     return `${"  ".repeat(depth)}${b.textContent}${state === null ? "" : state === "true" ? " v" : " >"}`;
   });
 const row = (name: string) => rowButtons().find((b) => b.textContent === name);
-const back = () => document.querySelector<HTMLElement>("button:has(.lucide-chevron-left)");
+const back = () => document.querySelector<HTMLElement>("button:has([data-icon='chevron-left'])");
 const shown = () => document.body.textContent;
 
 test("the tree lists folders first, opens a folder lazily on click, and opens files read-only", async () => {

@@ -7,7 +7,7 @@ import {
   LoaderCircle,
   Search,
   Server,
-} from "lucide-react";
+} from "./icons";
 
 import { useId, useState } from "react";
 

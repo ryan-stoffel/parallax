@@ -1,4 +1,4 @@
-import { Info } from "lucide-react";
+import { Info } from "./icons";
 import { useId, useState } from "react";
 
 import type { AgentBackgroundKind, AgentBackgroundTask } from "../protocol/generated/protocol";

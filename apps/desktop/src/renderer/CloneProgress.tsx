@@ -1,4 +1,4 @@
-import { LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "./icons";
 
 /**
  * git's progress line, such as `Receiving objects:  42% (420/1000), 12.40 MiB | 6.20 MiB/s`, as

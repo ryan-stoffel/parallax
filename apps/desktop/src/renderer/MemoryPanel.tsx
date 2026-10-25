@@ -1,4 +1,4 @@
-import { CircleAlert, Clock, FileText, Lightbulb } from "lucide-react";
+import { CircleAlert, Clock, FileText, Lightbulb } from "./icons";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { MemoryFile, MemoryKind, MemoryScope } from "../protocol/generated/protocol";

@@ -1,4 +1,4 @@
-import { Bot, Cpu } from "lucide-react";
+import { Bot, Cpu } from "./icons";
 import { useEffect, useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 
 import type { ConnectionState } from "../preload/bridge";

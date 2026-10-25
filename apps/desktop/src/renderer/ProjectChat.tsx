@@ -1,4 +1,4 @@
-import { GitBranch } from "lucide-react";
+import { GitBranch } from "./icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Project, PromptImage } from "../protocol/generated/protocol";

@@ -6,7 +6,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { Code, Eye } from "lucide-react";
+import { Code, Eye } from "./icons";
 
 import { MarkdownText } from "./AgentChat";
 

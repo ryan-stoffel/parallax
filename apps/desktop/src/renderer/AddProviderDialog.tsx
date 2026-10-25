@@ -1,4 +1,4 @@
-import { ExternalLink, Plus, Search, X } from "lucide-react";
+import { ExternalLink, Plus, Search, X } from "./icons";
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 
 import { HOME_VARS, type RegistryAgent } from "../preload/bridge";

@@ -1,4 +1,4 @@
-import { ArrowUp, Check, ChevronDown, LoaderCircle } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, LoaderCircle } from "./icons";
 import { useId, useRef, useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";

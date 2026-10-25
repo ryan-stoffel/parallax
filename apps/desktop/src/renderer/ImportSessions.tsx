@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Download, FileArchive, Folder, LoaderCircle, X } from "lucide-react";
+import { ArrowLeft, Check, Download, FileArchive, Folder, LoaderCircle, X } from "./icons";
 import {
   useCallback,
   useEffect,

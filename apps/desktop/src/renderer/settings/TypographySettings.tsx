@@ -1,4 +1,4 @@
-import { Atom, Package } from "lucide-react";
+import { Atom, Package } from "../icons";
 import { useEffect, useState, type ReactNode } from "react";
 
 import {

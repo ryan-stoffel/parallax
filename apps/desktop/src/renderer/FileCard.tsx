@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { X } from "./icons";
 import { useEffect, useState } from "react";
 
 import { drawPdfPage, openPdf } from "./documents";

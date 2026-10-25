@@ -8,7 +8,7 @@ import {
   RefreshCw,
   Smartphone,
   X,
-} from "lucide-react";
+} from "./icons";
 import {
   lazy,
   Suspense,

@@ -1,25 +1,15 @@
-// The whole set, to look names up in; the app imports only the curated icons.
-import * as lucide from "lucide-react";
 import { expect, test } from "vite-plus/test";
+
+import { Layers } from "./icons";
 
 import { defaultIcon, iconColors, iconLook, projectIcons } from "./projectIcons";
 
-const pascal = (name: string) =>
-  name
-    .split("-")
-    .map((word) => word[0]!.toUpperCase() + word.slice(1))
-    .join("");
-
-test("about 150 icons, each under its own Lucide name, which plxd accepts as a key", () => {
+test("about 150 icons, each under its own name, which plxd accepts as a key", () => {
   expect(projectIcons.length).toBeGreaterThanOrEqual(140);
   expect(projectIcons.length).toBeLessThanOrEqual(160);
   expect(new Set(projectIcons.map((i) => i.name)).size).toBe(projectIcons.length);
   expect(new Set(projectIcons.map((i) => i.label)).size).toBe(projectIcons.length);
-  for (const i of projectIcons) {
-    expect(i.name).toMatch(/^[a-z0-9-]{1,64}$/);
-    // Lucide's icon of that name, or of an old name Lucide keeps as an alias, so a mix-up shows.
-    expect((lucide as Record<string, unknown>)[pascal(i.name)]).toBe(i.Icon);
-  }
+  for (const i of projectIcons) expect(i.name).toMatch(/^[a-z0-9-]{1,64}$/);
   expect(projectIcons[0]!.name).toBe(defaultIcon.name);
   expect(projectIcons.find((i) => i.name === "folder-git-2")?.label).toBe("Folder git");
 });
@@ -41,10 +31,10 @@ test("an icon draws its glyph in its color, and falls back to Layers and the acc
     Icon: rocket,
     color: "text-project-green",
   });
-  expect(iconLook(undefined)).toEqual({ Icon: lucide.Layers, color: "text-accent" });
+  expect(iconLook(undefined)).toEqual({ Icon: Layers, color: "text-accent" });
   expect(iconLook({ name: "rocket" })).toEqual({ Icon: rocket, color: "text-accent" });
   expect(iconLook({ name: "not-an-icon", color: "green" })).toEqual({
-    Icon: lucide.Layers,
+    Icon: Layers,
     color: "text-project-green",
   });
   expect(iconLook({ name: "rocket", color: "chartreuse" })).toEqual({

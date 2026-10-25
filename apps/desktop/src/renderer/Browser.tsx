@@ -4,7 +4,7 @@ import type {
   PageTitleUpdatedEvent,
   WebviewTag,
 } from "electron";
-import { Bot, TriangleAlert } from "lucide-react";
+import { Bot, TriangleAlert } from "./icons";
 import {
   useCallback,
   useEffect,

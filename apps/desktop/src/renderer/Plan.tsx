@@ -11,7 +11,7 @@ import {
   ClipboardList,
   ListChecks,
   LoaderCircle,
-} from "lucide-react";
+} from "./icons";
 import {
   memo,
   useId,

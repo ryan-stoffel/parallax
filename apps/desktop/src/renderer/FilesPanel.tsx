@@ -8,7 +8,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
-} from "lucide-react";
+} from "./icons";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";

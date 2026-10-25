@@ -1,6 +1,6 @@
 // Pieces of the sidebar (0075): the divider over Today with its View panel, and the small animated
 // parts the sidebar shares.
-import { ArrowDown, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from "lucide-react";
+import { ArrowDown, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from "./icons";
 import { useId, useState, type ReactNode, type ToggleEvent } from "react";
 
 import { menuPanel } from "./ui";

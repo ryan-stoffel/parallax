@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Plus, Star, X } from "lucide-react";
+import { ChevronDown, ChevronUp, Plus, Star, X } from "../icons";
 import { useState } from "react";
 
 import type { ProviderInfo, ProviderModel } from "../../protocol/generated/protocol";

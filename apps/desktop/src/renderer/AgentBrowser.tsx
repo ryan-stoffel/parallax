@@ -1,4 +1,4 @@
-import { Globe, Hand, MousePointer2 } from "lucide-react";
+import { Globe, Hand, MousePointer2 } from "./icons";
 import {
   useEffect,
   useRef,

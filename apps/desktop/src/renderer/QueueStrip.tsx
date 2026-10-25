@@ -1,13 +1,4 @@
-import {
-  ArrowDown,
-  ArrowUp,
-  CornerUpRight,
-  GripVertical,
-  Image,
-  Link,
-  Pencil,
-  X,
-} from "lucide-react";
+import { ArrowDown, ArrowUp, CornerUpRight, GripVertical, Image, Link, Pencil, X } from "./icons";
 import { useId, useState } from "react";
 
 import type { OrchestrationCommand, QueuedMessage } from "../protocol/generated/protocol";

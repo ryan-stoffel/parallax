@@ -1,4 +1,4 @@
-import { Check, ImageUp, Search } from "lucide-react";
+import { Check, ImageUp, Search } from "./icons";
 import { useId, useRef, useState, type KeyboardEvent, type Ref, type ToggleEvent } from "react";
 
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";

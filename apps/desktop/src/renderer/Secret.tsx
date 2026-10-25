@@ -3,7 +3,7 @@
 // password field to plxd's `secret/answer`, which keeps it in the host's keystore. It is never
 // kept in the window's state, the transcript, or the log.
 import { TraceIcon, TraceLine, TraceTitle } from "./Trace";
-import { KeyRound } from "lucide-react";
+import { KeyRound } from "./icons";
 import { useId, useState, type FormEvent } from "react";
 
 import { quietButton } from "./Approval";

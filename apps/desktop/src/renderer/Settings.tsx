@@ -1,4 +1,4 @@
-import { ArrowUpRight, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Plus, RefreshCw, Trash2, X } from "./icons";
 import {
   lazy,
   Suspense,

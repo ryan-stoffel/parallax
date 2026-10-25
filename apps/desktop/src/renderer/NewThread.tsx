@@ -1,4 +1,4 @@
-import { ChevronDown, Folder, House, MessagesSquare, Plus } from "lucide-react";
+import { ChevronDown, Folder, House, MessagesSquare, Plus } from "./icons";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { AccountChoice, PromptImage, Repo, Role } from "../protocol/generated/protocol";

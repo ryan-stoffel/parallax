@@ -194,11 +194,11 @@ test("workspace uses the Connect device icon, updates it, and falls back by host
   expect(icon().querySelector("path")?.getAttribute("d")).toBe("M6 13h.01");
   expect(icon().closest("span")?.getAttribute("aria-hidden")).toBe("true");
   await show({ id: "device", name: "Mac mini", icon: "desktop" });
-  expect(icon().classList.contains("lucide-monitor")).toBe(true);
+  expect(icon().getAttribute("data-icon")).toBe("monitor");
   await show({ id: "local", name: "macbook" });
-  expect(icon().classList.contains("lucide-laptop")).toBe(true);
+  expect(icon().getAttribute("data-icon")).toBe("laptop");
   await show({ id: "ssh", name: "Remote", destination: "fixture" });
-  expect(icon().classList.contains("lucide-server")).toBe(true);
+  expect(icon().getAttribute("data-icon")).toBe("server");
   await show({ id: "lan", name: "Remote", routes: ["wss://fixture"] });
-  expect(icon().classList.contains("lucide-server")).toBe(true);
+  expect(icon().getAttribute("data-icon")).toBe("server");
 });

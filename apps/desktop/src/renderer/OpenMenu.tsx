@@ -1,4 +1,4 @@
-import { Check, ChevronDown, FolderOpen, SquareTerminal } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, SquareTerminal } from "./icons";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { OpenTarget, TerminalApp } from "../preload/bridge";

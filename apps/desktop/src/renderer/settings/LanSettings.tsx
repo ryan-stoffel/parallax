@@ -1,4 +1,4 @@
-import { Plus, Wifi } from "lucide-react";
+import { Plus, Wifi } from "../icons";
 import { useEffect, useState } from "react";
 
 import type {

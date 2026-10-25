@@ -1,4 +1,4 @@
-import { Download, File } from "lucide-react";
+import { Download, File } from "./icons";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
 import {

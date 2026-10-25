@@ -1,4 +1,4 @@
-import { Pencil, Plus, Server } from "lucide-react";
+import { Pencil, Plus, Server } from "../icons";
 import { lazy, Suspense, useEffect, useState } from "react";
 
 import { olderVersion, type ConnectionError, type ConnectionState } from "../../preload/bridge";

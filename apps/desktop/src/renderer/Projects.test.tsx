@@ -773,14 +773,11 @@ const openPicker = () =>
   [...document.querySelectorAll<HTMLElement>('[role="dialog"][aria-label="Project icon"]')].find(
     (p) => p.childElementCount > 0,
   )!;
-/** The Lucide glyph and color an icon draws, from its classes. */
-const looks = (svg: Element | null | undefined) => {
-  const classes = [...(svg?.classList ?? [])];
-  return [
-    classes.find((c) => c.startsWith("lucide-"))?.slice("lucide-".length),
-    classes.find((c) => c.startsWith("text-")),
-  ];
-};
+/** The glyph and color an icon draws, from its name and classes. */
+const looks = (svg: Element | null | undefined) => [
+  svg?.getAttribute("data-icon") ?? undefined,
+  [...(svg?.classList ?? [])].find((c) => c.startsWith("text-")),
+];
 const rowIcon = (name: string) => looks(rowButton(name).querySelector("svg"));
 const iconPicker = (within: Element) =>
   within.matches('[role="dialog"][aria-label="Project icon"]')

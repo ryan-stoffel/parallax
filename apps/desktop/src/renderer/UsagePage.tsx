@@ -1,4 +1,4 @@
-import { RefreshCw, RotateCw } from "lucide-react";
+import { RefreshCw, RotateCw } from "./icons";
 import {
   useCallback,
   useEffect,

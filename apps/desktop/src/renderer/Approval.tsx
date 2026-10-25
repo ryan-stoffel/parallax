@@ -15,8 +15,8 @@ import {
   TimerOff,
   Undo2,
   Workflow,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 import {
   Fragment,
   useId,
@@ -165,7 +165,7 @@ interface Outcome {
   verb: string;
   /** Who decided and when, in a sentence, for the line's details. */
   who: string;
-  Icon: LucideIcon;
+  Icon: IconComponent;
   color: string;
 }
 

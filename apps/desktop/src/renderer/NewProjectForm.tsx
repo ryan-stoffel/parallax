@@ -1,4 +1,4 @@
-import { ArrowLeft, LockOpen } from "lucide-react";
+import { ArrowLeft, LockOpen } from "./icons";
 import { useId, useRef, useState } from "react";
 
 import type {

@@ -1,4 +1,4 @@
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Search } from "./icons";
 import { useId, useState, type Ref } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";

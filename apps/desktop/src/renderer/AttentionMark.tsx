@@ -1,4 +1,4 @@
-import { CircleAlert, Eye, MessageCircleQuestion } from "lucide-react";
+import { CircleAlert, Eye, MessageCircleQuestion } from "./icons";
 import { useEffect, useState } from "react";
 
 import type { Attention } from "./attention";

@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, Lock } from "lucide-react";
+import { Bot, ChevronDown, Lock } from "./icons";
 import { useEffect, useId, useState } from "react";
 
 import type { AgentRun, Thread } from "../protocol/generated/protocol";

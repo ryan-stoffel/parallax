@@ -16,8 +16,8 @@ import {
   Sunset,
   Trophy,
   X,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { DeviceHost, Profile } from "../preload/bridge";
@@ -265,7 +265,7 @@ function ProfileCard({
     setTimeout(() => setSharing(undefined), 2000);
   };
 
-  const chips: { Icon: LucideIcon; text: string }[] = [];
+  const chips: { Icon: IconComponent; text: string }[] = [];
   if (activity.since)
     chips.push({ Icon: CalendarDays, text: `Building since ${monthYear.format(activity.since)}` });
   if (repos > 0)
@@ -375,7 +375,7 @@ function Stat({
   value,
   unit,
 }: {
-  Icon: LucideIcon;
+  Icon: IconComponent;
   tone: keyof typeof tones;
   label: string;
   value: number;
@@ -401,7 +401,7 @@ function Stat({
 }
 
 /** The icon for a busiest hour of the day: the sun's place then. */
-function rhythmIcon(hour: number): LucideIcon {
+function rhythmIcon(hour: number): IconComponent {
   if (hour >= 5 && hour < 12) return Sunrise;
   if (hour >= 12 && hour < 18) return Sun;
   if (hour >= 18 && hour < 22) return Sunset;

@@ -6,7 +6,7 @@ import {
   LoaderCircle,
   MessageCircleQuestion,
   X,
-} from "lucide-react";
+} from "./icons";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
 import { behaviorPrefs } from "./prefs";

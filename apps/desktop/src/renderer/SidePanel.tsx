@@ -17,8 +17,8 @@ import {
   Terminal,
   Workflow,
   X,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 import { useState, type ComponentProps, type ReactNode } from "react";
 
 import { Browser, BrowserTabBar } from "./Browser";
@@ -31,7 +31,7 @@ import { IconButton, TopBar } from "./ui";
 
 interface Surface {
   name: string;
-  icon: LucideIcon;
+  icon: IconComponent;
   /** The letter that opens it from the list; a pull request's tab has its URL. */
   key: string;
   /** Its empty state, or absent while it has a view of its own. */

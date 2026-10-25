@@ -26,8 +26,8 @@ import {
   RefreshCw,
   Tag,
   Users,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type { Components } from "react-markdown";
 
@@ -198,7 +198,7 @@ export const linkedPr = (href: string, urls: readonly string[]) => {
 const repoOf = (url: string) => /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(url)?.[1] ?? "";
 
 /** How a pull request's state looks: open green, draft gray, merged purple, closed red. */
-export function lookOf(pr?: PullRequest): { Icon: LucideIcon; color: string; label?: string } {
+export function lookOf(pr?: PullRequest): { Icon: IconComponent; color: string; label?: string } {
   if (pr?.state === "merged")
     return { Icon: GitMerge, color: "text-project-violet", label: "Merged" };
   if (pr?.state === "closed")
@@ -384,7 +384,7 @@ export function LinkedPullRequests({
 }
 
 /** A check's icon and its classes: a running one spins until it ends. */
-const checkIcons: Record<string, { Icon: LucideIcon; color: string }> = {
+const checkIcons: Record<string, { Icon: IconComponent; color: string }> = {
   passed: { Icon: CircleCheck, color: "text-added" },
   failed: { Icon: CircleX, color: "text-danger" },
   pending: { Icon: LoaderCircle, color: "animate-spin text-warning" },
@@ -575,7 +575,7 @@ function ChecksList({
 }
 
 /** All of a pull request's checks in a few words, as its Summary tab shows them. */
-function checksOf(pr: PullRequest): { Icon: LucideIcon; color: string; text: string } {
+function checksOf(pr: PullRequest): { Icon: IconComponent; color: string; text: string } {
   const total = pr.checks.length;
   const count = (state: PrCheck["state"]) => pr.checks.filter((c) => c.state === state).length;
   const text =
@@ -634,7 +634,7 @@ function Item({
   disabled,
   onClick,
 }: {
-  Icon: LucideIcon;
+  Icon: IconComponent;
   label: string;
   hint?: string;
   danger?: boolean;
@@ -971,7 +971,7 @@ export function DiffLineView({ line }: { line: DiffLine }) {
  * A review verdict in words, and its icon. A plain "commented" review shows as its comment, or,
  * with only inline comments, as "reviewed".
  */
-const verdicts: Record<string, { Icon: LucideIcon; color: string; text: string }> = {
+const verdicts: Record<string, { Icon: IconComponent; color: string; text: string }> = {
   commented: { Icon: MessageSquare, color: "text-muted-foreground", text: "reviewed" },
   approved: { Icon: CircleCheck, color: "text-added", text: "approved these changes" },
   changesRequested: { Icon: CircleAlert, color: "text-danger", text: "requested changes" },
@@ -986,7 +986,7 @@ function TimelineEvent({
   sub,
   children,
 }: {
-  Icon: LucideIcon;
+  Icon: IconComponent;
   color?: string;
   title: ReactNode;
   sub?: ReactNode;

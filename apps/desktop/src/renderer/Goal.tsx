@@ -1,4 +1,4 @@
-import { Target } from "lucide-react";
+import { Target } from "./icons";
 
 import type { Item } from "./transcript";
 

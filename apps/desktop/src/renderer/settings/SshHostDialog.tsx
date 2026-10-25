@@ -1,4 +1,4 @@
-import { Plus, X } from "lucide-react";
+import { Plus, X } from "../icons";
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 
 import type { Host } from "../hosts";

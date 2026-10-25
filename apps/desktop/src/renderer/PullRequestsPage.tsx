@@ -6,7 +6,7 @@ import {
   ListFilter,
   RefreshCw,
   Search,
-} from "lucide-react";
+} from "./icons";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import type { PullRequest } from "../protocol/generated/protocol";

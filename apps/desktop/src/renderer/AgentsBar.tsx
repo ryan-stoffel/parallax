@@ -1,4 +1,4 @@
-import { ChevronUp, CircleAlert, GitBranch, ShieldQuestion } from "lucide-react";
+import { ChevronUp, CircleAlert, GitBranch, ShieldQuestion } from "./icons";
 import { useId, useState, type ComponentType, type SVGProps } from "react";
 
 import { DoneMark } from "./AttentionMark";

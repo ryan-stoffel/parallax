@@ -1,4 +1,4 @@
-import { ClipboardList, FolderGit2, FolderOpen } from "lucide-react";
+import { ClipboardList, FolderGit2, FolderOpen } from "./icons";
 import { useLayoutEffect, useState, type ComponentProps } from "react";
 
 import { Actions } from "./Actions";

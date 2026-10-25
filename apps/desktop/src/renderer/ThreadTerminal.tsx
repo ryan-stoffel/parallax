@@ -1,4 +1,4 @@
-import { Plus, Terminal, X } from "lucide-react";
+import { Plus, Terminal, X } from "./icons";
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { isRepository, noRepo, type ThreadsState, type ThreadsView } from "./threads";

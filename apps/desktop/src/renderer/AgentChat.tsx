@@ -32,7 +32,7 @@ import {
   TriangleAlert,
   Workflow,
   X,
-} from "lucide-react";
+} from "./icons";
 import {
   createContext,
   lazy,

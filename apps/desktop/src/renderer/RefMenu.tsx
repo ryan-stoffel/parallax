@@ -1,4 +1,4 @@
-import { ChevronDown, GitBranch, Search } from "lucide-react";
+import { ChevronDown, GitBranch, Search } from "./icons";
 import { useCallback, useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
 import type { RepoRef } from "../protocol/generated/protocol";

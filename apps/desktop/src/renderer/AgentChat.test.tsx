@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
-import { Globe } from "lucide-react";
+import { Globe } from "./icons";
 import { readFileSync } from "node:fs";
 import { act, type ComponentProps, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
@@ -582,7 +582,7 @@ test("computer use calls read as what the agent did in which app (PLX-897)", () 
   const summary = (name: string, input: Record<string, string>) => {
     row({ kind: "tool", key: "t", callId: "1", name, input });
     const text = shown();
-    const icon = document.querySelector("summary svg.lucide-mouse-pointer-click");
+    const icon = document.querySelector("summary svg[data-icon='mouse-pointer-click']");
     act(() => unmount());
     return [text, !!icon];
   };
@@ -683,17 +683,17 @@ test("a running tool call spins and shimmers, and a finished one shows its kind'
 
   render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
   expect(document.querySelector(".animate-spin")).toBeNull();
-  expect(summary().querySelector("svg.lucide-file-text")).not.toBeNull();
+  expect(summary().querySelector("svg[data-icon='file-text']")).not.toBeNull();
   expect(said()).toBe("Succeeded");
 });
 
 test("each kind of tool has its icon once it's done", () => {
-  // The icon each finished tool shows, by its lucide name, or Parallax's mark.
+  // The icon each finished tool shows, by its icon name, or Parallax's mark.
   const icon = (name: string | null, input: Record<string, string> = {}) => {
     row({ kind: "tool", key: "t", callId: "1", name, input, status: "ok" });
-    const svg = document.querySelector("summary svg:not(.lucide-chevron-right)")!;
+    const svg = document.querySelector("summary svg:not([data-icon='chevron-right'])")!;
     act(() => unmount());
-    return svg.querySelector("clipPath") ? "parallax" : svg.getAttribute("class")!.split(" ")[1];
+    return svg.querySelector("clipPath") ? "parallax" : svg.getAttribute("data-icon");
   };
   expect(
     Object.fromEntries(
@@ -726,40 +726,40 @@ test("each kind of tool has its icon once it's done", () => {
       ].map((name) => [name, icon(name)]),
     ),
   ).toEqual({
-    Task: "lucide-bot",
-    Agent: "lucide-bot",
-    Bash: "lucide-square-terminal",
-    Read: "lucide-file-text",
-    NotebookRead: "lucide-file-text",
-    LS: "lucide-file-text",
-    Grep: "lucide-search",
-    Glob: "lucide-search",
-    WebSearch: "lucide-search",
-    ToolSearch: "lucide-search",
-    Edit: "lucide-pencil",
-    MultiEdit: "lucide-pencil",
-    NotebookEdit: "lucide-pencil",
-    Write: "lucide-file-plus",
-    WebFetch: "lucide-globe",
-    mcp__linear__save_issue: "lucide-plug",
-    Skill: "lucide-sparkles",
+    Task: "bot",
+    Agent: "bot",
+    Bash: "square-terminal",
+    Read: "file-text",
+    NotebookRead: "file-text",
+    LS: "file-text",
+    Grep: "search",
+    Glob: "search",
+    WebSearch: "search",
+    ToolSearch: "search",
+    Edit: "pencil",
+    MultiEdit: "pencil",
+    NotebookEdit: "pencil",
+    Write: "file-plus",
+    WebFetch: "globe",
+    mcp__linear__save_issue: "plug",
+    Skill: "sparkles",
     // Parallax's own tools wear its mark (PLX-843).
     mcp__plxd__thread_launch: "parallax",
     // A plxd tool this app doesn't know is still plxd's.
     mcp__plxd__plan_approve: "parallax",
-    TodoWrite: "lucide-list-checks",
+    TodoWrite: "list-checks",
     // Claude Code's task tools plan as TodoWrite did (PLX-248).
-    TaskCreate: "lucide-list-checks",
-    TaskUpdate: "lucide-list-checks",
-    TaskList: "lucide-list-checks",
-    TaskGet: "lucide-list-checks",
-    Frobnicate: "lucide-hammer",
+    TaskCreate: "list-checks",
+    TaskUpdate: "list-checks",
+    TaskList: "list-checks",
+    TaskGet: "list-checks",
+    Frobnicate: "hammer",
   });
-  expect(icon(null)).toBe("lucide-hammer");
+  expect(icon(null)).toBe("hammer");
 
   // Thinking has the brain.
   row({ kind: "reasoning", key: "r", text: "Hm" });
-  expect(document.querySelector("summary svg.lucide-brain")).not.toBeNull();
+  expect(document.querySelector("summary svg[data-icon='brain']")).not.toBeNull();
 });
 
 test("a failed, denied, or unfinished tool call says how it went, as its line's status and in words", () => {
@@ -804,7 +804,7 @@ test("a tool named like an object's own property is any other tool, running or d
   expect(said()).toBe("Running");
   act(() => unmount());
   render(<RowView row={{ ...tool, status: "ok" }} live open={false} onToggle={() => {}} />);
-  expect(document.querySelector("summary svg.lucide-hammer")).not.toBeNull();
+  expect(document.querySelector("summary svg[data-icon='hammer']")).not.toBeNull();
   expect(said()).toBe("Succeeded");
 });
 

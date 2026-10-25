@@ -1,4 +1,4 @@
-import { Check, LoaderCircle, Palette, Search, X } from "lucide-react";
+import { Check, LoaderCircle, Palette, Search, X } from "../icons";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { notify } from "../notifications";

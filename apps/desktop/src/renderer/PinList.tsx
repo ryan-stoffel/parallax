@@ -19,7 +19,7 @@ import {
   Plus,
   Star,
   Ungroup,
-} from "lucide-react";
+} from "./icons";
 import {
   Fragment,
   useEffect,

@@ -204,7 +204,7 @@ test("a waiting request is pinned over the composer, outside the transcript, wit
 
   const title = document.getElementById(card()!.getAttribute("aria-labelledby")!)!;
   expect(title.textContent).toBe("BashRun the tests");
-  expect(card()!.querySelector("svg.lucide-square-terminal")).not.toBeNull();
+  expect(card()!.querySelector("svg[data-icon='square-terminal']")).not.toBeNull();
   expect(card()!.querySelector("pre")!.textContent).toBe("pnpm test");
   expect(pinned()!.textContent).toContain("Always allow adds Bash(pnpm test:*)");
   expect(document.getElementById(card()!.getAttribute("aria-describedby")!)!.textContent).toBe(
@@ -714,7 +714,7 @@ test("a Write shows its content as added; an MCP call its server, tool, and argu
   expect(document.getElementById(el.getAttribute("aria-labelledby")!)!.textContent).toBe(
     "Linearsave issue",
   );
-  expect(el.querySelector("svg.lucide-plug")).not.toBeNull();
+  expect(el.querySelector("svg[data-icon='plug']")).not.toBeNull();
   const fields = [...el.querySelectorAll("dt")].map((dt) => [
     dt.textContent,
     dt.nextElementSibling!.textContent,

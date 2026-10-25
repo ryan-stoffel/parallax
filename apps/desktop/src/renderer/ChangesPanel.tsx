@@ -1,4 +1,4 @@
-import { GitCompare, Undo2 } from "lucide-react";
+import { GitCompare, Undo2 } from "./icons";
 import { useEffect, useRef, useState } from "react";
 
 import type { ThreadRun } from "../protocol/generated/protocol";

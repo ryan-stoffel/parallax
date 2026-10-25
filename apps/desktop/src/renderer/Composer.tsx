@@ -9,7 +9,7 @@ import {
   Sparkles,
   Square,
   X,
-} from "lucide-react";
+} from "./icons";
 import Blockquote from "@tiptap/extension-blockquote";
 import Bold from "@tiptap/extension-bold";
 import Code from "@tiptap/extension-code";

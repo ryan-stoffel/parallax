@@ -22,7 +22,7 @@ import {
   PanelLeftOpen,
   PanelRight,
   Workflow,
-} from "lucide-react";
+} from "./icons";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { flushSync } from "react-dom";
 

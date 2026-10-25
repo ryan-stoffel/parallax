@@ -1,4 +1,4 @@
-import { Plus, RotateCw, Trash2 } from "lucide-react";
+import { Plus, RotateCw, Trash2 } from "../icons";
 import { useEffect, useState } from "react";
 
 import {

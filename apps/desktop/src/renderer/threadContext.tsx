@@ -1,6 +1,6 @@
 // Threads attached to a message as context (PLX-378, decision 0047): how one looks as a chip, in
 // the composer and in the sent message, and what attaching takes.
-import { MessagesSquare, X } from "lucide-react";
+import { MessagesSquare, X } from "./icons";
 import { createContext, useContext, type ComponentType, type SVGProps } from "react";
 
 import type { ConnectionState } from "../preload/bridge";

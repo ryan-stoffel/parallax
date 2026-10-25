@@ -1,4 +1,4 @@
-import { Package } from "lucide-react";
+import { Package } from "./icons";
 import type { ReactNode } from "react";
 
 /** A mention in a message, as the composer draws one: an icon and a name, kept whole. Its box is

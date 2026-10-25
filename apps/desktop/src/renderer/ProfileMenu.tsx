@@ -1,4 +1,4 @@
-import { CircleUser, LogIn, LogOut, Settings, UserPlus, type LucideIcon } from "lucide-react";
+import { CircleUser, LogIn, LogOut, Settings, UserPlus, type IconComponent } from "./icons";
 import { useId, useRef, useState } from "react";
 
 import { AccountDialog, SecuredByClerk } from "./Account";
@@ -31,7 +31,7 @@ export function ProfileButton({ listed }: { listed: { host: Host; view: ThreadsV
     const answer = await window.parallax.signIn(create);
     if (n === latest.current) setNote(answer);
   };
-  const item = (Icon: LucideIcon, label: string, onClick: () => void) => (
+  const item = (Icon: IconComponent, label: string, onClick: () => void) => (
     <button type="button" role="menuitem" onClick={onClick} className={menuItem}>
       <Icon aria-hidden className="text-muted-foreground" />
       {label}

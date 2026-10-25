@@ -8,7 +8,7 @@ import {
   Moon,
   Search,
   Sun,
-} from "lucide-react";
+} from "./icons";
 import {
   useEffect,
   useId,

@@ -1,4 +1,4 @@
-import { AppWindowMac, Eye, LoaderCircle, MousePointerClick, ShieldCheck } from "lucide-react";
+import { AppWindowMac, Eye, LoaderCircle, MousePointerClick, ShieldCheck } from "../icons";
 import { useCallback, useEffect, useState, type ComponentType, type SVGProps } from "react";
 
 import type { ComputerStatus } from "../../protocol/generated/protocol";

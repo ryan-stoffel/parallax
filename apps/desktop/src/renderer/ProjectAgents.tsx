@@ -1,4 +1,4 @@
-import { ArrowUp, GitBranch, LoaderCircle, ShieldQuestion, Workflow } from "lucide-react";
+import { ArrowUp, GitBranch, LoaderCircle, ShieldQuestion, Workflow } from "./icons";
 import { useCallback, useMemo, useState } from "react";
 
 import type { AgentRun } from "../protocol/generated/protocol";

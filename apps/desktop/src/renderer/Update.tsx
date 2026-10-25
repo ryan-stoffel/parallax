@@ -8,7 +8,7 @@ import {
   RefreshCw,
   RotateCw,
   Server,
-} from "lucide-react";
+} from "./icons";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { UpdateState } from "../preload/bridge";

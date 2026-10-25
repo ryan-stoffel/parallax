@@ -1,4 +1,4 @@
-import { ChevronRight, ChevronsDownUp, ChevronsUpDown, File, FileDiff, Folder } from "lucide-react";
+import { ChevronRight, ChevronsDownUp, ChevronsUpDown, File, FileDiff, Folder } from "./icons";
 import { createContext, useContext, type ReactNode } from "react";
 
 import type { CheckpointFile, ThreadRun } from "../protocol/generated/protocol";

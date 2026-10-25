@@ -13,8 +13,8 @@ import {
   Wrench,
   X,
   Zap,
-  type LucideIcon,
-} from "lucide-react";
+  type IconComponent,
+} from "./icons";
 import {
   useEffect,
   useId,
@@ -44,7 +44,7 @@ export interface RepoAction {
 }
 
 /** The glyphs an action can wear, by the name it keeps. */
-export const actionIcons: Record<string, LucideIcon> = {
+export const actionIcons: Record<string, IconComponent> = {
   play: Play,
   test: FlaskConical,
   build: Hammer,

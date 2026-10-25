@@ -1,4 +1,4 @@
-import { ChevronDown, Folder, FolderGit2, FolderPlus, FolderSearch, Search } from "lucide-react";
+import { ChevronDown, Folder, FolderGit2, FolderPlus, FolderSearch, Search } from "./icons";
 import {
   Fragment,
   useEffect,
