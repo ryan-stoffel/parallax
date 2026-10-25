@@ -1129,6 +1129,18 @@ mod tests {
         }
     }
 
+    /// A new turn's follow-up with `text` and nothing else.
+    fn follow_up(text: &str) -> FollowUp {
+        FollowUp {
+            turn_id: TurnId::generate(),
+            text: text.into(),
+            images: Vec::new(),
+            steer: false,
+            model: None,
+            permission: None,
+        }
+    }
+
     #[test]
     fn a_goal_is_the_text_after_slash_goal() {
         assert_eq!(super::goal("/goal  tests pass ", &[]), Some("tests pass"));
@@ -1148,14 +1160,7 @@ mod tests {
     #[test]
     fn follow_ups_are_idempotent_on_their_turn_id() {
         let (handle, mut control) = RunHandle::new(RunId::generate(), true, CancelSwitch::new());
-        let turn = FollowUp {
-            turn_id: TurnId::generate(),
-            text: "and the tests".into(),
-            images: Vec::new(),
-            steer: false,
-            model: None,
-            permission: None,
-        };
+        let turn = follow_up("and the tests");
         handle.send(turn.clone()).unwrap();
         handle.send(turn.clone()).unwrap();
         assert_eq!(control.try_recv().unwrap(), turn);
@@ -1168,17 +1173,7 @@ mod tests {
             Err(SendError::IdConflict)
         );
         drop(control);
-        assert_eq!(
-            handle.send(FollowUp {
-                turn_id: TurnId::generate(),
-                text: "late".into(),
-                images: Vec::new(),
-                steer: false,
-                model: None,
-                permission: None,
-            }),
-            Err(SendError::Finished)
-        );
+        assert_eq!(handle.send(follow_up("late")), Err(SendError::Finished));
         assert_eq!(
             handle.send(turn),
             Err(SendError::Finished),
@@ -1189,17 +1184,7 @@ mod tests {
     #[test]
     fn a_backend_without_follow_ups_refuses_them() {
         let (handle, _control) = RunHandle::new(RunId::generate(), false, CancelSwitch::new());
-        assert_eq!(
-            handle.send(FollowUp {
-                turn_id: TurnId::generate(),
-                text: "hi".into(),
-                images: Vec::new(),
-                steer: false,
-                model: None,
-                permission: None,
-            }),
-            Err(SendError::Unsupported)
-        );
+        assert_eq!(handle.send(follow_up("hi")), Err(SendError::Unsupported));
     }
 
     #[test]
