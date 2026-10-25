@@ -8,6 +8,8 @@ import {
   kindOf,
   presets,
   saveProvider,
+  slug,
+  unique,
   versionOf,
   versions,
   withVersion,
@@ -67,20 +69,6 @@ export function registryDraft(agent: RegistryAgent, platform: string): Draft | u
     programHint: `Install ${agent.name} on the host from its archive, then give the full path to ${program}, or put it on the host's PATH.`,
   };
 }
-
-/** `base`, or "`base` 2", "`base` 3"…: the first that `taken` doesn't have. */
-function unique(base: string, taken: string[], join = " "): string {
-  let name = base;
-  for (let n = 2; taken.includes(name); n++) name = `${base}${join}${n}`;
-  return name;
-}
-
-/** An instance id from a name: lowercase letters, digits, and `-`. */
-const slug = (name: string) =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "") || "provider";
 
 const steps = ["Provider", "Identity", "Config"];
 

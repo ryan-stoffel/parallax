@@ -8,17 +8,9 @@ import { notify } from "../notifications";
 import { isRepository, type ThreadsView } from "../threads";
 import { Picker } from "../ui";
 import { field, HostPicker, PageTitle, primaryButton, quietButton, Section, Switch } from "./parts";
+import { scriptRoles } from "./shared";
 
-/** A script's roles in a few words, as T3 Code's `projectScriptMenuLabel` names them. */
-export function scriptRoles(script: RepoScript): string {
-  const roles = [
-    ...(script.runOnWorktreeCreate
-      ? [script.async === false ? "setup, holds the agent" : "setup"]
-      : []),
-    ...(script.runOnSettle ? ["on settle"] : []),
-  ];
-  return roles.join(", ");
-}
+export { scriptRoles };
 
 const blank: RepoScript = { id: "", name: "", command: "", runOnWorktreeCreate: true };
 

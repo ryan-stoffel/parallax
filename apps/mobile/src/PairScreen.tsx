@@ -1,5 +1,5 @@
-// Pairing (0065): pick a computer showing a code on this network, or type its address, then the
-// code from its Settings > Connections > Pair a device.
+// Pairing on the LAN (0065), for a computer without Tailscale: pick a computer showing a code on
+// this network, or type its address, then the code from its Settings > Connections > Pair a device.
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -15,7 +15,13 @@ import { pair, type Saved } from "./host";
 import { font } from "./theme";
 import { Button, Mark, T, useColors } from "./ui";
 
-export function Pairing({ onPaired }: { onPaired: (saved: Saved) => void }) {
+export function Pairing({
+  onPaired,
+  onCancel,
+}: {
+  onPaired: (saved: Saved) => void;
+  onCancel: () => void;
+}) {
   const c = useColors();
   const [found, setFound] = useState<{ name: string; route: string }[]>();
   const [route, setRoute] = useState("");
@@ -137,6 +143,9 @@ export function Pairing({ onPaired }: { onPaired: (saved: Saved) => void }) {
           {error}
         </T>
       )}
+      <Pressable accessibilityRole="button" onPress={onCancel} style={{ alignSelf: "center", padding: 10 }}>
+        <T style={{ fontSize: 14, color: c.accent }}>Use Tailscale instead</T>
+      </Pressable>
     </ScrollView>
   );
 }

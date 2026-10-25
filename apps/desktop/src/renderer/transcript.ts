@@ -924,7 +924,7 @@ export const plxdTools = "mcp__plxd__";
  */
 function subagentTitle(items: Item[], runId: string): string | undefined {
   type Summary = { runId?: unknown; prompt?: unknown };
-  for (const x of items.toReversed()) {
+  for (const x of [...items].reverse()) {
     if (x.kind !== "tool" || !x.name?.startsWith(plxdTools) || !x.output?.includes(runId)) continue;
     try {
       type Answer = Summary & { run?: Summary; runs?: Summary[]; thread?: Summary };
@@ -1148,3 +1148,16 @@ export const statusLabel = (status: AgentStatus) =>
 
 /** Whether the run's CLI is live, so Stop applies. */
 export const isRunning = (status?: AgentStatus) => status === "starting" || status === "running";
+
+/**
+ * The goal the user's latest message set with `/goal <objective>` (PLX-749), which Claude Code
+ * and Codex keep working toward until it is met. `/goal clear` sets none.
+ */
+// ponytail: a later message from the user hides the goal even if the CLI still pursues it; read
+// the CLI's goal state if that matters.
+export function pursuedGoal(items: readonly Item[]): string | undefined {
+  const last = items.findLast((i) => i.kind === "user" && !i.wake && i.from === undefined);
+  if (last?.kind !== "user" || !last.text || last.images?.length) return undefined;
+  const objective = /^\/goal\s+(.+)$/is.exec(last.text.trim())?.[1]?.trim();
+  return objective?.toLowerCase() === "clear" ? undefined : objective;
+}

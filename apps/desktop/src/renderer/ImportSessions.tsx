@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ImportSource, ImportableSession, ProviderInfo } from "../protocol/generated/protocol";
+import type { ImportSource, ImportableSession } from "../protocol/generated/protocol";
 import { readExports, type ExportPart, type ExportedChat } from "./chatExports";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
@@ -17,6 +17,7 @@ import { localId } from "./hosts";
 import { notify } from "./notifications";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import { loadProviders, useProviders } from "./providers";
+import { importAccount } from "./settings/shared";
 import { age } from "./Sidebar";
 import { IconButton, segment } from "./ui";
 
@@ -34,27 +35,6 @@ const chatApps: App[] = [
   { source: "chatgpt", name: "ChatGPT", Logo: OpenAILogo },
   { source: "claudeChat", name: "Claude", Logo: ClaudeLogo },
 ];
-
-/** The agent kind each source's imports continue on. */
-const kindOf: Record<ImportSource, string> = {
-  claude: "claude",
-  codex: "codex",
-  cursor: "cursor",
-  chatgpt: "codex",
-  claudeChat: "claude",
-};
-
-/**
- * The account an import from `source` runs its follow-ups on: that source's own agent when it's
- * on, else the first agent that is. With none, plxd picks the source's own.
- */
-function accountFor(source: ImportSource, providers: ProviderInfo[] | undefined) {
-  const kind = kindOf[source];
-  const on = providers?.filter((p) => p.instance.enabled);
-  const info =
-    on?.find((p) => p.instance.id === kind) ?? on?.find((p) => p.instance.kind === kind) ?? on?.[0];
-  return info && ({ kind: "subscription", backend: info.instance.id } as const);
-}
 
 /** One row of `SessionList`: a session or a chat. */
 type Item = {
@@ -141,7 +121,7 @@ export function ImportSessions({ className = "" }: { className?: string }) {
       }))}
       importItem={async (item) => {
         const session = sessions.find((s) => `${s.source}:${s.id}` === item.key)!;
-        const account = accountFor(session.source, providers);
+        const account = importAccount(session.source, providers);
         const answer = await window.parallax.request(localId, "thread/import", {
           source: session.source,
           id: session.id,
@@ -238,7 +218,7 @@ export function ImportChats({ className = "" }: { className?: string }) {
         }))}
         importItem={async (item) => {
           const chat = chats.find((c) => `${c.source}:${c.id}` === item.key)!;
-          const account = accountFor(chat.source, providers);
+          const account = importAccount(chat.source, providers);
           const answer = await window.parallax.request(localId, "thread/importChat", {
             ...chat,
             ...(account && { account }),

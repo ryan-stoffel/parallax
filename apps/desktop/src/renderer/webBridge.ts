@@ -194,6 +194,7 @@ export class WebHost {
   private logId?: LogId;
   private nextId = 1;
   private failures = 0;
+  private closed = false;
   private retryTimer?: number;
   private heartbeatTimer?: number;
   private livenessTimer?: number;
@@ -216,9 +217,15 @@ export class WebHost {
   ) {}
 
   async connect(): Promise<void> {
+    if (this.closed) return;
     clearTimeout(this.retryTimer);
     this.setState({ status: "connecting" });
     const socket = await this.open();
+    // Closed while it opened: the socket it got goes too.
+    if (this.closed) {
+      if (!("error" in socket)) socket.close();
+      return;
+    }
     if ("error" in socket) {
       if (socket.error !== "revoked") return this.fail(socket.error);
       return this.signedOut();
@@ -328,6 +335,13 @@ export class WebHost {
       () => this.end("Parallax stopped answering."),
       LIVENESS_MS,
     );
+  }
+
+  /** Ends the connection for good, as the mobile app does for a computer it removes. */
+  close(): void {
+    this.closed = true;
+    clearTimeout(this.retryTimer);
+    if (this.socket) this.end("The connection was closed.");
   }
 
   /** Reconnects now if the connection failed. */
@@ -524,7 +538,12 @@ export class WebHost {
   }
 
   private fail(message: string): void {
-    this.setState({ status: "failed", error: { reason: "exited", message }, retrying: true });
+    this.setState({
+      status: "failed",
+      error: { reason: "exited", message },
+      retrying: !this.closed,
+    });
+    if (this.closed) return;
     const wait = Math.min(1000 * 2 ** this.failures++, 10_000);
     this.retryTimer = window.setTimeout(() => void this.connect(), wait);
   }

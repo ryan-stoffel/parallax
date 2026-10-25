@@ -14,7 +14,7 @@ import { imageCaps } from "./images";
 import { uploadBytes } from "./uploads";
 import type { RunOptions } from "./models";
 import { notify } from "./notifications";
-import { accountOptions, defaultBackend } from "./NewThread";
+import { accountOptions, defaultBackend } from "./settings/shared";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { RefMenu } from "./RefMenu";
 import { ProjectIcon } from "./Sidebar";

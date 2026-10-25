@@ -2,17 +2,10 @@ import { ChevronDown, Zap } from "lucide-react";
 import { useId, type CSSProperties } from "react";
 
 import type { AgentEffort } from "../protocol/generated/protocol";
+import { effortLevels } from "./catalog";
 import { menuButton, menuPanel, Picker } from "./ui";
 
-// Each level plxd takes, a line about it, and how long (in seconds) a stripe takes to cross the
-// fill.
-const levels: { value: AgentEffort; name: string; blurb: string; speed: number }[] = [
-  { value: "low", name: "Low", blurb: "A little thought first", speed: 3 },
-  { value: "medium", name: "Medium", blurb: "Thinks it over", speed: 2 },
-  { value: "high", name: "High", blurb: "Digs in on the hard parts", speed: 1.3 },
-  { value: "xhigh", name: "Extra high", blurb: "Takes its time on the hardest parts", speed: 0.8 },
-  { value: "max", name: "Max", blurb: "Everything it's got", speed: 0.4 },
-];
+const levels = effortLevels;
 const last = levels.length - 1;
 // The thumb's center travels from one radius in to one radius short of the far end, as the
 // range's own (invisible) thumb does, so pointer positions map to the same stops.

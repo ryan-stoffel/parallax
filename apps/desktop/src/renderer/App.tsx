@@ -63,7 +63,8 @@ import {
   PullRequestView,
   usePullRequests,
 } from "./PullRequests";
-import { PullRequestsPage, type PrEntry } from "./PullRequestsPage";
+import { PullRequestsPage } from "./PullRequestsPage";
+import type { PrEntry } from "./pullRequestSearch";
 import { Settings } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { Browser, BrowserTabBar } from "./Browser";

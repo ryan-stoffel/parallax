@@ -1,15 +1,15 @@
 {
   "expo": {
-    "name": "Parallax",
+    "name": "Parallax (Nightly)",
     "slug": "parallax",
     "scheme": "parallax",
-    "version": "0.0.0",
+    "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
-    "icon": "../../design/icon/masters/Parallax-dark-full-1024.png",
+    "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
     "ios": {
       "bundleIdentifier": "dev.parallax.mobile",
-      "icon": "../../design/icon/Parallax.icon",
+      "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
       "supportsTablet": false,
       "infoPlist": {
         "NSAppTransportSecurity": {
@@ -20,15 +20,17 @@
           "_parallax._tcp"
         ],
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "buildNumber": "6"
     },
     "plugins": [
       [
         "expo-font",
         {
           "fonts": [
-            "./assets/fonts/Sora_400Regular.ttf",
-            "./assets/fonts/Sora_500Medium.ttf"
+            "./assets/fonts/Sora_500Medium.ttf",
+            "./assets/fonts/JetBrainsMonoNerdFont-Regular.ttf",
+            "./assets/fonts/JetBrainsMonoNerdFont-Bold.ttf"
           ]
         }
       ],
@@ -38,7 +40,24 @@
           "faceIDPermission": false
         }
       ],
-      "expo-notifications"
+      "expo-notifications",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Parallax attaches the photos you pick to your messages.",
+          "cameraPermission": "Parallax attaches the photos you take to your messages.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Parallax shows your recent photos so you can attach them to your messages.",
+          "savePhotosPermission": false,
+          "isAccessMediaLocationEnabled": false
+        }
+      ],
+      "./plugins/withSceneLifecycle"
     ],
     "experiments": {
       "tsconfigPaths": false

@@ -21,6 +21,7 @@ import {
   StatusDot,
 } from "./parts";
 import { clockOptions } from "../prefs";
+import { githubLine } from "./shared";
 
 /** How often the status is read while plxd installs `gh` or waits on a sign-in. */
 const POLL_MS = 2000;
@@ -155,21 +156,7 @@ function GitHub({
   else if (!supported) detail = "Update plxd on this host to see GitHub here.";
   else if (error) detail = error;
   else if (!status) detail = "Checking…";
-  else if (status.installing) detail = "Installing the GitHub CLI…";
-  else if (!status.installed) {
-    detail = setup
-      ? "Not installed. Parallax can install the GitHub CLI on this host."
-      : "Not installed. Install the GitHub CLI on this host to open pull requests.";
-    tone = "off";
-  } else if (status.signingIn) detail = "Waiting for you to approve the code on GitHub…";
-  else if (status.signedIn === false)
-    detail = setup
-      ? "Not signed in."
-      : "Not signed in. Run `gh auth login` on this host, then refresh.";
-  else if (status.signedIn) {
-    detail = status.account ? `Signed in as @${status.account}` : "Signed in";
-    tone = "on";
-  } else detail = status.note ?? "Couldn't tell whether gh is signed in.";
+  else ({ detail, tone } = githubLine(status, setup));
 
   let action: ReactNode = null;
   if (status && !error && setup) {

@@ -40,6 +40,7 @@ import type {
   PullRequest,
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
+import { githubText, numberOf, onGithub, shotName } from "./github";
 import { diffBand, diffLook } from "./Approval";
 import { tabItem } from "./Composer";
 import { describeError, githubProblem } from "./errors";
@@ -188,8 +189,7 @@ export const RUNNING_POLL_MS = 15_000;
 /** How long a check runs before it counts as stuck and its pull request is read every POLL_MS. */
 export const STUCK_MS = 30 * 60_000;
 
-/** A pull request's number, from its URL. */
-export const numberOf = (url: string) => /\/pull\/(\d+)/.exec(url)?.[1] ?? "?";
+export { numberOf };
 /** Which of `urls`, a thread's linked pull requests, `href` goes to, on any of its tabs. */
 export const linkedPr = (href: string, urls: readonly string[]) => {
   const pr = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.exec(href)?.[0].toLowerCase();
@@ -698,10 +698,6 @@ function Section({
   );
 }
 
-/** Whether `src` is on GitHub's image hosts, the only remote images the app's CSP loads. */
-const onGithub = (src: unknown): src is string =>
-  typeof src === "string" && /^https:\/\/(github\.com|[\w-]+\.githubusercontent\.com)\//.test(src);
-
 /**
  * A pull request's description and comments are GitHub's, not the agent's, so their GitHub-hosted
  * images load, unlike a transcript's remote ones, and open in the Lightbox when clicked. Any other image stays
@@ -724,32 +720,6 @@ const githubMarkdown: Components = {
       </a>
     ),
 };
-
-/**
- * GitHub's Markdown with each HTML `<img>`, as GitHub writes a dropped screenshot, as a Markdown
- * image, since Markdown here renders no HTML. Code, fenced or inline, stays as written. ponytail:
- * regexes, not a Markdown or HTML parser; they miss an `<img>` whose attributes hold a `>`, and
- * code fenced by more than three marks.
- */
-export function githubText(body: string): string {
-  return body
-    .split(/(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]*`)/)
-    .map((part, i) => (i % 2 ? part : images(part)))
-    .join("");
-}
-
-const images = (text: string) =>
-  text.replace(/<img\b[^>]*>/gi, (tag) => {
-    const attr = (name: string) => new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, "i").exec(tag)?.[1];
-    const src = attr("src");
-    return src ? `![${(attr("alt") ?? "").replace(/[[\]]/g, "")}](${src})` : tag;
-  });
-
-/** A screenshot's name: its alt text, or without a useful one, its file's name. */
-export function shotName(src: string, alt: string): string {
-  if (alt.trim() && alt.trim().toLowerCase() !== "image") return alt.trim();
-  return decodeURIComponent(new URL(src).pathname.split("/").at(-1) || "Screenshot");
-}
 
 // ponytail: "long" by length, not rendered height; measure it if this cuts the wrong ones.
 const isLong = (c: PrComment) => c.body.length > 600 || c.body.split("\n").length > 12;
@@ -1727,3 +1697,5 @@ export function PullRequestView({
     </div>
   );
 }
+
+export { githubText, shotName };

@@ -4,6 +4,12 @@
 // whose answer was lost goes again safely.
 
 import type { RpcError } from "../../desktop/src/preload/bridge";
+import type {
+  AccountChoice,
+  AgentEffort,
+  AgentPermission,
+  PromptImage,
+} from "../../desktop/src/protocol/generated/protocol";
 
 export interface Outgoing {
   /** The message's id, which is its `turnId` and its dispatch's `commandId`. */
@@ -11,6 +17,14 @@ export interface Outgoing {
   threadId: string;
   text: string;
   steer: boolean;
+  /** Images the agent sees, sent with the message. */
+  images?: PromptImage[];
+  /** A new model, effort, or access for the thread, from this message on. */
+  model?: string;
+  effort?: AgentEffort;
+  permission?: AgentPermission;
+  /** Another provider for the thread, with `model` one of its own. */
+  account?: AccountChoice;
 }
 
 /** What one try did: plxd took it, the phone isn't connected, or plxd refused it. */
