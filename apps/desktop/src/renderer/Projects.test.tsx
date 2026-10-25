@@ -415,7 +415,7 @@ test("Local folder browses from ~/, filters as you type, opens with Enter, goes 
   expect(paletteOptions().map((o) => o.textContent)).toEqual([
     "New repositoryStart an empty repository in ~/.parallax/projects",
     "Local folderAdd a repository that's already on this computer",
-    "Clone from GitHubClone a repository by its owner/name",
+    "Clone from GitHubClone a repository by its owner/name or link",
     "New ProjectA focused chat where agents coordinate work",
     "New folderKeep chats and threads together in the sidebar",
   ]);

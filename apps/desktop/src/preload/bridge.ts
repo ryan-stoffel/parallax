@@ -54,16 +54,20 @@ export const HOME_VARS: Partial<Record<ProviderKind, string>> = {
 export const isFolderName = (name: string) =>
   /^[\w.-]+$/.test(name) && name !== "." && name !== "..";
 
-/** `owner/name` from a GitHub slug or URL, or undefined. */
+/**
+ * `owner/name` from a GitHub slug, or from a GitHub link to the repository or any page under it,
+ * or its HTTPS or SSH clone URL. Undefined otherwise.
+ */
 export function githubSlug(input: string): string | undefined {
-  const slug = input
-    .trim()
-    .replace(/^(https:\/\/)?github\.com\//, "")
-    .replace(/\.git$/, "")
-    .replace(/\/$/, "");
-  const [owner, name, ...rest] = slug.split("/");
-  return owner && name && rest.length === 0 && isFolderName(owner) && isFolderName(name)
-    ? `${owner}/${name}`
+  const text = input.trim();
+  const link =
+    /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/|(?:ssh:\/\/)?git@github\.com[:/])([^/?#]+)\/([^/?#]+)/i.exec(
+      text,
+    );
+  const [owner, name, ...rest] = link ? [link[1], link[2]] : text.replace(/\/$/, "").split("/");
+  const repo = name?.replace(/\.git$/, "");
+  return owner && repo && rest.length === 0 && isFolderName(owner) && isFolderName(repo)
+    ? `${owner}/${repo}`
     : undefined;
 }
 
