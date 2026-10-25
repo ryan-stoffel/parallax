@@ -649,10 +649,11 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const stalled = error !== undefined || !connected;
   const unanswered = useMemo(
     () =>
-      isRunning(transcript.run?.status) && !stalled && pending.length === 0
+      // Not while messages are queued: plxd's cancel drops them too, and they'd be lost.
+      isRunning(transcript.run?.status) && !stalled && pending.length === 0 && queue.length === 0
         ? unansweredOf(transcript.items, sent)
         : undefined,
-    [transcript, stalled, pending.length, sent],
+    [transcript, stalled, pending.length, queue.length, sent],
   );
 
   // The trace sheet follows its work as it grows, and keeps what it had once the work is gone.
