@@ -937,7 +937,7 @@ test("another client's project.updated renames a row and changes its icon, in th
   expect(crumbs()).toEqual(["This Mac", "ember app"]);
   const crumbIcon = document.querySelector('[aria-label="Breadcrumb"] li:last-child svg');
   expect(looks(crumbIcon)).toEqual(["rocket", "text-project-green"]);
-  expect(looks(document.querySelector("main svg.size-10"))).toEqual([
+  expect(looks(document.querySelector("main svg.size-8"))).toEqual([
     "rocket",
     "text-project-green",
   ]);
@@ -997,7 +997,7 @@ test("with iconImages, Change icon uploads an image, and a Project's and its rep
   ]);
   await click(rowButton("ember"));
   expect(drawn(document.querySelector('[aria-label="Breadcrumb"]'))).toEqual([projectUrl]);
-  expect(drawn(document.querySelector("main svg.size-10")?.parentElement)).toEqual([projectUrl]);
+  expect(drawn(document.querySelector("main svg.size-8")?.parentElement)).toEqual([projectUrl]);
 });
 
 test("an icon name or color this app doesn't know draws Layers or the accent in its place", async () => {
@@ -1024,7 +1024,7 @@ test("an icon name or color this app doesn't know draws Layers or the accent in 
   await click(rowButton("ember"));
   const crumbIcon = document.querySelector('[aria-label="Breadcrumb"] li:last-child svg');
   expect(looks(crumbIcon)).toEqual(["layers", "text-project-red"]);
-  expect(looks(document.querySelector("main svg.size-10"))).toEqual(["layers", "text-project-red"]);
+  expect(looks(document.querySelector("main svg.size-8"))).toEqual(["layers", "text-project-red"]);
 });
 
 const iconButton = () =>

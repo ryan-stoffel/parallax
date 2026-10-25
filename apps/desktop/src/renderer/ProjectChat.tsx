@@ -243,7 +243,7 @@ export function ProjectChat({
           {/* The first column's width, so the second starts past the edge. */}
           <span aria-hidden className="w-full" />
           <div className="flex w-full flex-col items-center px-8 pb-[8vh]">
-            <ProjectIcon icon={project.icon} className="size-10" />
+            <ProjectIcon icon={project.icon} className="size-8" />
             <h2 className="mt-5 text-heading font-medium tracking-tight">{project.name}</h2>
             <p className="mt-2 max-w-sm text-reading text-muted-foreground">
               Describe a feature or a bug and the coordinator starts an agent on it. Send several

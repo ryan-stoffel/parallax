@@ -1059,7 +1059,7 @@ function Tab({
         />
         <hr className={toolbarMenuDivider} />
         <div role="group" aria-label="Zoom" className="flex h-9 items-center gap-3 pr-1 pl-2.5">
-          <ZoomIn aria-hidden className="size-[18px] shrink-0 text-muted-foreground" />
+          <ZoomIn aria-hidden className="size-4 shrink-0 text-muted-foreground" />
           <span className="flex-1 text-body">Zoom</span>
           <span className="flex items-center rounded-lg bg-selected">
             {(
@@ -1081,7 +1081,7 @@ function Tab({
                   title={label}
                   disabled={!src}
                   onClick={() => zoomTo(nextZoom(zoom, direction))}
-                  className="grid size-7 place-items-center rounded-lg text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-[18px]"
+                  className="grid size-7 place-items-center rounded-lg text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 [&_svg]:size-4"
                 >
                   <Icon aria-hidden />
                 </button>
@@ -1384,7 +1384,7 @@ function BrowserTab({
           onClick={onClose}
           className={`mr-1 size-7 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
         >
-          <Close aria-hidden className="size-4.5" />
+          <Close aria-hidden className="size-4" />
         </button>
       )}
     </div>

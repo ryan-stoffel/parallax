@@ -1427,7 +1427,7 @@ export function Composer({
             aria-label="Attach files"
             title="Attach files"
             onClick={() => filePicker.current?.click()}
-            className={`mr-1.5 ${view === "ring" && usage?.summary ? "" : "ml-auto"} grid size-9 place-items-center rounded-full text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4.5`}
+            className={`mr-1.5 ${view === "ring" && usage?.summary ? "" : "ml-auto"} grid size-9 place-items-center rounded-full text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4`}
           >
             <Paperclip />
           </button>
@@ -1440,7 +1440,7 @@ export function Composer({
               className="grid size-9 place-items-center rounded-full bg-danger text-background disabled:opacity-50"
             >
               {stopping ? (
-                <LoaderCircle className="size-4.5 animate-spin" />
+                <LoaderCircle className="size-4 animate-spin" />
               ) : (
                 <Square className="size-3.5 fill-current" />
               )}
@@ -1452,7 +1452,7 @@ export function Composer({
               disabled={!canSend}
               className="send-sky grid size-9 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground"
             >
-              <ArrowUp className="size-4.5" />
+              <ArrowUp className="size-4" />
             </button>
           )}
         </div>

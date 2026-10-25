@@ -18,7 +18,7 @@ export function Chip({
     <span
       contentEditable={false}
       title={title}
-      className={`mx-[0.1em] inline-flex items-center gap-[0.3em] rounded-sm border px-[0.4em] py-[0.1em] align-baseline text-body leading-tight whitespace-nowrap text-foreground [&_img]:size-[1.05em] [&_img]:shrink-0 [&_svg]:size-[1.05em] [&_svg]:shrink-0 ${
+      className={`mx-[0.1em] inline-flex items-center gap-[0.3em] rounded-sm border px-[0.4em] py-[0.1em] align-baseline text-body leading-tight whitespace-nowrap text-foreground [&_img]:size-3.5 [&_img]:shrink-0 [&_svg]:size-3.5 [&_svg]:shrink-0 ${
         tone === "file"
           ? "border-accent/30 bg-accent/10"
           : "border-project-violet/30 bg-project-violet/10"

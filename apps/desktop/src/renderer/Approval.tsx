@@ -842,7 +842,7 @@ function ComputerApprovalCard({
           aria-hidden
           className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent/10 text-accent ring-1 ring-accent/20 ring-inset"
         >
-          <MousePointerClick className="size-[18px]" />
+          <MousePointerClick className="size-4" />
         </span>
         <div className="min-w-0 flex-1 pt-px">
           <p id={titleId} className="text-body font-medium">

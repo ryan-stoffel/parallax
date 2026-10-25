@@ -242,7 +242,7 @@ export function ToolbarMenuRow({
       type="button"
       role={checked === undefined ? "menuitem" : "menuitemcheckbox"}
       aria-checked={checked}
-      className={`flex h-8 w-full items-center gap-3 rounded-md px-2.5 text-left text-body enabled:hover:bg-hover disabled:opacity-40 [&_svg]:size-[18px] [&_svg]:shrink-0 [&>svg:first-child]:text-muted-foreground ${className}`}
+      className={`flex h-8 w-full items-center gap-3 rounded-md px-2.5 text-left text-body enabled:hover:bg-hover disabled:opacity-40 [&_svg]:size-4 [&_svg]:shrink-0 [&>svg:first-child]:text-muted-foreground ${className}`}
       {...props}
     >
       {icon}

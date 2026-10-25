@@ -432,6 +432,15 @@
   zoom: var(--code-zoom, 1);
 }
 
+/* Every lucide icon draws 1.5px lines at every size (0085), where lucide's own 2-in-24 stroke
+   thins and thickens with the icon. An icon given its own `strokeWidth` keeps it. */
+svg.lucide[stroke-width="2"] {
+  stroke-width: 1.5px;
+}
+svg.lucide[stroke-width="2"] * {
+  vector-effect: non-scaling-stroke;
+}
+
 /* The type scale (docs/decisions/0085-ui-style-guide.md): every font size is one of these. Each
    sets only the size, so text keeps the line height around it. */
 @theme {
