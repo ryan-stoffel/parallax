@@ -77,6 +77,8 @@ import {
   Timeline,
   toneColor,
   useCard,
+  useGitHub,
+  usePrColors,
 } from "./PullRequestParts";
 import {
   activityOf,
@@ -237,7 +239,7 @@ function FilterChips({
 
 /** Its checks' mark, for a list row. */
 function ChecksMark({ pr }: { pr: PullRequest }) {
-  const c = useColors();
+  const c = usePrColors();
   if (pr.checksState === "passed") return <Icon icon={CircleCheck} size={13} color={c.added} />;
   if (pr.checksState === "failed") return <Icon icon={CircleX} size={13} color={c.danger} />;
   if (pr.checksState === "pending") return <Icon icon={Clock} size={13} color={c.warning} />;
@@ -246,7 +248,7 @@ function ChecksMark({ pr }: { pr: PullRequest }) {
 
 /** Its reviews' mark, for a list row: changes requested, or approved. */
 function ReviewMark({ pr }: { pr: PullRequest }) {
-  const c = useColors();
+  const c = usePrColors();
   const tone = reviewsSummary(pr).tone;
   if (tone === "danger") return <Icon icon={UserX} size={13} color={c.danger} />;
   if (tone === "success") return <Icon icon={UserCheck} size={13} color={c.added} />;
@@ -260,9 +262,9 @@ function ReviewMark({ pr }: { pr: PullRequest }) {
  * spinner, or why it can't be read. A long press opens its link menu.
  */
 function PrRow({ entry, pr, error, offline }: { entry: PrEntry; pr?: PullRequest; error?: string; offline?: string }) {
-  const c = useColors();
+  const c = usePrColors();
   const nav = useNav();
-  const [symbol, color, stateLabel] = lookOf(pr, c);
+  const [symbol, color, stateLabel] = lookOf(pr, useGitHub());
   const small = { fontSize: 12, lineHeight: 16 };
   const problem = error ?? offline;
   const number = pr?.number ?? numberOf(entry.url);
@@ -479,7 +481,7 @@ function Folded({ children }: { children: ReactNode }) {
 
 /** The checks row, which folds its checks under it, open when one failed or is running. */
 function Checks({ pr }: { pr: PullRequest }) {
-  const c = useColors();
+  const c = usePrColors();
   const summary = checksSummary(pr.checks);
   const [open, setOpen] = useState(summary.tone !== "success");
   const icon = summary.tone === "danger" ? CircleX : summary.tone === "warning" ? Clock : CircleCheck;
@@ -525,7 +527,7 @@ function Checks({ pr }: { pr: PullRequest }) {
 
 /** The reviews row, which folds each reviewer's verdict, and who's still asked, under it. */
 function Reviews({ pr }: { pr: PullRequest }) {
-  const c = useColors();
+  const c = usePrColors();
   const summary = reviewsSummary(pr);
   const latest = latestReviews(pr.reviews ?? []);
   const waiting = pr.reviewRequests.filter((who) => !latest.some((r) => r.author === who));
@@ -585,7 +587,7 @@ function Reviews({ pr }: { pr: PullRequest }) {
 
 /** The branch row: whether it merges cleanly into its base. */
 function Branch({ pr }: { pr: PullRequest }) {
-  const c = useColors();
+  const c = usePrColors();
   const base = pr.baseBranch;
   const [icon, color, title]: [LucideIcon, string, string] =
     pr.mergeState === "dirty"
@@ -606,8 +608,9 @@ type Method = "squash" | "merge";
 const methodLabels: Record<Method, string> = { squash: "Squash and merge", merge: "Create a merge commit" };
 
 /**
- * The card's foot, as T3's: one prominent split button that merges by the chosen method, its
- * chevron choosing the method or turning auto-merge on or off. A draft gets Ready for review.
+ * The card's foot, as T3's: one prominent split button in GitHub's green that merges by the
+ * chosen method, its chevron choosing the method or turning auto-merge on or off. A draft gets
+ * Ready for review.
  */
 function MergeControls({
   pr,
@@ -619,9 +622,10 @@ function MergeControls({
   act: (action: PrAction, label: string, destructive?: boolean) => void;
 }) {
   const c = useColors();
+  const gh = useGitHub();
   const [method, setMethod] = useState<Method>("squash");
   const can = !acting && pr.mergeState !== "dirty";
-  const fg = can ? c.background : c.faintForeground;
+  const fg = can ? "#ffffff" : c.faintForeground;
   if (pr.draft)
     return (
       <View style={{ padding: 12 }}>
@@ -647,7 +651,7 @@ function MergeControls({
   };
   return (
     <View style={{ padding: 12, gap: 8 }}>
-      <View style={[styles.split, { backgroundColor: can ? c.foreground : c.selected }]}>
+      <View style={[styles.split, { backgroundColor: can ? gh.merge : c.selected }]}>
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ disabled: !can, busy: acting }}
@@ -665,7 +669,7 @@ function MergeControls({
           accessibilityLabel="Merge options"
           disabled={acting}
           onPress={options}
-          style={({ pressed }) => [styles.splitMore, { borderLeftColor: can ? "rgba(127, 127, 140, 0.4)" : c.border }, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [styles.splitMore, { borderLeftColor: can ? "rgba(0, 0, 0, 0.28)" : c.border }, pressed && { opacity: 0.7 }]}
         >
           <Icon icon={ChevronDown} size={14} color={fg} strokeWidth={2.4} />
         </Pressable>
@@ -857,7 +861,8 @@ export function PullRequestScreen({
     });
   }, [navigation, url, pr, c.background]);
 
-  const [symbol, color, stateLabel] = lookOf(pr, c);
+  const gh = useGitHub();
+  const [symbol, , stateLabel, fill] = lookOf(pr, gh);
   const updated = pr && ago(pr.updatedAt);
   const copy = (branch: string) =>
     void Clipboard.setStringAsync(branch).then(() => Haptics.selectionAsync());
@@ -871,13 +876,11 @@ export function PullRequestScreen({
             accessibilityLabel={`Status, ${stateLabel}`}
             disabled={!open}
             onPress={stateMenu}
-            style={({ pressed }) => [styles.line, { minHeight: 30, gap: 6 }, pressed && { opacity: 0.6 }]}
+            style={({ pressed }) => [styles.line, styles.state, { backgroundColor: fill }, pressed && { opacity: 0.7 }]}
           >
-            <Icon icon={symbol} size={14} color={color} />
-            <T medium style={{ fontSize: 13, lineHeight: 17, color }}>
-              {stateLabel}
-            </T>
-            {open && <Icon icon={ChevronDown} size={10} color={c.faintForeground} strokeWidth={2.4} />}
+            <Icon icon={symbol} size={14} color="#ffffff" />
+            <T style={{ fontSize: 13, lineHeight: 17, fontWeight: "600", color: "#ffffff" }}>{stateLabel}</T>
+            {open && <Icon icon={ChevronDown} size={10} color="#ffffff" strokeWidth={2.4} />}
           </Pressable>
           {pr && <DiffStats additions={pr.additions} deletions={pr.deletions} compact />}
           {pr && (
@@ -972,7 +975,7 @@ export function PullRequestScreen({
             ) : pr.state === "merged" ? (
               <CardRow
                 icon={GitMerge}
-                tint={c.projectViolet}
+                tint={gh.merged}
                 title={pr.mergedBy ? `Merged by ${pr.mergedBy}` : "Merged"}
                 value={pr.mergedAt && ago(pr.mergedAt)}
                 divider={false}
@@ -980,7 +983,7 @@ export function PullRequestScreen({
             ) : (
               <CardRow
                 icon={GitPullRequestClosed}
-                tint={c.danger}
+                tint={gh.closed}
                 title="Closed without merging"
                 value={pr.closedAt && ago(pr.closedAt)}
                 divider={false}
@@ -1069,6 +1072,7 @@ const styles = StyleSheet.create({
   empty: { alignItems: "center", gap: 8, paddingTop: 72, paddingHorizontal: 40 },
   emptyMark: { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", marginBottom: 6 },
   branch: { fontFamily: font.mono, fontSize: 12, lineHeight: 16 },
+  state: { minHeight: 30, gap: 6, paddingHorizontal: 12, borderRadius: 15 },
   split: { flexDirection: "row", borderRadius: 12, overflow: "hidden" },
   merge: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 12, borderRadius: 12 },
   splitMore: { width: 44, alignItems: "center", justifyContent: "center", borderLeftWidth: StyleSheet.hairlineWidth },

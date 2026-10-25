@@ -42,13 +42,56 @@ export function useCard() {
 export const toneColor = (tone: Tone, c: Colors) =>
   ({ success: c.added, danger: c.danger, warning: c.warning, muted: c.faintForeground })[tone];
 
-/** A pull request's state as the desktop's PR panel draws it: its icon, color, and word. */
-export function lookOf(pr: Pick<PullRequest, "state" | "draft"> | undefined, c: Colors): [LucideIcon, string, string] {
-  if (pr?.state === "merged") return [GitMerge, c.projectViolet, "Merged"];
-  if (pr?.state === "closed") return [GitPullRequestClosed, c.danger, "Closed"];
-  if (pr?.state === "open" && pr.draft) return [GitPullRequestDraft, c.faintForeground, "Draft"];
-  if (pr?.state === "open") return [GitPullRequest, c.added, "Open"];
-  return [GitPullRequest, c.faintForeground, "Pull request"];
+/**
+ * GitHub's own colors (Primer) for a pull request's states, light and dark: each state's icon and
+ * text color, its filled pill's color behind white, and the merge button's green.
+ */
+const githubColors = {
+  light: {
+    open: "#1a7f37",
+    draft: "#59636e",
+    merged: "#8250df",
+    closed: "#cf222e",
+    openFill: "#1f883d",
+    draftFill: "#59636e",
+    mergedFill: "#8250df",
+    closedFill: "#cf222e",
+    merge: "#1f883d",
+  },
+  dark: {
+    open: "#3fb950",
+    draft: "#9198a1",
+    merged: "#a371f7",
+    closed: "#f85149",
+    openFill: "#238636",
+    draftFill: "#656c76",
+    mergedFill: "#8957e5",
+    closedFill: "#da3633",
+    merge: "#238636",
+  },
+};
+
+export type GitHubColors = typeof githubColors.light;
+
+/** GitHub's colors for the current appearance. */
+export const useGitHub = (): GitHubColors => githubColors[useColorScheme() === "dark" ? "dark" : "light"];
+
+/** Parallax's colors with GitHub's green and red, for a pull request's checks, reviews, and branch. */
+export function usePrColors(): Colors {
+  const gh = useGitHub();
+  return { ...useColors(), added: gh.open, danger: gh.closed };
+}
+
+/** A pull request's state as GitHub draws it: its icon, its color, its word, and its pill's fill. */
+export function lookOf(
+  pr: Pick<PullRequest, "state" | "draft"> | undefined,
+  gh: GitHubColors,
+): [LucideIcon, string, string, string] {
+  if (pr?.state === "merged") return [GitMerge, gh.merged, "Merged", gh.mergedFill];
+  if (pr?.state === "closed") return [GitPullRequestClosed, gh.closed, "Closed", gh.closedFill];
+  if (pr?.state === "open" && pr.draft) return [GitPullRequestDraft, gh.draft, "Draft", gh.draftFill];
+  if (pr?.state === "open") return [GitPullRequest, gh.open, "Open", gh.openFill];
+  return [GitPullRequest, gh.draft, "Pull request", gh.draftFill];
 }
 
 /** A GitHub user's picture, or their initial while it loads or when they have none. */
@@ -356,23 +399,38 @@ const verdictWords: Record<PrReviewState, string> = {
 };
 
 /** A verdict's timeline icon and color. */
-function verdictLook(verdict: PrReviewState | undefined, c: Colors): [LucideIcon, string] {
-  if (verdict === "approved") return [Check, c.added];
-  if (verdict === "changesRequested") return [FileDiff, c.danger];
+function verdictLook(verdict: PrReviewState | undefined, c: Colors, gh: GitHubColors): [LucideIcon, string] {
+  if (verdict === "approved") return [Check, gh.open];
+  if (verdict === "changesRequested") return [FileDiff, gh.closed];
   if (verdict === "dismissed") return [CircleMinus, c.faintForeground];
   return [MessageSquareText, c.faintForeground];
 }
 
-/** One event on the timeline: its icon in a ring on the line at the left, its content beside it. */
-function Event({ icon, color, last, children }: { icon: LucideIcon; color: string; last: boolean; children: ReactNode }) {
+/**
+ * One event on the timeline: its icon in a ring on the line at the left, its content beside it.
+ * With `fill`, the ring is filled and the icon white, as GitHub marks a merge or a close.
+ */
+function Event({
+  icon,
+  color,
+  fill,
+  last,
+  children,
+}: {
+  icon: LucideIcon;
+  color?: string;
+  fill?: string;
+  last: boolean;
+  children: ReactNode;
+}) {
   const c = useColors();
   const card = useCard();
   return (
     <View style={{ flexDirection: "row", gap: 12 }}>
       <View style={{ width: 32, alignItems: "center" }}>
         {!last && <View style={[styles.rail, { backgroundColor: c.border }]} />}
-        <View style={[styles.ring, { backgroundColor: card, borderColor: c.border }]}>
-          <Icon icon={icon} size={15} color={color} />
+        <View style={[styles.ring, { backgroundColor: fill ?? card, borderColor: fill ?? c.border }]}>
+          <Icon icon={icon} size={15} color={fill ? "#ffffff" : color} />
         </View>
       </View>
       <View style={{ flex: 1, gap: 8, paddingTop: 5, paddingBottom: 24 }}>{children}</View>
@@ -401,6 +459,7 @@ function Byline({ author, action, at }: { author?: string; action: string; at: s
 /** The activity tab: comments with their GitHub images, verdicts, commits, and the merge or close. */
 export function Timeline({ events }: { events: Activity[] }) {
   const c = useColors();
+  const gh = useGitHub();
   const card = useCard();
   if (!events.length)
     return (
@@ -431,13 +490,13 @@ export function Timeline({ events }: { events: Activity[] }) {
             <Event
               key={i}
               icon={e.kind === "merged" ? GitMerge : GitPullRequestClosed}
-              color={e.kind === "merged" ? c.projectViolet : c.danger}
+              fill={e.kind === "merged" ? gh.mergedFill : gh.closedFill}
               last={last}
             >
               <Byline author={e.author} action={e.kind === "merged" ? "merged this" : "closed this"} at={e.at} />
             </Event>
           );
-        const [icon, color] = verdictLook(e.verdict, c);
+        const [icon, color] = verdictLook(e.verdict, c, gh);
         return (
           <Event key={i} icon={icon} color={color} last={last}>
             <Byline author={e.author} action={verdictWords[e.verdict ?? "commented"]} at={e.at} />
