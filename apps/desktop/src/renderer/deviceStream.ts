@@ -28,6 +28,13 @@ export interface DeviceScreen {
 /** How an iPhone Duo can be folded: shut on its cover, half open as a book, or flat open. */
 export type DuoPose = "closed" | "book" | "open";
 
+/**
+ * Which of an iPhone Duo's displays a stream `width` by `height` shows, as serve-sim streams the
+ * live one: 1 the cover, 1398 by 2034, or 3 the inside, 2007 by 2853.
+ */
+export const duoDisplay = (width: number, height: number) =>
+  Math.min(width, height) > 1700 ? 3 : 1;
+
 export interface DeviceStreamEvents {
   onStatus: (status: DeviceStreamStatus, detail?: string) => void;
   onScreen: (screen: DeviceScreen) => void;
@@ -78,8 +85,6 @@ const IOS_KEY = 0x06;
 const IOS_ORIENTATION = 0x07;
 const IOS_POSE = 0x0e;
 const IOS_SCREEN = 0x82;
-/** serve-sim's hinge angle below which an iPhone Duo's cover is the live display. */
-const DUO_COVER_BELOW = 90;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -396,7 +401,10 @@ export function createDeviceStream(
           }
         },
         error: () => {
-          if (!stopped && videoDecoder === decoder) restartVideo();
+          if (stopped || videoDecoder !== decoder) return;
+          // The last description may be what broke it, so the reopened stream brings its own.
+          description = undefined;
+          restartVideo();
         },
       });
       videoDecoder = decoder;
@@ -553,7 +561,7 @@ export function createDeviceStream(
           screen = { width: config.width, height: config.height, orientation: config.orientation };
           if (config.hingeDegrees !== undefined)
             screen.fold = {
-              display: config.hingeDegrees < DUO_COVER_BELOW ? 1 : 3,
+              display: duoDisplay(config.width, config.height),
               angle: config.hingeDegrees,
             };
           events.onScreen(screen);

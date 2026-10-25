@@ -8,12 +8,13 @@
 //!   for Android ([0084](../../docs/decisions/0084-upstream-serve-sim.md)). It installs into
 //!   `<data>/tools/device-hub/` only when the user asks (`device/setup`), and runs as plxd's child
 //!   on two random 127.0.0.1 ports, Expo's and on a Mac serve-sim's, from the first stream until
-//!   plxd stops. Its wrapper exits when its stdin ends, so it never outlives plxd. serve-sim has a
-//!   shell-exec route and serve-emu's routes have no auth, so nothing reaches them but this module,
-//!   which opens only the stream routes below.
+//!   plxd stops. Its wrapper exits when its stdin ends, so it never outlives plxd. serve-sim also
+//!   serves its preview and host controls, and serve-emu's routes have no auth, so nothing reaches
+//!   them but this module, which opens only the stream routes below.
 //! - **Relay**: `device/stream` opens one of three upstreams for a booted device: iOS's AVCC video
-//!   body (`/serve-sim/helper/<udid>/stream.avcc`), iOS's input socket (`/serve-sim/helper/<udid>/ws`),
-//!   or Android's socket, which carries both (`/vendor/serve-emu/ws`). What it sends goes to the connection that opened it as
+//!   body (`/serve-sim/helper/<udid>/stream.avcc`), iOS's input socket
+//!   (`/serve-sim/helper/<udid>/ws`), or Android's socket, which carries both
+//!   (`/vendor/serve-emu/ws`). What it sends goes to the connection that opened it as
 //!   `device/data`, in base64 unless it's text, and `device/send` writes back. It ends with the
 //!   upstream, `device/close`, or the connection.
 

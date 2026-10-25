@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use super::{Chunked, Listed, Relay, Upstream, get, newest_iphone, relay, upstream_path};
+use super::{Chunked, HUB, Listed, Relay, Upstream, get, newest_iphone, relay, upstream_path};
 
 #[test]
 fn a_chunked_body_decodes_however_it_is_split() {
@@ -145,4 +145,15 @@ async fn a_relay_leaves_the_list_when_its_connection_stops() {
     stopped.cancel();
     task.await.unwrap();
     assert!(streams.lock().unwrap().is_empty());
+}
+
+#[test]
+fn the_hubs_version_names_both_its_pins() {
+    // It names the install folder, so a pin that moves without it would reuse a stale install.
+    let manifest: serde_json::Value = serde_json::from_slice(HUB.manifest).unwrap();
+    let pin = |name: &str| manifest["dependencies"][name].as_str().unwrap().to_owned();
+    assert_eq!(
+        manifest["version"],
+        format!("{}-{}", pin("expo-device-hub"), pin("serve-sim"))
+    );
 }

@@ -4,6 +4,7 @@ import {
   AvccDemuxer,
   avcCodec,
   createDeviceStream,
+  duoDisplay,
   hidUsage,
   keyFor,
   parseSemu,
@@ -56,6 +57,12 @@ test("a SEMU frame gives its key flag and timestamp, and a bare access unit is s
   const { key, sps } = scanAccessUnit(bare);
   expect(key).toBe(true);
   expect(avcCodec(sps!)).toBe("avc1.64001f");
+});
+
+test("an iPhone Duo's live display follows the size of what it streams", () => {
+  expect([duoDisplay(1398, 2034), duoDisplay(2034, 1398), duoDisplay(2006, 2852)]).toEqual([
+    1, 1, 3,
+  ]);
 });
 
 test("pasted text types as US keyboard keys on iOS", () => {
