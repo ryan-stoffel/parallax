@@ -27,3 +27,11 @@ export function byName<T>(items: readonly T[], query: string, name: (item: T) =>
 export function replaceSlash(text: string, slash: Slash, insert: string): { text: string; cursor: number } {
   return { text: text.slice(0, slash.from) + insert + text.slice(slash.to), cursor: slash.from + insert.length };
 }
+
+/** `text` cut into its words and the space between them, each word marked when `known` takes it. */
+export function segments(text: string, known: (word: string) => boolean): { text: string; known: boolean }[] {
+  return text
+    .split(/(\s+)/)
+    .filter((part) => part !== "")
+    .map((part) => ({ text: part, known: !/\s/.test(part) && known(part) }));
+}

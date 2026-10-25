@@ -65,7 +65,7 @@ import { openLightbox } from "./Lightbox";
 import { ProviderLogo } from "./logos";
 import { allAccess, useOffers, type Offer } from "./offers";
 import { usePrefs } from "./prefs";
-import { byName, replaceSlash, slashAt } from "./slash";
+import { byName, replaceSlash, segments, slashAt } from "./slash";
 import { SendButton } from "./SendButton";
 import { Sheet, sheetTitle } from "./Sheet";
 import { Icon, T, useColors } from "./ui";
@@ -698,6 +698,9 @@ export function Composer({
     ? byName((loaded ?? []).filter((m) => !ownCommands.has(m.name)), slash.query, (m) => m.name).slice(0, maxCommands)
     : [];
   const menu = !!slash && (loaded === undefined || matches.length > 0);
+  // The commands the CLI knows, which the text draws as the desktop's violet chips. The `/word`
+  // still being typed stays plain until it's done.
+  const known = new Set((commands?.list ?? []).map((m) => m.text));
   /** Puts `command` in place of the `/` being typed, as the desktop's menu does. */
   const pickCommand = (command: AgentCommand, from = text) => {
     const at = slashAt(from, selection.start);
@@ -796,7 +799,6 @@ export function Composer({
         <TextInput
           accessibilityLabel="Message"
           multiline
-          value={text}
           onChangeText={changeText}
           selection={placed}
           onSelectionChange={(e) => {
@@ -806,7 +808,20 @@ export function Composer({
           placeholder={placeholder ?? (working ? "Steer, or queue a follow-up" : "Reply")}
           placeholderTextColor={c.faintForeground}
           style={[styles.input, { color: c.foreground }]}
-        />
+        >
+          {segments(text, (word) => known.has(word) && !(slash && slash.query === word.slice(1))).map((part, i) =>
+            part.known ? (
+              <Text
+                key={i}
+                style={{ color: c.projectViolet, backgroundColor: `${c.projectViolet}1f`, fontWeight: "600" }}
+              >
+                {part.text}
+              </Text>
+            ) : (
+              part.text
+            ),
+          )}
+        </TextInput>
         <View style={styles.bar}>
           <Pressable
             accessibilityRole="button"
