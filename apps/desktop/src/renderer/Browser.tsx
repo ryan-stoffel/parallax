@@ -1384,7 +1384,7 @@ function BrowserTab({
           onClick={onClose}
           className={`mr-1 size-7 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
         >
-          <Close aria-hidden className="size-4.5" />
+          <Close aria-hidden className="size-4" />
         </button>
       )}
     </div>
