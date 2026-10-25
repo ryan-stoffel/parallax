@@ -211,7 +211,7 @@ test("a message draws in its first render, so a list measures it at its height",
   expect(document.querySelector("strong")?.textContent).toBe("bold");
 });
 
-test("a link opens only as a file, a web page, or an email, never another scheme", () => {
+test("a link opens only as a file or an https page, never another scheme", () => {
   const opened = vi.spyOn(window, "open").mockReturnValue(null);
   message("[run](javascript:alert(1)) [docs](https://example.com) [app](vscode://x)");
   for (const a of document.querySelectorAll("a")) act(() => a.click());
@@ -220,16 +220,17 @@ test("a link opens only as a file, a web page, or an email, never another scheme
 });
 
 test("a file's image shows as a block of its own, and is a link inside text", () => {
-  message("![shot](out/a.png)\n\nSee ![b](out/b.png) here");
-  // The block is FileImage, a link to its file while it reads it; the one in text is a link, never
-  // an image with no source.
+  message(
+    "Here's the screenshot:\n![shot](out/a.png)\nSee ![b](out/b.png) here\n- item\n\n  ![c](out/c.png)",
+  );
+  // The one on its own line is FileImage, a link to its file while it reads it; the one in text and
+  // the one in a list are links, never images with no source.
   expect(document.querySelectorAll("img")).toHaveLength(0);
   const links = [...document.querySelectorAll("a")];
-  expect(
-    links.map((a) => [a.textContent, a.getAttribute("title") ?? a.getAttribute("href")]),
-  ).toEqual([
-    ["shot", "out/a.png"],
+  expect(links.map((a) => [a.textContent, a.getAttribute("href")])).toEqual([
+    ["shot", "#"],
     ["b", "out/b.png"],
+    ["c", "out/c.png"],
   ]);
 });
 

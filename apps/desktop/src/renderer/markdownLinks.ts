@@ -19,14 +19,16 @@ export const fileReference = (href: string) =>
 // A fenced code block, or a code span, whose text is never Markdown.
 const code = /^ {0,3}(`{3,}|~{3,})[^]*?^ {0,3}\1[ \t]*$|(`+)[^`][^]*?\2/gm;
 const image = /!\[([^\]]*)\]\((\s*<?)([^\s)>]+)/g;
-// An image by reference, `![alt][ref]`, whose URL is in a definition elsewhere.
-const imageByReference = /!(\[[^\]]*\]\[[^\]]*\])/g;
+// An image by reference, `![alt][ref]` or `![alt]`, whose URL is in a definition elsewhere.
+const imageByReference = /!(\[[^\]]*\](?:\[[^\]]*\])?)(?!\()/g;
 
 /**
  * `markdown` with each image whose URL `shown` refuses written as a link to it, with its alt text,
  * as the desktop's transcript shows one, so it never loads and still reads. `shown` learns too
- * whether the image is its line's only content, past any quote marks, where it's a block of its
- * own. An image by reference is always a link. Code is left as written.
+ * whether the image is its line's only content, unindented, which then becomes a paragraph of its
+ * own, blank lines around it, so the renderer draws it as a block (the desktop's FileImage) and
+ * not in the text's flow. An image by reference, whose URL it can't see, is always a link. Code is
+ * left as written.
  */
 export function unloadedImages(
   markdown: string,
@@ -37,12 +39,12 @@ export function unloadedImages(
       .replace(image, (all, alt: string, open: string, url: string, at: number) => {
         const start = text.lastIndexOf("\n", at - 1) + 1;
         const end = text.indexOf("\n", at) < 0 ? text.length : text.indexOf("\n", at);
-        const alone =
-          /^ {0,3}(?:> ?)*$/.test(text.slice(start, at)) &&
-          /^[^)]*\)\s*$/.test(text.slice(at + all.length, end));
+        const alone = start === at && /^[^)]*\)\s*$/.test(text.slice(at + all.length, end));
         return shown(url, alone) ? all : `[${alt || "Image"}](${open}${url}`;
       })
-      .replace(imageByReference, "$1");
+      .replace(imageByReference, "$1")
+      // Every image left on a line of its own is one `shown` kept there.
+      .replace(/^!\[[^\]\n]*\]\([^\n]*\)[ \t]*$/gm, "\n$&\n");
   let out = "";
   let at = 0;
   for (const m of markdown.matchAll(code)) {

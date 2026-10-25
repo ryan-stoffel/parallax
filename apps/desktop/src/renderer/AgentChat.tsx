@@ -2495,14 +2495,14 @@ const markdownStyle: MarkdownStyle = (() => {
 const recognition = { inlineCode: filePath };
 
 /**
- * Follows a Markdown link: a file to `openFile`, a web page or email to a new window, which main
- * hands to the system's browser or mail app, and any other scheme, `javascript:` among them,
- * nowhere.
+ * Follows a Markdown link: a file to `openFile`, an https page to a new window, which main hands
+ * to the system's browser, and any other scheme, `javascript:` among them, nowhere, as main would
+ * open none of them.
  */
 function follow(url: string, openFile?: (path: string) => void) {
   const path = linkedPath(fileReference(url));
   if (path !== undefined) openFile?.(path);
-  else if (/^(https?|mailto):/i.test(url)) window.open(url, "_blank", "noreferrer");
+  else if (/^https:/i.test(url)) window.open(url, "_blank", "noreferrer");
 }
 
 /** Markdown between code blocks, drawn by Enriched Markdown's web renderer. */

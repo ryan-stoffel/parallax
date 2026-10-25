@@ -44,17 +44,22 @@ test("an image that doesn't load is a link with its alt text, and code is left a
   );
 });
 
-test("an image is alone on its line, past quote marks, or among other text, and by reference a link", () => {
+test("an image alone on its line, unindented, becomes a block; any other stays where it is", () => {
   const seen: [string, boolean][] = [];
   const shown = (url: string, alone: boolean) => (seen.push([url, alone]), true);
-  unloadedImages('![a](a.png)\n> ![b](b.png "t")\nSee ![c](c.png) here\n- ![d](d.png)', shown);
+  expect(
+    unloadedImages(
+      "Here:\n![a](a.png)\nIts caption.\n> ![b](b.png)\nSee ![c](c.png)\n- ![d](d.png)",
+      shown,
+    ),
+  ).toBe("Here:\n\n![a](a.png)\n\nIts caption.\n> ![b](b.png)\nSee ![c](c.png)\n- ![d](d.png)");
   expect(seen).toEqual([
     ["a.png", true],
-    ["b.png", true],
+    ["b.png", false],
     ["c.png", false],
     ["d.png", false],
   ]);
-  expect(unloadedImages("![chart][1]\n\n[1]: https://x.dev/c.png", () => true)).toBe(
-    "[chart][1]\n\n[1]: https://x.dev/c.png",
+  expect(unloadedImages("![chart][1] and ![logo]\n\n[1]: https://x.dev/c.png", () => true)).toBe(
+    "[chart][1] and [logo]\n\n[1]: https://x.dev/c.png",
   );
 });
