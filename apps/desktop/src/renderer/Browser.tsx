@@ -300,9 +300,14 @@ export function Browser({
   const driver = driverOf(agent?.backend);
   // The agent's tabs show their sites' favicons, which plxd doesn't report.
   const icons = siteIcons.use();
+  // An SSH host's localhost isn't this computer's, which main fetches from, so it gets none.
+  const iconSite = (url: string) =>
+    remoteHost && /^(localhost|127\.|\[::1\])/.test(URL.parse(url)?.hostname ?? "")
+      ? ""
+      : siteOf(url);
   const agentUrls = (agent?.tabs ?? []).map((t) => t.url).join(" ");
   useEffect(() => {
-    for (const url of agentUrls.split(" ")) askSiteIcon(siteOf(url));
+    for (const url of agentUrls.split(" ")) askSiteIcon(iconSite(url));
   }, [agentUrls]);
   // The agent tab shown, by id, or undefined for the user's own tab `current`.
   const [agentTab, setAgentTab] = useState<string>();
@@ -330,8 +335,8 @@ export function Browser({
     setCurrent(tab.id);
     setAgentTab(undefined);
   };
-  // Closing the last tab hides the browser, as Chrome closes its window, and leaves a blank tab
-  // for when it shows again.
+  // Closing the last own tab hides the browser, as Chrome closes its window, unless the agent has
+  // tabs, and leaves a blank tab for when it shows again.
   // The pages of the tabs closed here, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
   const closed = useRef<string[]>([]);
   // History (PLX-976), one for the browser, which any of its tabs opens.
@@ -348,7 +353,9 @@ export function Browser({
     const rest = tabs.filter((t) => t.id !== id);
     if (!rest.length) {
       rest.push(ownTab());
-      onEmpty?.();
+      // The agent's tabs keep the browser open, showing the first.
+      if (agent?.tabs[0]) setAgentTab(agent.tabs[0].tabId);
+      else onEmpty?.();
     }
     setTabs(rest);
     if (id === current) setCurrent(rest[Math.min(at, rest.length - 1)]!.id);
@@ -391,7 +398,7 @@ export function Browser({
       key: `a:${t.tabId}`,
       title: t.title || shortUrl(t.url) || "Agent's tab",
       url: t.url,
-      ...(icons[siteOf(t.url)] && { icon: icons[siteOf(t.url)] }),
+      ...(icons[iconSite(t.url)] && { icon: icons[iconSite(t.url)] }),
       agent: driver.name,
     })),
     ...tabs.map((t) => ({
@@ -529,6 +536,8 @@ const siteOf = (url: string) => {
   return origin && origin !== "null" ? origin : "";
 };
 // The sites' favicons fetched for agents' tabs, by origin, each asked for once.
+// ponytail: kept for the app's life and never retried; expire entries if dev servers on one port
+// changing icons matters.
 const siteIcons = memory<Readonly<Record<string, string>>>({});
 const askedSites = new Set<string>();
 function askSiteIcon(site: string) {
@@ -687,9 +696,11 @@ function Tab({
   const focused = useRef(false);
 
   // A tab shown, by a click or a shortcut, takes focus to its page, as in Chrome, so the page's
-  // shortcuts keep working from it.
+  // shortcuts keep working from it. A blank tab's address bar takes it instead.
   useEffect(() => {
-    if (shown && src) requestAnimationFrame(() => view.current?.focus());
+    if (!shown) return;
+    if (src) requestAnimationFrame(() => view.current?.focus());
+    else if (!page) requestAnimationFrame(() => addressBar.current?.focus());
   }, [shown]);
 
   // Extensions see the shown tab as the active one.
@@ -705,6 +716,7 @@ function Tab({
       return;
     }
     setError(undefined);
+    focused.current = false;
     setAddress(next);
     onChange({ url: next });
     // The view shows a load's error, so the rejection needs no handling here. A webview that
@@ -875,7 +887,7 @@ function Tab({
           ref={addressBar}
           // A new tab's address bar takes focus, as in Chrome, but not a tab shown again or one
           // opening a page, whose page takes it.
-          autoFocus={!src && !load}
+          autoFocus={!page && !load}
           aria-label="Address"
           placeholder={`Search ${searchEngineName(engine)} or type a URL`}
           spellCheck={false}
