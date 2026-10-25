@@ -125,7 +125,7 @@ export function MiniPrompt({
           {busy ? (
             <LoaderCircle className="size-3.5 animate-spin" />
           ) : (
-            <ArrowUp className={large ? "size-4.5" : "size-3.5"} />
+            <ArrowUp className={large ? "size-4" : "size-3.5"} />
           )}
         </button>
       </form>

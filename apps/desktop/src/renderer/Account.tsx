@@ -852,7 +852,7 @@ function ConnectRows() {
       {devices.map((d) => (
         <div key={d.id} className={settingRow}>
           <div className="flex min-w-0 items-center gap-3">
-            <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground [&_svg]:size-4.5">
+            <span className="grid size-9 shrink-0 place-items-center rounded-lg border border-border text-muted-foreground [&_svg]:size-4">
               <DeviceIcon icon={d.icon} />
             </span>
             <RowText title={d.name}>

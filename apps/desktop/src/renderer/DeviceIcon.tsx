@@ -16,6 +16,7 @@ function MiniPc(props: LucideProps) {
       strokeLinecap="round"
       strokeLinejoin="round"
       {...props}
+      className={`lucide ${props.className ?? ""}`}
     >
       <rect x="2" y="7" width="20" height="10" rx="3" />
       <path d="M6 13h.01" />

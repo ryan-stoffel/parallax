@@ -144,7 +144,7 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
             type="button"
             aria-label="Close"
             onClick={() => menu.current?.hidePopover()}
-            className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-[18px]"
+            className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
           >
             <Close aria-hidden />
           </button>
@@ -203,7 +203,7 @@ function ExtensionRow({
 }) {
   const moreId = useId();
   const rowButton =
-    "grid size-7 shrink-0 place-items-center rounded-md hover:bg-hover [&_svg]:size-[18px]";
+    "grid size-7 shrink-0 place-items-center rounded-md hover:bg-hover [&_svg]:size-4";
   return (
     <div className="flex items-center gap-0.5 rounded-md hover:bg-hover">
       <button
@@ -213,9 +213,9 @@ function ExtensionRow({
         className="flex h-9 min-w-0 flex-1 items-center gap-3 pl-2.5 text-left text-body"
       >
         {extension.icon ? (
-          <img src={extension.icon} alt="" className="size-[18px] shrink-0" />
+          <img src={extension.icon} alt="" className="size-4 shrink-0" />
         ) : (
-          <Extension aria-hidden className="size-[18px] shrink-0 text-muted-foreground" />
+          <Extension aria-hidden className="size-4 shrink-0 text-muted-foreground" />
         )}
         <span className="truncate">{extension.name}</span>
       </button>

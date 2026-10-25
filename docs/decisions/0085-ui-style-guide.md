@@ -1,4 +1,4 @@
-# 0085: One font, one type scale, one radius scale, and a black dark theme
+# 0085: One font, one type scale, one radius scale, one icon family, and a black dark theme
 
 - Status: accepted; supersedes [0083](0083-project-surfaces.md)'s Sora for headings
 - Date: 2026-10-25
@@ -54,6 +54,19 @@ The same kind of text is the same size and weight everywhere:
 | `rounded-full` | | Pills, avatars, dots, round buttons |
 
 `--radius-*: initial` resets Tailwind's own here too.
+
+### Icons
+
+Every interface icon is lucide's, the browser's included, which drew Material Symbols before. A CSS rule (`index.css`) draws every lucide icon's lines at 1.5px whatever its size, since lucide's own stroke is 2 in 24 and thins and thickens with the icon. An icon given its own `strokeWidth`, such as a check in a tiny checkbox, keeps it.
+
+| Size | For |
+| --- | --- |
+| `size-3` | 12px marks: a pin, a PR's checks |
+| `size-3.5` | 14px, beside text: rows, chips, second lines |
+| `size-4` | 16px controls: buttons, menu items, the composer |
+| `size-5` | 20px large buttons and tiles |
+
+Brand logos, file-type icons, and Parallax's own marks keep their own drawing.
 
 ### Exempt
 

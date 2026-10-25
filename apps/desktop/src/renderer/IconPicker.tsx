@@ -216,7 +216,7 @@ export function IconPicker({
                   title={i.label}
                   tabIndex={i === tabStop ? 0 : -1}
                   onClick={() => choose(withGlyph(i.name))}
-                  className="grid size-8 place-items-center rounded-md hover:bg-hover aria-selected:bg-selected [&_svg]:size-4.5"
+                  className="grid size-8 place-items-center rounded-md hover:bg-hover aria-selected:bg-selected [&_svg]:size-4"
                 >
                   <i.Icon aria-hidden />
                 </button>
