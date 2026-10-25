@@ -44,14 +44,13 @@ if (node[0] < 22 || (node[0] === 22 && node[1] < 13)) {
   process.exit(1);
 }
 
-const sdk = await import("@cursor/sdk");
 const {
   Agent,
   Cursor,
   FileCredentialStore,
   InMemoryCredentialStore,
   JsonlLocalAgentStore,
-} = sdk;
+} = await import("@cursor/sdk");
 
 /** Every Cursor settings layer the Cursor CLI loads, as T3 Code passes them. */
 const SETTING_SOURCES = ["project", "user", "team", "mdm", "plugins"];
@@ -229,7 +228,7 @@ async function run() {
     const message = next;
     next = null;
     arm();
-    const outcome = await turn(agent, message, start, permission, (run) => {
+    const result = await turn(agent, message, start, permission, (run) => {
       current = run;
       // A steer that arrived while the run was starting cancels it now.
       if (run && steers.length) run.cancel().catch(() => {});
@@ -240,13 +239,12 @@ async function run() {
       emit({ type: "turnFinished", result: null });
       break;
     }
+    emit({ type: "turnFinished", result: result ?? null });
     if (steers.length) {
-      emit({ type: "turnFinished", result: outcome.result ?? null });
       next = steers.shift();
       continue;
     }
     // A plan ends the turn, as in T3 Code: the app shows it, and building it is the next message.
-    emit({ type: "turnFinished", result: outcome.result ?? null });
     emit({ type: "idle" });
     const follow = await lines.next();
     if (!follow || follow.type === "cancel") break;
@@ -333,7 +331,7 @@ async function turn(agent, message, start, permission, setRun) {
       message: result.error?.message || result.result || "the Cursor run failed",
     });
   }
-  return { result: result.result };
+  return result.result;
 }
 
 function readLines() {

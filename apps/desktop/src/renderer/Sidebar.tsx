@@ -157,7 +157,8 @@ import {
   useModHeld,
 } from "./ui";
 import { PanelResize } from "./PanelResize";
-import { lookOf, numberOf, usePullRequests, type PullRequests } from "./PullRequests";
+import { numberOf } from "./github";
+import { lookOf, usePullRequests, type PullRequests } from "./PullRequests";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
@@ -346,7 +347,7 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
 }
 
 /** A pinned folder's icon in its color (pins.ts), where a thread's repo icon goes. */
-export function FolderMark({ folder }: { folder: PinFolder }) {
+function FolderMark({ folder }: { folder: PinFolder }) {
   return (
     <Folder
       aria-hidden
@@ -777,7 +778,7 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  const projects = shown.filter((i) => i.kind === "project");
+  const projects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
   // The favorites stay in the order they're moved into (pins.ts), the rest after by name, so they
   // don't shuffle as their Projects get busy.
   const favOrder = favoriteOrder.use();
@@ -1083,9 +1084,7 @@ export function ThreadList({
     setPicked(next);
   };
   const bulk = async (action: "archive" | "snooze" | "pin") => {
-    const list = pickedItems.flatMap((i) =>
-      i.kind === "thread" ? [{ item: i, t: i.thread }] : [],
-    );
+    const list = pickedItems.map((i) => ({ item: i, t: i.thread }));
     if (!list.length) return;
     const n = plural(list.length, "thread");
     const errors: (string | undefined)[] = [];
@@ -1188,7 +1187,7 @@ export function ThreadList({
         hostId={item.host.id}
         device={many && item.host.icon ? item.host : undefined}
         title={item.title}
-        run={view.state.runs[t.id]}
+        run={item.run}
         repo={item.repo}
         attention={rowAttention(item)}
         selected={selected}
@@ -1219,9 +1218,7 @@ export function ThreadList({
         onSnooze={(until) => void snoozeUntil(item, until)}
         onPin={pinnable ? () => void pin(item) : undefined}
         onMarkUnread={
-          item.attention === "settled" &&
-          view.state.runs[t.id] &&
-          !isRunning(view.state.runs[t.id]!.status)
+          item.attention === "settled" && item.run && !isRunning(item.run.status)
             ? () => markUnread(item)
             : undefined
         }
@@ -1263,7 +1260,7 @@ export function ThreadList({
     if (item.kind !== "thread" || item.key === selectedKey) return;
     card.current?.show(el, {
       title: item.title,
-      run: item.view.state.runs[item.thread.id],
+      run: item.run,
       repo: placeOf(item),
       host: item.host,
       snoozedUntil: item.thread.snoozedUntil,
@@ -1338,7 +1335,7 @@ export function ThreadList({
   ];
   const pinOf = (i: Item & { kind: "thread" }): PinData => {
     const chosen = pinIconsNow[i.key];
-    const repo = i.repo && !i.repo.scratch ? i.repo : undefined;
+    const repo = repoOfRow(i);
     return {
       key: i.key,
       title: i.title,
@@ -1380,6 +1377,9 @@ export function ThreadList({
   const pins = pinned.flatMap((i) =>
     i.kind === "thread" && !favoriteThreads.includes(i) ? [pinOf(i)] : [],
   );
+  // Moves `key` into the favorites, last (pins.ts).
+  const favorite = (key: string) =>
+    pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key]);
   const unfavorite = (key: string) => {
     if (pinFavorites.get().includes(key))
       pinFavorites.set(pinFavorites.get().filter((k) => k !== key));
@@ -1388,11 +1388,20 @@ export function ThreadList({
     const item = byKey.get(key);
     if (item?.kind === "thread" && item.thread.pinned) void pin(item);
   };
+  // A favorite's or pin's row opens, or shows its card, by its key.
+  const openKeyed = (key: string) => {
+    const item = byKey.get(key);
+    if (item) openItem(item);
+  };
+  const restKeyed = (key: string, el: HTMLElement) => {
+    const item = byKey.get(key);
+    if (item) restCard(item)(el);
+  };
 
   const pinList = (
     <PinList
       onNewThread={onNewFolderThread}
-      onFavorite={(key) => pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key])}
+      onFavorite={favorite}
       onPlaced={unfavorite}
       onMarkUnread={(key) => {
         const item = byKey.get(key);
@@ -1400,10 +1409,7 @@ export function ThreadList({
       }}
       pins={pins}
       searching={words.length > 0}
-      onOpen={(key) => {
-        const item = byKey.get(key);
-        if (item) openItem(item);
-      }}
+      onOpen={openKeyed}
       onPinThread={(hostId, threadId) => {
         const item = byKey.get(`${hostId}/${threadId}`);
         if (item?.kind === "thread" && !item.thread.pinned && !item.thread.parent) void pin(item);
@@ -1413,10 +1419,7 @@ export function ThreadList({
         const item = byKey.get(key);
         if (item) void rename(item, title);
       }}
-      onRest={(key, el) => {
-        const item = byKey.get(key);
-        if (item) restCard(item)(el);
-      }}
+      onRest={restKeyed}
       onLeave={hideCard}
     />
   );
@@ -1619,8 +1622,7 @@ export function ThreadList({
     });
   };
   // A Project's own menu items, where its plxd allows each (0043, PLX-803).
-  const projectActions = (item: Item): FavoriteAction[] => {
-    if (item.kind !== "project") return [];
+  const projectActions = (item: Item & { kind: "project" }): FavoriteAction[] => {
     const { project, view } = item;
     const open = (what: ProjectDialog) => (square: HTMLElement) =>
       projectDialogs.current?.open(what, project, view, square);
@@ -1674,11 +1676,9 @@ export function ThreadList({
       key: p.key,
       kind: "project" as const,
       title: p.title,
-      icon: (
-        <ProjectIcon icon={p.kind === "project" ? p.project.icon : undefined} className="size-5" />
-      ),
+      icon: <ProjectIcon icon={p.project.icon} className="size-5" />,
       attention: p.attention,
-      project: p.kind === "project" ? projectStatus(p.view.state, p.runs) : undefined,
+      project: projectStatus(p.view.state, p.runs),
       selected: p.key === openKey,
       badge: modHeld && listed.indexOf(p) >= 0 && listed.indexOf(p) < 9 && (
         <RowBadge index={listed.indexOf(p)} />
@@ -1717,24 +1717,18 @@ export function ThreadList({
                     ...favoriteOrder.get().filter((k) => !keys.includes(k)),
                   ])
           }
-          onRest={(key, el) => {
-            const item = byKey.get(key);
-            if (item) restCard(item)(el);
-          }}
+          onRest={restKeyed}
           onLeave={hideCard}
-          onOpen={(key) => {
-            const item = byKey.get(key);
-            if (item) openItem(item);
-          }}
+          onOpen={openKeyed}
           onAdd={(key) => {
             forgetPin(key);
-            pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key]);
+            favorite(key);
           }}
           onPinRow={(hostId, threadId) => {
             const item = byKey.get(`${hostId}/${threadId}`);
             if (item?.kind !== "thread" || item.thread.parent) return;
             if (!item.thread.pinned) void pin(item);
-            pinFavorites.set([...pinFavorites.get().filter((k) => k !== item.key), item.key]);
+            favorite(item.key);
           }}
           onRemove={unfavorite}
         />
@@ -1879,9 +1873,7 @@ export function ThreadList({
           count={pickedItems.length}
           can={{
             snooze: pickedItems.some((i) => "threadAttention" in i.view.capabilities),
-            pin: pickedItems.some(
-              (i) => i.kind === "thread" && !i.thread.parent && "areas" in i.view.capabilities,
-            ),
+            pin: pickedItems.some((i) => !i.thread.parent && "areas" in i.view.capabilities),
           }}
           onAction={(a) => void bulk(a)}
           onClear={() => setPicked(new Set())}
@@ -2295,6 +2287,24 @@ function ScopeMenu({
     );
   };
 
+  // The All threads and No repo rows, around the repos.
+  const fixedRow = (key: "all" | "none", icon: ReactNode, name: string) => (
+    <button
+      type="button"
+      role="menuitemradio"
+      aria-checked={scope === key}
+      className={menuItem}
+      onClick={() => choose(key)}
+    >
+      {icon}
+      {name}
+      <span className={trailing}>
+        {count(needs(key))}
+        {check(scope === key)}
+      </span>
+    </button>
+  );
+
   const label = current?.name ?? "All threads";
   const title = current
     ? `Showing ${current.name}${outside ? `. ${outside} waiting elsewhere` : ""}`
@@ -2360,40 +2370,10 @@ function ScopeMenu({
           />
         </label>
         <div className="min-h-0 overflow-y-auto p-1.5">
-          {!q && (
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={scope === "all"}
-              className={menuItem}
-              onClick={() => choose("all")}
-            >
-              <Layers aria-hidden />
-              All threads
-              <span className={trailing}>
-                {count(needs("all"))}
-                {check(scope === "all")}
-              </span>
-            </button>
-          )}
+          {!q && fixedRow("all", <Layers aria-hidden />, "All threads")}
           {(repos.length > 0 || !q) && heading("Repos")}
           {repos.map(row)}
-          {!q && (
-            <button
-              type="button"
-              role="menuitemradio"
-              aria-checked={scope === "none"}
-              className={menuItem}
-              onClick={() => choose("none")}
-            >
-              <SquareDashed aria-hidden />
-              No repo
-              <span className={trailing}>
-                {count(needs("none"))}
-                {check(scope === "none")}
-              </span>
-            </button>
-          )}
+          {!q && fixedRow("none", <SquareDashed aria-hidden />, "No repo")}
           {q && repos.length === 0 && (
             <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
           )}
@@ -2659,17 +2639,23 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
   cursor: CursorLogo,
 };
 
+/** A backend's logo: its own, or a provider instance's (providers.ts). */
+export const backendLogo = (backend: string) => backendLogos[backend] ?? instanceLogo(backend);
+
 /**
- * A thread row's first line: its title, then `status`: what it asks of the user, or how long ago it
- * was prompted. Hovering or focusing the row hides the status and keeps the title clear of the
- * row's actions.
+ * A thread row's first line: `icon`, if any, its title, then `status`: what it asks of the user, or
+ * how long ago it was prompted. Hovering or focusing the row hides the status and keeps the title
+ * clear of the row's actions.
  */
 function RowHead({
+  icon,
   title,
   titleColor = "text-foreground",
   status,
   renaming = false,
 }: {
+  /** Where it is, on a one-line row. */
+  icon?: ReactNode;
   title: ReactNode;
   titleColor?: string;
   status: ReactNode;
@@ -2680,6 +2666,7 @@ function RowHead({
     <span
       className={`flex w-full items-center gap-2 ${renaming ? "" : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34"}`}
     >
+      {icon}
       <span
         data-title
         className={`min-w-0 flex-1 truncate text-body font-medium transition-colors ${titleColor}`}
@@ -2915,7 +2902,7 @@ function ThreadRow({
     editing.current = false;
     onRename(value);
   };
-  const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
+  const Logo = run?.backend ? backendLogo(run.backend) : undefined;
   // Read once, not polled: a row's state is as of when the sidebar loaded it.
   const prs = usePullRequests(hostId, run?.id, run?.pullRequests ?? [], false, false);
   const prLook = majorityLook(prs);
@@ -3019,6 +3006,8 @@ function ThreadRow({
   );
   // A rename's input can't sit in a button, so the row is a plain box while it's open.
   const Main = renaming ? "div" : "button";
+  // A one-line row leads with where it is, unless it's under its repo's heading.
+  const oneLine = look === "compact" && !nested;
   // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887), and
   // spaces it off its neighbors. An open thread holds its own draft, so neither shows while it's open.
   const rowLook = picked
@@ -3054,30 +3043,20 @@ function ThreadRow({
         }}
         className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-2"}`}
       >
-        {look === "compact" && !nested ? (
-          // One-line rows: where it is, its title, and its status.
-          <span className="flex w-full items-center gap-2 group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
-            {folder && (!repo || repo.scratch) ? (
+        <RowHead
+          icon={
+            oneLine &&
+            (folder && (!repo || repo.scratch) ? (
               <FolderMark folder={folder} />
             ) : (
               <RepoIcon repo={repo} />
-            )}
-            <span
-              data-title
-              className={`min-w-0 flex-1 truncate text-body font-medium transition-colors ${titleColor}`}
-            >
-              {titleText}
-            </span>
-            <span
-              data-status
-              className="shrink-0 text-meta text-faint-foreground group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
-            >
-              {status}
-            </span>
-          </span>
-        ) : (
-          <RowHead title={titleText} titleColor={titleColor} status={status} renaming={renaming} />
-        )}
+            ))
+          }
+          title={titleText}
+          titleColor={titleColor}
+          status={status}
+          renaming={!oneLine && renaming}
+        />
         {/* Two-line rows: the title, then where it is and its details. One-line rows keep to one
             line under a repo's heading too, and a row under its repo's heading leaves out the repo. */}
         {look !== "compact" && (!nested || hasDetails) && (
@@ -3138,7 +3117,7 @@ function ThreadRow({
         )}
       </Main>
       <div
-        className={`absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 [&_button]:cursor-pointer ${renaming && (look !== "compact" || nested) ? "hidden" : ""}`}
+        className={`absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 [&_button]:cursor-pointer ${renaming && !oneLine ? "hidden" : ""}`}
       >
         {snoozable && (
           <button
@@ -3301,8 +3280,7 @@ function ThreadRow({
               </button>
             )}
             <button type="button" role="menuitem" className={menuItem} onClick={choose(onArchive)}>
-              {thread.archived ? <ArchiveRestore aria-hidden /> : <Archive aria-hidden />}
-              {thread.archived ? "Unarchive" : "Archive"}
+              {mainLabel}
               <MenuKey>E</MenuKey>
             </button>
             {onFork && run && (
@@ -3568,7 +3546,7 @@ function ThreadCard({
   top: number;
   left: number;
 }) {
-  const Logo = run?.backend ? (backendLogos[run.backend] ?? instanceLogo(run.backend)) : undefined;
+  const Logo = run?.backend ? backendLogo(run.backend) : undefined;
   const look = run && (statusLooks[run.status] ?? statusLooks.completed!);
   return (
     <div

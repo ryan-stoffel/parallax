@@ -10,7 +10,7 @@ export type Mode = "light" | "dark";
 export type Tokens = Record<string, string>;
 
 /** One color theme, converted. */
-export interface AddedTheme {
+interface AddedTheme {
   id: string;
   name: string;
   mode: Mode;
@@ -413,7 +413,7 @@ const vscodeKeys: Record<string, string> = {
  * Whether `value` is a color CSS reads, kept to one plain value (a hex, a name, or one function
  * like rgb() or oklch()), so it can't end its declaration in the CSS it goes into.
  */
-export const isCssColor = (value: unknown): value is string =>
+const isCssColor = (value: unknown): value is string =>
   typeof value === "string" &&
   /^(#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})|[a-z-]+(\([^;{}()]*\))?)$/i.test(value.trim()) &&
   (globalThis.CSS?.supports("color", value) ?? true);
@@ -475,34 +475,39 @@ export const addExtension = (extension: AddedExtension) =>
 
 export const removeExtension = (id: string) => added.set(added.get().filter((e) => e.id !== id));
 
-/** Parallax's own tokens for each mode, as index.css's .scheme-light and .scheme-dark set them. */
+/** The tokens `names` in Parallax's own `mode`, as index.css's .scheme-light or .scheme-dark sets them. */
+export function schemeTokens(mode: Mode, names: string[]): Tokens {
+  const probe = document.createElement("span");
+  probe.className = `scheme-${mode}`;
+  document.body.append(probe);
+  const style = getComputedStyle(probe);
+  const tokens = Object.fromEntries(
+    names.map((name) => [name, style.getPropertyValue(name).trim()]),
+  );
+  probe.remove();
+  return tokens;
+}
+
+/** The tokens `tokensOf` falls back on. */
+const fallbackNames = [
+  "--background",
+  "--foreground",
+  "--accent",
+  "--danger",
+  "--warning",
+  "--added",
+  "--syntax-keyword",
+  "--syntax-string",
+  "--syntax-number",
+  "--syntax-title",
+  "--syntax-type",
+  "--syntax-comment",
+  ...["red", "orange", "yellow", "green", "teal", "sky", "violet", "pink", "gray"].map(
+    (c) => `--project-${c}`,
+  ),
+];
+
+/** Parallax's own tokens for each mode, the ones `tokensOf` falls back on. */
 export function parallaxTokens(): Record<Mode, Tokens> {
-  const read = (mode: Mode) => {
-    const probe = document.createElement("span");
-    probe.className = `scheme-${mode}`;
-    document.body.append(probe);
-    const style = getComputedStyle(probe);
-    const tokens: Tokens = {};
-    for (const name of [
-      "--background",
-      "--foreground",
-      "--accent",
-      "--danger",
-      "--warning",
-      "--added",
-      "--syntax-keyword",
-      "--syntax-string",
-      "--syntax-number",
-      "--syntax-title",
-      "--syntax-type",
-      "--syntax-comment",
-      ...["red", "orange", "yellow", "green", "teal", "sky", "violet", "pink", "gray"].map(
-        (c) => `--project-${c}`,
-      ),
-    ])
-      tokens[name] = style.getPropertyValue(name).trim();
-    probe.remove();
-    return tokens;
-  };
-  return { light: read("light"), dark: read("dark") };
+  return { light: schemeTokens("light", fallbackNames), dark: schemeTokens("dark", fallbackNames) };
 }

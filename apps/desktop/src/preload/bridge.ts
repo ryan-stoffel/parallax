@@ -23,8 +23,7 @@ export type ThemePreference = (typeof THEME_PREFERENCES)[number];
  * Where the top bar's Open button opens a folder: an editor, the OS's file manager, or the
  * terminal app chosen in Settings.
  */
-export const OPEN_TARGETS = ["cursor", "vscode", "files", "terminal"] as const;
-export type OpenTarget = (typeof OPEN_TARGETS)[number];
+export type OpenTarget = "cursor" | "vscode" | "files" | "terminal";
 /**
  * The `parallax` command at `path`: this app's (`installed`), one for a plxd that moved or changed
  * (`stale`), none (`missing`), something else named `parallax` (`other`), or none to offer from
@@ -542,10 +541,10 @@ export type TerminalTarget =
  * What Add computer sets up with `plx-connect add` (0056): a Tailscale IP, an ssh user, and with
  * `headless`, plxd alone, without the app.
  */
-export type ConnectAdd = { device: string; user?: string; headless?: boolean };
+type ConnectAdd = { device: string; user?: string; headless?: boolean };
 
 /** How an ACP Registry agent is run with `npx` or `uvx`: a package, pinned to its version. */
-export type RegistryPackage = { package: string; args?: string[]; env?: Record<string, string> };
+type RegistryPackage = { package: string; args?: string[]; env?: Record<string, string> };
 
 /**
  * An agent in the ACP Registry (cdn.agentclientprotocol.com/registry/v1), as main passes it on.

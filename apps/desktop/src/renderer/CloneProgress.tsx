@@ -14,18 +14,9 @@ export function parseProgress(line: string): { phase: string; percent?: number; 
 
 /**
  * A clone under way (PLX-905): `title`, then a bar with git's phase and percent from `line`, its
- * latest progress line. With no line yet the bar pulses. `cloning` false, while a repository is
- * only being added, shows the title alone.
+ * latest progress line. With no line yet the bar pulses.
  */
-export function CloneProgress({
-  title,
-  line,
-  cloning = true,
-}: {
-  title: string;
-  line?: string;
-  cloning?: boolean;
-}) {
+export function CloneProgress({ title, line }: { title: string; line?: string }) {
   const progress = line ? parseProgress(line) : undefined;
   const percent = progress?.percent;
   return (
@@ -40,20 +31,16 @@ export function CloneProgress({
           <span className="text-muted-foreground tabular-nums">{percent}%</span>
         )}
       </div>
-      {cloning && (
-        <>
-          <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-hover">
-            <div
-              className={`h-full rounded-full bg-accent transition-[width] duration-500 ${percent === undefined ? "w-1/4 animate-pulse" : ""}`}
-              style={percent === undefined ? undefined : { width: `${percent}%` }}
-            />
-          </div>
-          <div className="mt-1.5 flex justify-between gap-3 text-meta text-muted-foreground">
-            <span className="truncate">{progress?.phase ?? "Connecting…"}</span>
-            {progress?.detail && <span className="shrink-0 tabular-nums">{progress.detail}</span>}
-          </div>
-        </>
-      )}
+      <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-hover">
+        <div
+          className={`h-full rounded-full bg-accent transition-[width] duration-500 ${percent === undefined ? "w-1/4 animate-pulse" : ""}`}
+          style={percent === undefined ? undefined : { width: `${percent}%` }}
+        />
+      </div>
+      <div className="mt-1.5 flex justify-between gap-3 text-meta text-muted-foreground">
+        <span className="truncate">{progress?.phase ?? "Connecting…"}</span>
+        {progress?.detail && <span className="shrink-0 tabular-nums">{progress.detail}</span>}
+      </div>
     </div>
   );
 }

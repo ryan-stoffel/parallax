@@ -101,7 +101,7 @@ function folderOf(hostId: string, runId: string): Promise<string | undefined> {
  * The file `path` names in thread `runId`'s folder on `hostId`, or undefined when it's outside it.
  * Rejects, saying why, when an absolute path's folder can't be read.
  */
-export async function linkedFile(
+async function linkedFile(
   hostId: string,
   runId: string,
   path: string,
@@ -112,8 +112,7 @@ export async function linkedFile(
   return { runId, path: inside, name, kind: kindOf(name) };
 }
 
-export const outsideFolder =
-  "This file is outside the thread's folder, so it can't be opened here.";
+const outsideFolder = "This file is outside the thread's folder, so it can't be opened here.";
 
 /**
  * In a transcript, what opens a file the agent named: in the side panel, as a presented file's
@@ -221,7 +220,6 @@ function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: s
             <Lightbox
               images={[{ src: url, name: doc.name }]}
               index={0}
-              onIndex={() => {}}
               onClose={() => setShown(false)}
               onDownload={() => loaded && download(doc.name, loaded.bytes)}
             />

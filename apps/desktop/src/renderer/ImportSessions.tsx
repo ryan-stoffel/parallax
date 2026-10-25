@@ -139,7 +139,7 @@ export function ImportSessions({ className = "" }: { className?: string }) {
  * lists its chats as `ImportSessions` lists sessions, to import as archived threads with no repo
  * (`thread/importChat`, `thread/importedChats`).
  */
-export function ImportChats({ className = "" }: { className?: string }) {
+function ImportChats({ className = "" }: { className?: string }) {
   const { supported, why, providers } = useImport("chatImport");
   const [chats, setChats] = useState<ExportedChat[]>();
   const [file, setFile] = useState<string>();
@@ -150,13 +150,13 @@ export function ImportChats({ className = "" }: { className?: string }) {
 
   // Which of `list` are imported. Throws, in words, when plxd can't say, so no chat is marked by
   // another export's answer.
-  const refresh = useCallback(async (list: ExportedChat[]) => {
+  const refresh = async (list: ExportedChat[]) => {
     const answer = await window.parallax.request(localId, "thread/importedChats", {
       chats: list.map(({ source, id, createdAt }) => ({ source, id, createdAt })),
     });
     if ("error" in answer) throw new Error(describeError(answer.error));
     setThreads(answer.result.threads);
-  }, []);
+  };
   const open = async (picked: File[]) => {
     if (!picked.length) return;
     setReading(true);
@@ -557,7 +557,6 @@ function SessionRow({
   disabled: boolean;
   onToggle: (on: boolean) => void;
 }) {
-  const folder = s.folder;
   return (
     <li>
       <label
@@ -593,10 +592,10 @@ function SessionRow({
             {s.title}
           </span>
           <span className="flex items-center gap-1 truncate text-meta text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
-            {folder && (
+            {s.folder && (
               <>
                 <Folder aria-hidden />
-                <span className="truncate">{folder}</span>
+                <span className="truncate">{s.folder}</span>
                 <span aria-hidden>·</span>
               </>
             )}

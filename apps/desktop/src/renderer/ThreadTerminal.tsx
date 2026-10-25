@@ -14,7 +14,7 @@ const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.T
 export type ThreadFolder = { key: string; hostId: string; path: string; threadId?: string };
 
 /** The `path` of a host's home folder, which main resolves, since the app can't know it. */
-export const homePath = "~";
+const homePath = "~";
 
 /**
  * Thread `threadId`'s folder: its own worktree, or a Current checkout thread's repository
@@ -41,8 +41,8 @@ export function folderOf(
   return repo && folderOf(hostId, state, { repoId: repo.id });
 }
 
-/** The terminal id of a folder's first drawer tab, to type or run a command in it with `terminalInput`. */
-export const drawerTerminalId = (folder: ThreadFolder) => `drawer:${folder.key}`;
+/** The terminal id of a folder's first drawer tab. */
+const drawerTerminalId = (folder: ThreadFolder) => `drawer:${folder.key}`;
 
 /** The terminal id of a folder's drawer tab `n`. */
 const tabTerminalId = (folder: ThreadFolder, n: number) =>

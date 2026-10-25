@@ -317,7 +317,7 @@ export function App() {
     () => hosts.map((h) => ({ host: h, view: views[h.id] ?? idleThreads })),
     [hosts, views],
   );
-  const { groups } = groupThreads(threads.state);
+  const groups = groupThreads(threads.state);
   const pinFolders = pinLayout.use().folders;
   // The pinned folder New Thread starts in, from that folder's New thread (pins.ts).
   const startId = startIn.use();
@@ -330,7 +330,7 @@ export function App() {
   const startConnected = useConnection(startPref)?.status === "connected";
   const start = (startConnected && hosts.find((h) => h.id === startPref)) || host;
   const startState = (views[start.id] ?? idleThreads).state;
-  const startGroups = start.id === host.id ? groups : groupThreads(startState).groups;
+  const startGroups = start.id === host.id ? groups : groupThreads(startState);
   const startElsewhere = useMemo(
     () => otherRepos(hosts, views, start.id),
     [hosts, views, start.id],
@@ -591,7 +591,7 @@ export function App() {
       setNative((prev) => ({ ...prev, [threadId]: list })),
     [],
   );
-  const subagents = (openThread && native[openThread.id]) || ([] as NativeSubagent[]);
+  const subagents = (openThread && native[openThread.id]) || [];
   const openSubagent = useCallback(
     (threadId: string, callId?: string) =>
       setSelection({ kind: "thread", threadId, subagent: callId }),
@@ -737,7 +737,7 @@ export function App() {
       shown.current.hostId !== before.hostId ||
       shown.current.selection !== before.selection;
     const view = views[id] ?? idleThreads;
-    let groupId = groupThreads(view.state).groups.find((g) => g.name === group.name)?.id;
+    let groupId = groupThreads(view.state).find((g) => g.name === group.name)?.id;
     const source = threads.state.repos.find((r) => r.id === group.id);
     let moved: Repo | undefined;
     if (!repoless(group) && source && (at || lacksRepo(view, group.name))) {
@@ -1108,8 +1108,6 @@ export function App() {
       <PanelLeftOpen />
     </IconButton>
   );
-  // The side panel is a chat's, so Settings has none.
-  const chat = !settings;
   const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
   const [requestedWidths, setRequestedWidths] = useState<[number, number]>([288, 416]);
   useEffect(() => {
@@ -1117,7 +1115,8 @@ export function App() {
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
-  const sidePanelOpen = pane !== undefined && chat;
+  // The side panel is a chat's, so Settings has none.
+  const sidePanelOpen = pane !== undefined && !settings;
   const expanded = sidePanelOpen && panelExpanded;
   const [leftWidth, rightWidth] = panelWidths(
     viewportWidth,
@@ -1231,15 +1230,9 @@ export function App() {
             }}
             onOpenProject={openProject}
             onOpenSettings={openSettings}
-            onOpenPullRequests={() => {
-              setSettings(null);
-              setMainPage("pullRequests");
-            }}
+            onOpenPullRequests={() => openMainPage("pullRequests")}
             browserOpen={!settings && mainPage === "browser"}
-            onOpenBrowser={() => {
-              setSettings(null);
-              setMainPage("browser");
-            }}
+            onOpenBrowser={() => openMainPage("browser")}
             onDelete={deleteThread}
             addDialog={addDialog}
             onNewThread={() => picker.current?.showModal()}
@@ -1303,7 +1296,7 @@ export function App() {
                     command="back"
                     disabled={stepTo(-1) === undefined}
                     onClick={() => step(-1)}
-                    className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-35 [&_svg]:size-4"
+                    className={stepButton}
                   >
                     <ChevronLeft />
                   </IconButton>
@@ -1312,7 +1305,7 @@ export function App() {
                     command="forward"
                     disabled={stepTo(1) === undefined}
                     onClick={() => step(1)}
-                    className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-35 [&_svg]:size-4"
+                    className={stepButton}
                   >
                     <ChevronRight />
                   </IconButton>
@@ -1541,10 +1534,7 @@ export function App() {
                       local={host.id === localId}
                       addRepo={threads.addRepo}
                       start={threads.start}
-                      runOptions={
-                        connection?.status === "connected" &&
-                        "runOptions" in connection.capabilities
-                      }
+                      runOptions={connected && "runOptions" in connection.capabilities}
                       onStarted={(threadId, background) => {
                         // Started from a pinned folder's New thread: pinned there (pins.ts).
                         if (fileStarted(`${host.id}/${threadId}`))
@@ -1857,6 +1847,9 @@ export function App() {
   );
   return <SharedRepoIcons value={repoIcons}>{page}</SharedRepoIcons>;
 }
+
+const stepButton =
+  "grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-35 [&_svg]:size-4";
 
 /**
  * A side of the split's header, like a tab: its repository's icon, its title, its Focus left or

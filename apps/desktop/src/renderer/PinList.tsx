@@ -33,7 +33,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { Attention } from "./attention";
+import { mostUrgent, type Attention } from "./attention";
 import { DoneMark, WorkingMark } from "./AttentionMark";
 import { IconPicker } from "./IconPicker";
 import { iconColors } from "./projectIcons";
@@ -63,7 +63,7 @@ import {
 } from "./pins";
 import type { FavoriteAction } from "./Favorites";
 import { MenuKey } from "./Sidebar";
-import { shownRows, Tick } from "./SidebarParts";
+import { close, shownRows, Tick } from "./SidebarParts";
 import { dragThread, draggedThread, threadDragType } from "./threadDrag";
 import { Menu, menuHeading, menuItem, openOnContextMenu } from "./ui";
 
@@ -90,8 +90,6 @@ type Folder = Extract<PinEntry, { kind: "folder" }>;
 
 const news = (a: Attention) => a === "done" || a === "failed" || a === "needsYou";
 const busy = (a: Attention) => a === "working" || a === "monitoring" || a === "waiting";
-const urgency: Attention[] = ["needsYou", "failed", "done", "working", "monitoring", "waiting"];
-const topOf = (pins: Pin[]) => urgency.find((a) => pins.some((p) => p.attention === a));
 const reduced = () => document.documentElement.classList.contains("reduce-motion");
 const tinted = (tint: string) => ({ "--tint": tint }) as CSSProperties;
 // A folder's colors: the icons' palette, with no color, faint, in place of the accent.
@@ -283,7 +281,7 @@ export function PinList({
         const pin = draggedPin();
         if (isPinDrag(e) && pin) {
           place(pin.key);
-          onPlaced?.(pin.key);
+          onPlaced(pin.key);
         } else pinRow(e, place);
         endDrag();
       },
@@ -426,7 +424,7 @@ export function PinList({
         const pin = draggedPin();
         if (isPinDrag(e) && pin) {
           moveToEnd(entries, pin.key);
-          onPlaced?.(pin.key);
+          onPlaced(pin.key);
         } else pinRow(e);
         endDrag();
       }}
@@ -749,12 +747,6 @@ function rowNav(e: ReactKeyboardEvent<HTMLElement>) {
   next.scrollIntoView({ block: "nearest" });
 }
 
-/** Runs `then` after closing the menu it's in. */
-const close = (then: () => void) => (e: { currentTarget: HTMLElement }) => {
-  e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
-  then();
-};
-
 // A row's surface: with something dragged into it, open, at rest, or its name being edited.
 const plainSurface = {
   target:
@@ -990,7 +982,7 @@ function FolderItem({
   onDrop: (e: DragEvent) => void;
 }) {
   const more = useRef<HTMLButtonElement>(null);
-  const top = topOf(pins);
+  const top = mostUrgent(pins.map((p) => p.attention));
   const bold = pins.some((p) => news(p.attention));
   const icon = (
     <span className="grid size-4 shrink-0 place-items-center text-[color-mix(in_srgb,var(--tint)_80%,var(--foreground))] [&_svg]:size-4">
@@ -1034,9 +1026,9 @@ function FolderItem({
       <span
         className={`flex shrink-0 items-center gap-1 text-meta text-faint-foreground tabular-nums ${hideOnHover}`}
       >
-        {top && news(top) ? (
+        {news(top) ? (
           <Status attention={top} words />
-        ) : top && busy(top) ? (
+        ) : busy(top) ? (
           <Status attention={top} />
         ) : (
           pins.length > 0 && <Tick value={pins.length} />

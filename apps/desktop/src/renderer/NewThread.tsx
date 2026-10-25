@@ -32,8 +32,6 @@ import { ariaKeyshortcut, bindingsOf, useShortcutLabel } from "./keybindings";
 import { Picker } from "./ui";
 import { uuidv7 } from "./uuidv7";
 
-export { accountOptions, type AccountOption };
-
 // The picker's value that opens the folder picker instead of choosing a group.
 const addRepository = "add-repository";
 // The picker's value for another computer's repository: entry ids are only unique per computer.
@@ -145,6 +143,7 @@ export function NewThread({
     };
   }, [hostId, runOptions]);
   const connection = useConnection(hostId);
+  const connected = connection?.status === "connected";
   // Open while the host needs an account for the failed start.
   const [choices, setChoices] = useState<AccountOption[]>();
   const [picked, setPicked] = useState(0);
@@ -191,13 +190,10 @@ export function NewThread({
   // Only a repository has a checkout, and only a plxd that takes `checkout` would use it: an
   // older one would make a worktree anyway.
   const checkoutUnavailable =
-    connection?.status === "connected" && !("checkout" in connection.capabilities)
-      ? "needs a newer plxd"
-      : undefined;
+    connected && !("checkout" in connection.capabilities) ? "needs a newer plxd" : undefined;
   const checkout = workspace === "checkout" && !checkoutUnavailable && !repoless(group);
   // Only a plxd with `repoRefs` lists refs or starts from one, and only a repository has them.
-  const refsAvailable =
-    !repoless(group) && connection?.status === "connected" && "repoRefs" in connection.capabilities;
+  const refsAvailable = !repoless(group) && connected && "repoRefs" in connection.capabilities;
   // The picked ref, kept with its repository and workspace, so picking another drops it: a new
   // worktree's base never becomes a checkout's switch.
   const [pickedRef, setPickedRef] = useState<{ groupId: string; checkout: boolean; ref: string }>();
@@ -506,12 +502,11 @@ export function NewThread({
                   ?
                 </h1>
                 {/* Without a repo, an empty line in its place, so the box doesn't move. */}
-                {repoless(group) && (
+                {repoless(group) ? (
                   <div aria-hidden className="invisible mb-9 text-reading">
                     &nbsp;
                   </div>
-                )}
-                {!repoless(group) && (
+                ) : (
                   <div className="relative mb-9 text-center">
                     {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
                     <button
@@ -592,25 +587,19 @@ export function NewThread({
           attach={attachThreads(connection, threadLinks)}
           backend={runOptions ? backend : undefined}
           hostId={hostId}
-          connected={connection?.status === "connected"}
-          contextAndFast={
-            connection?.status === "connected" && "contextAndFast" in connection.capabilities
-          }
+          connected={connected}
+          contextAndFast={connected && "contextAndFast" in connection.capabilities}
           disabledReason={disabledReason}
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
           menus={
-            connection?.status === "connected" && "composerMenus" in connection.capabilities
+            connected && "composerMenus" in connection.capabilities
               ? { hostId, repo: group.id === noRepo || group.space ? undefined : group.id }
               : undefined
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           noAccess={group.space}
-          manualDenied={
-            connection?.status === "connected" && !("approvals" in connection.capabilities)
-              ? "host"
-              : undefined
-          }
+          manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
           // No Repo picks only its computer here, and a Space nothing, since its entry is on this
           // computer alone. While a start is under way it stays as it was, but inert, so the thread
           // can't move. `contents` keeps the tab's own layout.

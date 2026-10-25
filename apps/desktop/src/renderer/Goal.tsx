@@ -1,7 +1,5 @@
 import { Target } from "lucide-react";
 
-export { pursuedGoal } from "./transcript";
-
 /**
  * The goal the run is working toward, above the composer while it runs. `compact` names it only in
  * its tooltip, for a place beside other tabs.

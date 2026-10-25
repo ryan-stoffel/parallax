@@ -6,8 +6,6 @@ import { notify } from "./notifications";
 import { menuPanel, popoverBeside } from "./ui";
 import { presentWaiting } from "./waiting";
 
-export { presentWaiting, type WaitingPresentation } from "./waiting";
-
 /**
  * What a thread's settled agent still waits on, tucked over its composer as T3 Code's strip is
  * (PLX-777): one line naming its background tasks, such as a Monitor, and the pull requests plxd

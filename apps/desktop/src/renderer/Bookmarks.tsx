@@ -63,7 +63,7 @@ function parseNodes(raw: unknown): BookmarkNode[] {
   });
 }
 
-export const bookmarks = stored<BookmarkNode[]>("parallax.bookmarks", [], (raw) => parseNodes(raw));
+export const bookmarks = stored<BookmarkNode[]>("parallax.bookmarks", [], parseNodes);
 
 /** Whether the bookmarks bar shows, while there are bookmarks. */
 export const bookmarksBar = stored<boolean>("parallax.bookmarksBar", true, (raw, fallback) =>
@@ -128,8 +128,7 @@ function changed(
 const isUrl = (url: string) => (node: BookmarkNode) => !isFolder(node) && node.url === url;
 const isId = (id: string) => (node: BookmarkNode) => isFolder(node) && node.id === id;
 
-export const removedBookmark = (nodes: readonly BookmarkNode[], url: string) =>
-  without(nodes, isUrl(url));
+const removedBookmark = (nodes: readonly BookmarkNode[], url: string) => without(nodes, isUrl(url));
 
 /** `nodes` without folder `id` and everything in it. */
 export const removedFolder = (nodes: readonly BookmarkNode[], id: string) =>
@@ -168,10 +167,10 @@ export function withFolder(
   return [inserted(nodes, parent, { id, title, children: [] }), id];
 }
 
-export const renamedBookmark = (nodes: readonly BookmarkNode[], url: string, title: string) =>
+const renamedBookmark = (nodes: readonly BookmarkNode[], url: string, title: string) =>
   changed(nodes, isUrl(url), (node) => ({ ...node, title }));
 
-export const renamedFolder = (nodes: readonly BookmarkNode[], id: string, title: string) =>
+const renamedFolder = (nodes: readonly BookmarkNode[], id: string, title: string) =>
   changed(nodes, isId(id), (node) => ({ ...node, title }));
 
 /**
@@ -217,12 +216,6 @@ export function folderList(
   );
 }
 
-// Opens a popover beside `source`, which the app's popovers are positioned against.
-function openBeside(popover: HTMLElement | null, source: HTMLElement | null | undefined) {
-  // The DOM types don't know showPopover's `source` yet.
-  const opener = popover as { showPopover(options?: { source?: HTMLElement }): void } | null;
-  opener?.showPopover(source ? { source } : undefined);
-}
 const closePopover = (e: { currentTarget: HTMLElement }) =>
   e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
 
@@ -527,7 +520,10 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
   const edit = (of: Target) => {
     setEditing(of);
     const chip = chips.current.get(keyOf(of)) ?? anchor.current;
-    openBeside(document.getElementById(of.url ? editorId : folderEditorId), chip);
+    // Beside the chip, which the app's popovers are positioned against.
+    document
+      .getElementById(of.url ? editorId : folderEditorId)
+      ?.showPopover(chip ? { source: chip } : undefined);
   };
   const addFolder = () => {
     const [next, id] = withFolder(bookmarks.get(), "New folder");
@@ -625,22 +621,20 @@ export function BookmarksBar({ onOpen }: { onOpen: (url: string, newTab: boolean
       </Menu>
       {createPortal(
         <Themed>
-          <>
-            <BookmarkEditor id={editorId} url={editing.url} title="Edit bookmark" />
-            <FolderEditor id={folderEditorId} folderId={editing.folder} onDelete={deleteFolder} />
-            <ConfirmDialog
-              ref={confirm}
-              title="Delete this folder?"
-              action="Delete folder"
-              onConfirm={() => {
-                if (deleting) bookmarks.set(removedFolder(bookmarks.get(), deleting.id));
-                confirm.current?.close();
-              }}
-            >
-              Its {deleting?.count === 1 ? "bookmark goes" : `${deleting?.count} bookmarks go`} with
-              it.
-            </ConfirmDialog>
-          </>
+          <BookmarkEditor id={editorId} url={editing.url} title="Edit bookmark" />
+          <FolderEditor id={folderEditorId} folderId={editing.folder} onDelete={deleteFolder} />
+          <ConfirmDialog
+            ref={confirm}
+            title="Delete this folder?"
+            action="Delete folder"
+            onConfirm={() => {
+              if (deleting) bookmarks.set(removedFolder(bookmarks.get(), deleting.id));
+              confirm.current?.close();
+            }}
+          >
+            Its {deleting?.count === 1 ? "bookmark goes" : `${deleting?.count} bookmarks go`} with
+            it.
+          </ConfirmDialog>
         </Themed>,
         document.body,
       )}

@@ -103,26 +103,24 @@ export function ProjectChat({
     <>
       <CheckoutLabel host={host} checkout />
       {pickBase ? (
-        <>
-          <RefMenu
-            hostId={hostId}
-            repo={repo}
-            checkout
-            value={branch}
-            onChange={(baseBranch) =>
-              void updateProject(project.id, { baseBranch }).then(
-                (error) =>
-                  error &&
-                  notify({
-                    key: `base-branch/${project.id}`,
-                    tone: "error",
-                    title: "Couldn't change the base branch",
-                    body: error,
-                  }),
-              )
-            }
-          />
-        </>
+        <RefMenu
+          hostId={hostId}
+          repo={repo}
+          checkout
+          value={branch}
+          onChange={(baseBranch) =>
+            void updateProject(project.id, { baseBranch }).then(
+              (error) =>
+                error &&
+                notify({
+                  key: `base-branch/${project.id}`,
+                  tone: "error",
+                  title: "Couldn't change the base branch",
+                  body: error,
+                }),
+            )
+          }
+        />
       ) : (
         branch && (
           <span className={tabItem} title={branch}>
@@ -172,20 +170,18 @@ export function ProjectChat({
 
   if (project.coordinator)
     return (
-      <>
-        <AgentChat
-          key={project.coordinator}
-          hostId={hostId}
-          runId={project.coordinator}
-          prompt={prompt}
-          going={started === project.coordinator}
-          tab={tab}
-          strip={bar}
-          others={others}
-          projectMode={project.permission}
-          threadLinks={threadLinks}
-        />
-      </>
+      <AgentChat
+        key={project.coordinator}
+        hostId={hostId}
+        runId={project.coordinator}
+        prompt={prompt}
+        going={started === project.coordinator}
+        tab={tab}
+        strip={bar}
+        others={others}
+        projectMode={project.permission}
+        threadLinks={threadLinks}
+      />
     );
 
   // The first message starts the coordinator. One sent while it starts waits for it, then goes

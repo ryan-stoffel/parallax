@@ -10,7 +10,7 @@ import { statusLabel, useConnection } from "../ConnectionStatus";
 import { localId, useHosts, type Host } from "../hosts";
 import { dismiss, notify } from "../notifications";
 import {
-  dangerButton,
+  ConfirmRemove,
   primaryButton,
   quietButton,
   Row,
@@ -229,25 +229,11 @@ export function LanSettings() {
                   : `On the relay${h.thisComputer ? ", this computer" : ""}. ${h.online ? "Connected." : "Not connected."}`
               }
             >
-              {/* Cancel takes Remove's place and focus, so a double click can't remove. */}
               {confirmingRelay === h.hostId ? (
-                <>
-                  <button
-                    type="button"
-                    className={dangerButton}
-                    onClick={() => void removeRelayHost(h.hostId)}
-                  >
-                    Remove
-                  </button>
-                  <button
-                    type="button"
-                    autoFocus
-                    className={quietButton}
-                    onClick={() => setConfirmingRelay(undefined)}
-                  >
-                    Cancel
-                  </button>
-                </>
+                <ConfirmRemove
+                  onRemove={() => void removeRelayHost(h.hostId)}
+                  onCancel={() => setConfirmingRelay(undefined)}
+                />
               ) : (
                 <button
                   type="button"

@@ -35,8 +35,8 @@ import { DownloadsButton } from "./Downloads";
 import { HistoryDialog } from "./HistoryDialog";
 import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, type Fit, type Size } from "./PageFrame";
-import { backendLogos } from "./Sidebar";
-import { instanceLogo, instanceName } from "./providers";
+import { backendLogo } from "./Sidebar";
+import { instanceName } from "./providers";
 import { memory, stored } from "./stored";
 import {
   Add,
@@ -138,7 +138,7 @@ export function nextZoom(factor: number, direction: 1 | -1): number {
 }
 
 /** How a browser lays out its bar, as Helium does (PLX-966): all in one row, or tabs over a toolbar. */
-export type BrowserLayout = "compact" | "classic";
+type BrowserLayout = "compact" | "classic";
 export const browserLayout = stored<BrowserLayout>("parallax.browserLayout", "compact", (raw, f) =>
   raw === "compact" || raw === "classic" ? raw : f,
 );
@@ -335,9 +335,6 @@ export function Browser({
     setCurrent(tab.id);
     setAgentTab(undefined);
   };
-  // Closing the last own tab shows the agent's tab before it, as Chrome shows a neighbor. With no
-  // agent tab either, it hides the browser, as Chrome closes its window, and leaves a blank tab for
-  // when it shows again.
   // The pages of the tabs closed here, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
   const closed = useRef<string[]>([]);
   // History (PLX-976), one for the browser, which any of its tabs opens.
@@ -347,6 +344,9 @@ export function Browser({
     closed.current = closed.current.slice(0, -1);
     if (page) newTab(page, current);
   };
+  // Closing the last own tab shows the agent's tab before it, as Chrome shows a neighbor. With no
+  // agent tab either, it hides the browser, as Chrome closes its window, and leaves a blank tab for
+  // when it shows again.
   const close = (id: number) => {
     const at = tabs.findIndex((t) => t.id === id);
     const page = tabs[at]?.url;
@@ -539,7 +539,7 @@ const driverOf = (backend?: string): Driver =>
   backend
     ? {
         name: backendNames[backend] ?? instanceName(backend) ?? "The agent",
-        Logo: backendLogos[backend] ?? instanceLogo(backend),
+        Logo: backendLogo(backend),
       }
     : { name: "The agent" };
 
@@ -562,7 +562,7 @@ function askSiteIcon(site: string) {
 }
 
 /** A browser tab as its top bar draws it: its key is `a:` and an agent tab's id, or `o:` and an own tab's. */
-export interface BrowserTabFace {
+interface BrowserTabFace {
   key: string;
   title: string;
   url?: string;
@@ -572,7 +572,7 @@ export interface BrowserTabFace {
 }
 
 /** A scope's browser tabs, which tab is in front, and what its top bar's buttons do. */
-export interface BrowserTabs {
+interface BrowserTabs {
   tabs: BrowserTabFace[];
   selected: string;
   select: (key: string) => void;
@@ -581,7 +581,7 @@ export interface BrowserTabs {
 }
 
 /** Each browser's tabs, by its scope: a side panel's, or `permanent`. */
-export const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
+const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
 
 /**
  * One of the user's own tabs: back, forward, reload or stop, a loading bar, and an address bar
@@ -659,7 +659,6 @@ function Tab({
     pageFit.set(next);
     setFixed(undefined);
   };
-  // The latest callbacks, for the webview's listeners, which mount once per page.
   // Find in page (PLX-969): whether the bar is open, its text, and the match in front of how many.
   const [finding, setFinding] = useState(false);
   const [query, setQuery] = useState("");
@@ -702,6 +701,7 @@ function Tab({
     } else return false;
     return true;
   };
+  // The latest callbacks, for the webview's listeners, which mount once per page.
   const latest = useRef({ onChange, ask, local, shown, focusOnLoad });
   latest.current = { onChange, ask, local, shown, focusOnLoad };
   // Whether the page has taken the focus it's due on load: its first, and again after each page

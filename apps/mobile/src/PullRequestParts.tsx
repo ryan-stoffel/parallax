@@ -71,7 +71,7 @@ const githubColors = {
   },
 };
 
-export type GitHubColors = typeof githubColors.light;
+type GitHubColors = typeof githubColors.light;
 
 /** GitHub's colors for the current appearance. */
 export const useGitHub = (): GitHubColors => githubColors[useColorScheme() === "dark" ? "dark" : "light"];
@@ -163,8 +163,6 @@ export function CardRow({
   onPress,
   expanded,
   divider = true,
-  destructive,
-  children,
 }: {
   icon: LucideIcon;
   tint?: string;
@@ -174,8 +172,6 @@ export function CardRow({
   onPress?: () => void;
   expanded?: boolean;
   divider?: boolean;
-  destructive?: boolean;
-  children?: ReactNode;
 }) {
   const c = useColors();
   const chevron = expanded === undefined ? ChevronRight : expanded ? ChevronUp : ChevronDown;
@@ -191,9 +187,9 @@ export function CardRow({
         pressed && { opacity: 0.6 },
       ]}
     >
-      <Icon icon={icon} size={18} color={destructive ? c.danger : (tint ?? c.faintForeground)} />
+      <Icon icon={icon} size={18} color={tint ?? c.faintForeground} />
       <View style={{ flex: 1, gap: 2 }}>
-        <T medium style={{ fontSize: 14, lineHeight: 19, color: destructive ? c.danger : c.foreground }}>
+        <T medium style={{ fontSize: 14, lineHeight: 19, color: c.foreground }}>
           {title}
         </T>
         {!!detail && (
@@ -202,12 +198,11 @@ export function CardRow({
           </T>
         )}
       </View>
-      {children ??
-        (!!value && (
-          <T muted numberOfLines={2} style={{ ...styles.caption, maxWidth: "40%", textAlign: "right" }}>
-            {value}
-          </T>
-        ))}
+      {!!value && (
+        <T muted numberOfLines={2} style={{ ...styles.caption, maxWidth: "40%", textAlign: "right" }}>
+          {value}
+        </T>
+      )}
       {onPress && <Icon icon={chevron} size={12} color={c.faintForeground} strokeWidth={2.4} />}
     </Pressable>
   );
@@ -317,7 +312,7 @@ export function Segmented<V extends string>({
   const c = useColors();
   const dark = useColorScheme() === "dark";
   return (
-    <View style={[styles.segments, { backgroundColor: dark ? c.surface : c.sidebar }]}>
+    <View style={[styles.segments, { backgroundColor: useCard() }]}>
       {options.map((o) => {
         const on = o.value === value;
         return (

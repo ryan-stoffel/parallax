@@ -6,7 +6,7 @@ import { ChevronRight, FileText } from "lucide-react-native";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, View } from "react-native";
 
-import type { ThreadRun, TurnDiffResult } from "../../desktop/src/protocol/generated/protocol";
+import type { ThreadRun } from "../../desktop/src/protocol/generated/protocol";
 import { fileRows, type DiffViewRow } from "./diffLogic";
 import { DiffStats } from "./PullRequestParts";
 import { font } from "./theme";
@@ -78,7 +78,7 @@ function readTurnDiff(hostId: string, threadId: string, ordinal: number): Promis
       .request(hostId, "orchestration/getTurnDiff", { threadId, from: ordinal - 1, to: ordinal })
       .then((a) => {
         if ("error" in a) throw new Error(a.error.message);
-        return (a.result as TurnDiffResult).diff;
+        return a.result.diff;
       });
     // A failed read is tried again next time.
     read.catch(() => turnDiffs.delete(key));

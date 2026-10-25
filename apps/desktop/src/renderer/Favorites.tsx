@@ -14,7 +14,7 @@ import {
 import type { Attention } from "./attention";
 import { draggedPin, pinDragType, setDraggedPin } from "./pins";
 import { MenuKey } from "./Sidebar";
-import { shownRows } from "./SidebarParts";
+import { close, shownRows } from "./SidebarParts";
 import { dragThread, draggedThread, threadDragType } from "./threadDrag";
 import { Menu, menuItem, openOnContextMenu } from "./ui";
 
@@ -166,10 +166,6 @@ export function Favorites({
   const editing = items.find((f) => f.key === menuFor);
   const at = editing ? items.indexOf(editing) : -1;
   if (!items.length) return null;
-  const close = (run: () => void) => (e: { currentTarget: HTMLElement }) => {
-    e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
-    run();
-  };
   return (
     <>
       <ul

@@ -44,7 +44,7 @@ export interface RepoAction {
 }
 
 /** The glyphs an action can wear, by the name it keeps. */
-export const actionIcons: Record<string, LucideIcon> = {
+const actionIcons: Record<string, LucideIcon> = {
   play: Play,
   test: FlaskConical,
   build: Hammer,
@@ -133,9 +133,6 @@ export function Actions({
     canRun
       ? `Run ${a.name}${a.keybinding ? ` (${formatKeybinding(a.keybinding)})` : ""}`
       : "No folder to run in yet";
-  const edit = (action: RepoAction | "new") => {
-    setEditing(action);
-  };
 
   return (
     <>
@@ -149,9 +146,7 @@ export function Actions({
                 aria-label={a.name}
                 disabled={!canRun}
                 title={titleOf(a)}
-                onClick={() => {
-                  onRun(a);
-                }}
+                onClick={() => onRun(a)}
                 className={`${menuItem} min-w-0 flex-1 disabled:opacity-50 [&_svg]:size-4`}
               >
                 <Icon aria-hidden />
@@ -162,13 +157,17 @@ export function Actions({
                   </span>
                 )}
               </button>
-              <IconButton label={`Edit ${a.name}`} onClick={() => edit(a)}>
+              <IconButton label={`Edit ${a.name}`} onClick={() => setEditing(a)}>
                 <Pencil />
               </IconButton>
             </div>
           );
         })}
-        <button type="button" onClick={() => edit("new")} className={`${menuItem} [&_svg]:size-4`}>
+        <button
+          type="button"
+          onClick={() => setEditing("new")}
+          className={`${menuItem} [&_svg]:size-4`}
+        >
           <Plus aria-hidden />
           Add action
         </button>
@@ -204,7 +203,7 @@ const hint = "text-meta font-normal text-muted-foreground";
  * own shortcuts and those of `others`, the repository's other actions. Saving or deleting closes
  * it; closing calls `onClose`.
  */
-export function ActionDialog({
+function ActionDialog({
   action,
   others,
   onSave,

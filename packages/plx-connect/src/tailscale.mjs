@@ -88,7 +88,7 @@ function toDevice(node) {
 }
 
 /** The Tailscale CLI: `tailscale` on PATH, else the first of the usual install paths that exists. */
-export async function findTailscale() {
+async function findTailscale() {
   const name = process.platform === "win32" ? "tailscale.exe" : "tailscale";
   const ok = await new Promise((resolve) =>
     execFile(name, ["version"], { timeout: 5000 }, (error) => resolve(!error)),

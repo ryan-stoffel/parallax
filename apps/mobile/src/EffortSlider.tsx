@@ -19,8 +19,7 @@ import type { AgentEffort } from "../../desktop/src/protocol/generated/protocol"
 import { effortLevels } from "../../desktop/src/renderer/catalog";
 import { T, useColors } from "./ui";
 
-const levels = effortLevels;
-const last = levels.length - 1;
+const last = effortLevels.length - 1;
 const THUMB = 28;
 const TRACK = 6;
 // The height a touch lands in, taller than the thumb.
@@ -44,7 +43,7 @@ export function EffortSlider({
 }) {
   const c = useColors();
   const still = useReducedMotion();
-  const level = levels.findIndex((l) => l.value === value);
+  const level = effortLevels.findIndex((l) => l.value === value);
   const [width, setWidth] = useState(0);
   const w = useSharedValue(0);
   // The thumb's center, and the stop it's at, on the UI thread.
@@ -67,7 +66,7 @@ export function EffortSlider({
 
   const pick = (i: number) => {
     void Haptics.selectionAsync();
-    onChange(levels[i]!.value);
+    onChange(effortLevels[i]!.value);
   };
   /** Moves to the stop nearest `px` across the track, with a tick when it's another. */
   const choose = (px: number) => {
@@ -105,7 +104,7 @@ export function EffortSlider({
           accessible
           accessibilityRole="adjustable"
           accessibilityLabel="Reasoning effort"
-          accessibilityValue={{ text: levels[level]?.name ?? "Default" }}
+          accessibilityValue={{ text: effortLevels[level]?.name ?? "Default" }}
           accessibilityActions={[{ name: "increment" }, { name: "decrement" }]}
           onAccessibilityAction={(e) => {
             const i = Math.min(Math.max(level + (e.nativeEvent.actionName === "increment" ? 1 : -1), 0), last);
@@ -124,7 +123,7 @@ export function EffortSlider({
             <Animated.View style={[styles.fill, { backgroundColor: c.accent }, fill]} />
           </View>
           {width > 0 &&
-            levels.map((l, i) => (
+            effortLevels.map((l, i) => (
               <View
                 key={l.value}
                 pointerEvents="none"
@@ -140,7 +139,7 @@ export function EffortSlider({
       </GestureDetector>
       <View style={styles.names}>
         {width > 0 &&
-          levels.map((l, i) => (
+          effortLevels.map((l, i) => (
             <T
               key={l.value}
               medium={i === level}

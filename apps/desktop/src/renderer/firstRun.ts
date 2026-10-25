@@ -59,7 +59,7 @@ const sameVars = (a: ProviderEnvVar[], b: ProviderEnvVar[]) =>
  * Whether `instance` is an agent as setup or plxd's first run adds it, under its id and with
  * nothing the user set (a name aside). Setup changes only these, never one the user made.
  */
-export function untouched(instance: ProviderInstance): boolean {
+function untouched(instance: ProviderInstance): boolean {
   const agent = agents.find((a) => a.id === instance.id && a.kind === instance.kind);
   return (
     !!agent &&

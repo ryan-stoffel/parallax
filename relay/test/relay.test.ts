@@ -39,7 +39,7 @@ async function online(user = `user_${crypto.randomUUID()}`) {
 }
 
 /** A client's stream to `host`, joined by plxd's side. */
-async function stream(host: Host, token: string, control: Awaited<ReturnType<typeof online>>["control"]) {
+async function stream(host: Host, token: string, control: Socket) {
   const ticket = await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token });
   expect(ticket.status).toBe(200);
   const { ticket: value } = (await ticket.json()) as { ticket: string };
@@ -51,6 +51,8 @@ async function stream(host: Host, token: string, control: Awaited<ReturnType<typ
 
 const hosts = testEnv.HOSTS;
 const users = testEnv.USERS;
+/** `host`'s Durable Object. */
+const stubOf = (host: Host) => hosts.get(hosts.idFromName(host.id));
 
 describe("sign-in", () => {
   it("refuses tokens that aren't a current session from the configured Clerk", async () => {
@@ -152,7 +154,7 @@ describe("clock creep", () => {
       const ahead = (await hostSocket(host, await hostProof(host, host, at))) as Response;
       expect(ahead.status).toBe(401);
     }
-    const stub = hosts.get(hosts.idFromName(host.id));
+    const stub = stubOf(host);
     const last = await runInDurableObject(stub, (_: HostRelay, state) => state.storage.get<number>("lastProof"));
     expect(last!).toBeLessThanOrEqual(Date.now() + 30_000);
   });
@@ -199,7 +201,7 @@ describe("streams", () => {
     expect(new Uint8Array((await client.next()) as ArrayBuffer)).toEqual(record.slice().reverse());
 
     // The relay keeps nothing of a stream: only the host's registration is stored.
-    const stub = hosts.get(hosts.idFromName(host.id));
+    const stub = stubOf(host);
     const stored = await runInDurableObject(stub, async (_: HostRelay, state) => ({
       keys: [...(await state.storage.list()).keys()],
       held: state.storage.sql.exec("SELECT count(*) AS n FROM held").one().n,
@@ -224,7 +226,7 @@ describe("streams", () => {
 async function serveHooks(host: Host, control: Socket, urls: [string, string][]) {
   const keys = await Promise.all(urls.map(([hookId, token]) => hookKey(hookId, token)));
   control.ws.send(JSON.stringify({ t: "hooks", keys }));
-  const stub = hosts.get(hosts.idFromName(host.id));
+  const stub = stubOf(host);
   await expect
     .poll(() => runInDurableObject(stub, (_: HostRelay, state) => state.storage.get<string[]>("hooks")))
     .toEqual([...keys].sort());
@@ -232,7 +234,7 @@ async function serveHooks(host: Host, control: Socket, urls: [string, string][])
 
 /** How many webhooks `host`'s object holds. */
 function heldCount(host: Host) {
-  const stub = hosts.get(hosts.idFromName(host.id));
+  const stub = stubOf(host);
   return runInDurableObject(stub, (_: HostRelay, state) =>
     state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM held").one().n,
   );
@@ -299,7 +301,7 @@ describe("webhooks", () => {
     await control.next(); // ready
     const first = hookFrame((await control.next()) as ArrayBuffer);
     control.ws.send(JSON.stringify({ t: "hook", id: first.head.id, status: 429, body: {} }));
-    const stub = hosts.get(hosts.idFromName(host.id));
+    const stub = stubOf(host);
     await expect
       .poll(() =>
         runInDurableObject(stub, (_: HostRelay, state) =>
@@ -347,7 +349,7 @@ describe("webhooks", () => {
     const nobody = await newHost();
     expect((await call(`/v1/hooks/${nobody.id}/hook1/token`, { method: "POST" })).status).toBe(404);
     expect(((await socket(`/v1/hosts/${nobody.id}/host`)) as Response).status).toBe(404);
-    const stored = await runInDurableObject(hosts.get(hosts.idFromName(nobody.id)), async (_: HostRelay, state) => ({
+    const stored = await runInDurableObject(stubOf(nobody), async (_: HostRelay, state) => ({
       keys: (await state.storage.list()).size,
       tables: state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name = 'held'").toArray().length,
     }));
@@ -359,7 +361,7 @@ describe("held webhook retries", () => {
   it("wake no sooner than the oldest webhook of a hook is due, however many wait behind it", async () => {
     const { host, control } = await online();
     await serveHooks(host, control, [["hook1", "token"]]);
-    const stub = hosts.get(hosts.idFromName(host.id));
+    const stub = stubOf(host);
     const now = Date.now();
     const due = now + 60_000;
     // The oldest waits a minute; the ones behind it look overdue, as after timeouts.
@@ -441,7 +443,7 @@ describe("removing hosts", () => {
     expect((await call(`/v1/hosts/${mine[0]!.id}`, { method: "DELETE", token })).status).toBe(200);
     expect((await hostsOf()).map((h) => h.hostId)).not.toContain(mine[0]!.id);
     expect((await call(`/v1/hosts/${mine[0]!.id}/tickets`, { method: "POST", token })).status).toBe(404);
-    const stored = await runInDurableObject(hosts.get(hosts.idFromName(mine[0]!.id)), async (_: HostRelay, state) =>
+    const stored = await runInDurableObject(stubOf(mine[0]!), async (_: HostRelay, state) =>
       (await state.storage.list()).size,
     );
     expect(stored).toBe(0);
@@ -485,7 +487,7 @@ describe("cost ceilings", () => {
     const { client, open } = await stream(host, token, control);
     const side = opened(await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`));
     await client.next();
-    const stub = hosts.get(hosts.idFromName(host.id));
+    const stub = stubOf(host);
     await runInDurableObject(stub, (relay: HostRelay) => {
       const day = new Date().toISOString().slice(0, 10);
       const bytes = MAX_DAILY_BYTES - 2 * MIN_FRAME_BYTES;
@@ -511,7 +513,7 @@ describe("cost ceilings", () => {
     const { client, open } = await stream(host, token, control);
     const side = opened(await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`));
     await client.next();
-    const stub = hosts.get(hosts.idFromName(host.id));
+    const stub = stubOf(host);
     await runInDurableObject(stub, (relay: HostRelay) => {
       const day = new Date().toISOString().slice(0, 10);
       (relay as unknown as { traffic: object }).traffic = { day, bytes: MAX_DAILY_BYTES, saved: 0 };

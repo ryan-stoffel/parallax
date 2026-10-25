@@ -42,6 +42,7 @@ import {
   EditorContent,
   markInputRule,
   wrappingInputRule,
+  type Mark,
   Node as TiptapNode,
   NodeViewWrapper,
   ReactNodeViewRenderer,
@@ -83,7 +84,8 @@ import { FileCard } from "./FileCard";
 import { Chip, fileIcon, Mention } from "./Mention";
 import { imageFromUrl, imageUrl, readImage, type ImageCaps } from "./images";
 import { Lightbox } from "./Lightbox";
-import { encodedImage, uploadFiles, withFiles, type UploadCaps } from "./uploads";
+import { encodedImage, withFiles } from "./attachments";
+import { uploadFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
 import { ScrollThumb } from "./ScrollThumb";
 import { dismiss, notify } from "./notifications";
@@ -97,33 +99,19 @@ import { draggedThread, threadDragType } from "./threadDrag";
 import { stored } from "./stored";
 import { Picker, type PickerOption } from "./ui";
 
+const access = (value: AgentPermission, icon: ReactNode): PickerOption => ({
+  value,
+  ...accessLevels[value],
+  icon,
+});
+
 // The access levels (catalog.ts), each with its icon.
 export const accessOptions: Record<AgentPermission, PickerOption> = {
-  manual: {
-    value: "manual",
-    ...accessLevels.manual,
-    icon: <Hand />,
-  },
-  edit: {
-    value: "edit",
-    ...accessLevels.edit,
-    icon: <FilePen />,
-  },
-  auto: {
-    value: "auto",
-    ...accessLevels.auto,
-    icon: <Sparkles />,
-  },
-  plan: {
-    value: "plan",
-    ...accessLevels.plan,
-    icon: <ListChecks />,
-  },
-  bypass: {
-    value: "bypass",
-    ...accessLevels.bypass,
-    icon: <LockOpen />,
-  },
+  manual: access("manual", <Hand />),
+  edit: access("edit", <FilePen />),
+  auto: access("auto", <Sparkles />),
+  plan: access("plan", <ListChecks />),
+  bypass: access("bypass", <LockOpen />),
 };
 
 const divider = <span aria-hidden className="mx-1 h-5 w-px bg-border" />;
@@ -307,7 +295,10 @@ function threadRefsIn(state: EditorState, titled: ReadonlyMap<string, string>) {
   return tr.docChanged ? tr.setMeta("addToHistory", false) : undefined;
 }
 
-/** A transaction removing every `name` node in `state` that `drop` picks, or undefined for none. */
+/**
+ * A transaction removing every `name` node in `state` that `drop` picks, or undefined for none.
+ * It isn't an undo step, so undo can't bring them back.
+ */
 function withoutNodes(state: EditorState, name: string, drop: (node: ProseMirrorNode) => boolean) {
   const { tr } = state;
   state.doc.descendants((node, pos) => {
@@ -317,8 +308,16 @@ function withoutNodes(state: EditorState, name: string, drop: (node: ProseMirror
     if (state.doc.textBetween(end, Math.min(end + 1, state.doc.content.size)) === " ") end++;
     tr.delete(tr.mapping.map(pos), tr.mapping.map(end));
   });
-  return tr.docChanged ? tr : undefined;
+  return tr.docChanged ? tr.setMeta("addToHistory", false) : undefined;
 }
+
+/** `mark`, formatted as you type only by text that `find` matches. */
+const typedAs = (mark: Mark, find: RegExp) =>
+  mark.extend({
+    addInputRules() {
+      return [markInputRule({ find, type: this.type })];
+    },
+  });
 
 // The box's editor: typed Markdown (`- `, `1. `, `[ ] `, ```` ``` ````, `> `, `#`, `**bold**`,
 // `*italic*`, `~~struck~~`, `` `code` ``) formats as you type, as T3 Code's does. Nothing else
@@ -358,27 +357,13 @@ const extensions = [
   }).configure({ nested: true }),
   Paragraph,
   // `~~struck~~`, with no space just inside, as bold and italic.
-  Strike.extend({
-    addInputRules() {
-      return [markInputRule({ find: /(?:^|\s)(~~([^~\s](?:[^~]*[^~\s])?)~~)$/, type: this.type })];
-    },
-  }),
+  typedAs(Strike, /(?:^|\s)(~~([^~\s](?:[^~]*[^~\s])?)~~)$/),
   Text,
   MentionNode,
   ThreadRefNode,
   ImageRefNode,
-  Bold.extend({
-    addInputRules() {
-      return [
-        markInputRule({ find: /(?:^|\s)(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/, type: this.type }),
-      ];
-    },
-  }),
-  Italic.extend({
-    addInputRules() {
-      return [markInputRule({ find: /(?:^|\s)(\*([^*\s](?:[^*]*[^*\s])?)\*)$/, type: this.type })];
-    },
-  }),
+  typedAs(Bold, /(?:^|\s)(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/),
+  typedAs(Italic, /(?:^|\s)(\*([^*\s](?:[^*]*[^*\s])?)\*)$/),
 ];
 
 // What's sent is the box as Markdown. Text goes out as typed, unescaped, since the agent reads it
@@ -456,6 +441,11 @@ const toMarkdown = (node: ProseMirrorNode, naming: Naming = {}) =>
 // in it runs or loads.
 const hasText = (html: string) =>
   !!new DOMParser().parseFromString(html, "text/html").body.textContent?.trim();
+
+// The most base64 one image can be: an even share of the total cap, so any number of them up to
+// the most fits it.
+const imageShare = ({ maxImages, maxImageBytes, maxTotalBytes }: ImageCaps) =>
+  Math.min(maxImageBytes, Math.floor(maxTotalBytes / maxImages));
 
 /** Supervised's description where its requests are denied, by why (`ComposerProps.manualDenied`). */
 const manualDenials = {
@@ -569,14 +559,6 @@ const savedCommands = stored<Record<string, AgentCommand[]>>(
 
 const commandsKeyOf = (hostId: string, backend: string, folder: string | undefined) =>
   `${hostId}/${backend}/${folder ?? ""}`;
-
-/** The list `listCommands` last answered for this thread, on any run of the app. */
-export const savedCommandList = (
-  hostId: string,
-  backend: string,
-  repo: string | undefined,
-  runId: string | undefined,
-): AgentCommand[] | undefined => savedCommands.get()[commandsKeyOf(hostId, backend, runId ?? repo)];
 
 /** The commands `agent/commands` lists for a thread on `backend`, once per host and folder. */
 export function listCommands(
@@ -978,14 +960,13 @@ export function Composer({
   const { hostId, repo, runId } = menus ?? {};
   const folder = runId ?? repo ?? "";
   const commandsKey =
-    hostId === undefined || target === undefined ? undefined : `${hostId}/${target}/${folder}`;
+    hostId === undefined || target === undefined
+      ? undefined
+      : commandsKeyOf(hostId, target, folder);
   const pathsKey = hostId === undefined || !folder ? undefined : `${hostId}/${folder}`;
   // The list this computer last got shows at once (`savedCommands`), while the first `/` asks the
   // CLI again. Not before: listing commands starts the CLI.
-  const saved =
-    hostId === undefined || target === undefined
-      ? undefined
-      : savedCommandList(hostId, target, repo, runId);
+  const saved = commandsKey === undefined ? undefined : savedCommands.get()[commandsKey];
   const wantsCommands = trigger?.kind === "/" && commandsKey !== undefined;
   const wantsPaths = trigger?.kind === "@" && pathsKey !== undefined;
   useEffect(() => {
@@ -1037,7 +1018,7 @@ export function Composer({
     let seen = 0;
     const tr = withoutNodes(editor.state, "threadRef", () => ++seen > max);
     if (!tr) return;
-    editor.view.dispatch(tr.setMeta("addToHistory", false));
+    editor.view.dispatch(tr);
     setAttachError(`A message takes at most ${max} attached threads.`);
   };
 
@@ -1219,8 +1200,7 @@ export function Composer({
   const canSend = !!onSend && !disabledReason && !empty && !uploading;
   const showStop = !!onStop && !disabledReason && empty;
 
-  // Adds pasted, dropped, or picked files: images as thumbnails, anything else as a chip. Each
-  // image gets an even share of the total cap, so any number of them up to the most fits it.
+  // Adds pasted, dropped, or picked files: images as thumbnails, anything else as a chip.
   const addFiles = async (added: File[]): Promise<PromptImage[]> => {
     const isImage = (f: File) => f.type.startsWith("image/");
     const others = added.filter((f) => !isImage(f));
@@ -1237,9 +1217,9 @@ export function Composer({
       setAttachError("This host's plxd can't take images.");
       return [];
     }
-    const { maxImages, maxImageBytes, maxTotalBytes } = imageCaps;
+    const { maxImages } = imageCaps;
     const room = Math.max(0, maxImages - images.length);
-    const share = Math.min(maxImageBytes, Math.floor(maxTotalBytes / maxImages));
+    const share = imageShare(imageCaps);
     const read = await Promise.all(picked.slice(0, room).map((f) => readImage(f, share)));
     const errors = read.filter((r) => typeof r === "string");
     if (picked.length > room) errors.push(`A message takes at most ${maxImages} images.`);
@@ -1256,7 +1236,7 @@ export function Composer({
     setImages(left);
     if (left.some((image) => imageKey(image) === key)) return;
     const tr = withoutNodes(editor.state, "imageRef", (node) => node.attrs["key"] === key);
-    if (tr) editor.view.dispatch(tr.setMeta("addToHistory", false));
+    if (tr) editor.view.dispatch(tr);
   };
   // Each image's name in the sent text, by its number among the images.
   const imageName = (key: string) => {
@@ -1367,9 +1347,10 @@ export function Composer({
     onUpdate: ({ editor, transaction }) => {
       if (!transaction.getMeta("recall")) recalled.current = undefined;
       setText(toMarkdown(editor.state.doc, { imageName }));
-      setThreads(threadsIn(editor.state.doc));
+      const ids = threadsIn(editor.state.doc);
+      setThreads(ids);
       // A paste can bring more threads than a message takes.
-      if (attach && threadsIn(editor.state.doc).length > attach.max) keepThreadCap();
+      if (attach && ids.length > attach.max) keepThreadCap();
       const mentions = mentionsIn(editor.state, known);
       if (mentions) editor.view.dispatch(mentions);
     },
@@ -1552,11 +1533,7 @@ export function Composer({
               ? "This host's plxd can't take images."
               : images.length + added.length >= imageCaps.maxImages
                 ? `A message takes at most ${imageCaps.maxImages} images.`
-                : carried.data.length >
-                    Math.min(
-                      imageCaps.maxImageBytes,
-                      Math.floor(imageCaps.maxTotalBytes / imageCaps.maxImages),
-                    )
+                : carried.data.length > imageShare(imageCaps)
                   ? "That image is too large to send."
                   : undefined;
             if (why) {
@@ -1598,7 +1575,7 @@ export function Composer({
     threadsHost.current = host;
     // Not an undo step, so undo can't bring another computer's threads back.
     const tr = withoutNodes(editor.state, "threadRef", () => true);
-    if (tr) editor.view.dispatch(tr.setMeta("addToHistory", false));
+    if (tr) editor.view.dispatch(tr);
   }, [host, editor]);
 
   // Tokens typed or recalled before their list arrived become chips once it does.
@@ -1830,60 +1807,56 @@ export function Composer({
         </div>
         <div className="flex items-center gap-0.5 px-3 pt-1 pb-3">
           {run && (
-            <>
-              {/* A disabled fieldset turns off every control in it, and its title says why. */}
-              <fieldset
-                ref={controls}
-                disabled={!!optionsDisabled}
-                title={optionsDisabled}
-                className="flex min-w-0 items-center gap-0.5"
-              >
-                {model && (
-                  <>
-                    {/* Every provider, and an open run can't pick those it can't move to. */}
-                    <ModelMenu
-                      key={backend}
-                      catalog={catalog}
-                      unavailable={blocked}
-                      value={model}
-                      onChange={setModel}
-                    />
-                  </>
-                )}
-                {efforts && (
-                  <>
-                    {divider}
-                    <EffortMenu
-                      value={effort}
-                      onChange={setEffort}
-                      contexts={contexts}
-                      context={context}
-                      onContext={setContext}
-                      fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
-                      fast={fast}
-                      onFast={setFast}
-                    />
-                  </>
-                )}
-                {/* One permission is no choice, so there's nothing to show. */}
-                {permissions.length > 1 && (
-                  <>
-                    {divider}
-                    <Picker
-                      label="Access"
-                      value={permission}
-                      onChange={(value) => setPermission(value as AgentPermission)}
-                      options={permissions.map((p) =>
-                        p === "manual" && manualDenied
-                          ? { ...accessOptions[p], description: manualDenials[manualDenied] }
-                          : accessOptions[p],
-                      )}
-                      panelClassName="w-[25rem]"
-                    />
-                  </>
-                )}
-              </fieldset>
-            </>
+            // A disabled fieldset turns off every control in it, and its title says why.
+            <fieldset
+              ref={controls}
+              disabled={!!optionsDisabled}
+              title={optionsDisabled}
+              className="flex min-w-0 items-center gap-0.5"
+            >
+              {/* Every provider, and an open run can't pick those it can't move to. */}
+              {model && (
+                <ModelMenu
+                  key={backend}
+                  catalog={catalog}
+                  unavailable={blocked}
+                  value={model}
+                  onChange={setModel}
+                />
+              )}
+              {efforts && (
+                <>
+                  {divider}
+                  <EffortMenu
+                    value={effort}
+                    onChange={setEffort}
+                    contexts={contexts}
+                    context={context}
+                    onContext={setContext}
+                    fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
+                    fast={fast}
+                    onFast={setFast}
+                  />
+                </>
+              )}
+              {/* One permission is no choice, so there's nothing to show. */}
+              {permissions.length > 1 && (
+                <>
+                  {divider}
+                  <Picker
+                    label="Access"
+                    value={permission}
+                    onChange={(value) => setPermission(value as AgentPermission)}
+                    options={permissions.map((p) =>
+                      p === "manual" && manualDenied
+                        ? { ...accessOptions[p], description: manualDenials[manualDenied] }
+                        : accessOptions[p],
+                    )}
+                    panelClassName="w-[25rem]"
+                  />
+                </>
+              )}
+            </fieldset>
           )}
           <input
             ref={filePicker}

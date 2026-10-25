@@ -68,7 +68,7 @@ export class UserAccount extends DurableObject<Env> {
     );
   }
 
-  private async devices(): Promise<string[]> {
+  private async devices() {
     return (await this.ctx.storage.get<string[]>("devices")) ?? [];
   }
 

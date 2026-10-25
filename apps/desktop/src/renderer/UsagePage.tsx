@@ -54,21 +54,6 @@ import {
 } from "./usageStats";
 import { clockOptions } from "./prefs";
 
-export {
-  attribute,
-  buckets,
-  niceTop,
-  stack,
-  summarize,
-  tokensOf,
-  type Attribution,
-  type Backend,
-  type Measures,
-  type Part,
-  type Range,
-  type Summary,
-} from "./usageStats";
-
 type View = "cost" | "tokens" | "limits";
 const views: { value: View; name: string }[] = [
   { value: "cost", name: "Cost" },

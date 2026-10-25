@@ -8,8 +8,6 @@ import { notify } from "../notifications";
 import { HostPicker, PageTitle, quietButton, Row, Section, Switch } from "./parts";
 import { nextLabel, scheduleLabel } from "./shared";
 
-export { nextLabel, scheduleLabel };
-
 /**
  * Settings > Schedules: a host's scheduled tasks (0063), which agents create with
  * `schedule_task`. Each can be paused, run now, or deleted.

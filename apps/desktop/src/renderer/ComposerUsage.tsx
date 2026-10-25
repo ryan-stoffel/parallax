@@ -57,7 +57,7 @@ interface Totals {
 }
 
 /** What the composer's ring shows about the open thread: its context and its usage so far. */
-export interface ComposerUsageData {
+interface ComposerUsageData {
   context?: string;
   /** Context use, 0 to 100, for the ring. */
   contextUsed?: number;

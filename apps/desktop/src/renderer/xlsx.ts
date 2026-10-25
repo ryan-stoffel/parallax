@@ -36,7 +36,7 @@ const childOf = (el: Element, name: string) =>
   [...el.children].find((c) => c.localName === name && c.namespaceURI === NS);
 
 /** A1-style references: column letters to a zero-based index and back. */
-export const colIndex = (letters: string) => {
+const colIndex = (letters: string) => {
   let n = 0;
   for (let i = 0; i < letters.length; i++) n = n * 26 + letters.charCodeAt(i) - 64;
   return n - 1;

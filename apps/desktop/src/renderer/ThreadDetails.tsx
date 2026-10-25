@@ -12,18 +12,18 @@ import { IconButton } from "./ui";
 
 /** Where the keys of the threads that show Thread details are kept, as a JSON array. */
 export const THREAD_DETAILS_KEY = "parallax.threadDetails.open";
-export const THREAD_DETAILS_ID = "thread-details";
+const THREAD_DETAILS_ID = "thread-details";
 
 /** The docked card's width, `w-64`, with its right gap. */
 const DOCKED_WIDTH = 268;
 /** The least of its row the thread keeps beside the docked card; below it the card floats. */
-export const THREAD_MIN_SHARE = 0.6;
+const THREAD_MIN_SHARE = 0.6;
 
 /** Whether docking Thread details in a row `width` wide would leave the thread too little room. */
 export const tooNarrowToDock = (width: number) =>
   width > 0 && width - DOCKED_WIDTH < width * THREAD_MIN_SHARE;
 
-export type ThreadDetailsMode = "docked" | "floating" | "hidden";
+type ThreadDetailsMode = "docked" | "floating" | "hidden";
 
 /** The keys of the threads kept showing Thread details. */
 function readOpen(): string[] {

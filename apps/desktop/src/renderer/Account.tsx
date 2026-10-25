@@ -718,12 +718,9 @@ function AccountRows({ profile }: { profile: Profile }) {
         </div>
       </div>
       <div className={settingRow}>
-        <div className="min-w-0">
-          <span className="block text-body font-medium">Sign out</span>
-          <span className="block text-body text-muted-foreground">
-            Only on this computer. Your other devices stay signed in.
-          </span>
-        </div>
+        <RowText title="Sign out">
+          Only on this computer. Your other devices stay signed in.
+        </RowText>
         <button
           type="button"
           onClick={() => void window.parallax.signOut()}

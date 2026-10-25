@@ -7,10 +7,17 @@ import { localId, useHosts, type Host } from "../hosts";
 import { notify } from "../notifications";
 import { isRepository, type ThreadsView } from "../threads";
 import { Picker } from "../ui";
-import { field, HostPicker, PageTitle, primaryButton, quietButton, Section, Switch } from "./parts";
+import {
+  field,
+  HostPicker,
+  PageTitle,
+  primaryButton,
+  quietButton,
+  Section,
+  settingRow,
+  Switch,
+} from "./parts";
 import { scriptRoles } from "./shared";
-
-export { scriptRoles };
 
 const blank: RepoScript = { id: "", name: "", command: "", runOnWorktreeCreate: true };
 
@@ -213,10 +220,7 @@ export function ScriptSettings({ listed }: { listed: { host: Host; view: Threads
             </p>
           )}
           {file?.scripts.map((script) => (
-            <div
-              key={script.id}
-              className="flex items-center justify-between gap-4 border-border px-4 py-3 not-last:border-b"
-            >
+            <div key={script.id} className={settingRow}>
               <div className="min-w-0">
                 <span className="block text-body font-medium">
                   {script.name}

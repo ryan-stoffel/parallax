@@ -3,7 +3,7 @@ import type { RpcError, RpcResponse } from "../preload/bridge";
 
 type Pending = { onResponse: (response: RpcResponse<unknown>) => void; timer: NodeJS.Timeout };
 
-export type RpcHandlers = {
+type RpcHandlers = {
   /** A notification from plxd, such as `events/event`. */
   onNotification(method: string, params: unknown): void;
   /** The stream broke a framing rule (0007) and must be closed. */

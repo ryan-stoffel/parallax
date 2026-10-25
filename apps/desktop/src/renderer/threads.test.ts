@@ -38,7 +38,6 @@ const [parallaxAdded, threadStarted, scratchAdded, threadArchived, threadDeleted
   ParallaxEvent,
 ];
 const started = messages.find((m) => m.id === 4 && m.result)!.result as ThreadStartResult;
-const quickChat = messages.find((m) => m.id === 5 && m.result)!.result as ThreadStartResult;
 
 const apply = (state: ThreadsState, ...list: ParallaxEvent[]) =>
   list.reduce((s, event) => threadsReducer(s, { type: "event", event }), state);
@@ -149,27 +148,20 @@ test("runs are kept by id: a later list replaces the runs it has, and keeps the 
   expect(state.runs["other"]).toEqual(other);
 });
 
-test("groups: repositories, then No Repo, newest first, archived apart", () => {
-  // The quick chat's result arrives before the scratch entry's repo.added (seq 50).
+test("groups: repositories, then No Repo", () => {
   let state = apply(emptyThreads, parallaxAdded, threadStarted);
-  state = apply(state, { kind: "thread.started", thread: quickChat.thread });
-  const newer = { ...started.thread, id: "newer", createdAt: "2026-09-26T13:00:00Z" };
-  state = apply(state, { kind: "thread.started", thread: newer });
-
-  const byGroup = () =>
-    groupThreads(state).groups.map((g) => [g.id, g.name, g.threads.map((t) => t.id)]);
+  const byGroup = () => groupThreads(state).map((g) => [g.id, g.name]);
   const parallax = started.thread.repo;
   expect(byGroup()).toEqual([
-    [parallax, "parallax", ["newer", started.thread.id]],
-    [noRepo, "No Repo", [quickChat.thread.id]],
+    [parallax, "parallax"],
+    [noRepo, "No Repo"],
   ]);
   // Once the scratch entry is known, it is still the one No Repo group, not a repository.
-  state = apply(state, scratchAdded, threadArchived);
+  state = apply(state, scratchAdded);
   expect(byGroup()).toEqual([
-    [parallax, "parallax", ["newer"]],
-    [noRepo, "No Repo", [quickChat.thread.id]],
+    [parallax, "parallax"],
+    [noRepo, "No Repo"],
   ]);
-  expect(groupThreads(state).archived.map((t) => t.id)).toEqual([started.thread.id]);
 });
 
 test("a scope's events keep a run current, stamp when it changed, and track what it asks", () => {

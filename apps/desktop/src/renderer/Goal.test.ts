@@ -1,7 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { pursuedGoal } from "./Goal";
-import type { Item } from "./transcript";
+import { pursuedGoal, type Item } from "./transcript";
 
 const user = (text: string, extra: Partial<Extract<Item, { kind: "user" }>> = {}): Item => ({
   kind: "user",

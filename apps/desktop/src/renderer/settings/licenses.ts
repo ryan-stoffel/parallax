@@ -1,5 +1,5 @@
 /** A bundled asset's notice, shown in Settings > General > Open source licenses. */
-export interface Notice {
+interface Notice {
   name: string;
   license: string;
   /** The copyright line and, for open licenses, the license text. */

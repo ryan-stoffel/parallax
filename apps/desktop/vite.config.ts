@@ -36,9 +36,7 @@ const csp = (dev: boolean) =>
     "media-src plx-render: plx-file: blob:",
     "object-src 'none'",
     "base-uri 'none'",
-  ]
-    .filter(Boolean)
-    .join("; ");
+  ].join("; ");
 
 const cspMeta: Plugin = {
   name: "parallax-csp",

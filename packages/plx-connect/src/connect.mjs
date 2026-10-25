@@ -26,7 +26,7 @@ import { findDevice, parseStatus, PLXD_PORT, probe, readStatus, TAGGED } from ".
  */
 
 /** A step failed. Its ✗ line is already printed. */
-export class StepFailed extends Error {}
+class StepFailed extends Error {}
 
 /**
  * Prints `title`, runs `run`, then prints its ✓ line, or ✗ with the error's message.
@@ -124,7 +124,7 @@ async function waitForPort(ip, timeoutMs) {
  * when it names none but is an IP. Throws a message for people otherwise.
  * @param {string} query
  */
-export async function resolveTarget(query) {
+async function resolveTarget(query) {
   /** @type {ReturnType<typeof parseStatus> | undefined} */
   let tailnet;
   try {

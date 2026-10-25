@@ -160,6 +160,31 @@ export function HostPicker({
   );
 }
 
+/**
+ * Remove and Cancel, for a removal that asks first in place. Cancel takes focus, so a double click
+ * or a second Enter can't remove.
+ */
+export function ConfirmRemove({
+  disabled,
+  onRemove,
+  onCancel,
+}: {
+  disabled?: boolean;
+  onRemove: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <>
+      <button type="button" disabled={disabled} onClick={onRemove} className={dangerButton}>
+        Remove
+      </button>
+      <button type="button" autoFocus onClick={onCancel} className={quietButton}>
+        Cancel
+      </button>
+    </>
+  );
+}
+
 /** 1536 → "1.5 KB": a size in bytes for people. */
 export function formatBytes(bytes: number): string {
   const units = ["bytes", "KB", "MB", "GB", "TB"];

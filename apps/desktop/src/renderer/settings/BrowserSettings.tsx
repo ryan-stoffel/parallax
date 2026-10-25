@@ -207,13 +207,7 @@ export function BrowserSettings() {
             className={quietButton}
             onClick={() =>
               void window.parallax.loadUnpackedExtension().then((answer) => {
-                if (typeof answer === "string")
-                  notify({
-                    key: "extension",
-                    tone: "error",
-                    title: "Couldn't add the extension",
-                    body: answer,
-                  });
+                if (typeof answer === "string") extensionFailed(answer);
                 void refresh();
               })
             }
@@ -232,13 +226,7 @@ export function BrowserSettings() {
               void window.parallax
                 .installExtension(link)
                 .then((answer) => {
-                  if (typeof answer === "string")
-                    notify({
-                      key: "extension",
-                      tone: "error",
-                      title: "Couldn't add the extension",
-                      body: answer,
-                    });
+                  if (typeof answer === "string") extensionFailed(answer);
                   else setLink("");
                   void refresh();
                 })
@@ -320,6 +308,9 @@ export function BrowserSettings() {
     </>
   );
 }
+
+const extensionFailed = (body: string) =>
+  notify({ key: "extension", tone: "error", title: "Couldn't add the extension", body });
 
 /** "a, b, and c", capitalized: what Clear browsing data clears, for its confirm. */
 function listed(items: string[]): string {

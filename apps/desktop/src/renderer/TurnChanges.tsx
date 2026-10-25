@@ -83,8 +83,7 @@ export function TurnChanges({ turnId }: { turnId: string | undefined }) {
   const key = (path: string) => `${run.id}\n${path}`;
   const isOpen = (path: string) => folds.get(key(path)) ?? files.length <= OPEN_UP_TO;
   const anyOpen = dirs.some(isOpen);
-  const added = files.reduce((n, f) => n + f.additions, 0);
-  const removed = files.reduce((n, f) => n + f.deletions, 0);
+  const { added, removed } = totals(tree);
   const AllIcon = anyOpen ? ChevronsDownUp : ChevronsUpDown;
 
   const rows = (nodes: TreeNode[], depth: number): ReactNode[] =>

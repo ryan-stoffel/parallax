@@ -4,16 +4,8 @@ import { expect, test, vi } from "vite-plus/test";
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import type { HostUploadParams } from "../protocol/generated/protocol";
 import { pieceBytes } from "./documents";
-import {
-  encodedImage,
-  isImagePath,
-  readUpload,
-  splitFiles,
-  uploadBytes,
-  uploadFiles,
-  withFiles,
-  withoutImages,
-} from "./uploads";
+import { encodedImage, isImagePath, splitFiles, withFiles, withoutImages } from "./attachments";
+import { readUpload, uploadBytes, uploadFiles } from "./uploads";
 
 const connected = (capabilities: Record<string, Record<string, number>>) =>
   ({ status: "connected", plxd: "", protocol: 1, capabilities }) as ConnectionState;

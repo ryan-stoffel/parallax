@@ -94,15 +94,8 @@ import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
 import { Lightbox } from "./Lightbox";
 import { fromBase64 } from "./ooxml";
-import {
-  encodedImage,
-  isImagePath,
-  splitFiles,
-  uploadBytes,
-  uploadFiles,
-  withFiles,
-  withoutImages,
-} from "./uploads";
+import { encodedImage, isImagePath, splitFiles, withFiles, withoutImages } from "./attachments";
+import { uploadBytes, uploadFiles } from "./uploads";
 import {
   Trace,
   TraceCollapsible,
@@ -122,19 +115,12 @@ import { onGithub } from "./github";
 import { dollarMath } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
-import {
-  latestPlan,
-  PlanStrip,
-  PlanLine,
-  ProposedPlan,
-  withPlans,
-  type PlanRow,
-  type ProposedPlanRow,
-} from "./Plan";
+import { PlanStrip, PlanLine, ProposedPlan } from "./Plan";
+import { latestPlan, withPlans, type PlanRow, type ProposedPlanRow } from "./plans";
 import { searchText, useFind } from "./Find";
 import { plainText, PromptRail, ScrollToEnd, type Prompt } from "./PromptRail";
 import { attachThreads, SentThread, ThreadLinksContext, type ThreadLinks } from "./threadContext";
-import { GoalStrip, pursuedGoal } from "./Goal";
+import { GoalStrip } from "./Goal";
 import { QueueStrip } from "./QueueStrip";
 import { AgentsBar, isGoing, type AgentRow } from "./AgentsBar";
 import { ComposerTabs, type ComposerTab } from "./ComposerTabs";
@@ -165,6 +151,7 @@ import {
   waitingSecrets,
   workedFor,
   plxdTools,
+  pursuedGoal,
   type Approval,
   type Item,
   type Subagent,
@@ -185,7 +172,8 @@ import {
   type Kind,
 } from "./steps";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
-import { presentWaiting, WaitingBar } from "./WaitingBar";
+import { presentWaiting } from "./waiting";
+import { WaitingBar } from "./WaitingBar";
 import { clockOptions } from "./prefs";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
@@ -861,7 +849,7 @@ export function AgentChat({
               <TranscriptView
                 rows={rows}
                 sent={unsent}
-                live={isRunning(run?.status)}
+                live={running}
                 stalled={stalled}
                 turnDone={transcript.turnDone}
                 root={run?.worktreePath}
@@ -923,7 +911,7 @@ export function AgentChat({
               : Promise.resolve("")
           }
           onSteer={
-            queueEnabled && isRunning(run?.status)
+            queueEnabled && running
               ? (text, options, images, threads) =>
                   sendText(text, options, images, threads, "steer")
               : undefined
@@ -1666,22 +1654,18 @@ export const RowView = memo(function RowView({
     case "epoch":
       // A coordinator's new session (0079): the conversation before it is no longer the agent's.
       return (
-        <div className="flex items-center gap-2 text-meta text-faint-foreground">
-          <span className="h-px flex-1 bg-border" />
+        <Divider>
           <RotateCcw aria-hidden className="size-3.5" />
           <span>New session, picked up from the Project's state</span>
-          <span className="h-px flex-1 bg-border" />
-        </div>
+        </Divider>
       );
     case "compaction":
       // Under way, it's the live row; done, a divider where the earlier conversation became a summary.
       return row.done ? (
-        <div className="flex items-center gap-2 text-meta text-faint-foreground">
-          <span className="h-px flex-1 bg-border" />
+        <Divider>
           <FoldVertical aria-hidden className="size-3.5" />
           <span>Context compacted</span>
-          <span className="h-px flex-1 bg-border" />
-        </div>
+        </Divider>
       ) : (
         <TraceLine status="running">
           <TraceIcon>
@@ -1876,15 +1860,13 @@ export const RowView = memo(function RowView({
     case "modelSwitch":
       // Where the thread moved to another model (PLX-495), as T3 Code's context handoff.
       return (
-        <div className="flex items-center gap-2 text-meta text-faint-foreground">
-          <span className="h-px flex-1 bg-border" />
+        <Divider>
           <ArrowLeftRight aria-hidden className="size-3.5" />
           <span>Switched model</span>
           <ModelLabel model={row.from} />
           <ArrowRight aria-hidden className="size-3.5" />
           <ModelLabel model={row.to} />
-          <span className="h-px flex-1 bg-border" />
-        </div>
+        </Divider>
       );
     case "end": {
       const { outcome } = row;
@@ -1915,6 +1897,17 @@ export const RowView = memo(function RowView({
     }
   }
 });
+
+/** A rule across the transcript with `children` in its middle, where the conversation turns. */
+function Divider({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 text-meta text-faint-foreground">
+      <span className="h-px flex-1 bg-border" />
+      {children}
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
 
 /** What an end row says, by how the process ended. A status newer than this app says "Ended". */
 const endLabels: Partial<Record<string, string>> = {
@@ -2382,7 +2375,7 @@ const isWhole = (input?: JsonValue): input is JsonValue =>
 // browser, https only. No remote image or video loads: each stays a link with its alt text.
 
 /** Which remote images Markdown loads: a pull request's GitHub-hosted ones, or none. */
-export type Images = "github" | "none";
+type Images = "github" | "none";
 
 /**
  * The desktop's `.markdown` look in Enriched Markdown's terms, from the theme's variables, so it
@@ -2668,7 +2661,7 @@ function PromptMeta({
   onEdit,
 }: {
   at?: string;
-  text?: string | null;
+  text?: string;
   fork?: ReactNode;
   onEdit?: () => void;
 }) {
@@ -2985,6 +2978,3 @@ function openedDeviceId(output?: string): string | undefined {
     return undefined;
   }
 }
-
-export { activity, stepLabel, summarize };
-export type { Activity, StepsSummary } from "./steps";

@@ -1,7 +1,7 @@
 import { Bot, Cpu } from "lucide-react";
 import { useEffect, useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 
-import type { ConnectionState } from "../preload/bridge";
+import type { ConnectionState, HostResponse } from "../preload/bridge";
 import type { ProviderInstance, ProvidersListResult } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { notify } from "./notifications";
@@ -74,6 +74,13 @@ function notifySignIns(hostId: string, before: ProvidersListResult, after: Provi
   }
 }
 
+/** Keeps a list plxd answered as `hostId`'s, or resolves to why it couldn't, for people. */
+function kept(hostId: string, answer: HostResponse<ProvidersListResult>) {
+  if ("error" in answer) return describeError(answer.error);
+  put(hostId, answer.result);
+  return undefined;
+}
+
 /** `hostId`'s last list, or undefined before its first. */
 export const listedProviders = (hostId: string) => lists.get(hostId);
 
@@ -86,9 +93,7 @@ export function loadProviders(hostId: string, refresh = false): Promise<string |
   if (pending && !refresh) return pending;
   const load = window.parallax.request(hostId, "providers/list", { refresh }).then((answer) => {
     if (loading.get(hostId) === load) loading.delete(hostId);
-    if ("error" in answer) return describeError(answer.error);
-    put(hostId, answer.result);
-    return undefined;
+    return kept(hostId, answer);
   });
   loading.set(hostId, load);
   return load;
@@ -99,18 +104,12 @@ export async function saveProvider(
   hostId: string,
   instance: ProviderInstance,
 ): Promise<string | undefined> {
-  const answer = await window.parallax.request(hostId, "providers/save", { instance });
-  if ("error" in answer) return describeError(answer.error);
-  put(hostId, answer.result);
-  return undefined;
+  return kept(hostId, await window.parallax.request(hostId, "providers/save", { instance }));
 }
 
 /** Removes an instance, and its secrets. Resolves to an error for people. */
 export async function removeProvider(hostId: string, id: string): Promise<string | undefined> {
-  const answer = await window.parallax.request(hostId, "providers/remove", { id });
-  if ("error" in answer) return describeError(answer.error);
-  put(hostId, answer.result);
-  return undefined;
+  return kept(hostId, await window.parallax.request(hostId, "providers/remove", { id }));
 }
 
 /**
@@ -195,26 +194,26 @@ export function logoOf(instance: { kind: string; name: string; program?: string 
   return known ?? (icon ? (maskLogo(icon) as Logo) : kindOf("acp").Logo);
 }
 
+/** The instance `id` on the first host whose listed instances have it. */
+function listedInstance(id: string): ProviderInstance | undefined {
+  for (const list of lists.values()) {
+    const info = list.providers.find((p) => p.instance.id === id);
+    if (info) return info.instance;
+  }
+  return undefined;
+}
+
 /**
  * The logo of the instance a run's `backend` names, on any host whose instances are listed: its
  * kind's, or undefined for a backend no list has yet.
  */
 export function instanceLogo(backend: string): Logo | undefined {
-  for (const list of lists.values()) {
-    const info = list.providers.find((p) => p.instance.id === backend);
-    if (info) return logoOf(info.instance);
-  }
-  return undefined;
+  const instance = listedInstance(backend);
+  return instance && logoOf(instance);
 }
 
 /**
  * The name of the instance `id` on any host whose instances are listed: a subscription account
  * is named by its instance, an added one by the name the user gave it.
  */
-export function instanceName(id: string): string | undefined {
-  for (const list of lists.values()) {
-    const info = list.providers.find((p) => p.instance.id === id);
-    if (info) return info.instance.name;
-  }
-  return undefined;
-}
+export const instanceName = (id: string): string | undefined => listedInstance(id)?.name;

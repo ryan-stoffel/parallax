@@ -8,7 +8,7 @@ import type { HostUpdateResult } from "../protocol/generated/protocol";
 // restarts and doesn't come back on the new plxd in time counts as failed.
 
 /** A release version's numbers, without its channel: `[2610, 10912, 13045]` (0030). */
-export function versionNumbers(version: string): number[] | undefined {
+function versionNumbers(version: string): number[] | undefined {
   const numbers = version.split("-")[0]!.split(".");
   if (!numbers.every((n) => /^\d+$/.test(n))) return undefined;
   return numbers.map(Number);
@@ -32,7 +32,7 @@ export function compareVersions(a: string, b: string): number | undefined {
 export const isOlder = (plxd: string, version: string) => (compareVersions(plxd, version) ?? 0) < 0;
 
 /** How a remote host is reached, which decides how its plxd updates without `host/update`. */
-export type HostKind = "ssh" | "remote";
+type HostKind = "ssh" | "remote";
 
 /** How often an SSH host with running agents is asked again before plxd is reinstalled there. */
 export const IDLE_POLL_MS = 15_000;

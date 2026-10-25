@@ -51,12 +51,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import type {
-  PrAction,
-  PrCheck,
-  PrDiffResult,
-  PullRequest,
-} from "../../desktop/src/protocol/generated/protocol";
+import type { PrAction, PrCheck, PullRequest } from "../../desktop/src/protocol/generated/protocol";
 import { githubText } from "../../desktop/src/renderer/github";
 import { numberOf, type PrEntry } from "../../desktop/src/renderer/pullRequestSearch";
 import { useComputer, useFleet, type Computer } from "./fleet";
@@ -120,9 +115,8 @@ const reads = new Map<string, PullRequest>();
 async function view(e: Pick<PrEntry, "hostId" | "runId" | "url">): Promise<PullRequest | string> {
   const answer = await window.parallax.request(e.hostId, "pr/view", { runId: e.runId, url: e.url });
   if ("error" in answer) return answer.error.message;
-  const pr = answer.result as PullRequest;
-  reads.set(e.url, pr);
-  return pr;
+  reads.set(e.url, answer.result);
+  return answer.result;
 }
 
 /** Opens a pull request's link menu, for a row's long press: open it on GitHub or copy its link. */
@@ -547,41 +541,42 @@ function Reviews({ pr }: { pr: PullRequest }) {
       {open && (
         <Folded>
           {latest.map((r) => (
-            <View key={r.author} style={styles.person}>
-              <Icon
-                icon={r.state === "approved" ? Check : r.state === "changesRequested" ? FileDiff : MessageSquareText}
-                size={18}
-                color={r.state === "approved" ? c.added : r.state === "changesRequested" ? c.danger : c.faintForeground}
-              />
-              <Avatar login={r.author} size={32} />
-              <View style={{ flex: 1 }}>
-                <T medium numberOfLines={1} style={{ fontSize: 14, lineHeight: 19 }}>
-                  {r.author}
-                </T>
-                <T muted style={{ fontSize: 12, lineHeight: 16 }}>
-                  {r.state === "approved" ? "Approved" : r.state === "changesRequested" ? "Requested changes" : "Commented"} ·{" "}
-                  {ago(r.submittedAt)}
-                </T>
-              </View>
-            </View>
+            <Person
+              key={r.author}
+              login={r.author}
+              icon={r.state === "approved" ? Check : r.state === "changesRequested" ? FileDiff : MessageSquareText}
+              color={r.state === "approved" ? c.added : r.state === "changesRequested" ? c.danger : c.faintForeground}
+            >
+              {r.state === "approved" ? "Approved" : r.state === "changesRequested" ? "Requested changes" : "Commented"} ·{" "}
+              {ago(r.submittedAt)}
+            </Person>
           ))}
           {waiting.map((who) => (
-            <View key={who} style={styles.person}>
-              <Icon icon={Clock} size={18} color={c.faintForeground} />
-              <Avatar login={who} size={32} />
-              <View style={{ flex: 1 }}>
-                <T medium numberOfLines={1} style={{ fontSize: 14, lineHeight: 19 }}>
-                  {who}
-                </T>
-                <T muted style={{ fontSize: 12, lineHeight: 16 }}>
-                  Review requested
-                </T>
-              </View>
-            </View>
+            <Person key={who} login={who} icon={Clock} color={c.faintForeground}>
+              Review requested
+            </Person>
           ))}
         </Folded>
       )}
     </>
+  );
+}
+
+/** A reviewer's row under Reviews: their verdict's mark, their avatar and login, and what they did. */
+function Person({ login, icon, color, children }: { login: string; icon: LucideIcon; color: string; children: ReactNode }) {
+  return (
+    <View style={styles.person}>
+      <Icon icon={icon} size={18} color={color} />
+      <Avatar login={login} size={32} />
+      <View style={{ flex: 1 }}>
+        <T medium numberOfLines={1} style={{ fontSize: 14, lineHeight: 19 }}>
+          {login}
+        </T>
+        <T muted style={{ fontSize: 12, lineHeight: 16 }}>
+          {children}
+        </T>
+      </View>
+    </View>
   );
 }
 
@@ -710,8 +705,7 @@ function Diff({
     if (state) return;
     void window.parallax.request(hostId, "pr/diff", { runId, url }).then((a) => {
       if ("error" in a) return setState(a.error.message);
-      const result = a.result as PrDiffResult;
-      const read = { rows: diffRows(result.diff), truncated: result.truncated };
+      const read = { rows: diffRows(a.result.diff), truncated: a.result.truncated };
       diffs.set(url, read);
       setState(read);
     });
@@ -803,9 +797,8 @@ export function PullRequestScreen({
           setActing(false);
           if ("error" in answer) return Alert.alert(`Couldn't ${label.toLowerCase()}`, answer.error.message);
           void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          const next = answer.result as PullRequest;
-          reads.set(url, next);
-          setPr(next);
+          reads.set(url, answer.result);
+          setPr(answer.result);
         },
       },
     ]);

@@ -6,8 +6,8 @@ import { childOrder, runAttention, type Attention } from "./attention";
 import type { ProjectAgentsView } from "./ProjectAgents";
 import { OpenHint } from "./OpenHint";
 import { popoverBeside } from "./ui";
-import { instanceLogo, instanceName } from "./providers";
-import { age, backendLogos } from "./Sidebar";
+import { instanceName } from "./providers";
+import { age, backendLogo } from "./Sidebar";
 import { titleOf } from "./threads";
 import { accountLabel } from "./transcript";
 
@@ -51,7 +51,7 @@ export function projectAgentRows(
         id: run.id,
         title: titles[run.id] ?? titleOf(run),
         attention: runAttention(run, asks),
-        Logo: backendLogos[run.backend] ?? instanceLogo(run.backend),
+        Logo: backendLogo(run.backend),
         ...(run.branch && { branch: run.branch }),
         ...(run.diff && { diff: run.diff }),
         updatedAt: run.updatedAt,
@@ -90,6 +90,10 @@ export function AgentsBar({
   const lead = going[0]!;
   const waiting = going.filter((c) => c.attention === "needsYou").length;
   const extra = going.length - 3;
+  const openRow = (runId: string) => {
+    document.getElementById(id)?.hidePopover();
+    onOpen(runId);
+  };
 
   return (
     <section aria-label={label}>
@@ -154,24 +158,8 @@ export function AgentsBar({
       >
         {open && (
           <>
-            <CardGroup
-              label="Working"
-              items={going}
-              onOpen={(runId) => {
-                document.getElementById(id)?.hidePopover();
-                onOpen(runId);
-              }}
-            />
-            {finished.length > 0 && (
-              <CardGroup
-                label="Done"
-                items={finished}
-                onOpen={(runId) => {
-                  document.getElementById(id)?.hidePopover();
-                  onOpen(runId);
-                }}
-              />
-            )}
+            <CardGroup label="Working" items={going} onOpen={openRow} />
+            {finished.length > 0 && <CardGroup label="Done" items={finished} onOpen={openRow} />}
           </>
         )}
       </div>

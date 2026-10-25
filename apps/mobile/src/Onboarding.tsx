@@ -26,7 +26,7 @@ import { Button, DeviceIcon, Dot, Icon, Mark, T, useColors } from "./ui";
 const TAILSCALE_APP = "https://apps.apple.com/app/tailscale/id1470499037";
 
 /** A LAN-paired computer as a machine (0065). */
-export const pairedMachine = (saved: Saved): Machine => ({
+const pairedMachine = (saved: Saved): Machine => ({
   id: pairedId(saved),
   name: saved.name,
   os: "",
@@ -70,13 +70,7 @@ function Step({
 }
 
 /** Finds the user's computers from any one of them. `onFound` gets every Parallax computer. */
-export function FindComputers({
-  onFound,
-  index = 1,
-}: {
-  onFound: (machines: Machine[]) => void;
-  index?: number;
-}) {
+export function FindComputers({ onFound }: { onFound: (machines: Machine[]) => void }) {
   const c = useColors();
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
@@ -101,7 +95,7 @@ export function FindComputers({
   if (pairing) return <Pairing onPaired={(saved) => onFound([pairedMachine(saved)])} onCancel={() => setPairing(false)} />;
   return (
     <Step
-      index={index}
+      index={1}
       title="Find your computers"
       subtitle="Enter any computer that has Parallax with Connect on. Parallax finds the rest of your computers from it."
     >
@@ -145,7 +139,7 @@ export function FindComputers({
 }
 
 /** A computer to pick, with its symbol and whether it's chosen. */
-export function ComputerChoice({
+function ComputerChoice({
   machine,
   chosen,
   onPress,

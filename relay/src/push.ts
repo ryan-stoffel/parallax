@@ -10,7 +10,7 @@ const TEXT: Record<Notification["state"], string> = {
 };
 
 /** The APNs payload for `notification`. The app opens the run from `hostId` and `run`. */
-export function apnsPayload(notification: Notification) {
+function apnsPayload(notification: Notification) {
   return {
     aps: {
       alert: { title: "Parallax", body: TEXT[notification.state] },

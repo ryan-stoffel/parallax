@@ -2,10 +2,9 @@ import { CircleUser, LogIn, LogOut, Settings, UserPlus, type LucideIcon } from "
 import { useId, useRef, useState } from "react";
 
 import { AccountDialog, SecuredByClerk } from "./Account";
-import type { Host } from "./hosts";
 import { ParallaxMark } from "./logos";
 import { Avatar, useProfile } from "./profile";
-import type { ThreadsView } from "./threads";
+import type { HostThreads } from "./Sidebar";
 import { IconButton, Menu, menuItem } from "./ui";
 
 /**
@@ -14,7 +13,7 @@ import { IconButton, Menu, menuItem } from "./ui";
  * Account dialog, and Sign out. Signed out, it offers Sign in and Create an account, which open
  * Clerk's pages in the browser.
  */
-export function ProfileButton({ listed }: { listed: { host: Host; view: ThreadsView }[] }) {
+export function ProfileButton({ listed }: { listed: HostThreads[] }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
   const profile = useProfile();

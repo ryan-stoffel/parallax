@@ -304,7 +304,7 @@ const list = {
 
 // A thread's plxd tools (0041), by what they're doing and what they did (PLX-843), then the 0019
 // coordinator tools older transcripts hold.
-export const plxdLabels: Partial<Record<string, readonly [doing: string, done: string]>> = {
+const plxdLabels: Partial<Record<string, readonly [doing: string, done: string]>> = {
   thread_launch: ["Starting a child thread", "Started a child thread"],
   thread_fork: ["Forking a thread", "Forked a thread"],
   thread_list: ["Listing threads", "Listed threads"],
@@ -384,7 +384,7 @@ export const plxdLabels: Partial<Record<string, readonly [doing: string, done: s
 
 // Computer use (PLX-897), by what the agent is doing or did and in which app, such as "Clicked in
 // Notes", and what it typed, pressed, or set.
-export const computerTools = `${plxdTools}computer_`;
+const computerTools = `${plxdTools}computer_`;
 const computerLabels: Partial<Record<string, readonly [doing: string, done: string]>> = {
   list_apps: ["Listing apps", "Listed apps"],
   get_app_state: ["Looking at", "Looked at"],
@@ -418,7 +418,7 @@ const plxdLabel = (name: string | null) =>
  * task's title or prompt, the secret, the file, the search, or the page). Undefined for any other
  * tool.
  */
-export function plxdCall(item: Extract<Item, { kind: "tool" }>, doing = false) {
+function plxdCall(item: Extract<Item, { kind: "tool" }>, doing = false) {
   const computer = computerCall(item, doing);
   if (computer) return computer;
   const labels = plxdLabel(item.name);

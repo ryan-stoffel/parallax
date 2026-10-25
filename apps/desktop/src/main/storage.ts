@@ -7,7 +7,7 @@ import type { StorageItem, StorageItemId } from "../preload/bridge";
 import { dataDir } from "./plxd";
 
 /** The total size of `target` in bytes, a folder's files included. Symlinks count as themselves. */
-export async function sizeOf(target: string): Promise<number> {
+async function sizeOf(target: string): Promise<number> {
   const stats = await lstat(target).catch(() => undefined);
   if (!stats) return 0;
   if (!stats.isDirectory()) return stats.size;

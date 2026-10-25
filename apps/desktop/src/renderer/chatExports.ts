@@ -147,7 +147,7 @@ export function parseExport(json: unknown): ExportedChat[] {
 export type ExportPart = { filename: string; url: string };
 
 /** What the files given to `readExports` hold: chats, and manifest parts still to download. */
-export type ExportContents = { chats: ExportedChat[]; parts: ExportPart[] };
+type ExportContents = { chats: ExportedChat[]; parts: ExportPart[] };
 
 /**
  * The chats in one JSON or JSON Lines text: a list of chats, as `conversations.json` is, one

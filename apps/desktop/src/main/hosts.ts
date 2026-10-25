@@ -40,7 +40,13 @@ import {
   type SavedDevice,
 } from "./connect";
 import type { Account } from "./account";
-import { backoffMs, Connection, LOCATE_PLXD, sshCommand } from "./connection";
+import {
+  backoffMs,
+  Connection,
+  LOCATE_PLXD,
+  sshCommand,
+  type ConnectionOptions,
+} from "./connection";
 import { closeDeviceStream, openDeviceStream, sendDeviceStream } from "./devices";
 import { HostUpdater } from "./hostUpdate";
 import { installPlxd } from "./installPlxd";
@@ -289,12 +295,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
           ended = true;
           windowSubscriptions(sender).delete(key);
         }
-        if (sender.isDestroyed()) return;
-        if (ipcStats) {
-          ipcStats.messages += 1;
-          ipcStats.bytes += Buffer.byteLength(JSON.stringify(message));
-        }
-        sender.send("parallax:subscription", key, message);
+        forward(sender, key, message);
       },
     );
     // It ends at once when `logId` is stale.
@@ -317,12 +318,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
         ended = true;
         windowSubscriptions(sender).delete(key);
       }
-      if (sender.isDestroyed()) return;
-      if (ipcStats) {
-        ipcStats.messages += 1;
-        ipcStats.bytes += Buffer.byteLength(JSON.stringify(message));
-      }
-      sender.send("parallax:subscription", key, message);
+      forward(sender, key, message);
     });
     if (!ended) windowSubscriptions(sender).set(key, stop);
   });
@@ -460,7 +456,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
  */
 function sshOf(hostId: string): SshTarget | undefined {
   const ssh = settings.ssh ?? "ssh";
-  const saved = settings.hosts.find((h) => h.id === hostId);
+  const saved = savedHost(hostId);
   if (saved) return { destination: saved.destination, ssh };
   if (!hostId.startsWith("tailnet:")) return undefined;
   const device = savedDevices().find((d) => deviceHostId(d.id) === hostId);
@@ -568,18 +564,22 @@ const renderPolicy = [
   "connect-src https:",
 ].join("; ");
 
-/**
- * The html_render page or browser recording (PLX-639) at `plx-render://page/<host>/<run>/<id>`,
- * which that host's plxd keeps with the run's images: a page as a document of its own.
- */
-export async function renderPage(url: string): Promise<Response> {
-  const [, hostId, runId, imageId] = (URL.parse(url)?.pathname ?? "").split("/").map((part) => {
+/** A URL's path split at `/`, each part decoded, or "" where it doesn't decode. */
+const pathParts = (url: string) =>
+  (URL.parse(url)?.pathname ?? "").split("/").map((part) => {
     try {
       return decodeURIComponent(part);
     } catch {
       return "";
     }
   });
+
+/**
+ * The html_render page or browser recording (PLX-639) at `plx-render://page/<host>/<run>/<id>`,
+ * which that host's plxd keeps with the run's images: a page as a document of its own.
+ */
+export async function renderPage(url: string): Promise<Response> {
+  const [, hostId, runId, imageId] = pathParts(url);
   const host = hostId ? connections.get(hostId) : undefined;
   const page =
     host && runId && imageId
@@ -639,13 +639,7 @@ const streamTypes: Record<string, string> = {
  */
 export async function streamFile(url: string, range: string | null): Promise<Response> {
   const refuse = (status: number, why: string) => new Response(why, { status });
-  const parts = (URL.parse(url)?.pathname ?? "").split("/").map((part) => {
-    try {
-      return decodeURIComponent(part);
-    } catch {
-      return "";
-    }
-  });
+  const parts = pathParts(url);
   const [, hostId, runId, filePath] = parts;
   if (parts.length !== 4 || !hostId || !runId || !filePath)
     return refuse(400, "That isn't a file's address.");
@@ -816,25 +810,13 @@ async function replaceOtherServe(
 function addConnection(
   hostId: string,
   command: () => string[] | undefined,
-  {
-    destination,
-    device,
-    lan,
-    env,
-  }: {
-    destination?: string;
-    device?: string;
-    lan?: string;
-    env?: () => Record<string, string> | undefined;
-  } = {},
+  options: Pick<ConnectionOptions, "destination" | "device" | "lan" | "env"> = {},
 ) {
+  const { destination } = options;
   connections.get(hostId)?.dispose();
   const created = new Connection({
     command,
-    ...(destination !== undefined && { destination }),
-    ...(device !== undefined && { device }),
-    ...(lan !== undefined && { lan }),
-    ...(env !== undefined && { env }),
+    ...options,
     clientVersion: app.getVersion(),
     ...(hostId === "local" && { replaceDaemon: replaceOtherServe }),
     onState: (state) => {
@@ -993,7 +975,7 @@ async function lanPlatform(hostId: string): Promise<NodeJS.Platform> {
 }
 
 /** A route's address without its port: `192.168.1.20` for `192.168.1.20:7341`. */
-export const routeHost = (route: string) =>
+const routeHost = (route: string) =>
   route.startsWith("[")
     ? route.slice(1, route.indexOf("]"))
     : route.split(":").length === 2
@@ -1090,7 +1072,7 @@ const isCode = (value: unknown): value is string =>
  * computer and connects. Resolves to an error for people.
  */
 async function pairLan(target: unknown, code: unknown): Promise<string | undefined> {
-  const { found: id, address } = (isObject(target) ? target : {}) as Record<string, unknown>;
+  const { found: id, address }: Record<string, unknown> = isObject(target) ? target : {};
   const routes =
     typeof id === "string"
       ? found.get(id)?.routes
@@ -1354,8 +1336,7 @@ async function readLook(hostId: string, announce = true): Promise<void> {
   if (host?.state.status !== "connected") return;
   const answer = await host.request("host/settings/get", {});
   if ("error" in answer) return;
-  const nodeId = hostId.slice("tailnet:".length);
-  const old = savedDevices().find((d) => d.id === nodeId);
+  const old = deviceOf(hostId);
   const name = answer.result.deviceName || undefined;
   const icon = isDeviceIcon(answer.result.deviceIcon) ? answer.result.deviceIcon : undefined;
   if (!old || (old.name === name && old.icon === icon)) return;
@@ -1465,7 +1446,7 @@ const isScriptTerminal = (value: unknown): value is string =>
 
 /** A terminal's width or height, in character cells. */
 const isSize = (value: unknown): value is number =>
-  Number.isInteger(value) && (value as number) > 0 && (value as number) <= 1000;
+  typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 1000;
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1473,6 +1454,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function invalid(code: number, message: string): RpcResponse<never> {
   return { error: { code, message } };
+}
+
+/** Sends a subscription's or watch's message to its window, counted in `ipcStats`. */
+function forward(sender: WebContents, key: string, message: unknown): void {
+  if (sender.isDestroyed()) return;
+  if (ipcStats) {
+    ipcStats.messages += 1;
+    ipcStats.bytes += Buffer.byteLength(JSON.stringify(message));
+  }
+  sender.send("parallax:subscription", key, message);
 }
 
 /** A window's subscriptions, ended when it closes or reloads, since its listeners are gone. */

@@ -69,7 +69,7 @@ export function imageUrl(parts: Parts, path: string | undefined): string | undef
 }
 
 /** `bytes` in standard base64, in chunks, since one call can't spread megabytes of arguments. */
-export function toBase64(bytes: Uint8Array): string {
+function toBase64(bytes: Uint8Array): string {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000)
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));

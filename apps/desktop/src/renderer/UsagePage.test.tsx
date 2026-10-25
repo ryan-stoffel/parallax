@@ -5,19 +5,17 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import type { UsageDay } from "../protocol/generated/protocol";
+import { lastDaily, resetTime, UsagePage } from "./UsagePage";
 import {
   attribute,
   buckets,
-  lastDaily,
   niceTop,
-  resetTime,
   stack,
   summarize,
   tokensOf,
-  UsagePage,
   type Measures,
   type Range,
-} from "./UsagePage";
+} from "./usageStats";
 import { dayKey } from "./profile";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

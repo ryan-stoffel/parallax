@@ -236,7 +236,7 @@ const processes: ServeSystem = {
  * an AppImage's mount, or the copy the `parallax` command runs on Linux,
  * `…/parallax/app/plxd serve` (PLX-750). A Cargo build or a plxd on PATH is someone else's.
  */
-export const isBundledServe = (args: string) =>
+const isBundledServe = (args: string) =>
   /(\.app\/Contents\/Resources|\/resources|\/parallax\/app)\/plxd serve(\s|$)/.test(args);
 
 /** Whether a serve's command line is the copy at `~/.parallax-plxd/plxd` (`refreshCopy`). */

@@ -411,7 +411,7 @@ function fakeTurn(runId: string, turnId: string | undefined, text: string | unde
   };
   // Each model request reports its context and cache use as Claude's would, with the last turn's
   // speed sample until this turn's result brings a new one.
-  const run = db.runs.find((r) => r.id === runId);
+  const run = runOf(runId);
   const last = [...(logs.get(runId) ?? [])]
     .reverse()
     .flatMap((e) => (e.event.kind === "agent.output" ? [...e.event.items].reverse() : []))
@@ -884,43 +884,6 @@ const handlers: { [M in Method]?: Handler<M> } = {
     return { threads, snippets };
   },
 
-  // Areas (PLX-789): every change sends the whole list again, as plxd does.
-  "area/create": (p) => {
-    const found = db.areas.find((a) => a.id === p.id);
-    if (found) return { area: found };
-    const listed = (id: string) => db.threads.some((t) => t.id === id && !t.parent);
-    const area = {
-      id: p.id,
-      name: p.name.trim(),
-      color: p.color,
-      threads: p.threads.filter(listed),
-      projects: p.projects.filter((id) => db.projects.some((x) => x.id === id)),
-      repos: [...new Set(p.repos ?? [])].filter((id) =>
-        db.repos.some((r) => r.id === id && !r.scratch),
-      ),
-    };
-    db.areas.push(area);
-    emit({ kind: "areas.changed", areas: db.areas });
-    return { area };
-  },
-  "area/update": (p) => {
-    const area = db.areas.find((a) => a.id === p.area);
-    if (!area) return fail("no such area", "areaNotFound");
-    if (p.name !== undefined) area.name = p.name.trim();
-    if (p.color !== undefined) area.color = p.color;
-    if (p.threads) area.threads = [...new Set(p.threads)];
-    if (p.projects) area.projects = [...new Set(p.projects)];
-    if (p.repos) area.repos = [...new Set(p.repos)];
-    emit({ kind: "areas.changed", areas: db.areas });
-    return { area };
-  },
-  "area/delete": (p) => {
-    if (!db.areas.some((a) => a.id === p.area)) return {};
-    db.areas = db.areas.filter((a) => a.id !== p.area);
-    emit({ kind: "areas.changed", areas: db.areas });
-    return {};
-  },
-
   // Every computer has the same folders in the preview.
   "host/folders": (p) => listing(p.path),
 
@@ -956,32 +919,6 @@ const handlers: { [M in Method]?: Handler<M> } = {
     if (p.name) repo.name = p.name;
     emit({ kind: "repo.updated", repo });
     return { repo };
-  },
-  "space/create": (p) => {
-    const found = db.repos.find((r) => r.id === p.id);
-    if (found) return { repo: found };
-    const repo = {
-      id: p.id,
-      name: p.name,
-      path: `/data/spaces/${p.id}`,
-      space: true,
-      ...(p.icon && { icon: p.icon }),
-      createdAt: now(),
-    };
-    db.repos.push(repo);
-    emit({ kind: "repo.added", repo });
-    return { repo };
-  },
-  "space/delete": (p) => {
-    if (!db.repos.some((r) => r.id === p.space && r.space)) return fail("no such space");
-    db.threads = db.threads.filter((t) => t.repo !== p.space);
-    db.repos = db.repos.filter((r) => r.id !== p.space);
-    emit({ kind: "repo.removed", repo: p.space });
-    if (db.areas.some((a) => a.repos?.includes(p.space))) {
-      for (const a of db.areas) a.repos = a.repos?.filter((id) => id !== p.space);
-      emit({ kind: "areas.changed", areas: db.areas });
-    }
-    return {};
   },
   "repo/refs": () => ({
     refs: [
@@ -1391,10 +1328,6 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "orchestration/getTurnDiff": (p) => ({ diff: p.from === 0 ? UPDATER_PATCH : "" }),
   "orchestration/getFullThreadDiff": () => ({ diff: UPDATER_PATCH }),
   "queue/list": () => ({ messages: [] }),
-  "queue/edit": () => ({ messages: [] }),
-  "queue/reorder": () => ({ messages: [] }),
-  "queue/cancel": () => ({ messages: [] }),
-  "queue/steer": () => ({ messages: [] }),
 
   // Computer use (PLX-897): plxd has Accessibility but not Screen Recording yet, and Notes is
   // always allowed, as the groceries thread left it.
@@ -1518,9 +1451,7 @@ const profile: Profile = {
   lastName: "Stoffel",
   email: "ryan@example.com",
 };
-const connect: ConnectState = connectSetUp
-  ? { on: true, icon: "laptop", channel: "nightly" }
-  : { on: false, icon: "laptop", channel: "nightly" };
+const connect: ConnectState = { on: connectSetUp, icon: "laptop", channel: "nightly" };
 // Set up, they carry the names given on them; new, they're known by their host names.
 if (connectSetUp) for (const d of tailnet.slice(0, 3)) d.parallax = true;
 else for (const d of tailnet) delete d.name;
@@ -1691,8 +1622,6 @@ function fakeAdd(device: TailnetDevice, user: string | undefined): [string, numb
 }
 
 const terminalListeners = new Map<string, (message: TerminalMessage) => void>();
-
-// ---- The bridge --------------------------------------------------------------------------------
 
 // ---- Cloning onto a computer (PLX-905) ------------------------------------------------------------
 

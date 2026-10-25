@@ -217,9 +217,7 @@ function RemoteHost({
   };
   const canSignIn =
     window.parallax.platform !== "win32" && state?.status === "failed" && signInFixes(state.error);
-  useEffect(() => {
-    if (state?.status === "connected") setSigningIn(false);
-  }, [state?.status]);
+  if (signingIn && state?.status === "connected") setSigningIn(false);
   return (
     <>
       <div className={settingRow}>

@@ -2,10 +2,9 @@ import { ChevronDown, Zap } from "lucide-react";
 import { useId, type CSSProperties } from "react";
 
 import type { AgentEffort } from "../protocol/generated/protocol";
-import { effortLevels } from "./catalog";
+import { effortLevels as levels } from "./catalog";
 import { menuButton, menuPanel, Picker } from "./ui";
 
-const levels = effortLevels;
 const last = levels.length - 1;
 // The thumb's center travels from one radius in to one radius short of the far end, as the
 // range's own (invisible) thumb does, so pointer positions map to the same stops.

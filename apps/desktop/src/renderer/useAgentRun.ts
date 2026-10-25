@@ -14,7 +14,7 @@ import { applyEvents, emptyTranscript, rebuild, type Transcript } from "./transc
 import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
 
-export interface AgentRunView {
+interface AgentRunView {
   transcript: Transcript;
   /** Why the transcript couldn't load, for people. */
   error?: string;
@@ -76,7 +76,7 @@ export interface SentMessage {
  * A new model, effort, or access for a run, sent only to a plxd that advertises `sendModel`, and
  * a new account, perhaps another provider's, only to one that advertises `sendAccount`.
  */
-export type SendOptions = Pick<
+type SendOptions = Pick<
   AgentSendParams,
   "model" | "effort" | "permission" | "contextWindow" | "fast" | "account"
 >;

@@ -18,7 +18,7 @@ import { isRunning } from "./transcript";
 import { notify, type Notice } from "./notifications";
 import { Menu, menuItem, splitChevron } from "./ui";
 
-export type GitAction = "commit" | "push" | "pr";
+type GitAction = "commit" | "push" | "pr";
 
 const actions: { action: GitAction; label: string; busy: string; Icon: LucideIcon }[] = [
   { action: "commit", label: "Commit", busy: "Committing…", Icon: GitCommitHorizontal },

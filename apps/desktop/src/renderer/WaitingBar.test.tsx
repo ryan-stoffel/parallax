@@ -6,7 +6,8 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import type { ParallaxBridge } from "../preload/bridge";
 import type { AgentBackgroundTask } from "../protocol/generated/protocol";
 import { Notifications } from "./notifications";
-import { presentWaiting, WaitingBar } from "./WaitingBar";
+import { presentWaiting } from "./waiting";
+import { WaitingBar } from "./WaitingBar";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers.

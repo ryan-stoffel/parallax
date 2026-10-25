@@ -13,7 +13,7 @@ export interface Toast {
 }
 
 /** How long a toast stays. */
-export const toastMs = 5000;
+const toastMs = 5000;
 /** The most toasts on screen; a newer one pushes out the oldest. */
 const maxToasts = 3;
 

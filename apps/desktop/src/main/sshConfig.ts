@@ -23,7 +23,7 @@ export function configHosts(text: string): string[] {
 }
 
 /** The `Include` patterns in one ssh config file's text. */
-export function configIncludes(text: string): string[] {
+function configIncludes(text: string): string[] {
   const includes: string[] = [];
   for (const raw of text.split(/\r?\n/)) {
     const line = uncommented(raw);

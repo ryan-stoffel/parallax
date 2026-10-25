@@ -17,7 +17,8 @@ export function Lightbox({
 }: {
   images: readonly { src: string; name: string }[];
   index: number;
-  onIndex: (index: number) => void;
+  /** Shows another of `images`; needed only when there are several. */
+  onIndex?: (index: number) => void;
   onClose: () => void;
   onDownload?: (index: number) => void;
 }) {
@@ -29,7 +30,7 @@ export function Lightbox({
   const many = images.length > 1;
   const go = (step: number) => {
     setZoom(undefined);
-    onIndex((index + step + images.length) % images.length);
+    onIndex?.((index + step + images.length) % images.length);
   };
   const at = (e: { currentTarget: Element; clientX: number; clientY: number }) => {
     const box = e.currentTarget.getBoundingClientRect();
