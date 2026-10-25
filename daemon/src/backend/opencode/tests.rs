@@ -339,6 +339,14 @@ async fn until(events: &mut EventStream, until: impl Fn(&Event) -> bool) -> Vec<
     }
 }
 
+/// The run's outcome, from the `Finished` that ends `seen`.
+fn outcome(seen: &[Event]) -> &Outcome {
+    match seen.last() {
+        Some(Event::Finished { outcome, .. }) => outcome,
+        other => panic!("expected Finished last, got {other:?}"),
+    }
+}
+
 /// The script of a server that runs one turn with a `bash` call that asks first.
 fn one_turn(request: &Request) -> (u16, Value, Vec<Value>) {
     let path = request.target.split('?').next().unwrap_or_default();
@@ -435,13 +443,7 @@ async fn a_thread_at_a_server_url_streams_asks_and_finishes() {
         result: Some("It printed hello world.".into()),
         failed: false,
     }));
-    assert!(matches!(
-        seen.last(),
-        Some(Event::Finished {
-            outcome: Outcome::Completed { .. },
-            ..
-        })
-    ));
+    assert!(matches!(outcome(&seen), Outcome::Completed { .. }));
 
     // Every call signed in, for the run's folder; Auto-accept edits asks before commands only.
     let folder = super::encode(&cwd);
@@ -529,13 +531,7 @@ async fn a_resumed_plan_run_appends_its_rules_and_an_interrupting_denial_aborts(
         result: None,
         failed: false,
     }));
-    assert!(matches!(
-        seen.last(),
-        Some(Event::Finished {
-            outcome: Outcome::Completed { .. },
-            ..
-        })
-    ));
+    assert!(matches!(outcome(&seen), Outcome::Completed { .. }));
 
     assert!(server.find("POST", "/session?").is_none(), "no new session");
     let patched = server.find("PATCH", "/session/ses_1").unwrap();
@@ -574,11 +570,7 @@ async fn a_wrong_password_and_a_failed_turn_fail_the_run() {
         OpencodeBackend::new(launcher.clone(), opencode(Some(&server.url), Some("wrong")));
     let mut events = backend.start(request(cwd.clone())).unwrap().events;
     let seen = until(&mut events, |e| matches!(e, Event::Finished { .. })).await;
-    let Some(Event::Finished {
-        outcome: Outcome::Failed(failure),
-        ..
-    }) = seen.last()
-    else {
+    let Outcome::Failed(failure) = outcome(&seen) else {
         panic!("expected a failure: {seen:?}");
     };
     assert!(
@@ -590,11 +582,7 @@ async fn a_wrong_password_and_a_failed_turn_fail_the_run() {
     let backend = OpencodeBackend::new(launcher, opencode(Some(&server.url), Some("hunter2")));
     let mut events = backend.start(request(cwd)).unwrap().events;
     let seen = until(&mut events, |e| matches!(e, Event::Finished { .. })).await;
-    let Some(Event::Finished {
-        outcome: Outcome::Failed(failure),
-        ..
-    }) = seen.last()
-    else {
+    let Outcome::Failed(failure) = outcome(&seen) else {
         panic!("expected a failure: {seen:?}");
     };
     assert_eq!(failure.message, "Model not found: opencode/nope");
@@ -626,13 +614,7 @@ async fn a_started_server_gets_the_password_and_no_url() {
     );
     started.run.cancel();
     let seen = until(&mut events, |e| matches!(e, Event::Finished { .. })).await;
-    assert!(matches!(
-        seen.last(),
-        Some(Event::Finished {
-            outcome: Outcome::Cancelled,
-            ..
-        })
-    ));
+    assert_eq!(outcome(&seen), &Outcome::Cancelled);
 
     let env = fs::read_to_string(dir.path().join("env")).unwrap();
     assert!(env.contains("OPENCODE_SERVER_PASSWORD=hunter2\n"));
@@ -790,13 +772,7 @@ async fn a_denial_goes_on_and_a_request_opencode_rejected_is_withdrawn() {
         output: None,
         images: Vec::new(),
     }));
-    assert!(matches!(
-        seen.last(),
-        Some(Event::Finished {
-            outcome: Outcome::Completed { .. },
-            ..
-        })
-    ));
+    assert!(matches!(outcome(&seen), Outcome::Completed { .. }));
     let denied = server.find("POST", "/permission/per_1/reply").unwrap();
     assert_eq!(
         denied.body,

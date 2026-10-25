@@ -230,11 +230,7 @@ impl Translator {
                 let failure = (status == Some("failed"))
                     .then(|| turn_failure(turn.and_then(|turn| turn.get("error"))));
                 vec![Step::TurnDone {
-                    result: if status == Some("completed") {
-                        result
-                    } else {
-                        None
-                    },
+                    result: result.filter(|_| status == Some("completed")),
                     failure,
                 }]
             }
@@ -244,17 +240,13 @@ impl Translator {
                 .get("error")
                 .and_then(|error| error.get("message"))
                 .and_then(Value::as_str)
-                .map(|detail| notice(detail.to_owned()))
+                .map(notice)
                 .into_iter()
                 .collect(),
-            "warning" | "guardianWarning" => text(params, "message")
-                .map(|detail| notice(detail.to_owned()))
-                .into_iter()
-                .collect(),
-            "configWarning" => text(params, "summary")
-                .map(|detail| notice(detail.to_owned()))
-                .into_iter()
-                .collect(),
+            "warning" | "guardianWarning" => {
+                text(params, "message").map(notice).into_iter().collect()
+            }
+            "configWarning" => text(params, "summary").map(notice).into_iter().collect(),
             "account/rateLimits/updated" => rate_limits(params),
             "serverRequest/resolved" => params
                 .get("requestId")
@@ -431,8 +423,10 @@ fn warning(detail: String) -> Step {
     })
 }
 
-fn notice(detail: String) -> Step {
-    Step::Emit(Event::Notice { detail })
+fn notice(detail: &str) -> Step {
+    Step::Emit(Event::Notice {
+        detail: detail.to_owned(),
+    })
 }
 
 /// A tool call item's name, in exec's naming so the app shows both alike, or the MCP tool as

@@ -157,11 +157,10 @@ impl Backend for CursorSdkBackend {
         lines
             .send(format!("{start}\n"))
             .map_err(|_| StartError::Invalid("couldn't write to the Cursor SDK sidecar".into()))?;
-        let mut turns = VecDeque::new();
-        turns.push_back(PendingTurn {
+        let turns = VecDeque::from([PendingTurn {
             id: request.turn_id,
             follow_up: false,
-        });
+        }]);
         tokio::spawn(drive(Driver {
             process,
             control,
@@ -245,52 +244,34 @@ pub(crate) async fn inspect(
         return report;
     }
     let cwd = launcher.data_dir().root().to_owned();
+    // The SDK is installed, but the sidecar couldn't say more.
+    let failed = |path: Option<String>, note: String| Report {
+        installed: true,
+        path,
+        note: Some(note),
+        ..Report::default()
+    };
     let spec = match command(launcher, instance, "status", &cwd, env) {
         Ok(spec) => spec,
-        Err(error) => {
-            return Report {
-                installed: true,
-                note: Some(error.to_string()),
-                ..Report::default()
-            };
-        }
+        Err(error) => return failed(None, error.to_string()),
     };
     let path = spec.program.to_string_lossy().into_owned();
     let value = match run_json(launcher, spec, timeout).await {
         Ok(value) => value,
-        Err(note) => {
-            return Report {
-                installed: true,
-                path: Some(path),
-                note: Some(note),
-                ..Report::default()
-            };
-        }
+        Err(note) => return failed(Some(path), note),
     };
-    if value.get("type").and_then(Value::as_str) == Some("error") {
-        return Report {
-            installed: true,
-            path: Some(path),
-            note: Some(message_of(&value)),
-            ..Report::default()
-        };
+    if str_of(&value, "type") == Some("error") {
+        return failed(Some(path), message_of(&value));
     }
     let signed_in = value.get("signedIn").and_then(Value::as_bool);
-    let note = str_of(&value, "message").map(str::to_owned);
     let mut report = Report {
         installed: true,
         installing: false,
         path: Some(path),
-        version: value
-            .get("version")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        version: str_of(&value, "version").map(str::to_owned),
         signed_in,
-        email: value
-            .get("email")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        note,
+        email: str_of(&value, "email").map(str::to_owned),
+        note: str_of(&value, "message").map(str::to_owned),
         models: Vec::new(),
     };
     if signed_in == Some(true)
@@ -300,22 +281,15 @@ pub(crate) async fn inspect(
         report.models = listed
             .get("models")
             .and_then(Value::as_array)
-            .map(|models| {
-                models
-                    .iter()
-                    .filter_map(|model| {
-                        Some(ProviderModel {
-                            id: model.get("id")?.as_str()?.to_owned(),
-                            name: model
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or("model")
-                                .to_owned(),
-                        })
-                    })
-                    .collect()
+            .into_iter()
+            .flatten()
+            .filter_map(|model| {
+                Some(ProviderModel {
+                    id: str_of(model, "id")?.to_owned(),
+                    name: str_of(model, "name").unwrap_or("model").to_owned(),
+                })
             })
-            .unwrap_or_default();
+            .collect();
     }
     report
 }
@@ -383,13 +357,7 @@ impl CursorAuth {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(instance);
-        let cwd = self.launcher.data_dir().root().to_owned();
-        let spec = command(&self.launcher, instance, "login", &cwd, &[])
-            .map_err(|error| error.to_string())?;
-        let mut process = self
-            .launcher
-            .spawn(&spec)
-            .map_err(|error| error.to_string())?;
+        let mut process = self.spawn(instance, "login")?;
         let signals = process.signals().clone();
         let url = tokio::time::timeout(Duration::from_secs(30), async {
             while let Some(output) = process.next().await {
@@ -489,13 +457,7 @@ impl CursorAuth {
     /// When the sidecar cannot start or does not exit.
     pub async fn sign_out(&self, instance: &str) -> Result<(), String> {
         self.cancel();
-        let cwd = self.launcher.data_dir().root().to_owned();
-        let spec = command(&self.launcher, instance, "logout", &cwd, &[])
-            .map_err(|error| error.to_string())?;
-        let mut process = self
-            .launcher
-            .spawn(&spec)
-            .map_err(|error| error.to_string())?;
+        let mut process = self.spawn(instance, "logout")?;
         let exit = tokio::time::timeout(Duration::from_secs(20), async {
             while let Some(output) = process.next().await {
                 if let Output::Exited(exit) = output {
@@ -511,6 +473,16 @@ impl CursorAuth {
         } else {
             Err(exit_message(exit))
         }
+    }
+
+    /// The sidecar's `which` command for `instance`, started in plxd's data folder.
+    fn spawn(&self, instance: &str, which: &str) -> Result<Process, String> {
+        let cwd = self.launcher.data_dir().root().to_owned();
+        let spec = command(&self.launcher, instance, which, &cwd, &[])
+            .map_err(|error| error.to_string())?;
+        self.launcher
+            .spawn(&spec)
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -545,7 +517,7 @@ async fn drive(mut driver: Driver) {
         tokio::select! {
             biased;
             output = driver.process.next() => {
-                match output {
+                let sent = match output {
                     None => {
                         driver.finish(None).await;
                         return;
@@ -555,17 +527,13 @@ async fn drive(mut driver: Driver) {
                         return;
                     }
                     Some(Output::Oversized { bytes }) => {
-                        if driver.warn(format!("skipped a line of {bytes} bytes")).await.is_err() {
-                            driver.switch.cancel();
-                            return;
-                        }
+                        driver.warn(format!("skipped a line of {bytes} bytes")).await
                     }
-                    Some(Output::Line(line)) => {
-                        if driver.line(&line).await.is_err() {
-                            driver.switch.cancel();
-                            return;
-                        }
-                    }
+                    Some(Output::Line(line)) => driver.line(&line).await,
+                };
+                if sent.is_err() {
+                    driver.switch.cancel();
+                    return;
                 }
             }
             message = driver.control.recv(), if driver.stdin.is_some() => {
@@ -724,17 +692,13 @@ impl Driver {
 
     async fn on_error(&mut self, value: &Value) -> Result<(), StreamClosed> {
         let message = message_of(value);
-        match str_of(value, "failure") {
-            Some("notSignedIn") => {
-                self.failure = Some(Failure::new(FailureKind::NotSignedIn, message));
-                Ok(())
-            }
-            Some("rateLimited") => {
-                self.failure = Some(Failure::new(FailureKind::RateLimited, message));
-                Ok(())
-            }
-            _ => self.sink.emit(Event::Notice { detail: message }).await,
-        }
+        let kind = match str_of(value, "failure") {
+            Some("notSignedIn") => FailureKind::NotSignedIn,
+            Some("rateLimited") => FailureKind::RateLimited,
+            _ => return self.sink.emit(Event::Notice { detail: message }).await,
+        };
+        self.failure = Some(Failure::new(kind, message));
+        Ok(())
     }
 
     fn send_follow_up(&mut self, follow: &FollowUp) -> Result<(), ()> {
@@ -907,14 +871,7 @@ fn images_of(images: &[super::PromptImage]) -> Vec<Value> {
 }
 
 fn tokens(value: &Value, name: &str) -> u64 {
-    value
-        .get(name)
-        .and_then(|token| {
-            token
-                .as_u64()
-                .or_else(|| token.as_i64().and_then(|n| u64::try_from(n).ok()))
-        })
-        .unwrap_or(0)
+    value.get(name).and_then(Value::as_u64).unwrap_or(0)
 }
 
 fn str_of<'a>(value: &'a Value, name: &str) -> Option<&'a str> {
@@ -1007,8 +964,8 @@ mod tests {
     use super::CursorSdkBackend;
     use crate::backend::process::{Environment, Launcher};
     use crate::backend::{
-        AccountRef, Backend, Credential, Event, FollowUp, Outcome, Overrides, RunRequest,
-        ToolPolicy, TurnId,
+        AccountRef, Backend, Credential, Event, EventStream, FollowUp, Outcome, Overrides,
+        RunRequest, ToolPolicy, TurnId,
     };
     use crate::paths::DataDir;
 
@@ -1034,6 +991,30 @@ case "$cmd" in
     ;;
 esac
 "#;
+
+    /// `script` as the executable `fake-cursor` in `root`.
+    fn fake_program(root: &std::path::Path, script: &str) -> std::path::PathBuf {
+        let program = root.join("fake-cursor");
+        fs::write(&program, script).unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        program
+    }
+
+    /// Every event up to and including `Finished`, or to the stream's end.
+    async fn until_finished(events: &mut EventStream) -> Vec<Event> {
+        let mut all = Vec::new();
+        while let Some(event) = tokio::time::timeout(Duration::from_secs(5), events.next())
+            .await
+            .unwrap()
+        {
+            let done = matches!(event, Event::Finished { .. });
+            all.push(event);
+            if done {
+                break;
+            }
+        }
+        all
+    }
 
     fn launcher(dir: &std::path::Path, program: &std::path::Path) -> Launcher {
         let mut env = Environment::empty();
@@ -1075,30 +1056,21 @@ esac
     async fn a_turn_streams_text_and_the_sidecar_never_sees_cursor_env() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let program = root.join("fake-cursor");
-        fs::write(&program, FAKE).unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = fake_program(&root, FAKE);
         let backend = CursorSdkBackend::new(launcher(&root, &program));
         let started = backend.start(request(root.clone())).unwrap();
         let mut events = started.events;
-        let mut kinds = Vec::new();
-        let mut text = String::new();
-        while let Some(event) = tokio::time::timeout(Duration::from_secs(5), events.next())
-            .await
-            .unwrap()
-        {
-            if let Event::TextDelta { text: delta, .. } = &event {
-                text.push_str(delta);
-            }
-            let done = matches!(event, Event::Finished { .. });
-            kinds.push(event);
-            if done {
-                break;
-            }
-        }
+        let all = until_finished(&mut events).await;
+        let text: String = all
+            .iter()
+            .filter_map(|event| match event {
+                Event::TextDelta { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(text, "hello");
         assert!(matches!(
-            kinds.last(),
+            all.last(),
             Some(Event::Finished {
                 outcome: Outcome::Completed { result: Some(result) },
                 ..
@@ -1122,9 +1094,7 @@ esac
         for resume in [None, Some(crate::backend::Resume::new("agent-1"))] {
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path().canonicalize().unwrap();
-            let program = root.join("fake-cursor");
-            fs::write(&program, FAKE).unwrap();
-            fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+            let program = fake_program(&root, FAKE);
             let backend = CursorSdkBackend::new(launcher(&root, &program));
             let request = RunRequest {
                 resume: resume.clone(),
@@ -1133,14 +1103,7 @@ esac
             };
             let started = backend.start(request).unwrap();
             let mut events = started.events;
-            while let Some(event) = tokio::time::timeout(Duration::from_secs(5), events.next())
-                .await
-                .unwrap()
-            {
-                if matches!(event, Event::Finished { .. }) {
-                    break;
-                }
-            }
+            until_finished(&mut events).await;
             let stdin = fs::read_to_string(root.join("stdin")).unwrap();
             let start: Value = serde_json::from_str(stdin.lines().next().unwrap()).unwrap();
             assert_eq!(start["prompt"], "Never edit files.\n\nSay hello");
@@ -1162,9 +1125,7 @@ esac
             exit 1\n";
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let program = root.join("fake-cursor");
-        fs::write(&program, FAILS).unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = fake_program(&root, FAILS);
         let auth = super::CursorAuth::new(launcher(&root, &program));
         assert_eq!(
             auth.sign_in("cursor").await.unwrap(),
@@ -1202,9 +1163,7 @@ wait
 "#;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let program = root.join("fake-cursor");
-        fs::write(&program, LATE_IDLE).unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = fake_program(&root, LATE_IDLE);
         let mut env = Environment::empty();
         env.set("PATH", "/usr/bin:/bin");
         env.set("PLXD_CURSOR_SDK", &program);
@@ -1225,14 +1184,7 @@ wait
             })
             .unwrap();
         let mut events = started.events;
-        while let Some(event) = tokio::time::timeout(Duration::from_secs(5), events.next())
-            .await
-            .unwrap()
-        {
-            if matches!(event, Event::Finished { .. }) {
-                break;
-            }
-        }
+        until_finished(&mut events).await;
         assert!(
             fs::read_to_string(root.join("stdin"))
                 .unwrap()
@@ -1366,9 +1318,7 @@ wait
     async fn only_the_instances_cursor_api_key_reaches_the_sidecar() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
-        let program = root.join("fake-cursor");
-        fs::write(&program, FAKE).unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = fake_program(&root, FAKE);
         let backend = CursorSdkBackend::new(launcher(&root, &program)).with_overrides(Overrides {
             env: vec![
                 ("CURSOR_API_KEY".into(), "instance-key".into()),
@@ -1377,14 +1327,7 @@ wait
             ..Overrides::default()
         });
         let mut events = backend.start(request(root.clone())).unwrap().events;
-        while let Some(event) = tokio::time::timeout(Duration::from_secs(5), events.next())
-            .await
-            .unwrap()
-        {
-            if matches!(event, Event::Finished { .. }) {
-                break;
-            }
-        }
+        until_finished(&mut events).await;
         let seen = fs::read_to_string(root.join("cursor-env")).unwrap();
         assert_eq!(seen.trim(), "CURSOR_API_KEY=instance-key");
     }

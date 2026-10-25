@@ -13,8 +13,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
-use super::commands::Parsed;
-use super::process::{Output, Process};
+use super::commands::{Parsed, read_answer, text, within};
+use super::process::Process;
 
 /// The file in the CLI's folder that holds [`schema`], for a CLI that reads it from a file.
 pub const SCHEMA_FILE: &str = "schema.json";
@@ -62,25 +62,9 @@ pub async fn ask(mut probe: NameProbe, prompt: &str, limit: Duration) -> Result<
             // closes stdin, which ends the prompt.
             let _ = pipe.write_all(prompt.as_bytes()).await;
         }
-        loop {
-            match probe.process.next().await {
-                Some(Output::Line(line)) => {
-                    let parsed = serde_json::from_slice(&line).ok();
-                    if let Some(answer) = parsed.as_ref().and_then(probe.parse) {
-                        return answer;
-                    }
-                }
-                Some(Output::Oversized { .. }) => {}
-                Some(Output::Exited(exit)) => {
-                    return Err(format!("it exited before answering: {}", exit.stderr_tail));
-                }
-                None => return Err("it exited before answering".to_owned()),
-            }
-        }
+        read_answer(&mut probe.process, probe.parse).await
     };
-    tokio::time::timeout(limit, read)
-        .await
-        .unwrap_or_else(|_| Err(format!("it didn't answer within {limit:?}")))
+    within(limit, read).await
 }
 
 /// Claude Code's `result` message: its `structured_output`, or its `result` text when it failed.
@@ -106,12 +90,6 @@ pub fn codex(message: &Value) -> Parsed<Name> {
         "turn.failed" => Some(Err(text(&message["error"]["message"]))),
         _ => None,
     }
-}
-
-fn text(value: &Value) -> String {
-    value
-        .as_str()
-        .map_or_else(|| value.to_string(), str::to_owned)
 }
 
 #[cfg(test)]

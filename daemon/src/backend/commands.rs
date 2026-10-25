@@ -67,23 +67,44 @@ pub async fn list<T>(mut probe: Probe<T>, limit: Duration) -> Result<T, String> 
             // A failed write means the CLI exited, which the output says.
             let _ = pipe.write_all(input.as_bytes()).await;
         }
-        loop {
-            match probe.process.next().await {
-                Some(Output::Line(line)) => {
-                    let parsed = serde_json::from_slice(&line).ok();
-                    if let Some(answer) = parsed.as_ref().and_then(probe.parse) {
-                        return answer;
-                    }
-                }
-                Some(Output::Oversized { .. }) => {}
-                Some(Output::Exited(exit)) => {
-                    return Err(format!("it exited before answering: {}", exit.stderr_tail));
-                }
-                None => return Err("it exited before answering".to_owned()),
-            }
-        }
+        read_answer(&mut probe.process, probe.parse).await
     };
-    tokio::time::timeout(limit, read)
+    within(limit, read).await
+}
+
+/// Reads `process`'s lines until `parse` finds the answer in one, for [`list`] and
+/// [`namer::ask`](super::namer::ask).
+///
+/// # Errors
+///
+/// What the CLI answered instead, or that it exited first.
+pub(super) async fn read_answer<T>(
+    process: &mut Process,
+    parse: fn(&Value) -> Parsed<T>,
+) -> Result<T, String> {
+    loop {
+        match process.next().await {
+            Some(Output::Line(line)) => {
+                let parsed = serde_json::from_slice(&line).ok();
+                if let Some(answer) = parsed.as_ref().and_then(parse) {
+                    return answer;
+                }
+            }
+            Some(Output::Oversized { .. }) => {}
+            Some(Output::Exited(exit)) => {
+                return Err(format!("it exited before answering: {}", exit.stderr_tail));
+            }
+            None => return Err("it exited before answering".to_owned()),
+        }
+    }
+}
+
+/// `answer`, or that it didn't come within `limit`.
+pub(super) async fn within<T>(
+    limit: Duration,
+    answer: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::time::timeout(limit, answer)
         .await
         .unwrap_or_else(|_| Err(format!("it didn't answer within {limit:?}")))
 }
@@ -181,7 +202,8 @@ fn command(prefix: &str, entry: &Value) -> Option<AgentCommand> {
     })
 }
 
-fn text(value: &Value) -> String {
+/// `value` as text: a string as it is, anything else as JSON.
+pub(super) fn text(value: &Value) -> String {
     value
         .as_str()
         .map_or_else(|| value.to_string(), str::to_owned)

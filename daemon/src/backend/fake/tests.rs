@@ -84,6 +84,18 @@ fn root() -> PathBuf {
     PathBuf::from("/")
 }
 
+/// A plain follow-up `text` as turn `turn_id`.
+fn follow_up(turn_id: TurnId, text: &str) -> FollowUp {
+    FollowUp {
+        turn_id,
+        text: text.into(),
+        images: Vec::new(),
+        steer: false,
+        model: None,
+        permission: None,
+    }
+}
+
 /// Starts a run and checks that it opens with the prompt's turn.
 async fn launch(backend: &dyn Backend, request: RunRequest) -> Started {
     let turn_id = request.turn_id;
@@ -306,14 +318,7 @@ async fn cancel_mid_stream_interrupts_the_cli() {
     );
     wait_until_gone(&pid).await;
     assert_eq!(
-        run.send(FollowUp {
-            turn_id: TurnId::generate(),
-            text: "too late".into(),
-            images: Vec::new(),
-            steer: false,
-            model: None,
-            permission: None,
-        }),
+        run.send(follow_up(TurnId::generate(), "too late")),
         Err(SendError::Finished)
     );
 }
@@ -360,20 +365,13 @@ async fn a_follow_up_becomes_the_next_turn() {
         }
     );
     let turn_id = TurnId::generate();
-    let follow_up = FollowUp {
-        turn_id,
-        text: "Now the \"tests\",\nplease.".into(),
-        images: Vec::new(),
-        steer: false,
-        model: None,
-        permission: None,
-    };
-    run.send(follow_up.clone()).unwrap();
-    run.send(follow_up.clone()).unwrap();
+    let message = follow_up(turn_id, "Now the \"tests\",\nplease.");
+    run.send(message.clone()).unwrap();
+    run.send(message.clone()).unwrap();
     assert_eq!(
         run.send(FollowUp {
             text: "different".into(),
-            ..follow_up
+            ..message
         }),
         Err(SendError::IdConflict)
     );
@@ -413,14 +411,7 @@ async fn a_follow_up_the_cli_never_read_is_reported_dropped() {
     run.cancel();
     let turn_id = TurnId::generate();
     // Accepted while the run is still winding down, or refused once it has ended.
-    let sent = run.send(FollowUp {
-        turn_id,
-        text: "one more thing".into(),
-        images: Vec::new(),
-        steer: false,
-        model: None,
-        permission: None,
-    });
+    let sent = run.send(follow_up(turn_id, "one more thing"));
     let all = rest(&mut events).await;
     assert_eq!(outcome(&all), &Outcome::Cancelled);
     if sent.is_ok() {
@@ -434,14 +425,7 @@ async fn a_follow_up_the_cli_never_read_is_reported_dropped() {
         );
     }
     assert_eq!(
-        run.send(FollowUp {
-            turn_id,
-            text: "one more thing".into(),
-            images: Vec::new(),
-            steer: false,
-            model: None,
-            permission: None,
-        }),
+        run.send(follow_up(turn_id, "one more thing")),
         Err(SendError::Finished),
         "a retry must not claim the dropped message arrived"
     );
@@ -480,15 +464,7 @@ async fn turns_finish_in_the_order_they_started() {
     // Both reach the CLI while the prompt's turn is still running.
     let (second, third) = (TurnId::generate(), TurnId::generate());
     for (turn_id, text) in [(second, "second"), (third, "third")] {
-        run.send(FollowUp {
-            turn_id,
-            text: text.into(),
-            images: Vec::new(),
-            steer: false,
-            model: None,
-            permission: None,
-        })
-        .unwrap();
+        run.send(follow_up(turn_id, text)).unwrap();
     }
     let all = rest(&mut events).await;
     let finished: Vec<(Option<TurnId>, Option<&str>)> = all
@@ -598,14 +574,7 @@ async fn a_backend_without_follow_ups_refuses_them_and_closes_stdin() {
     let backend = backend("follow-up").without_follow_ups();
     let Started { run, mut events } = launch(&backend, request(&root())).await;
     assert_eq!(
-        run.send(FollowUp {
-            turn_id: TurnId::generate(),
-            text: "hi".into(),
-            images: Vec::new(),
-            steer: false,
-            model: None,
-            permission: None,
-        }),
+        run.send(follow_up(TurnId::generate(), "hi")),
         Err(SendError::Unsupported)
     );
     // The script's read sees end of file at once, so it exits after its first turn.
@@ -874,15 +843,7 @@ async fn a_withdrawn_request_takes_no_answer() {
     })
     .unwrap();
     let turn_id = TurnId::generate();
-    run.send(FollowUp {
-        turn_id,
-        text: "Next.".into(),
-        images: Vec::new(),
-        steer: false,
-        model: None,
-        permission: None,
-    })
-    .unwrap();
+    run.send(follow_up(turn_id, "Next.")).unwrap();
     let all = rest(&mut events).await;
     assert_eq!(texts(&all), ["Next."]);
 }

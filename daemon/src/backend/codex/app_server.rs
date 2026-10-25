@@ -270,25 +270,14 @@ fn thread_params(request: &RunRequest) -> Result<(&'static str, Value), StartErr
     {
         let server = &tools.mcp_config()?["mcpServers"][crate::mcp::SERVER];
         // Dotted overrides merge into the user's MCP map rather than replacing it.
+        let key = |field: &str| format!("mcp_servers.{}.{field}", crate::mcp::SERVER);
         for field in ["command", "args"] {
-            config.insert(
-                format!("mcp_servers.{}.{field}", crate::mcp::SERVER),
-                server[field].clone(),
-            );
+            config.insert(key(field), server[field].clone());
         }
-        config.insert(
-            format!(
-                "mcp_servers.{}.default_tools_approval_mode",
-                crate::mcp::SERVER
-            ),
-            "approve".into(),
-        );
+        config.insert(key("default_tools_approval_mode"), "approve".into());
         // Codex gives up on a tool call after 60 s by default, and `delegate_task`'s wait runs
         // up to an hour.
-        config.insert(
-            format!("mcp_servers.{}.tool_timeout_sec", crate::mcp::SERVER),
-            crate::mcp::MAX_TOOL_SECONDS.into(),
-        );
+        config.insert(key("tool_timeout_sec"), crate::mcp::MAX_TOOL_SECONDS.into());
     }
     if let Some(tokens) = request.context_window {
         if !CONTEXT_WINDOWS.contains(&tokens) {
@@ -1051,29 +1040,7 @@ impl Driver {
             return;
         };
         match (kind, result) {
-            (Request::Thread, Ok(result)) => {
-                let thread_id = result
-                    .pointer("/thread/id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let Some(thread_id) = thread_id else {
-                    self.fail_to_start("Codex started a thread without an id".into());
-                    return;
-                };
-                let model = result
-                    .get("model")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                self.emit(Event::SessionStarted {
-                    session_id: thread_id.clone(),
-                    model,
-                    api_key_source: None,
-                })
-                .await;
-                self.server.bind(self.key, thread_id.clone());
-                self.thread_id = Some(thread_id);
-                self.next_turn().await;
-            }
+            (Request::Thread, Ok(result)) => self.thread_started(&result).await,
             (Request::Thread, Err(message)) => match self.fallback.take() {
                 Some((params, input)) => {
                     tracing::warn!(%message, "could not resume a Codex thread; starting a new one");
@@ -1116,12 +1083,10 @@ impl Driver {
                     (Some(running), Some(turn_id)) => running.steered.push(turn_id),
                     // The turn it joined has already completed.
                     (_, turn_id) => {
-                        let result = None;
-                        let failed = false;
                         self.emit(Event::TurnFinished {
                             turn_id,
-                            result,
-                            failed,
+                            result: None,
+                            failed: false,
                         })
                         .await;
                     }
@@ -1139,25 +1104,42 @@ impl Driver {
         }
     }
 
+    /// `thread/start`, `thread/resume`, or `thread/fork` answered `result`: reports the session,
+    /// takes the thread's lines from now on, and starts the first turn.
+    async fn thread_started(&mut self, result: &Value) {
+        let thread_id = result
+            .pointer("/thread/id")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(thread_id) = thread_id else {
+            self.fail_to_start("Codex started a thread without an id".into());
+            return;
+        };
+        let model = result
+            .get("model")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        self.emit(Event::SessionStarted {
+            session_id: thread_id.clone(),
+            model,
+            api_key_source: None,
+        })
+        .await;
+        self.server.bind(self.key, thread_id.clone());
+        self.thread_id = Some(thread_id);
+        self.next_turn().await;
+    }
+
     /// Ends the running turn, and the turns of the messages steered into it, with `result`.
     async fn finish_running(&mut self, result: Option<String>) {
         let failed = self.failure.is_some();
-        let Some(running) = self.running.take() else {
-            let turn_id = None;
+        let (first, steered) = self.running.take().map_or((None, Vec::new()), |running| {
+            (running.turn_id, running.steered)
+        });
+        for turn_id in std::iter::once(first).chain(steered.into_iter().map(Some)) {
             self.emit(Event::TurnFinished {
                 turn_id,
-                result,
-                failed,
-            })
-            .await;
-            return;
-        };
-        let turns = std::iter::once(running.turn_id).chain(running.steered.into_iter().map(Some));
-        for turn_id in turns {
-            let result = result.clone();
-            self.emit(Event::TurnFinished {
-                turn_id,
-                result,
+                result: result.clone(),
                 failed,
             })
             .await;
@@ -1335,9 +1317,8 @@ impl Driver {
             End::Left => None,
             End::Exited(exit) => Some(exit),
         };
-        let exit = exited.clone().flatten();
         if let Some(failure) = self.failure.take() {
-            return failure.ended(exit.as_ref());
+            return failure.ended(exited.as_ref().and_then(Option::as_ref));
         }
         let done = self.turns_done > 0 && self.running.is_none();
         let Some(exited) = exited else {
