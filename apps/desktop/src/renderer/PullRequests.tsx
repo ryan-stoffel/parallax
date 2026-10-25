@@ -188,7 +188,6 @@ export const RUNNING_POLL_MS = 15_000;
 /** How long a check runs before it counts as stuck and its pull request is read every POLL_MS. */
 export const STUCK_MS = 30 * 60_000;
 
-export { numberOf };
 /** Which of `urls`, a thread's linked pull requests, `href` goes to, on any of its tabs. */
 export const linkedPr = (href: string, urls: readonly string[]) => {
   const pr = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.exec(href)?.[0].toLowerCase();

@@ -102,12 +102,3 @@ export function readUpload(hostId: string, path: string): Promise<Uint8Array> {
 }
 
 const base64Of = async (file: Blob) => (await dataUrlOf(file)).split(",", 2)[1] ?? "";
-
-export {
-  encodedImage,
-  isImagePath,
-  splitFiles,
-  withFiles,
-  withoutImages,
-  type Encoded,
-} from "./attachments";

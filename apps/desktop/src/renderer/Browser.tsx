@@ -35,8 +35,8 @@ import { DownloadsButton } from "./Downloads";
 import { HistoryDialog } from "./HistoryDialog";
 import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, type Fit, type Size } from "./PageFrame";
-import { backendLogos } from "./Sidebar";
-import { instanceLogo, instanceName } from "./providers";
+import { backendLogo } from "./Sidebar";
+import { instanceName } from "./providers";
 import { memory, stored } from "./stored";
 import {
   Add,
@@ -539,7 +539,7 @@ const driverOf = (backend?: string): Driver =>
   backend
     ? {
         name: backendNames[backend] ?? instanceName(backend) ?? "The agent",
-        Logo: backendLogos[backend] ?? instanceLogo(backend),
+        Logo: backendLogo(backend),
       }
     : { name: "The agent" };
 

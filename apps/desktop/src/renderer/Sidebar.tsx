@@ -157,7 +157,8 @@ import {
   useModHeld,
 } from "./ui";
 import { PanelResize } from "./PanelResize";
-import { lookOf, numberOf, usePullRequests, type PullRequests } from "./PullRequests";
+import { numberOf } from "./github";
+import { lookOf, usePullRequests, type PullRequests } from "./PullRequests";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";

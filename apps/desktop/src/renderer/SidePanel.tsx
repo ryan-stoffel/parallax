@@ -25,7 +25,8 @@ import { Browser, BrowserTabBar } from "./Browser";
 import { useBrowserTheme } from "./browserTheme";
 import type { DocRef } from "./documents";
 import { PanelResize } from "./PanelResize";
-import { lookOf, numberOf, type PullRequests } from "./PullRequests";
+import { numberOf } from "./github";
+import { lookOf, type PullRequests } from "./PullRequests";
 import { isMedia } from "./transcript";
 import { IconButton, TopBar } from "./ui";
 

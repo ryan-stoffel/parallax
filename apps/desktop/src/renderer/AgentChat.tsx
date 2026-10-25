@@ -94,15 +94,8 @@ import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
 import { Lightbox } from "./Lightbox";
 import { fromBase64 } from "./ooxml";
-import {
-  encodedImage,
-  isImagePath,
-  splitFiles,
-  uploadBytes,
-  uploadFiles,
-  withFiles,
-  withoutImages,
-} from "./uploads";
+import { encodedImage, isImagePath, splitFiles, withFiles, withoutImages } from "./attachments";
+import { uploadBytes, uploadFiles } from "./uploads";
 import {
   Trace,
   TraceCollapsible,
