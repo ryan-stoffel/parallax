@@ -81,11 +81,9 @@ export async function createRepo(
     };
   }
   try {
-    await run("git", ["init", "-q"], { cwd: dir, env: gitEnv() });
-    await run("git", ["commit", "-q", "--allow-empty", "-m", "Initial commit"], {
-      cwd: dir,
-      env: gitEnv(),
-    });
+    const options = { cwd: dir, env: gitEnv() };
+    await run("git", ["init", "-q"], options);
+    await run("git", ["commit", "-q", "--allow-empty", "-m", "Initial commit"], options);
     return { path: dir };
   } catch (error) {
     await rm(dir, { recursive: true, force: true });

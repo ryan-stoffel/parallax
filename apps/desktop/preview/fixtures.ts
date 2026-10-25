@@ -29,7 +29,7 @@ import type {
 
 export const HOME = "/Users/ryan";
 export const PARALLAX_PATH = `${HOME}/Developer/personal/parallax`;
-export const DOCS_PATH = `${HOME}/Developer/personal/docs-site`;
+const DOCS_PATH = `${HOME}/Developer/personal/docs-site`;
 
 /** A run's logged event, before the mock numbers it. */
 export interface RunEvent {
@@ -37,17 +37,17 @@ export interface RunEvent {
   event: ParallaxEvent;
 }
 
-export interface MemoryDoc {
+interface MemoryDoc {
   file: MemoryFile;
   content: string;
 }
 
-export interface ContextDoc {
+interface ContextDoc {
   file: ContextFile;
   content: string;
 }
 
-export interface Fixtures {
+interface Fixtures {
   repos: Repo[];
   /** Hand-picked lists of threads and Projects (PLX-789). */
   areas: Area[];

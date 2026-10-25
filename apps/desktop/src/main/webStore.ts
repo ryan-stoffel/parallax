@@ -7,6 +7,7 @@ import {
 } from "electron";
 
 import { installExtension, removeExtension } from "./extensions";
+import { broadcast } from "./windows";
 
 // The Chrome Web Store's install button in the side panel's browser (PLX-962). The store enables
 // Add to Chrome only for a Chrome user agent, which its preload gives its pages, and installs through `chrome.webstorePrivate` and
@@ -128,8 +129,7 @@ async function confirm(
 
 /** Tells every window the installed list changed, so the browser's toolbar shows it. */
 function changed() {
-  for (const window of BrowserWindow.getAllWindows())
-    window.webContents.send("parallax:extensionsChanged");
+  broadcast("parallax:extensionsChanged");
 }
 
 /** An extension as `chrome.management` describes one. */

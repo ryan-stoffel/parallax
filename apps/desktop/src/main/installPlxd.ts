@@ -18,7 +18,7 @@ const RELEASES = "https://github.com/ryan-stoffel/parallax/releases/download";
  * starts this one. Exits 3 with one line for people when it can't. `sh -s` reads it from ssh's
  * stdin.
  */
-export const INSTALL_SCRIPT = `set -eu
+const INSTALL_SCRIPT = `set -eu
 version=$1
 fail() { printf '%s\\n' "$1" >&2; exit 3; }
 case $(uname -s) in

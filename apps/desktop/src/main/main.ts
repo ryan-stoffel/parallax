@@ -23,6 +23,7 @@ import {
   THEME_PREFERENCES,
   blurSupported,
   type BrowserAction,
+  type CommandStatus,
   needsTransparentWindow,
   type OpenTarget,
   type RegistryAgent,
@@ -52,7 +53,6 @@ import {
   launch,
   type Editor,
 } from "./editors";
-import type { CommandStatus } from "../preload/bridge";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { renderPage, savedHost, startHosts, streamFile } from "./hosts";
 import {
@@ -405,6 +405,13 @@ app.on("browser-window-focus", () => {
   else if (process.connected) process.send?.("check");
 });
 
+/** The OS folder picker, sheet-attached to `sender`'s window when it has one. */
+function pickDirectory(sender: Electron.WebContents, buttonLabel?: string) {
+  const win = BrowserWindow.fromWebContents(sender);
+  const options = { properties: ["openDirectory" as const], ...(buttonLabel && { buttonLabel }) };
+  return win ? dialog.showOpenDialog(win, options) : dialog.showOpenDialog(options);
+}
+
 /** Asks the browser tab that shows `tab`'s page for something, over `onBrowser` (bridge.ts). */
 function tellTab(tab: Electron.WebContents, action: BrowserAction) {
   const host = tab.isDestroyed() ? undefined : tab.hostWebContents;
@@ -423,11 +430,7 @@ ipcMain.handle("parallax:installExtension", (_event, text: unknown) =>
   installExtension(browserSession(), typeof text === "string" ? text : ""),
 );
 ipcMain.handle("parallax:loadUnpackedExtension", async (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  const options = { properties: ["openDirectory" as const], buttonLabel: "Load Extension" };
-  const { canceled, filePaths } = await (win
-    ? dialog.showOpenDialog(win, options)
-    : dialog.showOpenDialog(options));
+  const { canceled, filePaths } = await pickDirectory(event.sender, "Load Extension");
   return canceled || !filePaths[0] ? undefined : addUnpacked(browserSession(), filePaths[0]);
 });
 ipcMain.handle("parallax:removeExtension", (_event, id: unknown) =>
@@ -480,11 +483,7 @@ ipcMain.handle("parallax:webStore", (event, method: unknown, ...args: unknown[])
 // New Thread's "Add repository…" and the add palette's "Choose in Finder": a folder on this Mac,
 // sheet-attached to the asking window.
 ipcMain.handle("parallax:pickFolder", async (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  const options = { properties: ["openDirectory" as const] };
-  const { canceled, filePaths } = await (win
-    ? dialog.showOpenDialog(win, options)
-    : dialog.showOpenDialog(options));
+  const { canceled, filePaths } = await pickDirectory(event.sender);
   return canceled ? null : (filePaths[0] ?? null);
 });
 
@@ -549,12 +548,7 @@ ipcMain.handle("parallax:selectTerminalApp", async (event, selected: unknown) =>
     writeTerminalApp(terminalFile(), chosen.path);
   } catch (error) {
     const win = BrowserWindow.fromWebContents(event.sender);
-    if (win)
-      await dialog.showMessageBox(win, {
-        type: "warning",
-        message: "Parallax couldn't save your terminal.",
-        detail: (error as Error).message,
-      });
+    if (win) await warn(win, "Parallax couldn't save your terminal.", (error as Error).message);
     return null;
   }
   terminal = chosen.path;
@@ -638,12 +632,12 @@ async function setUpCommand(win: BrowserWindow): Promise<void> {
   if (response !== 0) return;
   const error = await putCommand();
   if (error && error !== "Cancelled.")
-    await dialog.showMessageBox(win, {
-      type: "warning",
-      message: "Parallax couldn't install the parallax command.",
-      detail: error,
-    });
+    await warn(win, "Parallax couldn't install the parallax command.", error);
 }
+
+/** A warning dialog over `win`. */
+const warn = (win: BrowserWindow, message: string, detail: string) =>
+  dialog.showMessageBox(win, { type: "warning", message, detail });
 
 // The Open targets' own app icons on macOS, as data URLs, found once. Quick Look, since
 // `app.getFileIcon` gives a `.app` bundle a placeholder icon. A target without one keeps its mark.
@@ -653,7 +647,7 @@ async function openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>> {
   const apps = {
     ...installedEditors(),
     files: "/System/Library/CoreServices/Finder.app",
-    ...(terminal ? { terminal: terminal } : {}),
+    ...(terminal ? { terminal } : {}),
   };
   const icons = await Promise.all(
     Object.entries(apps).map(async ([target, program]) => {
@@ -689,12 +683,7 @@ ipcMain.handle(
       error = await launch(editorCommand(program, folder, destination));
     }
     const win = BrowserWindow.fromWebContents(event.sender);
-    if (error && win)
-      await dialog.showMessageBox(win, {
-        type: "warning",
-        message: "Parallax couldn't open the folder.",
-        detail: error,
-      });
+    if (error && win) await warn(win, "Parallax couldn't open the folder.", error);
   },
 );
 

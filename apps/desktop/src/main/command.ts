@@ -155,7 +155,7 @@ export const offerAtLaunch = (
  * What the app keeps about the command: whether it has asked, and whether the user removed it,
  * after which launch leaves it removed.
  */
-export type CommandRecord = { asked?: boolean; removed?: boolean };
+type CommandRecord = { asked?: boolean; removed?: boolean };
 
 /** The record in `file`, or an empty one when it's missing or can't be read. */
 export async function readRecord(file: string): Promise<CommandRecord> {

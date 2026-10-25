@@ -38,11 +38,11 @@ import type {
 import { RpcClient } from "./rpc";
 
 // 0007's client rules.
-export const HEARTBEAT_MS = 30_000;
-export const LIVENESS_MS = 10_000;
+const HEARTBEAT_MS = 30_000;
+const LIVENESS_MS = 10_000;
 // `attach` may spend its 10 s connect timeout starting plxd before it forwards `initialize`.
-export const HANDSHAKE_TIMEOUT_MS = 20_000;
-export const REQUEST_TIMEOUT_MS = 30_000;
+const HANDSHAKE_TIMEOUT_MS = 20_000;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 /** Methods that keep a command receipt (0052). */
 const RECEIPTED_METHODS = new Set([
@@ -78,7 +78,6 @@ const MUTATING_METHODS = new Set([
   "thread/fork",
   "thread/archive",
   "thread/update",
-  "thread/delete",
   "project/create",
   "project/update",
   "project/fromThreads",
@@ -555,7 +554,7 @@ export class Connection {
         const error = "error" in response ? handshakeError(response.error) : undefined;
         const version = "result" in response ? response.result.plxd : error?.plxd;
         const finish = () => {
-          if ("error" in response) return this.end(handshakeError(response.error));
+          if ("error" in response) return this.end(error!);
           if (this.preparationError) return this.end(this.preparationError);
           this.onInitialized(client, response.result);
         };

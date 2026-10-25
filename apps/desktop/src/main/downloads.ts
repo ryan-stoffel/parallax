@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
-import { app, BrowserWindow, shell, type DownloadItem, type Session } from "electron";
+import { app, shell, type DownloadItem, type Session } from "electron";
 
 import type { DownloadInfo } from "../preload/bridge";
+import { broadcast } from "./windows";
 
 // The browser's downloads (PLX-975): each saves to the downloads folder under a name of its own,
 // as Chrome's do, or where the user picks when they'd rather be asked (Settings › Browser), and
@@ -32,15 +33,15 @@ export function uniquePath(
   return candidate;
 }
 
-const list = () => [...downloads.values()].map((d) => d.info).reverse();
+/** The downloads so far, the newest first. */
+export const downloadList = () => [...downloads.values()].map((d) => d.info).reverse();
 
 // Progress reaches the windows at most every 200 ms; a start or an end at once.
 let pending: ReturnType<typeof setTimeout> | undefined;
 function send(now = false) {
   const flush = () => {
     pending = undefined;
-    for (const window of BrowserWindow.getAllWindows())
-      window.webContents.send("parallax:downloads", list());
+    broadcast("parallax:downloads", downloadList());
   };
   if (now) {
     clearTimeout(pending);
@@ -92,9 +93,6 @@ export function startDownloads(session: Session) {
     send(true);
   });
 }
-
-/** The downloads so far, the newest first. */
-export const downloadList = list;
 
 /** Opens a download's file, shows it in its folder, or cancels it; or clears the finished ones. */
 export function downloadAction(id: string | undefined, action: string) {

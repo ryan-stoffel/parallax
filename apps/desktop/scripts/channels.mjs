@@ -1,5 +1,5 @@
 /** The branch a dev checkout's Update follows. Nightly and stable are tags on main (0051). */
-export const channelBranches = { nightly: "main", release: "main" };
+const channelBranches = { nightly: "main", release: "main" };
 
 /**
  * The branch a channel follows, or undefined for anything that isn't one. The app sends the

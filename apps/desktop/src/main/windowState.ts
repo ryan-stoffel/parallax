@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import type { Rectangle } from "electron";
 
 /** Where the window was and whether it filled the screen, which the next launch opens it as. */
-export type WindowState = { bounds: Rectangle; maximized: boolean };
+type WindowState = { bounds: Rectangle; maximized: boolean };
 
 /**
  * The state saved in `file`, or undefined when there's none, it's malformed, or the middle of its

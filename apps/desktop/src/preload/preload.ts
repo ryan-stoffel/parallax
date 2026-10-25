@@ -1,20 +1,19 @@
 import { contextBridge, ipcRenderer, webFrame } from "electron";
 
 import { ErrorCodes } from "../protocol/generated/protocol";
-import type {
-  BrowserAction,
-  DownloadInfo,
-  GoogleAccount,
-  ConnectionState,
-  DeviceStreamMessage,
-  Profile,
-  SubscriptionMessage,
-  TerminalMessage,
-  ParallaxBridge,
-  WatchMessage,
-  WatchParams,
+import {
+  blurSupported,
+  validLocale,
+  type BrowserAction,
+  type ConnectionState,
+  type DeviceStreamMessage,
+  type Profile,
+  type SubscriptionMessage,
+  type TerminalMessage,
+  type ParallaxBridge,
+  type WatchMessage,
+  type WatchParams,
 } from "./bridge";
-import { blurSupported, validLocale } from "./bridge";
 import { injectBrowserAction } from "electron-chrome-extensions/browser-action";
 
 // Subscription and watch listeners by the key this preload gave them.
@@ -97,26 +96,14 @@ const bridge: ParallaxBridge = {
   installExtension: (text) => ipcRenderer.invoke("parallax:installExtension", text),
   loadUnpackedExtension: () => ipcRenderer.invoke("parallax:loadUnpackedExtension"),
   removeExtension: (id) => ipcRenderer.invoke("parallax:removeExtension", id),
-  onExtensionsChanged(listener) {
-    const forward = () => listener();
-    ipcRenderer.on("parallax:extensionsChanged", forward);
-    return () => ipcRenderer.removeListener("parallax:extensionsChanged", forward);
-  },
+  onExtensionsChanged: (listener) => follow("parallax:extensionsChanged", listener, false),
   selectBrowserTab: (id) => ipcRenderer.send("parallax:selectBrowserTab", id),
   clearBrowsingData: (what) => ipcRenderer.invoke("parallax:clearBrowsingData", what),
   downloads: () => ipcRenderer.invoke("parallax:downloads"),
   googleAccount: () => ipcRenderer.invoke("parallax:googleAccount"),
   siteIcon: (page) => ipcRenderer.invoke("parallax:siteIcon", page),
-  onDownloads(listener) {
-    const forward = (_event: unknown, list: DownloadInfo[]) => listener(list);
-    ipcRenderer.on("parallax:downloads", forward);
-    return () => ipcRenderer.removeListener("parallax:downloads", forward);
-  },
-  onGoogleAccount(listener) {
-    const forward = (_event: unknown, account: GoogleAccount | undefined) => listener(account);
-    ipcRenderer.on("parallax:googleAccount", forward);
-    return () => ipcRenderer.removeListener("parallax:googleAccount", forward);
-  },
+  onDownloads: (listener) => follow("parallax:downloads", listener, false),
+  onGoogleAccount: (listener) => follow("parallax:googleAccount", listener, false),
   downloadAction: (id, action) => ipcRenderer.send("parallax:downloadAction", id, action),
   setDownloadPrefs: (prefs) => ipcRenderer.send("parallax:downloadPrefs", prefs),
   updatable: process.argv.includes("--parallax-updatable"),
