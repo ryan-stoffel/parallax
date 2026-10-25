@@ -436,6 +436,45 @@ async fn a_resume_replays_a_short_gap_and_snapshots_a_long_one() {
     assert!(!history.more);
 }
 
+/// A thread's snapshot carries only its newest 128 KiB or so of events, so it opens quickly over
+/// a slow link, and history before them reaches the rest in one page (PLX-1001).
+#[tokio::test]
+async fn a_snapshot_carries_only_the_newest_events_and_history_the_rest() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let thread = working_thread(&host, &mut client).await;
+    let start = subscribe_working(&mut client, thread).await;
+    let waiting = TurnId::generate();
+    dispatch(&mut client, message(thread, waiting, "Later")).await;
+    // Each edit is one `queue.updated` of over 4 KiB: 48 of them are well past the cap.
+    for i in 0..48 {
+        let text = format!("{i} {}", "x".repeat(4096));
+        dispatch(&mut client, edit(thread, waiting, &text)).await;
+    }
+
+    let seen = snapshot(&mut client, thread).await;
+    let bytes: usize = seen
+        .events
+        .iter()
+        .map(|event| serde_json::to_vec(&event.event).unwrap().len())
+        .sum();
+    assert!(seen.more, "older events remain");
+    assert!(bytes <= 128 * 1024, "the snapshot carried {bytes} bytes");
+    let first = seen.events.first().unwrap().seq;
+    let history = client
+        .call::<OrchestrationThreadHistory>(ThreadHistoryParams {
+            thread_id: thread,
+            before: first,
+        })
+        .await
+        .unwrap();
+    assert!(!history.more, "one history page holds the rest");
+    assert_eq!(
+        history.events.first().map(|event| event.seq),
+        start.events.first().map(|event| event.seq)
+    );
+}
+
 /// The shell starts from every project, run, and thread, then gets what a sidebar shows: a run's
 /// status, but none of its transcript. A held Stop on a thread stops the threads it started.
 #[tokio::test]
