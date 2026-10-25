@@ -8,8 +8,8 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::methods::{
     AgentList, AgentStart, ContextList, ContextReadBytes, ContextSaveArtifact, ContextWrite,
-    InboxList, MemoryDelete, MemoryList, MemoryPropose, MemoryRead, MemoryWrite, ProjectStart,
-    RepoAdd, ThreadStart,
+    InboxList, MemoryDelete, MemoryList, MemoryPropose, MemoryRead, MemoryWrite, RepoAdd,
+    ThreadStart,
 };
 use parallax_protocol::{
     AgentListParams, AgentRun, AgentStatus, ContextListParams, ContextReadBytesParams,
@@ -25,7 +25,7 @@ use serde_json::json;
 use crate::agents::{
     Conn, Host, create, end_turn, fake, init, project_params, real_repo, until, updated_to,
 };
-use crate::coordinator::{coordinator_launches, nth_launch, roles, spawn, start_params};
+use crate::coordinator::{coordinator_launches, nth_launch, plan, roles, spawn};
 use crate::mcp::{Mcp, mcp_command};
 use crate::support::{kind, temp_dir};
 
@@ -139,11 +139,7 @@ async fn project_with_coordinator(
     );
     let host = Host::start(temp_dir(), backends);
     let (mut client, project) = host.project_client().await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     (host, client, project, coordinator)
 }

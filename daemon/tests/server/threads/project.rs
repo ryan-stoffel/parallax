@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{
-    AgentCancel, AgentList, AgentSend, ProjectList, ProjectStart, ProjectUpdate, ThreadStart,
+    AgentCancel, AgentList, AgentSend, ProjectList, ProjectUpdate, ThreadStart,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AgentCancelParams, AgentDelivery, AgentListParams, AgentSendParams,
@@ -21,7 +21,7 @@ use serde_json::json;
 use crate::agents::{
     Host, create, end_turn, fake, git, init, project_params, send_params, subscribe,
 };
-use crate::coordinator::{nth_launch, roles, sessions, start_params};
+use crate::coordinator::{nth_launch, plan, roles, sessions};
 use crate::inbox::added;
 use crate::support::{PATIENCE, project_update, temp_dir};
 
@@ -52,11 +52,7 @@ async fn seven_tasks_start_without_waiting_on_the_coordinator_and_wake_it_once()
     );
     let host = Host::start(temp_dir(), backends);
     let (mut client, project) = host.project_client().await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     sessions(&mut client, &[coordinator.id]).await;
 
     let mut children = Vec::new();

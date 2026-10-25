@@ -28,7 +28,7 @@ use crate::agents::{
     Conn, Host, create, end_turn, init, project_params, send_params, subscribe, until, updated_to,
 };
 use crate::coordinator::{
-    coordinator_launches, nth_launch, roles, spawn, start_params as coordinator_params,
+    coordinator_launches, nth_launch, plan, roles, spawn, start_params as coordinator_params,
 };
 use crate::inbox::added;
 use crate::mcp::{Mcp, every_callers_tools, mcp_command};
@@ -124,11 +124,7 @@ async fn a_childs_question_wakes_the_coordinator_whose_different_answer_reaches_
     let backends = roles(hang(), vec![turn("Planned."), turn("Answered.")], &seen);
     let host = Host::start(temp_dir(), backends);
     let (mut client, project) = host.project_client().await;
-    let coordinator = client
-        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     let child = spawn(&mut client, &coordinator, "Add rate limits.").await;
     running(&mut client, child).await;
 
@@ -230,11 +226,7 @@ async fn project_with_child(
 ) -> (Host, Conn, ProjectId, RunId, RunId) {
     let host = Host::start(temp_dir(), hanging(seen));
     let (mut client, project) = host.project_client().await;
-    let coordinator = client
-        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     let child = spawn(&mut client, &coordinator, "Upgrade Node.").await;
     running(&mut client, child).await;
     (host, client, project.id, coordinator.id, child)
@@ -265,11 +257,7 @@ async fn only_a_projects_child_asks_and_only_its_coordinator_escalates() {
     let item = added(&mut client, project.id).await;
     assert_eq!((item.kind, item.run), (InboxKind::NeedsYou, mine));
 
-    let coordinator = client
-        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     let refused = ask(&mut client, coordinator.id, "?", "!")
         .await
         .unwrap_err();
@@ -391,11 +379,7 @@ async fn an_open_question_wakes_the_coordinator_after_a_restart() {
     ];
     let host = Host::start(temp_dir(), roles(hang(), coordinators, &seen));
     let (mut client, project) = host.project_client().await;
-    let coordinator = client
-        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let child = spawn(&mut client, &coordinator, "Add rate limits.").await;
     running(&mut client, child).await;
@@ -514,11 +498,7 @@ async fn an_ended_child_resumes_with_a_different_answer() {
     let backends = roles(worker, vec![vec![init("coordinator-1"), Step::Hang]], &seen);
     let host = Host::start(temp_dir(), backends);
     let (mut client, project) = host.project_client().await;
-    let coordinator = client
-        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     let child = spawn(&mut client, &coordinator, "Add rate limits.").await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
 
@@ -560,11 +540,7 @@ async fn a_new_coordinator_gets_the_projects_open_questions() {
     ];
     let host = Host::start(temp_dir(), roles(hang(), coordinators, &seen));
     let (mut client, project) = host.project_client().await;
-    let old = client
-        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let old = plan(&mut client, project.id).await;
     let child = spawn(&mut client, &old, "Add rate limits.").await;
     running(&mut client, child).await;
     let open = ask(&mut client, child, "Per user or per IP?", "Per user")
@@ -631,11 +607,7 @@ async fn ask_me_sends_questions_to_needs_you_and_refuses_the_coordinators_answer
         "the default"
     );
     subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     let first = nth_launch(&seen, 0).await;
     assert!(
         pinned(&first).contains("The project's autonomy is Routine:"),
