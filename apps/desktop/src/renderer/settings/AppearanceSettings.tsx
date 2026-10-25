@@ -232,7 +232,7 @@ export function AppearanceSettings({
           <div className="flex items-center justify-between gap-4">
             <div className="min-w-0">
               <span className="block text-body font-medium">Installed themes</span>
-              <span className="block text-body text-muted-foreground">
+              <span className="block text-meta text-muted-foreground">
                 VS Code themes from Open VSX. Each one&apos;s variants join the menus above.
               </span>
             </div>

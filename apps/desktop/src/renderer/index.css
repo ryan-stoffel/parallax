@@ -709,6 +709,10 @@ body {
 .markdown > * + * {
   margin-top: 0.75em;
 }
+/* Bold at the scale's heaviest weight (0085), not the browser's 700. */
+.markdown :is(strong, b) {
+  font-weight: 600;
+}
 .markdown :is(h1, h2, h3, h4) {
   font-weight: 600;
   line-height: 1.3;

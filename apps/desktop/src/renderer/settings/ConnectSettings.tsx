@@ -63,7 +63,7 @@ export function ConnectSettings() {
       {connect?.on && (
         <section aria-label="Computers" className="mb-8">
           <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
-            <h2 className="text-body font-medium text-muted-foreground">Computers</h2>
+            <h2 className="text-reading font-semibold">Computers</h2>
             <button
               type="button"
               onClick={() => setAdding(true)}

@@ -537,7 +537,7 @@ export function CommandMenu({
               setQuery(e.target.value);
               setActive(0);
             }}
-            className="min-w-0 flex-1 bg-transparent text-reading placeholder:text-faint-foreground focus-visible:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
           />
         </div>
         <div
@@ -607,7 +607,7 @@ function MenuRow({
         {row.icon}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-reading">
+        <span className="block truncate text-body">
           {typeof row.label === "string" ? <Marked text={row.label} words={words} /> : row.label}
         </span>
         {row.hint && (
