@@ -1,7 +1,29 @@
 import type { Token, Tokens } from "marked";
 import { expect, test } from "vitest";
 
-import { lex } from "./markdown";
+import { diffBlockRows, lex, linkSite } from "./markdown";
+
+test("picks a link's icon by its site, as the desktop's linkIcon", () => {
+  expect(linkSite("https://github.com/o/r/pull/12")).toBe("github");
+  expect(linkSite("https://gist.github.com/x")).toBe("github");
+  expect(linkSite("https://linear.app/team/issue/PLX-1")).toBe("linear");
+  expect(linkSite("http://user@example.com:8080/a")).toBe("web");
+  expect(linkSite("https://notgithub.com")).toBe("web");
+  expect(linkSite("mailto:a@b.c")).toBeUndefined();
+  expect(linkSite("src/ui.tsx")).toBeUndefined();
+});
+
+test("reads a diff block's lines, its headers as bands", () => {
+  expect(diffBlockRows("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n same\n--- gone\n")).toEqual([
+    { kind: "band", text: "--- a/x" },
+    { kind: "band", text: "+++ b/x" },
+    { kind: "band", text: "@@ -1 +1 @@" },
+    { kind: "del", text: "old" },
+    { kind: "add", text: "new" },
+    { kind: "context", text: "same" },
+    { kind: "del", text: "-- gone" },
+  ]);
+});
 
 /** The math in `text`'s tokens, at any depth, as `$tex$` or `$$tex$$`. */
 const math = (text: string) => {

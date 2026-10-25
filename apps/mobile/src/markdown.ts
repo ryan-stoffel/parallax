@@ -1,9 +1,11 @@
 // Markdown's tokens as ui.tsx draws them: marked's, with LaTeX read from the delimiters the
-// desktop accepts (math.ts rewrites \(...\) and \[...\] to dollars and escapes a lone dollar), and
-// a code block's simple syntax colors. Pure, for the test.
+// desktop accepts (math.ts rewrites \(...\) and \[...\] to dollars and escapes a lone dollar), a
+// link's site for its icon, a code block's simple syntax colors, and a diff block's lines. Pure,
+// for the test.
 import { Marked, type Token, type TokenizerExtension } from "marked";
 
 import { dollarMath } from "../../desktop/src/renderer/math";
+import type { DiffViewRow } from "./diffLogic";
 
 /** LaTeX: `$$...$$` is display math, centered on its own line, and `$...$` sits in the text. */
 export interface MathToken {
@@ -70,6 +72,38 @@ export function linkedPath(href?: string): string | undefined {
     // A stray %, kept as written.
   }
   return path.replaceAll("\\", "/");
+}
+
+/**
+ * Which icon a link wears, as the desktop's `linkIcon` (AgentChat.tsx) picks it: GitHub's mark on
+ * github.com, Linear's on linear.app, a globe on any other web page, and none for anything else.
+ */
+export function linkSite(href?: string): "github" | "linear" | "web" | undefined {
+  // A pattern rather than URL, whose hostname React Native doesn't implement.
+  const host = /^https?:\/\/(?:[^/?#@]*@)?([^/?#:]+)/i.exec(href ?? "")?.[1]?.toLowerCase();
+  if (!host) return undefined;
+  const on = (site: string) => host === site || host.endsWith(`.${site}`);
+  return on("github.com") ? "github" : on("linear.app") ? "linear" : "web";
+}
+
+/**
+ * A diff block's lines, as the desktop's DiffLines reads them: hunk headers, and the file headers
+ * before a file's first hunk, are bands, so a removed `-- comment` inside a hunk stays removed.
+ */
+export function diffBlockRows(text: string): DiffViewRow[] {
+  let inHunk = false;
+  return text
+    .replace(/\n$/, "")
+    .split("\n")
+    .map((line): DiffViewRow => {
+      if (line.startsWith("diff ")) inHunk = false;
+      if (line.startsWith("@@")) inHunk = true;
+      if (line.startsWith("@@") || (!inHunk && /^(\+\+\+|---|diff |index )/.test(line)))
+        return { kind: "band", text: line };
+      if (line[0] === "+") return { kind: "add", text: line.slice(1) };
+      if (line[0] === "-") return { kind: "del", text: line.slice(1) };
+      return { kind: "context", text: line[0] === " " ? line.slice(1) : line };
+    });
 }
 
 /** A highlighted piece of code: its text and its kind, which picks its color. */

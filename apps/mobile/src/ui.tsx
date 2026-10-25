@@ -1,7 +1,8 @@
 // The app's shared pieces, drawn as the desktop draws them: its colors for the appearance, the
 // Parallax mark, lucide icons (the desktop's own set), text in the system's font, its attention
 // marks, grouped lists as iOS Settings draws them, and Markdown, with its code, tables, LaTeX,
-// and images that open in the lightbox, as the desktop's transcript renders it.
+// links with their site's icon, and images that open in the lightbox, as the desktop's
+// transcript renders it.
 import * as Clipboard from "expo-clipboard";
 import type { LucideIcon } from "lucide-react-native";
 import {
@@ -30,7 +31,16 @@ import {
   SquareTerminal,
 } from "lucide-react-native";
 import type { Token, Tokens } from "marked";
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   Animated,
   Easing,
@@ -65,7 +75,7 @@ import { onGithub } from "../../desktop/src/renderer/github";
 import type { Kind } from "../../desktop/src/renderer/steps";
 import { openLightbox } from "./Lightbox";
 import { deviceKind } from "./machines";
-import { highlight, lex, linkedPath, type MathToken } from "./markdown";
+import { diffBlockRows, highlight, lex, linkedPath, linkSite, type MathToken } from "./markdown";
 import { DisplayMath, InlineMath } from "./Math";
 import { dark, font, light, type Colors } from "./theme";
 
@@ -289,6 +299,19 @@ export function GitHubLogo({ size = 18, color }: { size?: number; color?: ColorV
         fill={(color ?? c.foreground) as string}
         fillRule="evenodd"
         d="M12 0c6.63 0 12 5.276 12 11.79-.001 5.067-3.29 9.567-8.175 11.187-.6.118-.825-.25-.825-.56 0-.398.015-1.665.015-3.242 0-1.105-.375-1.813-.81-2.181 2.67-.295 5.475-1.297 5.475-5.822 0-1.297-.465-2.344-1.23-3.169.12-.295.54-1.503-.12-3.125 0 0-1.005-.324-3.3 1.209a11.32 11.32 0 00-3-.398c-1.02 0-2.04.133-3 .398-2.295-1.518-3.3-1.209-3.3-1.209-.66 1.622-.24 2.83-.12 3.125-.765.825-1.23 1.887-1.23 3.169 0 4.51 2.79 5.527 5.46 5.822-.345.294-.66.81-.765 1.577-.69.31-2.415.81-3.495-.973-.225-.354-.9-1.223-1.845-1.209-1.005.015-.405.56.015.781.51.28 1.095 1.327 1.23 1.666.24.663 1.02 1.93 4.035 1.385 0 .988.015 1.916.015 2.196 0 .31-.225.664-.825.56C3.303 21.374-.003 16.867 0 11.791 0 5.276 5.37 0 12 0z"
+      />
+    </Svg>
+  );
+}
+
+/** Linear's mark, as the desktop's logos.tsx draws it (Simple Icons, CC0). */
+export function LinearLogo({ size = 18, color }: { size?: number; color?: ColorValue }) {
+  const c = useColors();
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24">
+      <Path
+        fill={(color ?? c.foreground) as string}
+        d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z"
       />
     </Svg>
   );
@@ -614,6 +637,129 @@ function follow(href: string, onFile?: (path: string) => void) {
   else if (/^(https?|mailto):/i.test(href)) void Linking.openURL(href);
 }
 
+/** A soft fade from `color` at one side of a sideways scroller, over what's cut off there. */
+function EdgeFade({ side, color }: { side: "left" | "right"; color: string }) {
+  const id = `edge-${side}`;
+  return (
+    <View pointerEvents="none" style={[styles.edge, side === "left" ? { left: 0 } : { right: 0 }]}>
+      <Svg width="100%" height="100%">
+        <Defs>
+          <LinearGradient id={id} x1={side === "left" ? "1" : "0"} y1="0" x2={side === "left" ? "0" : "1"} y2="0">
+            <Stop offset="0" stopColor={color} stopOpacity={0} />
+            <Stop offset="1" stopColor={color} stopOpacity={1} />
+          </LinearGradient>
+        </Defs>
+        <Rect width="100%" height="100%" fill={`url(#${id})`} />
+      </Svg>
+    </View>
+  );
+}
+
+/**
+ * A sideways scroller for a code block or table wider than the message, fading into `fade` (its
+ * box's fill) at each side with more to see, so a cut line reads as one that continues.
+ */
+function SideScroll({
+  fade,
+  contentContainerStyle,
+  children,
+}: {
+  fade: string;
+  contentContainerStyle?: ViewStyle;
+  children: ReactNode;
+}) {
+  const size = useRef({ view: 0, content: 0, x: 0 });
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const update = () => {
+    const { view, content, x } = size.current;
+    const left = x > 1;
+    const right = x + view < content - 1;
+    setEdges((e) => (e.left === left && e.right === right ? e : { left, right }));
+  };
+  return (
+    <View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        scrollEventThrottle={32}
+        onLayout={(e) => {
+          size.current.view = e.nativeEvent.layout.width;
+          update();
+        }}
+        onContentSizeChange={(width) => {
+          size.current.content = width;
+          update();
+        }}
+        onScroll={(e) => {
+          size.current.x = e.nativeEvent.contentOffset.x;
+          update();
+        }}
+        contentContainerStyle={contentContainerStyle}
+      >
+        {children}
+      </ScrollView>
+      {edges.left && <EdgeFade side="left" color={fade} />}
+      {edges.right && <EdgeFade side="right" color={fade} />}
+    </View>
+  );
+}
+
+/**
+ * A web link's icon before its text, as the desktop draws it: GitHub's or Linear's mark, or a
+ * globe, at the text's size in its foreground color, sitting a little below the baseline.
+ */
+function LinkIcon({ href, size }: { href: string; size: number }) {
+  const c = useColors();
+  const site = linkSite(href);
+  if (!site) return null;
+  const s = Math.round(size * 0.93);
+  return (
+    // An inline view's bottom sits on the baseline: the desktop's `align-[-0.15em]` moves it down.
+    <View style={{ paddingRight: 4, transform: [{ translateY: size * 0.15 }] }}>
+      {site === "github" ? (
+        <GitHubLogo size={s} color={c.foreground} />
+      ) : site === "linear" ? (
+        <LinearLogo size={s} color={c.foreground} />
+      ) : (
+        <Globe size={s} color={c.foreground} strokeWidth={2} />
+      )}
+    </View>
+  );
+}
+
+// The longest inline code drawn as a pill: a pill can't wrap, so longer code wraps as text.
+const pillChars = 24;
+
+/**
+ * Inline code at text size `size`: a soft rounded pill, as the desktop's, or, when long or inside a
+ * link (whose tap a pill would swallow), text on the code fill between thin spaces.
+ */
+function CodeSpan({ text, size, color, pill }: { text: string; size: number; color: string; pill: boolean }) {
+  const c = useColors();
+  const s = size * 0.86;
+  if (!pill || text.length > pillChars || text.includes("\n"))
+    return (
+      <Text style={{ backgroundColor: c.code }}>
+        {" "}
+        <Text style={{ fontFamily: font.mono, fontSize: s }}>{text}</Text>
+        {" "}
+      </Text>
+    );
+  return (
+    // JetBrains Mono's descent is 0.3 em: moved down by it, the pill's text shares the line's baseline.
+    <View style={{ transform: [{ translateY: s * 0.3 + StyleSheet.hairlineWidth }] }}>
+      <Text
+        style={[
+          styles.pill,
+          { fontFamily: font.mono, fontSize: s, lineHeight: s * 1.32, color, backgroundColor: c.code, borderColor: c.border },
+        ]}
+      >
+        {text}
+      </Text>
+    </View>
+  );
+}
+
 /** A Markdown image: its picture, full width at its own shape, opening the lightbox. */
 function MarkdownImage({ src, alt, all }: { src: string; alt: string; all: () => string[] }) {
   const c = useColors();
@@ -645,7 +791,9 @@ function MarkdownImage({ src, alt, all }: { src: string; alt: string; all: () =>
         style={{
           width: "100%",
           aspectRatio: ratio ?? 16 / 9,
-          borderRadius: 8,
+          borderRadius: 12,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: c.border,
           backgroundColor: c.code,
         }}
         resizeMode="contain"
@@ -655,10 +803,11 @@ function MarkdownImage({ src, alt, all }: { src: string; alt: string; all: () =>
 }
 
 /**
- * Inline Markdown inside a `Text` of font `size`: bold, italics, struck text, code, links, math,
- * and an image left inline as a link with its alt text, as the desktop's transcript shows one.
+ * Inline Markdown inside a `Text` of font `size`: bold, italics, struck text, code, links with
+ * their site's icon, math, and an image left inline as a link with its alt text, as the desktop's
+ * transcript shows one. Inside a link (`linked`), code stays text, so the whole link takes a tap.
  */
-function Inline({ tokens, size = 15 }: { tokens?: Token[]; size?: number }): ReactNode {
+function Inline({ tokens, size = 15, linked = false }: { tokens?: Token[]; size?: number; linked?: boolean }): ReactNode {
   const c = useColors();
   const { onFile, quoted } = useContext(MarkdownContext);
   return tokens?.map((t, i) => {
@@ -666,33 +815,40 @@ function Inline({ tokens, size = 15 }: { tokens?: Token[]; size?: number }): Rea
       case "strong":
         return (
           <Text key={i} style={{ fontWeight: "600" }}>
-            <Inline tokens={t.tokens} size={size} />
+            <Inline tokens={t.tokens} size={size} linked={linked} />
           </Text>
         );
       case "em":
         return (
           <Text key={i} style={{ fontStyle: "italic" }}>
-            <Inline tokens={t.tokens} size={size} />
+            <Inline tokens={t.tokens} size={size} linked={linked} />
           </Text>
         );
       case "del":
         return (
           <Text key={i} style={{ textDecorationLine: "line-through" }}>
-            <Inline tokens={t.tokens} size={size} />
+            <Inline tokens={t.tokens} size={size} linked={linked} />
           </Text>
         );
       case "codespan":
         return (
-          <Text key={i} style={{ fontFamily: font.mono, fontSize: size * 0.86, backgroundColor: c.code }}>
-            {unescape((t as Tokens.Codespan).text)}
-          </Text>
+          <CodeSpan
+            key={i}
+            text={unescape((t as Tokens.Codespan).text)}
+            size={size}
+            color={quoted ? c.mutedForeground : c.foreground}
+            pill={!linked}
+          />
         );
-      case "link":
+      case "link": {
+        const { href } = t as Tokens.Link;
         return (
-          <Text key={i} style={{ color: c.accent }} onPress={() => follow((t as Tokens.Link).href, onFile)}>
-            <Inline tokens={t.tokens} size={size} />
+          <Text key={i} style={{ color: c.accent }} onPress={() => follow(href, onFile)}>
+            <LinkIcon href={href} size={size} />
+            <Inline tokens={t.tokens} size={size} linked />
           </Text>
         );
+      }
       case "image": {
         const image = t as Tokens.Image;
         return (
@@ -720,7 +876,7 @@ function Inline({ tokens, size = 15 }: { tokens?: Token[]; size?: number }): Rea
         return null;
       case "text":
         return "tokens" in t && t.tokens ? (
-          <Inline key={i} tokens={t.tokens} size={size} />
+          <Inline key={i} tokens={t.tokens} size={size} linked={linked} />
         ) : (
           unescape((t as Tokens.Text).text)
         );
@@ -790,9 +946,49 @@ function Paragraph({ tokens = [] }: { tokens?: Token[] }) {
 }
 
 /**
- * A code block, as the desktop's CodeBlock: a header with its fence's language and Copy, over its
- * code in JetBrains Mono, scrolling sideways, in simple syntax colors, or a diff's lines in green
- * and red.
+ * A diff block's lines, as the desktop's DiffLines draws them: added and removed lines tinted, with
+ * their sign and a bar at the left, and headers as faint bands, each tint across the widest line.
+ */
+function DiffBlock({ text }: { text: string }) {
+  const c = useColors();
+  const looks = {
+    add: { sign: "+", color: c.added, row: { backgroundColor: `${c.added}1a`, borderLeftColor: c.added } },
+    del: { sign: "−", color: c.danger, row: { backgroundColor: `${c.danger}1a`, borderLeftColor: c.danger } },
+    context: { sign: " ", color: c.faintForeground, row: { borderLeftColor: "transparent" } },
+  };
+  return (
+    <SideScroll fade={c.code} contentContainerStyle={{ minWidth: "100%", paddingVertical: 8 }}>
+      <View style={{ flexGrow: 1 }}>
+        {diffBlockRows(text).map((r, i) => {
+          if (r.kind === "band")
+            return (
+              <Text key={i} selectable style={[styles.band, { color: c.faintForeground, backgroundColor: c.hover }]}>
+                {r.text}
+              </Text>
+            );
+          const look = looks[r.kind];
+          return (
+            <View
+              key={i}
+              accessibilityLabel={`${r.kind === "add" ? "Added: " : r.kind === "del" ? "Removed: " : ""}${r.text}`}
+              style={[styles.diffRow, look.row]}
+            >
+              <Text style={[styles.codeText, styles.sign, { color: look.color }]}>{look.sign}</Text>
+              <Text selectable style={[styles.codeText, { color: c.foreground, paddingRight: 14 }]}>
+                {r.text || " "}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    </SideScroll>
+  );
+}
+
+/**
+ * A code block, as the desktop's CodeBlock: a card with its fence's language and Copy at the top,
+ * over its code in JetBrains Mono in the desktop's syntax colors, or a diff's tinted lines. Long
+ * lines scroll sideways inside the card, fading at the edge.
  */
 function CodeBlock({ code }: { code: Tokens.Code }) {
   const c = useColors();
@@ -804,34 +1000,10 @@ function CodeBlock({ code }: { code: Tokens.Code }) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
-  const lines =
-    language === "diff" || language === "patch"
-      ? code.text.split("\n").map((line, i) => (
-          <Text
-            key={i}
-            style={{
-              color: /^\+(?!\+\+)/.test(line)
-                ? c.added
-                : /^-(?!--)/.test(line)
-                  ? c.danger
-                  : line.startsWith("@@")
-                    ? c.accent
-                    : undefined,
-            }}
-          >
-            {i ? "\n" : ""}
-            {line}
-          </Text>
-        ))
-      : highlight(code.text, language).map((p, i) => (
-          <Text key={i} style={p.kind && { color: colors[p.kind] }}>
-            {p.text}
-          </Text>
-        ));
   return (
     <View style={[styles.code, { backgroundColor: c.code, borderColor: c.border }]}>
       <View style={[styles.codeHeader, { borderBottomColor: c.border }]}>
-        <Text style={{ fontFamily: font.mono, fontSize: 11.5, color: c.faintForeground }}>{language ?? "text"}</Text>
+        <Text style={{ fontFamily: font.mono, fontSize: 12, color: c.faintForeground }}>{language ?? "text"}</Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={copied ? "Copied" : "Copy code"}
@@ -839,19 +1011,23 @@ function CodeBlock({ code }: { code: Tokens.Code }) {
           hitSlop={8}
           style={({ pressed }) => [styles.copy, pressed && { backgroundColor: c.selected }]}
         >
-          <Icon icon={copied ? Check : Copy} size={13} color={c.faintForeground} />
-          <Text style={{ fontSize: 12, color: c.faintForeground }}>{copied ? "Copied" : "Copy"}</Text>
+          <Icon icon={copied ? Check : Copy} size={14} color={c.faintForeground} />
+          <Text style={{ fontSize: 12.5, color: c.faintForeground }}>{copied ? "Copied" : "Copy"}</Text>
         </Pressable>
       </View>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 12, paddingVertical: 10 }}
-      >
-        <Text selectable style={{ fontFamily: font.mono, fontSize: 12.5, lineHeight: 20, color: c.foreground }}>
-          {lines}
-        </Text>
-      </ScrollView>
+      {language === "diff" || language === "patch" ? (
+        <DiffBlock text={code.text} />
+      ) : (
+        <SideScroll fade={c.code} contentContainerStyle={{ paddingHorizontal: 14, paddingVertical: 12 }}>
+          <Text selectable style={[styles.codeText, { color: c.foreground }]}>
+            {highlight(code.text, language).map((p, i) => (
+              <Text key={i} style={p.kind && { color: colors[p.kind] }}>
+                {p.text}
+              </Text>
+            ))}
+          </Text>
+        </SideScroll>
+      )}
     </View>
   );
 }
@@ -883,12 +1059,12 @@ function List({ list }: { list: Tokens.List }) {
   const scope = useContext(MarkdownContext);
   const start = typeof list.start === "number" ? list.start : 1;
   // Room for the widest number, so the items' text lines up.
-  const marker = list.ordered ? String(start + list.items.length - 1).length * 9 + 8 : 12;
+  const marker = list.ordered ? String(start + list.items.length - 1).length * 9 + 8 : 14;
   return (
     <MarkdownContext value={{ ...scope, depth: scope.depth + 1 }}>
-      <View style={{ gap: 4 }}>
+      <View style={{ gap: 6 }}>
         {list.items.map((item, i) => (
-          <View key={i} style={{ flexDirection: "row", gap: 8 }}>
+          <View key={i} style={{ flexDirection: "row", gap: 7 }}>
             {item.task ? (
               <TaskBox checked={!!item.checked} />
             ) : (
@@ -899,13 +1075,14 @@ function List({ list }: { list: Tokens.List }) {
                   textAlign: list.ordered ? "right" : "center",
                   color: c.faintForeground,
                   fontVariant: ["tabular-nums"],
+                  fontWeight: list.ordered ? "500" : "700",
                 }}
               >
                 {list.ordered ? `${start + i}.` : bullets[scope.depth % bullets.length]}
               </T>
             )}
             <View style={{ flex: 1 }}>
-              <Blocks tokens={item.tokens} />
+              <Blocks tokens={item.tokens} gap={6} />
             </View>
           </View>
         ))}
@@ -915,58 +1092,68 @@ function List({ list }: { list: Tokens.List }) {
 }
 
 /**
- * A table, as the desktop's: in a rounded box that scrolls sideways, its header on a fill. Each
- * column is as wide as its widest cell, up to a wrapping width, measured once before it shows.
+ * A table, as the desktop's, made for a phone: a rounded card with its header on a fill and
+ * hairlines between rows, filling the message's width, or scrolling sideways with a fade when
+ * wider. Each column is as wide as its widest cell, up to a wrapping width. Its columns follow the
+ * table's alignment, as the desktop's do, a right or centered column in even-width digits.
  */
 function Table({ table }: { table: Tokens.Table }) {
   const c = useColors();
   const rows = [table.header, ...table.rows];
+  const columns = table.header.length;
+  const cells = useRef<(View | null)[]>([]);
   const [widths, setWidths] = useState<number[]>();
-  const measured = useRef<number[]>([]);
-  const count = useRef(0);
-  const measure = (j: number, width: number) => {
-    measured.current[j] = Math.max(measured.current[j] ?? 0, Math.ceil(width));
-    if (++count.current === rows.length * table.header.length) setWidths([...measured.current]);
-  };
+  // The new architecture lays out before a layout effect runs and shows nothing until it ends, so
+  // each cell's own width is read and the columns set within the first frame, with no flash. The
+  // +1 covers offsetWidth's rounding, so a cell never wraps once set.
+  useLayoutEffect(() => {
+    const found = Array.from({ length: columns }, () => 0);
+    cells.current.forEach((cell, k) => {
+      if (cell) found[k % columns] = Math.max(found[k % columns]!, cell.offsetWidth + 1);
+    });
+    setWidths(found);
+  }, [columns]);
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-      <View style={[styles.table, { borderColor: c.border, opacity: widths ? 1 : 0 }]}>
-        {rows.map((row, i) => (
-          <View
-            key={i}
-            style={[
-              { flexDirection: "row" },
-              i === 0 && { backgroundColor: c.hover },
-              i < rows.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border },
-            ]}
-          >
-            {row.map((cell, j) => (
-              <View
-                key={j}
-                onLayout={widths ? undefined : (e) => measure(j, e.nativeEvent.layout.width)}
-                style={[
-                  styles.cell,
-                  widths ? { width: widths[j] } : { maxWidth: 260 },
-                  j > 0 && { borderLeftWidth: StyleSheet.hairlineWidth, borderColor: c.border },
-                ]}
-              >
-                <T
-                  selectable
-                  style={{
-                    fontSize: 13,
-                    lineHeight: 19,
-                    fontWeight: i === 0 ? "600" : "400",
-                    textAlign: table.align[j] ?? "left",
+    <View style={[styles.table, { borderColor: c.border, backgroundColor: c.surface }]}>
+      <SideScroll fade={c.surface} contentContainerStyle={{ minWidth: "100%" }}>
+        <View style={{ flexGrow: 1, opacity: widths ? 1 : 0 }}>
+          {rows.map((row, i) => (
+            <View
+              key={i}
+              style={[
+                { flexDirection: "row" },
+                i === 0 && { backgroundColor: c.hover },
+                i < rows.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderColor: c.border },
+              ]}
+            >
+              {row.map((cell, j) => (
+                <View
+                  key={j}
+                  ref={(view) => {
+                    cells.current[i * columns + j] = view;
                   }}
+                  // Set, each column grows by its share, so a narrow table still fills the card.
+                  style={[styles.cell, widths ? { flexBasis: widths[j], flexGrow: widths[j], flexShrink: 0 } : { maxWidth: 248 }]}
                 >
-                  <Inline tokens={cell.tokens} size={13} />
-                </T>
-              </View>
-            ))}
-          </View>
-        ))}
-      </View>
-    </ScrollView>
+                  <T
+                    selectable
+                    style={{
+                      fontSize: 14,
+                      lineHeight: 20,
+                      fontWeight: i === 0 ? "600" : "400",
+                      textAlign: table.align[j] ?? "left",
+                      fontVariant: table.align[j] ? ["tabular-nums"] : undefined,
+                    }}
+                  >
+                    <Inline tokens={cell.tokens} size={14} />
+                  </T>
+                </View>
+              ))}
+            </View>
+          ))}
+        </View>
+      </SideScroll>
+    </View>
   );
 }
 
@@ -980,14 +1167,21 @@ function Block({ token, first }: { token: Token; first: boolean }): ReactNode {
     case "checkbox":
       return null;
     case "hr":
-      return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginVertical: 8 }} />;
+      return <View style={{ height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginVertical: 10 }} />;
     case "heading": {
       const size = [0, 20, 17, 15, 15, 15, 15][(token as Tokens.Heading).depth]!;
+      // More room above than below, so a heading reads with the text it opens, as the desktop's 1.4em.
       return (
         <T
           selectable
           muted={scope.quoted}
-          style={{ fontSize: size, lineHeight: size * 1.3, fontWeight: "600", letterSpacing: -0.2, marginTop: first ? 0 : 8 }}
+          style={{
+            fontSize: size,
+            lineHeight: Math.round(size * 1.3),
+            fontWeight: "600",
+            letterSpacing: size > 15 ? -0.3 : -0.1,
+            marginTop: first ? 0 : Math.round(size * 0.6),
+          }}
         >
           <Inline tokens={token.tokens} size={size} />
         </T>
@@ -1001,7 +1195,7 @@ function Block({ token, first }: { token: Token; first: boolean }): ReactNode {
     }
     case "blockquote":
       return (
-        <View style={{ flexDirection: "row", gap: 11 }}>
+        <View style={{ flexDirection: "row", gap: 12, paddingVertical: 2 }}>
           <View style={{ width: 3, borderRadius: 1.5, backgroundColor: c.foreground, opacity: 0.18 }} />
           <View style={{ flex: 1 }}>
             <MarkdownContext value={{ ...scope, quoted: true }}>
@@ -1024,9 +1218,10 @@ function Block({ token, first }: { token: Token; first: boolean }): ReactNode {
   }
 }
 
-function Blocks({ tokens }: { tokens: Token[] }) {
+/** Blocks one under another, `gap` apart: a message's, or tighter in a list's item. */
+function Blocks({ tokens, gap = 12 }: { tokens: Token[]; gap?: number }) {
   return (
-    <View style={{ gap: 10 }}>
+    <View style={{ gap }}>
       {tokens.map((t, i) => (
         <Block key={i} token={t} first={i === 0} />
       ))}
@@ -1082,12 +1277,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    height: 32,
-    paddingLeft: 12,
-    paddingRight: 4,
+    height: 36,
+    paddingLeft: 14,
+    paddingRight: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  copy: { flexDirection: "row", alignItems: "center", gap: 4, height: 24, paddingHorizontal: 6, borderRadius: 6 },
+  copy: { flexDirection: "row", alignItems: "center", gap: 5, height: 28, paddingHorizontal: 8, borderRadius: 8 },
+  codeText: { fontFamily: font.mono, fontSize: 13, lineHeight: 20 },
+  band: { fontFamily: font.mono, fontSize: 11.5, lineHeight: 18, paddingHorizontal: 14, paddingVertical: 2 },
+  diffRow: { flexDirection: "row", borderLeftWidth: 2, paddingLeft: 12 },
+  sign: { width: 18 },
+  edge: { position: "absolute", top: 0, bottom: 0, width: 28 },
+  pill: { borderRadius: 5, borderWidth: StyleSheet.hairlineWidth, paddingHorizontal: 5, overflow: "hidden" },
   task: {
     width: 16,
     height: 16,
@@ -1097,8 +1298,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  table: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, overflow: "hidden" },
-  cell: { paddingHorizontal: 11, paddingVertical: 6 },
+  table: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, overflow: "hidden" },
+  cell: { paddingHorizontal: 12, paddingVertical: 9 },
   sectionTitle: { fontSize: 12, letterSpacing: 0.4, paddingHorizontal: 16 },
   footer: { fontSize: 12, lineHeight: 17, paddingHorizontal: 16 },
   group: { borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
