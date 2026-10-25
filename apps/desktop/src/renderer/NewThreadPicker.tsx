@@ -69,7 +69,7 @@ export function NewThreadPicker({
         setQuery("");
         setActive(0);
       }}
-      className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
+      className="mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50"
     >
       <form
         method="dialog"

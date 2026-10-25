@@ -765,7 +765,7 @@ const plainSurface = {
     "bg-[color-mix(in_srgb,var(--tint)_10%,var(--selected))] shadow-[inset_0_0_0_1.5px_color-mix(in_srgb,var(--tint)_70%,transparent)]",
 };
 const rowLook =
-  "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-body transition-[background-color,transform] duration-100 outline-none";
+  "flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-body transition-[background-color,transform] duration-100 outline-none";
 const moreButton =
   "grid size-5.5 place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity group-hover/pin:opacity-100 group-has-[:focus-visible]/pin:opacity-100 hover:bg-[color-mix(in_srgb,var(--tint)_16%,transparent)] hover:text-foreground [&_svg]:size-3.5";
 const hideOnHover = "group-hover/pin:hidden group-has-[:focus-visible]/pin:hidden";

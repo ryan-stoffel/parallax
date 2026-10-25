@@ -115,7 +115,7 @@ export function WaitingBar({
         aria-label="Waiting on"
         className={
           compact
-            ? `inset-auto m-0 mb-2 rounded-2xl border border-border bg-surface p-3 text-body text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`
+            ? `inset-auto m-0 mb-2 rounded-xl border border-border bg-surface p-3 text-body text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`
             : `${menuPanel("end")} w-80 p-3 text-body`
         }
       >

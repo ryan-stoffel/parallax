@@ -195,7 +195,7 @@ export function AddDialog({
 
 /** The palette's dialog. */
 const palette =
-  "mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-2xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50";
+  "mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50";
 
 /**
  * Asks where to clone a repository on `hostId`, then clones it there and registers it, as Clone

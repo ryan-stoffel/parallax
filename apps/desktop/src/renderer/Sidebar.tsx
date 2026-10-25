@@ -189,7 +189,7 @@ import { PinList, type Pin as PinData } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 
 const row =
-  "flex w-full items-center gap-2 rounded-md px-2 py-[5px] text-left text-body hover:bg-hover";
+  "flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-body hover:bg-hover";
 const current = "bg-selected text-foreground";
 const sectionHeading =
   "flex h-7 items-center gap-1 px-2 text-meta font-medium text-faint-foreground";
@@ -346,12 +346,12 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
 }
 
 /** A pinned folder's icon in its color (pins.ts), where a thread's repo icon goes. */
-export function FolderMark({ folder, big }: { folder: PinFolder; big?: boolean }) {
+export function FolderMark({ folder }: { folder: PinFolder }) {
   return (
     <Folder
       aria-hidden
       style={{ color: folder.color ? `var(--project-${folder.color})` : undefined }}
-      className={`${big ? "size-[18px]" : "size-4"} shrink-0 ${folder.color ? "" : "text-muted-foreground"}`}
+      className={`size-4 shrink-0 ${folder.color ? "" : "text-muted-foreground"}`}
     />
   );
 }
@@ -359,11 +359,11 @@ export function FolderMark({ folder, big }: { folder: PinFolder; big?: boolean }
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
  * another computer, or else its initials on a tile in a color picked from its name. No Repo is a
- * dashed square. `big` draws it at 18px, as a thread row's.
+ * dashed square.
  */
-export function RepoIcon({ repo, big }: { repo?: Repo; big?: boolean }) {
+export function RepoIcon({ repo }: { repo?: Repo }) {
   const shared = useContext(SharedRepoIcons);
-  const size = big ? "size-[18px]" : "size-4";
+  const size = "size-4";
   if (!repo || repo.scratch)
     return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);
@@ -372,7 +372,7 @@ export function RepoIcon({ repo, big }: { repo?: Repo; big?: boolean }) {
     <span
       aria-hidden
       style={{ color: repoColor(repo, undefined) }}
-      className={`grid ${size} shrink-0 place-items-center rounded-sm bg-current/15 ${big ? "text-micro" : "text-micro"} leading-none font-bold`}
+      className={`grid ${size} shrink-0 place-items-center rounded-sm bg-current/15 text-micro leading-none font-semibold`}
     >
       {/* Drawn from the attribute, so the tile adds nothing to the text around it. */}
       <span data-initials={initials(repo.name)} className="before:content-[attr(data-initials)]" />
@@ -866,13 +866,16 @@ export function ThreadList({
     ...(sections.working ? workingTops : []),
   ];
   const modHeld = useModHeld();
-  const openItem = (item: Item) =>
+  // Opening a row hides its card, which would cover what it opens.
+  const openItem = (item: Item) => {
+    hideCard();
     onSelect(
       item.host.id,
       item.kind === "thread"
         ? { kind: "thread", threadId: item.thread.id }
         : { kind: "project", projectId: item.project.id },
     );
+  };
 
   // Switching scope reopens the row last open there, if it still is and isn't archived.
   const setScope = (next: Scope, reopen = true) => {
@@ -1255,8 +1258,9 @@ export function ThreadList({
       />
     );
   };
+  // The open thread's card would only repeat what the thread shows.
   const restCard = (item: Item) => (el: HTMLElement) => {
-    if (item.kind !== "thread") return;
+    if (item.kind !== "thread" || item.key === selectedKey) return;
     card.current?.show(el, {
       title: item.title,
       run: item.view.state.runs[item.thread.id],
@@ -2148,7 +2152,7 @@ function Drawer<T>({
           setOpened(!open);
           onOpenChange(!open);
         }}
-        className="sticky top-0 z-10 flex list-none items-center gap-3 rounded-md bg-sidebar px-2 py-1.5 text-body text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+        className="sticky top-0 z-10 flex list-none items-center gap-3 rounded-lg bg-sidebar px-2 py-1.5 text-body text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
       >
         <span>
           {label}{" "}
@@ -2317,7 +2321,7 @@ function ScopeMenu({
         {outside > 0 && (
           <span
             aria-hidden
-            className="absolute -right-1 -bottom-0.75 grid h-3.25 min-w-3.25 place-items-center rounded-full bg-warning px-0.75 text-micro font-bold text-white ring-2 ring-sidebar tabular-nums"
+            className="absolute -right-1 -bottom-0.75 grid h-3.25 min-w-3.25 place-items-center rounded-full bg-warning px-0.75 text-micro font-semibold text-white ring-2 ring-sidebar tabular-nums"
           >
             {outside}
           </span>
@@ -2664,13 +2668,18 @@ function RowHead({
   title,
   titleColor = "text-foreground",
   status,
+  renaming = false,
 }: {
   title: ReactNode;
   titleColor?: string;
   status: ReactNode;
+  /** While its title is edited in place, the line is the box's, with the actions hidden. */
+  renaming?: boolean;
 }) {
   return (
-    <span className="flex w-full items-center gap-2 group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34">
+    <span
+      className={`flex w-full items-center gap-2 ${renaming ? "" : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34"}`}
+    >
       <span
         data-title
         className={`min-w-0 flex-1 truncate text-body font-medium transition-colors ${titleColor}`}
@@ -2775,10 +2784,9 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
  * was prompted), then its repo, its worktree or local checkout icon, branch, and git status, a
  * pin, linked pull requests (the number of one, or +N for more) and their checks, and provider.
  * Under a search, the words found are marked, and a match only in its messages shows a line of
- * them. Resting on it shows its card, unless it's the open thread; hovering or focusing it swaps
- * the status for Snooze, Archive, and more actions, which also open by right-clicking the row:
- * native popovers, so Escape and clicking away close them. Double-clicking the title renames it in
- * place.
+ * them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
+ * Archive, and more actions, which also open by right-clicking the row: native popovers, so
+ * Escape and clicking away close them. Double-clicking the title renames it in place.
  */
 function ThreadRow({
   look,
@@ -3021,8 +3029,7 @@ function ThreadRow({
       data-kind="thread"
       data-flip={rowKey}
       className={`group/row relative rounded-lg transition-colors duration-100 ${rowLook} ${drafted ? draftGap : ""} ${flash ? "row-flash" : ""}`}
-      // The open thread's card would only repeat what the thread shows.
-      onMouseEnter={(e) => !selected && onRest(e.currentTarget)}
+      onMouseEnter={(e) => onRest(e.currentTarget)}
       onMouseLeave={onLeave}
     >
       <Main
@@ -3031,15 +3038,7 @@ function ThreadRow({
         aria-description={picked ? "Selected" : undefined}
         data-row={rowKey}
         data-kind="thread"
-        onClick={
-          renaming
-            ? undefined
-            : (e) => {
-                // Opening it hides its card, which would cover the thread it opens.
-                onLeave();
-                onOpen(e);
-              }
-        }
+        onClick={renaming ? undefined : onOpen}
         onKeyDown={renaming ? undefined : onKeys}
         onContextMenu={(e) => {
           onLeave();
@@ -3075,7 +3074,7 @@ function ThreadRow({
             </span>
           </span>
         ) : (
-          <RowHead title={titleText} titleColor={titleColor} status={status} />
+          <RowHead title={titleText} titleColor={titleColor} status={status} renaming={renaming} />
         )}
         {/* Two-line rows: the title, then where it is and its details. One-line rows keep to one
             line under a repo's heading too, and a row under its repo's heading leaves out the repo. */}
@@ -3158,7 +3157,9 @@ function ThreadRow({
           </span>
         )}
       </Main>
-      <div className="absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 [&_button]:cursor-pointer">
+      <div
+        className={`absolute top-1 right-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 [&_button]:cursor-pointer ${renaming && (look !== "compact" || nested) ? "hidden" : ""}`}
+      >
         {snoozable && (
           <button
             type="button"

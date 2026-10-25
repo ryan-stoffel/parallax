@@ -33,7 +33,7 @@ export function TypographySettings() {
           <FontPicker
             label="Interface font"
             value={appearance.uiFont}
-            defaultName="System"
+            defaultName="Inter"
             defaultFamily="var(--font-sans)"
             bundled={bundledFonts.ui}
             groups={[["Installed", [...fonts.other, ...fonts.mono]]]}
@@ -81,7 +81,7 @@ export function TypographySettings() {
           className={`${preview} px-4 py-3 text-reading leading-relaxed`}
         >
           Use <Chip icon={<Package />}>Frontend Design</Chip> to fix the flaky test in{" "}
-          <Chip icon={<span className="text-micro font-bold">TS</span>} tone="file">
+          <Chip icon={<span className="text-micro font-semibold">TS</span>} tone="file">
             surface.test.ts
           </Chip>{" "}
           and align the header with{" "}

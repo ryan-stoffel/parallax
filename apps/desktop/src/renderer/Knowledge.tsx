@@ -64,9 +64,7 @@ function Head({ memories }: { memories: readonly Memory[] }) {
     .join(", ");
   return (
     <header className="px-1 pt-5">
-      <h2 className="font-brand text-heading leading-tight font-semibold tracking-tight">
-        Knowledge
-      </h2>
+      <h2 className="text-heading leading-tight font-semibold tracking-tight">Knowledge</h2>
       <p className="mt-0.5 text-body text-muted-foreground">
         What this Project's agents know{counts && `: ${counts}`}.
       </p>

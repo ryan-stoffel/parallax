@@ -110,14 +110,14 @@ function FileCard({
         ? sizeOf(file.size)
         : kinds[doc.kind];
   return (
-    <div className="group relative flex h-[88px] max-w-xl items-center gap-4 overflow-hidden rounded-2xl border border-border bg-surface pr-4 pl-5 hover:bg-hover">
+    <div className="group relative flex h-[88px] max-w-xl items-center gap-4 overflow-hidden rounded-xl border border-border bg-surface pr-4 pl-5 hover:bg-hover">
       <button
         type="button"
         aria-label={`Open ${doc.name}`}
         title={doc.name}
         disabled={!onOpen}
         onClick={() => onOpen?.(doc)}
-        className="absolute inset-0 rounded-2xl focus-visible:outline-2 focus-visible:outline-ring"
+        className="absolute inset-0 rounded-xl focus-visible:outline-2 focus-visible:outline-ring"
       />
       <div aria-hidden className="pointer-events-none relative h-full shrink-0" style={{ width }}>
         {plain && (
@@ -186,7 +186,7 @@ function ReadMedia({ hostId, doc }: { hostId: string; doc: DocRef }) {
   const url = useObjectUrl(loaded?.bytes);
   if (error)
     return (
-      <p className="rounded-2xl border border-border bg-surface px-5 py-4 text-body text-muted-foreground">
+      <p className="rounded-xl border border-border bg-surface px-5 py-4 text-body text-muted-foreground">
         {doc.name} · {error}
       </p>
     );
@@ -226,7 +226,7 @@ function MediaFrame({
 }) {
   const [shown, setShown] = useState(false);
   return (
-    <div className="relative w-full overflow-hidden rounded-2xl border border-border bg-black">
+    <div className="relative w-full overflow-hidden rounded-xl border border-border bg-black">
       {!url ? (
         <div aria-label={`Loading ${doc.name}`} className="aspect-video w-full bg-selected" />
       ) : isVideo(doc.kind) ? (

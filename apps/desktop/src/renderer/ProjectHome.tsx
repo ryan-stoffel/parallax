@@ -128,7 +128,7 @@ export function ProjectHome({
           <ProjectIcon icon={project.icon} className="size-5" />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate font-brand text-heading leading-tight font-semibold tracking-tight">
+          <h2 className="truncate text-heading leading-tight font-semibold tracking-tight">
             {project.name}
           </h2>
           <p className="mt-0.5 text-body text-muted-foreground">{openLine(rows)}</p>

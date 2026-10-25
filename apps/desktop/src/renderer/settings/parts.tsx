@@ -43,7 +43,7 @@ export function Section({
   return (
     <section aria-label={title} data-setting={anchorOf(title)} className="mb-8 scroll-mt-6">
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
-        <h2 className="text-body font-medium text-muted-foreground">{title}</h2>
+        <h2 className="text-reading font-semibold">{title}</h2>
         {action}
       </div>
       <div className="rounded-xl border border-border bg-(--pane-card)">{children}</div>
@@ -72,7 +72,7 @@ export function Row({
       <div className="min-w-0">
         <span className="block text-body font-medium">{title}</span>
         {description && (
-          <span className="block text-body text-muted-foreground">{description}</span>
+          <span className="block text-meta text-muted-foreground">{description}</span>
         )}
       </div>
       {children && <div className="flex shrink-0 items-center gap-2">{children}</div>}

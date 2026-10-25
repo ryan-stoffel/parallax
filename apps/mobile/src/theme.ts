@@ -1,5 +1,5 @@
 // Parallax Light and Dark, as apps/desktop/src/renderer/index.css has them (theme.test.ts keeps
-// them in step), and the desktop's type: the system's font for text, Sora for the brand, and
+// them in step), and its type: the system's font for text, Sora for the brand, and
 // JetBrains Mono Nerd Font for code. Pure, for the test; ui.tsx picks one by the appearance.
 export const light = {
   background: "#ffffff",
@@ -32,18 +32,18 @@ export const light = {
 
 export const dark: typeof light = {
   ...light,
-  background: "#161616",
-  surface: "#1f1f1f",
-  foreground: "#ececec",
+  background: "#0a0a0a",
+  surface: "#141414",
+  foreground: "#ededed",
   mutedForeground: "#a3a3a3",
-  faintForeground: "#8f8f8f",
+  faintForeground: "#8a8a8a",
   border: "rgba(255, 255, 255, 0.08)",
   selected: "rgba(255, 255, 255, 0.08)",
   accent: "#5b80ff",
   danger: "#ff6b4a",
   warning: "#f59e0b",
-  code: "#101010",
-  sidebar: "#101010",
+  code: "#111111",
+  sidebar: "#000000",
   hover: "rgba(255, 255, 255, 0.05)",
   added: "#4ade80",
   projectViolet: "#a78bfa",

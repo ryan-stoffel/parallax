@@ -1185,7 +1185,7 @@ export function Composer({
             setAttachError("A thread on another computer can't be attached here.");
           else addThreads([thread.runId]);
         }}
-        className={`relative z-10 rounded-2xl border bg-surface shadow-composer focus-within:border-ring ${threadOver ? "border-ring" : "border-border"}`}
+        className={`relative z-10 rounded-xl border bg-surface shadow-composer focus-within:border-ring ${threadOver ? "border-ring" : "border-border"}`}
       >
         {menuOpen && (
           <div
@@ -1425,7 +1425,7 @@ export function Composer({
       </form>
       {tab && (
         // Tucked under the box, so what it shows reads as part of it.
-        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-2xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
+        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
           {tab}
         </div>
       )}

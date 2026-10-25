@@ -227,7 +227,7 @@ function StartAgent({
       }}
       className="px-3 pb-3"
     >
-      <div className="flex items-end gap-1 rounded-2xl border border-border bg-surface p-1.5 focus-within:border-ring">
+      <div className="flex items-end gap-1 rounded-xl border border-border bg-surface p-1.5 focus-within:border-ring">
         <textarea
           aria-label="New subagent's task"
           rows={2}

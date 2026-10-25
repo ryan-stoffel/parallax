@@ -1031,7 +1031,7 @@ function SubagentView({
         <div
           role="status"
           aria-label="Subagent"
-          className="flex min-w-0 items-center gap-2.5 rounded-2xl border border-border bg-surface py-2.5 pr-2.5 pl-4 text-body text-muted-foreground"
+          className="flex min-w-0 items-center gap-2.5 rounded-xl border border-border bg-surface py-2.5 pr-2.5 pl-4 text-body text-muted-foreground"
         >
           <ClaudeLogo aria-hidden className="size-4 shrink-0" />
           <span className="min-w-0 truncate">
@@ -1751,7 +1751,7 @@ export const RowView = memo(function RowView({
           )}
           {/* A message of images or files alone has no bubble. */}
           {((!images?.length && !files.length) || said?.trim() !== "") && (
-            <div className="max-w-[85%] rounded-2xl bg-selected px-3.5 py-2 text-reading leading-relaxed whitespace-pre-wrap">
+            <div className="max-w-[85%] rounded-xl bg-selected px-3.5 py-2 text-reading leading-relaxed whitespace-pre-wrap">
               {/* A follow-up from an older log, which has no text for it. */}
               {said !== undefined ? (
                 withMentions(said, known)
@@ -2670,7 +2670,7 @@ function EditMessage({
             e.currentTarget.form?.requestSubmit();
           }
         }}
-        className="w-full resize-none rounded-2xl border border-border bg-selected px-3.5 py-2 text-reading leading-relaxed outline-none focus:border-accent"
+        className="w-full resize-none rounded-xl border border-border bg-selected px-3.5 py-2 text-reading leading-relaxed outline-none focus:border-accent"
       />
       <div className="flex items-center gap-3 text-body">
         <button type="button" onClick={onCancel} className="text-muted-foreground">

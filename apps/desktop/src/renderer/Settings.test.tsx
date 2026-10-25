@@ -793,7 +793,7 @@ test("Text's sizes and Word wrap are kept, and a font's search takes any font's 
   await renderSettings("appearance");
   await pick("Interface font size", "16 px");
   await pick("Monospace font size", "14 px");
-  await pick("Interface font", "Inter");
+  await pick("Interface font", "Geist");
   await click(
     document.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Word wrap"]')!,
   );
@@ -806,7 +806,7 @@ test("Text's sizes and Word wrap are kept, and a font's search takes any font's 
   expect(JSON.parse(localStorage.getItem("parallax.appearance")!)).toMatchObject({
     uiSize: 16,
     codeSize: 14,
-    uiFont: "Inter Variable",
+    uiFont: "Geist Variable",
     wordWrap: false,
     codeFont: "Berkeley Mono",
   });
