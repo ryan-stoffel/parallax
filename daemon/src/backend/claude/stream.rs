@@ -4,6 +4,7 @@
 //! Parallax doesn't use are ignored, as 0004 asks, so a newer CLI that adds fields still parses.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::Instant;
 
 use jiff::Timestamp;
 use serde_json::{Map, Value};
@@ -129,6 +130,11 @@ pub(super) struct TurnDone {
     pub foreign: bool,
 }
 
+/// The least output and streaming time a turn's speed sample takes: a reply of a few tokens
+/// streams in one burst, whose rate says nothing.
+const MIN_SPEED_TOKENS: u64 = 20;
+const MIN_SPEED_MS: u64 = 250;
+
 /// The state that reading one run's output needs.
 #[derive(Debug)]
 #[expect(
@@ -182,8 +188,16 @@ pub(super) struct Translator {
     known_window: Option<(String, u64)>,
     /// The session's running output tokens and API milliseconds, as of the last `result`.
     api_totals: Option<(u64, u64)>,
-    /// The last turn's output tokens and API milliseconds, an approximate speed sample.
+    /// The last turn's output tokens and milliseconds, a speed sample: their streaming time when
+    /// partial messages came, else the turn's share of the session's API time.
     speed: Option<(u64, u64)>,
+    /// When the line being read arrived, for timing what streams.
+    now: Instant,
+    /// When the main session's response streaming now sent its first delta.
+    stream_start: Option<Instant>,
+    /// This turn's main-session output tokens and the milliseconds they streamed for, from each
+    /// response's first delta to its `message_delta`, so the wait for the first token is left out.
+    turn_stream: (u64, u64),
     /// The request whose usage was last sent, as each of its content blocks repeats it.
     usage_message: Option<String>,
     /// The id of the message streaming now, from its `message_start`, for its text deltas.
@@ -200,22 +214,39 @@ pub(super) struct Translator {
 }
 
 impl Translator {
-    /// Takes the turn's output tokens and API time from the `result`'s running session totals.
-    /// Both include subagents and the wait for each request's first token, so the rate they give
-    /// is approximate. A resumed session's totals carry over from before (0004), so its first
-    /// `result` only sets the baseline, as does a total that went down.
+    /// Takes the turn's speed sample. With partial messages, it's the main session's output tokens
+    /// over the time they streamed, which leaves out each request's wait for its first token and
+    /// subagents; a turn too short to time keeps the last sample. Without them, it's the turn's
+    /// output tokens and API time from the `result`'s running session totals, which include both,
+    /// so the rate is approximate. A resumed session's totals carry over from before (0004), so its
+    /// first `result` only sets their baseline, as does a total that went down.
     fn sample_speed(&mut self, message: &Map<String, Value>, totals: Option<&Map<String, Value>>) {
-        let Some(ms) = message.get("duration_api_ms").and_then(Value::as_u64) else {
-            return;
-        };
-        let Some(tokens) = totals.map(|totals| {
+        let streamed = std::mem::take(&mut self.turn_stream);
+        self.stream_start = None;
+        let api = self.api_sample(message, totals);
+        if streamed != (0, 0) {
+            if streamed.0 >= MIN_SPEED_TOKENS && streamed.1 >= MIN_SPEED_MS {
+                self.speed = Some(streamed);
+            }
+        } else if let Some(sample) = api {
+            self.speed = Some(sample);
+        }
+    }
+
+    /// The turn's output tokens and API milliseconds from the `result`'s running session totals,
+    /// when they rose, keeping the totals as the next turn's baseline.
+    fn api_sample(
+        &mut self,
+        message: &Map<String, Value>,
+        totals: Option<&Map<String, Value>>,
+    ) -> Option<(u64, u64)> {
+        let ms = message.get("duration_api_ms").and_then(Value::as_u64)?;
+        let tokens = totals.map(|totals| {
             totals
                 .values()
                 .filter_map(|usage| usage.get("outputTokens").and_then(Value::as_u64))
                 .sum::<u64>()
-        }) else {
-            return;
-        };
+        })?;
         let turn = match self.api_totals {
             Some((before_tokens, before_ms)) => tokens
                 .checked_sub(before_tokens)
@@ -224,12 +255,7 @@ impl Translator {
             None => Some((tokens, ms)),
         };
         self.api_totals = Some((tokens, ms));
-        let Some((turn_tokens, turn_ms)) = turn else {
-            return;
-        };
-        if turn_tokens > 0 && turn_ms > 0 {
-            self.speed = Some((turn_tokens, turn_ms));
-        }
+        turn.filter(|&(turn_tokens, turn_ms)| turn_tokens > 0 && turn_ms > 0)
     }
 
     /// A translator for a run under `policy` whose `system/init` must report
@@ -259,6 +285,9 @@ impl Translator {
             known_window: None,
             api_totals: None,
             speed: None,
+            now: Instant::now(),
+            stream_start: None,
+            turn_stream: (0, 0),
             resumed: false,
             usage_message: None,
             streaming: None,
@@ -317,6 +346,12 @@ impl Translator {
 
     /// Reads one line of stdout.
     pub fn line(&mut self, line: &[u8]) -> Vec<Step> {
+        self.line_at(line, Instant::now())
+    }
+
+    /// Reads one line of stdout that arrived at `now`.
+    pub fn line_at(&mut self, line: &[u8], now: Instant) -> Vec<Step> {
+        self.now = now;
         if line.iter().all(u8::is_ascii_whitespace) {
             return Vec::new();
         }
@@ -704,7 +739,8 @@ impl Translator {
     /// A partial message (`--include-partial-messages`, PLX-714): its text as it streams, as
     /// deltas the whole `assistant` message replaces, and each tool call as its block starts,
     /// with a null input the whole message's call replaces. Other blocks wait for that message,
-    /// and a subagent's are skipped, as T3 Code skips them.
+    /// and a subagent's are skipped, as T3 Code skips them. Each response is timed from its first
+    /// delta to its `message_delta`, for the turn's speed sample.
     fn stream_event(&mut self, message: &Map<String, Value>) -> Vec<Step> {
         let Some(event) = message.get("event").and_then(Value::as_object) else {
             return Vec::new();
@@ -718,6 +754,7 @@ impl Translator {
         }
         match text(event, "type") {
             Some("message_start") => {
+                self.stream_start = None;
                 self.streaming = event
                     .get("message")
                     .and_then(|inner| text(inner.as_object()?, "id"))
@@ -736,7 +773,22 @@ impl Translator {
                     _ => Vec::new(),
                 }
             }
+            Some("message_delta") => {
+                let tokens = event
+                    .get("usage")
+                    .and_then(|usage| usage.get("output_tokens"))
+                    .and_then(Value::as_u64);
+                if let (Some(start), Some(tokens)) = (self.stream_start.take(), tokens) {
+                    let ms = u64::try_from(self.now.saturating_duration_since(start).as_millis())
+                        .unwrap_or(u64::MAX);
+                    self.turn_stream.0 = self.turn_stream.0.saturating_add(tokens);
+                    self.turn_stream.1 = self.turn_stream.1.saturating_add(ms);
+                }
+                Vec::new()
+            }
             Some("content_block_delta") => {
+                // Any delta, text, thinking, or a tool call's input, is output streaming.
+                self.stream_start.get_or_insert(self.now);
                 let delta = event.get("delta").and_then(Value::as_object);
                 match delta.and_then(|delta| Some((text(delta, "type")?, text(delta, "text")?))) {
                     Some(("text_delta", text)) if !text.is_empty() => {

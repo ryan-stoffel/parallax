@@ -1434,9 +1434,10 @@ test("a pasted image goes with the message beside the text, and shows while it's
   });
 
   const send = sendCalls(request)[0]!;
+  // The text names the image where it was pasted.
   expect(send[2]).toMatchObject({
     runId,
-    text: "",
+    text: "[Image 1]",
     images: [{ mediaType: "image/png", data: "iVBORw==" }],
   });
   const img = document.querySelector('[role="log"] img');
@@ -1457,13 +1458,18 @@ test("a thread dropped on the composer goes with the message as threads, and sho
       }),
     );
   });
-  type("Do the same here");
+  // After the dropped thread's chip, which the text names.
+  act(() => void composer().editor!.commands.insertContent("Do the same here"));
   await act(async () => {
     composer().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
 
   const send = sendCalls(request)[0]!;
-  expect(send[2]).toMatchObject({ runId, text: "Do the same here", threads: ["run-a"] });
+  expect(send[2]).toMatchObject({
+    runId,
+    text: '@"Fix the flaky test" Do the same here',
+    threads: ["run-a"],
+  });
   expect(document.querySelector('[role="log"] [data-thread-chip]')?.textContent).toBe(
     "Thread · nowFix the flaky test",
   );

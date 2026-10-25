@@ -186,9 +186,10 @@ async function pick(text: string) {
 const composer = () =>
   document.querySelector<TiptapEditorHTMLElement>('[role="textbox"][aria-label="Message"]')!;
 
-async function send(text: string) {
+/** Sends `text` in place of what the box holds, or without one, what it holds. */
+async function send(text?: string) {
   const box = composer();
-  act(() => void box.editor!.commands.setContent(text));
+  if (text !== undefined) act(() => void box.editor!.commands.setContent(text));
   await act(async () => {
     box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   });
@@ -457,9 +458,16 @@ test("No Repo starts a thread with no repo, with a thread dropped on the box att
       }),
     );
   });
-  await send("Hi");
+  // After the dropped thread's chip, which the text names.
+  act(() => void composer().editor!.commands.insertContent("Hi"));
+  await send();
   expect(calls("thread/start")).toEqual([
-    { runId: expect.any(String), prompt: "Hi", threads: [thread.id], branchSlug: "hi" },
+    {
+      runId: expect.any(String),
+      prompt: '@"Fix the flaky test" Hi',
+      threads: [thread.id],
+      branchSlug: expect.any(String),
+    },
   ]);
   expect(crumbs()).toEqual(["This Mac", "No Repo", "Hi"]);
 });
@@ -481,7 +489,7 @@ test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens
         value: data,
       }),
     );
-    void composer().editor!.commands.setContent("Tidy the README");
+    void composer().editor!.commands.insertContent("Tidy the README");
   });
   await act(async () => (threadRow("Fix the flaky test") as HTMLElement).click());
   await settle();
@@ -489,18 +497,22 @@ test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens
   const draft = () => document.querySelector<HTMLElement>('#sidebar li[data-kind="draft"] button');
   const rows = document.querySelectorAll('#sidebar ul[aria-label="Threads"] > li');
   expect(rows[0]!.getAttribute("data-kind")).toBe("draft");
-  expect(draft()!.textContent).toBe("Tidy the READMEDraftparallax");
+  expect(draft()!.textContent).toBe('@"Fix the flaky test" Tidy the READMEDraftparallax');
 
   await act(async () => draft()!.click());
   await settle();
   expect(draft()).toBeNull();
   expect(heading()).toBe("What should we build in parallax?");
-  expect(composer().textContent).toBe("Tidy the README");
+  // With the thread's chip back where it was.
+  expect(composer().textContent).toBe("Fix the flaky test Tidy the README");
 
   // Starting it leaves no draft behind.
-  await send("Tidy the README");
+  await send();
   expect(calls("thread/start")).toEqual([
-    expect.objectContaining({ prompt: "Tidy the README", threads: [thread.id] }),
+    expect.objectContaining({
+      prompt: '@"Fix the flaky test" Tidy the README',
+      threads: [thread.id],
+    }),
   ]);
   expect(draft()).toBeNull();
 });

@@ -953,6 +953,7 @@ export function AgentChat({
           started={box}
           accountId={box?.accountId}
           requestUsage={transcript.requestUsage}
+          threadUsage={transcript.threadUsage}
           connected={connected}
           hostId={hostId}
           contextAndFast={connected && "contextAndFast" in connection.capabilities}

@@ -1,14 +1,20 @@
 import {
   ArrowUp,
+  Brain,
+  Cpu,
   FilePen,
   Hand,
+  Image as ImageIcon,
   ListChecks,
   LockOpen,
   LoaderCircle,
+  MessagesSquare,
   Paperclip,
   Sparkles,
   Square,
+  SquareSlash,
   X,
+  Zap,
 } from "lucide-react";
 import Blockquote from "@tiptap/extension-blockquote";
 import Bold from "@tiptap/extension-bold";
@@ -45,7 +51,10 @@ import {
 } from "@tiptap/react";
 import { defaultMarkdownSerializer, MarkdownSerializer } from "prosemirror-markdown";
 import {
+  createContext,
   Fragment as ReactFragment,
+  useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -66,23 +75,27 @@ import type {
 import { lastPrompt } from "./attention";
 import { sizeOf } from "./documents";
 import type { ComposerContents } from "./drafts";
-import { UsageInline, UsageRing, useComposerUsage } from "./ComposerUsage";
-import type { RequestUsage } from "./transcript";
+import { threadUsageOf, UsageRing } from "./ComposerUsage";
+import type { RequestUsage, ThreadUsage } from "./transcript";
 import { EffortMenu } from "./EffortMenu";
 import { accessPrefs } from "./accessPrefs";
 import { FileCard } from "./FileCard";
-import { Mention } from "./Mention";
-import { imageUrl, readImage, type ImageCaps } from "./images";
+import { Chip, fileIcon, Mention } from "./Mention";
+import { imageFromUrl, imageUrl, readImage, type ImageCaps } from "./images";
 import { Lightbox } from "./Lightbox";
 import { encodedImage, uploadFiles, withFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
+import { ScrollThumb } from "./ScrollThumb";
 import { dismiss, notify } from "./notifications";
-import { behaviorPrefs, newThreadPrefs, usageView } from "./prefs";
+import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { accessLevels } from "./catalog";
 import { useCatalog, type Model, type Provider, type RunOptions } from "./models";
-import { lookOf, ThreadChip, type AttachThreads } from "./threadContext";
+import { RepoIcon } from "./Sidebar";
+import { lookOf, type AttachThreads } from "./threadContext";
+import type { ThreadsState } from "./threads";
 import { draggedThread, threadDragType } from "./threadDrag";
-import { menuItem, Picker, type PickerOption } from "./ui";
+import { stored } from "./stored";
+import { Picker, type PickerOption } from "./ui";
 
 // The access levels (catalog.ts), each with its icon.
 export const accessOptions: Record<AgentPermission, PickerOption> = {
@@ -115,38 +128,197 @@ export const accessOptions: Record<AgentPermission, PickerOption> = {
 
 const divider = <span aria-hidden className="mx-1 h-5 w-px bg-border" />;
 
+/** What the inline thread and image chips read to draw themselves: the attached images, and the
+ * host's threads. */
+const RefsContext = createContext<{ images: readonly PromptImage[]; threads?: ThreadsState }>({
+  images: [],
+});
+
+// Each image's key, by identity, for its place in the text. A draft and a failed send's put-back
+// keep the same image objects, so their chips find them again. Random, since a copied chip can
+// outlive the app: a counter would start over and name another image.
+const imageKeys = new WeakMap<PromptImage, string>();
+function imageKey(image: PromptImage): string {
+  let key = imageKeys.get(image);
+  if (key === undefined) imageKeys.set(image, (key = crypto.randomUUID()));
+  return key;
+}
+
+/** The inline nodes that stand for something attached, each drawn as a chip and deleted whole. */
+const chipNodes = new Set(["mention", "threadRef", "imageRef"]);
+
+/** An inline atom drawn by `view`, with `attrs` as its attributes. */
+const chipNode = (
+  name: string,
+  attrs: Record<string, unknown>,
+  view: (props: NodeViewProps) => ReactNode,
+) =>
+  TiptapNode.create({
+    name,
+    group: "inline",
+    inline: true,
+    atom: true,
+    selectable: false,
+    addAttributes: () =>
+      Object.fromEntries(Object.entries(attrs).map(([k, v]) => [k, { default: v }])),
+    parseHTML: () => [
+      {
+        tag: `span[data-${name}]`,
+        getAttrs: (el) =>
+          Object.fromEntries(Object.keys(attrs).map((k) => [k, el.getAttribute(`data-${k}`)])),
+      },
+    ],
+    // `data-plx-chip` marks the box's own chips on the clipboard, for paste.
+    renderHTML: ({ node }) => [
+      "span",
+      {
+        "data-plx-chip": name,
+        [`data-${name}`]: "",
+        ...Object.fromEntries(Object.keys(attrs).map((k) => [`data-${k}`, node.attrs[k]])),
+      },
+    ],
+    addNodeView: () =>
+      ReactNodeViewRenderer(
+        (props: NodeViewProps) => (
+          <NodeViewWrapper as="span" data-chip={name}>
+            {view(props)}
+          </NodeViewWrapper>
+        ),
+        { as: "span" },
+      ),
+  });
+
 // A picked /skill or @file: one node, drawn as a chip and deleted whole, holding the token it sends.
-const MentionNode = TiptapNode.create({
-  name: "mention",
-  group: "inline",
-  inline: true,
-  atom: true,
-  selectable: false,
-  addAttributes: () => ({ token: { default: "" } }),
-  parseHTML: () => [
-    { tag: "span[data-mention]", getAttrs: (el) => ({ token: el.getAttribute("data-mention") }) },
-  ],
-  renderHTML: ({ node }) => ["span", { "data-mention": node.attrs["token"] }, node.attrs["token"]],
+const MentionNode = chipNode("mention", { token: "" }, ({ node }) => (
+  <Mention token={node.attrs["token"] as string} />
+)).extend({
   renderText: ({ node }) => node.attrs["token"] as string,
-  // Backspace just after one takes it whole, which the browser does unreliably for an uneditable span.
+  // Backspace just after any chip takes it whole, which the browser does unreliably for an
+  // uneditable span.
   addKeyboardShortcuts: () => ({
     Backspace: ({ editor }) => {
       const { empty, $from, from } = editor.state.selection;
       const before = $from.nodeBefore;
-      if (!empty || before?.type.name !== "mention") return false;
+      if (!empty || !before || !chipNodes.has(before.type.name)) return false;
       return editor.commands.deleteRange({ from: from - before.nodeSize, to: from });
     },
   }),
-  addNodeView: () =>
-    ReactNodeViewRenderer(
-      ({ node }: NodeViewProps) => (
-        <NodeViewWrapper as="span">
-          <Mention token={node.attrs["token"] as string} />
-        </NodeViewWrapper>
-      ),
-      { as: "span" },
-    ),
 });
+
+/** An attached thread where it was picked: its project's icon, its title, and its provider. */
+function ThreadRef({ runId, title }: { runId: string; title: string }) {
+  const { threads } = useContext(RefsContext);
+  const look = lookOf(threads, runId);
+  const repoId = threads?.threads.find((t) => t.id === runId)?.repo;
+  const repo = threads?.repos.find((r) => r.id === repoId);
+  const shown = look.known ? look.title : title || look.title;
+  // A chat bubble says it's a thread; its project and provider follow its title.
+  return (
+    <Chip
+      tone="thread"
+      title={`Thread: ${repo ? `${shown} · ${repo.name}` : shown}`}
+      icon={<MessagesSquare aria-hidden className="text-muted-foreground" />}
+      end={
+        <>
+          {repo && !repo.scratch && <RepoIcon repo={repo} />}
+          <look.Logo aria-hidden />
+        </>
+      }
+    >
+      {shown}
+    </Chip>
+  );
+}
+
+// An attached thread in the text (PLX-378): sent as its title, `@"Title"`, beside its run id.
+const ThreadRefNode = chipNode("threadRef", { runId: "", title: "" }, ({ node }) => (
+  <ThreadRef runId={node.attrs["runId"] as string} title={node.attrs["title"] as string} />
+));
+
+/** A pasted image where it was pasted: its thumbnail, its number among the images, and its size. */
+function ImageRef({ imageKey: key }: { imageKey: string }) {
+  const { images } = useContext(RefsContext);
+  const i = images.findIndex((image) => imageKey(image) === key);
+  const image = images[i];
+  return (
+    <Chip
+      tone="image"
+      // Every 4 characters of base64 are 3 bytes.
+      end={image && sizeOf(Math.floor((image.data.length * 3) / 4))}
+      icon={
+        image ? (
+          <img src={imageUrl(image)} alt="" className="rounded-sm object-cover" />
+        ) : (
+          <ImageIcon />
+        )
+      }
+    >
+      {image ? `Image ${i + 1}` : "Removed image"}
+    </Chip>
+  );
+}
+
+// A pasted image's place in the text: sent as `[Image N]`, its number among the message's images.
+// `src` is set only on the clipboard: the image as a data URL, so a copied prompt brings it along.
+const ImageRefNode = chipNode("imageRef", { key: "", src: null }, ({ node }) => (
+  <ImageRef imageKey={node.attrs["key"] as string} />
+));
+
+/** `fragment` with each image chip in it replaced by what `map` makes of it, or dropped for null. */
+function mapImageRefs(
+  fragment: Fragment,
+  map: (node: ProseMirrorNode) => ProseMirrorNode | null,
+): Fragment {
+  const nodes: ProseMirrorNode[] = [];
+  fragment.forEach((node) => {
+    if (node.type.name === "imageRef") {
+      const mapped = map(node);
+      if (mapped) nodes.push(mapped);
+    } else nodes.push(node.isLeaf ? node : node.copy(mapImageRefs(node.content, map)));
+  });
+  return Fragment.fromArray(nodes);
+}
+
+/** The run ids of the threads attached in `doc`, in order, once each. */
+function threadsIn(doc: ProseMirrorNode): string[] {
+  const ids: string[] = [];
+  doc.descendants((node) => {
+    if (node.type.name === "threadRef") ids.push(node.attrs["runId"] as string);
+  });
+  return [...new Set(ids)];
+}
+
+/**
+ * A transaction turning each `@"Title"` in `state`'s text whose title `titled` knows into that
+ * thread's chip, or undefined for none, such as a stopped prompt put back as text.
+ */
+function threadRefsIn(state: EditorState, titled: ReadonlyMap<string, string>) {
+  const { tr } = state;
+  state.doc.descendants((node, pos, parent) => {
+    if (!node.isText || parent?.type.spec.code) return;
+    for (const m of node.text!.matchAll(/@"([^"]*)"/g)) {
+      const runId = titled.get(m[1]!);
+      if (runId === undefined) continue;
+      const from = pos + m.index;
+      const chip = state.schema.nodes["threadRef"]!.create({ runId, title: m[1] });
+      tr.replaceWith(tr.mapping.map(from), tr.mapping.map(from + m[0].length), chip);
+    }
+  });
+  return tr.docChanged ? tr.setMeta("addToHistory", false) : undefined;
+}
+
+/** A transaction removing every `name` node in `state` that `drop` picks, or undefined for none. */
+function withoutNodes(state: EditorState, name: string, drop: (node: ProseMirrorNode) => boolean) {
+  const { tr } = state;
+  state.doc.descendants((node, pos) => {
+    if (node.type.name !== name || !drop(node)) return;
+    // With the space put in after it, so no double space is left.
+    let end = pos + node.nodeSize;
+    if (state.doc.textBetween(end, Math.min(end + 1, state.doc.content.size)) === " ") end++;
+    tr.delete(tr.mapping.map(pos), tr.mapping.map(end));
+  });
+  return tr.docChanged ? tr : undefined;
+}
 
 // The box's editor: typed Markdown (`- `, `1. `, `[ ] `, ```` ``` ````, `> `, `#`, `**bold**`,
 // `*italic*`, `~~struck~~`, `` `code` ``) formats as you type, as T3 Code's does. Nothing else
@@ -193,6 +365,8 @@ const extensions = [
   }),
   Text,
   MentionNode,
+  ThreadRefNode,
+  ImageRefNode,
   Bold.extend({
     addInputRules() {
       return [
@@ -237,6 +411,11 @@ const markdown = new MarkdownSerializer(
     taskItem: nodes["list_item"]!,
     hardBreak: (state) => state.write("\n"),
     mention: (state, node) => state.text(node.attrs["token"] as string, false),
+    threadRef: (state, node) => state.text(`@"${node.attrs["title"] as string}"`, false),
+    imageRef: (state, node) => {
+      const name = (state.options as Naming).imageName?.(node.attrs["key"] as string);
+      if (name) state.text(`[${name}]`, false);
+    },
     text: (state, node) => state.text(node.text!, false),
   },
   {
@@ -265,8 +444,13 @@ function asLines(node: ProseMirrorNode): ProseMirrorNode {
   return node.copy(Fragment.from(children));
 }
 
-const toMarkdown = (node: ProseMirrorNode) =>
-  markdown.serialize(asLines(node), { tightLists: true });
+/** How the text names what its chips stand for: a pasted image by its number among the images. */
+interface Naming {
+  imageName?: (key: string) => string | undefined;
+}
+
+const toMarkdown = (node: ProseMirrorNode, naming: Naming = {}) =>
+  markdown.serialize(asLines(node), { tightLists: true, ...naming } as never);
 
 // Whether copied HTML has text of its own, not just an image. A parsed document is inert: nothing
 // in it runs or loads.
@@ -333,7 +517,7 @@ function byName<T>(items: T[], query: string, name: (item: T) => string): T[] {
 const maxFiles = 50;
 
 /** The most threads the `@` menu shows. */
-const maxThreadRows = 5;
+const maxThreadRows = 6;
 // The notification of why something wasn't attached, which the next one replaces.
 const attachKey = "composer/attach";
 
@@ -366,6 +550,34 @@ const ownCommands = new Set(["model", "effort", "fast", "permissions"]);
 // doesn't start its CLI again. A failed fetch isn't kept, so the next `/` asks again.
 const commandLists = new Map<string, Promise<AgentCommand[]>>();
 
+/** The most command lists `savedCommands` keeps, the newest. */
+const maxSavedLists = 30;
+
+/**
+ * The last command list each host, backend, and folder answered, kept on this computer, so a `/`
+ * shows it at once, before this run of the app asks the CLI again.
+ */
+const savedCommands = stored<Record<string, AgentCommand[]>>(
+  "parallax:commands",
+  {},
+  (raw, fallback) =>
+    (raw && typeof raw === "object" && !Array.isArray(raw) ? raw : fallback) as Record<
+      string,
+      AgentCommand[]
+    >,
+);
+
+const commandsKeyOf = (hostId: string, backend: string, folder: string | undefined) =>
+  `${hostId}/${backend}/${folder ?? ""}`;
+
+/** The list `listCommands` last answered for this thread, on any run of the app. */
+export const savedCommandList = (
+  hostId: string,
+  backend: string,
+  repo: string | undefined,
+  runId: string | undefined,
+): AgentCommand[] | undefined => savedCommands.get()[commandsKeyOf(hostId, backend, runId ?? repo)];
+
 /** The commands `agent/commands` lists for a thread on `backend`, once per host and folder. */
 export function listCommands(
   hostId: string,
@@ -373,11 +585,16 @@ export function listCommands(
   repo: string | undefined,
   runId: string | undefined,
 ): Promise<AgentCommand[]> {
-  const key = `${hostId}/${backend}/${runId ?? repo ?? ""}`;
+  const key = commandsKeyOf(hostId, backend, runId ?? repo);
   let list = commandLists.get(key);
   if (!list) {
     list = window.parallax.request(hostId, "agent/commands", { backend, repo, runId }).then((r) => {
-      if ("result" in r) return r.result.commands;
+      if ("result" in r) {
+        const { [key]: _, ...rest } = savedCommands.get();
+        const kept = Object.entries(rest).slice(-(maxSavedLists - 1));
+        savedCommands.set({ ...Object.fromEntries(kept), [key]: r.result.commands });
+        return r.result.commands;
+      }
       commandLists.delete(key);
       return [];
     });
@@ -386,17 +603,59 @@ export function listCommands(
   return list;
 }
 
-/** A row of the `/` or `@` menu. `group` heads the `@` menu's threads and files apart. */
+/** A row of the `/` or `@` menu, under its `group`'s heading. */
 interface MenuEntry {
   key: string;
   label: string;
   description?: string;
+  /** What the menu's footer says while the row is highlighted, such as a skill's whole description. */
+  detail?: string;
   hint?: string;
   icon?: ReactNode;
+  /** Where it comes from, at the row's end: a skill's plugin, or a thread's project. */
+  badge?: ReactNode;
   /** Muted text at the row's end, such as how long ago a thread was prompted. */
   meta?: string;
-  group?: "Threads" | "Files";
+  group: "Controls" | "Commands and skills" | "Threads" | "Files";
   pick: () => void;
+}
+
+/**
+ * The host's threads for the `@` menu, best first. With nothing typed, its newest, as the sidebar
+ * orders them. Otherwise those whose title starts with `query`, then has a word starting with it,
+ * then contains it, then whose title and project hold every word of it, newest first within each,
+ * then the ones `found` (`thread/search`, which reads their messages) that none of those caught. Archived threads only show for a query, after the rest.
+ */
+export function rankThreads(
+  state: ThreadsState,
+  query: string,
+  found: readonly string[],
+): string[] {
+  const q = query.trim().toLowerCase();
+  const newest = (a: (typeof state.threads)[number], b: (typeof state.threads)[number]) =>
+    Number(!!a.archived) - Number(!!b.archived) ||
+    Date.parse(lastPrompt(b)) - Date.parse(lastPrompt(a));
+  if (!q)
+    return state.threads
+      .filter((t) => !t.archived)
+      .sort(newest)
+      .map((t) => t.id);
+  const words = q.split(/\s+/);
+  const repoNames = new Map(state.repos.map((r) => [r.id, r.name.toLowerCase()]));
+  const rank = (t: (typeof state.threads)[number]) => {
+    const title = (state.titles[t.id] ?? t.title ?? "").toLowerCase();
+    if (title.startsWith(q)) return 0;
+    if (title.split(/[^\p{L}\p{N}]+/u).some((w) => w.startsWith(q))) return 1;
+    if (title.includes(q)) return 2;
+    const both = `${title} ${repoNames.get(t.repo) ?? ""}`;
+    return words.every((w) => both.includes(w)) ? 3 : 4;
+  };
+  const matched = state.threads
+    .map((t) => ({ t, rank: rank(t) }))
+    .filter((m) => m.rank < 4)
+    .sort((a, b) => a.rank - b.rank || newest(a.t, b.t))
+    .map((m) => m.t.id);
+  return [...new Set([...matched, ...found])];
 }
 
 /** A plain item in the composer's tab, sized like the pickers that can sit beside it. */
@@ -468,6 +727,8 @@ export interface ComposerProps {
   connected?: boolean;
   /** The latest request measurements, scoped to the open run's provider and account. */
   requestUsage?: RequestUsage;
+  /** The open thread's token and cost totals, which the ring's card shows. */
+  threadUsage?: ThreadUsage;
   /** The account actually charged for an open run, including automatic key fallback. */
   accountId?: string;
   /** Instances the thread can't run on, by why, whose models it doesn't offer: those an open run
@@ -513,7 +774,7 @@ export interface ComposerProps {
   menus?: { hostId: string; repo?: string; runId?: string };
   /**
    * The host's threads, on a plxd with `threadContext` (0047): `@` lists them above the files, and
-   * a sidebar row dropped on the box attaches one, as a chip beside the images. Absent: neither.
+   * a sidebar row dropped on the box attaches one, as a chip in the text. Absent: neither.
    */
   attach?: AttachThreads;
   /** What the box starts with, such as a reopened draft (PLX-788). Read once, as it mounts. */
@@ -529,17 +790,18 @@ export interface ComposerProps {
  * turn. With `onSendInBackground`, Cmd/Ctrl+Enter sends
  * through it, anywhere in the box. Settings > General's send shortcut can make Cmd/Ctrl+Enter
  * send and Enter a new line everywhere; Cmd/Ctrl+Shift+Enter then steers or sends in the
- * background. It grows with its text up to 40% of the window.
- * Pasted, dropped, and picked images sit above the text as thumbnails, and go beside it, never in
- * it (PLX-193). Other files sit below it as chips. With `uploadBytes`, both go to the host, their
+ * background. It grows with its text up to seven lines, then scrolls.
+ * Pasted, dropped, and picked images sit above the text as thumbnails and go beside it (PLX-193).
+ * A pasted one also takes its place in the text as a chip, sent as `[Image N]`. Other files sit
+ * below it as chips. With `uploadBytes`, both go to the host, their
  * paths listed after the text (PLX-779, PLX-799).
  * In an empty box, Up and Down step through `history`, until the recalled prompt is edited.
  * With `menus`, `/` at the start of a word opens a menu of the composer's own commands and the
  * CLI's commands and skills, and `@` one of the thread's files, filtered as you type. Up and Down
  * move through it, Enter or Tab picks, and Esc closes it.
- * With `attach`, `@` also lists the host's threads above the files: its newest, or those
- * `thread/search` finds for what's typed. Picking one, or dropping a sidebar row on the box,
- * attaches it as a chip beside the images (PLX-378).
+ * With `attach`, `@` also lists the host's threads above the files: its newest, or the best matches
+ * for what's typed (`rankThreads`). Picking one, or dropping a sidebar row on the box, attaches it
+ * as a chip in the text, sent as `@"Title"` (PLX-378).
  */
 export function Composer({
   newThread,
@@ -557,6 +819,7 @@ export function Composer({
   hostId: host,
   connected = false,
   requestUsage,
+  threadUsage,
   accountId,
   unavailable,
   optionsDisabled,
@@ -585,15 +848,8 @@ export function Composer({
   const [images, setImages] = useState<PromptImage[]>(initial?.images ?? []);
   // The image shown large, kept by identity so images put back ahead of it don't change it.
   const [shown, setShown] = useState<PromptImage>();
-  // Attached threads' run ids, shown as chips beside the images.
+  // Attached threads' run ids, as the text's thread chips have them, kept on every edit.
   const [threads, setThreads] = useState<string[]>(initial?.threads ?? []);
-  // Run ids are the host's own, so they don't follow a New Thread draft to another computer.
-  // Reset while rendering, not in an effect, so a Composer that never changes host does no extra work.
-  const [threadsHost, setThreadsHost] = useState(host);
-  if (threadsHost !== host) {
-    setThreadsHost(host);
-    setThreads([]);
-  }
   // Why an image, file, or thread wasn't added, in a notification an add that takes clears.
   const setAttachError = (why?: string) =>
     why
@@ -676,20 +932,18 @@ export function Composer({
   const startedFast = started?.fast ?? (fresh ? defaults.fast : false);
   const fast = hasFast && (pickedFast ?? startedFast);
   const account = { kind: "subscription", backend: target! } as const;
-  // Usage for the provider the next message goes to. An open run's measurements show only while
-  // its provider, account, model, and context window are still picked.
-  const view = usageView(behaviorPrefs.use().composerUsage);
-  const showUsage = view !== "off";
-  const usage = useComposerUsage({
-    hostId: host,
+  // The open thread's usage, for the ring. Its latest request's measurements show only while its
+  // provider, account, model, and context window are still picked.
+  const usage = threadUsageOf({
     connected,
-    backend: showUsage ? target : undefined,
+    backend: target,
     kind: targetBackend?.kind,
     accountId: target === backend ? (accountId ?? target) : target,
     usage:
       target === backend && model?.id === startedModel?.id && context === startedContext
         ? requestUsage
         : undefined,
+    totals: threadUsage,
   });
   let options: RunOptions = {};
   // A started run sends only what changed, unless the message goes to another instance.
@@ -726,7 +980,12 @@ export function Composer({
   const commandsKey =
     hostId === undefined || target === undefined ? undefined : `${hostId}/${target}/${folder}`;
   const pathsKey = hostId === undefined || !folder ? undefined : `${hostId}/${folder}`;
-  // Fetched on the first `/` or `@`, not before: listing commands starts the CLI.
+  // The list this computer last got shows at once (`savedCommands`), while the first `/` asks the
+  // CLI again. Not before: listing commands starts the CLI.
+  const saved =
+    hostId === undefined || target === undefined
+      ? undefined
+      : savedCommandList(hostId, target, repo, runId);
   const wantsCommands = trigger?.kind === "/" && commandsKey !== undefined;
   const wantsPaths = trigger?.kind === "@" && pathsKey !== undefined;
   useEffect(() => {
@@ -751,30 +1010,63 @@ export function Composer({
       live = false;
     };
   }, [pathsAt, pathsKey, hostId, repo, runId]);
-  const loadedCommands = commands && commands.key === commandsKey ? commands.list : undefined;
+  const loadedCommands = commands && commands.key === commandsKey ? commands.list : saved;
   const loadedPaths = paths && paths.key === pathsKey ? paths.list : undefined;
-  // The threads `thread/search` found for what's typed after `@`; the last list shows meanwhile.
-  const [found, setFound] = useState<string[]>([]);
+  // The threads `thread/search` found by their messages for what's typed after `@`, and for what.
+  const [searched, setSearched] = useState<{ query: string; ids: string[] }>();
   const threadHost = attach?.hostId;
   const search = trigger?.kind === "@" ? trigger.query.trim() : undefined;
   useEffect(() => {
     if (threadHost === undefined || !search) return;
     let live = true;
-    void window.parallax
-      .request(threadHost, "thread/search", { query: search })
-      .then((r) => live && setFound("result" in r ? r.result.threads.map((t) => t.id) : []));
+    void window.parallax.request(threadHost, "thread/search", { query: search }).then(
+      (r) =>
+        live &&
+        setSearched({
+          query: search,
+          ids: "result" in r ? r.result.threads.map((t) => t.id) : [],
+        }),
+    );
     return () => {
       live = false;
     };
   }, [threadHost, search]);
-  // Adds threads as chips, once each, at most the host's cap, but never the open thread itself.
-  const addThreads = (ids: readonly string[]) => {
-    const all = [...new Set([...threads, ...ids])].filter((id) => id !== attach?.self);
+  // Takes thread chips past the host's cap out of the text, the last ones first, saying why.
+  const keepThreadCap = () => {
     const max = attach?.max ?? 0;
+    let seen = 0;
+    const tr = withoutNodes(editor.state, "threadRef", () => ++seen > max);
+    if (!tr) return;
+    editor.view.dispatch(tr.setMeta("addToHistory", false));
+    setAttachError(`A message takes at most ${max} attached threads.`);
+  };
+
+  // Puts threads in the text as chips, at `range` (the cursor by default), each once, up to the
+  // host's cap, but never the open thread itself.
+  const addThreads = (ids: readonly string[], range?: { from: number; to: number }) => {
+    const had = threadsIn(editor.state.doc);
+    const fresh = [...new Set(ids)].filter((id) => id !== attach?.self && !had.includes(id));
+    const max = attach?.max ?? 0;
+    const room = Math.max(0, max - had.length);
     setAttachError(
-      all.length > max ? `A message takes at most ${max} attached threads.` : undefined,
+      fresh.length > room ? `A message takes at most ${max} attached threads.` : undefined,
     );
-    setThreads(all.slice(0, max));
+    // A space apart from a word just before them.
+    const at = range?.from ?? editor.state.selection.from;
+    const before = editor.state.doc.textBetween(Math.max(0, at - 1), at, undefined, "\ufffc");
+    const chips = [
+      ...(before && !/\s/.test(before) ? [{ type: "text", text: " " }] : []),
+      ...fresh.slice(0, room).flatMap((runId) => [
+        { type: "threadRef", attrs: { runId, title: lookOf(attach?.state, runId).title } },
+        { type: "text", text: " " },
+      ]),
+    ];
+    const chain = editor.chain().focus();
+    if (fresh.length === 0 || room === 0) {
+      if (range) chain.deleteRange(range).run();
+      return;
+    }
+    (range ? chain.insertContentAt(range, chips) : chain.insertContent(chips)).run();
   };
 
   // Puts `text` where the trigger is, as typed text, which Markdown leaves alone.
@@ -794,32 +1086,39 @@ export function Composer({
           model && {
             name: "model",
             description: "Pick the model",
+            icon: <Cpu />,
             act: () => openControl("Model:"),
           },
           efforts && {
             name: "effort",
             description: "Set the reasoning effort",
+            icon: <Brain />,
             act: () => openControl("Reasoning effort:"),
           },
           efforts &&
             hasFast && {
               name: "fast",
               description: fast ? "Turn fast mode off" : "Turn fast mode on",
+              icon: <Zap />,
               act: () => setFast(!fast),
             },
           permissions.length > 1 && {
             name: "permissions",
             description: "Choose what it may do without asking",
+            icon: <LockOpen />,
             act: () => openControl("Access:"),
           },
         ].filter((c) => !!c);
   let entries: MenuEntry[] = [];
   if (trigger?.kind === "/")
     entries = [
-      ...byName(own, trigger.query, (c) => c.name).map((c) => ({
+      ...byName(own, trigger.query, (c) => c.name).map((c): MenuEntry => ({
         key: `own:${c.name}`,
         label: `/${c.name}`,
         description: c.description,
+        detail: c.description,
+        icon: c.icon,
+        group: "Controls",
         pick: () => {
           replaceTrigger(trigger, "");
           c.act();
@@ -829,49 +1128,63 @@ export function Composer({
         (loadedCommands ?? []).filter((c) => !ownCommands.has(c.name)),
         trigger.query,
         (c) => c.name,
-      ).map((c, i) => ({
-        // Two scopes can each have a skill of the same name.
-        key: `${i}:${c.text}`,
-        label: c.text,
-        description: c.description,
-        hint: c.argumentHint,
-        pick: () => replaceTrigger(trigger, `${c.text} `),
-      })),
+      ).map((c, i): MenuEntry => {
+        // A plugin's skill, `plugin:name`, shows its plugin as a badge.
+        const at = c.name.lastIndexOf(":");
+        return {
+          // Two scopes can each have a skill of the same name.
+          key: `${i}:${c.text}`,
+          label: `${c.text[0]}${c.name.slice(at + 1)}`,
+          description: c.description,
+          detail: c.description,
+          hint: c.argumentHint,
+          icon: <SquareSlash />,
+          badge: at > 0 ? c.name.slice(0, at) : undefined,
+          group: "Commands and skills",
+          pick: () => replaceTrigger(trigger, `${c.text} `),
+        };
+      }),
     ];
   else if (trigger?.kind === "@") {
-    // With nothing typed, the host's newest threads, as the sidebar orders them.
-    const ids = !attach
-      ? []
-      : search
-        ? found
-        : attach.state.threads
-            .filter((t) => !t.archived)
-            .sort((a, b) => Date.parse(lastPrompt(b)) - Date.parse(lastPrompt(a)))
-            .map((t) => t.id);
-    const threadRows = ids
-      .filter((id) => id !== attach?.self && !threads.includes(id))
-      .slice(0, maxThreadRows)
-      .map((id): MenuEntry => {
-        const look = lookOf(attach?.state, id);
-        return {
-          key: `thread:${id}`,
-          label: look.title,
-          icon: <look.Logo aria-hidden />,
-          meta: look.age,
-          group: "Threads",
-          pick: () => {
-            replaceTrigger(trigger, "");
-            addThreads([id]);
-          },
-        };
-      });
-    const fileRows = matchPaths(loadedPaths ?? [], trigger.query).map((path): MenuEntry => ({
-      key: path,
-      label: path,
-      // Headed only beside threads.
-      group: threadRows.length > 0 ? "Files" : undefined,
-      pick: () => replaceTrigger(trigger, `@${path} `),
-    }));
+    const ids = attach
+      ? rankThreads(
+          attach.state,
+          trigger.query,
+          searched && searched.query === search ? searched.ids : [],
+        ).filter((id) => id !== attach.self && !threads.includes(id))
+      : [];
+    const threadRows = ids.slice(0, maxThreadRows).map((id): MenuEntry => {
+      const look = lookOf(attach?.state, id);
+      const thread = attach?.state.threads.find((t) => t.id === id);
+      const repo = attach?.state.repos.find((r) => r.id === thread?.repo);
+      return {
+        key: `thread:${id}`,
+        label: look.title,
+        icon: <look.Logo aria-hidden />,
+        badge: repo && !repo.scratch && (
+          <>
+            <RepoIcon repo={repo} />
+            {repo.name}
+          </>
+        ),
+        detail: repo?.path,
+        meta: look.age,
+        group: "Threads",
+        pick: () => addThreads([id], trigger),
+      };
+    });
+    const fileRows = matchPaths(loadedPaths ?? [], trigger.query).map((path): MenuEntry => {
+      const slash = path.lastIndexOf("/");
+      return {
+        key: path,
+        label: path.slice(slash + 1),
+        description: slash > 0 ? path.slice(0, slash) : undefined,
+        detail: path,
+        icon: fileIcon(path),
+        group: "Files",
+        pick: () => replaceTrigger(trigger, `@${path} `),
+      };
+    });
     entries = [...threadRows, ...fileRows];
   }
   // What the menu still waits for, shown as a row of its own.
@@ -882,11 +1195,19 @@ export function Composer({
   const menuOpen =
     !!menus && !!trigger && trigger.from !== closedAt && (entries.length > 0 || !!loading);
   const highlighted = Math.min(active, entries.length - 1);
-  // Opens below the box when a tall prompt leaves no room for it above (max-h-44 plus its margin).
+  // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
   const box = useRef<HTMLFormElement>(null);
+  // The text's area, whose editor `ScrollThumb` scrolls.
+  const textArea = useRef<HTMLDivElement>(null);
+  const editorDom = useCallback(
+    () => textArea.current?.querySelector<HTMLElement>(".composer-input"),
+    [],
+  );
+  const menuList = useRef<HTMLDivElement>(null);
+  const menuDom = useCallback(() => menuList.current, []);
   const [menuBelow, setMenuBelow] = useState(false);
   useLayoutEffect(() => {
-    if (menuOpen) setMenuBelow(box.current!.getBoundingClientRect().top < 192);
+    if (menuOpen) setMenuBelow(box.current!.getBoundingClientRect().top < 360);
   });
   useEffect(() => {
     document.getElementById(`${menuId}-${highlighted}`)?.scrollIntoView?.({ block: "nearest" });
@@ -900,7 +1221,7 @@ export function Composer({
 
   // Adds pasted, dropped, or picked files: images as thumbnails, anything else as a chip. Each
   // image gets an even share of the total cap, so any number of them up to the most fits it.
-  const addFiles = async (added: File[]) => {
+  const addFiles = async (added: File[]): Promise<PromptImage[]> => {
     const isImage = (f: File) => f.type.startsWith("image/");
     const others = added.filter((f) => !isImage(f));
     const fits = (f: File) => !host || !uploadBytes || f.size <= uploadBytes.maxBytes;
@@ -911,8 +1232,11 @@ export function Composer({
       tooLarge &&
         `${tooLarge.name} is larger than ${sizeOf(uploadBytes!.maxBytes)}, the most a file can be.`,
     );
-    if (picked.length === 0) return;
-    if (!imageCaps) return setAttachError("This host's plxd can't take images.");
+    if (picked.length === 0) return [];
+    if (!imageCaps) {
+      setAttachError("This host's plxd can't take images.");
+      return [];
+    }
     const { maxImages, maxImageBytes, maxTotalBytes } = imageCaps;
     const room = Math.max(0, maxImages - images.length);
     const share = Math.min(maxImageBytes, Math.floor(maxTotalBytes / maxImages));
@@ -922,6 +1246,22 @@ export function Composer({
     setAttachError(errors[0]);
     const ok = read.filter((r) => typeof r !== "string");
     setImages((all) => [...all, ...ok].slice(0, maxImages));
+    return ok;
+  };
+
+  // Removes image `i`, and its place in the text unless the same image is attached again.
+  const removeImage = (i: number) => {
+    const key = imageKey(images[i]!);
+    const left = images.filter((_, j) => j !== i);
+    setImages(left);
+    if (left.some((image) => imageKey(image) === key)) return;
+    const tr = withoutNodes(editor.state, "imageRef", (node) => node.attrs["key"] === key);
+    if (tr) editor.view.dispatch(tr.setMeta("addToHistory", false));
+  };
+  // Each image's name in the sent text, by its number among the images.
+  const imageName = (key: string) => {
+    const i = images.findIndex((image) => imageKey(image) === key);
+    return i < 0 ? undefined : `Image ${i + 1}`;
   };
 
   const submit = async (background = false, steer = false) => {
@@ -929,8 +1269,13 @@ export function Composer({
     const sent = editor.getJSON();
     const sentFiles = canUpload ? files : [];
     const sentImages = images;
-    const sentThreads = threads;
-    let sentText = text;
+    // Only the host's own, never the open thread: undo can bring back a chip from before the box
+    // changed computer, and a paste can bring the open thread's own.
+    const sentThreads = threads.filter(
+      (id) => id !== attach?.self && attach?.state.threads.some((t) => t.id === id),
+    );
+    // Without the space a chip leaves after itself at the end.
+    let sentText = toMarkdown(editor.state.doc, { imageName }).replace(/[ \t]+$/, "");
     // Images too, so the agent has each as a file as well as seeing it (PLX-799).
     const uploads = canUpload
       ? [...sentFiles, ...sentImages.map((image, i) => encodedImage(image, i + 1))]
@@ -950,12 +1295,11 @@ export function Composer({
       );
       if (typeof paths === "string")
         return notify({ tone: "error", title: "Couldn't upload the files", body: paths });
-      sentText = withFiles(text, paths);
+      sentText = withFiles(sentText, paths);
     }
     editor.commands.clearContent();
-    // Only what's sent: images and threads added during an upload stay.
+    // Only what's sent: images added during an upload stay.
     setImages((all) => all.filter((i) => !sentImages.includes(i)));
-    setThreads((all) => all.filter((t) => !sentThreads.includes(t)));
     setAttachError(undefined);
     const failed = await (steer ? onSteer! : background ? onSendInBackground! : onSend)(
       sentText,
@@ -968,15 +1312,11 @@ export function Composer({
       // Put it back ahead of anything typed or added while it was in flight.
       const typed = editor.isEmpty ? [] : (editor.getJSON().content ?? []);
       editor.commands.setContent({ ...sent, content: [...(sent.content ?? []), ...typed] });
+      keepThreadCap();
       setImages((added) => [...sentImages, ...added].slice(0, imageCaps?.maxImages));
-      putBackThreads(sentThreads);
       if (failed) notify({ tone: "error", title: "Couldn't send the message", body: failed });
     }
   };
-
-  // Threads back ahead of any attached meanwhile.
-  const putBackThreads = (back: readonly string[]) =>
-    setThreads((added) => [...new Set([...back, ...added])].slice(0, attach?.max));
 
   const stop = async () => {
     const back = unanswered;
@@ -990,7 +1330,16 @@ export function Composer({
       // ponytail: its formatting shows as typed Markdown, until the box parses Markdown.
       editor.commands.focus("start");
       editor.view.pasteText(editor.isEmpty ? back.text : `${back.text}\n`);
-      if (attach && back.threads?.length) putBackThreads(back.threads);
+      if (attach && back.threads?.length) {
+        // Each thread the text names as `@"Title"` becomes its chip again, and any it doesn't
+        // name goes in at the cursor.
+        const titled = new Map(back.threads.map((id) => [lookOf(attach.state, id).title, id]));
+        const tr = threadRefsIn(editor.state, titled);
+        if (tr) editor.view.dispatch(tr);
+        const named = threadsIn(editor.state.doc);
+        addThreads(back.threads.filter((id) => !named.includes(id)));
+        keepThreadCap();
+      }
       void back
         .images()
         .then((images) =>
@@ -1017,7 +1366,10 @@ export function Composer({
     enablePasteRules: false,
     onUpdate: ({ editor, transaction }) => {
       if (!transaction.getMeta("recall")) recalled.current = undefined;
-      setText(toMarkdown(editor.state.doc));
+      setText(toMarkdown(editor.state.doc, { imageName }));
+      setThreads(threadsIn(editor.state.doc));
+      // A paste can bring more threads than a message takes.
+      if (attach && threadsIn(editor.state.doc).length > attach.max) keepThreadCap();
       const mentions = mentionsIn(editor.state, known);
       if (mentions) editor.view.dispatch(mentions);
     },
@@ -1042,10 +1394,10 @@ export function Composer({
             "aria-controls": menuId,
             "aria-activedescendant": `${menuId}-${highlighted}`,
           }),
-        // It grows from three rows up to the cap, then scrolls. Its parent is anchored below it,
-        // so it grows upward.
+        // It grows from three rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
+        // Its parent is anchored below it, so it grows upward.
         class:
-          "composer-input markdown block max-h-[40vh] min-h-[calc(4.875em+1.125rem)] overflow-y-auto px-5 pt-4.5 focus-visible:outline-none",
+          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.125rem))] min-h-[calc(4.875em+1.125rem)] overflow-y-auto px-5 pt-4.5 focus-visible:outline-none",
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1117,8 +1469,9 @@ export function Composer({
           ])
         );
       },
-      // Paste takes files (a screenshot, a copied image) above the text, so a copied file's name
-      // or an image's URL never lands in it. Text copied from an app (Office, Notes, a web page)
+      // Paste takes files (a screenshot, a copied image) above the text, with a chip for each
+      // image where it was pasted, so a copied file's name or an image's URL never lands in it.
+      // What was copied from the box itself pastes as it was, chips and formatting included. Text copied from an app (Office, Notes, a web page)
       // can carry a picture of itself too: when its HTML has text of its own, it's text. Text is
       // plain only, so nothing brings in its source's styling. Anything else falls through to the
       // editor, which drops it.
@@ -1127,16 +1480,35 @@ export function Composer({
           const data = event.clipboardData;
           const text = data?.getData("text/plain");
           const html = data?.getData("text/html");
+          // Chips copied or cut from a box like this one: the editor reads its own HTML back, so
+          // they stay chips. Only the box's own chips are marked, so a copy from another editor
+          // (Linear's, with its links) still pastes as its plain text.
+          if (html?.includes("data-plx-chip")) return false;
           let files = [...(data?.files ?? [])];
           if (files.length > 0 && text && html && hasText(html)) files = [];
           if (files.length === 0 && !text) return false;
           event.preventDefault();
-          if (files.length > 0) void addFiles(files);
+          if (files.length > 0)
+            // Each pasted image also takes its place in the text, where it was pasted.
+            void addFiles(files).then((added) => {
+              if (added.length === 0 || editor.isDestroyed) return;
+              editor
+                .chain()
+                .focus()
+                .insertContent(
+                  added.flatMap((image) => [
+                    { type: "imageRef", attrs: { key: imageKey(image) } },
+                    { type: "text", text: " " },
+                  ]),
+                )
+                .run();
+            });
           else view.pasteText(text!);
           return true;
         },
       },
-      // Copy and cut give the selection's Markdown as its text, so pasting it back sends the same.
+      // Copy and cut give the selection's Markdown as its text, so pasting it back sends the same,
+      // an image chip named as it's sent.
       // Within one line or code block, that's just its text (with any inline Markdown), not the
       // block's markers or fences.
       clipboardTextSerializer: (slice, view) => {
@@ -1149,7 +1521,55 @@ export function Composer({
                 $from.parent.slice($from.parentOffset, $to.parentOffset).content,
               )
             : slice.content;
-        return toMarkdown(schema.topNodeType.create(null, content));
+        return toMarkdown(schema.topNodeType.create(null, content), { imageName });
+      },
+      // A copied image chip carries its image, so the prompt pastes whole into another box.
+      transformCopied: (slice) =>
+        new Slice(
+          mapImageRefs(slice.content, (node) => {
+            const image = images.find((i) => imageKey(i) === node.attrs["key"]);
+            return image ? node.type.create({ ...node.attrs, src: imageUrl(image) }) : node;
+          }),
+          slice.openStart,
+          slice.openEnd,
+        ),
+      // A pasted image chip whose image isn't attached here brings it, as long as it's one plxd
+      // takes and there's room for it; one already here is the same image again.
+      transformPasted: (slice) => {
+        const added: PromptImage[] = [];
+        let refused: string | undefined;
+        const content = mapImageRefs(slice.content, (node) => {
+          const here = images.find((i) => imageKey(i) === node.attrs["key"]);
+          const carried = imageFromUrl((node.attrs["src"] as string | null) ?? "");
+          const image =
+            here ??
+            (carried && [...images, ...added].find((i) => i.data === carried.data)) ??
+            carried;
+          if (!image) return node.type.create({ key: node.attrs["key"], src: null });
+          if (image === carried && !added.includes(carried)) {
+            // As an added file is: an even share of the total cap each.
+            const why = !imageCaps
+              ? "This host's plxd can't take images."
+              : images.length + added.length >= imageCaps.maxImages
+                ? `A message takes at most ${imageCaps.maxImages} images.`
+                : carried.data.length >
+                    Math.min(
+                      imageCaps.maxImageBytes,
+                      Math.floor(imageCaps.maxTotalBytes / imageCaps.maxImages),
+                    )
+                  ? "That image is too large to send."
+                  : undefined;
+            if (why) {
+              refused = why;
+              return null;
+            }
+            added.push(carried);
+          }
+          return node.type.create({ key: imageKey(image), src: null });
+        });
+        if (added.length > 0) setImages((all) => [...all, ...added]);
+        if (refused || added.length > 0) setAttachError(refused);
+        return new Slice(content, slice.openStart, slice.openEnd);
       },
       // Pasted lines are lines, as typed ones are: a paragraph each, blank ones kept.
       clipboardTextParser: (text, _context, _plain, view) => {
@@ -1169,6 +1589,17 @@ export function Composer({
       ? { text: "", doc: { type: "doc" }, images: [], files: [], threads: [] }
       : { text, doc: editor.getJSON(), images, files, threads };
   }, [contents, editor, text, images, files, threads, uploading]);
+
+  // Run ids are the host's own, so attached threads don't follow a New Thread draft to another
+  // computer.
+  const threadsHost = useRef(host);
+  useEffect(() => {
+    if (threadsHost.current === host) return;
+    threadsHost.current = host;
+    // Not an undo step, so undo can't bring another computer's threads back.
+    const tr = withoutNodes(editor.state, "threadRef", () => true);
+    if (tr) editor.view.dispatch(tr.setMeta("addToHistory", false));
+  }, [host, editor]);
 
   // Tokens typed or recalled before their list arrived become chips once it does.
   useEffect(() => {
@@ -1218,85 +1649,125 @@ export function Composer({
           // Run ids are the host's own, so another computer's thread can't come along.
           if (thread.hostId !== attach?.hostId)
             setAttachError("A thread on another computer can't be attached here.");
-          else addThreads([thread.runId]);
+          else {
+            // Where it's dropped in the text, else at its end.
+            const at = editor.view.dom.contains(e.target as Node)
+              ? editor.view.posAtCoords({ left: e.clientX, top: e.clientY })?.pos
+              : undefined;
+            if (at === undefined) editor.commands.focus("end");
+            addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
+          }
         }}
         className={`relative z-10 rounded-xl border bg-surface shadow-composer focus-within:border-ring ${threadOver ? "border-ring" : "border-border"}`}
       >
         {menuOpen && (
           <div
-            id={menuId}
-            role="listbox"
-            aria-label={
-              trigger.kind === "/"
-                ? "Commands"
-                : entries[0]?.group === "Threads"
-                  ? "Threads and files"
-                  : "Files"
-            }
-            className={`absolute inset-x-0 ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} max-h-44 overflow-y-auto rounded-lg border border-border bg-surface p-1 text-foreground shadow-composer`}
+            className={`absolute inset-x-0 ${menuBelow ? "top-full mt-2" : "bottom-full mb-2"} overflow-hidden rounded-lg border border-border bg-surface text-foreground shadow-composer`}
           >
-            {entries.map((entry, i) => (
-              <ReactFragment key={entry.key}>
-                {entry.group && entry.group !== entries[i - 1]?.group && (
-                  <div
-                    role="presentation"
-                    className="px-2 pt-1.5 pb-1 text-meta font-medium text-faint-foreground"
+            <div className="group/scroll relative">
+              <div
+                ref={menuList}
+                id={menuId}
+                role="listbox"
+                aria-label={
+                  trigger.kind === "/"
+                    ? "Commands"
+                    : entries[0]?.group === "Threads"
+                      ? "Threads and files"
+                      : "Files"
+                }
+                className="max-h-72 overflow-y-auto p-1.5"
+              >
+                {entries.map((entry, i) => (
+                  <ReactFragment key={entry.key}>
+                    {entry.group !== entries[i - 1]?.group && (
+                      <div
+                        role="presentation"
+                        className="px-2.5 pt-2 pb-1 text-caption font-medium tracking-wide text-faint-foreground uppercase"
+                      >
+                        {entry.group}
+                      </div>
+                    )}
+                    <div
+                      id={`${menuId}-${i}`}
+                      role="option"
+                      aria-selected={i === highlighted}
+                      // The box keeps focus, so typing goes on filtering.
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        entry.pick();
+                      }}
+                      onMouseMove={() => setActive(i)}
+                      className={`flex h-9 w-full cursor-default items-center gap-2.5 rounded-md px-2.5 text-left text-body ${i === highlighted ? "bg-hover" : ""}`}
+                    >
+                      <span className="grid size-4 shrink-0 place-items-center text-muted-foreground [&_img]:size-4 [&_svg]:size-4">
+                        {entry.icon}
+                      </span>
+                      <span data-label className="max-w-[55%] shrink-0 truncate font-medium">
+                        {entry.label}
+                      </span>
+                      {entry.hint && (
+                        <span className="shrink-0 font-mono text-caption text-faint-foreground">
+                          {entry.hint}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1 truncate text-meta text-faint-foreground">
+                        {entry.description}
+                      </span>
+                      {entry.badge && (
+                        <span className="flex max-w-[30%] shrink-0 items-center gap-1.5 truncate rounded-md bg-hover px-1.5 py-0.5 text-caption text-muted-foreground [&_svg]:size-3.5">
+                          {entry.badge}
+                        </span>
+                      )}
+                      {entry.meta && (
+                        <span className="w-7 shrink-0 text-right text-meta text-faint-foreground tabular-nums">
+                          {entry.meta}
+                        </span>
+                      )}
+                    </div>
+                  </ReactFragment>
+                ))}
+                {loading && (
+                  <p
+                    role="status"
+                    className="flex items-center gap-2 px-2.5 py-2 text-meta text-faint-foreground"
                   >
-                    {entry.group}
-                  </div>
+                    <LoaderCircle className="size-3.5 animate-spin" />
+                    {loading}
+                  </p>
                 )}
-                <div
-                  id={`${menuId}-${i}`}
-                  role="option"
-                  aria-selected={i === highlighted}
-                  // The box keeps focus, so typing goes on filtering.
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    entry.pick();
-                  }}
-                  onMouseMove={() => setActive(i)}
-                  className={`${menuItem} ${i === highlighted ? "bg-hover" : ""}`}
-                >
-                  {entry.icon}
-                  <span className={entry.meta ? "min-w-0 truncate" : "shrink-0"}>
-                    {entry.label}
-                  </span>
-                  {entry.hint && (
-                    <span className="shrink-0 text-meta text-faint-foreground">{entry.hint}</span>
-                  )}
-                  {entry.description && (
-                    <span className="min-w-0 truncate text-meta text-faint-foreground">
-                      {entry.description}
+              </div>
+              <ScrollThumb target={menuDom} />
+            </div>
+            {entries.length > 0 && (
+              <div className="flex items-start gap-3 border-t border-border px-3.5 py-2 text-meta text-faint-foreground">
+                <p className="line-clamp-2 min-w-0 flex-1 text-muted-foreground">
+                  {entries[highlighted]?.detail}
+                </p>
+                <span aria-hidden className="flex shrink-0 items-center gap-2.5">
+                  {[
+                    ["↑↓", "move"],
+                    ["↵", "pick"],
+                    ["esc", "close"],
+                  ].map(([key, what]) => (
+                    <span key={key} className="flex items-center gap-1">
+                      <kbd className="rounded-sm border border-border px-1 font-sans text-caption leading-4">
+                        {key}
+                      </kbd>
+                      {what}
                     </span>
-                  )}
-                  {entry.meta && (
-                    <span className="ml-auto shrink-0 pl-2 text-meta text-faint-foreground">
-                      {entry.meta}
-                    </span>
-                  )}
-                </div>
-              </ReactFragment>
-            ))}
-            {loading && (
-              <p role="status" className="px-2 py-1.5 text-meta text-faint-foreground">
-                {loading}
-              </p>
+                  ))}
+                </span>
+              </div>
             )}
           </div>
         )}
-        {(images.length > 0 || threads.length > 0 || files.length > 0) && (
+        {(images.length > 0 || files.length > 0) && (
           <fieldset
             // Locked while files upload: what's there now is what's sent.
             disabled={uploading}
             className="m-0 flex min-w-0 flex-wrap items-center gap-2 border-0 px-4 pt-3.5"
           >
-            {threads.map((id) => (
-              <ThreadChip
-                key={id}
-                look={lookOf(attach?.state, id)}
-                onRemove={() => setThreads((all) => all.filter((t) => t !== id))}
-              />
-            ))}
             {images.map((image, i) => (
               <span key={i} className="relative">
                 <button
@@ -1314,7 +1785,7 @@ export function Composer({
                 <button
                   type="button"
                   aria-label={`Remove image ${i + 1}`}
-                  onClick={() => setImages((all) => all.filter((_, j) => j !== i))}
+                  onClick={() => removeImage(i)}
                   className="absolute -top-1.5 -right-1.5 grid size-5 place-items-center rounded-full border border-border bg-surface text-muted-foreground shadow-sm hover:text-foreground"
                 >
                   <X className="size-3" />
@@ -1343,7 +1814,7 @@ export function Composer({
             onClose={() => setShown(undefined)}
           />
         )}
-        <div className="relative">
+        <div ref={textArea} className="group/scroll relative">
           {!text && (
             <p
               aria-hidden
@@ -1352,7 +1823,10 @@ export function Composer({
               {placeholder}
             </p>
           )}
-          <EditorContent editor={editor} />
+          <RefsContext.Provider value={{ images, threads: attach?.state }}>
+            <EditorContent editor={editor} />
+          </RefsContext.Provider>
+          <ScrollThumb target={editorDom} />
         </div>
         <div className="flex items-center gap-0.5 px-3 pt-1 pb-3">
           {run && (
@@ -1421,13 +1895,13 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {view === "ring" && usage?.summary && <UsageRing data={usage} />}
+          {usage?.summary && <UsageRing data={usage} />}
           <button
             type="button"
             aria-label="Attach files"
             title="Attach files"
             onClick={() => filePicker.current?.click()}
-            className={`mr-1.5 ${view === "ring" && usage?.summary ? "" : "ml-auto"} grid size-9 place-items-center rounded-full text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4`}
+            className={`mr-1.5 ${usage?.summary ? "" : "ml-auto"} grid size-9 place-items-center rounded-full text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4`}
           >
             <Paperclip />
           </button>
@@ -1456,7 +1930,6 @@ export function Composer({
             </button>
           )}
         </div>
-        {view === "inline" && usage && <UsageInline data={usage} />}
       </form>
       {tab && (
         // Tucked under the box, so what it shows reads as part of it.

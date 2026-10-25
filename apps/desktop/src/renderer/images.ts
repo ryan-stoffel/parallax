@@ -141,6 +141,15 @@ const fromDataUrl = (url: string): PromptImage => ({
   data: url.slice(url.indexOf(",") + 1),
 });
 
+/**
+ * A data URL as an image, such as one a copied prompt carries, or undefined unless it's base64 of
+ * a type plxd takes.
+ */
+export function imageFromUrl(url: string): PromptImage | undefined {
+  const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+=*)$/.exec(url);
+  return match ? { mediaType: match[1] as ImageMediaType, data: match[2]! } : undefined;
+}
+
 // One data URL per image, so re-rendering a thumbnail doesn't rebuild megabytes of string.
 const urls = new WeakMap<PromptImage, string>();
 

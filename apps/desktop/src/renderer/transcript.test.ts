@@ -945,6 +945,32 @@ test("a script's end replaces its start where it was (PLX-650)", () => {
   expect(of(restarted.items, "script")).toMatchObject([{ status: "interrupted" }]);
 });
 
+test("thread usage sums each usage delta, and knows when earlier turns are missing", () => {
+  const delta = (cost?: number): AgentOutputItem => ({
+    kind: "usage",
+    inputTokens: 100,
+    outputTokens: 20,
+    cacheReadTokens: 1_000,
+    cacheWriteTokens: 10,
+    ...(cost !== undefined && { costUsdMicros: cost }),
+  });
+  const events = [at({ kind: "agent.started", runId }), output(delta(500)), output(delta(700))];
+  const t = build(...events);
+  expect(t.threadUsage).toEqual({
+    inputTokens: 200,
+    outputTokens: 40,
+    cacheReadTokens: 2_000,
+    cacheWriteTokens: 20,
+    costUsdMicros: 1_200,
+    fromStart: true,
+  });
+  expect(rebuild(t, events, runId).threadUsage).toEqual(t.threadUsage);
+  // A page without the run's start is a lower bound, and a delta without a cost drops the cost.
+  const tail = build(output(delta()));
+  expect(tail.threadUsage).toMatchObject({ outputTokens: 20, fromStart: false });
+  expect(tail.threadUsage?.costUsdMicros).toBeUndefined();
+});
+
 test("request measurements survive snapshots and replay but clear on compaction, session and account switches", () => {
   const measured: AgentOutputItem = {
     kind: "requestUsage",

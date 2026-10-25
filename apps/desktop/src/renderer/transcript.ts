@@ -217,8 +217,23 @@ export type Approval = Extract<Item, { kind: "approval" }>;
 /** The most recent main-session measurements, scoped to the account and provider that emitted them. */
 export type RequestUsage = Extract<AgentOutputItem, { kind: "requestUsage" }> & { at: string };
 
+/**
+ * The thread's tokens and cost, summed from its `usage` deltas (0004). `fromStart` says the
+ * transcript holds the run's start, so earlier turns aren't missing from the sums. The cost is
+ * absent once any delta came without one.
+ */
+export interface ThreadUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsdMicros?: number;
+  fromStart: boolean;
+}
+
 export interface Transcript {
   requestUsage?: RequestUsage;
+  threadUsage?: ThreadUsage;
   /** Absent until `agent.started` is in. */
   run?: AgentRun;
   items: Item[];
@@ -406,8 +421,35 @@ export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string)
   return { ...applyEventsInner(t, incoming, runId), events: all };
 }
 
+const noUsage: ThreadUsage = {
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  costUsdMicros: 0,
+  fromStart: false,
+};
+
+/** `total` with one `usage` delta added. */
+function withUsage(
+  total: ThreadUsage,
+  delta: Extract<AgentOutputItem, { kind: "usage" }>,
+): ThreadUsage {
+  return {
+    inputTokens: total.inputTokens + delta.inputTokens,
+    outputTokens: total.outputTokens + delta.outputTokens,
+    cacheReadTokens: total.cacheReadTokens + delta.cacheReadTokens,
+    cacheWriteTokens: total.cacheWriteTokens + delta.cacheWriteTokens,
+    costUsdMicros:
+      total.costUsdMicros === undefined || delta.costUsdMicros === undefined
+        ? undefined
+        : total.costUsdMicros + delta.costUsdMicros,
+    fromStart: total.fromStart,
+  };
+}
+
 function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
-  let { run, seq, turnDone, openTurns = 0, requestUsage } = t;
+  let { run, seq, turnDone, openTurns = 0, requestUsage, threadUsage } = t;
   const items = [...t.items];
   const subagents = { ...t.subagents };
   const push = (item: Item) => items.push(item);
@@ -433,6 +475,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
     switch (event.kind) {
       case "agent.started":
         turnDone = false;
+        threadUsage = { ...(threadUsage ?? noUsage), fromStart: true };
         if (event.run) push({ kind: "user", key: key(), text: event.run.prompt });
         break;
       case "agent.accountFallback":
@@ -496,6 +539,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
               usage: { ...item.usage, model: item.usage.model ?? run?.model },
               at: time,
             };
+          if (item.kind === "usage") threadUsage = withUsage(threadUsage ?? noUsage, item);
           if (item.kind === "contextCompaction") requestUsage = undefined;
           if (item.kind === "sessionStarted") {
             const lastSession = items.findLast((row) => row.kind === "session");
@@ -525,6 +569,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
   return {
     run,
     requestUsage,
+    threadUsage,
     items,
     subagents: changed ? subagents : t.subagents,
     seq,

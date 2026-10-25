@@ -25,7 +25,7 @@
 {"kind":"textDelta","messageId":"msg_011CfwdTYDxKDnx8nzW3gJXc","text":"es.txt."}
 {"cachedInputTokens":49462,"contextTokens":50002,"inputTokens":50002,"kind":"requestUsage","model":"claude-haiku-5-5"}
 {"kind":"text","messageId":"msg_011CfwdTYDxKDnx8nzW3gJXc","text":"The first line of README.md is `# demo`, and I wrote `hi` to notes.txt."}
-{"cachedInputTokens":49462,"contextTokens":50002,"contextWindow":1000000,"inputTokens":50002,"kind":"requestUsage","model":"claude-haiku-5-5","outputMs":14348,"outputTokens":1134}
+{"cachedInputTokens":49462,"contextTokens":50002,"contextWindow":1000000,"inputTokens":50002,"kind":"requestUsage","model":"claude-haiku-5-5"}
 {"cacheReadTokens":128122,"cacheWriteTokens":78319,"costUsdMicros":14587,"inputTokens":1248,"kind":"usage","model":"claude-haiku-5-5","outputTokens":1134}
 {"cursor":"38d7b5da-7ce2-4914-8a77-50d83e62de97","kind":"turnCursor","turnId":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01"}
 {"kind":"turnFinished","result":"The first line of README.md is `# demo`, and I wrote `hi` to notes.txt.","turnId":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01"}

@@ -14,7 +14,6 @@ import {
   type Appearance,
 } from "../appearance";
 import { ParallaxMark } from "../logos";
-import { behaviorPrefs, setBehaviorPrefs, usageView } from "../prefs";
 import { IconButton, Picker, Segmented, menuItem, type PickerOption } from "../ui";
 import {
   fillIcons,
@@ -37,13 +36,6 @@ const parallaxThemes: ColorTheme[] = [
 ];
 
 /** What each usage view shows, for its row's description. */
-const usageDescriptions = {
-  ring: "A ring by the attach button fills with the fullest limit. Hover it for every limit and the thread's context, cache, and speed.",
-  inline:
-    "A row inside the prompt box, under its pickers, with every limit and the thread's context, speed, and cache.",
-  off: "No usage in the composer. The Usage page still has it.",
-};
-
 /**
  * A small drawing of the app in `theme`'s `mode`: the sidebar, a few lines, a card, and the
  * composer. It draws with the real tokens, which .scheme-light or .scheme-dark beside the
@@ -116,7 +108,6 @@ export function AppearanceSettings({
   onThemeChange: (theme: ThemePreference) => void;
 }) {
   const appearance = useAppearance();
-  const composerUsage = usageView(behaviorPrefs.use().composerUsage);
   const set = (change: Partial<Appearance>) => setAppearance(change);
   // The mode whose menu opened Add theme, which gets the added theme.
   const [adding, setAdding] = useState<Mode>();
@@ -391,18 +382,6 @@ export function AppearanceSettings({
             ]}
             value={appearance.diffColors}
             onChange={(diffColors) => set({ diffColors })}
-          />
-        </Row>
-        <Row title="Usage in the composer" description={usageDescriptions[composerUsage]}>
-          <Segmented
-            label="Usage in the composer"
-            options={[
-              { value: "ring", name: "Ring" },
-              { value: "inline", name: "Inline" },
-              { value: "off", name: "Off" },
-            ]}
-            value={composerUsage}
-            onChange={(view) => setBehaviorPrefs({ composerUsage: view })}
           />
         </Row>
       </Section>

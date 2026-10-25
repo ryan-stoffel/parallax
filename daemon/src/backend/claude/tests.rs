@@ -4116,6 +4116,76 @@ fn request_speed_is_the_turns_share_of_the_sessions_output_and_api_time() {
     assert_eq!(speed(second), Some((Some(400), Some(5_000))));
 }
 
+#[test]
+fn request_speed_is_main_session_output_over_the_time_it_streamed() {
+    use std::time::{Duration, Instant};
+
+    use serde_json::json;
+    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+    translator.line(
+        fixture("read-only")
+            .lines()
+            .find(|line| line.contains("\"subtype\":\"init\""))
+            .unwrap()
+            .as_bytes(),
+    );
+    let start = Instant::now();
+    let at = |ms: u64| start + Duration::from_millis(ms);
+    let event = |parent: Value, event: Value| {
+        json!({"type": "stream_event", "parent_tool_use_id": parent, "event": event}).to_string()
+    };
+    let started = json!({"type": "message_start", "message": {"id": "m"}});
+    let delta = json!({"type": "content_block_delta", "index": 0,
+        "delta": {"type": "text_delta", "text": "Hi"}});
+    let done = |tokens: u64| json!({"type": "message_delta", "usage": {"output_tokens": tokens}});
+    let assistant = json!({"type": "assistant", "parent_tool_use_id": null, "message": {
+        "id": "m", "model": "claude-opus-4-7", "content": [],
+        "usage": {"input_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}});
+    // The API time also counts the wait for each first token and the subagent's output.
+    let result = |ms: u64, tokens: u64| {
+        json!({"type": "result", "subtype": "success", "duration_api_ms": ms,
+            "modelUsage": {"claude-opus-4-7": {"outputTokens": tokens}}})
+        .to_string()
+    };
+    let speed = |steps: Vec<Step>| {
+        steps.into_iter().find_map(|step| match step {
+            Step::Emit(Event::RequestUsage(usage)) => Some((usage.output_tokens, usage.output_ms)),
+            _ => None,
+        })
+    };
+
+    // Two responses in the turn, each timed from its first delta: 2s waiting for the first one's
+    // first token doesn't count, nor a subagent's stream between them.
+    translator.line_at(event(Value::Null, started.clone()).as_bytes(), at(0));
+    translator.line_at(event(Value::Null, delta.clone()).as_bytes(), at(2_000));
+    translator.line_at(event(Value::Null, delta.clone()).as_bytes(), at(2_500));
+    translator.line_at(event(Value::Null, done(80)).as_bytes(), at(3_000));
+    translator.line_at(
+        event(json!("toolu_sub"), delta.clone()).as_bytes(),
+        at(3_100),
+    );
+    translator.line_at(event(json!("toolu_sub"), done(500)).as_bytes(), at(9_000));
+    translator.line_at(event(Value::Null, started.clone()).as_bytes(), at(9_500));
+    translator.line_at(event(Value::Null, delta.clone()).as_bytes(), at(10_000));
+    translator.line_at(event(Value::Null, done(120)).as_bytes(), at(11_000));
+    translator.line_at(assistant.to_string().as_bytes(), at(11_000));
+    let first = translator.line_at(result(12_000, 700).as_bytes(), at(11_100));
+    assert_eq!(speed(first), Some((Some(200), Some(2_000))));
+
+    // A reply too short to time keeps the last sample.
+    translator.line_at(event(Value::Null, started.clone()).as_bytes(), at(20_000));
+    translator.line_at(event(Value::Null, delta.clone()).as_bytes(), at(20_400));
+    translator.line_at(event(Value::Null, done(5)).as_bytes(), at(20_410));
+    translator.line_at(assistant.to_string().as_bytes(), at(20_410));
+    let short = translator.line_at(result(13_000, 705).as_bytes(), at(20_500));
+    assert_eq!(speed(short), Some((Some(200), Some(2_000))));
+
+    // Without partial messages, the turn's API time is the fallback.
+    translator.line_at(assistant.to_string().as_bytes(), at(30_000));
+    let unstreamed = translator.line_at(result(17_000, 905).as_bytes(), at(30_100));
+    assert_eq!(speed(unstreamed), Some((Some(200), Some(4_000))));
+}
+
 /// A sidecar that answers each query's prompt at once and ends it when its prompt ends, logging
 /// its own start and end, and that dies when a prompt says `crash`.
 const ANSWERING_SDK: &str = r#"#!/bin/sh

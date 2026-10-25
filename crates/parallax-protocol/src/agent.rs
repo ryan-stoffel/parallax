@@ -1332,8 +1332,10 @@ pub struct AgentRequestUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub output_tokens: Option<u64>,
-    /// Milliseconds those output tokens took by the provider's own timing: Claude's API time for
-    /// the last turn, or `OpenCode`'s text and reasoning streaming time. Never wall-clock turn time.
+    /// Milliseconds those output tokens took by the provider's own timing: the time Claude's
+    /// main-session responses streamed in the last turn (its API time for the turn when it streamed
+    /// no partial messages), or `OpenCode`'s text and reasoning streaming time. Never wall-clock
+    /// turn time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub output_ms: Option<u64>,

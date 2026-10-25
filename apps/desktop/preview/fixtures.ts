@@ -940,6 +940,7 @@ export function createFixtures(now = Date.now()): Fixtures {
         kind: "text",
         text: "Not without a setting, and 0028 keeps the channel out of settings on purpose: switching a stable install to nightlies would mean a downgrade path back. The supported way is to install a nightly build, which then follows nightlies on its own. I'd leave it as is; if you want an opt-in, it should be its own decision record.",
       },
+      usageItem(184_300, 2_100),
       {
         kind: "requestUsage",
         backend: "claude",
@@ -2073,6 +2074,18 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       text: "/security-review",
       name: "security-review",
       description: "Review pending changes for security issues",
+    },
+    {
+      text: "/design:ux-copy",
+      name: "design:ux-copy",
+      description:
+        "Write or review UX copy: microcopy, error messages, empty states, and CTAs. Use when naming a button, wording a confirmation dialog, or filling an empty state.",
+    },
+    {
+      text: "/frontend-design:frontend-design",
+      name: "frontend-design:frontend-design",
+      description:
+        "Guidance for distinctive, intentional visual design when building new UI or reshaping an existing one, from typography to motion.",
     },
   ];
   const repoFiles = [
