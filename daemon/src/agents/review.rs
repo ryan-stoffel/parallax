@@ -23,9 +23,11 @@ use parallax_protocol::{
 use parallax_store::{Run as RunRow, Worktree};
 use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
 
-use super::{convert, run_accepted, run_not_found, store, store_error};
+use super::{
+    convert, no_worktree, run_accepted, run_not_found, store, store_error, worktree_failed,
+};
 use crate::server::Daemon;
-use crate::worktree::{ChangeStatus, MAX_BLOB_BYTES, WorktreeError, validate_repo_path};
+use crate::worktree::{ChangeStatus, MAX_BLOB_BYTES, validate_repo_path};
 
 /// A run's row and worktree, if it can still be reviewed.
 async fn reviewable(daemon: &Arc<Daemon>, id: RunId) -> Result<(RunRow, Worktree), ErrorObject> {
@@ -49,21 +51,20 @@ async fn reviewable(daemon: &Arc<Daemon>, id: RunId) -> Result<(RunRow, Worktree
                 "run {id} is a project's coordinator, which changes no files to review"
             )));
         }
-        return Err(ErrorObject::internal_error(format!(
-            "run {id} has no recorded worktree"
-        )));
+        return Err(no_worktree(id));
     };
     if worktree.git_dir.is_empty() {
-        return Err(ErrorObject::parallax(
-            ErrorKind::WorktreeFailed,
-            format!("run {id}'s worktree has no recorded git folder, so plxd can't read it safely"),
-        ));
+        return Err(no_git_dir(id));
     }
     Ok((row, worktree))
 }
 
-fn worktree_failed(error: &WorktreeError) -> ErrorObject {
-    ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string())
+/// For a run whose worktree was never pinned to its git folder (#166).
+fn no_git_dir(id: RunId) -> ErrorObject {
+    ErrorObject::parallax(
+        ErrorKind::WorktreeFailed,
+        format!("run {id}'s worktree has no recorded git folder, so plxd can't read it safely"),
+    )
 }
 
 fn file_status(status: &ChangeStatus) -> AgentFileStatus {
@@ -226,10 +227,7 @@ pub(crate) async fn run_folder(
             .map_err(|error| store_error(&error))?
         {
             if worktree.git_dir.is_empty() {
-                return Err(ErrorObject::parallax(
-                    ErrorKind::WorktreeFailed,
-                    format!("run {id}'s worktree has no recorded git folder, so plxd can't read it safely"),
-                ));
+                return Err(no_git_dir(id));
             }
             return Ok((worktree.path.into(), Some(worktree.git_dir.into())));
         }

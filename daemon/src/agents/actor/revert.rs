@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use uuid::Uuid;
 
-use super::{Actor, DiffSummary, convert};
+use super::{Actor, convert, diff_summary};
 use crate::backend::Rewind;
 use crate::checkpoints;
 use crate::store::store_error;
@@ -139,12 +139,7 @@ impl Actor {
                 .diff_stat(path, git_dir, &worktree.base)
                 .await
                 .map_err(ErrorObject::internal_error)?;
-            self.record_diff(DiffSummary {
-                commit,
-                files: stat.files,
-                insertions: stat.insertions,
-                deletions: stat.deletions,
-            });
+            self.record_diff(diff_summary(commit, stat));
         }
         let (project, event) = checkpoints::finish_revert(&self.daemon, pending.plan).await?;
         let (id, run_id, state) = (self.row.id, self.id, self.row.state.clone());

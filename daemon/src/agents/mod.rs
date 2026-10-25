@@ -327,6 +327,19 @@ pub(crate) fn run_accepted(id: RunId) -> ErrorObject {
     )
 }
 
+/// The error for a run that should have a worktree row and has none.
+pub(super) fn no_worktree(id: RunId) -> ErrorObject {
+    ErrorObject::internal_error(format!("run {id} has no recorded worktree"))
+}
+
+/// Fails with `runNotFound` unless run `id` is in the store.
+fn require_run(db: &parallax_store::Store, id: RunId) -> Result<(), ErrorObject> {
+    match db.get_run(id.into()).map_err(|e| store_error(&e))? {
+        Some(_) => Ok(()),
+        None => Err(run_not_found(id)),
+    }
+}
+
 fn requested_account(account: Option<&AccountChoice>) -> Option<String> {
     account.and_then(|account| serde_json::to_string(account).ok())
 }
@@ -437,7 +450,8 @@ async fn prepare_run(
     if !(full_claude || thread_run && resolved.backend().full_thread()) {
         worker::check_backend(resolved.backend())?;
     }
-    if let Some(cli) = worker::cli_of(resolved.backend()) {
+    // Only a CLI plxd detects has its version checked before a worker starts.
+    if let Some(cli) = resolved.backend().cli() {
         // Only this CLI's status: a full probe also waits on the slowest of the others.
         let mut detected = daemon.cli_detector.get(cli).await;
         if worker::check_version(cli, Some(&detected)).is_err() {
@@ -686,13 +700,7 @@ async fn create_worktree(
         .map_err(|error| worktree_failed(&error))?;
     let paths = async {
         let worktree = sandbox_path(&created.path, "the run's worktree")?;
-        let common = agents
-            .worktrees
-            .git_common_dir(repo_path)
-            .await
-            .map_err(|error| worktree_failed(&error))?;
-        let common = sandbox_path(&common, "the repository's git folder")?;
-        Ok::<_, ErrorObject>((worktree, common))
+        Ok::<_, ErrorObject>((worktree, git_common_dir(agents, repo_path).await?))
     }
     .await;
     match paths {
@@ -717,13 +725,20 @@ pub(super) async fn checkout_paths(
     repo_path: &Path,
 ) -> Result<(PathBuf, PathBuf), ErrorObject> {
     let cwd = sandbox_path(repo_path, "the project's repository")?;
+    Ok((cwd, git_common_dir(agents, repo_path).await?))
+}
+
+/// `repo_path`'s shared git folder, canonical and checked for the sandbox.
+pub(super) async fn git_common_dir(
+    agents: &Agents,
+    repo_path: &Path,
+) -> Result<PathBuf, ErrorObject> {
     let common = agents
         .worktrees
         .git_common_dir(repo_path)
         .await
         .map_err(|error| worktree_failed(&error))?;
-    let common = sandbox_path(&common, "the repository's git folder")?;
-    Ok((cwd, common))
+    sandbox_path(&common, "the repository's git folder")
 }
 
 /// Records run `run_id` through the orchestrator's `thread.create` (0059), in `lane`, which the
@@ -860,9 +875,9 @@ pub(super) fn in_mode(
         mode.agent()
             .filter(|permission| backend.project_permissions().contains(permission))
     };
-    let (label, other) = match mode {
-        ProjectPermission::Auto => ("Auto", ProjectPermission::Bypass),
-        ProjectPermission::Bypass => ("Bypass Permissions", ProjectPermission::Auto),
+    let (label, other, other_label) = match mode {
+        ProjectPermission::Auto => ("Auto", ProjectPermission::Bypass, "Bypass"),
+        ProjectPermission::Bypass => ("Bypass Permissions", ProjectPermission::Auto, "Auto"),
         ProjectPermission::Unknown => {
             return Err(ErrorObject::parallax(
                 ErrorKind::UnsupportedOption,
@@ -874,11 +889,6 @@ pub(super) fn in_mode(
         return Ok(permission);
     }
     let detail = if maps(other).is_some() {
-        let other = if other == ProjectPermission::Bypass {
-            "Bypass"
-        } else {
-            "Auto"
-        };
         // A model service has Auto in its threads but not in a Project.
         let scope = if mode
             .agent()
@@ -888,7 +898,7 @@ pub(super) fn in_mode(
         } else {
             ""
         };
-        format!("{name} has no {label}{scope}. Set the Project to {other} to use it.")
+        format!("{name} has no {label}{scope}. Set the Project to {other_label} to use it.")
     } else {
         format!("{name} has neither Auto nor Bypass Permissions, so it can't run in a Project.")
     };
@@ -1129,6 +1139,7 @@ pub(crate) async fn create_started(
         approvals = true;
     }
     // What the request asks for, as the runs table stores it. Routing fills in the backend below.
+    let parent = parent(thread.as_ref(), coordinator_thread);
     let mut fields = RunFields {
         project_id: project.into(),
         prompt: prompt.clone(),
@@ -1136,8 +1147,8 @@ pub(crate) async fn create_started(
         policy: WORKSPACE_WRITE.to_owned(),
         backend: String::new(),
         coordinator_thread: coordinator_thread.map(Uuid::from),
-        parent: parent(thread.as_ref(), coordinator_thread),
-        notify_parent: notify && parent(thread.as_ref(), coordinator_thread).is_some(),
+        parent,
+        notify_parent: notify && parent.is_some(),
         model: options.model.clone(),
         effort: options.effort.and_then(option_name),
         permission: options.permission.and_then(option_name),
@@ -1194,29 +1205,16 @@ pub(crate) async fn create_started(
         Some(scratch) => scratch.to_string_lossy().into_owned(),
         None => scope_path,
     };
-    let (created, (cwd, git_common_dir)) = if fields.checkout {
-        if let Some(reference) = thread.as_ref().and_then(|thread| thread.git_ref.as_deref()) {
-            switch_checkout(&daemon, project, Path::new(&repo_path), reference).await?;
-        }
-        (None, checkout_paths(agents, Path::new(&repo_path)).await?)
-    } else {
-        // A Project's run is cut from its integration branch's tip (0045).
-        let base = match mode {
-            Some(_) => integration(&daemon, project)
-                .await?
-                .and_then(|row| row.integration_branch),
-            None => None,
-        };
-        let (created, worktree_path, git_common_dir) = create_worktree(
-            agents,
-            Path::new(&repo_path),
-            run_id,
-            thread.as_ref(),
-            base.as_deref(),
-        )
-        .await?;
-        (Some(created), (worktree_path, git_common_dir))
-    };
+    let (created, (cwd, git_common_dir)) = workspace(
+        &daemon,
+        project,
+        run_id,
+        Path::new(&repo_path),
+        thread.as_ref(),
+        fields.checkout,
+        mode.is_some(),
+    )
+    .await?;
 
     fields.backend = prepared.resolved.backend().name().into();
     let status = match (&fork, &waiting) {
@@ -1321,6 +1319,37 @@ pub(crate) async fn create_started(
     })
 }
 
+/// Where new run `run_id` works, and its canonical cwd and git folder: for a `checkout` thread,
+/// `repo_path`'s own checkout, switched to the thread's ref first, or else a new worktree of
+/// `repo_path`, cut from the Project's integration branch's tip when `in_project` (0045).
+async fn workspace(
+    daemon: &Arc<Daemon>,
+    project: ProjectId,
+    run_id: RunId,
+    repo_path: &Path,
+    thread: Option<&NewThread>,
+    checkout: bool,
+    in_project: bool,
+) -> Result<(Option<CreatedWorktree>, (PathBuf, PathBuf)), ErrorObject> {
+    let agents = &daemon.agents;
+    if checkout {
+        if let Some(reference) = thread.and_then(|thread| thread.git_ref.as_deref()) {
+            switch_checkout(daemon, project, repo_path, reference).await?;
+        }
+        return Ok((None, checkout_paths(agents, repo_path).await?));
+    }
+    let base = if in_project {
+        integration(daemon, project)
+            .await?
+            .and_then(|row| row.integration_branch)
+    } else {
+        None
+    };
+    let (created, worktree_path, git_common_dir) =
+        create_worktree(agents, repo_path, run_id, thread, base.as_deref()).await?;
+    Ok((Some(created), (worktree_path, git_common_dir)))
+}
+
 /// A new thread's first message: `prompt` as the user or the coordinator wrote it, as in Claude
 /// Code (0034), after a Project child's header (0042).
 pub(super) fn first_prompt(prompt: &str, place: &Place) -> Result<String, ErrorObject> {
@@ -1422,9 +1451,7 @@ async fn actor_for(daemon: &Arc<Daemon>, id: RunId) -> Result<mpsc::Sender<Comma
             && row.fields.policy != convert::NO_WRITE
             && !row.fields.checkout
         {
-            return Err(ErrorObject::internal_error(format!(
-                "run {id} has no recorded worktree"
-            )));
+            return Err(no_worktree(id));
         }
         let turns = db.run_turns(id.into()).map_err(|e| store_error(&e))?;
         Ok((row, worktree, turns))
@@ -1776,13 +1803,7 @@ pub(crate) async fn image(
 ) -> Result<PromptImage, ErrorObject> {
     let AgentImageParams { run_id, image_id } = params;
     let stored = store(daemon, move |db| {
-        if db
-            .get_run(run_id.into())
-            .map_err(|e| store_error(&e))?
-            .is_none()
-        {
-            return Err(run_not_found(run_id));
-        }
+        require_run(db, run_id)?;
         db.image(run_id.into(), image_id.into())
             .map_err(|e| store_error(&e))
     })
@@ -1821,13 +1842,7 @@ pub(crate) async fn attach(
         data: attachment.data,
     };
     store(daemon, move |db| {
-        if db
-            .get_run(run_id.into())
-            .map_err(|e| store_error(&e))?
-            .is_none()
-        {
-            return Err(run_not_found(run_id));
-        }
+        require_run(db, run_id)?;
         db.add_images(run_id.into(), &[(id.into(), stored)])
             .map_err(|e| store_error(&e))
     })
@@ -1852,13 +1867,7 @@ pub(crate) async fn cancel(
 /// Fails with `runNotFound` unless `from`, the thread a message or interrupt comes from (0041), is
 /// a run on the host.
 async fn sender_exists(daemon: &Daemon, from: RunId) -> Result<(), ErrorObject> {
-    store(daemon, move |db| {
-        db.get_run(from.into())
-            .map_err(|e| store_error(&e))?
-            .map(|_| ())
-            .ok_or_else(|| run_not_found(from))
-    })
-    .await
+    store(daemon, move |db| require_run(db, from)).await
 }
 
 /// `pr/link` and `pr/unlink` (0041): adds `url`, a GitHub pull request's, to run `run_id`'s
@@ -2232,6 +2241,40 @@ mod tests {
     use crate::context::memory::Start;
     use crate::server::Daemon;
 
+    /// A Project's fields, for a test that stores one.
+    pub(super) fn project_fields() -> ProjectFields {
+        ProjectFields {
+            name: "app".to_owned(),
+            repo_path: "/src/app".to_owned(),
+            icon: None,
+            permission: "auto".to_owned(),
+            autonomy: "routine".to_owned(),
+            base_branch: None,
+        }
+    }
+
+    /// A worker run's fields in `project`, on the fake backend, with every option at its default.
+    pub(super) fn run_fields(project: Uuid) -> RunFields {
+        RunFields {
+            project_id: project,
+            prompt: "Build it.".to_owned(),
+            requested_account: None,
+            policy: super::WORKSPACE_WRITE.to_owned(),
+            backend: "fake".to_owned(),
+            coordinator_thread: None,
+            parent: None,
+            notify_parent: false,
+            model: None,
+            effort: None,
+            permission: None,
+            context_window: None,
+            fast: None,
+            approvals: false,
+            checkout: false,
+            explore: false,
+        }
+    }
+
     /// 0060: idle sessions past the cap release the least recently used; one that went idle
     /// again moves to the back, and one that is busy, released, or gone leaves the count.
     #[test]
@@ -2258,22 +2301,11 @@ mod tests {
         use parallax_protocol::AgentPermission::{Bypass, Manual};
 
         let fields = |approvals: bool, permission: Option<&str>| RunFields {
-            project_id: Uuid::nil(),
             prompt: "p".to_owned(),
-            requested_account: None,
-            policy: "workspaceWrite".to_owned(),
             backend: "claude".to_owned(),
-            coordinator_thread: None,
-            parent: None,
-            notify_parent: false,
-            model: None,
-            effort: None,
             permission: permission.map(str::to_owned),
-            context_window: None,
-            fast: None,
             approvals,
-            checkout: false,
-            explore: false,
+            ..run_fields(Uuid::nil())
         };
         assert!(super::full_claude_code(&fields(true, None), None));
         assert!(super::full_claude_code(
@@ -2414,17 +2446,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
         let project = Uuid::now_v7();
-        let fields = ProjectFields {
-            name: "app".to_owned(),
-            repo_path: "/src/app".to_owned(),
-            icon: None,
-            permission: "auto".to_owned(),
-            autonomy: "routine".to_owned(),
-            base_branch: None,
-        };
         // The start's `prepare_run` saw the project; the delete then removed it.
         store(&daemon, move |db| {
-            db.create_project(project, &fields)
+            db.create_project(project, &project_fields())
                 .map_err(|e| store_error(&e))?;
             db.delete_project(project).map_err(|e| store_error(&e))
         })
@@ -2432,24 +2456,7 @@ mod tests {
         .unwrap();
 
         let run_id = RunId::generate();
-        let run = RunFields {
-            project_id: project,
-            prompt: "Build it.".to_owned(),
-            requested_account: None,
-            policy: super::WORKSPACE_WRITE.to_owned(),
-            backend: "fake".to_owned(),
-            coordinator_thread: None,
-            parent: None,
-            notify_parent: false,
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            approvals: false,
-            checkout: false,
-            explore: false,
-        };
+        let run = run_fields(project);
         let state = RunState::default();
         let lane = daemon.orchestrator.lane(run_id).await;
         let error = record(
@@ -2485,34 +2492,9 @@ mod tests {
         // Not a UUIDv7, so it fails conversion to a protocol run.
         let (corrupt, good) = (Uuid::from_u128(1), Uuid::now_v7());
         store(&daemon, move |db| {
-            let fields = ProjectFields {
-                name: "app".to_owned(),
-                repo_path: "/src/app".to_owned(),
-                icon: None,
-                permission: "auto".to_owned(),
-                autonomy: "routine".to_owned(),
-                base_branch: None,
-            };
-            db.create_project(project, &fields)
+            db.create_project(project, &project_fields())
                 .map_err(|e| store_error(&e))?;
-            let run = RunFields {
-                project_id: project,
-                prompt: "Build it.".to_owned(),
-                requested_account: None,
-                policy: super::WORKSPACE_WRITE.to_owned(),
-                backend: "fake".to_owned(),
-                coordinator_thread: None,
-                parent: None,
-                notify_parent: false,
-                model: None,
-                effort: None,
-                permission: None,
-                context_window: None,
-                fast: None,
-                approvals: false,
-                checkout: false,
-                explore: false,
-            };
+            let run = run_fields(project);
             let state = RunState {
                 status: "running".to_owned(),
                 ..RunState::default()
@@ -2583,40 +2565,18 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
         let project = Uuid::now_v7();
-        let fields = ProjectFields {
-            name: "app".to_owned(),
-            repo_path: "/src/app".to_owned(),
-            icon: None,
-            permission: "auto".to_owned(),
-            autonomy: "routine".to_owned(),
-            base_branch: None,
-        };
         // A checkout thread that finished: no worktree, and nothing left to do.
         let id = RunId::generate();
         let run = RunFields {
-            project_id: project,
-            prompt: "Build it.".to_owned(),
-            requested_account: None,
-            policy: super::WORKSPACE_WRITE.to_owned(),
-            backend: "fake".to_owned(),
-            coordinator_thread: None,
-            parent: None,
-            notify_parent: false,
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            approvals: false,
             checkout: true,
-            explore: false,
+            ..run_fields(project)
         };
         let state = RunState {
             status: super::convert::COMPLETED.to_owned(),
             ..RunState::default()
         };
         store(&daemon, move |db| {
-            db.create_project(project, &fields)
+            db.create_project(project, &project_fields())
                 .map_err(|e| store_error(&e))?;
             db.create_run(id.into(), &run, &state)
                 .map_err(|e| store_error(&e))

@@ -329,11 +329,6 @@ pub(super) async fn check_linux_sandbox(
         .map_err(worker_unavailable)
 }
 
-/// The detected CLI a backend runs, if plxd checks its version before starting a worker.
-pub(super) fn cli_of(backend: &dyn Backend) -> Option<CliKind> {
-    backend.cli()
-}
-
 /// Characters the vendors read as wildcards in a sandbox path (0013).
 const GLOB_CHARACTERS: &[char] = &['*', '?', '[', ']'];
 
