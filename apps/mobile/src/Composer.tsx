@@ -1,5 +1,6 @@
-// The thread's message box, as the desktop's Composer, for a phone: the text, photos and files to
-// attach, and the model, reasoning effort, and access for what follows, in one sheet.
+// The thread's message box, as the desktop's Composer, for a phone: the text, written as Markdown
+// that shows formatted as it's typed, photos and files to attach, and the model, reasoning effort,
+// and access for what follows, in one sheet.
 // Photos go to the agent as images and are saved on the computer too, and files are saved there
 // with `host/upload` and listed after the text (0071), as the desktop sends them.
 import * as DocumentPicker from "expo-document-picker";
@@ -33,10 +34,13 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
+import {
+  EnrichedMarkdownTextInput,
+  type EnrichedMarkdownTextInputInstance,
+} from "react-native-enriched-markdown";
 import { ScrollView as GestureScrollView } from "react-native-gesture-handler";
 import Animated, { FadeIn, FadeOut, LinearTransition, useAnimatedStyle, withTiming } from "react-native-reanimated";
 
@@ -65,7 +69,7 @@ import { openLightbox } from "./Lightbox";
 import { ProviderLogo } from "./logos";
 import { allAccess, useOffers, type Offer } from "./offers";
 import { usePrefs } from "./prefs";
-import { byName, replaceSlash, segments, slashAt } from "./slash";
+import { byName, slashAt } from "./slash";
 import { SendButton } from "./SendButton";
 import { Sheet, sheetTitle } from "./Sheet";
 import { Icon, T, useColors } from "./ui";
@@ -534,6 +538,20 @@ export function Composer({
   const chosenAccess = permission ?? startAccess;
   const shownAccess = chosenAccess ?? run?.permission;
   const text = draft;
+  // The input holds its own text: a draft changed from outside it (sent, or taken back to edit) is
+  // written in, and what it reports itself isn't written back.
+  const input = useRef<EnrichedMarkdownTextInputInstance>(null);
+  const typed = useRef(draft);
+  // The saved draft goes in once made, through `setValue` rather than `defaultValue`, which on iOS
+  // doesn't report the plain text the `/` menu reads.
+  useEffect(() => {
+    if (draft) input.current?.setValue(draft);
+  }, []);
+  useEffect(() => {
+    if (draft === typed.current) return;
+    typed.current = draft;
+    input.current?.setValue(draft);
+  }, [draft]);
   const ready = !!(text.trim() || attached.length) && !!computer && !sending;
 
   const maxImages = caps?.maxImages ?? 10;
@@ -677,11 +695,11 @@ export function Composer({
     }
   }
 
-  // The `/` menu: the command being typed at the cursor, and the CLI's commands that match it.
+  // The `/` menu: the command being typed at the cursor, and the CLI's commands that match it. The
+  // input reports its cursor in its plain text, without the Markdown, so the `/` is found there.
+  const [plain, setPlain] = useState("");
   const [selection, setSelection] = useState({ start: 0, end: 0 });
-  // Where a picked command puts the cursor, until the input reports it there.
-  const [placed, setPlaced] = useState<{ start: number; end: number }>();
-  const slash = changes && selection.start === selection.end ? slashAt(text, selection.start) : undefined;
+  const slash = changes && selection.start === selection.end ? slashAt(plain, selection.start) : undefined;
   const commandsKey = hostId && offer.id ? `${hostId}/${offer.id}/${runId ?? repo ?? ""}` : undefined;
   const [commands, setCommands] = useState<{ key: string; list: AgentCommand[] }>();
   const wantsCommands = !!slash && !!commandsKey;
@@ -698,23 +716,18 @@ export function Composer({
     ? byName((loaded ?? []).filter((m) => !ownCommands.has(m.name)), slash.query, (m) => m.name).slice(0, maxCommands)
     : [];
   const menu = !!slash && (loaded === undefined || matches.length > 0);
-  // The commands the CLI knows, which the text draws as the desktop's violet chips. The `/word`
-  // still being typed stays plain until it's done.
-  const known = new Set((commands?.list ?? []).map((m) => m.text));
-  /** Puts `command` in place of the `/` being typed, as the desktop's menu does. */
-  const pickCommand = (command: AgentCommand, from = text) => {
-    const at = slashAt(from, selection.start);
-    if (!at) return;
+  /** Puts `command` in place of the `/` being typed, up to `to`, as the desktop's menu does. */
+  const pickCommand = (command: AgentCommand, to = slash?.to) => {
+    if (!slash || to === undefined) return;
     void Haptics.selectionAsync();
-    const next = replaceSlash(from, at, `${command.text} `);
-    onDraft(next.text);
-    setPlaced({ start: next.cursor, end: next.cursor });
+    input.current?.setSelection(slash.from, to);
+    input.current?.insertText(`${command.text} `);
   };
-  /** The text as typed, except that Return while the menu shows picks its first command. */
-  const changeText = (next: string) => {
-    const cursor = selection.start;
-    if (menu && matches[0] && next === `${text.slice(0, cursor)}\n${text.slice(cursor)}`) return pickCommand(matches[0]);
-    onDraft(next);
+  /** The plain text as typed. Return while the menu shows picks its first command in its place. */
+  const changePlain = (next: string) => {
+    setPlain(next);
+    if (menu && slash && matches[0] && next === `${plain.slice(0, slash.to)}\n${plain.slice(slash.to)}`)
+      pickCommand(matches[0], slash.to + 1);
   };
 
   return (
@@ -796,32 +809,31 @@ export function Composer({
             ))}
           </ScrollView>
         )}
-        <TextInput
+        <EnrichedMarkdownTextInput
+          ref={input}
           accessibilityLabel="Message"
-          multiline
-          onChangeText={changeText}
-          selection={placed}
-          onSelectionChange={(e) => {
-            setSelection(e.nativeEvent.selection);
-            if (placed) setPlaced(undefined);
+          onChangeMarkdown={(markdown) => {
+            typed.current = markdown;
+            onDraft(markdown);
           }}
+          onChangeText={changePlain}
+          onChangeSelection={setSelection}
+          markdownShortcuts
           placeholder={placeholder ?? (working ? "Steer, or queue a follow-up" : "Reply")}
           placeholderTextColor={c.faintForeground}
+          cursorColor={c.accent}
+          selectionColor={c.accent}
+          markdownStyle={{
+            strong: { color: c.foreground },
+            em: { color: c.foreground },
+            link: { color: c.accent, underline: false },
+            h1: { fontSize: 22, fontWeight: "600", color: c.foreground },
+            h2: { fontSize: 20, fontWeight: "600", color: c.foreground },
+            h3: { fontSize: 18, fontWeight: "600", color: c.foreground },
+            list: { itemSpacing: 2 },
+          }}
           style={[styles.input, { color: c.foreground }]}
-        >
-          {segments(text, (word) => known.has(word) && !(slash && slash.query === word.slice(1))).map((part, i) =>
-            part.known ? (
-              <Text
-                key={i}
-                style={{ color: c.projectViolet, backgroundColor: `${c.projectViolet}1f`, fontWeight: "600" }}
-              >
-                {part.text}
-              </Text>
-            ) : (
-              part.text
-            ),
-          )}
-        </TextInput>
+        />
         <View style={styles.bar}>
           <Pressable
             accessibilityRole="button"

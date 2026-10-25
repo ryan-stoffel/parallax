@@ -21,6 +21,7 @@ import {
   RUNNING_POLL_MS,
   usePullRequests,
 } from "./PullRequests";
+import { parsed } from "./markdownTest";
 import { Notifications } from "./notifications";
 import { setBehaviorPrefs } from "./prefs";
 import { SidePanel } from "./SidePanel";
@@ -313,7 +314,8 @@ test("a screenshot opens large, with its name and place, and arrows to the other
     this.dispatchEvent(new Event("close"));
   };
   await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
-  await click(document.querySelector("img[data-shot]"));
+  await parsed();
+  await click(document.querySelector(".enriched img"));
   const box = () => document.querySelector("dialog[aria-label]");
   expect(box()!.textContent).toBe("Before1 / 2");
   await act(async () =>
@@ -396,7 +398,7 @@ test("GitHub's images in the description and comments load, and others stay link
     ["The toast", "https://raw.githubusercontent.com/me/app/1/toast.gif"],
     ["Shot", "https://github.com/user-attachments/assets/1"],
   ]);
-  const badge = [...document.querySelectorAll(".markdown a")].find(
+  const badge = [...document.querySelectorAll(".enriched a")].find(
     (a) => a.textContent === "Badge",
   );
   expect(badge?.getAttribute("href")).toBe("https://example.com/a.png");

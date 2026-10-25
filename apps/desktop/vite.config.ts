@@ -117,7 +117,15 @@ export default defineConfig({
     root: ".",
     include: ["src/**/*.test.{ts,tsx}", "scripts/**/*.test.mjs"],
     // Its ES modules import each other without file extensions, which only a bundler resolves,
-    // so tests bundle it too (browserTheme.ts).
-    server: { deps: { inline: ["@material/material-color-utilities"] } },
+    // so tests bundle it too (browserTheme.ts). Enriched Markdown's web build is what the app
+    // bundles, by its `browser` field, which Node's resolution in tests skips.
+    server: {
+      deps: { inline: ["@material/material-color-utilities", "react-native-enriched-markdown"] },
+    },
+    alias: {
+      "react-native-enriched-markdown": fileURLToPath(
+        import.meta.resolve("react-native-enriched-markdown/lib/module/index.web.js"),
+      ),
+    },
   },
 });

@@ -6,9 +6,14 @@
 allowBuilds:
   # Squirrel.Windows, which electron-builder only uses for a target we don't build.
   electron-winstaller: false
+  # Enriched Markdown's native assets (tree-sitter grammars, RaTeX), which only the phone builds.
+  react-native-enriched-markdown: false
 
 # Vite+ asks for these so every tool shares its Vite and Vitest.
 overrides:
+  # Enriched Markdown's web build needs only Platform and processColor from React Native
+  # (shims/react-native), so no copy of React Native itself comes with it.
+  react-native: link:./shims/react-native
   vite: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1
   vitest: 5.0.1
 

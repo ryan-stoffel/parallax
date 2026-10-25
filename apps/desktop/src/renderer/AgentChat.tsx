@@ -52,9 +52,7 @@ import {
 } from "react";
 import Markdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
-import rehypeKatex from "rehype-katex";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
+import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
 
 import type { RpcError } from "../preload/bridge";
 import type {
@@ -89,7 +87,8 @@ import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
 import { download, readAttachment } from "./documents";
 import { DownloadButton, FileCards } from "./FileCards";
-import { FileImage, FileLink, FileRunContext, keepFiles, linkedPath } from "./FileLink";
+import { FileImage, FileRunContext, linkedPath, useOpenFile } from "./FileLink";
+import { filePath, fileReference, unloadedImages } from "./markdownLinks";
 import { HtmlRender, pageUrl } from "./HtmlRender";
 import { imageCaps, imageUrl, loadImage } from "./images";
 import { FileCard } from "./FileCard";
@@ -116,9 +115,10 @@ import {
   type TraceStatus,
 } from "./Trace";
 import { locale } from "./locale";
-import { ClaudeLogo, GitHubLogo, LinearLogo, ParallaxGlyph } from "./logos";
-import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
+import { ClaudeLogo, ParallaxGlyph } from "./logos";
+import { codeRuns, markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { mentionsOf, withMentions } from "./Mention";
+import { onGithub } from "./github";
 import { dollarMath } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
@@ -2378,38 +2378,193 @@ const previewed = new Set(["Edit", "MultiEdit", "Write"]);
 const isWhole = (input?: JsonValue): input is JsonValue =>
   input !== undefined && !(isObject(input) && input["truncated"] === true);
 
-export function linkIcon(href?: string) {
-  let host;
-  try {
-    const url = new URL(href ?? "");
-    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
-    host = url.hostname;
-  } catch {
-    return undefined;
-  }
-  const on = (site: string) => host === site || host.endsWith(`.${site}`);
-  return on("github.com") ? GitHubLogo : on("linear.app") ? LinearLogo : Globe;
+// Agent output is untrusted. Enriched Markdown draws raw HTML as its text, never as elements, and
+// every link goes through `follow`: a file in the thread's folder opens in the side panel
+// (FileLink.tsx, PLX-834), and a web page opens in a new window, which main hands to the system
+// browser, https only. No remote image or video loads: each stays a link with its alt text.
+
+/** Which remote images Markdown loads: a pull request's GitHub-hosted ones, or none. */
+export type Images = "github" | "none";
+
+/**
+ * The desktop's `.markdown` look in Enriched Markdown's terms, from the theme's variables, so it
+ * follows the appearance with no style of its own: the transcript's 14px text, headings in weight,
+ * code in the mono font on the code fill, tables as rounded cards, and GitHub's alerts in the
+ * theme's colors.
+ */
+const markdownStyle: MarkdownStyle = (() => {
+  const body = {
+    fontSize: 14,
+    lineHeight: 23,
+    fontFamily: "var(--font-sans)",
+    color: "var(--foreground)",
+    marginTop: 0,
+    marginBottom: 10,
+  };
+  const heading = (fontSize: number) => ({
+    ...body,
+    fontSize,
+    lineHeight: Math.round(fontSize * 1.3),
+    fontWeight: "600",
+    marginTop: Math.round(fontSize * 1.1),
+    marginBottom: 8,
+  });
+  return {
+    paragraph: body,
+    h1: heading(19),
+    h2: heading(16),
+    h3: heading(14),
+    h4: heading(14),
+    h5: heading(14),
+    h6: heading(14),
+    strong: { fontWeight: "bold" },
+    link: { color: "var(--accent)", underline: false },
+    code: {
+      fontFamily: "var(--font-mono)",
+      fontSize: 12,
+      // The text's color, so code that's a link's text is the link's.
+      color: "inherit",
+      backgroundColor: "var(--code)",
+      borderColor: "var(--border)",
+    },
+    codeBlock: {
+      ...body,
+      fontFamily: "var(--font-mono)",
+      fontSize: 12.5,
+      lineHeight: 20,
+      backgroundColor: "var(--code)",
+      borderColor: "var(--border)",
+      borderWidth: 1,
+      borderRadius: 12,
+      padding: 12,
+    },
+    blockquote: {
+      ...body,
+      color: "var(--muted-foreground)",
+      borderColor: "color-mix(in oklab, var(--foreground) 18%, transparent)",
+      borderWidth: 3,
+      gapWidth: 12,
+      backgroundColor: "transparent",
+      admonitions: {
+        note: { color: "var(--accent)" },
+        tip: { color: "var(--added)" },
+        important: { color: "var(--project-violet)" },
+        warning: { color: "var(--warning)" },
+        caution: { color: "var(--danger)" },
+      },
+    },
+    list: {
+      ...body,
+      bulletColor: "var(--faint-foreground)",
+      markerColor: "var(--faint-foreground)",
+      itemSpacing: 4,
+    },
+    taskList: {
+      checkedColor: "var(--accent)",
+      borderColor: "var(--faint-foreground)",
+      checkedTextColor: "var(--foreground)",
+      checkedStrikethrough: false,
+    },
+    table: {
+      ...body,
+      fontSize: 13,
+      lineHeight: 20,
+      headerBackgroundColor: "var(--hover)",
+      headerTextColor: "var(--foreground)",
+      rowEvenBackgroundColor: "transparent",
+      rowOddBackgroundColor: "transparent",
+      borderColor: "var(--border)",
+      borderWidth: 1,
+      borderRadius: 8,
+      cellPaddingHorizontal: 11,
+      cellPaddingVertical: 6,
+    },
+    thematicBreak: { color: "var(--border)", height: 1, marginTop: 16, marginBottom: 16 },
+    math: {
+      color: "var(--foreground)",
+      backgroundColor: "transparent",
+      marginTop: 0,
+      marginBottom: 10,
+    },
+    inlineMath: { color: "var(--foreground)" },
+    image: { borderRadius: 8, marginTop: 0, marginBottom: 10 },
+  };
+})();
+
+// In a transcript, inline code that names a file, such as `src/App.tsx`, is a link to it.
+const recognition = { inlineCode: filePath };
+
+/**
+ * Follows a Markdown link: to `onLink` first, when it takes it, then a file to `openFile`, and
+ * anything else to a new window, which main opens in the browser when it's https.
+ */
+function follow(
+  url: string,
+  openFile?: (path: string) => void,
+  onLink?: (href: string) => boolean,
+) {
+  if (onLink?.(url)) return;
+  const path = linkedPath(fileReference(url));
+  if (path !== undefined) openFile?.(path);
+  else window.open(url, "_blank", "noreferrer");
 }
 
-// Agent output is untrusted: no raw HTML (no rehype-raw), and react-markdown's
-// default urlTransform drops javascript: and other unsafe links. Links open in
-// a new window, which main hands to the system browser, https only. In a
-// transcript, a link or image naming a file is read from the thread's folder
-// through agent/file instead (FileLink.tsx, PLX-834).
-const markdownComponents: Components = {
-  a: ({ href, children }) => {
-    const path = linkedPath(href);
-    if (path !== undefined) return <FileLink path={path}>{children}</FileLink>;
-    const Icon = linkIcon(href);
-    return (
-      <a href={href} target="_blank" rel="noreferrer">
-        {Icon && (
-          <Icon aria-hidden className="mr-1 inline size-3.5 align-[-0.15em] text-foreground" />
-        )}
-        {children}
-      </a>
-    );
-  },
+/** Markdown between code blocks, drawn by Enriched Markdown's web renderer. */
+const EnrichedRun = memo(function EnrichedRun({
+  text,
+  images,
+  onLink,
+}: {
+  text: string;
+  images: Images;
+  onLink?: (href: string) => boolean;
+}) {
+  const openFile = useOpenFile();
+  const remote = (url: string) => images === "github" && onGithub(url);
+  // A thread's own files show, as FileImage reads them; any other image is a link.
+  const markdown = useMemo(
+    () =>
+      unloadedImages(text, (url) => remote(url) || (!!openFile && linkedPath(url) !== undefined)),
+    [text, images, !!openFile],
+  );
+  return (
+    <EnrichedMarkdownText
+      markdown={markdown}
+      markdownStyle={markdownStyle}
+      md4cFlags={{ latexMath: true }}
+      linkRecognition={openFile ? recognition : undefined}
+      enableTaskListItemToggle={false}
+      onLinkPress={({ url }) => follow(url, openFile, onLink)}
+      // An empty source keeps an image unrequested: a URL an agent writes can carry what it read.
+      resolveImageSource={({ url }) => (remote(url) ? undefined : { uri: "" })}
+      renderers={{
+        image: ({ url, altText }) => {
+          const path = linkedPath(url);
+          return path !== undefined && openFile ? (
+            <FileImage path={path} alt={altText || "Image"} />
+          ) : undefined;
+        },
+        video: ({ url }) => (
+          <a href={url} target="_blank" rel="noreferrer">
+            Video
+          </a>
+        ),
+      }}
+    />
+  );
+});
+
+// Highlights a code block whose fence names its language, never a guess; a diff's lines are
+// drawn by DiffLines instead. Built once: react-markdown runs its plugins' setup on every render,
+// and rehype-highlight's registers 37 languages each time.
+const highlighter = rehypeHighlight({ detect: false, plainText: ["diff", "patch"] });
+const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [() => highlighter];
+
+/** A Markdown tree node's text, as a code block's, for Copy. */
+type TextNode = { value?: string; children?: TextNode[] };
+const textOf = (node: TextNode): string => node.value ?? node.children?.map(textOf).join("") ?? "";
+
+const codeComponents: Components = {
   pre: ({ node, children }) => {
     const code = node?.children[0];
     const classes = code?.type === "element" ? code.properties["className"] : undefined;
@@ -2425,95 +2580,64 @@ const markdownComponents: Components = {
       </CodeBlock>
     );
   },
-  // Never load a remote image: a link with the alt text, which opens externally like any link.
-  img: ({ src, alt }) => {
-    const path = linkedPath(typeof src === "string" ? src : undefined);
-    if (path !== undefined) return <FileImage path={path} alt={alt || "Image"} />;
-    // An unsafe source arrives as "" from urlTransform: no href at all, then.
-    return (
-      <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
-        {alt || "Image"}
-      </a>
-    );
-  },
 };
 
-// Highlights a code block whose fence names its language, never a guess; a diff's lines are
-// drawn by DiffLines instead. Built once: react-markdown runs its plugins' setup on every render,
-// and rehype-highlight's registers 37 languages each time.
-const highlighter = rehypeHighlight({ detect: false, plainText: ["diff", "patch"] });
-// Typesets $...$ and $$...$$ (and \(...\) and \[...\], which dollarMath rewrites to them) with
-// KaTeX, which needs no network. Its output is plain elements, and invalid LaTeX stays as its source.
-const typeset = rehypeKatex({ strict: "ignore" });
-// Typesetting runs first, so math never reaches the code block renderer.
-const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [
-  () => typeset,
-  () => highlighter,
-];
-
-/** A Markdown tree node's text, as a code block's, for Copy. */
-type TextNode = { value?: string; children?: TextNode[] };
-const textOf = (node: TextNode): string => node.value ?? node.children?.map(textOf).join("") ?? "";
-
 /**
- * An agent message, rendered from Markdown with GitHub's extensions. `components` replace some
- * elements' renderers, such as the Context view's links; they get the same safe, HTML-free tree.
+ * A code block, as CodeBlock draws it: its language, Copy, and highlighting, or a diff's lines,
+ * which Enriched Markdown's web renderer has none of.
  */
-export const MarkdownText = memo(function MarkdownText({
-  text,
-  components,
-  streaming,
-}: {
-  text: string;
-  components?: Components;
-  /** Hides LaTeX that fails to typeset, since a streaming message's math may be unfinished. */
-  streaming?: boolean;
-}) {
-  const inThread = useContext(FileRunContext) !== undefined;
+const FencedCode = memo(function FencedCode({ text }: { text: string }) {
   return (
-    <div className={streaming ? "markdown streaming" : "markdown"}>
-      <Markdown
-        remarkPlugins={gfm}
-        rehypePlugins={highlight}
-        components={{ ...markdownComponents, ...components }}
-        urlTransform={inThread ? keepFiles : undefined}
-      >
-        {dollarMath(text)}
-      </Markdown>
-    </div>
+    <Markdown rehypePlugins={highlight} components={codeComponents}>
+      {text}
+    </Markdown>
   );
 });
 
-type MathNode = {
-  type: string;
-  children?: MathNode[];
-  position?: { start: { offset?: number } };
-  data?: { hProperties?: { className?: string[] } };
-};
-
-/**
- * remark-math reads `$$...$$` within a line as inline math, which typesets small and cramped.
- * Models write display equations that way, so mark those as display math.
- */
-function displayDoubleDollar() {
-  return (tree: MathNode, file: { value: unknown }) => {
-    const source = String(file.value);
-    const walk = (node: MathNode) => {
-      const props = node.data?.hProperties;
-      if (
-        node.type === "inlineMath" &&
-        props &&
-        source.startsWith("$$", node.position?.start.offset)
-      ) {
-        props.className = ["language-math", "math-display"];
-      }
-      node.children?.forEach(walk);
-    };
-    walk(tree);
-  };
+/** Markdown in runs (codeRuns): its code blocks as FencedCode, the rest with Enriched Markdown. */
+function Runs({
+  text,
+  images = "none",
+  onLink,
+}: {
+  text: string;
+  images?: Images;
+  onLink?: (href: string) => boolean;
+}) {
+  const runs = useMemo(() => codeRuns(text), [text]);
+  return runs.map((run, i) =>
+    run.code ? (
+      <FencedCode key={i} text={run.text} />
+    ) : (
+      <EnrichedRun key={i} text={run.text} images={images} onLink={onLink} />
+    ),
+  );
 }
 
-const gfm = [remarkGfm, remarkMath, displayDoubleDollar];
+/**
+ * Markdown as GitHub writes it, drawn by Enriched Markdown as the phone draws it (apps/mobile
+ * ui.tsx): headings, lists and task lists, tables, quotes and GitHub's alerts, KaTeX math, and
+ * links, with code blocks as CodeBlock. With `images` "github", GitHub-hosted images load, as a
+ * pull request's do. `onLink` takes a link before `follow` does, when it returns true.
+ */
+export const MarkdownText = memo(function MarkdownText({
+  text,
+  images,
+  onLink,
+  streaming,
+}: {
+  text: string;
+  images?: Images;
+  onLink?: (href: string) => boolean;
+  /** Hides LaTeX that fails to typeset, since a streaming message's math may be unfinished. */
+  streaming?: boolean;
+}) {
+  return (
+    <div className={streaming ? "enriched streaming" : "enriched"}>
+      <Runs text={dollarMath(text)} images={images} onLink={onLink} />
+    </div>
+  );
+});
 
 /**
  * A streaming agent message, rendered as MarkdownText renders it, but block by block: an
@@ -2526,7 +2650,7 @@ function StreamingMarkdown({ text }: { text: string }) {
   const blocks = useRef<string[]>([]);
   blocks.current = markdownBlocks(dollarMath(text), blocks.current);
   return (
-    <div className="markdown streaming">
+    <div className="enriched streaming">
       {blocks.current.map((block, i) => (
         <MarkdownBlock key={i} text={block} />
       ))}
@@ -2535,17 +2659,7 @@ function StreamingMarkdown({ text }: { text: string }) {
 }
 
 const MarkdownBlock = memo(function MarkdownBlock({ text }: { text: string }) {
-  const inThread = useContext(FileRunContext) !== undefined;
-  return (
-    <Markdown
-      remarkPlugins={gfm}
-      rehypePlugins={highlight}
-      components={markdownComponents}
-      urlTransform={inThread ? keepFiles : undefined}
-    >
-      {text}
-    </Markdown>
-  );
+  return <Runs text={text} />;
 });
 
 /** Copies text to the clipboard. `copied` is true for a moment after, for a Copied check. */

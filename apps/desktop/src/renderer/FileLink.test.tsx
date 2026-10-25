@@ -4,6 +4,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
+import { MarkdownText } from "./AgentChat";
+import { parsed } from "./markdownTest";
 import type { DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
 import { FileImage, FileLink, FileRunContext, inFolder, keepFiles, linkedPath } from "./FileLink";
@@ -185,4 +187,60 @@ test("a Markdown image of a file in the folder opens in the Lightbox, not the si
   act(() => dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
   for (let i = 0; i < 5; i++) await act(async () => {});
   expect(open).not.toHaveBeenCalled();
+});
+
+/** Renders `text` as a transcript's agent message does, in thread run-1 on host box. */
+async function message(text: string) {
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() =>
+    root.render(
+      <FileRunContext value={{ hostId: "box", runId: "run-1" }}>
+        <OpenDocumentContext value={open}>
+          <MarkdownText text={text} />
+        </OpenDocumentContext>
+      </FileRunContext>,
+    ),
+  );
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await parsed();
+}
+
+test("inline code naming a file opens it without its line; other code stays code", async () => {
+  await message("See `out/notes.csv:3`, then run `npm test`.\n\n```\nout/a.txt\n```");
+  const links = [...document.querySelectorAll("a")];
+  expect(links.map((a) => a.textContent)).toEqual(["out/notes.csv:3"]);
+  expect(links[0]!.querySelector("code")).not.toBeNull();
+  await act(async () => links[0]!.click());
+  for (let i = 0; i < 5; i++) await act(async () => {});
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({ path: "out/notes.csv" }));
+});
+
+test("a file path in a link's text stays the link's, and outside a thread stays code", async () => {
+  await message("[`src/App.tsx`](https://github.com/o/r/blob/main/src/App.tsx)");
+  const links = [...document.querySelectorAll("a")];
+  expect(links.map((a) => a.getAttribute("href"))).toEqual([
+    "https://github.com/o/r/blob/main/src/App.tsx",
+  ]);
+  act(() => unmount());
+
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root.render(<MarkdownText text="See `src/App.tsx`." />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await parsed();
+  expect(document.querySelector("code")?.textContent).toBe("src/App.tsx");
+  expect(document.querySelector("a")).toBeNull();
+});
+
+test("a GitHub alert shows its kind over the quote, and a plain quote stays a quote", async () => {
+  await message("> [!WARNING]\n> Back up first.\n\n> Just a quote.");
+  const alert = document.querySelector(".enrm-admonition")!;
+  expect(alert.textContent).toBe("WarningBack up first.");
+  expect(alert.querySelector("svg")!.getAttribute("fill")).toBe("var(--warning)");
+  expect(document.querySelector("blockquote")!.textContent).toBe("Just a quote.");
 });

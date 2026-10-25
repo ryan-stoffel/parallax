@@ -18,8 +18,16 @@ import Document from "@tiptap/extension-document";
 import HardBreak from "@tiptap/extension-hard-break";
 import Heading from "@tiptap/extension-heading";
 import Italic from "@tiptap/extension-italic";
-import { BulletList, ListItem, ListKeymap, OrderedList } from "@tiptap/extension-list";
+import {
+  BulletList,
+  ListItem,
+  ListKeymap,
+  OrderedList,
+  TaskItem,
+  TaskList,
+} from "@tiptap/extension-list";
 import Paragraph from "@tiptap/extension-paragraph";
+import Strike from "@tiptap/extension-strike";
 import Text from "@tiptap/extension-text";
 import { Dropcursor, Gapcursor, UndoRedo } from "@tiptap/extensions";
 import { Fragment, Slice, type Node as ProseMirrorNode } from "@tiptap/pm/model";
@@ -27,6 +35,7 @@ import type { EditorState } from "@tiptap/pm/state";
 import {
   EditorContent,
   markInputRule,
+  wrappingInputRule,
   Node as TiptapNode,
   NodeViewWrapper,
   ReactNodeViewRenderer,
@@ -139,10 +148,11 @@ const MentionNode = TiptapNode.create({
     ),
 });
 
-// The box's editor: typed Markdown (`- `, `1. `, ```` ``` ````, `> `, `#`, `**bold**`, `*italic*`,
-// `` `code` ``) formats as you type. Nothing else rewrites what's typed: bold and italic come from
-// `**` and `*` only, with no space just inside them (as in CommonMark), so `__init__`, `_private_`,
-// and `a * b * c` stay as they are, and there's no strikethrough or `---` rule. Links and
+// The box's editor: typed Markdown (`- `, `1. `, `[ ] `, ```` ``` ````, `> `, `#`, `**bold**`,
+// `*italic*`, `~~struck~~`, `` `code` ``) formats as you type, as T3 Code's does. Nothing else
+// rewrites what's typed: bold and italic come from `**` and `*` only, with no space just inside
+// them (as in CommonMark), so `__init__`, `_private_`, and `a * b * c` stay as they are, and there's
+// no `---` rule, so a diff's `--- a/file` stays text. Links and
 // underline have no place in a prompt, and a trailing empty line after a list or code block would
 // only add height. These are StarterKit's extensions in its order, listed one by one because
 // StarterKit bundles the ones it disables too, Link and linkifyjs among them.
@@ -160,7 +170,27 @@ const extensions = [
   ListItem,
   ListKeymap,
   OrderedList,
+  // `[ ] ` or `[x] ` at a line's start, as GitHub's task lists.
+  TaskList,
+  TaskItem.extend({
+    // Only `[ ]` or `[x]`: Tiptap's own also takes `[]`, as in `[] is an empty array`.
+    addInputRules() {
+      return [
+        wrappingInputRule({
+          find: /^\s*\[([ xX])\]\s$/,
+          type: this.type,
+          getAttributes: (match) => ({ checked: match[1] !== " " }),
+        }),
+      ];
+    },
+  }).configure({ nested: true }),
   Paragraph,
+  // `~~struck~~`, with no space just inside, as bold and italic.
+  Strike.extend({
+    addInputRules() {
+      return [markInputRule({ find: /(?:^|\s)(~~([^~\s](?:[^~]*[^~\s])?)~~)$/, type: this.type })];
+    },
+  }),
   Text,
   MentionNode,
   Bold.extend({
@@ -202,6 +232,9 @@ const markdown = new MarkdownSerializer(
       state.write(fence);
       state.closeBlock(node);
     },
+    taskList: (state, node) =>
+      state.renderList(node, "  ", (i) => (node.child(i).attrs["checked"] ? "- [x] " : "- [ ] ")),
+    taskItem: nodes["list_item"]!,
     hardBreak: (state) => state.write("\n"),
     mention: (state, node) => state.text(node.attrs["token"] as string, false),
     text: (state, node) => state.text(node.text!, false),
@@ -211,6 +244,7 @@ const markdown = new MarkdownSerializer(
     ...marks,
     bold: marks["strong"]!,
     italic: marks["em"]!,
+    strike: { open: "~~", close: "~~", mixable: true, expelEnclosingWhitespace: true },
   },
 );
 
@@ -1077,6 +1111,7 @@ export function Composer({
               );
             },
             () => commands.splitListItem("listItem"),
+            () => commands.splitListItem("taskItem"),
             () => commands.liftEmptyBlock(),
             () => commands.splitBlock(),
           ])
