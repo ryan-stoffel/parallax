@@ -49,8 +49,12 @@ export function useShow() {
   return (route: Main) => {
     const state = nav.getState();
     const now = state?.routes[0];
-    const same =
-      state?.index === 0 && now?.name === route.name && JSON.stringify(now.params ?? {}) === JSON.stringify(route.params ?? {});
+    // The same screen of the same thread or page, whatever else its params carry (`instant`).
+    const key = (params?: object) => {
+      const { hostId, runId, groupId } = (params ?? {}) as { hostId?: string; runId?: string; groupId?: string };
+      return `${hostId}/${runId}/${groupId}`;
+    };
+    const same = state?.index === 0 && now?.name === route.name && key(now.params) === key(route.params);
     if (same) close();
     else nav.reset({ index: 0, routes: [route] });
   };
