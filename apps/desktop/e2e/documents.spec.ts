@@ -78,6 +78,14 @@ test("presented files show as cards and open view-only in the side panel, with d
     await expect(transcript.getByRole("button", { name: `Download ${name}` })).toBeEnabled();
   await image.scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("image.png") });
+  // Clicking the image opens it in the Lightbox, with Download (PLX-998).
+  await transcript.getByRole("button", { name: "Open Ember_Screenshot.png" }).click();
+  const lightbox = page.getByRole("dialog", { name: "Ember_Screenshot.png" });
+  await expect(lightbox.getByRole("img", { name: "Ember_Screenshot.png" })).toBeVisible();
+  await expect(lightbox.getByRole("button", { name: "Download" })).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("image-lightbox.png") });
+  await page.keyboard.press("Escape");
+  await expect(lightbox).toBeHidden();
   await video.scrollIntoViewIfNeeded();
   await page.screenshot({ path: test.info().outputPath("video.png") });
 

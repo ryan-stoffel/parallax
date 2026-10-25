@@ -160,3 +160,15 @@ test("an older host's video is read whole, as before", async () => {
   expect(document.querySelector("video")!.getAttribute("src")).toMatch(/^blob:/);
   expect(request).toHaveBeenCalledTimes(1);
 });
+
+test("a presented image opens in the Lightbox when clicked, with Download (PLX-998)", async () => {
+  const doc = { runId: "run-1", path: "out/home.png", name: "home.png", kind: "png" as const };
+  await render(<FileCards hostId="box" item="7" files={[doc]} />);
+  act(() => document.querySelector<HTMLButtonElement>('[aria-label="Open home.png"]')!.click());
+  const dialog = document.querySelector("dialog")!;
+  expect(dialog.querySelector("img")!.getAttribute("src")).toMatch(/^blob:/);
+  expect(dialog.textContent).toContain("home.png");
+
+  act(() => download().click());
+  expect(saved.map((s) => s.name)).toEqual(["home.png"]);
+});

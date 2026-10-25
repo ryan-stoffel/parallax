@@ -17,6 +17,7 @@ import {
   type Opened,
 } from "./documents";
 import { pagesOf } from "./docx";
+import { Lightbox } from "./Lightbox";
 import { useSaveWhole, useStreamUrl } from "./mediaUrl";
 import { notify } from "./notifications";
 import { isMedia, isVideo } from "./transcript";
@@ -30,9 +31,9 @@ export const OpenDocumentContext = createContext<((doc: DocRef) => void) | undef
  * The files an agent presented with `present_files` (PLX-755), as cards: a thumbnail of each
  * file's real first page, with its second fanning out behind it on hover, its title and type,
  * and Download. Clicking a card opens the file in the side panel. An image or video shows at
- * full width instead, with Download in its corner (PLX-785), and a video its host streams plays
- * while it loads (PLX-836). A file of any other kind is a plain card with its name, size, and
- * Download (PLX-834). `item` is the transcript row: when it's newer than any row already seen
+ * full width instead, with Download in its corner (PLX-785), an image opening in the Lightbox
+ * when clicked (PLX-998), and a video its host streams plays while it loads (PLX-836). A file of
+ * any other kind is a plain card with its name, size, and Download (PLX-834). `item` is the transcript row: when it's newer than any row already seen
  * for a file, the file is read from disk again.
  */
 export function FileCards({
@@ -208,7 +209,10 @@ function StreamedMedia({ hostId, doc, src }: { hostId: string; doc: DocRef; src?
   return <MediaFrame doc={doc} url={src} disabled={!src || busy} onDownload={save} />;
 }
 
-/** `url`'s image or video, or a placeholder until it has one, with Download in its corner. */
+/**
+ * `url`'s image or video, or a placeholder until it has one, with Download in its corner. Clicking
+ * the image opens it in the Lightbox, with Download there too.
+ */
 function MediaFrame({
   doc,
   url,
@@ -220,6 +224,7 @@ function MediaFrame({
   disabled: boolean;
   onDownload: () => void;
 }) {
+  const [shown, setShown] = useState(false);
   return (
     <div className="relative w-full overflow-hidden rounded-2xl border border-border bg-black">
       {!url ? (
@@ -227,7 +232,23 @@ function MediaFrame({
       ) : isVideo(doc.kind) ? (
         <video controls src={url} aria-label={doc.name} className="block max-h-[80vh] w-full" />
       ) : (
-        <img src={url} alt={doc.name} className="block max-h-[80vh] w-full object-contain" />
+        <button
+          type="button"
+          aria-label={`Open ${doc.name}`}
+          onClick={() => setShown(true)}
+          className="block w-full cursor-zoom-in"
+        >
+          <img src={url} alt={doc.name} className="block max-h-[80vh] w-full object-contain" />
+        </button>
+      )}
+      {shown && url && (
+        <Lightbox
+          images={[{ src: url, name: doc.name }]}
+          index={0}
+          onIndex={() => {}}
+          onClose={() => setShown(false)}
+          onDownload={onDownload}
+        />
       )}
       <button
         type="button"
