@@ -9,6 +9,7 @@ import {
   createNavigationContainerRef,
   DarkTheme,
   DefaultTheme,
+  getStateFromPath,
   NavigationContainer,
   type LinkingOptions,
 } from "@react-navigation/native";
@@ -135,6 +136,14 @@ const linking: LinkingOptions<Screens> = {
       NewThread: "new",
       StartThread: "new/:hostId/:groupId",
     },
+  },
+  // A launch: a thread or a new thread's page is the main view alone, with nothing to go back to.
+  getStateFromPath(path, options) {
+    const state = getStateFromPath(path, options);
+    const route = state?.routes[state.routes.length - 1];
+    return route && (route.name === "Thread" || route.name === "StartThread")
+      ? { routes: [{ name: route.name, params: route.params }] }
+      : state;
   },
   // An open app: a thread or a new thread's page becomes the main view, and anything else opens
   // over it. The link's state starts at `initialRouteName`, so its own screen is the last.
