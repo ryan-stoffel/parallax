@@ -416,7 +416,9 @@ test("a streaming message renders as the whole text does, at every line", async 
       for (const styled of shape.querySelectorAll("[style]")) styled.removeAttribute("style");
       // An element React updated keeps its attributes' first order, one it made has its own.
       for (const el of shape.querySelectorAll("*")) {
-        const attributes = [...el.attributes].map((a) => [a.name, a.value] as const).sort();
+        const attributes = [...el.attributes]
+          .map((a) => [a.name, a.value] as const)
+          .sort(([a], [b]) => a.localeCompare(b));
         for (const [name] of attributes) el.removeAttribute(name);
         for (const [name, value] of attributes) el.setAttribute(name, value);
       }
