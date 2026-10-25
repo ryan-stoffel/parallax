@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import type { ParallaxBridge } from "../preload/bridge";
 import type { DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
-import { FileLink, FileRunContext, inFolder, keepFiles, linkedPath } from "./FileLink";
+import { FileImage, FileLink, FileRunContext, inFolder, keepFiles, linkedPath } from "./FileLink";
 import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -69,11 +69,22 @@ test("a transcript keeps file: and drive paths, and still drops unsafe schemes",
   expect(keepFiles("javascript:alert(1)")).toBe("");
 });
 
-// plxd's agent/files, naming the thread's folder.
-const request = vi.fn(async () => ({
-  logId: "l",
-  result: { entries: [], truncated: false, folder: "/home/me/repo" },
-}));
+// plxd's agent/files, naming the thread's folder, and agent/file, reading a 4-byte file.
+const request = vi.fn(async (_host: string, method: string) =>
+  method === "agent/file"
+    ? {
+        logId: "l",
+        result: {
+          path: "",
+          side: "working",
+          exists: true,
+          size: 4,
+          tooLarge: false,
+          content: "AAAA",
+        },
+      }
+    : { logId: "l", result: { entries: [], truncated: false, folder: "/home/me/repo" } },
+);
 const open = vi.fn<(doc: DocRef) => void>();
 let unmount = () => {};
 beforeEach(() => {
@@ -139,4 +150,33 @@ test("an absolute link is checked against the folder agent/files names", async (
   expect(notice.querySelector("p")!.textContent).toBe(
     "This file is outside the thread's folder, so it can't be opened here.",
   );
+});
+
+test("a Markdown image of a file in the folder opens in the Lightbox, not the side panel (PLX-998)", async () => {
+  URL.createObjectURL = () => "blob:home";
+  URL.revokeObjectURL = () => {};
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() =>
+    root.render(
+      <FileRunContext value={{ hostId: "box", runId: "run-1" }}>
+        <OpenDocumentContext value={open}>
+          <p>
+            <FileImage path="shots/home.png" alt="Home" />
+          </p>
+        </OpenDocumentContext>
+      </FileRunContext>,
+    ),
+  );
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  for (let i = 0; i < 5; i++) await act(async () => {});
+  act(() => document.querySelector<HTMLButtonElement>('[aria-label="Open home.png"]')!.click());
+  const dialog = document.querySelector("dialog")!;
+  expect(dialog.querySelector("img")!.getAttribute("src")).toBe("blob:home");
+  expect(dialog.textContent).toContain("home.png");
+  // On the body, outside the paragraph.
+  expect(dialog.closest("p")).toBeNull();
+  expect(open).not.toHaveBeenCalled();
 });

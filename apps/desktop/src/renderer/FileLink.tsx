@@ -6,10 +6,12 @@ import {
   type MouseEvent,
   type ReactNode,
 } from "react";
+import { createPortal } from "react-dom";
 import { defaultUrlTransform } from "react-markdown";
 
-import { failure, useDocument, useObjectUrl, type DocRef } from "./documents";
+import { download, failure, useDocument, useObjectUrl, type DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
+import { Lightbox } from "./Lightbox";
 import { notify } from "./notifications";
 import { isMedia, isVideo, kindOf } from "./transcript";
 
@@ -151,7 +153,7 @@ export function FileLink({ path, children }: { path: string; children: ReactNode
 
 /**
  * A Markdown image in a transcript whose source is an image in the thread's folder: the image,
- * read through `agent/file`, which opens large in the side panel, with Download, when clicked.
+ * read through `agent/file`, which opens in the Lightbox, with Download, when clicked (PLX-998).
  * Any other source is a FileLink with the alt text.
  */
 export function FileImage({ path, alt }: { path: string; alt: string }) {
@@ -175,9 +177,9 @@ export function FileImage({ path, alt }: { path: string; alt: string }) {
 }
 
 function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: string }) {
-  const open = useContext(OpenDocumentContext);
   const { loaded, error, progress } = useDocument(hostId, doc);
   const url = useObjectUrl(loaded?.bytes);
+  const [shown, setShown] = useState(false);
   if (error)
     return (
       <span className="text-muted-foreground">
@@ -185,24 +187,39 @@ function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: s
       </span>
     );
   return (
-    <button
-      type="button"
-      aria-label={`Open ${doc.name}`}
-      title={doc.path}
-      disabled={!open}
-      onClick={() => open?.(doc)}
-      className="block cursor-zoom-in rounded-md"
-    >
-      {url ? (
-        <img src={url} alt={alt} className="block max-h-96 max-w-full rounded-md" />
-      ) : (
-        <span
-          aria-label={`Loading ${doc.name}`}
-          className="grid h-32 w-48 place-items-center rounded-md bg-selected text-[12.5px] text-muted-foreground tabular-nums"
-        >
-          {progress !== undefined && `${Math.round(progress * 100)}%`}
-        </span>
-      )}
-    </button>
+    <>
+      <button
+        type="button"
+        aria-label={`Open ${doc.name}`}
+        title={doc.path}
+        disabled={!url}
+        onClick={() => setShown(true)}
+        className="block cursor-zoom-in rounded-md"
+      >
+        {url ? (
+          <img src={url} alt={alt} className="block max-h-96 max-w-full rounded-md" />
+        ) : (
+          <span
+            aria-label={`Loading ${doc.name}`}
+            className="grid h-32 w-48 place-items-center rounded-md bg-selected text-[12.5px] text-muted-foreground tabular-nums"
+          >
+            {progress !== undefined && `${Math.round(progress * 100)}%`}
+          </span>
+        )}
+      </button>
+      {/* On the body, since a Markdown image sits in a paragraph, which can't hold a dialog. */}
+      {shown &&
+        url &&
+        createPortal(
+          <Lightbox
+            images={[{ src: url, name: doc.name }]}
+            index={0}
+            onIndex={() => {}}
+            onClose={() => setShown(false)}
+            onDownload={() => loaded && download(doc.name, loaded.bytes)}
+          />,
+          document.body,
+        )}
+    </>
   );
 }
