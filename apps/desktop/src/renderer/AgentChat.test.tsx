@@ -22,13 +22,14 @@ import type {
   ParallaxEvent,
   ThreadRun,
 } from "../protocol/generated/protocol";
-import { activity, AgentChat, RowView, RunTab, summarize, TranscriptView } from "./AgentChat";
+import { AgentChat, RowView, RunTab, TranscriptView } from "./AgentChat";
 import { Composer } from "./Composer";
 import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import "./markdownTest";
 import { Notifications } from "./notifications";
+import { activity, summarize } from "./steps";
 import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
 import { emptyThreads } from "./threads";

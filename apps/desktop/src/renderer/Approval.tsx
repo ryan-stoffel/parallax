@@ -44,8 +44,6 @@ import {
 import { clockOptions } from "./prefs";
 import { diffLines } from "./diffLines";
 
-export { diffLines, type DiffLine } from "./diffLines";
-
 /** How the transcript names a tool (AgentChat's `describeTool`): its kind's icon, label, and target. */
 export interface ToolLook {
   Icon: ComponentType<SVGProps<SVGSVGElement>>;
@@ -73,10 +71,10 @@ export type AnswerState =
   | { state: "answered"; resolved: ApprovalResolution };
 
 /** Whether a request is Claude Code's plan, which `ExitPlanMode` hands over for approval. */
-export const isPlan = (request: ApprovalRequest) => request.toolName === "ExitPlanMode";
+const isPlan = (request: ApprovalRequest) => request.toolName === "ExitPlanMode";
 
 /** A computer use request (PLX-897): may the thread use an app on the user's Mac? */
-export const isComputer = (request: Pick<ApprovalRequest, "toolName">) =>
+const isComputer = (request: Pick<ApprovalRequest, "toolName">) =>
   request.toolName === "computer_use";
 
 /**
@@ -608,6 +606,10 @@ function Answers({
   useLayoutEffect(() => {
     if (denying) noteRef.current?.focus();
   }, [denying]);
+  const cancel = () => {
+    setDenying(false);
+    requestAnimationFrame(() => denyRef.current?.focus());
+  };
   if (state?.state === "gone")
     return (
       <button type="button" onClick={onDismiss} className={outlineButton}>
@@ -640,20 +642,11 @@ function Answers({
           onKeyDown={(e) => {
             if (e.key !== "Escape" || busy) return;
             e.preventDefault();
-            setDenying(false);
-            requestAnimationFrame(() => denyRef.current?.focus());
+            cancel();
           }}
           className="h-7 min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 text-body placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50"
         />
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            setDenying(false);
-            requestAnimationFrame(() => denyRef.current?.focus());
-          }}
-          className={quietButton}
-        >
+        <button type="button" disabled={busy} onClick={cancel} className={quietButton}>
           Cancel
         </button>
         <button type="submit" disabled={off} title={disabledReason} className={outlineButton}>

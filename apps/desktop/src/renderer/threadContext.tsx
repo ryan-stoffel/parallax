@@ -40,7 +40,7 @@ export function attachThreads(
 export const ThreadLinksContext = createContext<ThreadLinks | undefined>(undefined);
 
 /** How a thread's chip and `@` row show it. `known` is false for one the host doesn't list. */
-export interface ThreadLook {
+interface ThreadLook {
   title: string;
   Logo: ComponentType<SVGProps<SVGSVGElement>>;
   /** How long ago its newest message was sent, as the sidebar writes it: "3h". */
@@ -65,7 +65,7 @@ export function lookOf(state: ThreadsState | undefined, runId: string): ThreadLo
  * was prompted, and its title. With `onOpen` it's a button that opens the thread; with `onRemove`
  * it has a remove button in its corner, as an image does.
  */
-export function ThreadChip({
+function ThreadChip({
   look,
   onOpen,
   onRemove,

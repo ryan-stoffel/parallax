@@ -245,7 +245,6 @@ function MediaFrame({
         <Lightbox
           images={[{ src: url, name: doc.name }]}
           index={0}
-          onIndex={() => {}}
           onClose={() => setShown(false)}
           onDownload={onDownload}
         />
@@ -377,16 +376,16 @@ function gridPreview(xlsx: Xlsx): HTMLElement {
 }
 
 /** Page `page` of a file, scaled to `width` CSS pixels, as a sheet of paper. */
-export function Thumb({
+function Thumb({
   opened,
   page,
   width,
-  className = "",
+  className,
 }: {
   opened: Opened;
   page: number;
   width: number;
-  className?: string;
+  className: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const size = pageSize(opened);

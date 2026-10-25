@@ -13,18 +13,15 @@ import type {
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
 import "./markdownTest";
+import { PlanCard, PlanStrip, PlanLine, ProposedPlan } from "./Plan";
 import {
   latestPlan,
-  PlanCard,
   planChanges,
-  PlanStrip,
-  PlanLine,
-  ProposedPlan,
   withPlans,
   withTaskLists,
   type PlanRow,
   type PlanUpdate,
-} from "./Plan";
+} from "./plans";
 import { applyEvents, emptyTranscript, type Item } from "./transcript";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });

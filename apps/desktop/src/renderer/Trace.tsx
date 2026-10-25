@@ -66,16 +66,14 @@ export function TraceTitle({ className, ...props }: ComponentProps<"span">) {
 }
 
 /** Secondary text after the title, such as a count or how a call went. */
-export function TraceDescription({ className, ...props }: ComponentProps<"span">) {
+export function TraceDescription({ children }: { children: ReactNode }) {
   return (
     <span
       data-slot="trace-description"
-      className={cx(
-        "shrink-0 text-faint-foreground tabular-nums in-data-[status=error]:text-danger",
-        className,
-      )}
-      {...props}
-    />
+      className="shrink-0 text-faint-foreground tabular-nums in-data-[status=error]:text-danger"
+    >
+      {children}
+    </span>
   );
 }
 
@@ -83,12 +81,10 @@ export function TraceDescription({ className, ...props }: ComponentProps<"span">
 export function TraceCollapsible({
   open,
   onOpenChange,
-  className,
   children,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  className?: string;
   children: ReactNode;
 }) {
   return (
@@ -96,7 +92,7 @@ export function TraceCollapsible({
       data-slot="trace-collapsible"
       open={open}
       onToggle={(e) => e.currentTarget.open !== open && onOpenChange(e.currentTarget.open)}
-      className={cx("flex w-full min-w-0 flex-col", className)}
+      className="flex w-full min-w-0 flex-col"
     >
       {children}
     </details>
@@ -104,14 +100,11 @@ export function TraceCollapsible({
 }
 
 /** The line's button: put a `TraceLine` in it. It adds a chevron after the line. */
-export function TraceCollapsibleTrigger({ className, children }: ComponentProps<"summary">) {
+export function TraceCollapsibleTrigger({ children }: { children: ReactNode }) {
   return (
     <summary
       data-slot="trace-collapsible-trigger"
-      className={cx(
-        "flex w-fit max-w-full min-w-0 list-none items-center gap-1 rounded-md text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden",
-        className,
-      )}
+      className="flex w-fit max-w-full min-w-0 list-none items-center gap-1 rounded-md text-left text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden"
     >
       {children}
       {/* Its own row's open state only, not an open fold's around it. */}
@@ -123,15 +116,13 @@ export function TraceCollapsibleTrigger({ className, children }: ComponentProps<
 }
 
 /** What an open line shows, indented under it behind a rule. */
-export function TraceCollapsibleContent({ className, ...props }: ComponentProps<"div">) {
+export function TraceCollapsibleContent({ children }: { children: ReactNode }) {
   return (
     <div
       data-slot="trace-collapsible-content"
-      className={cx(
-        "mt-2 mb-1 ml-[7px] min-w-0 border-l border-border pr-1 pl-4 leading-relaxed wrap-break-word text-muted-foreground",
-        className,
-      )}
-      {...props}
-    />
+      className="mt-2 mb-1 ml-[7px] min-w-0 border-l border-border pr-1 pl-4 leading-relaxed wrap-break-word text-muted-foreground"
+    >
+      {children}
+    </div>
   );
 }

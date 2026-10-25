@@ -113,10 +113,7 @@ type ItemBody =
   | ({ kind: "script"; key: string; runId: string } & ThreadScript);
 
 /** What `thread.script` says of a thread's script. */
-export type ThreadScript = Omit<
-  Extract<ParallaxEvent, { kind: "thread.script" }>,
-  "kind" | "runId"
->;
+type ThreadScript = Omit<Extract<ParallaxEvent, { kind: "thread.script" }>, "kind" | "runId">;
 
 /** What an html_render result names: the page, its title, and the frame height the agent asked for. */
 export interface HtmlRenderRef {
@@ -185,7 +182,7 @@ function recordingId(output?: string): string | undefined {
 }
 
 /** The page an html_render tool's output names, or undefined for anything else. */
-export function htmlRenderRef(output?: string): HtmlRenderRef | undefined {
+function htmlRenderRef(output?: string): HtmlRenderRef | undefined {
   try {
     const { attachmentId, title, height } =
       (JSON.parse(output ?? "") as { htmlRender?: Partial<HtmlRenderRef> }).htmlRender ?? {};
@@ -198,7 +195,7 @@ export function htmlRenderRef(output?: string): HtmlRenderRef | undefined {
 }
 
 /** A secret request as `secretRequested` carries it. */
-export type SecretRequest = Omit<Extract<AgentOutputItem, { kind: "secretRequested" }>, "kind">;
+type SecretRequest = Omit<Extract<AgentOutputItem, { kind: "secretRequested" }>, "kind">;
 
 /** A permission request as `approvalRequested` carries it. */
 export type ApprovalRequest = Omit<Extract<AgentOutputItem, { kind: "approvalRequested" }>, "kind">;
@@ -277,7 +274,7 @@ export interface Subagent {
 }
 
 /** The tools that start one of Claude Code's own subagents: `Agent`, once `Task`. */
-export const isSubagentTool = (name: string | null) => name === "Agent" || name === "Task";
+const isSubagentTool = (name: string | null) => name === "Agent" || name === "Task";
 
 export type SubagentState = "running" | "completed" | "failed" | "stopped";
 
@@ -335,7 +332,7 @@ export function subagentRows(s: Subagent): Item[] {
 export const emptyTranscript: Transcript = { items: [], seq: 0 };
 
 /** The first `seq` of a compacted turn, when `event` is that rewritten row (0052). */
-export function compactedFrom(event: ParallaxEvent): number | undefined {
+function compactedFrom(event: ParallaxEvent): number | undefined {
   return event.kind === "agent.output" ? event.compacted?.from : undefined;
 }
 
@@ -382,10 +379,6 @@ export function applyCompacted(events: LoggedEvent[]): LoggedEvent[] {
 
 const isText = (v?: JsonValue) => (typeof v === "string" ? v : undefined);
 
-/**
- * Applies events, in `seq` order, for one run. Repeats and other runs' events are
- * skipped, and kinds this version doesn't know still count their `seq`.
- */
 function mergeHeld(held: LoggedEvent[], incoming: LoggedEvent[]): LoggedEvent[] {
   // `held` is already merged, so newer events in order with no compacted row just append: the
   // live case, which then skips sorting the whole log again.
@@ -402,6 +395,10 @@ function mergeHeld(held: LoggedEvent[], incoming: LoggedEvent[]): LoggedEvent[] 
   return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
 }
 
+/**
+ * Applies events, in `seq` order, for one run. Repeats and other runs' events are
+ * skipped, and kinds this version doesn't know still count their `seq`.
+ */
 export function applyEvents(t: Transcript, events: LoggedEvent[], runId: string): Transcript {
   const incoming = applyCompacted(events);
   const all = mergeHeld(t.events ?? [], incoming);
@@ -452,7 +449,6 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
   let { run, seq, turnDone, openTurns = 0, requestUsage, threadUsage } = t;
   const items = [...t.items];
   const subagents = { ...t.subagents };
-  const push = (item: Item) => items.push(item);
 
   for (const { seq: at, time, event } of events) {
     if (at <= seq) continue;
@@ -476,13 +472,13 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
       case "agent.started":
         turnDone = false;
         threadUsage = { ...(threadUsage ?? noUsage), fromStart: true };
-        if (event.run) push({ kind: "user", key: key(), text: event.run.prompt });
+        if (event.run) items.push({ kind: "user", key: key(), text: event.run.prompt });
         break;
       case "agent.accountFallback":
         requestUsage = undefined;
         // The failed attempt's CLI ended, with its turns, without an agent.finished.
         openTurns = 0;
-        push({
+        items.push({
           kind: "notice",
           key: key(),
           tone: "info",
@@ -499,10 +495,10 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
           else if (item.kind === "secret" && !item.status)
             items[i] = { ...item, status: "cancelled" };
         });
-        push({ kind: "end", key: key(), outcome: event.outcome });
+        items.push({ kind: "end", key: key(), outcome: event.outcome });
         break;
       case "agent.wakeupsPaused":
-        push({
+        items.push({
           kind: "notice",
           key: key(),
           tone: "info",
@@ -514,7 +510,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
         const { kind: _, runId: __, ...script } = event;
         const i = items.findIndex((r) => r.kind === "script" && r.terminalId === script.terminalId);
         if (i >= 0) items[i] = { ...items[i]!, ...script } as Item;
-        else push({ kind: "script", key: key(), runId, ...script });
+        else items.push({ kind: "script", key: key(), runId, ...script });
         break;
       }
       case "thread.reverted": {
@@ -779,27 +775,17 @@ function applyOutput(
         output: item.output,
         ...(!!item.images?.length && { images: item.images }),
       };
-      if (i >= 0) items[i] = { ...(items[i] as Extract<Item, { kind: "tool" }>), ...result };
+      const call = items[i];
+      if (call?.kind === "tool") items[i] = { ...call, ...result };
       else items.push({ kind: "tool", key, callId: item.callId, name: null, ...result });
-      const page =
-        i >= 0 && (items[i] as { name: string | null }).name === `${plxdTools}html_render`
-          ? item.status === "ok" && htmlRenderRef(item.output)
-          : undefined;
+      // A plxd tool that worked may show what it made: a page, a recording, or files.
+      const made = call?.kind === "tool" && item.status === "ok" ? call.name : undefined;
+      const page = made === `${plxdTools}html_render` && htmlRenderRef(item.output);
       if (page) items.push({ kind: "htmlRender", key: `${key}:page`, runId, ...page });
-      const recorded =
-        i >= 0 &&
-        item.status === "ok" &&
-        (items[i] as { name: string | null }).name === `${plxdTools}preview_recording_stop`
-          ? recordingId(item.output)
-          : undefined;
+      const recorded = made === `${plxdTools}preview_recording_stop` && recordingId(item.output);
       if (recorded)
         items.push({ kind: "recording", key: `${key}:video`, runId, attachmentId: recorded });
-      const files =
-        i >= 0 &&
-        item.status === "ok" &&
-        (items[i] as { name: string | null }).name === `${plxdTools}present_files`
-          ? presentedFiles(runId, item.output)
-          : undefined;
+      const files = made === `${plxdTools}present_files` && presentedFiles(runId, item.output);
       if (files) items.push({ kind: "files", key: `${key}:files`, files });
       break;
     }

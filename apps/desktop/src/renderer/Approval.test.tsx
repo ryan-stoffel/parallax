@@ -14,13 +14,13 @@ import { AgentChat, describeTool, RowView } from "./AgentChat";
 import {
   ApprovalQueue,
   clock,
-  diffLines,
   outcomeOf,
   queueOf,
   withAnswers,
   type AnswerState,
   type Asked,
 } from "./Approval";
+import { diffLines } from "./diffLines";
 import type { Approval, ApprovalRequest, ApprovalResolution, Item } from "./transcript";
 import { fakeWatch } from "./fakeWatch";
 import { Notifications } from "./notifications";

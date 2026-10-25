@@ -112,7 +112,7 @@ function Avatar({ sub, state }: { sub: Subagent; state?: SubagentState }) {
  * One subagent, as T3 Code lists one (PLX-843): its logo and state, its task, its last word, and
  * when it started. It opens the subagent.
  */
-export function SubagentRow({ sub }: { sub: Subagent }) {
+function SubagentRow({ sub }: { sub: Subagent }) {
   const context = useContext(SubagentsContext);
   if (!context) return undefined;
   const state = subagentState(sub, context.live, context.background);

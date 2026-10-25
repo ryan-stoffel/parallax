@@ -17,7 +17,7 @@ import { openXlsx, type Xlsx } from "./xlsx";
 
 import { isMedia, type DocKind, type DocRef, type MediaKind } from "./transcript";
 
-export type { DocKind, DocRef };
+export type { DocRef };
 
 export type Opened =
   | { kind: "docx"; docx: Docx }
@@ -106,7 +106,7 @@ export async function readAttachment(
 }
 
 /** A host's `fileChunks` capability (0074): the bytes one slice or piece carries, and the largest file pieces make. */
-export interface FileChunks {
+interface FileChunks {
   chunkBytes: number;
   maxBytes: number;
 }
@@ -137,7 +137,7 @@ export const chunksOf = async (hostId: string) =>
   fileChunks(await window.parallax.connectionState(hostId).catch(() => undefined));
 
 /** How long a retry waits for its host to reconnect before it's sent anyway. */
-export const reconnectWaitMs = 60_000;
+const reconnectWaitMs = 60_000;
 
 /**
  * Resolves once `hostId` is connected, or can't reconnect by itself, or after `reconnectWaitMs`,

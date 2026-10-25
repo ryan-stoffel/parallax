@@ -15,7 +15,7 @@ const charts = {
  * The app's theme as an html_render page reads it (PLX-639): T3 Code's variable names, from
  * index.css's tokens as they stand now.
  */
-export function pageTheme() {
+function pageTheme() {
   const style = getComputedStyle(document.documentElement);
   const v = (name: string) => style.getPropertyValue(name).trim();
   const appearance = document.documentElement.classList.contains("dark") ? "dark" : "light";

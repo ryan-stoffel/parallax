@@ -90,6 +90,10 @@ export function AgentsBar({
   const lead = going[0]!;
   const waiting = going.filter((c) => c.attention === "needsYou").length;
   const extra = going.length - 3;
+  const openRow = (runId: string) => {
+    document.getElementById(id)?.hidePopover();
+    onOpen(runId);
+  };
 
   return (
     <section aria-label={label}>
@@ -154,24 +158,8 @@ export function AgentsBar({
       >
         {open && (
           <>
-            <CardGroup
-              label="Working"
-              items={going}
-              onOpen={(runId) => {
-                document.getElementById(id)?.hidePopover();
-                onOpen(runId);
-              }}
-            />
-            {finished.length > 0 && (
-              <CardGroup
-                label="Done"
-                items={finished}
-                onOpen={(runId) => {
-                  document.getElementById(id)?.hidePopover();
-                  onOpen(runId);
-                }}
-              />
-            )}
+            <CardGroup label="Working" items={going} onOpen={openRow} />
+            {finished.length > 0 && <CardGroup label="Done" items={finished} onOpen={openRow} />}
           </>
         )}
       </div>

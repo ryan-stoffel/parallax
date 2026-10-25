@@ -26,16 +26,6 @@ import type { AgentTodoItem, AgentToolStatus } from "../protocol/generated/proto
 import { planChanges, type PlanRow, type PlanUpdate } from "./plans";
 import { popoverBeside } from "./ui";
 
-export {
-  latestPlan,
-  planChanges,
-  withPlans,
-  withTaskLists,
-  type PlanRow,
-  type PlanUpdate,
-  type ProposedPlanRow,
-} from "./plans";
-
 /** A step's state. A status newer than this app counts as to do. */
 const stateOf = (status: string) =>
   status === "completed" ? "done" : status === "inProgress" ? "now" : "todo";
