@@ -9,7 +9,8 @@
 //! `serve` lists, boots, and captures devices with this module's functions too. The devices a
 //! thread opened (T3's sessions) are kept in `tmp/devices/<run>.json` in plxd's data folder, so
 //! they last across the thread's turns until plxd restarts, as T3's last until its server does.
-//! The only device host is this computer, `local`.
+//! The only device host is this computer, `local`, and it runs one simulator or emulator, which
+//! every thread shares (PLX-989): `device_open` takes it under a lock in that folder.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -23,8 +24,9 @@ use tokio::time::{Instant, sleep, timeout};
 use super::{Reply, parse, pretty};
 
 /// What every agent with these tools is told (PLX-908): agents testing an app would otherwise boot
-/// a device themselves and open Simulator, Device Hub, or an emulator's window over Parallax.
-pub const INSTRUCTIONS: &str = "Parallax shows iOS Simulators and Android Emulators in its Device panel. To run or test an app on one, open it with device_open, which boots it headless and shows it there, then install, launch, and drive it with xcrun simctl or adb, and see it with device_screenshot. Never open Simulator, Device Hub, or an emulator window yourself, such as with `open -a Simulator` or `emulator -avd` without `-no-window`: the Device panel is the device's only window.";
+/// a device themselves and open Simulator, Device Hub, or an emulator's window over Parallax. Seven
+/// simulators booted by agents at once slowed the computer to a crawl (PLX-989), so it runs one.
+pub const INSTRUCTIONS: &str = "Parallax shows iOS Simulators and Android Emulators in its Device panel. To run or test an app on one, open it with device_open, which boots it headless and shows it there, then install, launch, and drive it with xcrun simctl or adb, and see it with device_screenshot. This computer runs one simulator or emulator at a time, shared by every thread in every project: device_open returns the one already running instead of booting another. Never create, boot, or clone a device yourself, such as with `xcrun simctl create`, `xcrun simctl boot`, `xcrun simctl clone`, or `emulator -avd`, and never open Simulator, Device Hub, or an emulator window, such as with `open -a Simulator`: the Device panel is the device's only window.";
 
 /// Every device tool, as [`definitions`] lists them.
 pub const TOOLS: &[&str] = &[
@@ -75,7 +77,7 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_open",
-            "description": "Open a simulator or emulator for this thread: boots it headless if needed and shows it in Parallax's Device panel, where the user can watch. Do not open Simulator, Device Hub, or an emulator window yourself. Returns how to drive it with simctl or adb.",
+            "description": "Open a simulator or emulator for this thread: boots it headless if needed and shows it in Parallax's Device panel, where the user can watch. This computer runs one simulator or emulator, shared by every thread: when one is running, this returns it and never boots a second. Never create, boot, or clone a device or start an emulator yourself, and do not open Simulator, Device Hub, or an emulator window. Returns how to drive it with simctl or adb.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -102,13 +104,13 @@ pub fn definitions() -> Vec<Value> {
         }),
         json!({
             "name": "device_close",
-            "description": "Close a device this thread opened. Pass shutdown=true to also power the simulator or emulator off.",
+            "description": "Close a device this thread opened. Pass shutdown=true to also power the simulator or emulator off, which happens only when no other thread has it open.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "deviceId": {"type": "string", "description": "Device to close. Omit to close every device in this thread."},
                     "hostId": host_id,
-                    "shutdown": {"type": "boolean", "description": "Also power the simulator or emulator off. Defaults to false."},
+                    "shutdown": {"type": "boolean", "description": "Also power the simulator or emulator off unless another thread has it open. Defaults to false."},
                 },
                 "additionalProperties": false,
             },
@@ -341,8 +343,11 @@ impl Devices {
         })))
     }
 
+    /// Opens the computer's one simulator or emulator (PLX-989): the running one, for every
+    /// thread, after shutting down any others, or else the one it boots.
     async fn open(&self, args: OpenArgs) -> Result<String, String> {
         check_host(args.host_id.as_deref())?;
+        let _lock = self.lock().await?;
         let mut devices = Vec::new();
         if let Ok(ios) = &self.tools.ios {
             devices.extend(ios_devices(ios).await.unwrap_or_default());
@@ -350,8 +355,42 @@ impl Devices {
         if let Ok(android) = &self.tools.android {
             devices.extend(android_devices(android).await.unwrap_or_default());
         }
-        let device = boot(&self.tools, pick(devices, &args)?).await?;
+        // Phones aren't simulators, so they don't count toward the one.
+        let (mut running, rest): (Vec<_>, Vec<_>) = devices
+            .into_iter()
+            .partition(|device| device.booted && !device.physical);
+        // The one a thread has open stays: this thread's, then another's, then the requested one.
         let mut sessions = self.read_sessions()?;
+        let elsewhere = self.open_elsewhere();
+        let mine = |device: &Device| sessions.iter().any(|s| s.device_id == device.id);
+        let shared = running
+            .iter()
+            .position(mine)
+            .or_else(|| running.iter().position(|d| elsewhere.contains(&d.id)))
+            .or_else(|| running.iter().position(|d| wants(&args, d)))
+            .unwrap_or(0);
+        let shared = (!running.is_empty()).then(|| running.remove(shared));
+        // Every other one goes, even one a thread has open, so one runs. A failed shutdown leaves
+        // it running rather than failing the open: `plxd mcp` has no log, and the next device_open
+        // tries again.
+        for extra in &running {
+            let _ = shutdown(&self.tools, extra.platform, &extra.id).await;
+        }
+        sessions.retain(|session| running.iter().all(|extra| extra.id != session.device_id));
+        let phone = rest.iter().find(|device| {
+            device.physical && args.device_id.as_ref().is_some_and(|id| *id == device.id)
+        });
+        let device = match (phone, shared) {
+            (Some(phone), _) => phone.clone(),
+            (None, Some(shared)) if wants(&args, &shared) => shared,
+            (None, Some(shared)) => {
+                return Err(format!(
+                    "{} ({}) is this computer's one simulator or emulator, and every thread shares it, so another can't boot. Call device_open without deviceId or platform to use it, or ask the user to shut it down in Parallax's Device panel.",
+                    shared.name, shared.id
+                ));
+            }
+            (None, None) => boot(&self.tools, pick(rest, &args)?).await?,
+        };
         sessions.retain(|session| session.device_id != device.id);
         sessions.push(Session {
             host_id: LOCAL.to_owned(),
@@ -408,6 +447,8 @@ impl Devices {
 
     async fn close(&self, args: CloseArgs) -> Result<String, String> {
         check_host(args.host_id.as_deref())?;
+        // Under the lock, so no thread opens the device between the check and its shutdown.
+        let _lock = self.lock().await?;
         let (closing, kept): (Vec<_>, Vec<_>) =
             self.read_sessions()?.into_iter().partition(|session| {
                 args.device_id
@@ -418,12 +459,61 @@ impl Devices {
             return Ok("{}".to_owned());
         }
         self.write_sessions(&kept)?;
-        if args.shutdown {
-            for session in &closing {
+        if !args.shutdown {
+            return Ok("{}".to_owned());
+        }
+        let elsewhere = self.open_elsewhere();
+        let mut left_running = Vec::new();
+        for session in &closing {
+            if elsewhere.contains(&session.device_id) {
+                left_running.push(session.device_id.clone());
+            } else {
                 shutdown(&self.tools, session.platform, &session.device_id).await?;
             }
         }
-        Ok("{}".to_owned())
+        if left_running.is_empty() {
+            return Ok("{}".to_owned());
+        }
+        Ok(pretty(&json!({
+            "leftRunning": left_running,
+            "reason": "Another thread has it open, so it was closed only in this thread.",
+        })))
+    }
+
+    /// Holds the computer's device lock until the file is dropped, so threads, each in its own
+    /// `plxd mcp`, open and shut down devices one at a time and boot one device, not one each.
+    async fn lock(&self) -> Result<std::fs::File, String> {
+        let failed =
+            |error: std::io::Error| format!("could not lock this computer's devices: {error}");
+        let dir = self
+            .sessions
+            .parent()
+            .ok_or("no folder for the device lock")?;
+        std::fs::create_dir_all(dir).map_err(failed)?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(dir.join("host.lock"))
+            .map_err(failed)?;
+        tokio::task::spawn_blocking(move || file.lock().map(|()| file))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(failed)
+    }
+
+    /// The devices other threads have open, from their sessions files beside this one's.
+    fn open_elsewhere(&self) -> Vec<String> {
+        let Some(entries) = self.sessions.parent().and_then(|dir| dir.read_dir().ok()) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| *path != self.sessions && path.extension() == Some("json".as_ref()))
+            .flat_map(|path| read_sessions(&path).unwrap_or_default())
+            .map(|session| session.device_id)
+            .collect()
     }
 
     fn read_sessions(&self) -> Result<Vec<Session>, String> {
@@ -433,11 +523,15 @@ impl Devices {
     fn write_sessions(&self, sessions: &[Session]) -> Result<(), String> {
         let failed =
             |error: std::io::Error| format!("could not save this thread's open devices: {error}");
-        if let Some(dir) = self.sessions.parent() {
-            std::fs::create_dir_all(dir).map_err(failed)?;
-        }
+        let dir = self.sessions.parent().ok_or("no folder for open devices")?;
+        std::fs::create_dir_all(dir).map_err(failed)?;
         let json = serde_json::to_vec(sessions).map_err(|error| error.to_string())?;
-        std::fs::write(&self.sessions, json).map_err(failed)
+        // Written whole, then renamed over the old one, so another thread never reads half.
+        let mut file = tempfile::NamedTempFile::new_in(dir).map_err(failed)?;
+        std::io::Write::write_all(&mut file, &json).map_err(failed)?;
+        file.persist(&self.sessions)
+            .map(drop)
+            .map_err(|error| failed(error.error))
     }
 }
 
@@ -493,7 +587,12 @@ pub(crate) async fn shutdown(
     match platform {
         Platform::Ios => {
             let ios = tools.ios.as_ref()?;
-            run(&ios.xcrun, &["simctl", "shutdown", id], BOOT_TIMEOUT).await?;
+            // Already off, as when two threads shut it down at once, is done.
+            if let Err(error) = run(&ios.xcrun, &["simctl", "shutdown", id], BOOT_TIMEOUT).await
+                && !error.contains("current state: Shutdown")
+            {
+                return Err(error);
+            }
         }
         Platform::Android if id.starts_with("emulator-") => {
             let android = tools.android.as_ref()?;
@@ -558,8 +657,21 @@ fn boot_failed(id: &str, why: &str) -> String {
     format!("Device {id} failed to boot: {why}")
 }
 
-/// The device `device_open` takes, as T3 picks it: `deviceId`'s, or else the platform's booted
-/// device, or its first.
+/// Whether `device` is what `device_open` asked for: `deviceId`'s, an emulator by its AVD's name
+/// too, or else any device of `platform`, or any device.
+fn wants(args: &OpenArgs, device: &Device) -> bool {
+    match &args.device_id {
+        Some(id) => {
+            *id == device.id || (device.platform == Platform::Android && *id == device.name)
+        }
+        None => args
+            .platform
+            .is_none_or(|platform| device.platform == platform),
+    }
+}
+
+/// The device `device_open` boots when none is running, as T3 picks it: `deviceId`'s, or else the
+/// platform's booted device (a phone), or its first.
 fn pick(devices: Vec<Device>, args: &OpenArgs) -> Result<Device, String> {
     if let Some(id) = &args.device_id {
         return devices
