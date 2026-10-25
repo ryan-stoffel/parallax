@@ -71,7 +71,8 @@ export function Sheet({
         <Animated.View
           style={[
             styles.sheet,
-            { backgroundColor: c.sidebar, marginBottom: Math.max(insets.bottom - 26, 8) },
+            // It runs past the screen's bottom edge, so its bottom never shows, even as it springs.
+            { backgroundColor: c.sidebar, marginBottom: -BELOW, paddingBottom: insets.bottom + 12 + BELOW },
             sheetStyle,
           ]}
         >
@@ -90,6 +91,9 @@ export function Sheet({
   );
 }
 
+/** How far a sheet runs past the screen's bottom edge. */
+const BELOW = 60;
+
 /** A sheet's title, centered over its header's buttons. */
 export const sheetTitle = { position: "absolute", left: 0, right: 0, textAlign: "center", fontSize: 17, fontWeight: "600" } as const;
 
@@ -99,7 +103,6 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
     borderRadius: 38,
     borderCurve: "continuous",
-    paddingBottom: 16,
     shadowColor: "#000000",
     shadowOpacity: 0.18,
     shadowRadius: 30,

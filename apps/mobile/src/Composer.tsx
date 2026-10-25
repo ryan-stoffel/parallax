@@ -8,7 +8,21 @@ import * as Haptics from "expo-haptics";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { Asset, type AssetMetadata } from "expo-media-library";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Plus, X } from "lucide-react-native";
+import type { LucideIcon } from "lucide-react-native";
+import {
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  FilePen,
+  FileText,
+  Hand,
+  ListChecks,
+  LockOpen,
+  Plus,
+  Sparkles,
+  X,
+} from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -126,6 +140,24 @@ function modelLine(m: Model): string | undefined {
 }
 
 type Page = "model" | "provider" | "access";
+
+/** Each access level's short name, for the prompt box's pill. */
+const accessShort: Record<AgentPermission, string> = {
+  manual: "Ask",
+  edit: "Edits",
+  auto: "Auto",
+  plan: "Plan",
+  bypass: "Full",
+};
+
+/** Each access level's icon, as the desktop's composer has them. */
+const accessIcons: Record<AgentPermission, LucideIcon> = {
+  manual: Hand,
+  edit: FilePen,
+  auto: Sparkles,
+  plan: ListChecks,
+  bypass: LockOpen,
+};
 
 /**
  * The model sheet, as Claude's app has it: the provider with its mark, the model as a list that
@@ -700,6 +732,23 @@ export function Composer({
               </Text>
             </Pressable>
           )}
+          {changes && shownAccess && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Access: ${accessLevels[shownAccess].label}`}
+              onPress={() => setSheet("access")}
+              style={({ pressed }) => [styles.access, { backgroundColor: pressed ? c.hover : c.selected }]}
+            >
+              <Icon
+                icon={accessIcons[shownAccess]}
+                size={15}
+                color={shownAccess === "bypass" ? c.warning : c.foreground}
+              />
+              <Text numberOfLines={1} style={[styles.pillText, { color: c.foreground, flexShrink: 1 }]}>
+                {accessShort[shownAccess]}
+              </Text>
+            </Pressable>
+          )}
           <View style={{ flex: 1 }} />
           {working && !ready && (
             <SendButton
@@ -772,6 +821,16 @@ export function Composer({
 }
 
 const styles = StyleSheet.create({
+  access: {
+    height: 38,
+    borderRadius: 19,
+    paddingHorizontal: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 1,
+    minWidth: 38,
+  },
   box: {
     borderWidth: 1,
     borderRadius: 26,
@@ -823,6 +882,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 7,
     maxWidth: 240,
+    flexShrink: 1,
   },
   pillText: { fontSize: 15 },
   steer: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 6 },

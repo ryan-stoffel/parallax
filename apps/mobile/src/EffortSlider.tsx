@@ -1,23 +1,18 @@
-// The reasoning slider, as the desktop's EffortMenu draws it: a track with a stop for each level,
-// an accent fill up to a white thumb that springs from stop to stop with a tick, stripes drifting
-// through the fill faster the harder it thinks, and at Max a glow and a pop of the thumb. A drag
-// or a tap picks the nearest stop, and each level's name sits under its stop.
+// The reasoning slider: a slim track with a stop for each level, an accent fill up to a white
+// thumb that springs from stop to stop with a tick, and each level's name under its stop. A drag
+// or a tap picks the nearest stop. At Max the thumb pops.
 import * as Haptics from "expo-haptics";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import Animated, {
-  cancelAnimation,
-  Easing,
   useAnimatedStyle,
   useReducedMotion,
   useSharedValue,
-  withRepeat,
   withSequence,
   withSpring,
   withTiming,
 } from "react-native-reanimated";
-import Svg, { Defs, LinearGradient, Pattern, Rect, Stop } from "react-native-svg";
 import { scheduleOnRN } from "react-native-worklets";
 
 import type { AgentEffort } from "../../desktop/src/protocol/generated/protocol";
@@ -26,13 +21,12 @@ import { T, useColors } from "./ui";
 
 const levels = effortLevels;
 const last = levels.length - 1;
-const THUMB = 44;
-const TRACK = 36;
-// One period of the fill's 45° stripes along the track, 16 px across them, as the desktop's.
-const STRIPE = 16 * Math.SQRT2;
-// A little overshoot, as the desktop's cubic-bezier(0.34, 1.56, 0.64, 1), so thumb and fill
-// spring into place together.
-const spring = { damping: 15, stiffness: 240, mass: 0.8 };
+const THUMB = 28;
+const TRACK = 6;
+// The height a touch lands in, taller than the thumb.
+const HIT = 40;
+// A little overshoot, so thumb and fill spring into place together.
+const spring = { damping: 16, stiffness: 260, mass: 0.7 };
 
 /** Stop `i`'s center on a track `width` wide: the thumb's center goes from one radius in to one short. */
 function at(i: number, width: number) {
@@ -51,15 +45,12 @@ export function EffortSlider({
   const c = useColors();
   const still = useReducedMotion();
   const level = levels.findIndex((l) => l.value === value);
-  const full = level === last;
   const [width, setWidth] = useState(0);
   const w = useSharedValue(0);
   // The thumb's center, and the stop it's at, on the UI thread.
   const x = useSharedValue(0);
   const stop = useSharedValue(level);
   const scale = useSharedValue(1);
-  const stripes = useSharedValue(0);
-  const glow = useSharedValue(0);
 
   // A level set from outside, as another provider's, springs there too.
   useEffect(() => {
@@ -68,23 +59,11 @@ export function EffortSlider({
     x.value = withSpring(at(Math.max(level, 0), width), spring);
   }, [level, width]);
 
-  // Stripes drift faster the harder it thinks, and Max glows and pops.
-  const speed = levels[Math.max(level, 0)]!.speed;
+  // Max pops the thumb once.
   useEffect(() => {
-    if (still) return;
-    stripes.value = 0;
-    stripes.value = withRepeat(withTiming(STRIPE, { duration: speed * 1000, easing: Easing.linear }), -1, false);
-    return () => cancelAnimation(stripes);
-  }, [speed, still]);
-  useEffect(() => {
-    if (!full || still) {
-      cancelAnimation(glow);
-      glow.value = 0;
-      return;
-    }
-    scale.value = withSequence(withTiming(1.2, { duration: 180 }), withTiming(1, { duration: 270 }));
-    glow.value = withRepeat(withTiming(1, { duration: 900, easing: Easing.inOut(Easing.ease) }), -1, true);
-  }, [full, still]);
+    if (level === last && !still)
+      scale.value = withSequence(withTiming(1.18, { duration: 160 }), withSpring(1, spring));
+  }, [level, still]);
 
   const pick = (i: number) => {
     void Haptics.selectionAsync();
@@ -104,7 +83,7 @@ export function EffortSlider({
     .activeOffsetX([-4, 4])
     .failOffsetY([-12, 12])
     .onBegin(() => {
-      scale.value = withTiming(0.9, { duration: 120 });
+      scale.value = withTiming(1.12, { duration: 120 });
     })
     .onUpdate((e) => choose(e.x))
     .onFinalize(() => {
@@ -112,16 +91,11 @@ export function EffortSlider({
     });
   const tap = Gesture.Tap().onEnd((e) => choose(e.x));
 
-  const fill = useAnimatedStyle(() => ({ width: stop.value < 0 ? 0 : x.value }));
+  // The fill runs under the thumb's center, so its end hides behind it.
+  const fill = useAnimatedStyle(() => ({ width: stop.value < 0 ? 0 : x.value + TRACK / 2 }));
   const thumb = useAnimatedStyle(() => ({
     opacity: stop.value < 0 ? 0 : 1,
     transform: [{ translateX: x.value - THUMB / 2 }, { scale: scale.value }],
-  }));
-  const drift = useAnimatedStyle(() => ({ transform: [{ translateX: stripes.value }] }));
-  const glowing = useAnimatedStyle(() => ({
-    opacity: glow.value > 0 ? 1 : 0,
-    shadowOpacity: 0.4 + glow.value * 0.3,
-    shadowRadius: 6 + glow.value * 16,
   }));
 
   return (
@@ -146,46 +120,22 @@ export function EffortSlider({
           }}
           style={styles.slider}
         >
-          <Animated.View
-            pointerEvents="none"
-            style={[styles.track, styles.glow, { backgroundColor: c.accent, shadowColor: c.accent }, glowing]}
-          />
-          <View style={[styles.track, { backgroundColor: c.selected, borderColor: c.border }]}>
-            <Animated.View style={[styles.fill, { backgroundColor: c.accent }, fill]}>
-              {/* Lighter to the right, as the desktop's accent to 65% accent. */}
-              <Svg style={StyleSheet.absoluteFill}>
-                <Defs>
-                  <LinearGradient id="lift" x1="0" y1="0" x2="1" y2="0">
-                    <Stop offset="0" stopColor="#ffffff" stopOpacity={0} />
-                    <Stop offset="1" stopColor="#ffffff" stopOpacity={0.35} />
-                  </LinearGradient>
-                </Defs>
-                <Rect width="100%" height="100%" fill="url(#lift)" />
-              </Svg>
-              <Animated.View style={[styles.stripes, { width: width + STRIPE }, drift]}>
-                <Svg width={width + STRIPE} height={TRACK}>
-                  <Defs>
-                    <Pattern id="stripes" width={16} height={16} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                      <Rect width={8} height={16} fill="#ffffff" fillOpacity={0.13} />
-                    </Pattern>
-                  </Defs>
-                  <Rect width="100%" height="100%" fill="url(#stripes)" />
-                </Svg>
-              </Animated.View>
-            </Animated.View>
-            {width > 0 &&
-              levels.map((l, i) => (
-                <View
-                  key={l.value}
-                  style={[
-                    styles.dot,
-                    { left: at(i, width) - 3 },
-                    i < level ? { backgroundColor: "rgba(255, 255, 255, 0.6)" } : { backgroundColor: c.foreground, opacity: 0.35 },
-                  ]}
-                />
-              ))}
+          <View style={[styles.track, { backgroundColor: c.border }]}>
+            <Animated.View style={[styles.fill, { backgroundColor: c.accent }, fill]} />
           </View>
-          <Animated.View pointerEvents="none" style={[styles.thumb, thumb]} />
+          {width > 0 &&
+            levels.map((l, i) => (
+              <View
+                key={l.value}
+                pointerEvents="none"
+                style={[
+                  styles.stop,
+                  { left: at(i, width) - STOP / 2 },
+                  { backgroundColor: i <= level ? c.accent : c.background, borderColor: i <= level ? c.accent : c.border },
+                ]}
+              />
+            ))}
+          <Animated.View pointerEvents="none" style={[styles.thumb, { borderColor: c.border }, thumb]} />
         </View>
       </GestureDetector>
       <View style={styles.names}>
@@ -196,7 +146,7 @@ export function EffortSlider({
               medium={i === level}
               faint={i !== level}
               numberOfLines={1}
-              style={{ ...styles.name, left: at(i, width) - NAME / 2, ...(i === level && { color: c.foreground }) }}
+              style={{ ...styles.name, left: at(i, width) - NAME / 2, ...(i === level && { color: c.accent }) }}
             >
               {l.name}
             </T>
@@ -207,32 +157,34 @@ export function EffortSlider({
 }
 
 const NAME = 72;
+const STOP = 10;
 
 const styles = StyleSheet.create({
-  slider: { height: THUMB, justifyContent: "center" },
-  track: {
-    height: TRACK,
-    borderRadius: TRACK / 2,
-    borderWidth: StyleSheet.hairlineWidth,
-    overflow: "hidden",
+  slider: { height: HIT, justifyContent: "center" },
+  track: { height: TRACK, borderRadius: TRACK / 2, marginHorizontal: THUMB / 2 - TRACK / 2, overflow: "hidden" },
+  fill: { position: "absolute", top: 0, bottom: 0, left: 0, borderRadius: TRACK / 2 },
+  stop: {
+    position: "absolute",
+    top: (HIT - STOP) / 2,
+    width: STOP,
+    height: STOP,
+    borderRadius: STOP / 2,
+    borderWidth: 1.5,
   },
-  glow: { position: "absolute", top: (THUMB - TRACK) / 2, left: 0, right: 0, borderWidth: 0, overflow: "visible", shadowOffset: { width: 0, height: 0 } },
-  // Square on the right, where the thumb covers it.
-  fill: { position: "absolute", top: 0, bottom: 0, left: 0, borderTopLeftRadius: TRACK / 2, borderBottomLeftRadius: TRACK / 2, overflow: "hidden" },
-  stripes: { position: "absolute", top: 0, bottom: 0, left: -STRIPE },
-  dot: { position: "absolute", top: (TRACK - 6) / 2 - StyleSheet.hairlineWidth, width: 6, height: 6, borderRadius: 3 },
   thumb: {
     position: "absolute",
+    top: (HIT - THUMB) / 2,
     left: 0,
     width: THUMB,
     height: THUMB,
     borderRadius: THUMB / 2,
     backgroundColor: "#ffffff",
+    borderWidth: StyleSheet.hairlineWidth,
     shadowColor: "#000000",
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
   },
-  names: { height: 16, marginTop: 10 },
-  name: { position: "absolute", width: NAME, textAlign: "center", fontSize: 11.5, lineHeight: 15 },
+  names: { height: 16, marginTop: 6 },
+  name: { position: "absolute", width: NAME, textAlign: "center", fontSize: 12, lineHeight: 15 },
 });
