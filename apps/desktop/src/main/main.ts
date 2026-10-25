@@ -436,6 +436,11 @@ ipcMain.handle("parallax:removeExtension", (_event, id: unknown) =>
 // The browser's downloads (PLX-975, downloads.ts).
 ipcMain.handle("parallax:downloads", () => downloadList());
 ipcMain.handle("parallax:googleAccount", () => googleAccount());
+ipcMain.handle("parallax:siteIcon", (_event, page: unknown) =>
+  typeof page === "string" && isBrowsable(page)
+    ? favicon(new URL("/favicon.ico", page).href)
+    : undefined,
+);
 ipcMain.on("parallax:downloadAction", (_event, id: unknown, action: unknown) => {
   if (typeof action === "string") downloadAction(typeof id === "string" ? id : undefined, action);
 });

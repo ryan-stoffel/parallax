@@ -200,6 +200,11 @@ export interface ParallaxBridge {
   downloads(): Promise<DownloadInfo[]>;
   /** Calls `listener` with the downloads as they change. Returns the unsubscribe function. */
   onDownloads(listener: (downloads: DownloadInfo[]) => void): () => void;
+  /**
+   * The favicon of `page`'s site, its /favicon.ico, as a data url, or undefined for none. An
+   * agent's tab, whose page is in plxd's browser, shows it.
+   */
+  siteIcon(page: string): Promise<string | undefined>;
   /** The Google account signed in to the browser, for its profile button (PLX-981). */
   googleAccount(): Promise<GoogleAccount | undefined>;
   /** Calls `listener` with the account as it signs in or out. Returns the unsubscribe function. */

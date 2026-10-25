@@ -483,6 +483,7 @@ export function SidePanel({
               page={panel.page}
               remoteHost={remoteHost}
               agent={key === scope ? agentTabs : undefined}
+              onEmpty={onClose}
             />
           </div>
         ))}

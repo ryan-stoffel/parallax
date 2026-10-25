@@ -1825,6 +1825,7 @@ export const mockBridge: ParallaxBridge = {
   downloads: () => delay([]),
   onDownloads: () => () => {},
   googleAccount: () => delay(undefined),
+  siteIcon: () => delay(undefined),
   onGoogleAccount: () => () => {},
   downloadAction: () => {},
   setDownloadPrefs: () => {},

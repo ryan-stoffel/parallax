@@ -106,6 +106,7 @@ const bridge: ParallaxBridge = {
   clearBrowsingData: (what) => ipcRenderer.invoke("parallax:clearBrowsingData", what),
   downloads: () => ipcRenderer.invoke("parallax:downloads"),
   googleAccount: () => ipcRenderer.invoke("parallax:googleAccount"),
+  siteIcon: (page) => ipcRenderer.invoke("parallax:siteIcon", page),
   onDownloads(listener) {
     const forward = (_event: unknown, list: DownloadInfo[]) => listener(list);
     ipcRenderer.on("parallax:downloads", forward);

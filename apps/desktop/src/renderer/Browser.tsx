@@ -4,17 +4,8 @@ import type {
   PageTitleUpdatedEvent,
   WebviewTag,
 } from "electron";
-import { Bot, TriangleAlert } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ComponentType,
-  type ReactNode,
-  type SVGProps,
-} from "react";
+import { TriangleAlert } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
 import type { BrowserAction } from "../preload/bridge";
@@ -35,7 +26,6 @@ import {
   restoreTabs,
   searchEngine,
   searchEngineName,
-  searchHomeFor,
   searchUrlFor,
 } from "./browserSettings";
 import { browserTheme, browserThemes, colorsOf, useDark, type BrowserColors } from "./browserTheme";
@@ -56,7 +46,6 @@ import {
   ArrowUp,
   Bookmark,
   Close,
-  CloseSmall,
   Code,
   DeleteHistory,
   DesktopWindows,
@@ -288,13 +277,14 @@ function restored(scope: string | undefined): { tabs: OwnTab[]; current: number 
  * whose new windows open as tabs here. Each new `page` opens in the current tab while it's blank,
  * or else in a new one. Its own tabs are saved under `scope` and come back after a restart
  * (PLX-964). `remoteHost`, the open host's name when it's an SSH host, notes that localhost is
- * this computer.
+ * this computer. Closing its last tab calls `onEmpty`.
  */
 export function Browser({
   page,
   remoteHost,
   scope,
   agent,
+  onEmpty,
 }: {
   page?: { url?: string; agentTab?: string };
   remoteHost?: string;
@@ -305,8 +295,15 @@ export function Browser({
   scope?: string;
   /** The open thread's agent tabs (PLX-639), which show before the user's own, and its backend. */
   agent?: { hostId: string; runId: string; tabs: PreviewTab[]; backend?: string };
+  onEmpty?: () => void;
 }) {
   const driver = driverOf(agent?.backend);
+  // The agent's tabs show their sites' favicons, which plxd doesn't report.
+  const icons = siteIcons.use();
+  const agentUrls = (agent?.tabs ?? []).map((t) => t.url).join(" ");
+  useEffect(() => {
+    for (const url of agentUrls.split(" ")) askSiteIcon(siteOf(url));
+  }, [agentUrls]);
   // The agent tab shown, by id, or undefined for the user's own tab `current`.
   const [agentTab, setAgentTab] = useState<string>();
   const shownTab = agent?.tabs.find((t) => t.tabId === agentTab);
@@ -333,7 +330,8 @@ export function Browser({
     setCurrent(tab.id);
     setAgentTab(undefined);
   };
-  // Closing the last tab leaves a blank one, as the panel has no window to close.
+  // Closing the last tab hides the browser, as Chrome closes its window, and leaves a blank tab
+  // for when it shows again.
   // The pages of the tabs closed here, the last last, for Cmd/Ctrl+Shift+T (PLX-969).
   const closed = useRef<string[]>([]);
   // History (PLX-976), one for the browser, which any of its tabs opens.
@@ -348,7 +346,10 @@ export function Browser({
     const page = tabs[at]?.url;
     if (page) closed.current = [...closed.current.slice(-24), page];
     const rest = tabs.filter((t) => t.id !== id);
-    if (!rest.length) rest.push(ownTab());
+    if (!rest.length) {
+      rest.push(ownTab());
+      onEmpty?.();
+    }
     setTabs(rest);
     if (id === current) setCurrent(rest[Math.min(at, rest.length - 1)]!.id);
   };
@@ -390,7 +391,7 @@ export function Browser({
       key: `a:${t.tabId}`,
       title: t.title || shortUrl(t.url) || "Agent's tab",
       url: t.url,
-      Logo: driver.Logo ?? Bot,
+      ...(icons[siteOf(t.url)] && { icon: icons[siteOf(t.url)] }),
       agent: driver.name,
     })),
     ...tabs.map((t) => ({
@@ -401,7 +402,6 @@ export function Browser({
     })),
   ];
   const selected = shownTab ? `a:${shownTab.tabId}` : `o:${current}`;
-  // The agent's name stands in for its logo, which arrives with it.
   const published = JSON.stringify([
     faces.map((f) => [f.key, f.title, f.url, f.icon, f.agent]),
     selected,
@@ -523,13 +523,28 @@ const driverOf = (backend?: string): Driver =>
       }
     : { name: "The agent" };
 
+/** `url`'s origin, which its site's favicon is kept by, or "" for none. */
+const siteOf = (url: string) => {
+  const origin = URL.parse(url)?.origin;
+  return origin && origin !== "null" ? origin : "";
+};
+// The sites' favicons fetched for agents' tabs, by origin, each asked for once.
+const siteIcons = memory<Readonly<Record<string, string>>>({});
+const askedSites = new Set<string>();
+function askSiteIcon(site: string) {
+  if (!site || askedSites.has(site)) return;
+  askedSites.add(site);
+  void window.parallax.siteIcon(site).then((icon) => {
+    if (icon) siteIcons.set({ ...siteIcons.get(), [site]: icon });
+  });
+}
+
 /** A browser tab as its top bar draws it: its key is `a:` and an agent tab's id, or `o:` and an own tab's. */
 export interface BrowserTabFace {
   key: string;
   title: string;
   url?: string;
   icon?: string;
-  Logo?: ComponentType<SVGProps<SVGSVGElement>>;
   /** The agent driving it, for an agent's tab. */
   agent?: string;
 }
@@ -574,25 +589,11 @@ function Tab({
 }) {
   const view = useRef<WebviewTag>(null);
   const addressBar = useRef<HTMLInputElement>(null);
-  // A new tab, with no page to open, shows the search engine's home page as its new tab page
-  // (PLX-981): its address bar stays empty and focused, and the tab stays New Tab, until the user
-  // goes to another page from it. `ntp` is the same for the webview's listeners, and `homeLoaded`
-  // whether the home page has loaded, after any redirect.
-  const [newTabPage, setNewTabPage] = useState(!page && !load);
-  const ntp = useRef(newTabPage);
-  const homeLoaded = useRef(false);
   // The url the tab last showed, so a reload keeps its title.
   const shownUrl = useRef(page?.url);
-  const leaveNewTabPage = () => {
-    ntp.current = false;
-    setNewTabPage(false);
-    // The page it goes to takes the focus the home page's load didn't.
-    focused.current = false;
-  };
-  // The first page, which mounts the webview; later pages load in it.
-  const [src, setSrc] = useState<string | undefined>(() =>
-    newTabPage ? searchHomeFor(searchEngine.get()) : undefined,
-  );
+  // The first page, which mounts the webview; later pages load in it. A new tab has none, so it's
+  // blank until the user opens a page.
+  const [src, setSrc] = useState<string>();
   const [address, setAddress] = useState("");
   const [history, setHistory] = useState({ back: false, forward: false });
   const [error, setError] = useState<{ url: string; description: string }>();
@@ -688,10 +689,7 @@ function Tab({
   // A tab shown, by a click or a shortcut, takes focus to its page, as in Chrome, so the page's
   // shortcuts keep working from it.
   useEffect(() => {
-    if (shown && src)
-      requestAnimationFrame(() =>
-        ntp.current ? addressBar.current?.focus() : view.current?.focus(),
-      );
+    if (shown && src) requestAnimationFrame(() => view.current?.focus());
   }, [shown]);
 
   // Extensions see the shown tab as the active one.
@@ -707,11 +705,10 @@ function Tab({
       return;
     }
     setError(undefined);
-    leaveNewTabPage();
     setAddress(next);
     onChange({ url: next });
     // The view shows a load's error, so the rejection needs no handling here. A webview that
-    // hasn't finished attaching, such as a new tab page's, throws instead, and would still load
+    // hasn't finished attaching throws instead, and would still load
     // its first page: a new webview opens this one (its key is its src).
     try {
       if (!view.current) throw new Error("no webview yet");
@@ -736,25 +733,14 @@ function Tab({
       setContentsId(el.getWebContentsId());
       stopAsking = onAsk(el.getWebContentsId(), (action) => {
         if (action.kind === "address") addressBar.current?.focus();
-        else if (action.kind === "icon") {
-          if (!ntp.current) latest.current.onChange({ icon: action.url });
-        } else if (!latest.current.local(action)) latest.current.ask(action);
+        else if (action.kind === "icon") latest.current.onChange({ icon: action.url });
+        else if (!latest.current.local(action)) latest.current.ask(action);
       });
     };
     const navigated = (inPage = false) => {
       const url = el.getURL();
       setHistory({ back: el.canGoBack(), forward: el.canGoForward() });
       setZoom(el.getZoomFactor());
-      // The new tab page's own steps, its first load and its in-page ones, such as Google's
-      // `?zx=`, aren't the user's; the next page is.
-      if (ntp.current) {
-        if (inPage) return;
-        if (!homeLoaded.current) {
-          homeLoaded.current = true;
-          return;
-        }
-        leaveNewTabPage();
-      }
       // Another page has no title until it says, rather than the last page's (PLX-981). A reload
       // keeps its own, which it doesn't say again.
       const moved = url !== shownUrl.current;
@@ -777,7 +763,6 @@ function Tab({
         setError({ url: e.validatedURL, description: e.errorDescription });
     };
     const titled = (e: PageTitleUpdatedEvent) => {
-      if (ntp.current) return;
       latest.current.onChange({ title: e.title });
       const next = titled_(browserHistory.get(), el.getURL(), e.title);
       if (next !== browserHistory.get()) browserHistory.set([...next]);
@@ -800,7 +785,7 @@ function Tab({
       // Once per page the tab opens, shown or not, so the page's own later loads don't take it.
       if (focused.current) return;
       focused.current = true;
-      if (latest.current.focusOnLoad && latest.current.shown && !ntp.current) el.focus();
+      if (latest.current.focusOnLoad && latest.current.shown) el.focus();
     };
     el.addEventListener("dom-ready", firstLoad);
     const navigatedTo = () => navigated();
@@ -888,9 +873,9 @@ function Tab({
         <Search aria-hidden />
         <input
           ref={addressBar}
-          // The new tab page's address bar takes focus, as in Chrome, but not a tab shown again or
-          // one opening a page, whose page takes it.
-          autoFocus={newTabPage}
+          // A new tab's address bar takes focus, as in Chrome, but not a tab shown again or one
+          // opening a page, whose page takes it.
+          autoFocus={!src && !load}
           aria-label="Address"
           placeholder={`Search ${searchEngineName(engine)} or type a URL`}
           spellCheck={false}
@@ -1331,7 +1316,7 @@ export function BrowserTabBar({ scope }: { scope: string }) {
 /**
  * One of the browser's tabs in the top bar, as Helium draws one: its icon, title, and close
  * button, every tab the same width, shrinking together as more open. The close button shows on
- * the one in front and on hover. An agent's tab has its provider's logo and no close button,
+ * the one in front and on hover. An agent's tab has its site's favicon too, and no close button,
  * since the agent closes it.
  */
 function BrowserTab({
@@ -1347,8 +1332,6 @@ function BrowserTab({
 }) {
   const icon = tab.icon ? (
     <img src={tab.icon} alt="" className="size-4 shrink-0" />
-  ) : tab.Logo ? (
-    <tab.Logo aria-hidden className="size-4 shrink-0" />
   ) : (
     <Public aria-hidden className="size-4 shrink-0" />
   );
@@ -1374,9 +1357,9 @@ function BrowserTab({
           type="button"
           aria-label={`Close ${tab.title}`}
           onClick={onClose}
-          className={`mr-1.5 size-6 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
+          className={`mr-1 size-7 shrink-0 place-items-center rounded-md hover:bg-hover ${selected ? "grid" : "hidden group-focus-within:grid group-hover:grid"}`}
         >
-          <CloseSmall aria-hidden className="size-4" />
+          <Close aria-hidden className="size-4.5" />
         </button>
       )}
     </div>
