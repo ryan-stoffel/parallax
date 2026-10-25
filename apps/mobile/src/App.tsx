@@ -2,8 +2,9 @@
 // The main view is always one thread, or a new thread's page, with no back stack of threads. A
 // swipe right anywhere on it, or its header's sidebar button, slides the sidebar (Sidebar.tsx) in
 // from the left, pushing the main view along. Search, Settings, and the pull requests rise as
-// sheets up to just below the notch, and what they open pushes inside them. The connections,
-// thread lists, and transcripts are the desktop renderer's (fleet.tsx).
+// sheets up to just below the notch that drag away, and what they open rises as another sheet
+// over them, with a back chevron. The connections, thread lists, and transcripts are the desktop
+// renderer's (fleet.tsx).
 import {
   CommonActions,
   createNavigationContainerRef,
@@ -15,7 +16,7 @@ import {
 } from "@react-navigation/native";
 import { createNativeStackNavigator, type NativeStackNavigationOptions } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
-import { Info, X } from "lucide-react-native";
+import { ChevronLeft, Info, X } from "lucide-react-native";
 import { useContext, useEffect, useRef, useState } from "react";
 import { Linking, StatusBar, StyleSheet, useColorScheme, useWindowDimensions, View } from "react-native";
 import { Drawer, useDrawerProgress } from "react-native-drawer-layout";
@@ -40,7 +41,7 @@ import { ComputerSettingsScreen } from "./SettingsComputer";
 import { ProviderScreen } from "./SettingsProviders";
 import { Sidebar, SidebarSky, sidebarWidth } from "./Sidebar";
 import { ThreadDetailsScreen } from "./ThreadDetails";
-import { dark, light } from "./theme";
+import { dark, light, type Colors } from "./theme";
 import { ThreadScreen } from "./Thread";
 import { Icon, useColors } from "./ui";
 import { UsageScreen } from "./Usage";
@@ -48,7 +49,7 @@ import { UsageScreen } from "./Usage";
 const Stack = createNativeStackNavigator<Screens>();
 const nav = createNavigationContainerRef<Screens>();
 
-/** The main view's header button that opens the sidebar: two lines in a glass circle. */
+/** The main view's header button that opens the sidebar: a sidebar's mark in a glass circle. */
 function SidebarButton() {
   const c = useColors();
   const { open } = useContext(SidebarControl);
@@ -59,14 +60,69 @@ function SidebarButton() {
   );
 }
 
-/** The main view's header: the sidebar button, or the back button when something is pushed over it. */
+/**
+ * The main view's header: no title and no line, with only the glass sidebar button on the left
+ * (the back button when something is pushed over it) and the thread's own glass menu on the right.
+ * A new thread's page makes it transparent itself (NewThread.tsx).
+ */
 const mainHeader: NativeStackNavigationOptions = {
+  title: "",
   headerLeft: ({ canGoBack }) => (canGoBack ? null : <SidebarButton />),
   headerLeftBackgroundVisible: false,
+  headerShadowVisible: false,
 };
 
-/** A sheet up to just below the notch, as Claude's app raises Search and Settings. */
-const sheet: NativeStackNavigationOptions = { presentation: "modal" };
+/**
+ * Every sheet's look, as Claude's app raises Search and Settings: up to just below the notch, a
+ * grabber that drags it away, and a clear header with no line, its buttons our own glass circles.
+ * A form sheet sizes only the scroll view at the root of its screen (react-native-screens), so
+ * each such screen is a scroll view, or a header view then one, with
+ * `contentInsetAdjustmentBehavior="automatic"`, which keeps its rows clear of the header and the
+ * home indicator.
+ */
+const sheet = (c: Colors): NativeStackNavigationOptions => ({
+  presentation: "formSheet",
+  sheetAllowedDetents: [1],
+  sheetGrabberVisible: true,
+  headerTransparent: true,
+  headerShadowVisible: false,
+  headerLeftBackgroundVisible: false,
+  headerRightBackgroundVisible: false,
+  contentStyle: { backgroundColor: c.background },
+});
+
+/**
+ * The same look for a sheet whose screen doesn't keep clear of a clear header yet (the pull
+ * requests, and Add computer): its header on the sheet's background with no line, as a page sheet,
+ * which drags away but draws no grabber. It takes `sheet` once its root scroll view has
+ * `contentInsetAdjustmentBehavior="automatic"`.
+ */
+const pageSheet = (c: Colors): NativeStackNavigationOptions => ({
+  presentation: "modal",
+  headerShadowVisible: false,
+  headerStyle: { backgroundColor: c.background },
+  headerLeftBackgroundVisible: false,
+  headerRightBackgroundVisible: false,
+  contentStyle: { backgroundColor: c.background },
+});
+
+/** A sheet's glass close button. */
+function CloseButton({ onPress }: { onPress: () => void }) {
+  return (
+    <GlassButton label="Close" onPress={onPress}>
+      <Icon icon={X} size={20} />
+    </GlassButton>
+  );
+}
+
+/** A sheet opened over another sheet's glass back chevron, which returns to the one under it. */
+const back = ({ navigation }: { navigation: { goBack: () => void } }): NativeStackNavigationOptions => ({
+  headerLeft: () => (
+    <GlassButton label="Back" onPress={() => navigation.goBack()}>
+      <Icon icon={ChevronLeft} size={22} />
+    </GlassButton>
+  ),
+});
 
 /**
  * Notifies when a thread on any computer starts needing the user, or finishes or fails, and
@@ -275,70 +331,80 @@ function Main({ setup }: { setup: Setup }) {
         <Shell>
           <Stack.Navigator screenOptions={{ headerBackButtonDisplayMode: "minimal" }}>
             <Stack.Screen name="StartThread" component={StartThreadScreen} options={mainHeader} />
-            <Stack.Screen name="Thread" component={ThreadScreen} options={mainHeader} />
-            <Stack.Screen name="PullRequest" component={PullRequestScreen} />
+            <Stack.Screen
+              name="Thread"
+              component={ThreadScreen}
+              // The bar is the page's own color, so it reads as no bar. A new thread's page turns
+              // into its thread in place, with no slide.
+              options={({ route }) => ({
+                ...mainHeader,
+                headerStyle: { backgroundColor: c.background },
+                animation: route.params?.instant ? "none" : "default",
+              })}
+            />
+            <Stack.Screen
+              name="PullRequest"
+              component={PullRequestScreen}
+              // Pushed on a thread it slides in; opened from a sheet it rises as a sheet of its own.
+              options={(props) => {
+                const routes = props.navigation.getState().routes;
+                const at = routes.findIndex((r) => r.key === props.route.key);
+                const inSheet = routes.slice(0, at).some((r) => r.name !== "Thread" && r.name !== "StartThread");
+                return inSheet ? { ...pageSheet(c), ...back(props) } : {};
+              }}
+            />
             <Stack.Screen
               name="ThreadDetails"
               component={ThreadDetailsScreen}
-              options={{ presentation: "formSheet", title: "Thread details", sheetAllowedDetents: [0.6, 0.95] }}
-            />
-            <Stack.Screen
-              name="NewThread"
-              component={NewThreadScreen}
-              options={{ presentation: "formSheet", title: "New thread", sheetAllowedDetents: [0.92] }}
-            />
-            <Stack.Screen
-              name="Search"
-              component={SearchScreen}
+              // Its header stays solid, as its screen lays out under one, on the sheet's background.
               options={{
-                presentation: "formSheet",
-                headerShown: false,
-                sheetAllowedDetents: [1],
-                sheetGrabberVisible: true,
+                ...sheet(c),
+                headerTransparent: false,
+                headerStyle: { backgroundColor: c.background },
+                title: "Thread details",
+                sheetAllowedDetents: [0.6, 0.95],
               }}
             />
+            <Stack.Screen name="NewThread" component={NewThreadScreen} options={{ ...sheet(c), headerShown: false }} />
+            <Stack.Screen name="Search" component={SearchScreen} options={{ ...sheet(c), headerShown: false }} />
             <Stack.Screen
               name="Settings"
               component={SettingsScreen}
               options={({ navigation }) => ({
-                ...sheet,
+                ...sheet(c),
                 title: "Settings",
-                headerLeft: () => (
-                  <GlassButton label="Close" onPress={() => navigation.goBack()}>
-                    <Icon icon={X} size={20} />
-                  </GlassButton>
-                ),
+                headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
                 headerRight: () => (
                   <GlassButton label="About Parallax" onPress={() => navigation.navigate("About")}>
                     <Icon icon={Info} size={20} />
                   </GlassButton>
                 ),
-                headerLeftBackgroundVisible: false,
-                headerRightBackgroundVisible: false,
-                headerShadowVisible: false,
               })}
             />
             <Stack.Screen
               name="PullRequests"
               component={PullRequestList}
               options={({ navigation }) => ({
-                ...sheet,
+                ...pageSheet(c),
                 title: "Pull requests",
-                headerLeft: () => (
-                  <GlassButton label="Close" onPress={() => navigation.goBack()}>
-                    <Icon icon={X} size={20} />
-                  </GlassButton>
-                ),
-                headerLeftBackgroundVisible: false,
-                headerShadowVisible: false,
+                headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
               })}
             />
-            <Stack.Screen name="About" component={AboutScreen} options={{ title: "About" }} />
-            <Stack.Screen name="Usage" component={UsageScreen} options={{ title: "Usage" }} />
-            <Stack.Screen name="Computer" component={ComputerScreen} />
-            <Stack.Screen name="ComputerSettings" component={ComputerSettingsScreen} />
-            <Stack.Screen name="Provider" component={ProviderScreen} />
-            <Stack.Screen name="AddComputer" component={AddComputerScreen} options={{ title: "" }} />
+            <Stack.Screen name="About" component={AboutScreen} options={(p) => ({ ...sheet(c), ...back(p), title: "About" })} />
+            {/* Its refresh button is the screen's own (Usage.tsx). */}
+            <Stack.Screen name="Usage" component={UsageScreen} options={(p) => ({ ...sheet(c), ...back(p), title: "Usage" })} />
+            <Stack.Screen name="Computer" component={ComputerScreen} options={(p) => ({ ...sheet(c), ...back(p) })} />
+            <Stack.Screen
+              name="ComputerSettings"
+              component={ComputerSettingsScreen}
+              options={(p) => ({ ...sheet(c), ...back(p) })}
+            />
+            <Stack.Screen name="Provider" component={ProviderScreen} options={(p) => ({ ...sheet(c), ...back(p) })} />
+            <Stack.Screen
+              name="AddComputer"
+              component={AddComputerScreen}
+              options={(p) => ({ ...pageSheet(c), ...back(p), title: "" })}
+            />
           </Stack.Navigator>
         </Shell>
       </NavigationContainer>

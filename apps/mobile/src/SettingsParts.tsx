@@ -1,7 +1,7 @@
-// The pieces a computer's settings pages share: the page, the computer it applies to with a
-// picker for another, a computer's host settings, rows for a switch, a text field, and a line of
-// text, and failures as alerts.
-import { ChevronsUpDown } from "lucide-react-native";
+// The pieces the settings pages share: a row's tinted icon, the page, the computer it applies to
+// with a picker for another, a computer's host settings, rows for a switch, a text field, and a
+// line of text, and failures as alerts.
+import { ChevronsUpDown, type LucideIcon } from "lucide-react-native";
 import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { Alert, ScrollView, StyleSheet, Switch, TextInput, View } from "react-native";
 
@@ -24,12 +24,25 @@ export const fail = (title: string, why: RpcError | string) =>
 export const can = (m: Computer, capability: string) =>
   m.state.status === "connected" && capability in m.state.capabilities;
 
-/** A pushed settings page: grouped sections on the page's background. */
+/**
+ * A settings row's icon, as Claude's settings draw theirs: a glyph in a soft square of its color.
+ * `children` takes the glyph's place, for one that isn't lucide's.
+ */
+export function Tile({ icon, color, children }: { icon?: LucideIcon; color: string; children?: ReactNode }) {
+  return (
+    <View style={[styles.tile, { backgroundColor: `${color}2e` }]}>
+      {icon ? <Icon icon={icon} size={17} color={color} /> : children}
+    </View>
+  );
+}
+
+/** A pushed settings page: grouped sections on the page's background, clear of the sheet's header. */
 export function Page({ children }: { children: ReactNode }) {
   const c = useColors();
   return (
     <ScrollView
       style={{ backgroundColor: c.background }}
+      contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ padding: 16, gap: 24, paddingBottom: 48 }}
       keyboardShouldPersistTaps="handled"
       automaticallyAdjustKeyboardInsets
@@ -237,6 +250,7 @@ export function Input(props: ComponentProps<typeof TextInput> & { mono?: boolean
 }
 
 const styles = StyleSheet.create({
+  tile: { width: 30, height: 30, borderRadius: 8, borderCurve: "continuous", alignItems: "center", justifyContent: "center" },
   block: { paddingHorizontal: 16, paddingVertical: 11 },
   input: {
     marginTop: 4,

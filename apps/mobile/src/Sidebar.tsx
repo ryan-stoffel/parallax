@@ -3,7 +3,8 @@
 // started) and search. Below are every computer's threads, as the desktop's sidebar lists a
 // host's: Projects, pinned, then the rest grouped by day or by repository, each with its attention
 // badge (Working, Needs you, Done, Failed), and drawers for those working, snoozed, and archived.
-// The filter narrows it to one computer or repository. A swipe left archives a thread, and a long
+// The filter narrows it to one computer or repository. A swipe left on a thread shows Archive, and
+// a full one archives it; on an archived thread a swipe right does the same for Unarchive. A long
 // press pins, snoozes, renames, or archives it. Its bottom has the profile picture (Settings),
 // pull requests, and New thread. The drawer keeps it mounted, so the sky never flickers in.
 import * as Haptics from "expo-haptics";
@@ -80,7 +81,7 @@ export interface Entry {
 export const when = (t: Thread) => t.lastPromptAt ?? t.createdAt;
 
 /** A Parallax Project (0042) as the list shows it: its coordinator, threads, and attention. */
-interface ProjectEntry {
+export interface ProjectEntry {
   computer: Computer;
   project: Project;
   attention: Attention;
@@ -89,7 +90,8 @@ interface ProjectEntry {
   at: string;
 }
 
-function projectsOf(computers: Computer[]): ProjectEntry[] {
+/** Every computer's Projects, as the list and Search show them. */
+export function projectsOf(computers: Computer[]): ProjectEntry[] {
   return computers.flatMap((computer) => {
     const { state } = computer.view;
     const inProject = threadProjects(state);
@@ -197,48 +199,87 @@ function dayOf(at: string, now = Date.now()) {
 }
 
 const SWIPE = 88;
+/** How much of the row a full swipe uncovers before letting go acts. */
+const FULL = 0.55;
 
-/** A row a swipe left slides open on an action, as iOS Mail's are. */
+/**
+ * A row a swipe slides open on an action, as iOS Mail's are: a short swipe shows the action to
+ * tap, and a full one, past a haptic tick, does it when let go. The action is at the row's end,
+ * for a swipe left, or with `start`, at its start, for a swipe right. The sidebar open, the
+ * drawer's own swipe only takes the main view's strip (App.tsx), so the two never compete.
+ */
 function Swipe({
   label,
   icon,
   color,
+  start,
   onPress,
   children,
 }: {
   label: string;
   icon: LucideIcon;
   color: string;
+  start?: boolean;
   onPress: () => void;
   children: ReactNode;
 }) {
   const width = sidebarWidth(useWindowDimensions().width);
   const view = useRef<ScrollView>(null);
-  return (
-    <ScrollView
-      ref={view}
-      horizontal
-      bounces={false}
-      directionalLockEnabled
-      showsHorizontalScrollIndicator={false}
-      snapToOffsets={[0, SWIPE + 8]}
-      decelerationRate="fast"
-    >
-      <View style={{ width }}>{children}</View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        onPress={() => {
-          view.current?.scrollTo({ x: 0, animated: false });
-          onPress();
-        }}
-        style={[styles.swipe, { backgroundColor: color }]}
-      >
+  const dragging = useRef(false);
+  const armed = useRef(false);
+  // Where the row rests and where its action shows, and how much of the action an offset uncovers.
+  const rest = start ? width : 0;
+  const open = start ? width - SWIPE - 8 : SWIPE + 8;
+  const uncovered = (x: number) => (start ? width - x : x);
+  const act = () => {
+    view.current?.scrollTo({ x: rest, animated: false });
+    onPress();
+  };
+  const action = (
+    <View style={[styles.swipe, { width, backgroundColor: color, alignItems: start ? "flex-end" : "flex-start" }]}>
+      <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={act} style={styles.swipeButton}>
         <Icon icon={icon} size={20} color="#ffffff" />
         <T medium style={{ color: "#ffffff", fontSize: 13 }}>
           {label}
         </T>
       </Pressable>
+    </View>
+  );
+  return (
+    <ScrollView
+      // A new side starts over at rest.
+      key={start ? "start" : "end"}
+      ref={view}
+      horizontal
+      bounces={false}
+      directionalLockEnabled
+      showsHorizontalScrollIndicator={false}
+      contentOffset={{ x: rest, y: 0 }}
+      snapToOffsets={start ? [open, rest] : [rest, open]}
+      snapToStart={false}
+      snapToEnd={false}
+      decelerationRate="fast"
+      scrollEventThrottle={16}
+      onScrollBeginDrag={() => {
+        dragging.current = true;
+      }}
+      onScroll={(e) => {
+        if (!dragging.current) return;
+        const past = uncovered(e.nativeEvent.contentOffset.x) > width * FULL;
+        if (past === armed.current) return;
+        armed.current = past;
+        void Haptics.impactAsync(past ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light);
+      }}
+      onScrollEndDrag={() => {
+        dragging.current = false;
+        if (!armed.current) return;
+        armed.current = false;
+        act();
+      }}
+    >
+      {start && action}
+      <View style={{ width }}>{children}</View>
+      {!start && action}
     </ScrollView>
   );
 }
@@ -287,6 +328,7 @@ function ThreadRow({
       label={thread.archived ? "Unarchive" : "Archive"}
       icon={thread.archived ? Lucide.ArchiveRestore : Archive}
       color={c.projectViolet}
+      start={thread.archived}
       onPress={() => void view.archive(thread.id, !thread.archived)}
     >
     <Pressable
@@ -669,15 +711,8 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   projectIcon: { width: 30, height: 30, borderRadius: 8, alignItems: "center", justifyContent: "center", marginRight: 4 },
-  swipe: {
-    width: SWIPE,
-    marginRight: 8,
-    marginVertical: 2,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 3,
-  },
+  swipe: { marginVertical: 2, borderRadius: 12, borderCurve: "continuous", justifyContent: "center" },
+  swipeButton: { width: SWIPE + 8, flex: 1, alignItems: "center", justifyContent: "center", gap: 3 },
   row: { marginHorizontal: 8, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 12, gap: 3 },
   line: { flexDirection: "row", alignItems: "center", gap: 6 },
   small: { fontSize: 13, lineHeight: 18 },

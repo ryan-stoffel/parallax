@@ -16,19 +16,19 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Alert, Image, Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { authorize } from "../modules/pinned-tls";
 import { keychain } from "./host";
 import { base64url } from "./pairing";
-import { LockKeyhole, LogOut, UserRound } from "lucide-react-native";
+import { UserRound } from "lucide-react-native";
 
 import { initials } from "../../desktop/src/renderer/attention";
 
 import { font } from "./theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { Button, Icon, Mark, Row, Section, SkyBanner, T, useColors } from "./ui";
+import { Button, Icon, Mark, SkyBanner, T, useColors } from "./ui";
 
 // The Clerk instance and the desktop app's OAuth application there, both public (desktop:
 // main/account.ts). The phone signs in as the same application.
@@ -42,7 +42,7 @@ const REDIRECT = "parallax://oauth/callback";
 /** The Frontend API a publishable key names: base64 of `<host>$` after `pk_test_` or `pk_live_`. */
 const API = `https://${atob(PUBLISHABLE_KEY.replace(/^pk_(test|live)_/, "")).replace(/\$$/, "")}`;
 /** Clerk's Account Portal beside it: `<slug>.accounts.dev`, or `accounts.<domain>`. */
-const PORTAL = API.replace("://clerk.", "://accounts.").replace(/\.clerk\.accounts\.dev$/, ".accounts.dev");
+export const PORTAL =API.replace("://clerk.", "://accounts.").replace(/\.clerk\.accounts\.dev$/, ".accounts.dev");
 
 /** What Clerk's userinfo says of the user, as much as the app shows. */
 export interface User {
@@ -275,41 +275,6 @@ export function Avatar({ size = 36 }: { size?: number }) {
         <Icon icon={UserRound} size={size * 0.5} color={c.mutedForeground} />
       )}
     </View>
-  );
-}
-
-/** Settings' account section: who's signed in, their account page, and Sign out. */
-export function AccountSection() {
-  const { user, signOut } = useAccount();
-  const name = nameOf(user);
-  return (
-    <Section title="Parallax account">
-      <Row
-        icon={UserRound}
-        title={name || "Signed in"}
-        detail={user?.email}
-        chevron
-        onPress={() => void Linking.openURL(`${PORTAL}/user`)}
-      />
-      <Row
-        icon={LockKeyhole}
-        title="Security and account deletion"
-        chevron
-        onPress={() => void Linking.openURL(`${PORTAL}/user/security`)}
-      />
-      <Row
-        icon={LogOut}
-        title="Sign out"
-        destructive
-        last
-        onPress={() =>
-          Alert.alert("Sign out of Parallax?", "Your computers stay on this phone.", [
-            { text: "Cancel", style: "cancel" },
-            { text: "Sign out", style: "destructive", onPress: () => void signOut() },
-          ])
-        }
-      />
-    </Section>
   );
 }
 

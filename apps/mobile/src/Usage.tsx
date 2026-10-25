@@ -1,13 +1,13 @@
-// Usage, pushed in the Settings sheet, as the desktop's usage page (UsagePage.tsx) has it, for a phone. Cost and Tokens
-// sum every connected computer's `usage/daily` over a range: the totals, the tokens by kind, a
-// bar chart a tap reads out, a card per provider, a breakdown by model or day, and each
-// computer's part. Limits shows each subscription's windows once, from `usage/limits`. Pull to
-// refresh asks every computer again.
-import { useIsFocused } from "@react-navigation/native";
+// Usage, a sheet over Settings, as the desktop's usage page (UsagePage.tsx) has it, for a phone.
+// Cost and Tokens sum every connected computer's `usage/daily` over a range: the totals, the
+// tokens by kind, a bar chart a tap reads out, a card per provider, and a breakdown by model or
+// day. Limits shows each subscription's windows once, from `usage/limits`. The header's refresh
+// button, or a pull, asks every computer again.
+import { useIsFocused, useNavigation } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
-import { RotateCw } from "lucide-react-native";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
+import { RefreshCw, RotateCw } from "lucide-react-native";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import Svg, { Line, Path } from "react-native-svg";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
@@ -35,6 +35,7 @@ import {
   type Range,
 } from "../../desktop/src/renderer/usageStats";
 import { useFleet, type Computer } from "./fleet";
+import { GlassButton } from "./Glass";
 import { ProviderLogo } from "./logos";
 import type { Colors } from "./theme";
 import { DeviceIcon, Icon, T, useColors } from "./ui";
@@ -72,13 +73,14 @@ const timeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 export function UsageScreen() {
   const c = useColors();
+  const navigation = useNavigation();
   const { computers } = useFleet();
   const focused = useIsFocused();
   const [view, setView] = useState<Choice>("cost");
   const [range, setRange] = useState<Range>("30d");
   // When the range was last chosen or refreshed: what the buckets end at.
   const [now, setNow] = useState(Date.now);
-  const [refreshing, setRefreshing] = useState(false);
+  const [refreshing, setRefreshing] = useState<"pull" | "button">();
   // Each computer's `usage/daily`, by its id and the first day asked for, so a late answer for
   // a range left behind never takes another's place.
   const [daily, setDaily] = useState<Record<string, Daily>>({});
@@ -142,8 +144,9 @@ export function UsageScreen() {
     return () => clearInterval(timer);
   }, [focused, view, connectedKey]);
 
-  const refresh = async () => {
-    setRefreshing(true);
+  /** Asks every computer again, from a pull or the header's button, which spins meanwhile. */
+  const refresh = async (from: "pull" | "button") => {
+    setRefreshing(from);
     // A computer that stopped trying connects again.
     for (const m of computers)
       if (m.state.status === "failed" && !m.state.retrying) void window.parallax.retry(m.machine.id);
@@ -152,15 +155,33 @@ export function UsageScreen() {
     await (view === "limits"
       ? loadLimits(connected)
       : loadDaily(connected, dayKey(buckets(range, at).previous[0]!)));
-    setRefreshing(false);
+    setRefreshing(undefined);
   };
+  const latest = useRef(refresh);
+  latest.current = refresh;
+
+  useLayoutEffect(
+    () =>
+      navigation.setOptions({
+        headerRight: () => (
+          <GlassButton label="Refresh usage" onPress={() => void latest.current("button")}>
+            {refreshing === "button" ? (
+              <ActivityIndicator color={c.foreground} />
+            ) : (
+              <Icon icon={RefreshCw} size={19} />
+            )}
+          </GlassButton>
+        ),
+      }),
+    [navigation, refreshing === "button", c],
+  );
 
   return (
     <ScrollView
       style={{ backgroundColor: c.background }}
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={{ paddingTop: 8, paddingBottom: 60 }}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} />}
+      refreshControl={<RefreshControl refreshing={refreshing === "pull"} onRefresh={() => void refresh("pull")} />}
     >
       <View style={styles.controls}>
         <Segmented label="Usage view" options={views} value={view} onChange={setView} />
@@ -236,7 +257,7 @@ interface Frame {
   sessions: ReturnType<typeof gather>["sessions"];
 }
 
-/** Cost or Tokens over the range, summed across the computers, then each computer's part. */
+/** Cost or Tokens over the range, summed across the computers, or why there's none. */
 function History({
   computers,
   daily,
@@ -264,22 +285,13 @@ function History({
   const frame: Frame | undefined = answered > 0 ? { range, span, days, sessions } : undefined;
   if (frame) held.current = frame;
   const shown = frame ?? (waiting ? held.current : undefined);
-  const cost = view === "cost";
+  if (shown) return <Dashboard frame={shown} stale={!frame} view={view} by={by} onBy={setBy} />;
+  if (waiting) return <Empty title="Loading usage…" />;
+  const problem = computers.map((m) => answer(m.machine.id)).find((a) => a && "problem" in a);
   return (
-    <>
-      {shown ? (
-        <Dashboard frame={shown} stale={!frame} view={view} by={by} onBy={setBy} />
-      ) : waiting ? (
-        <Empty title="Loading usage…" />
-      ) : null}
-      <ComputersPart
-        computers={computers}
-        answer={answer}
-        measure={(m) => (cost ? m.cost : tokensOf(m))}
-        format={(n) => (cost ? dollars(n) : `${tokenCount.format(n)} tokens`)}
-        span={span}
-      />
-    </>
+    <Empty title="No usage">
+      {problem && "problem" in problem ? problem.problem : "None of your computers is connected."}
+    </Empty>
   );
 }
 
@@ -879,72 +891,6 @@ function Breakdown({
 }
 
 /**
- * Each computer's part of the range, or why it has none: offline, an older plxd, or a source it
- * couldn't read.
- */
-function ComputersPart({
-  computers,
-  answer,
-  measure,
-  format,
-  span,
-}: {
-  computers: Computer[];
-  answer: (id: string) => Daily | undefined;
-  measure: (m: Measures) => number;
-  format: (n: number) => string;
-  span: ReturnType<typeof buckets>;
-}) {
-  const c = useColors();
-  const lines = computers.map((m) => {
-    const status = statusOf(m.state);
-    const a = answer(m.machine.id);
-    if (status) return { m, detail: status };
-    if (!a) return { m, detail: "Loading…" };
-    if ("problem" in a) return { m, detail: a.problem };
-    const total = summarize(a.days, span.starts, span.previous, span.partial).total;
-    const problems = a.problems.map((p) => p.message);
-    return { m, value: total, detail: problems.join(" ") || undefined };
-  });
-  const whole = lines.reduce((sum, l) => sum + (l.value ? measure(l.value) : 0), 0);
-  return (
-    <View style={{ gap: 10, marginTop: 16 }}>
-      <T muted medium style={styles.heading}>
-        Computers
-      </T>
-      <Card padded={false}>
-        {lines.map(({ m, value, detail }, i) => (
-          <View
-            key={m.machine.id}
-            style={[styles.computer, i < lines.length - 1 && { borderBottomColor: c.border, borderBottomWidth: StyleSheet.hairlineWidth }]}
-          >
-            <DeviceIcon name={m.machine.name} size={18} color={m.connected ? c.foreground : c.faintForeground} />
-            <View style={{ flex: 1, gap: 2 }}>
-              <View style={styles.lead}>
-                <T numberOfLines={1} style={{ flex: 1 }}>
-                  {m.machine.name}
-                </T>
-                {value && (
-                  <T medium style={{ fontVariant: ["tabular-nums"] }}>
-                    {format(measure(value))}
-                  </T>
-                )}
-              </View>
-              {value && whole > 0 && <Meter share={measure(value) / whole} color={c.accent} />}
-              {!!detail && (
-                <T muted style={{ fontSize: 12.5, lineHeight: 17 }}>
-                  {detail}
-                </T>
-              )}
-            </View>
-          </View>
-        ))}
-      </Card>
-    </View>
-  );
-}
-
-/**
  * Every computer's subscriptions' limit windows, read live from their CLIs: a section per
  * provider set up in Settings, a card per window. Each provider shows once (`mergeAccounts`).
  */
@@ -1142,7 +1088,6 @@ const styles = StyleSheet.create({
   breakdownHead: { flexDirection: "row", paddingTop: 10, paddingBottom: 4, borderTopWidth: StyleSheet.hairlineWidth },
   breakdownRow: { paddingVertical: 10 },
   more: { alignItems: "center", paddingTop: 12, marginTop: 2, borderTopWidth: StyleSheet.hairlineWidth },
-  computer: { flexDirection: "row", alignItems: "flex-start", gap: 12, paddingHorizontal: 16, paddingVertical: 12 },
   limitBar: { height: 36, borderRadius: 8, overflow: "hidden", marginTop: 12, justifyContent: "center" },
   limitLeft: { position: "absolute", left: 12, fontSize: 12.5, fontWeight: "600" },
   reset: {
