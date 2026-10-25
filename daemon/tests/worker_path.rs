@@ -11,14 +11,13 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use common::{run_worker, tool_result, worker_request};
+use common::{Worktree, claude_under_test, run_worker, tool_result, worker_request};
 use plxd::backend::claude::{ENV_FILE_ENV, write_env_file};
 use plxd::paths::DataDir;
 
 #[tokio::test]
 async fn a_worker_keeps_plxds_path_when_zsh_startup_resets_it() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     assert!(
@@ -29,11 +28,13 @@ async fn a_worker_keeps_plxds_path_when_zsh_startup_resets_it() {
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
     let data = root.join("data");
-    let worktree = data.join("worktrees/run");
-    let context = data.join("context/p");
-    let git_dir = root.join("repo/.git");
+    let Worktree {
+        path: worktree,
+        git_dir,
+        context,
+    } = common::worktree(&root, &data);
     let tools = root.join("tools");
-    for folder in [&home, &worktree, &context, &git_dir, &tools] {
+    for folder in [&home, &tools] {
         fs::create_dir_all(folder).unwrap();
     }
     // As nix-darwin's /etc/zshenv does: every zsh reads it, even `zsh -c`.
@@ -41,11 +42,6 @@ async fn a_worker_keeps_plxds_path_when_zsh_startup_resets_it() {
     let tool = tools.join("parallax-path-probe");
     fs::write(&tool, "#!/bin/sh\necho found-the-tool\n").unwrap();
     fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
-    fs::write(
-        worktree.join(".git"),
-        format!("gitdir: {}/worktrees/run\n", git_dir.display()),
-    )
-    .unwrap();
 
     let (request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
     let path = format!(

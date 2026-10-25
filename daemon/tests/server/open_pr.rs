@@ -10,8 +10,8 @@ use parallax_protocol::methods::{
     AgentCancel, AgentList, AgentOpenPr, AgentStart, RepoAdd, ThreadStart,
 };
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind,
-    ParallaxEvent, ProjectId, RepoAddParams, RepoId, RunId, ThreadStartParams,
+    AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind, ParallaxEvent,
+    ProjectId, RepoAddParams, RepoId, RunId, ThreadStartParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, find_program};
@@ -151,31 +151,7 @@ pub(crate) fn add_origin(repo: &Path, dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn thread(repo: Option<RepoId>) -> ThreadStartParams {
-    ThreadStartParams {
-        run_id: RunId::generate(),
-        repo,
-        project: None,
-        parent: None,
-        notify: None,
-        title: None,
-        prompt: "Rewrite the README".to_owned(),
-        account: Some(AccountChoice::Subscription {
-            backend: "fake".to_owned(),
-        }),
-        model: None,
-        effort: None,
-        permission: None,
-        context_window: None,
-        fast: None,
-        branch_slug: None,
-        images: Vec::new(),
-        approvals: false,
-        checkout: false,
-        base: None,
-        checkout_ref: None,
-        threads: Vec::new(),
-        naming: None,
-    }
+    crate::threads::start_params(repo, "Rewrite the README")
 }
 
 pub(crate) fn open(run_id: RunId, title: &str, body: Option<&str>) -> AgentOpenPrParams {

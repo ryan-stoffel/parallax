@@ -11,10 +11,10 @@ use parallax_protocol::methods::{
     RepoAdd, TaskDelegate, ThreadDelete, ThreadList, ThreadStart,
 };
 use parallax_protocol::{
-    AcceptId, AccountChoice, AgentAcceptParams, AgentCommitParams, AgentDelivery,
-    AgentEventsParams, AgentListParams, AgentOutputItem, AgentPermission, AgentSendParams,
-    AgentStatus, AgentWaitParams, AgentWaitUntil, ErrorKind, OrchestrationCommand, ParallaxEvent,
-    RepoAddParams, RepoId, RunId, TaskDelegateParams, Thread, ThreadDeleteParams, ThreadListParams,
+    AcceptId, AgentAcceptParams, AgentCommitParams, AgentDelivery, AgentEventsParams,
+    AgentListParams, AgentOutputItem, AgentPermission, AgentSendParams, AgentStatus,
+    AgentWaitParams, AgentWaitUntil, ErrorKind, OrchestrationCommand, ParallaxEvent, RepoAddParams,
+    RepoId, RunId, TaskDelegateParams, Thread, ThreadDeleteParams, ThreadListParams,
     ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
@@ -28,9 +28,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::time::{Instant, sleep};
 
-use crate::agents::{Conn, Host, end_turn, fake, git, init, real_repo, text};
+use crate::agents::{Conn, Host, end_turn, fake, git, init, real_repo, send_params, text};
 use crate::mcp::{Mcp, mcp_command};
 use crate::support::{PATIENCE, temp_dir};
+use crate::threads::start_params;
 
 /// Echoes each message, takes a moment, and finishes its turn.
 fn echo() -> Vec<Step> {
@@ -58,31 +59,7 @@ async fn caller(client: &mut Conn, repos: &TempDir) -> (RunId, RepoId) {
         .unwrap()
         .repo;
     let started = client
-        .call::<ThreadStart>(ThreadStartParams {
-            run_id: RunId::generate(),
-            repo: Some(repo.id),
-            project: None,
-            parent: None,
-            notify: None,
-            title: None,
-            prompt: "Plan the work.".to_owned(),
-            account: Some(AccountChoice::Subscription {
-                backend: "fake".to_owned(),
-            }),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            branch_slug: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-            approvals: false,
-            checkout: false,
-            base: None,
-            checkout_ref: None,
-            naming: None,
-        })
+        .call::<ThreadStart>(start_params(Some(repo.id), "Plan the work."))
         .await
         .unwrap();
     (started.run.id, repo.id)
@@ -600,29 +577,8 @@ async fn thread_fork_refuses_a_running_turn_and_more_permission() {
 
     let bypass = client
         .call::<ThreadStart>(ThreadStartParams {
-            run_id: RunId::generate(),
-            repo: None,
-            project: None,
-            parent: None,
-            notify: None,
-            title: None,
-            prompt: "Do anything.".to_owned(),
-            account: Some(AccountChoice::Subscription {
-                backend: "fake".to_owned(),
-            }),
-            model: None,
-            effort: None,
             permission: Some(AgentPermission::Bypass),
-            context_window: None,
-            fast: None,
-            branch_slug: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-            approvals: false,
-            checkout: false,
-            base: None,
-            checkout_ref: None,
-            naming: None,
+            ..start_params(None, "Do anything.")
         })
         .await
         .unwrap()
@@ -959,19 +915,8 @@ async fn working(client: &mut Conn, run: RunId) {
 async fn steer(client: &mut Conn, run: RunId, text: &str) {
     client
         .call::<AgentSend>(AgentSendParams {
-            run_id: run,
-            turn_id: TurnId::generate(),
-            text: text.to_owned(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-            from: None,
             delivery: Some(AgentDelivery::Steer),
+            ..send_params(run, TurnId::generate(), text)
         })
         .await
         .unwrap();
@@ -1223,21 +1168,7 @@ async fn a_task_is_cancelled_or_stopped_with_its_parent() {
     // The user's next message lets wake-ups through again, and its turn's end would send what
     // waits: the Stop dropped the stopped task's.
     client
-        .call::<AgentSend>(AgentSendParams {
-            run_id: me,
-            turn_id: TurnId::generate(),
-            text: "Carry on.".to_owned(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-            from: None,
-            delivery: None,
-        })
+        .call::<AgentSend>(send_params(me, TurnId::generate(), "Carry on."))
         .await
         .unwrap();
     let _ = client
@@ -1647,19 +1578,8 @@ async fn resumed_children_obey_host_cap() {
     }
     let refused = client
         .call::<AgentSend>(AgentSendParams {
-            run_id: old[0],
-            turn_id: TurnId::generate(),
-            text: "Resume old child.".into(),
-            from: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
             delivery: Some(AgentDelivery::Steer),
+            ..send_params(old[0], TurnId::generate(), "Resume old child.")
         })
         .await
         .unwrap_err();
@@ -1746,19 +1666,8 @@ async fn a_steer_into_an_idle_shared_session_obeys_the_host_cap() {
     // The last to settle keeps its idle session.
     let refused = client
         .call::<AgentSend>(AgentSendParams {
-            run_id: old[7],
-            turn_id: TurnId::generate(),
-            text: "Steer the idle child.".into(),
-            from: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
             delivery: Some(AgentDelivery::Steer),
+            ..send_params(old[7], TurnId::generate(), "Steer the idle child.")
         })
         .await
         .unwrap_err();
