@@ -39,6 +39,7 @@ mod turns;
 mod usage;
 mod wakes;
 mod worktree;
+mod you_entries;
 
 use std::fs;
 use std::path::Path;
@@ -70,6 +71,7 @@ pub use threads::{ForkedFrom, Repo, RepoFields, Thread, ThreadFields, ThreadUpda
 pub use usage::{LimitSnapshot, SessionModelUsage, UsageDelta, UsageHour, UsageSummary};
 pub use wakes::WakeState;
 pub use worktree::{Worktree, WorktreeFields};
+pub use you_entries::YouEntry;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const WAL_RETRY_INTERVAL: Duration = Duration::from_millis(20);

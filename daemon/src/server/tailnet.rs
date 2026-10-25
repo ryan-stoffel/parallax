@@ -342,7 +342,7 @@ impl Serving {
                         info!(%peer, node = %whois.node, "accepted a tailnet connection");
                         // Small request and answer frames: send each at once.
                         let _ = stream.set_nodelay(true);
-                        connection::serve(stream, daemon, stop_reading, closing).await;
+                        connection::serve(stream, daemon, stop_reading, closing, true).await;
                     }
                     Err(reason) => warn!(%peer, %reason, "refused a tailnet connection"),
                 }
