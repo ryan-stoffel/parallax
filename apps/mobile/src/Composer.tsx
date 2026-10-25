@@ -9,7 +9,7 @@ import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { Asset, type AssetMetadata } from "expo-media-library";
 import { Check, ChevronLeft, ChevronRight, FileText, Plus, X } from "lucide-react-native";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Image,
   Keyboard,
@@ -403,6 +403,7 @@ export function Composer({
   const [attaching, setAttaching] = useState(false);
   // Library photos tapped in the attach sheet and still being read, shown as attached already.
   const [pending, setPending] = useState<string[]>([]);
+  const reading = useRef(new Set<string>());
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
   const connected = !!computer?.connected;
@@ -462,13 +463,15 @@ export function Composer({
 
   /** Attaches a recent photo tapped in the attach sheet, or takes it off when it's attached. */
   async function toggleRecent(p: AssetMetadata) {
-    if (pending.includes(p.id)) return;
+    // The ref, not `pending`, so a second tap before the first's render lands sees the first.
+    if (reading.current.has(p.id)) return;
     const had = attached.find((a) => a.kind === "image" && a.asset === p.id);
     if (had) return setAttached((a) => a.filter((x) => x !== had));
-    if (attached.filter((a) => a.kind === "image").length + pending.length >= maxImages) {
+    if (attached.filter((a) => a.kind === "image").length + reading.current.size >= maxImages) {
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       return setError(`A message takes up to ${maxImages} photos.`);
     }
+    reading.current.add(p.id);
     setPending((x) => [...x, p.id]);
     try {
       const asset = new Asset(p.id);
@@ -484,6 +487,7 @@ export function Composer({
     } catch (e) {
       setError((e as Error).message);
     } finally {
+      reading.current.delete(p.id);
       setPending((x) => x.filter((id) => id !== p.id));
     }
   }
@@ -517,7 +521,8 @@ export function Composer({
           text: withFiles(text.trim(), paths),
           images,
           options: {
-            ...(changes && shownModel !== "" && { model: shownModel }),
+            // Until the default provider is read, the model shown may be another provider's.
+            ...(changes && (model ?? (read ? shownModel : "")) !== "" && { model: model ?? shownModel }),
             ...(moved && { account: { kind: "subscription" as const, backend: moved } }),
             ...(changes && effort && offer.efforts && { effort }),
             ...(changes && permission && offer.permissions.includes(permission) && { permission }),

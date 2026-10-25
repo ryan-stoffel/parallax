@@ -9,7 +9,6 @@ import {
   createNavigationContainerRef,
   DarkTheme,
   DefaultTheme,
-  getActionFromState,
   NavigationContainer,
   type LinkingOptions,
 } from "@react-navigation/native";
@@ -121,6 +120,8 @@ const THREADS = "parallax://threads";
 const linking: LinkingOptions<Screens> = {
   prefixes: ["parallax://"],
   config: {
+    // A link to a sheet opens it over a new thread's page, so closing it leaves a main view.
+    initialRouteName: "StartThread",
     screens: {
       Thread: "thread/:hostId/:runId",
       ThreadDetails: "details/:hostId/:runId",
@@ -135,11 +136,14 @@ const linking: LinkingOptions<Screens> = {
       StartThread: "new/:hostId/:groupId",
     },
   },
-  getActionFromState(state, options) {
-    const route = state.routes[0];
-    return route?.name === "Thread" || route?.name === "StartThread"
+  // An open app: a thread or a new thread's page becomes the main view, and anything else opens
+  // over it. The link's state starts at `initialRouteName`, so its own screen is the last.
+  getActionFromState(state) {
+    const route = state.routes[state.routes.length - 1];
+    if (!route) return undefined;
+    return route.name === "Thread" || route.name === "StartThread"
       ? CommonActions.reset({ index: 0, routes: [{ name: route.name, params: route.params }] })
-      : getActionFromState(state, options);
+      : CommonActions.navigate(route.name, route.params);
   },
 };
 
