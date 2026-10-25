@@ -12,13 +12,14 @@ const listAccounts =
 
 /**
  * The first signed-in account in ListAccounts' answer, or undefined for none. Each account is an
- * array: its name at 2, email at 3, picture at 4, 1 at 5 while it's valid, and 1 at 9 once it's
- * signed out but remembered (Chromium's gaia_auth_util.cc).
+ * array: its name at 2, email at 3, picture at 4, 0 at 9 once its session is no longer valid, and
+ * 1 at 14 once it's signed out but remembered (Chromium's ParseListAccountsData in
+ * gaia_auth_util.cc).
  */
 export function parseListAccounts(text: string): GoogleAccount | undefined {
   try {
     const [, accounts] = JSON.parse(text) as [unknown, unknown[][]];
-    const account = accounts.find((a) => a[5] === 1 && a[9] !== 1 && typeof a[3] === "string");
+    const account = accounts.find((a) => a[9] !== 0 && a[14] !== 1 && typeof a[3] === "string");
     if (!account) return undefined;
     return {
       name: typeof account[2] === "string" && account[2] ? account[2] : (account[3] as string),

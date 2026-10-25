@@ -1673,7 +1673,11 @@ export function App() {
               style={browserStyle}
               className="flex min-h-0 flex-1 flex-col bg-pane"
             >
-              <Browser scope="permanent" remoteHost={host.id === localId ? undefined : host.name} />
+              <Browser
+                scope="permanent"
+                remoteHost={host.id === localId ? undefined : host.name}
+                onEmpty={() => setMainPage(undefined)}
+              />
             </div>
           )}
           {/* Outside the views, so the terminals live on behind Settings. */}

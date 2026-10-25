@@ -571,6 +571,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     downloads: () => Promise.resolve([]),
     onDownloads: () => () => {},
     googleAccount: () => Promise.resolve(undefined),
+    siteIcon: () => Promise.resolve(undefined),
     onGoogleAccount: () => () => {},
     downloadAction: () => {},
     setDownloadPrefs: () => {},
