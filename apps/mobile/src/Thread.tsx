@@ -1,14 +1,17 @@
-// One thread, on any computer, as the desktop's transcript shows it (AgentChat.tsx): the user's
-// messages in bubbles with their images and files, the agent's answers, its steps as the desktop's
-// trace lines (steps.ts words them; each opens to its input, images, and output, an edit to its
-// diff), a finished turn folded under "Worked for …" with the files it changed, the files it
-// presented, and the composer, with what waits on the user and the thread's tabs over it
-// (ThreadStrips.tsx). Images open in the lightbox, and other files, as cards, in Quick Look.
+// One thread, on any computer, as the desktop's transcript shows it (AgentChat.tsx), starting at its
+// first message as a chat does: the user's messages in bubbles with their images and files, which a
+// long press lifts into a menu (MessageMenu.tsx), the agent's answers with a Copy button under each,
+// its steps as the desktop's trace lines (steps.ts words them), a finished turn folded under
+// "Worked for …" with the files it changed, the files it presented, and the composer, with what
+// waits on the user and the thread's tabs over it (ThreadStrips.tsx). A fold or a run of steps opens
+// in the trace sheet (TraceSheet.tsx), and a lone step at its detail. Images open in the lightbox,
+// and other files, as cards, in Quick Look. Until the transcript loads, a skeleton stands in.
 import { useHeaderHeight } from "@react-navigation/elements";
 import type { NativeStackHeaderItemMenuAction, NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
-import { ChevronRight, FoldVertical, Hand, KeyRound, RotateCcw, WifiOff } from "lucide-react-native";
+import { Check, ChevronRight, Copy, FoldVertical, Hand, KeyRound, RotateCcw, WifiOff } from "lucide-react-native";
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   Alert,
@@ -23,14 +26,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { splitFiles, isImagePath } from "../../desktop/src/renderer/attachments";
 import { attentionOf } from "../../desktop/src/renderer/attention";
-import { loadImage } from "../../desktop/src/renderer/images";
-import {
-  activity,
-  inputText,
-  stepLabel,
-  summarize,
-  toolKind,
-} from "../../desktop/src/renderer/steps";
+import { activity, stepLabel, summarize, toolKind } from "../../desktop/src/renderer/steps";
 import { asksOf, parentOf } from "../../desktop/src/renderer/threads";
 import {
   failureText,
@@ -38,7 +34,6 @@ import {
   isMedia,
   isRunning,
   statusLabel,
-  subagentRuns,
   workedFor,
   type DocRef,
   type Item,
@@ -47,17 +42,20 @@ import {
 import { useAgentRun } from "../../desktop/src/renderer/useAgentRun";
 import type { ThreadRun } from "../../desktop/src/protocol/generated/protocol";
 import { Composer } from "./Composer";
-import { DiffView, TurnChanges } from "./Diff";
+import { TurnChanges } from "./Diff";
 import { counts, editRows } from "./diffLogic";
 import { FileCard, openLinked } from "./FileCard";
 import { useComputer, useFleet } from "./fleet";
 import { openLightbox } from "./Lightbox";
+import { MessageMenu } from "./MessageMenu";
 import type { Screens } from "./nav";
 import { DiffStats } from "./PullRequestParts";
 import { setViewing } from "./push";
+import { TranscriptSkeleton } from "./Skeleton";
 import { startedPrompt } from "./started";
-import { font } from "./theme";
 import { ThreadStrips } from "./ThreadStrips";
+import { opens, RunImage, toolLook, TraceSheet } from "./TraceSheet";
+import { unansweredOf } from "./unanswered";
 import {
   AttentionBadge,
   duration,
@@ -71,8 +69,9 @@ import {
 } from "./ui";
 
 /**
- * The thread, as the rows below need it: where it runs, which rows are open, and each turn's run
- * by the turn id of its last reply, for its changed files.
+ * The thread, as the rows below need it: where it runs, which changed files are open, each turn's
+ * run by the turn id of its last reply, for its changed files, what opens the trace sheet, and the
+ * message Edit can take back.
  */
 interface RowContextValue {
   hostId: string;
@@ -81,35 +80,37 @@ interface RowContextValue {
   open: ReadonlySet<string>;
   toggle: (key: string) => void;
   replies: ReadonlyMap<string, ThreadRun>;
+  /** Opens the trace sheet on `work` under `title`, at step `start`'s detail when given. */
+  openTrace: (work: Work, title: string, start?: string) => void;
+  /** The latest message while the agent hasn't answered it, by its row key, and what edits it. */
+  editable?: { key: string; edit: () => void };
 }
 const RowContext = createContext<RowContextValue>(null!);
 
 type TraceStatus = "running" | "error" | "pending" | undefined;
 
-/** One trace line, as the desktop's TraceLine: an icon, a title, and how it went. */
+/** One trace line, as the desktop's TraceLine: an icon, a title, how it went, and a chevron when it opens. */
 function TraceLine({
   icon,
   title,
   description,
   status,
-  openKey,
+  onPress,
   changed,
 }: {
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   title: string;
   description?: string;
   status?: TraceStatus;
-  /** The key that opens it, when it opens. */
-  openKey?: string;
+  onPress?: () => void;
   /** An edit's lines added and removed. */
   changed?: { added: number; removed: number };
 }) {
   const c = useColors();
-  const { open, toggle } = useContext(RowContext);
   const color = status === "error" ? c.danger : c.mutedForeground;
   const line = (
     <View style={[styles.line, status === "pending" && { opacity: 0.6 }]}>
-      <View style={styles.traceIcon}>{icon}</View>
+      {!!icon && <View style={styles.traceIcon}>{icon}</View>}
       <T numberOfLines={1} style={{ ...styles.trace, color, flexShrink: 1 }}>
         {title}
       </T>
@@ -119,219 +120,114 @@ function TraceLine({
           {description}
         </T>
       )}
-      {openKey && (
-        <View style={{ transform: [{ rotate: open.has(openKey) ? "90deg" : "0deg" }] }}>
-          <Icon icon={ChevronRight} size={14} color={c.faintForeground} />
-        </View>
-      )}
+      {onPress && <Icon icon={ChevronRight} size={15} color={c.faintForeground} />}
     </View>
   );
-  if (!openKey) return line;
+  if (!onPress) return line;
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityState={{ expanded: open.has(openKey) }}
-      onPress={() => toggle(openKey)}
-      hitSlop={4}
+      accessibilityHint="Opens its steps"
+      onPress={onPress}
+      hitSlop={6}
+      style={({ pressed }) => pressed && { opacity: 0.55 }}
     >
       {line}
     </Pressable>
   );
 }
 
-/** What an open line shows, indented under it behind a rule. */
-function Opened({ openKey, children }: { openKey: string; children: React.ReactNode }) {
-  const c = useColors();
-  const { open } = useContext(RowContext);
-  if (!open.has(openKey)) return null;
-  return <View style={[styles.opened, { borderLeftColor: c.border }]}>{children}</View>;
-}
-
-/** A labeled block of a call's input or output, as the desktop's `Block`. */
-function Block({ label, text }: { label: string; text: string }) {
-  const c = useColors();
-  return (
-    <View style={{ gap: 4 }}>
-      <T faint style={{ fontSize: 12 }}>
-        {label}
-      </T>
-      <View style={[styles.block, { backgroundColor: c.code, borderColor: c.border }]}>
-        <T selectable style={{ fontFamily: font.mono, fontSize: 11.5, lineHeight: 17 }} numberOfLines={60}>
-          {text}
-        </T>
-      </View>
-    </View>
-  );
-}
-
-/** One of a run's images (`agent/image`), as a thumbnail that opens the lightbox with its set. */
-function RunImage({ id, ids, size = 120 }: { id: string; ids: string[]; size?: number }) {
-  const c = useColors();
-  const { hostId, runId } = useContext(RowContext);
-  const [uri, setUri] = useState<string>();
-  useEffect(() => void loadImage(hostId, runId, id).then(setUri), [hostId, runId, id]);
-  return (
-    <Pressable
-      accessibilityRole="imagebutton"
-      accessibilityLabel="Image"
-      onPress={() =>
-        void Promise.all(ids.map((i) => loadImage(hostId, runId, i))).then((uris) =>
-          openLightbox(
-            uris.flatMap((u) => (u ? [{ uri: u }] : [])),
-            Math.max(0, ids.indexOf(id)),
-          ),
-        )
-      }
-    >
-      <Image
-        source={uri ? { uri } : undefined}
-        style={{ width: size, height: size, borderRadius: 10, backgroundColor: c.code }}
-        resizeMode="cover"
-      />
-    </Pressable>
-  );
-}
-
-/** How a call went: its line's status, and in words when it failed or never finished. */
-const statuses: Record<string, { status?: TraceStatus; said?: string }> = {
-  running: { status: "running" },
-  ok: {},
-  error: { status: "error", said: "Failed" },
-  denied: { status: "error", said: "Denied" },
-  none: { status: "pending", said: "No result" },
-};
-
-function ToolCall({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: boolean }) {
+/** A lone call's line: its icon, what it did, how it went, and an edit's lines changed. */
+function ToolLine({ item, live, onPress }: { item: Extract<Item, { kind: "tool" }>; live: boolean; onPress?: () => void }) {
   const c = useColors();
   const { root } = useContext(RowContext);
-  const status = item.status ?? (live ? "running" : "none");
-  // A status newer than this app reads as no result.
-  const look = statuses[status] ?? statuses["none"]!;
-  // An edit opens to its diff, as the desktop's does, in place of its input.
+  const look = toolLook(item, live);
   const diff = useMemo(() => editRows(item.name, item.input), [item.name, item.input]);
   return (
-    <View>
-      <TraceLine
-        icon={status === "running" ? <WorkingMark size={14} /> : <KindIcon kind={toolKind(item.name)} color={look.status === "error" ? c.danger : c.mutedForeground} />}
-        title={stepLabel(item, root, status === "running")}
-        description={look.said}
-        status={look.status}
-        openKey={item.key}
-        changed={diff && counts(diff)}
-      />
-      <Opened openKey={item.key}>
-        {diff ? <DiffView rows={diff} /> : item.input !== undefined && <Block label="Input" text={inputText(item.input)} />}
-        {!!item.images?.length && (
-          <View style={{ gap: 4 }}>
-            <T faint style={{ fontSize: 12 }}>
-              Images
-            </T>
-            <View style={styles.images}>
-              {item.images.map((id) => (
-                <RunImage key={id} id={id} ids={item.images!} />
-              ))}
-            </View>
-          </View>
-        )}
-        {item.output !== undefined && <Block label="Output" text={item.output} />}
-      </Opened>
-    </View>
+    <TraceLine
+      icon={look.tone === "running" ? <WorkingMark size={14} /> : <KindIcon kind={toolKind(item.name)} color={look.tone === "error" ? c.danger : c.mutedForeground} />}
+      title={stepLabel(item, root, look.tone === "running")}
+      description={look.said}
+      status={look.tone}
+      onPress={onPress}
+      changed={diff && counts(diff)}
+    />
   );
 }
 
-/** A step that isn't a call: a thought, a checklist, or a notice. */
-function StepRow({ item, live }: { item: Item; live: boolean }) {
+/** A lone step's line: a call, a thought, a checklist, or a notice. */
+function StepLine({ item, live, onPress }: { item: Item; live: boolean; onPress?: () => void }) {
   const c = useColors();
   switch (item.kind) {
     case "tool":
-      return <ToolCall item={item} live={live} />;
+      return <ToolLine item={item} live={live} onPress={onPress} />;
     case "reasoning":
-      return (
-        <View>
-          <TraceLine icon={<KindIcon kind="thinking" color={c.mutedForeground} />} title="Thought" openKey={item.key} />
-          <Opened openKey={item.key}>
-            <T muted style={{ fontSize: 13.5, lineHeight: 20 }}>
-              {item.text.trim()}
-            </T>
-          </Opened>
-        </View>
-      );
+      return <TraceLine icon={<KindIcon kind="thinking" color={c.mutedForeground} />} title="Thought" onPress={onPress} />;
     case "todo":
-      return (
-        <View>
-          <TraceLine icon={<KindIcon kind="planning" color={c.mutedForeground} />} title="Updated the plan" openKey={item.key} />
-          <Opened openKey={item.key}>
-            {item.items.map((todo, i) => (
-              <T
-                key={i}
-                muted
-                style={{
-                  fontSize: 13.5,
-                  textDecorationLine: todo.status === "completed" ? "line-through" : "none",
-                }}
-              >
-                {todo.status === "completed" ? "✓" : todo.status === "inProgress" ? "›" : "○"} {todo.text}
-              </T>
-            ))}
-          </Opened>
-        </View>
-      );
+      return <TraceLine icon={<KindIcon kind="planning" color={c.mutedForeground} />} title="Updated the plan" onPress={onPress} />;
     default:
       return <RowView row={item} live={live} />;
   }
 }
 
-/** A finished turn's items with each run of steps between its messages as one `Work`. */
-function stepRuns(items: readonly Item[]): (Item | Work)[] {
-  const out: (Item | Work)[] = [];
-  let run: Item[] = [];
-  const flush = () => {
-    out.push(...subagentRuns(run));
-    run = [];
-  };
-  for (const item of items)
-    if (["reasoning", "tool", "todo", "notice"].includes(item.kind)) run.push(item);
-    else {
-      flush();
-      out.push(item);
-    }
-  flush();
-  return out;
-}
+/** The kinds of row a fold's steps are, for its sheet's title. */
+const stepKinds = ["reasoning", "tool", "todo"];
 
-/** A run of steps: one alone as its row, several as their summary, or what's under way now. */
+/** A run of steps: one alone as its line, several as their summary, or what's under way now. */
 function Steps({ work, live }: { work: Work; live: boolean }) {
   const c = useColors();
-  const { root } = useContext(RowContext);
+  const { root, openTrace } = useContext(RowContext);
   const only = work.items.length === 1 ? work.items[0]! : undefined;
   const last = work.items.findLast((i) => i.kind !== "notice");
   const active = live && last?.kind === "tool" && last.status === undefined;
-  if (only && !active) return <StepRow item={only} live={live} />;
-  const now = active ? activity(last) : undefined;
   const summary = summarize(work.items);
+  const open = (start?: string) => () => openTrace(work, summary.label, start);
+  if (only && !active) return <StepLine item={only} live={live} onPress={opens(only) ? open(only.key) : undefined} />;
+  const now = active ? activity(last) : undefined;
+  if (now)
+    return (
+      <TraceLine
+        icon={<WorkingMark size={14} />}
+        title={now.detail ? `${now.label} ${now.detail.replace(`${root}/`, "")}` : now.label}
+        status="running"
+        onPress={open()}
+      />
+    );
   return (
-    <View>
-      {now ? (
-        <TraceLine
-          icon={<WorkingMark size={14} />}
-          title={now.detail ? `${now.label} ${now.detail.replace(`${root}/`, "")}` : now.label}
-          status="running"
-          openKey={work.key}
-        />
-      ) : (
-        <TraceLine
-          icon={<KindIcon kind={summary.kind} color={summary.failures ? c.danger : c.mutedForeground} />}
-          title={summary.label}
-          description={summary.failures ? `${summary.failures} failed` : undefined}
-          status={summary.failures ? "error" : undefined}
-          openKey={work.key}
-        />
-      )}
-      <Opened openKey={work.key}>
-        {work.items.map((item) => (
-          <StepRow key={item.key} item={item} live={live} />
-        ))}
-      </Opened>
+    <TraceLine
+      icon={<KindIcon kind={summary.kind} color={summary.failures ? c.danger : c.mutedForeground} />}
+      title={summary.label}
+      description={summary.failures ? `${summary.failures} failed` : undefined}
+      status={summary.failures ? "error" : undefined}
+      onPress={open()}
+    />
+  );
+}
+
+/** The quiet buttons under an answer, as Claude's app has them: Copy, its Markdown, with a check a moment after. */
+function ReplyActions({ text }: { text: string }) {
+  const c = useColors();
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 1500);
+    return () => clearTimeout(timer);
+  }, [copied]);
+  return (
+    <View style={styles.actions}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={copied ? "Copied" : "Copy"}
+        hitSlop={6}
+        onPress={() => {
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+          void Clipboard.setStringAsync(text);
+          setCopied(true);
+        }}
+        style={({ pressed }) => [styles.action, pressed && { backgroundColor: c.selected }]}
+      >
+        <Icon icon={copied ? Check : Copy} size={16} color={c.faintForeground} />
+      </Pressable>
     </View>
   );
 }
@@ -433,18 +329,22 @@ function ApprovalLine({ item }: { item: Extract<Item, { kind: "approval" }> }) {
   );
 }
 
-/** The user's message: its images, its attached files as cards, and its text in a bubble. */
+/**
+ * The user's message: its images, its attached files as cards, and its text in a bubble, which a
+ * long press lifts into its menu.
+ */
 function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
   const c = useColors();
-  const { hostId } = useContext(RowContext);
+  const { hostId, runId, root, editable } = useContext(RowContext);
   const { text, paths } = splitFiles(item.text ?? "");
   const files = paths.filter((p) => !isImagePath(p));
+  const said = item.text === null ? "A message" : text;
   return (
     <View style={{ alignItems: "flex-end", gap: 6 }}>
       {!!item.images?.length && (
         <View style={[styles.images, { justifyContent: "flex-end" }]}>
           {item.images.map((id) => (
-            <RunImage key={id} id={id} ids={item.images!} size={96} />
+            <RunImage key={id} scope={{ hostId, runId, root }} id={id} ids={item.images!} size={96} />
           ))}
         </View>
       )}
@@ -454,11 +354,11 @@ function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
         </View>
       ))}
       {!!text.trim() && (
-        <View style={[styles.bubble, { backgroundColor: c.selected }]}>
-          <T selectable style={{ fontSize: 15, lineHeight: 22 }}>
-            {item.text === null ? "A message" : text}
-          </T>
-        </View>
+        <MessageMenu text={said} onEdit={editable?.key === item.key ? editable.edit : undefined}>
+          <View style={[styles.bubble, { backgroundColor: c.selected }]}>
+            <T style={{ fontSize: 15, lineHeight: 22 }}>{said}</T>
+          </View>
+        </MessageMenu>
       )}
     </View>
   );
@@ -509,25 +409,15 @@ function turnReplies(rows: readonly Row[], runs: readonly ThreadRun[]): Map<stri
 
 function RowView({ row, live }: { row: Row; live: boolean }) {
   const c = useColors();
-  const { hostId, runId, open, toggle, replies } = useContext(RowContext);
+  const { hostId, runId, open, toggle, replies, openTrace } = useContext(RowContext);
   switch (row.kind) {
-    case "work":
-      if (row.done)
-        return (
-          <View>
-            <TraceLine
-              icon={null}
-              title={workedFor(row.startedAt, row.endedAt)}
-              openKey={row.key}
-            />
-            <Opened openKey={row.key}>
-              {stepRuns(row.items).map((r) =>
-                r.kind === "work" ? <Steps key={r.key} work={r} live={false} /> : <RowView key={r.key} row={r} live={false} />,
-              )}
-            </Opened>
-          </View>
-        );
-      return <Steps work={row} live={live} />;
+    case "work": {
+      if (!row.done) return <Steps work={row} live={live} />;
+      // The sheet sums up its steps, or says how long it took when it holds only messages.
+      const steps = row.items.filter((i) => stepKinds.includes(i.kind));
+      const took = workedFor(row.startedAt, row.endedAt);
+      return <TraceLine title={took} onPress={() => openTrace(row, steps.length ? summarize(steps).label : took)} />;
+    }
     case "user":
       return <UserRow item={row} />;
     case "assistant": {
@@ -536,6 +426,7 @@ function RowView({ row, live }: { row: Row; live: boolean }) {
         <View>
           <Markdown text={row.text} onFile={(path) => void openLinked(hostId, runId, path)} />
           {turn && <TurnChanges hostId={hostId} threadId={runId} run={turn} open={open} toggle={toggle} />}
+          {!row.partial && <ReplyActions text={row.text} />}
         </View>
       );
     }
@@ -601,11 +492,14 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const insets = useSafeAreaInsets();
   const headerHeight = useHeaderHeight();
   const computer = useComputer(hostId);
-  const { drafts, computers } = useFleet();
+  const { drafts } = useFleet();
   const connected = !!computer?.connected;
-  const { transcript, error, queue, cancel, held, background, watching, runs } = useAgentRun(hostId, runId, connected);
+  const { transcript, error, sent, queue, cancel, held, background, watching, runs } = useAgentRun(hostId, runId, connected);
   const [draft, setDraft] = useState(drafts.get(runId) ?? "");
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  // What the trace sheet last opened on, as it was then, and a count that makes each opening fresh.
+  const [trace, setTrace] = useState<{ key: string; title: string; items: Item[]; start?: string; n: number }>();
+  const [traceOpen, setTraceOpen] = useState(false);
   const state = computer?.view.state;
   const thread = state?.threads.find((t) => t.id === runId);
   const run = state?.runs[runId];
@@ -636,8 +530,8 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      // Only the glass buttons, on a bar the page's own color: its title is at the transcript's
-      // top. Not transparent: iOS 26 veils an inverted list under a transparent bar.
+      // Only the glass buttons, on a bar the page's own color, as Claude's app has no title over a
+      // chat. Not transparent: iOS 26 veils an inverted list under a transparent bar.
       headerTitle: "",
       headerShadowVisible: false,
       // A native menu, in sections as iOS's own apps group theirs.
@@ -738,14 +632,33 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   // with no turn id, so it's matched by there being none.
   const first = transcript.items.some((i) => i.kind === "user") ? undefined : startedPrompt(runId);
   const parent = thread && state ? parentOf(state, thread) : undefined;
-  const subtitle = [computers.length > 1 && computer?.machine.name, run?.branch].filter(Boolean).join(" · ");
   // When the current turn's prompt went, for "Working for".
   const since = transcript.items.findLast((i) => i.kind === "user")?.at;
+  // Nothing in yet: no rows, no prompt from here, and no error to say instead.
+  const loading =
+    !!computer && rows.length === 0 && !first && pending.length === 0 && error === undefined && (transcript.seq === 0 || computer.view.loading);
 
-  const edit = (next: string) => {
+  const changeDraft = (next: string) => {
     setDraft(next);
     drafts.set(runId, next);
   };
+
+  // The latest message while the agent hasn't answered it, which Edit takes back as the desktop's
+  // pencil does (AgentChat.tsx): the run is stopped and the message dropped, and its text goes back
+  // in the composer.
+  const stalled = error !== undefined || !connected;
+  const unanswered = useMemo(
+    () =>
+      isRunning(transcript.run?.status) && !stalled && pending.length === 0
+        ? unansweredOf(transcript.items, sent)
+        : undefined,
+    [transcript, stalled, pending.length, sent],
+  );
+
+  // The trace sheet follows its work as it grows, and keeps what it had once the work is gone.
+  const traced = trace && rows.find((r) => r.key === trace.key);
+  const traceItems = traced?.kind === "work" ? traced.items : (trace?.items ?? []);
+
   const context: RowContextValue = {
     hostId,
     runId,
@@ -758,6 +671,18 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
         return next;
       }),
     replies,
+    openTrace: (work, title, start) => {
+      void Haptics.selectionAsync();
+      setTrace((t) => ({ key: work.key, title, items: work.items, start, n: (t?.n ?? 0) + 1 }));
+      setTraceOpen(true);
+    },
+    editable: unanswered && {
+      key: unanswered.key,
+      edit: () =>
+        void cancel(true).then((failed) =>
+          failed ? Alert.alert("Couldn't stop the thread", failed) : changeDraft(unanswered.text),
+        ),
+    },
   };
 
   return (
@@ -775,73 +700,75 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
             </T>
           </View>
         )}
-        <FlatList
-          inverted
-          data={[...rows].reverse()}
-          keyExtractor={(i) => i.key}
-          contentContainerStyle={styles.transcript}
-          keyboardDismissMode="interactive"
-          accessibilityLabel="Transcript"
-          // At the transcript's top, under the header's glass buttons: the thread's title, quietly.
-          ListFooterComponent={
-            <View style={{ paddingTop: 4, paddingBottom: 6, gap: 2 }}>
-              <T medium numberOfLines={2} style={{ fontSize: 17, lineHeight: 23, fontWeight: "600" }}>
-                {title}
-              </T>
-              {!!subtitle && (
-                <T faint numberOfLines={1} style={{ fontSize: 13, lineHeight: 18 }}>
-                  {subtitle}
-                </T>
-              )}
-            </View>
-          }
-          ListHeaderComponent={
-            <View style={{ gap: 14, marginTop: 14 }}>
-              {first && (
-                <View style={{ alignItems: "flex-end", gap: 4 }}>
-                  <View style={[styles.bubble, { backgroundColor: c.selected }]}>
-                    <T selectable style={{ fontSize: 15, lineHeight: 22 }}>
-                      {splitFiles(first).text}
+        {loading ? (
+          <TranscriptSkeleton />
+        ) : (
+          <FlatList
+            inverted
+            data={[...rows].reverse()}
+            keyExtractor={(i) => i.key}
+            // A short transcript starts at the top, as a chat does: inverted, the end is the top.
+            contentContainerStyle={styles.transcript}
+            keyboardDismissMode="interactive"
+            accessibilityLabel="Transcript"
+            ListHeaderComponent={
+              <View style={{ gap: 14, marginTop: 14 }}>
+                {first && (
+                  <View style={{ alignItems: "flex-end", gap: 4 }}>
+                    <View style={[styles.bubble, styles.sent, { backgroundColor: c.selected }]}>
+                      <T style={{ fontSize: 15, lineHeight: 22 }}>{splitFiles(first).text}</T>
+                    </View>
+                    <T faint style={{ fontSize: 12 }}>
+                      Sending…
                     </T>
                   </View>
-                  <T faint style={{ fontSize: 12 }}>
-                    Sending…
-                  </T>
-                </View>
-              )}
-              {[
-                ...pending.map((m) => ({
-                  id: m.id,
-                  text: m.text,
-                  note: `${connected ? "Sending…" : "Waiting for connection"}${m.steer ? " · steer" : ""}`,
-                })),
-              ].map((m) => (
-                <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
-                  <View style={[styles.bubble, { backgroundColor: c.selected, opacity: 0.6 }]}>
-                    <T>{splitFiles(m.text).text}</T>
+                )}
+                {[
+                  ...pending.map((m) => ({
+                    id: m.id,
+                    text: m.text,
+                    note: `${connected ? "Sending…" : "Waiting for connection"}${m.steer ? " · steer" : ""}`,
+                  })),
+                ].map((m) => (
+                  <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
+                    <View style={[styles.bubble, styles.sent, { backgroundColor: c.selected, opacity: 0.6 }]}>
+                      <T>{splitFiles(m.text).text}</T>
+                    </View>
+                    <T faint style={{ fontSize: 12 }}>
+                      {m.note}
+                    </T>
                   </View>
-                  <T faint style={{ fontSize: 12 }}>
-                    {m.note}
+                ))}
+                {working && <WorkingFor since={since} />}
+                {!working && attention !== "settled" && attention !== "working" && (
+                  <AttentionBadge attention={attention} />
+                )}
+                {error && (
+                  <T alert style={{ fontSize: 13, color: c.danger }}>
+                    {error}
                   </T>
-                </View>
-              ))}
-              {working && <WorkingFor since={since} />}
-              {!working && attention !== "settled" && attention !== "working" && (
-                <AttentionBadge attention={attention} />
-              )}
-              {error && (
-                <T alert style={{ fontSize: 13, color: c.danger }}>
-                  {error}
-                </T>
-              )}
-            </View>
-          }
-          renderItem={({ item, index }) => (
-            <View style={{ marginTop: item.kind === "user" ? 22 : 12 }}>
-              <RowView row={item} live={working && index < 3} />
-            </View>
-          )}
-        />
+                )}
+              </View>
+            }
+            renderItem={({ item, index }) => (
+              <View style={{ marginTop: item.kind === "user" ? 22 : 12 }}>
+                <RowView row={item} live={working && index < 3} />
+              </View>
+            )}
+          />
+        )}
+        {trace && (
+          <TraceSheet
+            key={trace.n}
+            open={traceOpen}
+            onClose={() => setTraceOpen(false)}
+            title={trace.title}
+            items={traceItems}
+            start={trace.start}
+            live={working && traced?.kind === "work" && !traced.done}
+            scope={{ hostId, runId, root: run?.worktreePath }}
+          />
+        )}
         <ThreadStrips
           hostId={hostId}
           runId={runId}
@@ -852,7 +779,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           queue={queue}
           held={held}
           running={isRunning(transcript.run?.status)}
-          stalled={error !== undefined || !connected}
+          stalled={stalled}
           connected={connected}
           parent={
             parent && {
@@ -867,7 +794,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           run={run}
           working={working}
           draft={draft}
-          onDraft={edit}
+          onDraft={changeDraft}
           onStop={() => void cancel()}
           bottom={Math.max(insets.bottom, 8)}
         />
@@ -889,13 +816,16 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  transcript: { paddingHorizontal: 18, paddingVertical: 12 },
-  line: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 24 },
+  transcript: { flexGrow: 1, justifyContent: "flex-end", paddingHorizontal: 18, paddingVertical: 12 },
+  line: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 28 },
   traceIcon: { width: 16, alignItems: "center" },
   trace: { fontSize: 14, lineHeight: 20 },
-  opened: { marginTop: 6, marginBottom: 4, marginLeft: 7, borderLeftWidth: 1, paddingLeft: 14, gap: 8 },
-  block: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8 },
   images: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  bubble: { maxWidth: "85%", borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9 },
+  // A sent message's bubble is as wide as MessageMenu lets it be; one still sending sets its own.
+  bubble: { borderRadius: 18, paddingHorizontal: 14, paddingVertical: 9 },
+  sent: { maxWidth: "85%" },
   rule: { flex: 1, height: StyleSheet.hairlineWidth },
+  // Under an answer, its buttons line up with its text.
+  actions: { flexDirection: "row", marginTop: 4, marginLeft: -7 },
+  action: { width: 32, height: 32, borderRadius: 16, alignItems: "center", justifyContent: "center" },
 });
