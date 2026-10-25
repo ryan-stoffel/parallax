@@ -20,6 +20,7 @@ import {
   Ellipsis,
   FileDiff,
   Folder,
+  FolderGit2,
   FolderPlus,
   GitBranch,
   GitFork,
@@ -492,9 +493,9 @@ function sweepOut(keys: string[], to: string, stagger = 0) {
  * Search, the repo filter, a menu to create a Project or add a repository, and New thread, then
  * (0075) the favorites, every host's Projects and the pinned threads moved up, the pinned threads
  * in their folders, a divider with Clear and the View panel, and Today: every other open thread,
- * most recently active first, grouped as View says. A thread row shows its repo or folder,
- * how long ago it was prompted or what it asks of the user, its title, branch, git status, and
- * pull request. Threads another thread started don't list (0041); a Project's show only inside it
+ * most recently active first, grouped as View says. A thread row shows its title, how long ago it
+ * was prompted or what it asks of the user, its repo or folder, git status, and pull request; its
+ * card adds its branch, which search also matches. Threads another thread started don't list (0041); a Project's show only inside it
  * (0042). While a thread is working it sits in a Working drawer above Snoozed and Archived, until it
  * finishes. Rows that move slide to their place. Changes the user makes show a toast with Undo,
  * which ⌘Z also runs. Resting on a thread shows a card.
@@ -3082,9 +3083,8 @@ function ThreadRow({
         {look !== "compact" && (!nested || hasDetails) && (
           <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
             {!nested && <RowPlace repo={repo} folder={folder} words={words} />}
-            <span className="flex min-w-0 flex-1 items-center gap-1">
-              {git && <GitCounts git={git} />}
-            </span>
+            {/* Never under its content's width, so a long repo name truncates instead. */}
+            <span className="flex flex-1 items-center gap-1">{git && <GitCounts git={git} />}</span>
             {thread.pinned && (
               <span title="Pinned" role="img" aria-label="Pinned" className="flex shrink-0">
                 <Pin className="size-3" />
@@ -3366,7 +3366,7 @@ function ThreadRow({
 }
 
 /**
- * The git status beside a row's branch: commits not pushed, then uncommitted lines.
+ * A row's git status, after its repo: commits not pushed, then uncommitted lines.
  * plxd doesn't count commits behind yet.
  */
 function GitCounts({ git }: { git: GitStatus }) {
@@ -3547,8 +3547,9 @@ function RowCard({ ref }: { ref: RefObject<CardHandle | null> }) {
 }
 
 /**
- * What a thread is, shown beside its row: its title, repository, computer, branch, account,
- * changes, and status, from its run as last listed (resting on the row lists it again).
+ * What a thread is, shown beside its row: its title, repository, computer, worktree branch or local
+ * checkout, account, changes, and status, from its run as last listed (resting on the row lists it
+ * again).
  */
 function ThreadCard({
   title,
@@ -3585,11 +3586,18 @@ function ThreadCard({
           {hostIcon(host)}
           <span className="truncate">{host.name}</span>
         </li>
-        {run?.branch && (
+        {run?.checkout ? (
           <li>
-            <GitBranch />
-            <span className="truncate">{run.branch}</span>
+            <Folder />
+            <span className="truncate">Local checkout</span>
           </li>
+        ) : (
+          run?.branch && (
+            <li>
+              <FolderGit2 />
+              <span className="truncate">{run.branch}</span>
+            </li>
+          )
         )}
         {run?.accountId && (
           <li>
