@@ -170,7 +170,7 @@ type Watch = {
  * Opens plxd's `/ws` with a new ticket, or says why it can't: `revoked` only when plxd doesn't
  * know the session anymore, else an error for people.
  */
-export type OpenSocket = () => Promise<WebSocket | { error: string }>;
+type OpenSocket = () => Promise<WebSocket | { error: string }>;
 
 /** `OpenSocket` for this browser's `session`, to the plxd that served the page. */
 export const openSocket =

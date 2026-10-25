@@ -136,7 +136,7 @@ test("iOS video without a description reopens for one, then reuses it", async ()
       closeDeviceStream: (id: string) => closed.push(id),
     },
   });
-  const events = { onStatus: () => {}, onScreen: () => {}, onInput: () => {} };
+  const events = { onStatus: () => {}, onScreen: () => {} };
   const canvas = { getContext: () => null } as unknown as HTMLCanvasElement;
   const stream = createDeviceStream(
     { hostId: "h", deviceId: "d", platform: "ios" },

@@ -17,7 +17,7 @@ type Mat = [Vec, Vec, Vec];
 const rad = (deg: number) => (deg * Math.PI) / 180;
 
 /** `rotateX(pitch) rotateY(yaw) rotateZ(roll)`'s matrix, in CSS's axes (y down, z toward you). */
-export function rotation({ pitch, yaw, roll }: Turn): Mat {
+function rotation({ pitch, yaw, roll }: Turn): Mat {
   const [a, b, c] = [rad(pitch), rad(yaw), rad(roll)];
   const x: Mat = [
     [1, 0, 0],

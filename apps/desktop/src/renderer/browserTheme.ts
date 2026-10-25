@@ -28,7 +28,7 @@ type Fixed = { light: BrowserColors; dark: BrowserColors };
 type Seeded = { seed: string; variant: "tonal" | "neutral" };
 
 /** A theme: the app's own colors, a fixed set, or a seed Chrome builds a palette from. */
-export interface BrowserTheme {
+interface BrowserTheme {
   id: string;
   name: string;
   colors?: Fixed | Seeded;
@@ -156,7 +156,7 @@ function lightness(hex: string): number {
 export const accentText = (accent: string) => (lightness(accent) > 0.1791 ? "#1A1C1C" : "#FFFFFF");
 
 /** A seeded theme's colors, as Chrome builds them from the seed's hue. */
-export function seededColors({ seed, variant }: Seeded, dark: boolean): BrowserColors {
+function seededColors({ seed, variant }: Seeded, dark: boolean): BrowserColors {
   const hue = Hct.fromInt(argbFromHex(seed)).hue;
   const chroma =
     variant === "tonal"

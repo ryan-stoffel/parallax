@@ -1266,13 +1266,6 @@ body {
     translate: 0 6px;
   }
 }
-@keyframes sidebar-pop {
-  from {
-    opacity: 0;
-    translate: 0 -4px;
-    scale: 0.985;
-  }
-}
 :root.reduce-motion .row-flash {
   animation: none;
 }
@@ -1966,19 +1959,6 @@ body {
   .mark-done-animate :is(.mark-blue, .mark-coral) {
     display: none;
   }
-}
-
-/* A line that's new arrives in three steps, as a pixel would. */
-.pixel-fade {
-  animation: pixel-fade 0.6s steps(3, end) both;
-}
-@keyframes pixel-fade {
-  from {
-    opacity: 0;
-  }
-}
-:root.reduce-motion .pixel-fade {
-  animation: none;
 }
 
 /* A faint line on hover or focus, so the divider reads as draggable without shouting. */

@@ -130,7 +130,7 @@ export function FilesPanel({
     if (active.current !== d || saving.current === d) return;
     const name = value.trim();
     const from = "path" in d ? d.path : undefined;
-    const folder = from === undefined ? (d as { folder: string }).folder : parentOf(from);
+    const folder = "path" in d ? parentOf(d.path) : d.folder;
     if (!name || (from !== undefined && name === nameOf(from))) return cancelDraft();
     const path = join(folder, name);
     saving.current = d;
@@ -441,7 +441,7 @@ function Empty({ title, hint }: { title: string; hint: string }) {
 }
 
 /** A file's text, or a note when it's binary. */
-export function fileText(bytes: Uint8Array): { text: string } | { note: string } {
+function fileText(bytes: Uint8Array): { text: string } | { note: string } {
   if (bytes.includes(0)) return { note: "This is a binary file." };
   try {
     return { text: new TextDecoder("utf-8", { fatal: true }).decode(bytes) };

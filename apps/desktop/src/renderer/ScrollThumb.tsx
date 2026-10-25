@@ -48,6 +48,10 @@ export function ScrollThumb({ target }: { target: () => HTMLElement | null | und
   }, [target]);
 
   if (!geometry) return null;
+  const endDrag = () => {
+    drag.current = undefined;
+    setDragging(false);
+  };
   return (
     <div
       aria-hidden
@@ -66,14 +70,8 @@ export function ScrollThumb({ target }: { target: () => HTMLElement | null | und
         const ratio = (el.scrollHeight - el.clientHeight) / Math.max(1, track);
         el.scrollTop = drag.current.scrollTop + (e.clientY - drag.current.y) * ratio;
       }}
-      onPointerUp={() => {
-        drag.current = undefined;
-        setDragging(false);
-      }}
-      onPointerCancel={() => {
-        drag.current = undefined;
-        setDragging(false);
-      }}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
       data-scroll-thumb
       style={{ top: geometry.top, height: geometry.height, left: geometry.left }}
       className={`group/thumb absolute z-10 flex w-2.5 cursor-default justify-center transition-opacity duration-200 group-hover/scroll:opacity-100 ${scrolling || dragging ? "opacity-100" : "opacity-0"}`}

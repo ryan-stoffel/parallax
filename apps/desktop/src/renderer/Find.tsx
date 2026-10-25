@@ -151,12 +151,12 @@ export function useFind({
     const others: Range[] = [];
     let chosen: Range | undefined;
     let settled = false;
+    const hit = hits[at];
     for (const el of root.querySelectorAll<HTMLElement>("[data-index]")) {
       const ranges = domRanges(el, query);
-      const hit = hits[at];
-      if (hit && hit.row === Number(el.dataset["index"])) settled = true;
-      const pick =
-        hit && hit.row === Number(el.dataset["index"]) ? Math.min(hit.nth, ranges.length - 1) : -1;
+      const here = hit?.row === Number(el.dataset["index"]);
+      if (here) settled = true;
+      const pick = here ? Math.min(hit.nth, ranges.length - 1) : -1;
       ranges.forEach((r, i) => (i === pick ? (chosen = r) : others.push(r)));
     }
     highlights.set("find", new Highlight(...others));

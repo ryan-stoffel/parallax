@@ -17,7 +17,7 @@ import {
 } from "three";
 
 /** The cover display (1) and the inside one (3), as the hub numbers them. */
-export type DuoDisplay = 1 | 3;
+type DuoDisplay = 1 | 3;
 
 /** A canvas in a display's shape, which the stream is drawn onto, and its material. */
 function surface(width: number, height: number) {
@@ -87,9 +87,6 @@ export function createDuo(model: Object3D) {
   const relative = new Matrix4();
 
   return {
-    get display() {
-      return display;
-    },
     /** Opens the hinge to `angle` degrees, 0 closed and 180 flat, with `live` the display on. */
     fold(live: DuoDisplay, angle: number) {
       if (live !== display) surfaces[display].clear();

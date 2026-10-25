@@ -225,6 +225,7 @@ export function DevicePanel({
     if ("error" in answer) setFailure({ id: "hub", message: answer.error.message });
     await refresh();
   };
+  const open = (target: DeviceInfo) => (target.booted ? select(target.id) : start(target));
 
   if (!state) return <Skeleton />;
   if ("error" in state) {
@@ -251,7 +252,7 @@ export function DevicePanel({
         failure={failure?.id === device.id || failure?.id === "hub" ? failure.message : undefined}
         onRetry={() => (device.booted ? void refresh() : start(device))}
         onSetUp={() => void setUp()}
-        onOpen={(target) => (target.booted ? select(target.id) : start(target))}
+        onOpen={open}
         onGallery={() => select("")}
         onPowerOff={() => void powerOff(device)}
       />
@@ -262,7 +263,7 @@ export function DevicePanel({
       hostId={hostId}
       state={state}
       busy={busy}
-      onOpen={(target) => (target.booted ? select(target.id) : start(target))}
+      onOpen={open}
       onCreate={(platform) => void create(platform)}
     />
   );
@@ -307,44 +308,38 @@ function Notice({
 function Pill({
   children,
   onClick,
-  href,
   dark,
   title,
 }: {
   children: ReactNode;
-  onClick?: () => void;
-  href?: string;
+  onClick: () => void;
   dark?: boolean;
   title?: string;
 }) {
-  const look = `inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-body font-medium transition-[transform,background-color] duration-100 active:scale-95 [&_svg]:size-3.5 ${
-    dark ? "bg-white text-black hover:bg-white/90" : "bg-selected text-foreground hover:bg-hover"
-  }`;
-  return href ? (
-    <a href={href} target="_blank" rel="noreferrer" title={title} className={look}>
-      {children}
-    </a>
-  ) : (
-    <button type="button" title={title} onClick={onClick} className={look}>
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-body font-medium transition-[transform,background-color] duration-100 active:scale-95 [&_svg]:size-3.5 ${
+        dark
+          ? "bg-white text-black hover:bg-white/90"
+          : "bg-selected text-foreground hover:bg-hover"
+      }`}
+    >
       {children}
     </button>
   );
 }
 
 /** Apple's and Android's marks, for each device's platform. */
-function PlatformMark({
-  platform,
-  className = "size-3.5",
-}: {
-  platform: DevicePlatform;
-  className?: string;
-}) {
+function PlatformMark({ platform }: { platform: DevicePlatform }) {
   return platform === "ios" ? (
-    <svg viewBox="0 0 24 24" aria-hidden className={`${className} fill-current`}>
+    <svg viewBox="0 0 24 24" aria-hidden className="size-3.5 fill-current">
       <path d="M16.37 12.6c-.02-2.16 1.77-3.2 1.85-3.25-1-1.47-2.57-1.67-3.13-1.7-1.33-.13-2.6.79-3.28.79-.68 0-1.72-.77-2.83-.75-1.45.02-2.8.85-3.55 2.15-1.52 2.63-.39 6.52 1.09 8.66.72 1.04 1.58 2.22 2.71 2.18 1.09-.04 1.5-.7 2.82-.7 1.31 0 1.68.7 2.83.68 1.17-.02 1.91-1.06 2.62-2.11.83-1.21 1.17-2.38 1.19-2.44-.03-.01-2.28-.88-2.32-3.47ZM14.2 6.25c.6-.73 1-1.73.89-2.75-.86.04-1.9.57-2.52 1.3-.55.64-1.04 1.67-.91 2.66.96.07 1.94-.49 2.54-1.21Z" />
     </svg>
   ) : (
-    <svg viewBox="0 0 24 24" aria-hidden className={`${className} fill-current`}>
+    <svg viewBox="0 0 24 24" aria-hidden className="size-3.5 fill-current">
       <path d="M17.6 9.48 19.44 6.3a.38.38 0 0 0-.66-.38l-1.86 3.22a11.5 11.5 0 0 0-9.84 0L5.22 5.92a.38.38 0 0 0-.66.38L6.4 9.48A10.8 10.8 0 0 0 1 18h22a10.8 10.8 0 0 0-5.4-8.52ZM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5Z" />
     </svg>
   );
@@ -897,7 +892,6 @@ function Viewer({
         onStatus: (next, detail) => setStatus({ status: next, detail }),
         onScreen: setScreen,
         onFrame: () => modelVisible.current && model.current?.frame(),
-        onInput: () => {},
       },
     );
     stream.current = live;
@@ -998,7 +992,7 @@ function Viewer({
         if (event.button !== 0 || !ready || !chrome) return;
         event.stopPropagation();
         event.currentTarget.setPointerCapture(event.pointerId);
-        (area.current?.querySelector('[role="application"]') as HTMLElement | null)?.focus();
+        area.current?.querySelector<HTMLElement>('[role="application"]')?.focus();
       } else if (!touching.current) return;
       event.stopPropagation();
       const last = touching.current;
@@ -1074,7 +1068,7 @@ function Viewer({
     const hit = ready ? modelPoint(event, false) : null;
     if (hit) {
       touching3d.current = hit;
-      (area.current?.querySelector('[role="application"]') as HTMLElement | null)?.focus();
+      area.current?.querySelector<HTMLElement>('[role="application"]')?.focus();
       stream.current?.touchRaw("begin", hit.x, hit.y);
       return;
     }
@@ -1249,17 +1243,10 @@ function Viewer({
     },
   };
 
-  const control = (
-    label: string,
-    icon: ReactNode,
-    onClick: () => void,
-    disabled = !ready,
-    pressed?: boolean,
-  ) => (
+  const control = (label: string, icon: ReactNode, onClick: () => void, disabled = !ready) => (
     <button
       type="button"
       aria-label={label}
-      aria-pressed={pressed}
       title={label}
       disabled={disabled}
       onClick={onClick}

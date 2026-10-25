@@ -26,7 +26,7 @@ export interface DeviceScreen {
 }
 
 /** How an iPhone Duo can be folded: shut on its cover, half open as a book, or flat open. */
-export type DuoPose = "closed" | "book" | "open";
+type DuoPose = "closed" | "book" | "open";
 
 /**
  * Which of an iPhone Duo's displays a stream `width` by `height` shows, as serve-sim streams the
@@ -35,30 +35,24 @@ export type DuoPose = "closed" | "book" | "open";
 export const duoDisplay = (width: number, height: number) =>
   Math.min(width, height) > 1700 ? 3 : 1;
 
-export interface DeviceStreamEvents {
+interface DeviceStreamEvents {
   onStatus: (status: DeviceStreamStatus, detail?: string) => void;
   onScreen: (screen: DeviceScreen) => void;
-  /** Whether input reaches the device. */
-  onInput: (connected: boolean) => void;
   /** A new frame is on the canvas, for a view that copies it, such as the 3D view's screen. */
   onFrame?: () => void;
 }
 
-export type DeviceButton = "home" | "back" | "recents" | "power" | "appSwitcher";
+type DeviceButton = "home" | "back" | "recents" | "power" | "appSwitcher";
 
 export interface DeviceStream {
   start(): void;
   stop(): void;
-  /** A touch at `x` and `y` from 0 to 1 across the shown screen. */
-  touch(phase: "begin" | "move" | "end", x: number, y: number): void;
   /** A touch at `x` and `y` from 0 to 1 across the device's own screen, however it's turned. */
   touchRaw(phase: "begin" | "move" | "end", x: number, y: number): void;
   key(event: KeyboardEvent, phase: "down" | "up"): void;
   /** Types `text`: as text on Android, as US keyboard keys on iOS. */
   text(text: string): void;
   button(button: DeviceButton): void;
-  /** iOS: turns the simulator to its next orientation. */
-  rotate(): void;
   /** iOS: turns the simulator to `orientation`. */
   orient(orientation: DeviceOrientation): void;
   /** iPhone Duo: folds it to `pose`. */
@@ -145,7 +139,7 @@ export function scanAccessUnit(buf: Uint8Array): { key: boolean; sps: Uint8Array
   return { key, sps };
 }
 
-export type AvccChunk = {
+type AvccChunk = {
   type: "description" | "keyframe" | "delta" | "seed";
   payload: Uint8Array;
 };
@@ -332,7 +326,6 @@ export function createDeviceStream(
   const fail = (detail: string) => {
     if (stopped) return;
     stop();
-    events.onInput(false);
     events.onStatus("error", detail);
   };
   const connecting = (detail?: string) => {
@@ -570,12 +563,10 @@ export function createDeviceStream(
       () => {
         control = undefined;
         inputOpen = false;
-        events.onInput(false);
         retry("control", openIosControl);
       },
       () => {
         inputOpen = true;
-        events.onInput(true);
       },
     );
   };
@@ -595,7 +586,6 @@ export function createDeviceStream(
           }
           return;
         }
-        events.onInput(true);
         const packet = parseSemu(data);
         const ready = videoDecoder?.state === "configured";
         const scanned =
@@ -622,7 +612,6 @@ export function createDeviceStream(
       (error) => {
         control = undefined;
         closeDecoder();
-        events.onInput(false);
         connecting(error);
         retry("control", openAndroid);
       },
@@ -661,21 +650,6 @@ export function createDeviceStream(
     if (!stopped && control && (!ios || inputOpen)) bridge.sendDeviceStream(control, data);
   };
 
-  /** serve-sim streams the raw framebuffer, so a turned simulator's touches turn back to it. */
-  const raw = (x: number, y: number) => {
-    if (!ios || !screen || screen.width > screen.height) return { x, y };
-    switch (screen.orientation) {
-      case "landscape_left":
-        return { x: y, y: 1 - x };
-      case "landscape_right":
-        return { x: 1 - y, y: x };
-      case "portrait_upside_down":
-        return { x: 1 - x, y: 1 - y };
-      default:
-        return { x, y };
-    }
-  };
-
   const hidKey = (usage: number, type: "down" | "up") => send(tagged(IOS_KEY, { type, usage }));
 
   return {
@@ -683,11 +657,6 @@ export function createDeviceStream(
     stop,
     touchRaw(phase, x, y) {
       if (ios) return send(tagged(IOS_TOUCH, { type: phase, x, y }));
-      const action = phase === "begin" ? "down" : phase === "move" ? "move" : "up";
-      send(JSON.stringify({ type: "touch", action, x, y }));
-    },
-    touch(phase, x, y) {
-      if (ios) return send(tagged(IOS_TOUCH, { type: phase, ...raw(x, y) }));
       const action = phase === "begin" ? "down" : phase === "move" ? "move" : "up";
       send(JSON.stringify({ type: "touch", action, x, y }));
     },
@@ -737,12 +706,6 @@ export function createDeviceStream(
         return;
       }
       send(JSON.stringify({ type: button === "appSwitcher" ? "recents" : button }));
-    },
-    rotate() {
-      if (!ios) return;
-      const current = screen?.orientation ?? "portrait";
-      const next = ORIENTATIONS[(ORIENTATIONS.indexOf(current) + 1) % ORIENTATIONS.length];
-      send(tagged(IOS_ORIENTATION, { orientation: next }));
     },
     orient(orientation) {
       if (ios) send(tagged(IOS_ORIENTATION, { orientation }));

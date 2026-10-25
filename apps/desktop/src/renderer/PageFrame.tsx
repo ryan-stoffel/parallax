@@ -207,7 +207,7 @@ export function PageFrame({
               />
             </label>
           ))}
-          {size && <span className="tabular-nums">· {Math.round(scale * 100)}%</span>}
+          <span className="tabular-nums">· {Math.round(scale * 100)}%</span>
           {fixed && (
             <button
               type="button"
@@ -225,21 +225,18 @@ export function PageFrame({
 
 /**
  * The toolbar's ⋮ menu, as Chrome's: its View section, Desktop (the monitor fit) or Panel (the
- * panel fit), with the user's own size as Custom while there is one, then `children`, such as
- * Developer tools.
+ * panel fit), with the user's own size as Custom while there is one.
  */
 export function ViewMenu({
   fit,
   size,
   fixed,
   onFit,
-  children,
 }: {
   fit: Fit;
   size?: Size;
   fixed: boolean;
   onFit: (fit: Fit) => void;
-  children?: ReactNode;
 }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -287,13 +284,6 @@ export function ViewMenu({
             checked
             onClick={() => menu.current?.hidePopover()}
           />
-        )}
-        {children && (
-          // Picking one of them closes the menu too.
-          <div onClick={() => menu.current?.hidePopover()}>
-            <div className="my-1 h-px bg-border" />
-            {children}
-          </div>
         )}
       </Menu>
     </>
