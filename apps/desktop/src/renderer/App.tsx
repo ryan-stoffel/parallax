@@ -286,6 +286,10 @@ export function App() {
   // each time, and each new request to show that view.
   const [revealFile, setRevealFile] = useState<{ runId: string; path: string }>();
   const [showFiles, setShowFiles] = useState<object>();
+  // Once the Files view has taken a pick, it's dropped, so the view doesn't open it again later.
+  useEffect(() => {
+    if (revealFile) setRevealFile(undefined);
+  }, [revealFile]);
 
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
