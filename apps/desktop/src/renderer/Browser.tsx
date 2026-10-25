@@ -700,7 +700,7 @@ function Tab({
   useEffect(() => {
     if (!shown) return;
     if (src) requestAnimationFrame(() => view.current?.focus());
-    else if (!page) requestAnimationFrame(() => addressBar.current?.focus());
+    else if (!page && !load) requestAnimationFrame(() => addressBar.current?.focus());
   }, [shown]);
 
   // Extensions see the shown tab as the active one.
