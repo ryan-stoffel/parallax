@@ -29,10 +29,10 @@ import { capitalized, instanceStatus } from "../../desktop/src/renderer/settings
 import { Choices } from "./Choices";
 import { useComputer, type Computer } from "./fleet";
 import { ProviderLogo } from "./logos";
-import { ago, useNav, type Screens } from "./nav";
+import { ago, useNav, type SettingsScreens } from "./nav";
 import { newInstance, secretName, withVar, argsOf } from "./settingsLogic";
-import { can, fail, Field, Note, Page } from "./SettingsParts";
-import { Row, Section, T, useColors } from "./ui";
+import { can, fail, Field, Note, Page, Section } from "./SettingsParts";
+import { Row, T, useColors } from "./ui";
 
 // Each computer's last `providers/list`, shared by the list and each provider's page, and
 // replaced by each save or remove's answer.
@@ -225,7 +225,7 @@ function useCursorSignIn(id: string, info: ProviderInfo) {
 }
 
 /** An instance's page: its name, account, runtime, variables, models, and Remove. */
-export function ProviderScreen({ route, navigation }: NativeStackScreenProps<Screens, "Provider">) {
+export function ProviderScreen({ route, navigation }: NativeStackScreenProps<SettingsScreens, "Provider">) {
   const { id, instance: instanceId } = route.params;
   const m = useComputer(id);
   const info = useList(id)?.providers.find((p) => p.instance.id === instanceId);

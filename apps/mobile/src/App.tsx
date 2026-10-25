@@ -2,14 +2,15 @@
 // The main view is always one thread, or a new thread's page, with no back stack of threads. A
 // swipe right anywhere on it, or its header's sidebar button, slides the sidebar (Sidebar.tsx) in
 // from the left, pushing the main view along. Search, Settings, and the pull requests rise as
-// sheets up to just below the notch that drag away, and what they open rises as another sheet
-// over them, with a back chevron. The connections, thread lists, and transcripts are the desktop
-// renderer's (fleet.tsx).
+// sheets up to just below the notch that drag away. Settings and the pull requests each hold
+// their own stack, so what they open changes the sheet's content in place, with a back chevron.
+// The connections, thread lists, and transcripts are the desktop renderer's (fleet.tsx).
 import {
   CommonActions,
   createNavigationContainerRef,
   DarkTheme,
   DefaultTheme,
+  getActionFromState,
   getStateFromPath,
   NavigationContainer,
   type LinkingOptions,
@@ -25,10 +26,11 @@ import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AccountProvider, SignIn, useAccount } from "./Account";
+import { AccountScreen } from "./AccountScreen";
 import { useFleet, FleetProvider } from "./fleet";
 import { GlassButton, SidebarIcon } from "./Glass";
 import { loadSetup, probe, saveSetup, type Setup } from "./machines";
-import { SidebarControl, type Screens } from "./nav";
+import { SidebarControl, type PullRequestScreens, type Screens, type SettingsScreens } from "./nav";
 import { NewThreadScreen, StartThreadScreen } from "./NewThread";
 import { Loading, Onboarding } from "./Onboarding";
 import { PullRequestList, PullRequestScreen } from "./PullRequests";
@@ -36,7 +38,7 @@ import { alertFor, notify, onOpened, phaseOf, type Phase } from "./push";
 import { LightboxHost } from "./Lightbox";
 import { getPrefs } from "./prefs";
 import { SearchScreen } from "./Search";
-import { AboutScreen, AddComputerScreen, ComputerScreen, SettingsScreen } from "./Settings";
+import { AboutScreen, AddComputerScreen, ComputerScreen, phonePages, PhoneSettingsScreen, SettingsScreen } from "./Settings";
 import { ComputerSettingsScreen } from "./SettingsComputer";
 import { ProviderScreen } from "./SettingsProviders";
 import { Sidebar, SidebarSky, sidebarWidth } from "./Sidebar";
@@ -47,6 +49,8 @@ import { Icon, useColors } from "./ui";
 import { UsageScreen } from "./Usage";
 
 const Stack = createNativeStackNavigator<Screens>();
+const SettingsStack = createNativeStackNavigator<SettingsScreens>();
+const PullRequestStack = createNativeStackNavigator<PullRequestScreens>();
 const nav = createNavigationContainerRef<Screens>();
 
 /** The main view's header button that opens the sidebar: a sidebar's mark in a glass circle. */
@@ -78,7 +82,8 @@ const mainHeader: NativeStackNavigationOptions = {
  * A form sheet sizes only the scroll view at the root of its screen (react-native-screens), so
  * each such screen is a scroll view, or a header view then one, with
  * `contentInsetAdjustmentBehavior="automatic"`, which keeps its rows clear of the header and the
- * home indicator.
+ * home indicator. A sheet with its own stack (Settings, Pull requests) hides this header and shows
+ * its pages' own.
  */
 const sheet = (c: Colors): NativeStackNavigationOptions => ({
   presentation: "formSheet",
@@ -92,19 +97,21 @@ const sheet = (c: Colors): NativeStackNavigationOptions => ({
 });
 
 /**
- * The same look for a sheet whose screen doesn't keep clear of a clear header yet (the pull
- * requests, and Add computer): its header on the sheet's background with no line, as a page sheet,
- * which drags away but draws no grabber. It takes `sheet` once its root scroll view has
- * `contentInsetAdjustmentBehavior="automatic"`.
+ * A page inside a sheet's own stack: the sheet's clear header with no line, a glass back chevron
+ * that returns to the page under it, and the sheet's background. Each screen is a scroll view
+ * with `contentInsetAdjustmentBehavior="automatic"`, which keeps its rows clear of the header and
+ * the home indicator.
  */
-const pageSheet = (c: Colors): NativeStackNavigationOptions => ({
-  presentation: "modal",
-  headerShadowVisible: false,
-  headerStyle: { backgroundColor: c.background },
-  headerLeftBackgroundVisible: false,
-  headerRightBackgroundVisible: false,
-  contentStyle: { backgroundColor: c.background },
-});
+const inSheet =
+  (c: Colors) =>
+  ({ navigation }: { navigation: { goBack: () => void } }): NativeStackNavigationOptions => ({
+    headerTransparent: true,
+    headerShadowVisible: false,
+    headerLeftBackgroundVisible: false,
+    headerRightBackgroundVisible: false,
+    contentStyle: { backgroundColor: c.background },
+    ...back({ navigation }),
+  });
 
 /** A sheet's glass close button. */
 function CloseButton({ onPress }: { onPress: () => void }) {
@@ -115,7 +122,7 @@ function CloseButton({ onPress }: { onPress: () => void }) {
   );
 }
 
-/** A sheet opened over another sheet's glass back chevron, which returns to the one under it. */
+/** A glass back chevron, which returns to the page or sheet under this one. */
 const back = ({ navigation }: { navigation: { goBack: () => void } }): NativeStackNavigationOptions => ({
   headerLeft: () => (
     <GlassButton label="Back" onPress={() => navigation.goBack()}>
@@ -172,7 +179,8 @@ const THREADS = "parallax://threads";
  * `details/<computer>/<thread>`, a computer's settings at `computer/<computer>` and its pages at
  * `computer/<computer>/<page>`, and a thread's pull request at
  * `parallax://pr/<computer>/<thread>?url=<its URL>`; a new thread's picker at `new` and its page
- * at `new/<computer>/<repo>`. A thread or a new thread's page becomes the main view.
+ * at `new/<computer>/<repo>`. A thread or a new thread's page becomes the main view. A link to a
+ * page of the Settings sheet opens it inside the sheet, over the sheet's first page.
  */
 const linking: LinkingOptions<Screens> = {
   prefixes: ["parallax://"],
@@ -182,12 +190,17 @@ const linking: LinkingOptions<Screens> = {
     screens: {
       Thread: "thread/:hostId/:runId",
       ThreadDetails: "details/:hostId/:runId",
-      Computer: "computer/:id",
-      ComputerSettings: "computer/:id/:page",
       PullRequest: "pr/:hostId/:runId",
-      PullRequests: "prs",
-      Usage: "usage",
-      Settings: "settings",
+      PullRequests: { initialRouteName: "PullRequestList", screens: { PullRequestList: "prs" } },
+      Settings: {
+        initialRouteName: "SettingsHome",
+        screens: {
+          SettingsHome: "settings",
+          Usage: "usage",
+          Computer: "computer/:id",
+          ComputerSettings: "computer/:id/:page",
+        },
+      },
       Search: "search",
       NewThread: "new",
       StartThread: "new/:hostId/:groupId",
@@ -202,13 +215,14 @@ const linking: LinkingOptions<Screens> = {
       : state;
   },
   // An open app: a thread or a new thread's page becomes the main view, and anything else opens
-  // over it. The link's state starts at `initialRouteName`, so its own screen is the last.
-  getActionFromState(state) {
+  // over it, a sheet's page inside its sheet. The link's state starts at `initialRouteName`, so
+  // its own screen is the last.
+  getActionFromState(state, options) {
     const route = state.routes[state.routes.length - 1];
     if (!route) return undefined;
     return route.name === "Thread" || route.name === "StartThread"
       ? CommonActions.reset({ index: 0, routes: [{ name: route.name, params: route.params }] })
-      : CommonActions.navigate(route.name, route.params);
+      : getActionFromState(state, options);
   },
 };
 
@@ -301,6 +315,67 @@ function Rounded({ dim, children }: { dim: string; children: React.ReactNode }) 
   );
 }
 
+/**
+ * The Settings sheet: the sections, with a close and an About button, and every page they open,
+ * pushed inside the sheet.
+ */
+function SettingsSheet() {
+  const c = useColors();
+  return (
+    <SettingsStack.Navigator screenOptions={inSheet(c)}>
+      <SettingsStack.Screen
+        name="SettingsHome"
+        component={SettingsScreen}
+        options={({ navigation }) => ({
+          title: "Settings",
+          headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
+          headerRight: () => (
+            <GlassButton label="About Parallax" onPress={() => navigation.navigate("About")}>
+              <Icon icon={Info} size={20} />
+            </GlassButton>
+          ),
+        })}
+      />
+      <SettingsStack.Screen
+        name="PhoneSettings"
+        component={PhoneSettingsScreen}
+        options={({ route }) => ({ title: phonePages[route.params.page] })}
+      />
+      <SettingsStack.Screen name="Account" component={AccountScreen} options={{ title: "Account" }} />
+      <SettingsStack.Screen name="About" component={AboutScreen} options={{ title: "About" }} />
+      {/* Its refresh button is the screen's own (Usage.tsx). */}
+      <SettingsStack.Screen name="Usage" component={UsageScreen} options={{ title: "Usage" }} />
+      <SettingsStack.Screen name="Computer" component={ComputerScreen} />
+      <SettingsStack.Screen name="ComputerSettings" component={ComputerSettingsScreen} />
+      <SettingsStack.Screen name="Provider" component={ProviderScreen} />
+      {/* Its screen doesn't keep clear of a clear header, so its header is solid, on the sheet's background. */}
+      <SettingsStack.Screen
+        name="AddComputer"
+        component={AddComputerScreen}
+        options={{ title: "", headerTransparent: false, headerStyle: { backgroundColor: c.background } }}
+      />
+    </SettingsStack.Navigator>
+  );
+}
+
+/** The Pull requests sheet: the list, with a close button, and each pull request, pushed inside it. */
+function PullRequestsSheet() {
+  const c = useColors();
+  return (
+    <PullRequestStack.Navigator screenOptions={inSheet(c)}>
+      <PullRequestStack.Screen
+        name="PullRequestList"
+        component={PullRequestList}
+        options={({ navigation }) => ({
+          title: "Pull requests",
+          headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
+        })}
+      />
+      <PullRequestStack.Screen name="PullRequest" component={PullRequestScreen} />
+    </PullRequestStack.Navigator>
+  );
+}
+
 function Main({ setup }: { setup: Setup }) {
   const scheme = useColorScheme();
   const c = scheme === "dark" ? dark : light;
@@ -345,7 +420,8 @@ function Main({ setup }: { setup: Setup }) {
             <Stack.Screen
               name="PullRequest"
               component={PullRequestScreen}
-              // Pushed on a thread it slides in; opened from a sheet it rises as a sheet of its own.
+              // Pushed on a thread it slides in; opened from Thread details it rises as a sheet of
+              // its own. The Pull requests sheet opens it inside itself.
               options={(props) => {
                 const routes = props.navigation.getState().routes;
                 const at = routes.findIndex((r) => r.key === props.route.key);
@@ -367,44 +443,9 @@ function Main({ setup }: { setup: Setup }) {
             />
             <Stack.Screen name="NewThread" component={NewThreadScreen} options={{ ...sheet(c), headerShown: false }} />
             <Stack.Screen name="Search" component={SearchScreen} options={{ ...sheet(c), headerShown: false }} />
-            <Stack.Screen
-              name="Settings"
-              component={SettingsScreen}
-              options={({ navigation }) => ({
-                ...sheet(c),
-                title: "Settings",
-                headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
-                headerRight: () => (
-                  <GlassButton label="About Parallax" onPress={() => navigation.navigate("About")}>
-                    <Icon icon={Info} size={20} />
-                  </GlassButton>
-                ),
-              })}
-            />
-            <Stack.Screen
-              name="PullRequests"
-              component={PullRequestList}
-              options={({ navigation }) => ({
-                ...sheet(c),
-                title: "Pull requests",
-                headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
-              })}
-            />
-            <Stack.Screen name="About" component={AboutScreen} options={(p) => ({ ...sheet(c), ...back(p), title: "About" })} />
-            {/* Its refresh button is the screen's own (Usage.tsx). */}
-            <Stack.Screen name="Usage" component={UsageScreen} options={(p) => ({ ...sheet(c), ...back(p), title: "Usage" })} />
-            <Stack.Screen name="Computer" component={ComputerScreen} options={(p) => ({ ...sheet(c), ...back(p) })} />
-            <Stack.Screen
-              name="ComputerSettings"
-              component={ComputerSettingsScreen}
-              options={(p) => ({ ...sheet(c), ...back(p) })}
-            />
-            <Stack.Screen name="Provider" component={ProviderScreen} options={(p) => ({ ...sheet(c), ...back(p) })} />
-            <Stack.Screen
-              name="AddComputer"
-              component={AddComputerScreen}
-              options={(p) => ({ ...pageSheet(c), ...back(p), title: "" })}
-            />
+            {/* The sheet's grabber is its own; each page's header is its stack's. */}
+            <Stack.Screen name="Settings" component={SettingsSheet} options={{ ...sheet(c), headerShown: false }} />
+            <Stack.Screen name="PullRequests" component={PullRequestsSheet} options={{ ...sheet(c), headerShown: false }} />
           </Stack.Navigator>
         </Shell>
       </NavigationContainer>

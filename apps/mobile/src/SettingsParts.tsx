@@ -1,7 +1,8 @@
-// The pieces the settings pages share: a row's tinted icon, the page, the computer it applies to
-// with a picker for another, a computer's host settings, rows for a switch, a text field, and a
-// line of text, and failures as alerts.
-import { ChevronsUpDown, type LucideIcon } from "lucide-react-native";
+// The pieces the settings pages share, as the desktop's settings/parts.tsx: a group of rows under
+// its label, the page, the computer it applies to with a picker for another, a computer's host
+// settings, rows for a switch, a select, a text field, and a line of text, a row's text action,
+// and failures as alerts.
+import { ChevronsUpDown } from "lucide-react-native";
 import { useEffect, useState, type ComponentProps, type ReactNode } from "react";
 import { Alert, ScrollView, StyleSheet, Switch, TextInput, View } from "react-native";
 
@@ -11,10 +12,10 @@ import type {
   HostSettingsSetParams,
 } from "../../desktop/src/protocol/generated/protocol";
 import { describeError } from "../../desktop/src/renderer/errors";
-import { Choices } from "./Choices";
+import { Choices, type Choice } from "./Choices";
 import { useFleet, type Computer } from "./fleet";
 import { font } from "./theme";
-import { DeviceIcon, Icon, Row, Section, T, useColors } from "./ui";
+import { DeviceIcon, Icon, Row, T, useColors } from "./ui";
 
 /** Says what couldn't be done, and why. */
 export const fail = (title: string, why: RpcError | string) =>
@@ -25,14 +26,89 @@ export const can = (m: Computer, capability: string) =>
   m.state.status === "connected" && capability in m.state.capabilities;
 
 /**
- * A settings row's icon, as Claude's settings draw theirs: a glyph in a soft square of its color.
- * `children` takes the glyph's place, for one that isn't lucide's.
+ * A group of settings, as the desktop's Settings draws one: its label in sentence case, then a
+ * rounded card of rows, and a line under it.
  */
-export function Tile({ icon, color, children }: { icon?: LucideIcon; color: string; children?: ReactNode }) {
+export function Section({ title, footer, children }: { title?: string; footer?: string; children: ReactNode }) {
+  const c = useColors();
   return (
-    <View style={[styles.tile, { backgroundColor: `${color}2e` }]}>
-      {icon ? <Icon icon={icon} size={17} color={color} /> : children}
+    <View style={{ gap: 8 }}>
+      {title && (
+        <T muted medium style={styles.label}>
+          {title}
+        </T>
+      )}
+      <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.border }]}>{children}</View>
+      {footer && (
+        <T faint style={styles.footer}>
+          {footer}
+        </T>
+      )}
     </View>
+  );
+}
+
+/** A row's action on its right, as text in the accent color, or the danger color. */
+export function Action({
+  label,
+  onPress,
+  disabled,
+  destructive,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  destructive?: boolean;
+}) {
+  const c = useColors();
+  return (
+    <T
+      accessibilityRole="button"
+      onPress={disabled ? undefined : onPress}
+      suppressHighlighting
+      style={{ color: disabled ? c.faintForeground : destructive ? c.danger : c.accent }}
+    >
+      {label}
+    </T>
+  );
+}
+
+/** A row whose choice shows on its right with the desktop's select icon, and opens a sheet of the choices. */
+export function SelectRow<V extends string>({
+  title,
+  detail,
+  value,
+  options,
+  onChange,
+  last,
+}: {
+  title: string;
+  detail?: string;
+  value: V;
+  options: Choice<V>[];
+  onChange: (value: V) => void;
+  last?: boolean;
+}) {
+  const c = useColors();
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Row
+        title={title}
+        detail={detail}
+        last={last}
+        onPress={() => setOpen(true)}
+        right={
+          <View style={styles.select}>
+            <T muted numberOfLines={1} style={{ flexShrink: 1 }}>
+              {options.find((o) => o.value === value)?.label ?? "None"}
+            </T>
+            <Icon icon={ChevronsUpDown} size={14} color={c.faintForeground} />
+          </View>
+        }
+      />
+      <Choices title={title} open={open} value={value} options={options} onChoose={onChange} onClose={() => setOpen(false)} />
+    </>
   );
 }
 
@@ -250,7 +326,10 @@ export function Input(props: ComponentProps<typeof TextInput> & { mono?: boolean
 }
 
 const styles = StyleSheet.create({
-  tile: { width: 30, height: 30, borderRadius: 8, borderCurve: "continuous", alignItems: "center", justifyContent: "center" },
+  label: { fontSize: 13, lineHeight: 18, paddingHorizontal: 4 },
+  card: { borderRadius: 14, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
+  footer: { fontSize: 12, lineHeight: 17, paddingHorizontal: 4 },
+  select: { flexDirection: "row", alignItems: "center", gap: 4, maxWidth: 170 },
   block: { paddingHorizontal: 16, paddingVertical: 11 },
   input: {
     marginTop: 4,

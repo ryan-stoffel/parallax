@@ -1,17 +1,16 @@
 // The app's screens and what each opens with, for typed navigation, and the sidebar's controls.
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, type NavigatorScreenParams } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { createContext, useContext } from "react";
 
 import type { SettingsPage } from "./settingsLogic";
 
+/** The main stack: the main view, what pushes over it, and the sheets. */
 export type Screens = {
   /** `instant`: shown without a transition, as a new thread its page started becomes. */
   Thread: { hostId: string; runId: string; instant?: boolean };
   ThreadDetails: { hostId: string; runId: string };
-  Computer: { id: string };
-  ComputerSettings: { id: string; page: SettingsPage };
-  Provider: { id: string; instance: string };
+  /** A pull request, pushed over its thread, or inside the Pull requests sheet. */
   PullRequest: { hostId: string; runId: string; url: string };
   /** The repository, then computer, picker for a new thread, as a sheet. */
   NewThread: undefined;
@@ -19,17 +18,45 @@ export type Screens = {
   StartThread: { hostId?: string; groupId?: string } | undefined;
   /** Search every thread, as a sheet. */
   Search: undefined;
-  /** Settings, as a sheet, which pushes Computer, ComputerSettings, Provider, Usage, About, and AddComputer. */
-  Settings: undefined;
-  /** The app's version and links, pushed in the Settings sheet. */
+  /** Settings, as a sheet that pushes its pages inside itself. */
+  Settings: NavigatorScreenParams<SettingsScreens> | undefined;
+  /** Every pull request, as a sheet that pushes each one inside itself. */
+  PullRequests: NavigatorScreenParams<PullRequestScreens> | undefined;
+};
+
+/** The Settings sheet's pages. */
+export type SettingsScreens = {
+  /** The sections, as the desktop's Settings lists them. */
+  SettingsHome: undefined;
+  /** A section of this phone's own settings. */
+  PhoneSettings: { page: PhonePage };
+  /** The app's version and links. */
   About: undefined;
   Usage: undefined;
-  /** Every pull request, as a sheet, which pushes PullRequest. */
-  PullRequests: undefined;
+  /** The Parallax account, as the desktop's Account dialog has it. */
+  Account: undefined;
+  Computer: { id: string };
+  ComputerSettings: { id: string; page: SettingsPage };
+  Provider: { id: string; instance: string };
   AddComputer: undefined;
 };
 
-export const useNav = () => useNavigation<NativeStackNavigationProp<Screens>>();
+/** This phone's own settings pages: General (notifications) and Appearance. */
+export type PhonePage = "general" | "appearance";
+
+/** The Pull requests sheet's pages. */
+export type PullRequestScreens = {
+  PullRequestList: undefined;
+  PullRequest: Screens["PullRequest"];
+};
+
+/**
+ * Every route by name. A screen navigates by name, and the nearest stack with that name takes it,
+ * so a screen needn't know which stack holds it.
+ */
+export type AllScreens = Screens & SettingsScreens & PullRequestScreens;
+
+export const useNav = () => useNavigation<NativeStackNavigationProp<AllScreens>>();
 
 /** What the main view can show: a thread, or a new thread's page. */
 export type Main =

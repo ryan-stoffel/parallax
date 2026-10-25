@@ -1,7 +1,8 @@
 // A computer's settings, a page per section of the desktop's Settings, in its words: Accounts,
 // Threads, Schedules, Source control, Computer use, Scripts, Connections, and Storage
-// (SettingsProviders.tsx has Providers). Each reads and changes that computer's plxd, and a
-// picker at the top moves the page to another computer.
+// (SettingsProviders.tsx has Providers, which shows Accounts under it, as the desktop's does).
+// Each reads and changes that computer's plxd, and a picker at the top moves the page to another
+// computer.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
 import { ArrowUpRight, Copy, Download, KeyRound, Plus, RefreshCw, ShieldCheck } from "lucide-react-native";
@@ -37,26 +38,13 @@ import { isRepository } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Choices } from "./Choices";
 import { useComputer, type Computer } from "./fleet";
-import { ago, type Screens } from "./nav";
+import { ago, type SettingsScreens } from "./nav";
+import { NewThreadsSection, PhoneConnections } from "./Settings";
 import { choiceKey, pages, type SettingsPage } from "./settingsLogic";
 import { ProvidersPage } from "./SettingsProviders";
-import { Block, can, ComputerPicker, fail, Field, Note, Page, SwitchRow, useHostSettings } from "./SettingsParts";
-import { Button, Dot, GitHubLogo, Row, Section, T, useColors } from "./ui";
+import { Action, Block, can, ComputerPicker, fail, Field, Note, Page, Section, SwitchRow, useHostSettings } from "./SettingsParts";
+import { Button, Dot, GitHubLogo, Row, T, useColors } from "./ui";
 import { font } from "./theme";
-
-/** A setting row's action on its right, in the accent color. */
-function Action({ label, onPress, disabled }: { label: string; onPress: () => void; disabled?: boolean }) {
-  const c = useColors();
-  return (
-    <T
-      accessibilityRole="button"
-      onPress={disabled ? undefined : onPress}
-      style={{ color: disabled ? c.faintForeground : c.accent }}
-    >
-      {label}
-    </T>
-  );
-}
 
 /** Asks for one line of text, resolving to it, or undefined when cancelled. */
 const ask = (title: string, message?: string, secure = false) =>
@@ -995,7 +983,13 @@ function StoragePage({ m }: { m: Computer }) {
 }
 
 const bodies: Record<SettingsPage, ComponentType<{ m: Computer }>> = {
-  providers: ProvidersPage,
+  // Its accounts and API keys too, as the desktop's Providers has them.
+  providers: ({ m }) => (
+    <>
+      <ProvidersPage m={m} />
+      <AccountsPage m={m} />
+    </>
+  ),
   accounts: AccountsPage,
   threads: ThreadsPage,
   schedules: SchedulesPage,
@@ -1006,8 +1000,12 @@ const bodies: Record<SettingsPage, ComponentType<{ m: Computer }>> = {
   storage: StoragePage,
 };
 
-/** One of a computer's settings pages, with the computer it applies to at the top. */
-export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenProps<Screens, "ComputerSettings">) {
+/**
+ * One of a computer's settings pages, with the computer it applies to at the top, under this
+ * phone's own settings of that section: Threads' computer for new threads, and Connections'
+ * computers and Tailscale.
+ */
+export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenProps<SettingsScreens, "ComputerSettings">) {
   const { id, page } = route.params;
   const m = useComputer(id);
   useEffect(() => navigation.setOptions({ title: pages[page] }), [page]);
@@ -1015,6 +1013,8 @@ export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenP
   if (!m) return null;
   return (
     <Page>
+      {page === "threads" && <NewThreadsSection />}
+      {page === "connections" && <PhoneConnections />}
       <ComputerPicker m={m} onChange={(next) => navigation.setParams({ id: next })} />
       {m.connected ? (
         <Body key={id} m={m} />
