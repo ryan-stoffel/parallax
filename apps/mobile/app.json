@@ -3,7 +3,7 @@
     "name": "Parallax (Nightly)",
     "slug": "parallax",
     "scheme": "parallax",
-    "version": "0.0.0",
+    "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "icon": "../../design/icon/masters/Parallax-nightly-full-1024.png",
@@ -20,7 +20,8 @@
           "_parallax._tcp"
         ],
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "buildNumber": "1"
     },
     "plugins": [
       [
