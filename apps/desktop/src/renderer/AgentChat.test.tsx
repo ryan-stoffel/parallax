@@ -27,7 +27,7 @@ import { Composer } from "./Composer";
 import { threadDrafts } from "./drafts";
 import { ForkContext } from "./Fork";
 import { markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
-import { parsed } from "./markdownTest";
+import "./markdownTest";
 import { Notifications } from "./notifications";
 import { ThreadLinksContext, type ThreadLinks } from "./threadContext";
 import { dragThread } from "./threadDrag";
@@ -149,7 +149,6 @@ test("in a fork, the history it copied is muted and offers no Fork, and the late
       <TranscriptView rows={rows} sent={new Map()} live copiedAt={copiedAt} />
     </ForkContext>,
   );
-  await parsed();
 
   const copied = [...document.querySelectorAll("[data-copied]")].map((e) => e.textContent);
   expect(copied).toEqual([
@@ -313,7 +312,6 @@ test("an assistant message renders Markdown, but never raw HTML or images", asyn
     key: "a",
     text: "Run **this**:\n\n```sh\ncargo test\n```\n\nSee [docs](https://example.com). <img src=x onerror=alert(1)> ![a diagram](file:///etc/passwd)",
   });
-  await parsed();
   expect(document.querySelector("strong")?.textContent).toBe("this");
   expect(document.querySelector("pre code")?.textContent).toBe("cargo test\n");
   expect(document.querySelector('button[aria-label="Copy code"]')).not.toBeNull();
@@ -334,7 +332,6 @@ test("an assistant message typesets LaTeX, and keeps invalid LaTeX as its source
     key: "a",
     text: "Inline $x^2$ and $2 \\times 3$.\n\n$$\n\\int_0^1 x\\,dx = \\frac{1}{2}\n$$\n\nBad: $\\frac{1$",
   });
-  await parsed();
   expect(document.querySelectorAll(".katex math").length).toBe(3);
   expect(document.querySelectorAll('math[display="block"]')).toHaveLength(1);
   // Display math isn't a code block, so it has no Copy button.
@@ -344,7 +341,6 @@ test("an assistant message typesets LaTeX, and keeps invalid LaTeX as its source
 
 test("$$...$$ within a line typesets as display math, and $...$ stays inline", async () => {
   row({ kind: "assistant", key: "a", text: "Inline $x$.\n\n$$ F'(s) = \\frac{-2s}{(s^2+1)^2} $$" });
-  await parsed();
   expect(document.querySelectorAll('math[display="block"]')).toHaveLength(1);
   expect(document.querySelectorAll(".katex")).toHaveLength(2);
 });
@@ -355,7 +351,6 @@ test("prices and shell variables stay text, and \\(...\\) and \\[...\\] typeset"
     key: "a",
     text: "From $5 [to](https://example.com) $10, or $5-$10. Set $PATH and $HOME. Then \\(x^2\\) and $y$.\n\n\\[\nz = 1\n\\]",
   });
-  await parsed();
   expect(document.querySelector("p")?.textContent).toMatch(
     /^From \$5 to \$10, or \$5-\$10\. Set \$PATH and \$HOME\. Then /,
   );
@@ -368,7 +363,6 @@ test("prices and shell variables stay text, and \\(...\\) and \\[...\\] typeset"
 test("a streaming message marks its markdown, so unfinished LaTeX stays hidden until it ends", async () => {
   const unfinished = "Setup:\n\nThen $\\frac{1$ and on";
   row({ kind: "assistant", key: "a", text: unfinished, partial: true });
-  await parsed();
   expect(document.querySelector(".enriched.streaming .katex-error")).not.toBeNull();
   act(() => unmount());
   row({ kind: "assistant", key: "a", text: unfinished.padEnd(SPLIT_FROM, " "), partial: true });
@@ -415,7 +409,6 @@ test("a streaming message renders as the whole text does, at every line", async 
     return async (text: string, partial: boolean) => {
       const row: Item = { kind: "assistant", key: "a", text, partial };
       act(() => root.render(<RowView row={row} live={false} open={false} onToggle={() => {}} />));
-      await parsed();
       // A streaming message differs by its class, which hides LaTeX still arriving, and by each
       // block's own Enriched Markdown root, whose last margin it zeroes: the elements are the same.
       const shape = container.cloneNode(true) as HTMLElement;
@@ -441,7 +434,6 @@ test("a short streaming message renders whole, without the split", async () => {
   vi.mocked(markdownBlocks).mockClear();
   const text = "Short.\n\nStill short.";
   row({ kind: "assistant", key: "a", text, partial: true });
-  await parsed();
   expect(markdownBlocks).not.toHaveBeenCalled();
   expect(document.querySelectorAll(".enriched p")).toHaveLength(2);
   act(() => unmount());
@@ -1903,18 +1895,15 @@ test("while a run goes, a message with work after it has no Copy bar, but an end
       (b) => b.closest("[data-index]")!.textContent,
     );
   render(<TranscriptView rows={[user, say("a", "First"), ls]} sent={new Map()} live />);
-  await parsed();
   expect(copies()).toEqual(["go"]);
   act(() => unmount());
   render(
     <TranscriptView rows={[user, say("a", "First"), ls, say("b", "Last")]} sent={new Map()} live />,
   );
-  await parsed();
   expect(copies()).toEqual(["go", expect.stringContaining("Last")]);
   act(() => unmount());
   // A turn that isn't going, as in a fork's copied history, keeps them on its last message.
   render(<TranscriptView rows={[user, say("a", "First"), ls]} sent={new Map()} live={false} />);
-  await parsed();
   expect(copies()).toEqual(["go", expect.stringContaining("First")]);
 });
 
@@ -1952,7 +1941,6 @@ test("while a run goes, its work shows as steps, the call in flight live, under 
 
   // A streaming reply is what the agent is doing: no steps, and no musing.
   transcript([user, reply]);
-  await parsed();
   expect(header()).toBeNull();
   expect(musingRow()).toBeUndefined();
   expect(rows()).toEqual([expect.stringContaining("go"), "Working for 0s", "Hi"]);
@@ -2197,7 +2185,6 @@ test("a turn's plan is one line where it began, its updates lines in the work, i
     { kind: "assistant", key: "a", text: "Done." },
   ];
   render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
-  await parsed();
   const rowAt = (i: number) => document.querySelectorAll("[data-index]")[i]!;
   const text = (r: Element) => r.textContent!.replace(/\s+/g, "");
   expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([
@@ -2263,7 +2250,6 @@ test("Claude Code's task tools make the same lines as TodoWrite, and their rows 
     { kind: "assistant", key: "a", text: "Done." },
   ];
   render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
-  await parsed();
   const rowAt = (i: number) => document.querySelectorAll("[data-index]")[i]!;
   const text = (r: Element) => r.textContent!.replace(/\s+/g, "");
   expect([...document.querySelectorAll("[data-index]")].map(text)).toEqual([

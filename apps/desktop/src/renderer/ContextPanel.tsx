@@ -8,6 +8,7 @@ import { describeError } from "./errors";
 import { dayLabel, locale } from "./locale";
 import { clockOptions } from "./prefs";
 import { GitHubLogo } from "./logos";
+import { codeComponents, highlight } from "./AgentChat";
 
 /** The status board the coordinator keeps, as `coordinator.md` asks; the Project tab leads with it. */
 export const board = "notes.md";
@@ -105,12 +106,24 @@ function useContent(hostId: string, project: string, file: ContextFile) {
 function ContextMarkdown({ text, components }: { text: string; components: Components }) {
   return (
     <div className="markdown">
-      <Markdown remarkPlugins={[remarkGfm]} components={components}>
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={highlight}
+        components={{ ...codeComponents, img: noImage, ...components }}
+      >
         {text}
       </Markdown>
     </div>
   );
 }
+
+// An agent can write a context file, so its images never load, as a transcript's don't: each is a
+// link with its alt text, which opens externally like any link.
+const noImage: Components["img"] = ({ src, alt }) => (
+  <a href={typeof src === "string" && src ? src : undefined} target="_blank" rel="noreferrer">
+    {alt || "Image"}
+  </a>
+);
 
 /** A context file, rendered as Markdown with `components`. */
 function ContextDoc({
@@ -276,7 +289,7 @@ const issue = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+/;
 const contextLink = /^(?:\.\/)?([^/:?#]+)$/;
 
 /**
- * How context files render beyond `MarkdownText`: tasks as an open or a check circle, GitHub pull
+ * How context files render beyond ContextMarkdown: tasks as an open or a check circle, GitHub pull
  * request and issue links with their icons, and a link to another context file as a button that
  * opens it here, off while that file doesn't exist.
  */

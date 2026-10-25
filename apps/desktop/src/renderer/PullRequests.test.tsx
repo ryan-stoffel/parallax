@@ -21,7 +21,7 @@ import {
   RUNNING_POLL_MS,
   usePullRequests,
 } from "./PullRequests";
-import { parsed } from "./markdownTest";
+import "./markdownTest";
 import { Notifications } from "./notifications";
 import { setBehaviorPrefs } from "./prefs";
 import { SidePanel } from "./SidePanel";
@@ -314,7 +314,6 @@ test("a screenshot opens large, with its name and place, and arrows to the other
     this.dispatchEvent(new Event("close"));
   };
   await render([url(42)], (prs) => <PullRequestView url={url(42)} prs={prs} onCompose={vi.fn()} />);
-  await parsed();
   await click(document.querySelector(".enriched img"));
   const box = () => document.querySelector("dialog[aria-label]");
   expect(box()!.textContent).toBe("Before1 / 2");

@@ -9,6 +9,9 @@ overrides:
   vite: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1
   vitest: 5.0.1
 
+patchedDependencies:
+  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee: 6db364fa82820ad8f6256ebf840408e076fc526ea1f7441c27e7ce931cd95194
+
 importers:
 
   .:
@@ -162,7 +165,7 @@ importers:
         version: link:shims/react-native
       react-native-enriched-markdown:
         specifier: 1.2.0-nightly-20261022-ca155ffee
-        version: 1.2.0-nightly-20261022-ca155ffee(katex@0.16.47)(react-native@shims+react-native)(react@19.3.0)
+        version: 1.2.0-nightly-20261022-ca155ffee(patch_hash=6db364fa82820ad8f6256ebf840408e076fc526ea1f7441c27e7ce931cd95194)(katex@0.16.47)(react-native@shims+react-native)(react@19.3.0)
       rehype-highlight:
         specifier: ^7.0.2
         version: 7.0.2
@@ -5962,7 +5965,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee(katex@0.16.47)(react-native@shims+react-native)(react@19.3.0):
+  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee(patch_hash=6db364fa82820ad8f6256ebf840408e076fc526ea1f7441c27e7ce931cd95194)(katex@0.16.47)(react-native@shims+react-native)(react@19.3.0):
     dependencies:
       react: 19.3.0
       react-native: link:shims/react-native

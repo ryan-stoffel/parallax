@@ -5,10 +5,10 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
 import { MarkdownText } from "./AgentChat";
-import { parsed } from "./markdownTest";
+import "./markdownTest";
 import type { DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
-import { FileImage, FileLink, FileRunContext, inFolder, keepFiles, linkedPath } from "./FileLink";
+import { FileImage, FileLink, FileRunContext, inFolder, linkedPath } from "./FileLink";
 import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -62,13 +62,6 @@ test("a linked path reads from the thread's folder, and never from outside it", 
     ["/repo", "/repo"],
   ])
     expect(inFolder(path!, folder)).toBeUndefined();
-});
-
-test("a transcript keeps file: and drive paths, and still drops unsafe schemes", () => {
-  expect(keepFiles("file:///repo/a.txt")).toBe("file:///repo/a.txt");
-  expect(keepFiles("C:%5Crepo%5Ca.txt")).toBe("C:%5Crepo%5Ca.txt");
-  expect(keepFiles("https://example.com")).toBe("https://example.com");
-  expect(keepFiles("javascript:alert(1)")).toBe("");
 });
 
 // plxd's agent/files, naming the thread's folder, and agent/file, reading a 4-byte file.
@@ -190,7 +183,7 @@ test("a Markdown image of a file in the folder opens in the Lightbox, not the si
 });
 
 /** Renders `text` as a transcript's agent message does, in thread run-1 on host box. */
-async function message(text: string) {
+function message(text: string) {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root.render(
@@ -205,11 +198,43 @@ async function message(text: string) {
     root.unmount();
     document.body.innerHTML = "";
   };
-  await parsed();
 }
 
+test("a message draws in its first render, so a list measures it at its height", () => {
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() => root.render(<MarkdownText text={"# Title\n\nA paragraph with **bold**."} />));
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  expect(document.querySelector("h1")?.textContent).toBe("Title");
+  expect(document.querySelector("strong")?.textContent).toBe("bold");
+});
+
+test("a link opens only as a file, a web page, or an email, never another scheme", () => {
+  const opened = vi.spyOn(window, "open").mockReturnValue(null);
+  message("[run](javascript:alert(1)) [docs](https://example.com) [app](vscode://x)");
+  for (const a of document.querySelectorAll("a")) act(() => a.click());
+  expect(opened.mock.calls.map((c) => c[0])).toEqual(["https://example.com"]);
+  opened.mockRestore();
+});
+
+test("a file's image shows as a block of its own, and is a link inside text", () => {
+  message("![shot](out/a.png)\n\nSee ![b](out/b.png) here");
+  // The block is FileImage, a link to its file while it reads it; the one in text is a link, never
+  // an image with no source.
+  expect(document.querySelectorAll("img")).toHaveLength(0);
+  const links = [...document.querySelectorAll("a")];
+  expect(
+    links.map((a) => [a.textContent, a.getAttribute("title") ?? a.getAttribute("href")]),
+  ).toEqual([
+    ["shot", "out/a.png"],
+    ["b", "out/b.png"],
+  ]);
+});
+
 test("inline code naming a file opens it without its line; other code stays code", async () => {
-  await message("See `out/notes.csv:3`, then run `npm test`.\n\n```\nout/a.txt\n```");
+  message("See `out/notes.csv:3`, then run `npm test`.\n\n```\nout/a.txt\n```");
   const links = [...document.querySelectorAll("a")];
   expect(links.map((a) => a.textContent)).toEqual(["out/notes.csv:3"]);
   expect(links[0]!.querySelector("code")).not.toBeNull();
@@ -219,7 +244,7 @@ test("inline code naming a file opens it without its line; other code stays code
 });
 
 test("a file path in a link's text stays the link's, and outside a thread stays code", async () => {
-  await message("[`src/App.tsx`](https://github.com/o/r/blob/main/src/App.tsx)");
+  message("[`src/App.tsx`](https://github.com/o/r/blob/main/src/App.tsx)");
   const links = [...document.querySelectorAll("a")];
   expect(links.map((a) => a.getAttribute("href"))).toEqual([
     "https://github.com/o/r/blob/main/src/App.tsx",
@@ -232,13 +257,12 @@ test("a file path in a link's text stays the link's, and outside a thread stays 
     root.unmount();
     document.body.innerHTML = "";
   };
-  await parsed();
   expect(document.querySelector("code")?.textContent).toBe("src/App.tsx");
   expect(document.querySelector("a")).toBeNull();
 });
 
 test("a GitHub alert shows its kind over the quote, and a plain quote stays a quote", async () => {
-  await message("> [!WARNING]\n> Back up first.\n\n> Just a quote.");
+  message("> [!WARNING]\n> Back up first.\n\n> Just a quote.");
   const alert = document.querySelector(".enrm-admonition")!;
   expect(alert.textContent).toBe("WarningBack up first.");
   expect(alert.querySelector("svg")!.getAttribute("fill")).toBe("var(--warning)");

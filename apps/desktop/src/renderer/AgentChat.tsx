@@ -2495,36 +2495,28 @@ const markdownStyle: MarkdownStyle = (() => {
 const recognition = { inlineCode: filePath };
 
 /**
- * Follows a Markdown link: to `onLink` first, when it takes it, then a file to `openFile`, and
- * anything else to a new window, which main opens in the browser when it's https.
+ * Follows a Markdown link: a file to `openFile`, a web page or email to a new window, which main
+ * hands to the system's browser or mail app, and any other scheme, `javascript:` among them,
+ * nowhere.
  */
-function follow(
-  url: string,
-  openFile?: (path: string) => void,
-  onLink?: (href: string) => boolean,
-) {
-  if (onLink?.(url)) return;
+function follow(url: string, openFile?: (path: string) => void) {
   const path = linkedPath(fileReference(url));
   if (path !== undefined) openFile?.(path);
-  else window.open(url, "_blank", "noreferrer");
+  else if (/^(https?|mailto):/i.test(url)) window.open(url, "_blank", "noreferrer");
 }
 
 /** Markdown between code blocks, drawn by Enriched Markdown's web renderer. */
-const EnrichedRun = memo(function EnrichedRun({
-  text,
-  images,
-  onLink,
-}: {
-  text: string;
-  images: Images;
-  onLink?: (href: string) => boolean;
-}) {
+const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; images: Images }) {
   const openFile = useOpenFile();
   const remote = (url: string) => images === "github" && onGithub(url);
-  // A thread's own files show, as FileImage reads them; any other image is a link.
+  // A thread's own file shows, as FileImage reads it, where it's a paragraph of its own, which
+  // the renderer hands to `renderers.image`; any other image is a link.
   const markdown = useMemo(
     () =>
-      unloadedImages(text, (url) => remote(url) || (!!openFile && linkedPath(url) !== undefined)),
+      unloadedImages(
+        text,
+        (url, alone) => remote(url) || (alone && !!openFile && linkedPath(url) !== undefined),
+      ),
     [text, images, !!openFile],
   );
   return (
@@ -2534,7 +2526,7 @@ const EnrichedRun = memo(function EnrichedRun({
       md4cFlags={{ latexMath: true }}
       linkRecognition={openFile ? recognition : undefined}
       enableTaskListItemToggle={false}
-      onLinkPress={({ url }) => follow(url, openFile, onLink)}
+      onLinkPress={({ url }) => follow(url, openFile)}
       // An empty source keeps an image unrequested: a URL an agent writes can carry what it read.
       resolveImageSource={({ url }) => (remote(url) ? undefined : { uri: "" })}
       renderers={{
@@ -2545,7 +2537,13 @@ const EnrichedRun = memo(function EnrichedRun({
           ) : undefined;
         },
         video: ({ url }) => (
-          <a href={url} target="_blank" rel="noreferrer">
+          <a
+            href={url}
+            onClick={(e) => {
+              e.preventDefault();
+              follow(url, openFile);
+            }}
+          >
             Video
           </a>
         ),
@@ -2558,13 +2556,14 @@ const EnrichedRun = memo(function EnrichedRun({
 // drawn by DiffLines instead. Built once: react-markdown runs its plugins' setup on every render,
 // and rehype-highlight's registers 37 languages each time.
 const highlighter = rehypeHighlight({ detect: false, plainText: ["diff", "patch"] });
-const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [() => highlighter];
+export const highlight: ComponentProps<typeof Markdown>["rehypePlugins"] = [() => highlighter];
 
 /** A Markdown tree node's text, as a code block's, for Copy. */
 type TextNode = { value?: string; children?: TextNode[] };
 const textOf = (node: TextNode): string => node.value ?? node.children?.map(textOf).join("") ?? "";
 
-const codeComponents: Components = {
+/** react-markdown's code blocks as CodeBlock, for Markdown it still draws (ContextPanel.tsx). */
+export const codeComponents: Components = {
   pre: ({ node, children }) => {
     const code = node?.children[0];
     const classes = code?.type === "element" ? code.properties["className"] : undefined;
@@ -2595,21 +2594,13 @@ const FencedCode = memo(function FencedCode({ text }: { text: string }) {
 });
 
 /** Markdown in runs (codeRuns): its code blocks as FencedCode, the rest with Enriched Markdown. */
-function Runs({
-  text,
-  images = "none",
-  onLink,
-}: {
-  text: string;
-  images?: Images;
-  onLink?: (href: string) => boolean;
-}) {
+function Runs({ text, images = "none" }: { text: string; images?: Images }) {
   const runs = useMemo(() => codeRuns(text), [text]);
   return runs.map((run, i) =>
     run.code ? (
       <FencedCode key={i} text={run.text} />
     ) : (
-      <EnrichedRun key={i} text={run.text} images={images} onLink={onLink} />
+      <EnrichedRun key={i} text={run.text} images={images} />
     ),
   );
 }
@@ -2618,23 +2609,21 @@ function Runs({
  * Markdown as GitHub writes it, drawn by Enriched Markdown as the phone draws it (apps/mobile
  * ui.tsx): headings, lists and task lists, tables, quotes and GitHub's alerts, KaTeX math, and
  * links, with code blocks as CodeBlock. With `images` "github", GitHub-hosted images load, as a
- * pull request's do. `onLink` takes a link before `follow` does, when it returns true.
+ * pull request's do.
  */
 export const MarkdownText = memo(function MarkdownText({
   text,
   images,
-  onLink,
   streaming,
 }: {
   text: string;
   images?: Images;
-  onLink?: (href: string) => boolean;
   /** Hides LaTeX that fails to typeset, since a streaming message's math may be unfinished. */
   streaming?: boolean;
 }) {
   return (
     <div className={streaming ? "enriched streaming" : "enriched"}>
-      <Runs text={dollarMath(text)} images={images} onLink={onLink} />
+      <Runs text={dollarMath(text)} images={images} />
     </div>
   );
 });

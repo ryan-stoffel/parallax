@@ -12,7 +12,7 @@ import type {
   ParallaxEvent,
 } from "../protocol/generated/protocol";
 import { MarkdownText } from "./AgentChat";
-import { parsed } from "./markdownTest";
+import "./markdownTest";
 import {
   latestPlan,
   PlanCard,
@@ -781,7 +781,6 @@ test("a proposed plan renders its Markdown safely, folds when long, and keeps ro
 
   planHeight = 200;
   proposed(false);
-  await parsed();
   const card = document.querySelector('[role="group"]')!;
   expect(document.getElementById(card.getAttribute("aria-labelledby")!)!.textContent).toBe(
     "Proposed plan",

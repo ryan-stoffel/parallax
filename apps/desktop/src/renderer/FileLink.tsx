@@ -7,7 +7,6 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { defaultUrlTransform } from "react-markdown";
 
 import { download, failure, useDocument, useObjectUrl, type DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
@@ -30,14 +29,6 @@ export const FileRunContext = createContext<{ hostId: string; runId: string } | 
 // A Windows drive path, its backslash as written or as Markdown percent-encodes it.
 const drive = /^[a-z]:(?:[\\/]|%5c)/i;
 const isAbsolute = (path: string) => path.startsWith("/") || /^[a-z]:\//i.test(path);
-
-/**
- * react-markdown's `urlTransform` in a transcript: keeps `file:` URLs and drive paths, which can
- * name the thread's files, and leaves the rest to its default, which drops `javascript:` and every
- * other unsafe scheme.
- */
-export const keepFiles = (url: string) =>
-  /^file:/i.test(url) || drive.test(url) ? url : defaultUrlTransform(url);
 
 /**
  * The path a link or image names when it's a file rather than a web page: relative, absolute, or

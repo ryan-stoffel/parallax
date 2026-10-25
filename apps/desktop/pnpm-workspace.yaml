@@ -17,6 +17,12 @@ overrides:
   vite: npm:@voidzero-dev/vite-plus-core@1.0.0-rc.1
   vitest: 5.0.1
 
+# Enriched Markdown's web renderer parses only after a render, so a message's first frame was empty
+# and a virtualized transcript measured it at that height. The patch parses in the render once the
+# parser has loaded (MarkdownText, AgentChat.tsx); worth offering upstream.
+patchedDependencies:
+  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee: patches/react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee.patch
+
 # Vite+ core is Vite 8 under its own version number, so Vite plugins'
 # `vite@^8` peer ranges don't match it.
 peerDependencyRules:
