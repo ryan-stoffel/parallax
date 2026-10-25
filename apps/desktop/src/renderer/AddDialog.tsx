@@ -625,6 +625,8 @@ function FolderStep({
             )}
           </>
         )}
+        {/* Above the folders, which can run past the body's height and hide it. */}
+        <Problem error={add.error} />
         <Heading>
           {clone
             ? hostName
@@ -644,7 +646,6 @@ function FolderStep({
         {current && "folders" in current && folders.length === 0 && (
           <Note>{filter ? "No folders match" : "No folders here"}</Note>
         )}
-        <Problem error={add.error} />
       </Body>
       <Footer keys={[navigate, ["Enter", "Open"], ["Backspace", "Back"], close]}>
         {hostId === localId && (

@@ -561,6 +561,32 @@ test("a clone that finishes after its palette closed is registered but leaves a 
   expect(workspaceButton()).toBe("Workspace: parallax on This Mac");
 });
 
+test("a failed clone says why above the folders, where a long list can't push it out of view (PLX-1007)", async () => {
+  listFolders.mockImplementation(listTree);
+  answers["repo/clone"] = () => ({
+    error: {
+      code: -32000,
+      message: "repository 'https://github.com/ryan-stoffel/photon.git/' not found",
+      data: { kind: "cloneFailed" },
+    },
+  });
+  await renderApp();
+  await openPalette();
+  await click(paletteOption("Clone from GitHub"));
+  typeInto(field(), "ryan-stoffel/photon");
+  pressKey("Enter");
+  await settle();
+  await click(action("Clone"));
+
+  const alert = dialog().querySelector('[role="alert"]')!;
+  expect(alert.textContent).toBe(
+    "repository 'https://github.com/ryan-stoffel/photon.git/' not found",
+  );
+  const folders = dialog().querySelector('[role="listbox"][aria-label="Folders"]')!;
+  expect(alert.compareDocumentPosition(folders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(dialog().open).toBe(true);
+});
+
 test("Create Project's Workspace can be cloned from GitHub in the palette, which comes back to the form with it chosen", async () => {
   listFolders.mockImplementation(listTree);
   answers["repo/clone"] = () => ({
