@@ -121,11 +121,11 @@ test("Mod+S toggles the sidebar, and Mod+Alt+U opens Settings > Usage", () => {
   expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
 });
 
-test("Mod+Shift+P is Open pull request on GitHub", () => {
+test("Mod+Shift+P is Open pull request on GitHub, and Mod+P is Go to file", () => {
   const press = (init: Partial<KeyboardEvent>) =>
     appShortcut({ code: "KeyP", key: "p", metaKey: true, ...init } as KeyboardEvent);
   expect(press({ shiftKey: true })).toBe("openPr");
-  expect(press({})).toBeUndefined();
+  expect(press({})).toBe("goToFile");
 });
 
 test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not Mod+O or Mod+B", () => {

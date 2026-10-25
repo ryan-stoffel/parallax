@@ -176,6 +176,7 @@ pub(crate) fn initialize(
 /// `composerMenus` (PLX-359): `agent/commands` and `repo/files`, for the composer's `/` and `@`
 /// menus.
 /// `githubStatus` (PLX-336): `github/status`.
+/// `repoGrep` (PLX-993): `repo/grep`, for the command menu's Search project contents.
 /// `threadContext` (PLX-372, 0047): `thread/search`, and `agent/start`, `thread/start`, and
 /// `agent/send` take `threads`, which an older plxd would silently drop, and `turnStarted` lists
 /// them. Its options are the caps: `maxThreads` per message, and `maxSummaryBytes` of each
@@ -304,6 +305,7 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
         ("files".to_owned(), serde_json::Map::new()),
         ("git".to_owned(), serde_json::Map::new()),
         ("repoGitStatus".to_owned(), serde_json::Map::new()),
+        ("repoGrep".to_owned(), serde_json::Map::new()),
         (
             "iconImages".to_owned(),
             serde_json::Map::from_iter([("maxBytes".to_owned(), images::MAX_ICON_BYTES.into())]),

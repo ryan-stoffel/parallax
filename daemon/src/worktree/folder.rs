@@ -1,6 +1,6 @@
 //! Git in the folder a run works in (PLX-298): the status `agent/gitStatus` reads, the commit
-//! `agent/commit` makes, the push `agent/push` and `agent/openPr` make, and the files
-//! `repo/files` lists (PLX-359).
+//! `agent/commit` makes, the push `agent/push` and `agent/openPr` make, the files
+//! `repo/files` lists (PLX-359), and the lines `repo/grep` finds (PLX-993).
 //!
 //! A run's folder is its worktree, which every call reaches pinned and hardened (#166), or a
 //! Current checkout thread's checkout, the user's own, which calls reach through the hookless
@@ -9,13 +9,19 @@
 use std::path::Path;
 use std::time::Duration;
 
-use parallax_protocol::GitStatus;
+use parallax_protocol::{GitStatus, GrepMatch};
 
-use super::{Commit, GitOutput, WorktreeError, WorktreeManager, describe_failure};
+use super::{
+    Commit, DEFAULT_TIMEOUT, GitOutput, WorktreeError, WorktreeManager, collect_capped,
+    describe_failure, owned_args,
+};
 use crate::backend::process::ProcessSpec;
 
 /// How long a push may take: it goes over the network and can carry a large branch.
 pub(super) const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The most characters of a line `repo/grep` returns.
+const MAX_GREP_TEXT: usize = 300;
 
 /// Where a run's git calls run.
 #[derive(Clone, Copy, Debug)]
@@ -296,6 +302,74 @@ impl WorktreeManager {
             .filter(|path| !path.is_empty())
             .map(str::to_owned)
             .collect())
+    }
+
+    /// The lines of `folder`'s files that contain `query`, ignoring case, from `git grep` over
+    /// tracked and untracked files that git doesn't ignore, binary ones skipped, in git's order:
+    /// for `repo/grep` (PLX-993). Reads at most `max_bytes` of git's output and says whether it
+    /// stopped there. No match is an empty list.
+    ///
+    /// # Errors
+    ///
+    /// [`WorktreeError::GitFailed`], [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`].
+    pub async fn grep(
+        &self,
+        folder: RunFolder<'_>,
+        query: &str,
+        max_bytes: usize,
+    ) -> Result<(Vec<GrepMatch>, bool), WorktreeError> {
+        let args = [
+            "grep",
+            "--null",
+            "--line-number",
+            "-I",
+            "--ignore-case",
+            "--fixed-strings",
+            "--untracked",
+            "--no-color",
+            "-e",
+            query,
+        ];
+        let spec = self.folder_spec(folder, &args).await?;
+        let cwd = folder.path();
+        let process = self.launcher.spawn(&spec)?;
+        let (stdout, exit, truncated) = tokio::time::timeout(
+            DEFAULT_TIMEOUT,
+            collect_capped(process, cwd, &args, max_bytes),
+        )
+        .await
+        .map_err(|_| WorktreeError::Timeout {
+            cwd: cwd.to_owned(),
+            args: owned_args(&args),
+            timeout: DEFAULT_TIMEOUT,
+        })??;
+        let stdout = String::from_utf8_lossy(&stdout).into_owned();
+        // git grep exits 1 when nothing matches; a cut run was killed, so its exit says nothing.
+        if let Some(exit) = exit
+            && !matches!(exit.info.code, Some(0 | 1))
+        {
+            return Err(GitOutput { stdout, exit }.failure(cwd, &args));
+        }
+        // Each line is `path NUL number NUL text`. A cut run's last line may be partial.
+        let mut lines: Vec<&str> = stdout.lines().collect();
+        if truncated {
+            lines.pop();
+        }
+        let matches = lines
+            .into_iter()
+            .filter_map(|line| {
+                let mut parts = line.splitn(3, '\0');
+                let path = parts.next()?;
+                let number = parts.next()?.parse().ok()?;
+                let text: String = parts.next()?.trim().chars().take(MAX_GREP_TEXT).collect();
+                Some(GrepMatch {
+                    path: path.to_owned(),
+                    line: number,
+                    text,
+                })
+            })
+            .collect();
+        Ok((matches, truncated))
     }
 
     /// The branch `repo_path`'s checkout has out, or `None` on a detached HEAD.

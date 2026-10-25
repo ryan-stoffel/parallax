@@ -5,7 +5,7 @@
 //! `coordinator`: `project/start` in `project.rs`; #110 `threads`: `thread.rs`; PLX-227
 //! `projectEdit`: `project/update` in `project.rs`; PLX-338 `projectDelete`: `project/delete` in
 //! `project.rs`; 0042 `projectFromThreads`: `project/fromThreads` in `project.rs`; PLX-318 `pullRequests`, PLX-328 `prDiff`, and PLX-373 `threadTools` (`pr/link`
-//! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus`: `composer.rs`; PLX-336 `githubStatus`:
+//! and `pr/unlink`): `pr.rs`; PLX-359 `composerMenus` and PLX-993 `repoGrep`: `composer.rs`; PLX-336 `githubStatus`:
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
 //! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
 //! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`; 0063 `schedules` and `prWatch`:
@@ -293,6 +293,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RepoRefs => |p| threads::refs(daemon, p),
         RepoGitStatus => |p| threads::git_status(daemon, p),
         RepoFiles => |p| composer::files(context, p),
+        RepoGrep => |p| composer::grep(context, p),
         AgentStart => |p| agent::start(context, p),
         AgentSend => |p| agent::send(context, p),
         AgentCancel => |p| agent::cancel(context, p),

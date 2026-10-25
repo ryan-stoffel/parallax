@@ -536,6 +536,11 @@ export type ParallaxRequests = {
 	 */
 	"repo/files": { params: RepoFilesParams, result: RepoFilesResult },
 	/**
+	 * `repo/grep`: the lines of a thread's files that contain a query, for the command
+	 * menu's Search project contents (PLX-993). Gated on the `repoGrep` capability.
+	 */
+	"repo/grep": { params: RepoGrepParams, result: RepoGrepResult },
+	/**
 	 * `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
 	 * github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
 	 * `githubStatus` capability.
@@ -1029,6 +1034,7 @@ export const REQUEST_METHODS = [
 	"project/delete",
 	"agent/commands",
 	"repo/files",
+	"repo/grep",
 	"github/status",
 	"thread/search",
 	"agent/resumeNow",
@@ -7093,6 +7099,59 @@ export type RepoFilesResult = {
 	 * Whether there were more than the cap.
 	 */
 	truncated: boolean,
+};
+
+/**
+ * Params of `repo/grep` (PLX-993): the lines of a thread's files that contain `query`, ignoring
+ * case, read with `git grep` in the run's folder, else the repo entry's checkout, over tracked
+ * and untracked files that git doesn't ignore, skipping binary ones. Fails with `invalidParams`
+ * for an empty query and `worktreeFailed` when git fails there.
+ */
+export type RepoGrepParams = {
+	/**
+	 * Plain text, not a pattern.
+	 */
+	query: string,
+	/**
+	 * The repo entry, without `runId`.
+	 */
+	repo?: RepoId,
+	/**
+	 * The run.
+	 */
+	runId?: RunId,
+};
+
+/**
+ * Result of `repo/grep`.
+ */
+export type RepoGrepResult = {
+	/**
+	 * In git's order, up to a cap.
+	 */
+	matches: Array<GrepMatch>,
+	/**
+	 * Whether there were more than the cap.
+	 */
+	truncated: boolean,
+};
+
+/**
+ * One line `repo/grep` found.
+ */
+export type GrepMatch = {
+	/**
+	 * Relative to the folder, with `/` separators.
+	 */
+	path: string,
+	/**
+	 * 1-based.
+	 */
+	line: number,
+	/**
+	 * The line, cut to a few hundred characters.
+	 */
+	text: string,
 };
 
 /**

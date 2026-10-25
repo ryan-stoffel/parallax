@@ -77,21 +77,21 @@ use crate::{
     RelayRegisterParams, RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
     RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
     RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
-    RepoGitStatusParams, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
-    RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
-    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
-    ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
-    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SpaceCreateParams,
-    SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult, SubscribeShellParams,
-    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
-    TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
-    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
-    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult,
-    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
-    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams, ThreadListResult,
-    ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult,
-    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
+    RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoMatchParams, RepoMatchResult,
+    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams,
+    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
+    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
+    SecretAnswerParams, SecretAnswerResult, SecretRequestParams, SecretRequestResult,
+    SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
+    SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
+    TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
+    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
+    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
+    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
+    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
+    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
+    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams,
+    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
     ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams,
     UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
     UsageLimitsParams, UsageLimitsResult,
@@ -483,6 +483,9 @@ method_table! {
         /// `repo/files`: a thread's files that git tracks or doesn't ignore, capped, for the
         /// composer's `@` menu.
         RepoFiles = "repo/files": RepoFilesParams => RepoFilesResult;
+        /// `repo/grep`: the lines of a thread's files that contain a query, for the command
+        /// menu's Search project contents (PLX-993). Gated on the `repoGrep` capability.
+        RepoGrep = "repo/grep": RepoGrepParams => RepoGrepResult;
         /// `github/status`: the GitHub CLI (`gh`) on the host, whether it is signed in to
         /// github.com, and as whom (PLX-336). Read-only and never prompts. Gated on the
         /// `githubStatus` capability.
@@ -876,6 +879,7 @@ mod tests {
                 "project/delete",
                 "agent/commands",
                 "repo/files",
+                "repo/grep",
                 "github/status",
                 "thread/search",
                 "agent/resumeNow",

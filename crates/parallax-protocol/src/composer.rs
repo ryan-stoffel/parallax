@@ -1,5 +1,6 @@
 //! What the composer's `/` and `@` menus list (PLX-359), behind the `composerMenus` capability:
 //! `agent/commands`, a CLI's own slash commands and skills, and `repo/files`, a thread's files.
+//! The command menu's Search project contents reads `repo/grep` (PLX-993), behind `repoGrep`.
 //!
 //! Each runs in a thread's folder: the run's, else the repo entry's checkout, else (for
 //! `agent/commands` only) the host's home folder.
@@ -75,4 +76,45 @@ pub struct RepoFilesResult {
     pub files: Vec<String>,
     /// Whether there were more than the cap.
     pub truncated: bool,
+}
+
+/// Params of `repo/grep` (PLX-993): the lines of a thread's files that contain `query`, ignoring
+/// case, read with `git grep` in the run's folder, else the repo entry's checkout, over tracked
+/// and untracked files that git doesn't ignore, skipping binary ones. Fails with `invalidParams`
+/// for an empty query and `worktreeFailed` when git fails there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoGrepParams {
+    /// Plain text, not a pattern.
+    pub query: String,
+    /// The repo entry, without `runId`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo: Option<RepoId>,
+    /// The run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run_id: Option<RunId>,
+}
+
+/// Result of `repo/grep`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoGrepResult {
+    /// In git's order, up to a cap.
+    pub matches: Vec<GrepMatch>,
+    /// Whether there were more than the cap.
+    pub truncated: bool,
+}
+
+/// One line `repo/grep` found.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GrepMatch {
+    /// Relative to the folder, with `/` separators.
+    pub path: String,
+    /// 1-based.
+    pub line: u32,
+    /// The line, cut to a few hundred characters.
+    pub text: String,
 }

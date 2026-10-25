@@ -74,6 +74,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "files",
     "git",
     "repoGitStatus",
+    "repoGrep",
     "githubSetup",
     "githubStatus",
     "hostFolders",
@@ -992,6 +993,13 @@ const handlers: { [M in Method]?: Handler<M> } = {
     ],
   }),
   "repo/files": () => ({ files: db.repoFiles, truncated: false }),
+  // The fixtures hold no file contents, so every file's path is its one line.
+  "repo/grep": (p) => ({
+    matches: db.repoFiles
+      .filter((path) => path.toLowerCase().includes(p.query.toLowerCase()))
+      .map((path) => ({ path, line: 1, text: path })),
+    truncated: false,
+  }),
 
   "agent/list": (p) => ({
     runs: p.project ? db.runs.filter((r) => r.project === p.project) : db.runs,

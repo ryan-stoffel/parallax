@@ -1,13 +1,15 @@
 //! `agent/files` and `agent/file`'s `working` side (PLX-296): browsing a thread's folder on disk,
 //! for a thread in a worktree and one in the user's own checkout; and `agent/fileCreate`,
-//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) changing it.
+//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) changing it; and `repo/grep` (PLX-993)
+//! searching it.
 
 use parallax_protocol::methods::{
-    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles,
+    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles, RepoGrep,
 };
 use parallax_protocol::{
     AgentEntry, AgentEntryKind, AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams, GrepMatch,
+    RepoGrepParams,
 };
 
 use super::*;
@@ -455,4 +457,78 @@ async fn files_and_folders_are_created_renamed_and_deleted_inside_the_threads_fo
         assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
     }
     assert!(worktree.join(".git").exists());
+}
+
+async fn grep(
+    client: &mut Conn,
+    query: &str,
+    repo: Option<RepoId>,
+    run_id: Option<RunId>,
+) -> Result<Vec<GrepMatch>, ErrorObject> {
+    let params = RepoGrepParams {
+        query: query.to_owned(),
+        repo,
+        run_id,
+    };
+    let found = client.call::<RepoGrep>(params).await?;
+    assert!(!found.truncated);
+    Ok(found.matches)
+}
+
+#[tokio::test]
+async fn repo_grep_finds_lines_in_a_threads_folder_ignoring_case_and_ignored_files() {
+    let host = Host::start(fake(editing()));
+    let path = repo_with_ignores(host.work.path());
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let started = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
+        .await
+        .unwrap();
+    let run_id = started.run.id;
+    client.until(updated_to(AgentStatus::Completed)).await;
+    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
+    add_ignored_and_links(&worktree);
+    std::fs::write(worktree.join("src/new.rs"), "// Written later\nfn h() {}\n").unwrap();
+
+    // The thread's own NOTES.md and an untracked file match; ignored debug.log never does.
+    let found = grep(&mut client, "WRITTEN", None, Some(run_id))
+        .await
+        .unwrap();
+    let lines: Vec<_> = found
+        .iter()
+        .map(|m| (m.path.as_str(), m.line, m.text.as_str()))
+        .collect();
+    assert_eq!(
+        lines,
+        [
+            ("NOTES.md", 1, "Written in a thread."),
+            ("src/new.rs", 1, "// Written later"),
+        ]
+    );
+    assert!(
+        grep(&mut client, "noise", None, Some(run_id))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    // The query is plain text, not a pattern or an option.
+    assert!(
+        grep(&mut client, "-v", None, Some(run_id))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        grep(&mut client, "fn f(", Some(repo.id), None)
+            .await
+            .unwrap()[0]
+            .path,
+        "src/lib.rs"
+    );
+    let error = grep(&mut client, "  ", None, Some(run_id))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, INVALID_PARAMS);
 }

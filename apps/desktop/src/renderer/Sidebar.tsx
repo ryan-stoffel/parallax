@@ -67,6 +67,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type Ref,
   type RefObject,
   type SVGProps,
   type ToggleEvent,
@@ -276,6 +277,8 @@ interface ThreadListProps {
   browserOpen?: boolean;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
+  /** The add palette, for the command menu's New Project and Add repository (PLX-993). */
+  addDialog?: Ref<AddDialogHandle>;
   /** New thread, which opens Mod+N's picker of the repository it goes in. */
   onNewThread: () => void;
   /** Folder `id`'s New thread, which opens New thread on the open repository, without the picker. */
@@ -508,6 +511,7 @@ export function ThreadList({
   onOpenBrowser,
   browserOpen,
   onDelete,
+  addDialog: addDialogRef,
   onNewThread,
   onNewFolderThread,
   split,
@@ -515,6 +519,7 @@ export function ThreadList({
   onClosePane,
 }: ThreadListProps) {
   const addDialog = useRef<AddDialogHandle>(null);
+  useImperativeHandle(addDialogRef, () => ({ open: (start) => addDialog.current?.open(start) }));
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const projectDialogs = useRef<ProjectDialogsHandle>(null);
