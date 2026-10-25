@@ -36,6 +36,7 @@ pub(crate) mod history;
 pub(crate) mod memory;
 pub(crate) mod stale;
 pub(crate) mod watcher;
+pub(crate) mod you_sync;
 
 use std::collections::HashMap;
 use std::io::{self, Read};

@@ -7,6 +7,11 @@
 //! `knowledge/<slug>.md`, or a plain thread's proposal, `proposals/<slug>.md`. An entry's file
 //! starts with its kind, title, source, date, and writer, one `Field: value` line each, then a
 //! blank line and the body. plxd writes that header, and reports it from the file as it stands.
+//!
+//! `memory/syncList` and `memory/syncRead`, behind the `youSync` capability, are plxd's, which
+//! pulls You memory from the user's other Connect devices with them (0082).
+
+use std::collections::BTreeMap;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -134,6 +139,21 @@ pub struct MemoryFile {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub unused: bool,
+    /// For a You entry or knowledge file, the computer that last wrote it (0082). Absent until
+    /// plxd has recorded its current text, which it does within a minute while `connect` is on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub machine: Option<MemoryMachine>,
+}
+
+/// A computer that wrote a You entry (0082).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryMachine {
+    /// Its Tailscale node ID.
+    pub id: String,
+    /// Its device name, or its Tailscale host name when it has none, as of the write.
+    pub name: String,
 }
 
 /// Params of `memory/list`.
@@ -285,4 +305,55 @@ pub struct MemoryProposeResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub file: Option<MemoryFile>,
+}
+
+/// Params of `memory/syncList`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySyncListParams {}
+
+/// One version of a You entry or knowledge file, as a plxd records it (0082).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySyncEntry {
+    /// The path in the You folder.
+    pub path: String,
+    /// The SHA-256, in hex, of the text that syncs: the file without its `Last used:` and
+    /// `Stale:` lines. Empty for a deletion.
+    pub hash: String,
+    /// The version vector: each machine's node ID, and how many local changes it made.
+    #[ts(type = "Record<string, number>")]
+    pub clock: BTreeMap<String, u64>,
+    /// The computer that wrote this version.
+    pub machine: MemoryMachine,
+    /// When it did, in RFC 3339 UTC.
+    pub written_at: Timestamp,
+    /// This version deletes the file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub deleted: bool,
+}
+
+/// Result of `memory/syncList`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySyncListResult {
+    /// Every path plxd has recorded in You, deletions included.
+    pub entries: Vec<MemorySyncEntry>,
+}
+
+/// Params of `memory/syncRead`. Fails with `contextNotFound` if there is no such file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySyncReadParams {
+    /// The path in the You folder: an entry or a knowledge file.
+    pub path: String,
+}
+
+/// Result of `memory/syncRead`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MemorySyncReadResult {
+    /// The text that syncs, whose SHA-256 is its entry's `hash`.
+    pub content: String,
 }

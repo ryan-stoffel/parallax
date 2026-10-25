@@ -1250,7 +1250,7 @@ async fn serve_socket(
             .await;
     let (local, plain) = tokio::io::duplex(64 * 1024);
     let (local_in, local_out) = tokio::io::split(local);
-    let serve = connection::serve(plain, daemon, stop_reading, closing);
+    let serve = connection::serve(plain, daemon, stop_reading, closing, false);
     let ((), pumped) = tokio::join!(serve, pump(socket, local_in, local_out));
     if let Err(error) = pumped {
         debug!(%peer, %error, "a remote WebSocket failed");

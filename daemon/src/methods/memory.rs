@@ -9,14 +9,18 @@
 //! naming the scope it is for, until its coordinator's next wake-up carries it; a coordinator's
 //! the same way, for the user, such as a rewrite the Memory tab asked for, naming the entry it
 //! replaces, or the brief's; and a plain thread's in its repository's folder, for the user.
+//!
+//! `memory/syncList` and `memory/syncRead`, behind `youSync`, are another plxd's, which pulls
+//! You memory with them ([`crate::context::you_sync`], 0082).
 
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::jsonrpc::ErrorObject;
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_REQUEST};
 use parallax_protocol::{
     ErrorKind, InboxKind, MemoryDeleteParams, MemoryDeleteResult, MemoryFile, MemoryKind,
     MemoryListParams, MemoryListResult, MemoryProposalTo, MemoryProposeParams, MemoryProposeResult,
-    MemoryReadParams, MemoryReadResult, MemoryScope, MemoryScopeKind, MemoryWriteParams,
+    MemoryReadParams, MemoryReadResult, MemoryScope, MemoryScopeKind, MemorySyncListParams,
+    MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult, MemoryWriteParams,
     MemoryWriteResult, ProjectId, RunId,
 };
 use uuid::Uuid;
@@ -24,7 +28,7 @@ use uuid::Uuid;
 use super::Context;
 use super::context::{io_error, run_blocking};
 use crate::context::corrections::Change;
-use crate::context::{self, memory};
+use crate::context::{self, memory, you_sync};
 use crate::store::store_error;
 
 /// The longest title, in bytes.
@@ -73,6 +77,11 @@ pub(super) async fn list(
     params: MemoryListParams,
 ) -> Result<MemoryListResult, ErrorObject> {
     let dir = scope_dir(context, params.scope).await?;
+    // Which machine last wrote each You entry (0082).
+    let versions = match params.scope {
+        MemoryScope::You => Some(you_sync::recorded(&context.daemon.reader).await?),
+        _ => None,
+    };
     run_blocking(move || {
         let mut files = Vec::new();
         for (path, metadata) in context::list_files(&dir).map_err(io_error(""))? {
@@ -80,7 +89,11 @@ pub(super) async fn list(
                 continue;
             }
             let header = header_of(&dir, &path);
-            files.push(memory_file(&path, &metadata, header));
+            let mut file = memory_file(&path, &metadata, header);
+            if let Some(versions) = &versions {
+                file.machine = you_sync::machine(&dir, &path, versions);
+            }
+            files.push(file);
         }
         Ok(MemoryListResult { files })
     })
@@ -101,6 +114,12 @@ pub(super) async fn read(
     let path = checked(&params.path, &all, "read")?.to_owned();
     let dir = scope_dir(context, params.scope).await?;
     let agent = params.from.is_some();
+    // An agent's read stamps the entry, which sync mustn't overwrite or race (0082).
+    let _sync = if agent {
+        you_lock(context, params.scope).await
+    } else {
+        None
+    };
     run_blocking(move || {
         let (bytes, mut metadata) = context::read_file(&dir, &path).map_err(io_error(&path))?;
         let mut text = String::from_utf8(bytes)
@@ -185,6 +204,7 @@ pub(super) async fn write(
         _ => content,
     };
     let written_path = path.clone();
+    let sync = you_lock(context, scope).await;
     let (file, changed) = run_blocking(move || {
         let target = dir.join(&written_path);
         let existed = std::fs::symlink_metadata(&target).is_ok();
@@ -193,6 +213,7 @@ pub(super) async fn write(
         Ok((save(&dir, &written_path, &text)?, changed))
     })
     .await?;
+    drop(sync);
     // A new entry corrects nothing, and neither does a rewrite that only re-dates one, as the
     // Knowledge tab's Keep does, so only a changed one is sent to running children. Saving a
     // proposal that `replaces` an entry writes over it, so it counts as a change.
@@ -226,11 +247,13 @@ pub(super) async fn delete(
     let path = checked(&params.path, &allowed, "delete")?.to_owned();
     let dir = scope_dir(context, params.scope).await?;
     let deleted = path.clone();
+    let sync = you_lock(context, params.scope).await;
     run_blocking(move || {
         context::delete_file(&dir, &deleted).map_err(io_error(&deleted))?;
         Ok(MemoryDeleteResult {})
     })
     .await?;
+    drop(sync);
     context::corrections::tell(&context.daemon, params.scope, &path, None, Change::Deleted);
     Ok(MemoryDeleteResult {})
 }
@@ -326,6 +349,44 @@ pub(super) async fn propose(
         to,
         file: Some(file),
     })
+}
+
+pub(super) async fn sync_list(
+    context: &Context,
+    _: MemorySyncListParams,
+) -> Result<MemorySyncListResult, ErrorObject> {
+    connect_only(context, "syncList")?;
+    you_sync::list(&context.daemon).await
+}
+
+pub(super) async fn sync_read(
+    context: &Context,
+    params: MemorySyncReadParams,
+) -> Result<MemorySyncReadResult, ErrorObject> {
+    connect_only(context, "syncRead")?;
+    you_sync::read(&context.daemon, params.path).await
+}
+
+/// Holds You memory's sync lock for a write to You, so a pull never overwrites it (0082).
+async fn you_lock(
+    context: &Context,
+    scope: MemoryScope,
+) -> Option<tokio::sync::MutexGuard<'_, ()>> {
+    match scope {
+        MemoryScope::You => Some(context.daemon.you_sync.lock().await),
+        _ => None,
+    }
+}
+
+/// Refuses a sync method on a connection that didn't come over Parallax Connect (0082).
+fn connect_only(context: &Context, method: &str) -> Result<(), ErrorObject> {
+    if context.over_connect {
+        return Ok(());
+    }
+    Err(ErrorObject::new(
+        INVALID_REQUEST,
+        format!("memory/{method} is only for another of your devices over Parallax Connect"),
+    ))
 }
 
 /// Checks the entry a proposal `replaces`: only a coordinator names one, and it is an existing
@@ -502,7 +563,7 @@ fn reads_differently(before: &str, after: &str) -> bool {
 }
 
 /// Writes `text` to `path` in `dir` within the shared context caps, and returns it.
-fn save(dir: &Path, path: &str, text: &str) -> Result<MemoryFile, ErrorObject> {
+pub(crate) fn save(dir: &Path, path: &str, text: &str) -> Result<MemoryFile, ErrorObject> {
     let size = text.len() as u64;
     let other = context::other_files_total(dir, path).map_err(io_error(path))?;
     if size > context::MAX_FILE_BYTES || other + size > context::MAX_PROJECT_BYTES {
@@ -570,6 +631,7 @@ fn memory_file(path: &str, metadata: &std::fs::Metadata, header: memory::Header)
         stale: header.stale.is_some(),
         unused,
         last_used: header.last_used,
+        machine: None,
     }
 }
 

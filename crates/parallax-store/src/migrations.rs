@@ -830,6 +830,21 @@ const MIGRATIONS: &[Migration] = &[
             SELECT id, 1, session_id, created_at FROM runs
             WHERE policy = 'noWrite' AND session_id IS NOT NULL;",
     },
+    // The version of each You entry and knowledge file, which plxd syncs between the user's
+    // Connect devices (0082, PLX-946). `clock` is plxd's JSON version vector. A deleted row is
+    // a tombstone, kept so an offline host can't bring the file back.
+    Migration {
+        version: 52,
+        sql: "CREATE TABLE you_entries (
+            path TEXT PRIMARY KEY,
+            hash TEXT NOT NULL,
+            clock TEXT NOT NULL,
+            machine TEXT NOT NULL,
+            machine_name TEXT NOT NULL,
+            written_at TEXT NOT NULL,
+            deleted INTEGER NOT NULL
+        );",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
