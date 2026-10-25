@@ -31,6 +31,8 @@ test("a slug is owner/name, from a URL too, and nothing that could leave its fol
     "a b/c",
     "-/x;rm",
     "https://github.com/ryan-stoffel",
+    "github.com/ryan-stoffel",
+    "www.github.com/ryan-stoffel/",
     "https://gitlab.com/ryan-stoffel/photon",
   ])
     expect(githubSlug(bad), bad).toBeUndefined();

@@ -66,7 +66,8 @@ export function githubSlug(input: string): string | undefined {
     );
   const [owner, name, ...rest] = link ? [link[1], link[2]] : text.replace(/\/$/, "").split("/");
   const repo = name?.replace(/\.git$/, "");
-  return owner && repo && rest.length === 0 && isFolderName(owner) && isFolderName(repo)
+  // GitHub's owner names are letters, digits, and `-`, so a host such as `github.com` never is one.
+  return owner && repo && rest.length === 0 && /^[a-z\d-]+$/i.test(owner) && isFolderName(repo)
     ? `${owner}/${repo}`
     : undefined;
 }
