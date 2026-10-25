@@ -126,7 +126,8 @@ export async function readIcon(file: Blob, maxBytes: number): Promise<PromptImag
   }
 }
 
-function dataUrlOf(file: Blob): Promise<string> {
+/** `file` read as a `data:<type>;base64,<data>` URL. */
+export function dataUrlOf(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);

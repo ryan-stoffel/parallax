@@ -6,6 +6,7 @@ import type { ConnectionState, HostResponse } from "../preload/bridge";
 import type { HostUploadResult } from "../protocol/generated/protocol";
 import { fileChunks, readSlices, retried, type Slice } from "./documents";
 import { describeError } from "./errors";
+import { dataUrlOf } from "./images";
 import { type Encoded } from "./attachments";
 
 /** What a host's `host/upload` takes: the most bytes one file can be, and on `fileChunks`, the most one piece carries. */
@@ -100,15 +101,7 @@ export function readUpload(hostId: string, path: string): Promise<Uint8Array> {
   return readSlices(hostId, slice);
 }
 
-function base64Of(file: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    // `data:<type>;base64,<data>`
-    reader.onload = () => resolve((reader.result as string).split(",", 2)[1] ?? "");
-    reader.onerror = () => reject(reader.error ?? new Error("couldn't read the file"));
-    reader.readAsDataURL(file);
-  });
-}
+const base64Of = async (file: Blob) => (await dataUrlOf(file)).split(",", 2)[1] ?? "";
 
 export {
   encodedImage,

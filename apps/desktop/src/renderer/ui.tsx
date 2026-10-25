@@ -71,16 +71,13 @@ export function useModHeld() {
     const key = (e: globalThis.KeyboardEvent) => {
       if (e.key === mod) setHeld(e.type === "keydown");
     };
+    const listening = new AbortController();
+    const { signal } = listening;
+    window.addEventListener("keydown", key, { signal });
+    window.addEventListener("keyup", key, { signal });
     // Switching apps with Cmd+Tab never sends its keyup.
-    const blur = () => setHeld(false);
-    window.addEventListener("keydown", key);
-    window.addEventListener("keyup", key);
-    window.addEventListener("blur", blur);
-    return () => {
-      window.removeEventListener("keydown", key);
-      window.removeEventListener("keyup", key);
-      window.removeEventListener("blur", blur);
-    };
+    window.addEventListener("blur", () => setHeld(false), { signal });
+    return () => listening.abort();
   }, []);
   return held;
 }
@@ -477,8 +474,10 @@ export const menuHeading = "px-2 pt-1.5 pb-1 text-meta font-medium text-faint-fo
 export const unavailableBadge =
   "shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-meta text-amber-500";
 
+const separator = <div role="separator" className="-mx-1 my-1 h-px bg-border" />;
+
 /** A form control's look, for a `field` Picker's trigger and the fields beside it. */
-export const fieldControl =
+const fieldControl =
   "flex h-8 items-center gap-2 rounded-lg border border-border bg-background px-2.5 text-body text-foreground enabled:hover:border-faint-foreground/60 disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
 
 /**
@@ -604,7 +603,7 @@ export function Picker({
         <div className="max-h-80 overflow-y-auto p-1">
           {shown.map((o, i) => (
             <Fragment key={o.value}>
-              {o.divider && !q && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
+              {o.divider && !q && separator}
               {o.group && o.group !== shown[i - 1]?.group && (
                 <div className={menuHeading}>{o.group}</div>
               )}
@@ -616,7 +615,7 @@ export function Picker({
           ))}
           {typed && (
             <>
-              {shown.length > 0 && <div role="separator" className="-mx-1 my-1 h-px bg-border" />}
+              {shown.length > 0 && separator}
               <MenuOption option={typed} checked={false} onClick={() => choose(typed)} />
             </>
           )}
@@ -755,24 +754,19 @@ export function Tooltips() {
     const out = (e: PointerEvent) => {
       if (target && !target.contains(e.relatedTarget as Node | null)) hide();
     };
-    document.addEventListener("pointerover", show);
-    document.addEventListener("pointerout", out);
-    document.addEventListener("focusin", focus);
-    document.addEventListener("focusout", hide);
-    document.addEventListener("pointerdown", hide, true);
-    document.addEventListener("keydown", hide, true);
-    window.addEventListener("scroll", hide, true);
-    window.addEventListener("blur", hide);
+    const listening = new AbortController();
+    const { signal } = listening;
+    document.addEventListener("pointerover", show, { signal });
+    document.addEventListener("pointerout", out, { signal });
+    document.addEventListener("focusin", focus, { signal });
+    document.addEventListener("focusout", hide, { signal });
+    document.addEventListener("pointerdown", hide, { capture: true, signal });
+    document.addEventListener("keydown", hide, { capture: true, signal });
+    window.addEventListener("scroll", hide, { capture: true, signal });
+    window.addEventListener("blur", hide, { signal });
     return () => {
       hide();
-      document.removeEventListener("pointerover", show);
-      document.removeEventListener("pointerout", out);
-      document.removeEventListener("focusin", focus);
-      document.removeEventListener("focusout", hide);
-      document.removeEventListener("pointerdown", hide, true);
-      document.removeEventListener("keydown", hide, true);
-      window.removeEventListener("scroll", hide, true);
-      window.removeEventListener("blur", hide);
+      listening.abort();
     };
   }, []);
   if (!tip) return null;

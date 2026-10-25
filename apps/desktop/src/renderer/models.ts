@@ -92,7 +92,7 @@ const builtIns: Omit<Instance, "enabled">[] = [
 ];
 
 /** What this device keeps about an instance's models, by model id. */
-export interface ModelPrefs {
+interface ModelPrefs {
   /** The order they're listed in. One not in it follows, in its own order. */
   order?: string[];
   /** Those left out of the model picker. */
