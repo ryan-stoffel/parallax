@@ -184,12 +184,7 @@ impl Element {
     pub fn frame(&self) -> Option<Rect> {
         let origin = self.attribute("AXPosition").and_then(|v| point(&v))?;
         let size = self.attribute("AXSize").and_then(|v| size(&v))?;
-        Some(Rect {
-            x: origin.x,
-            y: origin.y,
-            width: size.width,
-            height: size.height,
-        })
+        Some(rect(origin, size))
     }
 
     /// What the tree shows of the element, read in two calls rather than one per attribute.
@@ -244,12 +239,7 @@ impl Element {
                 value(9).and_then(|v| point(&v)),
                 value(10).and_then(|v| size(&v)),
             ) {
-                info.frame = Some(Rect {
-                    x: origin.x,
-                    y: origin.y,
-                    width: size.width,
-                    height: size.height,
-                });
+                info.frame = Some(rect(origin, size));
             }
         }
         info.actions = self.actions();
@@ -365,6 +355,15 @@ fn point(value: &CFType) -> Option<CgPoint> {
 
 fn size(value: &CFType) -> Option<CgSize> {
     ax_value(value, AX_VALUE_CG_SIZE)
+}
+
+fn rect(origin: CgPoint, size: CgSize) -> Rect {
+    Rect {
+        x: origin.x,
+        y: origin.y,
+        width: size.width,
+        height: size.height,
+    }
 }
 
 /// One of an app's windows on screen, as the window server lists it.

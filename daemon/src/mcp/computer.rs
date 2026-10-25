@@ -815,9 +815,7 @@ fn read_window(pid: i32) -> (Option<Window>, Vec<Node>) {
 
 /// A PNG of app `pid`'s window at `frame`, at most [`MAX_SIDE`] pixels on its longest side.
 async fn screenshot(pid: i32, frame: Rect) -> Result<Vec<u8>, String> {
-    let windows = tokio::task::spawn_blocking(move || macos::windows(pid))
-        .await
-        .map_err(|error| error.to_string())?;
+    let windows = blocking(move || Ok(macos::windows(pid))).await?;
     // The window server's window at the Accessibility window's frame, or the app's front one.
     let distance = |bounds: &Rect| {
         (bounds.x - frame.x).abs()
@@ -836,26 +834,25 @@ async fn screenshot(pid: i32, frame: Rect) -> Result<Vec<u8>, String> {
         .tempfile()
         .map_err(|error| format!("could not make a file for the screenshot: {error}"))?;
     let path = file.path().to_owned();
-    tokio::task::spawn_blocking(move || {
+    blocking(move || {
         // -x: no sound, -o: no shadow, -l: just this window.
         run(
             "/usr/sbin/screencapture",
             &["-x", "-o", &format!("-l{number}"), "-t", "png"],
             &path,
         )?;
-        let read = |path: &Path| {
-            std::fs::read(path).map_err(|error| format!("could not read the screenshot: {error}"))
+        let read = || {
+            std::fs::read(&path).map_err(|error| format!("could not read the screenshot: {error}"))
         };
         // sips -Z enlarges a smaller image too, so only a larger one goes through it.
-        let large = super::device::png_size(&read(&path)?)
+        let large = super::device::png_size(&read()?)
             .is_some_and(|(width, height)| width.max(height) > MAX_SIDE);
         if large {
             run("/usr/bin/sips", &["-Z", &MAX_SIDE.to_string()], &path)?;
         }
-        std::fs::read(&path).map_err(|error| format!("could not read the screenshot: {error}"))
+        read()
     })
     .await
-    .map_err(|error| error.to_string())?
 }
 
 /// Runs `program` with `args` and then `path`.

@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::thread::Binding;
-use super::{parse, pretty};
+use super::{object, parse, pretty, tool};
 
 /// What a Project's child gets.
 pub const CHILD_TOOLS: &[&str] = &["ask"];
@@ -32,46 +32,39 @@ pub fn tools(coordinator: bool) -> &'static [&'static str] {
 /// `tools/list` entries for [`tools`].
 #[must_use]
 pub fn definitions(coordinator: bool) -> Vec<Value> {
-    let tool = |name: &str, description: &str, properties: Value, required: &[&str]| {
-        json!({
-            "name": name,
-            "description": description,
-            "inputSchema": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": false,
-            },
-            "annotations": {"readOnlyHint": false, "destructiveHint": false},
-        })
-    };
     let question = json!({"type": "string", "description": "The question's id, from the message that woke you."});
     if !coordinator {
         return vec![tool(
             "ask",
             "Ask your Project's coordinator a question without waiting. Choose the answer you think most likely, say it as the assumption, and go on working on it at once: if the coordinator or the user decides otherwise, a message tells you.",
-            json!({
-                "question": {"type": "string", "description": "The question, at most 4 KiB."},
-                "assumption": {"type": "string", "description": "The answer you go on with until you hear otherwise, at most 4 KiB."},
-            }),
-            &["question", "assumption"],
+            object(
+                json!({
+                    "question": {"type": "string", "description": "The question, at most 4 KiB."},
+                    "assumption": {"type": "string", "description": "The answer you go on with until you hear otherwise, at most 4 KiB."},
+                }),
+                &["question", "assumption"],
+            ),
+            false,
         )];
     }
     vec![
         tool(
             "answer",
             "Answer a child's question for the user. If your answer differs from the child's assumption, the child gets it as a message. The user sees it in the inbox and can change it.",
-            json!({
-                "question": question,
-                "text": {"type": "string", "description": "The answer, at most 4 KiB. Repeat the child's assumption to confirm it without messaging the child."},
-            }),
-            &["question", "text"],
+            object(
+                json!({
+                    "question": question,
+                    "text": {"type": "string", "description": "The answer, at most 4 KiB. Repeat the child's assumption to confirm it without messaging the child."},
+                }),
+                &["question", "text"],
+            ),
+            false,
         ),
         tool(
             "escalate",
             "Pass a child's question to the user, when it is theirs to decide. The child keeps going on its assumption until the user answers.",
-            json!({"question": question}),
-            &["question"],
+            object(json!({"question": question}), &["question"]),
+            false,
         ),
     ]
 }

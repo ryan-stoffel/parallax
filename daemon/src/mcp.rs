@@ -309,7 +309,31 @@ fn tail(text: &str, max: usize) -> String {
     )
 }
 
-fn parse<T: DeserializeOwned>(arguments: Value) -> Result<T, String> {
+/// A `tools/list` entry: a tool that never destroys anything, and whether it only reads.
+fn tool(name: &str, description: &str, schema: Value, read_only: bool) -> Value {
+    let mut tool = json!({
+        "name": name,
+        "description": description,
+        "annotations": {"readOnlyHint": read_only, "destructiveHint": false},
+    });
+    tool["inputSchema"] = schema;
+    tool
+}
+
+/// An input schema of `properties`, `required` of them, and nothing else.
+fn object(properties: Value, required: &[&str]) -> Value {
+    let mut schema = json!({
+        "type": "object",
+        "required": required,
+        "additionalProperties": false,
+    });
+    schema["properties"] = properties;
+    schema
+}
+
+/// A tool's `arguments` as `T`, or the error the model sees. [`crate::preview`] parses its tools'
+/// arguments with it too.
+pub(crate) fn parse<T: DeserializeOwned>(arguments: Value) -> Result<T, String> {
     serde_json::from_value(arguments).map_err(|error| format!("invalid arguments: {error}"))
 }
 
@@ -323,7 +347,7 @@ fn check_text(name: &str, text: &str, max: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn pretty(value: &impl serde::Serialize) -> String {
+pub(crate) fn pretty(value: &impl serde::Serialize) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|error| error.to_string())
 }
 

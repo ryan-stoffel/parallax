@@ -29,7 +29,7 @@ use serde_json::{Value, json};
 use tokio::time::{Instant, sleep};
 
 use super::thread::{Binding, MAX_AGENT_WAIT, POLL, agent_wait, find_run, running};
-use super::{MAX_TEXT_BYTES, Plxd, check_text, last_output, parse, pretty, tail};
+use super::{MAX_TEXT_BYTES, Plxd, check_text, last_output, object, parse, pretty, tail, tool};
 
 /// The tools this module serves, in [`definitions`]' order.
 pub const TOOLS: &[&str] = &[
@@ -65,22 +65,6 @@ const SUMMARY_BYTES: usize = 8 * 1024;
     reason = "one schema per tool, read side by side"
 )]
 pub fn definitions() -> Vec<Value> {
-    let object = |properties: Value, required: &[&str]| {
-        json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false,
-        })
-    };
-    let tool = |name: &str, description: &str, schema: Value, read_only: bool| {
-        json!({
-            "name": name,
-            "description": description,
-            "inputSchema": schema,
-            "annotations": {"readOnlyHint": read_only, "destructiveHint": false},
-        })
-    };
     let target = json!({
         "type": "object",
         "description": "Where the child runs. Omit for your own provider and model.",
@@ -206,7 +190,7 @@ pub(super) struct Delegation {
     requests: Mutex<HashMap<String, RunId>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Target {
     #[serde(default)]
@@ -518,11 +502,7 @@ fn params(
     runtime_mode: Option<&str>,
     completion_wake: Option<CompletionWake>,
 ) -> Result<TaskDelegateParams, String> {
-    let target = target.unwrap_or(Target {
-        provider_instance_id: None,
-        model: None,
-        effort: None,
-    });
+    let target = target.unwrap_or_default();
     let permission = match runtime_mode {
         None | Some("inherit") => None,
         Some(mode) => Some(
@@ -634,7 +614,7 @@ async fn wait_for(plxd: &Plxd, task: RunId, timeout: Duration) -> Result<bool, S
         match agent_wait(plxd, task, left.min(MAX_AGENT_WAIT)).await {
             Ok(run) => {
                 let run = run?;
-                if !running(&run) && !waiting(&run) {
+                if ended(&run) {
                     return Ok(true);
                 }
                 // A usage limit holds it until its reset, which `agent/wait` counts as idle.
@@ -657,10 +637,15 @@ fn waiting(run: &AgentRun) -> bool {
     run.status == AgentStatus::Waiting
 }
 
+/// Whether `run` has ended its turn: neither running one nor waiting to resume one.
+fn ended(run: &AgentRun) -> bool {
+    !running(run) && !waiting(run)
+}
+
 /// A task as T3's tools show one.
 async fn shown(plxd: &Plxd, task: &DelegatedTask, wait_timed_out: bool) -> Result<Value, String> {
     let run = &task.run;
-    let ended = !running(run) && !waiting(run);
+    let ended = ended(run);
     let summary = if ended {
         last_output(plxd, run.id)
             .await?
@@ -705,7 +690,7 @@ async fn cancel(plxd: &Plxd, caller: RunId, task_id: RunId) -> Result<String, St
     crate::delegation::check_mode(mine.permission, task.run.permission).map_err(|_| {
         format!("task {task_id} now runs in a mode above yours, so you can't stop it")
     })?;
-    let ended = !running(&task.run) && !waiting(&task.run);
+    let ended = ended(&task.run);
     plxd.call::<OrchestrationDispatch>(OrchestrationCommand::RunInterrupt {
         thread_id: task_id,
         hold_queue: true,

@@ -46,15 +46,15 @@ impl Chromes {
     ) -> Result<Option<DeviceChrome>, String> {
         let kind = device_type(xcrun, udid).await?;
         let mut cache = self.0.lock().await;
-        let kind = format!("ios:{kind}");
-        if let Some(known) = cache.get(&kind) {
+        let key = format!("ios:{kind}");
+        if let Some(known) = cache.get(&key) {
             return Ok(known.clone());
         }
-        let chrome = match bundle(&kind["ios:".len()..]) {
+        let chrome = match bundle(&kind) {
             Some(bundle) => read(&bundle).await?,
             None => None,
         };
-        cache.insert(kind, chrome.clone());
+        cache.insert(key, chrome.clone());
         Ok(chrome)
     }
 }

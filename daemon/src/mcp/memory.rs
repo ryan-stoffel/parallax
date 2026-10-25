@@ -22,7 +22,7 @@ use parallax_protocol::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{MAX_CONTEXT_BYTES, MAX_PATH_BYTES, Plxd, check_text, parse, pretty};
+use super::{MAX_CONTEXT_BYTES, MAX_PATH_BYTES, Plxd, check_text, object, parse, pretty, tool};
 
 /// A Project's child's memory tools, and a plain thread's.
 pub const CHILD_TOOLS: &[&str] = &["memory_read", "memory_propose"];
@@ -86,18 +86,13 @@ impl Memory {
                 project: Some(project.id),
             }));
         }
-        let repo = listed
-            .threads
-            .iter()
-            .find(|thread| thread.id == caller.id)
-            .and_then(|thread| listed.repos.iter().find(|repo| repo.id == thread.repo))
-            .filter(|repo| !repo.scratch)
-            .map(|repo| repo.id);
-        Ok(repo.map(|repo| Self {
-            role: Role::Thread,
-            repo: Some(repo),
-            project: None,
-        }))
+        Ok(
+            super::thread::own_repo(&listed, caller.id).map(|repo| Self {
+                role: Role::Thread,
+                repo: Some(repo),
+                project: None,
+            }),
+        )
     }
 
     pub(super) fn names(&self) -> &'static [&'static str] {
@@ -125,22 +120,6 @@ impl Memory {
                 self.scopes()[0]
             ),
         });
-        let object = |properties: Value, required: &[&str]| {
-            json!({
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": false,
-            })
-        };
-        let tool = |name: &str, description: &str, schema: Value, read_only: bool| {
-            json!({
-                "name": name,
-                "description": description,
-                "inputSchema": schema,
-                "annotations": {"readOnlyHint": read_only, "destructiveHint": false},
-            })
-        };
         let title = json!({"type": "string", "description": "The entry's title, one line of at most 256 bytes."});
         let read = tool(
             "memory_read",
