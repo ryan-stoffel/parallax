@@ -126,9 +126,8 @@ async function upload(hostId: string, name: string, data: string, chunk?: number
       ...(chunk && { uploadId, offset: (at / 4) * 3, last }),
     });
     if ("error" in answer) throw new Error(`${name} couldn't be sent: ${answer.error.message}`);
-    const result = answer.result as { path: string; uploadId?: string };
-    if (last) return result.path;
-    uploadId = result.uploadId;
+    if (last) return answer.result.path;
+    uploadId = answer.result.uploadId;
   }
 }
 
@@ -182,7 +181,7 @@ const accessShort: Record<AgentPermission, string> = {
 };
 
 /** Each access level's icon, as the desktop's composer has them. */
-const accessIcons: Record<AgentPermission, LucideIcon> = {
+export const accessIcons: Record<AgentPermission, LucideIcon> = {
   manual: Hand,
   edit: FilePen,
   auto: Sparkles,
@@ -485,15 +484,15 @@ export function Composer({
   const [stored, setRead] = useState<{ hostId: string; backend?: string }>();
   const read = stored?.hostId === hostId ? stored : undefined;
   const standard = read?.backend;
-  const online = !!computer?.connected;
+  const connected = !!computer?.connected;
   useEffect(() => {
-    if (!onStart || !hostId || !online) return;
+    if (!onStart || !hostId || !connected) return;
     let live = true;
     void defaultBackend(hostId, "worker").then((backend) => live && setRead({ hostId, backend }));
     return () => {
       live = false;
     };
-  }, [!!onStart, hostId, online]);
+  }, [!!onStart, hostId, connected]);
   const shownProvider = provider ?? run?.backend ?? standard;
   const fallback: Offer = {
     id: "",
@@ -518,10 +517,8 @@ export function Composer({
   const reading = useRef(new Set<string>());
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string>();
-  const connected = !!computer?.connected;
   const capabilities = computer?.view.capabilities ?? {};
   const caps = imageCaps(computer?.state);
-  // A new model, effort, or access goes with a message only to a plxd that takes it.
   // A new thread's model, effort, and access go to a plxd that takes them (`runOptions`); an open
   // thread's change goes with a message only to one that takes that (`sendModel`).
   const changes = onStart ? "runOptions" in capabilities : "sendModel" in capabilities;
@@ -537,7 +534,6 @@ export function Composer({
   const startAccess = onStart && defaultAccess && offer.permissions.includes(defaultAccess) ? defaultAccess : undefined;
   const chosenAccess = permission ?? startAccess;
   const shownAccess = chosenAccess ?? run?.permission;
-  const text = draft;
   // The input holds its own text: a draft changed from outside it (sent, or taken back to edit) is
   // written in, and what it reports itself isn't written back.
   const input = useRef<EnrichedMarkdownTextInputInstance>(null);
@@ -552,7 +548,7 @@ export function Composer({
     typed.current = draft;
     input.current?.setValue(draft);
   }, [draft]);
-  const ready = !!(text.trim() || attached.length) && !!computer && !sending;
+  const ready = !!(draft.trim() || attached.length) && !!computer && !sending;
 
   const maxImages = caps?.maxImages ?? 10;
 
@@ -636,20 +632,18 @@ export function Composer({
     setSending(true);
     setError(undefined);
     try {
-      const hostId = computer.machine.id;
       const images = attached.flatMap((a) => (a.kind === "image" ? [a.image] : []));
       const files = attached.filter((a) => a.kind === "file");
       let paths: string[] = [];
       if ("fileUploads" in capabilities && attached.length) {
         if (!connected) throw new Error(`${computer.machine.name} isn't connected, so files can't be sent yet.`);
         const chunk = capabilities["fileChunks"]?.["chunkBytes"] as number | undefined;
-        paths = [];
         for (const [n, image] of images.entries()) {
           const { name, data } = encodedImage(image, n + 1);
-          paths.push(await upload(hostId, name, data, chunk));
+          paths.push(await upload(computer.machine.id, name, data, chunk));
         }
         for (const f of files)
-          paths.push(await upload(hostId, f.name, await new File(f.uri).base64(), chunk));
+          paths.push(await upload(computer.machine.id, f.name, await new File(f.uri).base64(), chunk));
       } else if (files.length) throw new Error(`${computer.machine.name}'s Parallax can't take files.`);
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       if (onStart) {
@@ -657,7 +651,7 @@ export function Composer({
         // off. Until the default is read, only one picked, so a default API key isn't passed over.
         const moved = read ? (offer.id !== standard ? offer.id : undefined) : provider;
         const failed = await onStart({
-          text: withFiles(text.trim(), paths),
+          text: withFiles(draft.trim(), paths),
           images,
           options: {
             // Until the default provider is read, the model shown may be another provider's.
@@ -675,7 +669,7 @@ export function Composer({
       computer.outbox.add({
         id: uuidv7(),
         threadId: runId!,
-        text: withFiles(text.trim(), paths),
+        text: withFiles(draft.trim(), paths),
         steer,
         ...(images.length && { images }),
         ...(changes && model !== undefined && { model }),

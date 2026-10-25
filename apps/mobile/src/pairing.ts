@@ -29,7 +29,7 @@ export const fromBase64url = (text: string) =>
 const bigEndian = (bytes: Uint8Array) => BigInt(`0x${bytesToHex(bytes) || "0"}`);
 
 /** A code as typed, without spaces or dashes, in capitals: `7kq-4m2` is `7KQ4M2`. */
-export const normalizeCode = (typed: string) => typed.replace(/[\s-]/g, "").toUpperCase();
+const normalizeCode = (typed: string) => typed.replace(/[\s-]/g, "").toUpperCase();
 
 /** spake2's `hash_to_scalar`: HKDF-SHA256 of the password to 48 bytes, read big-endian, mod l. */
 export const passwordScalar = (password: Uint8Array) =>

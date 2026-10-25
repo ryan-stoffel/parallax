@@ -19,7 +19,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 /** An image to show: its URI (https or a data: URL) and, if it has one, its name. */
-export interface Shot {
+interface Shot {
   uri: string;
   name?: string;
 }

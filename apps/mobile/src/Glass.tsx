@@ -80,9 +80,9 @@ export function Glass({
 }
 
 /** A window with its sidebar on the left, as iOS's own sidebar button draws it. */
-export function SidebarIcon({ size = 22, color }: { size?: number; color: string }) {
+export function SidebarIcon({ color }: { color: string }) {
   return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round">
+    <Svg width={22} height={22} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round">
       <Rect x={2.75} y={4.25} width={18.5} height={15.5} rx={4} />
       <Path d="M9.25 4.5v15M5.5 8.5h1.25M5.5 11.5h1.25" />
     </Svg>

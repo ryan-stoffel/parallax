@@ -121,7 +121,6 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
             const coordinator = project.coordinator;
             return (
               <ResultRow
-                label={project.name}
                 icon={<ProjectGlyph icon={project.icon} size={project.icon?.image ? 36 : 18} />}
                 title={project.name}
                 detail={[`${count} thread${count === 1 ? "" : "s"}`, computer.machine.name, !coordinator && "Not started"]
@@ -136,7 +135,6 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
           const e = item.entry;
           return (
             <ResultRow
-              label={e.title}
               icon={<RepoIcon repo={e.source} shared={shared} size={18} />}
               title={e.title}
               detail={placeOf(e, many || words.length > 0)}
@@ -172,7 +170,6 @@ export function SearchScreen({ navigation }: NativeStackScreenProps<Screens, "Se
 
 /** One result: its icon, its title and line under it with the query's words highlighted, and its state. */
 function ResultRow({
-  label,
   icon,
   title,
   detail,
@@ -180,7 +177,6 @@ function ResultRow({
   right,
   onPress,
 }: {
-  label: string;
   icon: ReactNode;
   title: string;
   detail: string;
@@ -192,7 +188,7 @@ function ResultRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={title}
       disabled={!onPress}
       onPress={onPress}
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}

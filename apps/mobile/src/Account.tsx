@@ -45,7 +45,7 @@ const API = `https://${atob(PUBLISHABLE_KEY.replace(/^pk_(test|live)_/, "")).rep
 export const PORTAL =API.replace("://clerk.", "://accounts.").replace(/\.clerk\.accounts\.dev$/, ".accounts.dev");
 
 /** What Clerk's userinfo says of the user, as much as the app shows. */
-export interface User {
+interface User {
   email?: string;
   given_name?: string;
   family_name?: string;

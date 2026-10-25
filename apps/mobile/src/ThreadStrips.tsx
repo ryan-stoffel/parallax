@@ -47,9 +47,6 @@ import { editRows } from "./diffLogic";
 import { font } from "./theme";
 import { Button, Dot, Icon, KindIcon, T, useColors, WorkingMark } from "./ui";
 
-/** A request that failed, in an alert, as the desktop's notification says it. */
-const failed = (title: string, message: string) => Alert.alert(title, message);
-
 /** The oldest permission request waiting, with how many wait, and Deny and Allow. */
 function ApprovalCard({
   hostId,
@@ -78,7 +75,7 @@ function ApprovalCard({
       decision,
     });
     setAnswering(false);
-    if ("error" in reply) failed("Your answer didn't reach the agent", reply.error.message);
+    if ("error" in reply) Alert.alert("Your answer didn't reach the agent", reply.error.message);
     else onAnswered();
   }
   return (
@@ -158,7 +155,7 @@ function SecretCard({ hostId, runId, secret }: { hostId: string; runId: string; 
     });
     // On success the card goes once plxd logs the answer.
     if ("error" in reply) {
-      failed(answer.type === "save" ? "Couldn't save the secret" : "Couldn't decline the secret", reply.error.message);
+      Alert.alert(answer.type === "save" ? "Couldn't save the secret" : "Couldn't decline the secret", reply.error.message);
       setBusy(undefined);
     }
   }
@@ -348,7 +345,7 @@ function QueueList({
     setBusy(true);
     const answer = await window.parallax.request(hostId, "orchestration/dispatch", command);
     setBusy(false);
-    if ("error" in answer) failed("Couldn't change the queue", answer.error.message);
+    if ("error" in answer) Alert.alert("Couldn't change the queue", answer.error.message);
   }
   function move(id: string, to: number) {
     const ids = messages.map((m) => m.id);
@@ -437,7 +434,7 @@ function WaitingList({
     // What ends leaves with plxd's events, and what didn't can be stopped again.
     setStopping(false);
     const wrong = answers.find((a) => "error" in a);
-    if (wrong && "error" in wrong) failed("Couldn't stop waiting", wrong.error.message);
+    if (wrong && "error" in wrong) Alert.alert("Couldn't stop waiting", wrong.error.message);
   }
   return (
     <>

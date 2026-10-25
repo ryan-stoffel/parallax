@@ -4,7 +4,7 @@
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
 import { ChevronDown, ChevronLeft, Search, SquareDashed } from "lucide-react-native";
-import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import {
   Animated,
   Keyboard,
@@ -28,15 +28,9 @@ import { greeting } from "./greeting";
 import type { Screens } from "./nav";
 import { getPrefs, setPrefs } from "./prefs";
 import { RepoIcon, useSharedIcons } from "./RepoIcon";
+import { homeless } from "./Sidebar";
 import { setStarted } from "./started";
 import { DeviceIcon, Icon, Section, T, useColors } from "./ui";
-
-/** `path` with the home folder as `~`. */
-const homeless = (path: string) =>
-  path
-    .replace(/^\\\\\?\\/, "")
-    .replace(/^(\/Users|\/home)\/[^/]+/, "~")
-    .replace(/^[A-Z]:\\Users\\[^\\]+/i, "~");
 
 /** The default computer first, then the rest by name. */
 const ordered = (computers: Computer[], defaultId?: string) =>
@@ -109,11 +103,6 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
   const { computers, defaultId } = useFleet();
   const shared = useSharedIcons();
   const [query, setQuery] = useState("");
-  // The title is the page's own, on the sheet's background: a native header in a sheet this tall
-  // leaves the list's foot under the screen's edge.
-  useLayoutEffect(() => {
-    navigation.setOptions({ headerShown: false });
-  }, [navigation]);
   // Past the home indicator, so the last row scrolls up to where it can be tapped.
   const page = [styles.page, { paddingBottom: insets.bottom + 24 }];
   /** The picked repository's name, null for no repo; kept while sliding back so the page stays drawn. */
@@ -288,10 +277,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
       : { hostId: defaultId ?? computers[0]?.machine.id, groupId: noRepo };
   const computer = useComputer(hostId);
   const [draft, setDraft] = useState("");
-  const repo = useMemo(
-    () => (groupId === noRepo ? undefined : computer?.view.state.repos.find((r) => r.id === groupId)),
-    [computer, groupId],
-  );
+  const repo = groupId === noRepo ? undefined : computer?.view.state.repos.find((r) => r.id === groupId);
   const name = computer?.machine.name ?? "this computer";
   const shared = useSharedIcons();
 

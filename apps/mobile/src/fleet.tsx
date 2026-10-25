@@ -12,7 +12,6 @@ import {
 import { Alert, AppState } from "react-native";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
-import type { ConnectDevicesResult } from "../../desktop/src/protocol/generated/protocol";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
 import { privateFile } from "../modules/pinned-tls";
 import { forget } from "./host";
@@ -155,7 +154,7 @@ export function FleetProvider({
       if ("connect" in state.capabilities)
         void window.parallax.request(id, "connect/devices", {}).then((answer) => {
           if ("error" in answer) return;
-          const { devices, self } = answer.result as ConnectDevicesResult;
+          const { devices, self } = answer.result;
           const found = computers(self ? [self, ...devices] : devices);
           update((s) => {
             const machines = merge(s.machines, found);

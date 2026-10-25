@@ -23,7 +23,7 @@ import { Dot, Icon, KindIcon, Markdown, T, useColors, WorkingMark } from "./ui";
 type Tool = Extract<Item, { kind: "tool" }>;
 
 /** Where a thread's steps ran, for their images and paths. */
-export interface TraceScope {
+interface TraceScope {
   hostId: string;
   runId: string;
   root?: string;
@@ -79,7 +79,7 @@ export function opens(item: Item): boolean {
 }
 
 /** A step's title, as its line and its detail's header say it. */
-function titleOf(item: Item, root: string | undefined, live: boolean): string {
+export function titleOf(item: Item, root: string | undefined, live: boolean): string {
   switch (item.kind) {
     case "tool":
       return stepLabel(item, root, toolLook(item, live).tone === "running");
@@ -235,7 +235,7 @@ function Step({
           style={{
             fontSize: 15,
             lineHeight: 21,
-            color: text ? c.foreground : look?.tone === "error" ? c.danger : c.foreground,
+            color: look?.tone === "error" ? c.danger : c.foreground,
             opacity: look?.tone === "pending" ? 0.6 : 1,
           }}
         >

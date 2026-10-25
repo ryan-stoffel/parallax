@@ -34,7 +34,8 @@ import { SidebarControl, type PullRequestScreens, type Screens, type SettingsScr
 import { NewThreadScreen, StartThreadScreen } from "./NewThread";
 import { Loading, Onboarding } from "./Onboarding";
 import { PullRequestList, PullRequestScreen } from "./PullRequests";
-import { alertFor, notify, onOpened, phaseOf, type Phase } from "./push";
+import { alertFor, phaseOf, type Phase } from "./alerts";
+import { notify, onOpened } from "./push";
 import { LightboxHost } from "./Lightbox";
 import { getPrefs } from "./prefs";
 import { SearchScreen } from "./Search";
@@ -76,9 +77,18 @@ const mainHeader: NativeStackNavigationOptions = {
   headerShadowVisible: false,
 };
 
+/** A sheet's clear header with no line, its buttons our own glass circles, on the sheet's background. */
+const clearHeader = (c: Colors): NativeStackNavigationOptions => ({
+  headerTransparent: true,
+  headerShadowVisible: false,
+  headerLeftBackgroundVisible: false,
+  headerRightBackgroundVisible: false,
+  contentStyle: { backgroundColor: c.background },
+});
+
 /**
  * Every sheet's look, as Claude's app raises Search and Settings: up to just below the notch, a
- * grabber that drags it away, and a clear header with no line, its buttons our own glass circles.
+ * grabber that drags it away, and the clear header.
  * A form sheet sizes only the scroll view at the root of its screen (react-native-screens), so
  * each such screen is a scroll view, or a header view then one, with
  * `contentInsetAdjustmentBehavior="automatic"`, which keeps its rows clear of the header and the
@@ -89,11 +99,7 @@ const sheet = (c: Colors): NativeStackNavigationOptions => ({
   presentation: "formSheet",
   sheetAllowedDetents: [1],
   sheetGrabberVisible: true,
-  headerTransparent: true,
-  headerShadowVisible: false,
-  headerLeftBackgroundVisible: false,
-  headerRightBackgroundVisible: false,
-  contentStyle: { backgroundColor: c.background },
+  ...clearHeader(c),
 });
 
 /**
@@ -105,11 +111,7 @@ const sheet = (c: Colors): NativeStackNavigationOptions => ({
 const inSheet =
   (c: Colors) =>
   ({ navigation }: { navigation: { goBack: () => void } }): NativeStackNavigationOptions => ({
-    headerTransparent: true,
-    headerShadowVisible: false,
-    headerLeftBackgroundVisible: false,
-    headerRightBackgroundVisible: false,
-    contentStyle: { backgroundColor: c.background },
+    ...clearHeader(c),
     ...back({ navigation }),
   });
 
@@ -442,6 +444,7 @@ function Main({ setup }: { setup: Setup }) {
                 sheetAllowedDetents: [0.6, 0.95],
               }}
             />
+            {/* Its title is the page's own: a native header here leaves the list's foot under the screen's edge. */}
             <Stack.Screen name="NewThread" component={NewThreadScreen} options={{ ...sheet(c), headerShown: false }} />
             <Stack.Screen name="Search" component={SearchScreen} options={{ ...sheet(c), headerShown: false }} />
             {/* The sheet's grabber is its own; each page's header is its stack's. */}

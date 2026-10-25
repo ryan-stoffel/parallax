@@ -54,7 +54,7 @@ import { setViewing } from "./push";
 import { TranscriptSkeleton } from "./Skeleton";
 import { startedPrompt } from "./started";
 import { ThreadStrips } from "./ThreadStrips";
-import { opens, RunImage, toolLook, TraceSheet } from "./TraceSheet";
+import { opens, RunImage, titleOf, toolLook, TraceSheet } from "./TraceSheet";
 import { unansweredOf } from "./unanswered";
 import {
   AttentionBadge,
@@ -299,7 +299,7 @@ async function readPicture(hostId: string, f: DocRef): Promise<string | undefine
       length: slice,
     });
     if ("error" in answer) return undefined;
-    const file = answer.result as { exists: boolean; content?: string; size?: number };
+    const file = answer.result;
     if (!file.exists || file.content == null) return undefined;
     data += file.content;
     if (offset + slice >= (file.size ?? 0)) break;
@@ -313,18 +313,10 @@ async function readPicture(hostId: string, f: DocRef): Promise<string | undefine
  */
 function ApprovalLine({ item }: { item: Extract<Item, { kind: "approval" }> }) {
   const c = useColors();
-  const { request, resolved } = item;
-  const said = !resolved
-    ? "Waiting for you:"
-    : resolved.decision === "allowed"
-      ? "Allowed"
-      : resolved.decision === "denied"
-        ? "Denied"
-        : "Ended";
   return (
     <TraceLine
-      icon={<Icon icon={Hand} size={15} color={resolved ? c.mutedForeground : c.warning} />}
-      title={`${said} ${request.toolName}`}
+      icon={<Icon icon={Hand} size={15} color={item.resolved ? c.mutedForeground : c.warning} />}
+      title={titleOf(item, undefined, false)}
     />
   );
 }
@@ -364,12 +356,12 @@ function UserRow({ item }: { item: Extract<Item, { kind: "user" }> }) {
   );
 }
 
-function Divider({ icon, label }: { icon: LucideIcon; label: string }) {
+function Divider({ icon, label }: { icon?: LucideIcon; label: string }) {
   const c = useColors();
   return (
     <View style={styles.line}>
       <View style={[styles.rule, { backgroundColor: c.border }]} />
-      <Icon icon={icon} size={13} color={c.faintForeground} />
+      {icon && <Icon icon={icon} size={13} color={c.faintForeground} />}
       <T faint style={{ fontSize: 12 }}>
         {label}
       </T>
@@ -454,15 +446,13 @@ function RowView({ row, live }: { row: Row; live: boolean }) {
       return <Divider icon={RotateCcw} label="New session" />;
     case "end":
       return (
-        <View style={styles.line}>
-          <View style={[styles.rule, { backgroundColor: c.border }]} />
-          <T faint style={{ fontSize: 12 }}>
-            {row.outcome.status === "failed"
+        <Divider
+          label={
+            row.outcome.status === "failed"
               ? `Failed: ${failureText(row.outcome.failure)}`
-              : statusLabel(row.outcome.status)}
-          </T>
-          <View style={[styles.rule, { backgroundColor: c.border }]} />
-        </View>
+              : statusLabel(row.outcome.status)
+          }
+        />
       );
     default:
       return null;
@@ -526,7 +516,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
     // The main view has no back stack, so an archived thread gives way to a new one.
     if (!thread?.archived) navigation.reset({ index: 0, routes: [{ name: "StartThread" }] });
   };
-  const symbol = (name: SFSymbol): MenuIcon => ({ type: "sfSymbol" as const, name });
+  const symbol = (name: SFSymbol): MenuIcon => ({ type: "sfSymbol", name });
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -727,19 +717,13 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
                     </T>
                   </View>
                 )}
-                {[
-                  ...pending.map((m) => ({
-                    id: m.id,
-                    text: m.text,
-                    note: `${connected ? "Sending…" : "Waiting for connection"}${m.steer ? " · steer" : ""}`,
-                  })),
-                ].map((m) => (
+                {pending.map((m) => (
                   <View key={m.id} style={{ alignItems: "flex-end", gap: 4 }}>
                     <View style={[styles.bubble, styles.sent, { backgroundColor: c.selected, opacity: 0.6 }]}>
                       <Markdown text={splitFiles(m.text).text} selectable={false} />
                     </View>
                     <T faint style={{ fontSize: 12 }}>
-                      {m.note}
+                      {`${connected ? "Sending…" : "Waiting for connection"}${m.steer ? " · steer" : ""}`}
                     </T>
                   </View>
                 ))}

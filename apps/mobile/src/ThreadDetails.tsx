@@ -10,39 +10,25 @@ import {
   CalendarClock,
   CalendarPlus,
   FileDiff,
-  FilePen,
   FolderGit2,
   FolderOpen,
   GitBranch,
   GitPullRequest,
-  Hand,
   Hash,
-  ListChecks,
   LockOpen,
-  Sparkles,
 } from "lucide-react-native";
 import { ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import type { AgentPermission } from "../../desktop/src/protocol/generated/protocol";
-
 import { accessLevels, effortLevels } from "../../desktop/src/renderer/catalog";
 import { groupOf, noRepo } from "../../desktop/src/renderer/threads";
 import { statusLabel } from "../../desktop/src/renderer/transcript";
+import { accessIcons } from "./Composer";
 import { useComputer } from "./fleet";
 import { ProviderLogo } from "./logos";
 import { useOffers } from "./offers";
 import type { Screens } from "./nav";
 import { DeviceIcon, Row, Section, T, useColors } from "./ui";
-
-/** Each access level's icon, as the desktop's composer has them. */
-const accessIcons: Record<AgentPermission, LucideIcon> = {
-  manual: Hand,
-  edit: FilePen,
-  auto: Sparkles,
-  plan: ListChecks,
-  bypass: LockOpen,
-};
 
 const copy = (text: string) => {
   void Clipboard.setStringAsync(text);

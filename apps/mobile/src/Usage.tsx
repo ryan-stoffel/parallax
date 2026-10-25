@@ -6,7 +6,7 @@
 import { useIsFocused, useNavigation } from "@react-navigation/native";
 import * as Haptics from "expo-haptics";
 import { RefreshCw, RotateCw } from "lucide-react-native";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import Svg, { Line, Path } from "react-native-svg";
 
@@ -92,46 +92,40 @@ export function UsageScreen() {
   // One request covers the range and the one before it.
   const since = dayKey(span.previous[0]!);
 
-  const loadDaily = useCallback(
-    (list: Computer[], from: string) =>
-      Promise.all(
-        list.map(async (m) => {
-          const id = m.machine.id;
-          const answer = await window.parallax.request(id, "usage/daily", { since: from, timeZone: timeZone() });
-          const value = "result" in answer ? answer.result : { problem: usageError(answer.error) };
-          setDaily((all) => ({ ...all, [`${id} ${from}`]: value }));
-        }),
-      ),
-    [],
-  );
+  const loadDaily = (list: Computer[], from: string) =>
+    Promise.all(
+      list.map(async (m) => {
+        const id = m.machine.id;
+        const answer = await window.parallax.request(id, "usage/daily", { since: from, timeZone: timeZone() });
+        const value = "result" in answer ? answer.result : { problem: usageError(answer.error) };
+        setDaily((all) => ({ ...all, [`${id} ${from}`]: value }));
+      }),
+    );
 
-  const loadLimits = useCallback(
-    (list: Computer[]) =>
-      Promise.all(
-        list.map(async (m) => {
-          const id = m.machine.id;
-          const [answer, keys, providers] = await Promise.all([
-            window.parallax.request(id, "usage/limits", {}),
-            window.parallax.request(id, "accounts/keys/list", {}),
-            m.state.status === "connected" && "providers" in m.state.capabilities
-              ? window.parallax.request(id, "providers/list", { refresh: false })
-              : undefined,
-          ]);
-          const enabled =
-            providers && "result" in providers
-              ? providers.result.providers.filter((p) => p.instance.enabled).map((p) => p.instance.id)
-              : undefined;
-          setLimits((all) => {
-            // A later failure keeps the last answer.
-            if ("error" in answer)
-              return all[id] && "accounts" in all[id] ? all : { ...all, [id]: { problem: usageError(answer.error) } };
-            const accounts = accountsOf(answer.result.accounts, "result" in keys ? keys.result.accounts : [], enabled);
-            return { ...all, [id]: { accounts } };
-          });
-        }),
-      ),
-    [],
-  );
+  const loadLimits = (list: Computer[]) =>
+    Promise.all(
+      list.map(async (m) => {
+        const id = m.machine.id;
+        const [answer, keys, providers] = await Promise.all([
+          window.parallax.request(id, "usage/limits", {}),
+          window.parallax.request(id, "accounts/keys/list", {}),
+          m.state.status === "connected" && "providers" in m.state.capabilities
+            ? window.parallax.request(id, "providers/list", { refresh: false })
+            : undefined,
+        ]);
+        const enabled =
+          providers && "result" in providers
+            ? providers.result.providers.filter((p) => p.instance.enabled).map((p) => p.instance.id)
+            : undefined;
+        setLimits((all) => {
+          // A later failure keeps the last answer.
+          if ("error" in answer)
+            return all[id] && "accounts" in all[id] ? all : { ...all, [id]: { problem: usageError(answer.error) } };
+          const accounts = accountsOf(answer.result.accounts, "result" in keys ? keys.result.accounts : [], enabled);
+          return { ...all, [id]: { accounts } };
+        });
+      }),
+    );
 
   useEffect(() => {
     if (focused) void loadDaily(connected, since);

@@ -30,7 +30,7 @@ import { Icon, T, useColors } from "./ui";
  * Where a file is: `path` in run `runId`'s folder on `hostId`, or with no `runId`, the path
  * `host/upload` saved a sent file at.
  */
-export interface FileSource {
+interface FileSource {
   hostId: string;
   runId?: string;
   path: string;
@@ -123,7 +123,7 @@ function download(source: FileSource, onProgress?: (share: number) => void): Pro
 }
 
 /** Downloads `source` and opens it in Quick Look, or says why it couldn't. */
-export async function openFile(source: FileSource, onProgress?: (share: number) => void): Promise<void> {
+async function openFile(source: FileSource, onProgress?: (share: number) => void): Promise<void> {
   void Haptics.selectionAsync();
   try {
     await preview(await download(source, onProgress));

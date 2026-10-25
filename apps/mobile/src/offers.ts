@@ -32,7 +32,7 @@ export function useOffers(computer: Computer | undefined): Offer[] {
   useEffect(() => {
     if (!id || !providers) return;
     void window.parallax.request(id, "providers/list", { refresh: false }).then((answer) => {
-      if (!("error" in answer)) setListed(answer.result as ProvidersListResult);
+      if (!("error" in answer)) setListed(answer.result);
     });
   }, [id, providers]);
   if (listed)

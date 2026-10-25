@@ -42,7 +42,7 @@ export async function loadSaved(): Promise<Saved | null> {
 export const forget = () => SecureStore.deleteItemAsync(KEY, keychain);
 
 /** `route` with plxd's port when it has none: `10.0.0.2` is `10.0.0.2:7341`. */
-export const withPort = (route: string) => (route.includes(":") ? route : `${route}:${PORT}`);
+const withPort = (route: string) => (route.includes(":") ? route : `${route}:${PORT}`);
 const url = (route: string, path: string) => `https://${withPort(route)}${path}`;
 
 /** A POST to `path`, pinned to `pin`: its JSON answer, or a pairing error for people. */

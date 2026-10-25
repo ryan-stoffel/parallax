@@ -63,7 +63,6 @@ export type Colors = typeof light;
 /** Undefined is the system's font, as the desktop's `-apple-system`. */
 export const font = {
   regular: undefined,
-  medium: undefined,
   brand: "Sora-Medium",
   mono: "JetBrainsMonoNF-Regular",
   monoBold: "JetBrainsMonoNF-Bold",

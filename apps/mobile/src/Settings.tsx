@@ -472,7 +472,6 @@ export function AddComputerScreen({ navigation }: NativeStackScreenProps<Setting
   const { add } = useFleet();
   return (
     <FindComputers
-      index={1}
       onFound={(found) => {
         add(found);
         navigation.goBack();

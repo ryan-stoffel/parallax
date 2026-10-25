@@ -14,7 +14,7 @@ import { WebHost } from "../../desktop/src/renderer/webBridge";
 import { PinnedSocket, privateFile } from "../modules/pinned-tls";
 import { loadSaved, pairedSocket, type Saved } from "./host";
 
-export const CONNECT_PORT = 7340;
+const CONNECT_PORT = 7340;
 
 /** A computer the phone uses: its tailnet node's id, name, OS, and address. */
 export interface Machine {
@@ -60,8 +60,6 @@ export const saveSetup = (setup: Setup) =>
   setupFile.write(
     JSON.stringify({ ...setup, machines: setup.machines.map(({ paired, ...m }) => m) }),
   );
-
-export const forgetSetup = () => setupFile.exists && setupFile.delete();
 
 /** The computers among `devices` that run Parallax with Connect on, phones and tablets aside. */
 export const computers = (devices: TailnetDevice[]): Machine[] =>
@@ -137,8 +135,10 @@ export class Fleet {
   readonly hosts = new Map<string, WebHost>();
   private readonly listeners = new Set<(hostId: string, state: ConnectionState) => void>();
 
-  constructor(signedOut: (machine: Machine) => Promise<void>, machines: Machine[]) {
-    this.signedOut = signedOut;
+  constructor(
+    private readonly signedOut: (machine: Machine) => Promise<void>,
+    machines: Machine[],
+  ) {
     for (const m of machines) this.add(m);
     const unknown = { error: { code: -32602, message: "unknown computer" } };
     const none = () => () => {};
@@ -156,8 +156,6 @@ export class Fleet {
       retry: async (id) => this.hosts.get(id)?.retry(),
     } as Partial<ParallaxBridge> as ParallaxBridge;
   }
-
-  private readonly signedOut: (machine: Machine) => Promise<void>;
 
   /** Connects to `m`, unless it's connected already. */
   add(m: Machine): void {

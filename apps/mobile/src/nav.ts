@@ -54,7 +54,7 @@ export type PullRequestScreens = {
  * Every route by name. A screen navigates by name, and the nearest stack with that name takes it,
  * so a screen needn't know which stack holds it.
  */
-export type AllScreens = Screens & SettingsScreens & PullRequestScreens;
+type AllScreens = Screens & SettingsScreens & PullRequestScreens;
 
 export const useNav = () => useNavigation<NativeStackNavigationProp<AllScreens>>();
 
