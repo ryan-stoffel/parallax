@@ -924,7 +924,7 @@ export const plxdTools = "mcp__plxd__";
  */
 function subagentTitle(items: Item[], runId: string): string | undefined {
   type Summary = { runId?: unknown; prompt?: unknown };
-  for (const x of items.toReversed()) {
+  for (const x of [...items].reverse()) {
     if (x.kind !== "tool" || !x.name?.startsWith(plxdTools) || !x.output?.includes(runId)) continue;
     try {
       type Answer = Summary & { run?: Summary; runs?: Summary[]; thread?: Summary };

@@ -636,9 +636,9 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
 
   useLayoutEffect(() => {
     navigation.setOptions({
-      // Only the glass buttons, over the transcript: its title is at the transcript's top.
+      // Only the glass buttons, on a bar the page's own color: its title is at the transcript's
+      // top. Not transparent: iOS 26 veils an inverted list under a transparent bar.
       headerTitle: "",
-      headerTransparent: true,
       headerShadowVisible: false,
       // A native menu, in sections as iOS's own apps group theirs.
       unstable_headerRightItems: () => [
@@ -762,10 +762,13 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
 
   return (
     <RowContext value={context}>
-      {/* The header is transparent, so the screen starts at its top. */}
-      <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: c.background }}>
+      <KeyboardAvoidingView
+        behavior="padding"
+        keyboardVerticalOffset={headerHeight}
+        style={{ flex: 1, backgroundColor: c.background }}
+      >
         {!connected && (
-          <View style={[styles.banner, { top: headerHeight, backgroundColor: c.surface, borderColor: c.border }]}>
+          <View style={[styles.banner, { top: 6, backgroundColor: c.surface, borderColor: c.border }]}>
             <Icon icon={WifiOff} size={14} color={c.mutedForeground} />
             <T muted style={{ fontSize: 13 }}>
               {computer ? `Reconnecting to ${computer.machine.name}…` : "This computer was removed."}
@@ -781,7 +784,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
           accessibilityLabel="Transcript"
           // At the transcript's top, under the header's glass buttons: the thread's title, quietly.
           ListFooterComponent={
-            <View style={{ paddingTop: headerHeight + 4, paddingBottom: 6, gap: 2 }}>
+            <View style={{ paddingTop: 4, paddingBottom: 6, gap: 2 }}>
               <T medium numberOfLines={2} style={{ fontSize: 17, lineHeight: 23, fontWeight: "600" }}>
                 {title}
               </T>

@@ -350,7 +350,7 @@ function Main({ setup }: { setup: Setup }) {
                 const routes = props.navigation.getState().routes;
                 const at = routes.findIndex((r) => r.key === props.route.key);
                 const inSheet = routes.slice(0, at).some((r) => r.name !== "Thread" && r.name !== "StartThread");
-                return inSheet ? { ...pageSheet(c), ...back(props) } : {};
+                return inSheet ? { ...sheet(c), ...back(props) } : {};
               }}
             />
             <Stack.Screen
@@ -385,7 +385,7 @@ function Main({ setup }: { setup: Setup }) {
               name="PullRequests"
               component={PullRequestList}
               options={({ navigation }) => ({
-                ...pageSheet(c),
+                ...sheet(c),
                 title: "Pull requests",
                 headerLeft: () => <CloseButton onPress={() => navigation.goBack()} />,
               })}

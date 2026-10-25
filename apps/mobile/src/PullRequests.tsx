@@ -386,63 +386,64 @@ export function PullRequestList() {
   const names = new Map(computers.map((m) => [m.machine.id, m.machine.name]));
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
-      <FlatList
-        data={shown}
-        keyExtractor={(r) => r.entry.url}
-        keyboardDismissMode="on-drag"
-        keyboardShouldPersistTaps="handled"
-        ListHeaderComponent={
-          <View style={{ gap: 10, paddingTop: 4, paddingBottom: 6 }}>
-            <View style={{ paddingHorizontal: 16 }}>
-              <GlassSearch value={query} onChange={setQuery} placeholder="Search pull requests" />
-            </View>
-            <FilterChips
-              value={filters}
-              onChange={setFilters}
-              computers={computers.map((m) => ({ id: m.machine.id, name: m.machine.name }))}
-              repos={repos}
-            />
+    // The list is the screen itself: a sheet sizes only a scroll view at its root.
+    <FlatList
+      style={{ backgroundColor: c.background }}
+      data={shown}
+      keyExtractor={(r) => r.entry.url}
+      contentInsetAdjustmentBehavior="automatic"
+      keyboardDismissMode="on-drag"
+      keyboardShouldPersistTaps="handled"
+      ListHeaderComponent={
+        <View style={{ gap: 10, paddingTop: 4, paddingBottom: 6 }}>
+          <View style={{ paddingHorizontal: 16 }}>
+            <GlassSearch value={query} onChange={setQuery} placeholder="Search pull requests" />
           </View>
-        }
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              void load(true).finally(() => setRefreshing(false));
-            }}
+          <FilterChips
+            value={filters}
+            onChange={setFilters}
+            computers={computers.map((m) => ({ id: m.machine.id, name: m.machine.name }))}
+            repos={repos}
           />
-        }
-        renderItem={({ item: { entry, read } }) => (
-          <PrRow
-            entry={entry}
-            pr={read.pr}
-            error={errors[entry.url]}
-            offline={connected.has(entry.hostId) ? undefined : `${names.get(entry.hostId) ?? "Its computer"} is offline`}
-          />
-        )}
-        ListEmptyComponent={
-          !entries.length ? (
-            <Empty title="No pull requests yet" note="A pull request a thread opens or links shows up here." />
-          ) : query.trim() ? (
-            <Empty title="No results" note={`No pull requests match "${query.trim()}".`} onClear={clear} />
-          ) : narrowed ? (
-            <Empty title="Nothing matches" note="Try other filters, or clear them." onClear={clear} />
-          ) : (
-            <Empty title="No open pull requests" note="Merged and closed ones are under the State filter." />
-          )
-        }
-        ListFooterComponent={
-          narrowed && shown.length ? (
-            <T faint style={{ fontSize: 12, lineHeight: 16, textAlign: "center", paddingTop: 14 }}>
-              {shown.length} of {entries.length} pull requests
-            </T>
-          ) : null
-        }
-        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
-      />
-    </View>
+        </View>
+      }
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            void load(true).finally(() => setRefreshing(false));
+          }}
+        />
+      }
+      renderItem={({ item: { entry, read } }) => (
+        <PrRow
+          entry={entry}
+          pr={read.pr}
+          error={errors[entry.url]}
+          offline={connected.has(entry.hostId) ? undefined : `${names.get(entry.hostId) ?? "Its computer"} is offline`}
+        />
+      )}
+      ListEmptyComponent={
+        !entries.length ? (
+          <Empty title="No pull requests yet" note="A pull request a thread opens or links shows up here." />
+        ) : query.trim() ? (
+          <Empty title="No results" note={`No pull requests match "${query.trim()}".`} onClear={clear} />
+        ) : narrowed ? (
+          <Empty title="Nothing matches" note="Try other filters, or clear them." onClear={clear} />
+        ) : (
+          <Empty title="No open pull requests" note="Merged and closed ones are under the State filter." />
+        )
+      }
+      ListFooterComponent={
+        narrowed && shown.length ? (
+          <T faint style={{ fontSize: 12, lineHeight: 16, textAlign: "center", paddingTop: 14 }}>
+            {shown.length} of {entries.length} pull requests
+          </T>
+        ) : null
+      }
+      contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+    />
   );
 }
 
@@ -763,7 +764,6 @@ export function PullRequestScreen({
 }: NativeStackScreenProps<Screens, "PullRequest">) {
   const { hostId, runId, url } = route.params;
   const c = useColors();
-  const insets = useSafeAreaInsets();
   const card = useCard();
   const computer = useComputer(hostId);
   const [pr, setPr] = useState<PullRequest | undefined>(reads.get(url));
@@ -939,7 +939,8 @@ export function PullRequestScreen({
   return (
     <ScrollView
       style={{ backgroundColor: c.background }}
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: insets.bottom + 32 }}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 }}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}

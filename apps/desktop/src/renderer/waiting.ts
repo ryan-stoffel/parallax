@@ -49,7 +49,7 @@ export function presentWaiting(
       return { kind, label: task.description.trim() || kinds[kind].singular };
     }),
     ...watching.map((url) => ({ kind: "pullRequest" as const, label: `#${numberOf(url)}` })),
-  ].toSorted((a, b) => kinds[a.kind].order - kinds[b.kind].order);
+  ].sort((a, b) => kinds[a.kind].order - kinds[b.kind].order);
   if (all.length === 0) return undefined;
   const details = all.map((item) => ({ kind: kinds[item.kind].singular, label: item.label }));
   const unnamed = (item: Item) => agentsShown && item.kind === "agent";
