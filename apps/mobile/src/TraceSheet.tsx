@@ -126,7 +126,6 @@ function Block({ label, text }: { label: string; text: string }) {
 
 /** A step's detail: a call's command or input, diff, images, and output, or a thought, plan, or message. */
 function Detail({ item, scope }: { item: Item; scope: TraceScope }) {
-  const c = useColors();
   switch (item.kind) {
     case "tool": {
       const diff = editRows(item.name, item.input);

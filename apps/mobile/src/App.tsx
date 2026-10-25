@@ -197,6 +197,7 @@ const linking: LinkingOptions<Screens> = {
         screens: {
           SettingsHome: "settings",
           Usage: "usage",
+          Account: "account",
           Computer: "computer/:id",
           ComputerSettings: "computer/:id/:page",
         },
