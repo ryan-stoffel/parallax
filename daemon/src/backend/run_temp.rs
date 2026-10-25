@@ -4,8 +4,8 @@
 //! session of the user leaves there. So plxd makes a new, owner-only folder for each worker's
 //! CLI in [`DataDir::run_temp_roots`] before the CLI starts, and removes it when the CLI exits.
 //! The backend points the vendor's temp setting at it through
-//! [`WorkerSandbox::temp`](super::WorkerSandbox), and the sandbox hides every other run's. A root goes with its last run's folder, and `serve`
-//! sweeps what a crash left at startup.
+//! [`WorkerSandbox::temp`](super::WorkerSandbox), and the sandbox hides every other run's. A root
+//! goes with its last run's folder, and `serve` sweeps what a crash left at startup.
 //!
 //! The roots are in `/tmp`, which every user can write, so a root must be a folder this user
 //! owns that nobody else can enter. One someone else made first refuses the worker instead.

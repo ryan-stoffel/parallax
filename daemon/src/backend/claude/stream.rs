@@ -406,78 +406,11 @@ impl Translator {
                 }
                 Vec::new()
             }
-            Some("task_started") => {
-                if let (Some(id), Some(_)) =
-                    (text(message, "tool_use_id"), text(message, "subagent_type"))
-                {
-                    self.subagents.insert(id.to_owned());
-                }
-                if let (Some(call), Some(id)) =
-                    (text(message, "tool_use_id"), text(message, "task_id"))
-                    && self.monitors.remove(call)
-                {
-                    self.monitor_tasks.insert(id.to_owned());
-                }
-                if let (Some(call), Some(id), Some("local_agent")) = (
-                    text(message, "tool_use_id"),
-                    text(message, "task_id"),
-                    text(message, "task_type"),
-                ) {
-                    self.agent_calls.insert(id.to_owned(), call.to_owned());
-                }
-                let mut tasks = self.tasks.clone();
-                if let Some(task) = self.counted(message) {
-                    tasks.insert(task.task_id.clone(), task);
-                }
-                self.tasks_changed(tasks).into_iter().collect()
-            }
-            // Every live task, which replaces the running set, so a missed `task_notification`
-            // can't leave a task running.
+            Some("task_started") => self.task_started(message).into_iter().collect(),
             Some("background_tasks_changed") => {
-                let Some(listed) = message.get("tasks").and_then(Value::as_array) else {
-                    return Vec::new();
-                };
-                let listed: Vec<_> = listed.iter().filter_map(Value::as_object).collect();
-                // A monitor gone from the roster has ended.
-                self.monitor_tasks
-                    .retain(|id| listed.iter().any(|task| text(task, "task_id") == Some(id)));
-                self.agent_calls
-                    .retain(|id, _| listed.iter().any(|task| text(task, "task_id") == Some(id)));
-                let tasks = listed
-                    .iter()
-                    .filter_map(|task| self.counted(task))
-                    .map(|task| (task.task_id.clone(), task))
-                    .collect();
-                self.tasks_changed(tasks).into_iter().collect()
+                self.background_tasks_changed(message).into_iter().collect()
             }
-            Some("task_notification") => {
-                let mut steps = Vec::new();
-                if let Some(call_id) = text(message, "tool_use_id")
-                    && self.subagents.remove(call_id)
-                {
-                    let status = match text(message, "status") {
-                        Some("completed") => SubagentStatus::Completed,
-                        Some("failed") => SubagentStatus::Failed,
-                        Some("stopped") => SubagentStatus::Stopped,
-                        _ => SubagentStatus::Unknown,
-                    };
-                    steps.push(Step::Emit(Event::SubagentFinished {
-                        call_id: call_id.to_owned(),
-                        status,
-                        summary: text(message, "summary")
-                            .filter(|summary| !summary.is_empty())
-                            .map(str::to_owned),
-                    }));
-                }
-                let mut tasks = self.tasks.clone();
-                if let Some(id) = text(message, "task_id") {
-                    tasks.remove(id);
-                    self.monitor_tasks.remove(id);
-                    self.agent_calls.remove(id);
-                }
-                steps.extend(self.tasks_changed(tasks));
-                steps
-            }
+            Some("task_notification") => self.task_notification(message),
             Some("status") if text(message, "status") == Some("compacting") => {
                 self.request_usage = None;
                 vec![Step::Emit(Event::ContextCompaction { done: false })]
@@ -501,6 +434,77 @@ impl Translator {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// A `task_started`: ties the task to its call, as a subagent's, a monitor's, or an agent's,
+    /// and adds it to the running set.
+    fn task_started(&mut self, message: &Map<String, Value>) -> Option<Step> {
+        let call = text(message, "tool_use_id");
+        let id = text(message, "task_id");
+        if let (Some(call), Some(_)) = (call, text(message, "subagent_type")) {
+            self.subagents.insert(call.to_owned());
+        }
+        if let (Some(call), Some(id)) = (call, id)
+            && self.monitors.remove(call)
+        {
+            self.monitor_tasks.insert(id.to_owned());
+        }
+        if let (Some(call), Some(id), Some("local_agent")) = (call, id, text(message, "task_type"))
+        {
+            self.agent_calls.insert(id.to_owned(), call.to_owned());
+        }
+        let mut tasks = self.tasks.clone();
+        if let Some(task) = self.counted(message) {
+            tasks.insert(task.task_id.clone(), task);
+        }
+        self.tasks_changed(tasks)
+    }
+
+    /// A `background_tasks_changed`: every live task, which replaces the running set, so a missed
+    /// `task_notification` can't leave a task running.
+    fn background_tasks_changed(&mut self, message: &Map<String, Value>) -> Option<Step> {
+        let listed = message.get("tasks").and_then(Value::as_array)?;
+        let listed: Vec<_> = listed.iter().filter_map(Value::as_object).collect();
+        let is_listed = |id: &str| listed.iter().any(|task| text(task, "task_id") == Some(id));
+        // A monitor gone from the roster has ended.
+        self.monitor_tasks.retain(|id| is_listed(id));
+        self.agent_calls.retain(|id, _| is_listed(id));
+        let tasks = listed
+            .iter()
+            .filter_map(|task| self.counted(task))
+            .map(|task| (task.task_id.clone(), task))
+            .collect();
+        self.tasks_changed(tasks)
+    }
+
+    /// A `task_notification`: a task ended, and with it a subagent, if it was one (PLX-382).
+    fn task_notification(&mut self, message: &Map<String, Value>) -> Vec<Step> {
+        let mut steps = Vec::new();
+        if let Some(call_id) = text(message, "tool_use_id")
+            && self.subagents.remove(call_id)
+        {
+            let status = match text(message, "status") {
+                Some("completed") => SubagentStatus::Completed,
+                Some("failed") => SubagentStatus::Failed,
+                Some("stopped") => SubagentStatus::Stopped,
+                _ => SubagentStatus::Unknown,
+            };
+            steps.push(Step::Emit(Event::SubagentFinished {
+                call_id: call_id.to_owned(),
+                status,
+                summary: text(message, "summary")
+                    .filter(|summary| !summary.is_empty())
+                    .map(str::to_owned),
+            }));
+        }
+        let mut tasks = self.tasks.clone();
+        if let Some(id) = text(message, "task_id") {
+            tasks.remove(id);
+            self.monitor_tasks.remove(id);
+            self.agent_calls.remove(id);
+        }
+        steps.extend(self.tasks_changed(tasks));
+        steps
     }
 
     /// The [`Event::BackgroundTasks`] for `tasks`, if they differ from the ones running.
@@ -611,33 +615,41 @@ impl Translator {
         }
         // Claude Code writes init before its first request, so this stops the run before any
         // tool runs.
-        let mode = text(message, "permissionMode");
-        let left_plan = self.left_plan && mode.is_some_and(|mode| LEFT_PLAN_MODES.contains(&mode));
         if (self.policy == ToolPolicy::WorkspaceWrite || coordinator)
-            && mode != Some(self.permission_mode)
-            && !left_plan
+            && let Some(step) =
+                self.mode_violation(text(message, "permissionMode"), coordinator, run)
         {
-            let reported = match mode {
-                Some(mode) => format!("permission mode {mode:?}"),
-                None => "no permission mode".to_owned(),
-            };
-            let danger = if coordinator {
-                ""
-            } else {
-                ", which on Linux lets a worker's commands write all of /home, /tmp, /var, /opt, \
-                 /run, /mnt, and /root"
-            };
-            let message = format!(
-                "Claude Code reported {reported} in {run} instead of {expected:?}. It forces \
-                 \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on{danger}. plxd doesn't \
-                 set it for this run, so check the env block of Claude Code's managed settings",
-                expected = self.permission_mode,
-            );
-            steps.push(violation(FailureKind::PolicyViolation, message));
+            steps.push(step);
             return steps;
         }
         self.verified = true;
         steps
+    }
+
+    /// The violation of a worker's or a coordinator's `system/init` that reports `mode` instead
+    /// of the one it asked for, or one of [`LEFT_PLAN_MODES`] once it left plan mode.
+    fn mode_violation(&self, mode: Option<&str>, coordinator: bool, run: &str) -> Option<Step> {
+        let left_plan = self.left_plan && mode.is_some_and(|mode| LEFT_PLAN_MODES.contains(&mode));
+        if mode == Some(self.permission_mode) || left_plan {
+            return None;
+        }
+        let reported = match mode {
+            Some(mode) => format!("permission mode {mode:?}"),
+            None => "no permission mode".to_owned(),
+        };
+        let danger = if coordinator {
+            ""
+        } else {
+            ", which on Linux lets a worker's commands write all of /home, /tmp, /var, /opt, /run, \
+             /mnt, and /root"
+        };
+        let message = format!(
+            "Claude Code reported {reported} in {run} instead of {expected:?}. It forces \
+             \"default\" when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is on{danger}. plxd doesn't set it \
+             for this run, so check the env block of Claude Code's managed settings",
+            expected = self.permission_mode,
+        );
+        Some(violation(FailureKind::PolicyViolation, message))
     }
 
     /// Whether `system/init` may list `tool` whatever the run's policy allows: `EndConversation`,
@@ -666,29 +678,7 @@ impl Translator {
         if message.get("parent_tool_use_id").is_none_or(Value::is_null)
             && let Some(usage) = inner.get("usage")
         {
-            let count = |key| usage.get(key).and_then(Value::as_u64);
-            let input = count("input_tokens").and_then(|input| {
-                input
-                    .checked_add(count("cache_read_input_tokens")?)?
-                    .checked_add(count("cache_creation_input_tokens")?)
-            });
-            let reported = parallax_protocol::AgentRequestUsage {
-                model: text(inner, "model").map(str::to_owned),
-                context_tokens: input,
-                input_tokens: input,
-                cached_input_tokens: count("cache_read_input_tokens"),
-                context_window: self.known_window.as_ref().and_then(|(model, window)| {
-                    (text(inner, "model") == Some(model.as_str())).then_some(*window)
-                }),
-                output_tokens: self.speed.map(|(tokens, _)| tokens),
-                output_ms: self.speed.map(|(_, ms)| ms),
-            };
-            // Claude Code sends a request's content blocks as separate lines with the same usage.
-            if message_id.is_none() || self.usage_message != message_id {
-                self.usage_message.clone_from(&message_id);
-                self.request_usage = Some(reported.clone());
-                steps.push(Step::Emit(Event::RequestUsage(reported)));
-            }
+            steps.extend(self.request_usage(inner, usage, message_id.as_deref()));
         }
         for block in blocks.into_iter().flatten().filter_map(Value::as_object) {
             match text(block, "type") {
@@ -734,6 +724,42 @@ impl Translator {
             }
         }
         in_subagent(message, text(inner, "model"), steps)
+    }
+
+    /// The main session's [`Event::RequestUsage`] for an `assistant` message's `usage`, unless an
+    /// earlier line of the same request, `message_id`, sent it: Claude Code sends a request's
+    /// content blocks as separate lines with the same usage.
+    fn request_usage(
+        &mut self,
+        inner: &Map<String, Value>,
+        usage: &Value,
+        message_id: Option<&str>,
+    ) -> Option<Step> {
+        if message_id.is_some() && self.usage_message.as_deref() == message_id {
+            return None;
+        }
+        let count = |key| usage.get(key).and_then(Value::as_u64);
+        let input = count("input_tokens").and_then(|input| {
+            input
+                .checked_add(count("cache_read_input_tokens")?)?
+                .checked_add(count("cache_creation_input_tokens")?)
+        });
+        let model = text(inner, "model");
+        let reported = parallax_protocol::AgentRequestUsage {
+            model: model.map(str::to_owned),
+            context_tokens: input,
+            input_tokens: input,
+            cached_input_tokens: count("cache_read_input_tokens"),
+            context_window: self
+                .known_window
+                .as_ref()
+                .and_then(|(known, window)| (model == Some(known.as_str())).then_some(*window)),
+            output_tokens: self.speed.map(|(tokens, _)| tokens),
+            output_ms: self.speed.map(|(_, ms)| ms),
+        };
+        self.usage_message = message_id.map(str::to_owned);
+        self.request_usage = Some(reported.clone());
+        Some(Step::Emit(Event::RequestUsage(reported)))
     }
 
     /// A partial message (`--include-partial-messages`, PLX-714): its text as it streams, as
@@ -888,32 +914,7 @@ impl Translator {
             }
         }
         if failed {
-            let errors: Vec<&str> = message
-                .get("errors")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
-            let failure = if RUN_LIMITS.contains(&subtype) {
-                FailureKind::VendorError
-            } else if self.limit_rejected {
-                FailureKind::RateLimited
-            } else if let Some(kind) = self.turn_error {
-                kind
-            } else if result.as_deref().is_some_and(signed_out) {
-                FailureKind::NotSignedIn
-            } else if errors.iter().any(|error| error.starts_with(NO_SESSION)) {
-                FailureKind::SessionNotFound
-            } else {
-                FailureKind::VendorError
-            };
-            let text = match (&result, errors.is_empty()) {
-                (Some(result), _) if !result.is_empty() => result.clone(),
-                (_, false) => errors.join("; "),
-                _ => format!("Claude Code ended the turn with {subtype:?}"),
-            };
-            self.last_failure = Some(Failure::new(failure, truncate(&text)));
+            self.last_failure = Some(self.turn_failure(message, subtype, result.as_deref()));
             self.last_result = None;
         } else {
             self.last_failure = None;
@@ -933,6 +934,41 @@ impl Translator {
             foreign: origin.is_some_and(|kind| kind != "human"),
         }));
         steps
+    }
+
+    /// Why a failed `result` of `subtype`, whose text is `result`, failed.
+    fn turn_failure(
+        &self,
+        message: &Map<String, Value>,
+        subtype: &str,
+        result: Option<&str>,
+    ) -> Failure {
+        let errors: Vec<&str> = message
+            .get("errors")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let kind = if RUN_LIMITS.contains(&subtype) {
+            FailureKind::VendorError
+        } else if self.limit_rejected {
+            FailureKind::RateLimited
+        } else if let Some(kind) = self.turn_error {
+            kind
+        } else if result.is_some_and(signed_out) {
+            FailureKind::NotSignedIn
+        } else if errors.iter().any(|error| error.starts_with(NO_SESSION)) {
+            FailureKind::SessionNotFound
+        } else {
+            FailureKind::VendorError
+        };
+        let text = match result {
+            Some(result) if !result.is_empty() => result.to_owned(),
+            _ if !errors.is_empty() => errors.join("; "),
+            _ => format!("Claude Code ended the turn with {subtype:?}"),
+        };
+        Failure::new(kind, truncate(&text))
     }
 
     /// A `control_request` from a CLI started with `--permission-prompt-tool stdio`: a
