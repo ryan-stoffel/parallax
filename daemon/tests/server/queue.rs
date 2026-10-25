@@ -10,8 +10,9 @@ use parallax_protocol::methods::{
 };
 use parallax_protocol::{
     AgentCancelParams, AgentDelivery, AgentOutcome, AgentOutputItem, AgentSendParams, AgentStatus,
-    ErrorKind, EventsEventParams, ParallaxEvent, Provider, QueueCancelParams, QueueEditParams,
-    QueueListParams, QueueReorderParams, QueueSteerParams, QueuedMessage, RunId, TurnId,
+    ErrorKind, EventsEventParams, ParallaxEvent, Project, Provider, QueueCancelParams,
+    QueueEditParams, QueueListParams, QueueReorderParams, QueueSteerParams, QueuedMessage, RunId,
+    TurnId,
 };
 use plxd::backend::fake::Step;
 use plxd::routing::BackendRegistry;
@@ -32,6 +33,18 @@ fn working() -> impl FnMut(&EventsEventParams) -> bool {
         message_id: None,
         text: "Working".to_owned(),
     })
+}
+
+/// A run on `backends` in a new Project, once its first turn is working: its host, a client
+/// subscribed to the Project, the Project, and the run.
+async fn working_run(backends: BackendRegistry) -> (Host, Conn, Project, RunId) {
+    let host = Host::start(temp_dir(), backends);
+    let (mut client, project) = host.project_client().await;
+    let params = start_params(project.id, "Work for a while");
+    let run_id = params.run_id;
+    client.call::<AgentStart>(params).await.unwrap();
+    until(&mut client, working()).await;
+    (host, client, project, run_id)
 }
 
 async fn queue(client: &mut Conn, run_id: RunId) -> Vec<TurnId> {
@@ -125,12 +138,7 @@ async fn reorder_cancel_and_edit(client: &mut Conn, run_id: RunId, [a, b, c]: [T
 /// next to the same CLI once its turn has ended.
 #[tokio::test]
 async fn waiting_messages_are_edited_reordered_cancelled_and_sent_in_order_after_a_restart() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Work for a while");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, working()).await;
+    let (host, mut client, project, run_id) = working_run(fake(busy())).await;
 
     let other = crate::threads::start_params(None, "Another thread");
     let other_id = other.run_id;
@@ -214,12 +222,7 @@ async fn waiting_messages_are_edited_reordered_cancelled_and_sent_in_order_after
 /// queue stays empty.
 #[tokio::test]
 async fn a_message_that_cant_be_stored_is_refused() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Work for a while");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, working()).await;
+    let (host, mut client, _, run_id) = working_run(fake(busy())).await;
 
     // The store refuses the queue's write at once. Holding SQLite's write lock instead would
     // make every write, the event log's included, wait out the 5 s busy timeout in turn, which
@@ -247,12 +250,7 @@ async fn a_message_that_cant_be_stored_is_refused() {
 /// refused rather than queued for it.
 #[tokio::test]
 async fn compact_is_refused_on_a_backend_that_cant_compact() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Work for a while");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, working()).await;
+    let (host, mut client, _, run_id) = working_run(fake(busy())).await;
 
     let refused = client
         .call::<AgentSend>(send_params(run_id, TurnId::generate(), " /compact "))
@@ -270,12 +268,7 @@ async fn compact_is_refused_on_a_backend_that_cant_compact() {
 /// Failed edits, reorders, and cancellations leave both queues and the event log unchanged.
 #[tokio::test]
 async fn queue_mutations_that_cant_be_stored_are_refused() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Work for a while");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, working()).await;
+    let (host, mut client, _, run_id) = working_run(fake(busy())).await;
 
     let (a, b) = (TurnId::generate(), TurnId::generate());
     for (turn, message) in [(a, "First"), (b, "Second")] {
@@ -384,12 +377,7 @@ async fn a_steer_goes_into_the_running_turn_ahead_of_waiting_messages() {
         Step::AwaitFollowUp,
         end_turn("Queued."),
     ];
-    let host = Host::start(temp_dir(), fake(script));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Work for a while");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, working()).await;
+    let (host, mut client, _, run_id) = working_run(fake(script)).await;
 
     let (queued, steered) = (TurnId::generate(), TurnId::generate());
     client
@@ -450,12 +438,7 @@ async fn a_steer_interrupts_a_cli_that_takes_no_messages_and_resumes_with_it() {
         Provider::Anthropic,
         Arc::new(fake_backend(busy()).without_follow_ups()),
     );
-    let host = Host::start(temp_dir(), backends);
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Work for a while");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, working()).await;
+    let (host, mut client, _, run_id) = working_run(backends).await;
 
     let turn = TurnId::generate();
     let steered = client
