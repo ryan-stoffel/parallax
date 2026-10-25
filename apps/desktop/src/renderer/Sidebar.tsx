@@ -20,7 +20,6 @@ import {
   Ellipsis,
   FileDiff,
   Folder,
-  FolderGit2,
   FolderPlus,
   GitBranch,
   GitFork,
@@ -1519,8 +1518,8 @@ export function ThreadList({
             </button>
           </div>
           <Fold open={open}>
-            {/* Under its repo's heading, a row needn't name the repo: title and status, then branch. */}
-            <ul className="flex flex-col gap-px">
+            {/* Under its repo's heading, a row needn't name the repo: title and status, then details. */}
+            <ul className="flex flex-col gap-0.5">
               {g.rows.map((i) => row(i, groupBy === "repo"))}
             </ul>
           </Fold>
@@ -1537,7 +1536,7 @@ export function ThreadList({
         {...unpinZone}
         className={`rounded-lg transition-colors ${caughtUp ? "flex flex-1 flex-col" : ""} ${unpinLook}`}
       >
-        <ul aria-label="Threads" className="flex flex-col gap-px">
+        <ul aria-label="Threads" className="flex flex-col gap-0.5">
           {draftRows.map(({ draft, repo }) => (
             <DraftRow
               key={draft.id}
@@ -2167,7 +2166,7 @@ function Drawer<T>({
         />
       </summary>
       {open && (
-        <ul className={`flex flex-col gap-px ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>
+        <ul className={`flex flex-col gap-0.5 ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>
       )}
       {open && more > 0 && (
         <button
@@ -2698,8 +2697,7 @@ function RowHead({
 
 /**
  * Where a row's thread is, at the start of its second line: its repo's icon and name, or its
- * pinned folder's where it has no repo, else No repo. It gives way to the branch beside it only
- * past half the row.
+ * pinned folder's where it has no repo, else No repo.
  */
 function RowPlace({
   repo,
@@ -2713,7 +2711,7 @@ function RowPlace({
 }) {
   const inFolder = folder && (!repo || repo.scratch);
   return (
-    <span className="flex max-w-[55%] min-w-0 shrink-0 items-center gap-1.5">
+    <span className="flex min-w-0 items-center gap-1.5">
       {inFolder ? <FolderMark folder={folder} /> : <RepoIcon repo={repo} />}
       <span className="min-w-0 truncate">
         <Marked
@@ -2781,8 +2779,8 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
 
 /**
  * A thread's row (0033, 0075): its title and status (what it asks of the user, or how long ago it
- * was prompted), then its repo, its worktree or local checkout icon, branch, and git status, a
- * pin, linked pull requests (the number of one, or +N for more) and their checks, and provider.
+ * was prompted), then its repo, its git status, a pin, linked pull requests (the number of one, or
+ * +N for more) and their checks, and provider. Its branch is on its card.
  * Under a search, the words found are marked, and a match only in its messages shows a line of
  * them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
  * Archive, and more actions, which also open by right-clicking the row: native popovers, so
@@ -2920,9 +2918,8 @@ function ThreadRow({
   // Read once, not polled: a row's state is as of when the sidebar loaded it.
   const prs = usePullRequests(hostId, run?.id, run?.pullRequests ?? [], false, false);
   const prLook = majorityLook(prs);
-  // A checkout thread has no branch of its own: show the one its repository has out. Every branch's
-  // status is read, for what's unpushed and uncommitted, again as its run's status changes. A
-  // detached HEAD, or a plxd without `git`, leaves it unnamed.
+  // A worktree's or checkout's status is read, for what's unpushed and uncommitted, again as its
+  // run's status changes. A plxd without `git` leaves it out.
   const [git, setGit] = useState<GitStatus | null>(null);
   const statusRun = run?.checkout || run?.branch ? run.id : undefined;
   const runStatus = run?.status;
@@ -2936,8 +2933,6 @@ function ThreadRow({
       live = false;
     };
   }, [hostId, statusRun, runStatus]);
-  const checkoutBranch = run?.checkout ? (git?.branch ?? null) : null;
-  const branch = run?.checkout ? (checkoutBranch ?? "Local checkout") : run?.branch;
   // The open pull requests' checks, as one: failed if any failed, else running if any are, else
   // passed once all have.
   const checks = prs.urls.flatMap((url) => {
@@ -2951,7 +2946,13 @@ function ThreadRow({
       : checks.length && checks.every((c) => c === "passed")
         ? "passed"
         : undefined;
-  const hasDetails = !!(branch || prs.urls.length || Logo || device || thread.pinned);
+  const hasDetails = !!(
+    (git && (git.ahead || git.changes)) ||
+    prs.urls.length ||
+    Logo ||
+    device ||
+    thread.pinned
+  );
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
     <>
@@ -3050,7 +3051,7 @@ function ThreadRow({
           onLeave();
           dragThread(e.dataTransfer, hostId, thread.id);
         }}
-        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-1.5"}`}
+        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-2"}`}
       >
         {look === "compact" && !nested ? (
           // One-line rows: where it is, its title, and its status.
@@ -3082,27 +3083,6 @@ function ThreadRow({
           <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
             {!nested && <RowPlace repo={repo} folder={folder} words={words} />}
             <span className="flex min-w-0 flex-1 items-center gap-1">
-              {run?.checkout ? (
-                // Without a branch, the text beside it already says "Local checkout".
-                <span
-                  title="Local checkout"
-                  role="img"
-                  aria-label="Local checkout"
-                  aria-hidden={!checkoutBranch}
-                  className="flex shrink-0"
-                >
-                  <Folder className="size-3.5" />
-                </span>
-              ) : (
-                branch && (
-                  <span title="Worktree" role="img" aria-label="Worktree" className="flex shrink-0">
-                    <FolderGit2 className="size-3.5" />
-                  </span>
-                )
-              )}
-              <span className="min-w-0 truncate">
-                {branch && <Marked text={branch} words={words} />}
-              </span>
               {git && <GitCounts git={git} />}
             </span>
             {thread.pinned && (
