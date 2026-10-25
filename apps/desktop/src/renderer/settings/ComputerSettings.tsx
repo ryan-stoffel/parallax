@@ -180,7 +180,7 @@ function Permission({
         <Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-faint-foreground" />
         <div className="min-w-0">
           <span className="block text-body font-medium">{title}</span>
-          <span className="block text-body text-muted-foreground">{description}</span>
+          <span className="block text-meta text-muted-foreground">{description}</span>
         </div>
       </div>
       <span className="flex shrink-0 items-center gap-1.5 text-body text-muted-foreground">

@@ -146,7 +146,7 @@ function LocalHost({ host }: { host: Host }) {
 
   return (
     <section aria-label="This computer" data-setting="this-computer" className="mb-8">
-      <div className="mb-2 flex min-h-7 items-center gap-2 text-body text-muted-foreground [&_svg]:size-4">
+      <div className="mb-2 flex min-h-7 items-center gap-2 text-reading font-semibold [&_svg]:size-4">
         <DeviceIcon icon={host.icon ?? "laptop"} />
         {renaming ? (
           <RenameForm
