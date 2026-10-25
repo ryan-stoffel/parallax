@@ -36,7 +36,7 @@ use uuid::Uuid;
 
 use crate::agents::{
     Conn, Host, create, end_turn, fake, fake_backend, git, has_item, init, items, project_params,
-    real_repo, send_params, subscribe, text, until, updated_to,
+    real_repo, scope, send_params, subscribe, text, until, updated_to,
 };
 use crate::support::{InProcess, PATIENCE, eventually, kind, project_update, temp_dir};
 
@@ -1491,7 +1491,7 @@ async fn deleting_an_unknown_project_or_a_repo_entry_fails() {
     let mut client = host.client().await;
     let work = temp_dir();
     let entry = client.add(&real_repo(work.path())).await;
-    let scope = ProjectId::try_from(Uuid::from(entry.id)).unwrap();
+    let scope = scope(entry.id);
     for project in [ProjectId::generate(), scope] {
         let error = delete(&mut client, project).await.unwrap_err();
         assert_eq!(kind(&error), ErrorKind::ProjectNotFound, "{project}");

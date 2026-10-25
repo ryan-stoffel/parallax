@@ -19,7 +19,7 @@ use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
 use plxd::mcp::question::{CHILD_TOOLS, COORDINATOR_TOOLS};
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
-use plxd::mcp::{board, delegation, device, files, html, land, preview, triggers};
+use plxd::mcp::{board, land};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use serde_json::json;

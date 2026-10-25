@@ -16,8 +16,8 @@ use plxd::backend::fake::{AskedApproval, Step};
 use serde_json::{Value, json};
 
 use crate::agents::{
-    Conn, Host, end_turn, fake, init, items, outcomes, real_repo, start_params, subscribe, until,
-    updated_to,
+    Conn, Host, end_turn, fake, init, items, outcomes, real_repo, scope, start_params, subscribe,
+    until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -267,7 +267,7 @@ async fn a_run_started_without_approvals_never_asks_outside_a_project() {
     let mut client = host.client().await;
     let work = temp_dir();
     let entry = client.add(&real_repo(work.path())).await;
-    let scope = ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap();
+    let scope = scope(entry.id);
     subscribe(&mut client, scope, 0).await;
     let params = start_params(scope, "Run the tests");
     let run_id = params.run_id;

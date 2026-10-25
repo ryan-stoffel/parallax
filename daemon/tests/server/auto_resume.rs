@@ -12,7 +12,7 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     AgentBackgroundKind, AgentBackgroundTask, AgentCancelParams, AgentListParams, AgentOutputItem,
     AgentPermission, AgentResumeNowParams, AgentRunState, AgentStatus, ErrorKind,
-    EventsEventParams, HostSettingsGetParams, ParallaxEvent, ProjectId, Provider, RunId, TurnId,
+    EventsEventParams, HostSettingsGetParams, ParallaxEvent, Provider, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{
@@ -21,7 +21,7 @@ use plxd::backend::{
 use plxd::routing::BackendRegistry;
 
 use crate::agents::{
-    Conn, Host, end_turn, fake_backend, init, items, real_repo, send_params, start_params,
+    Conn, Host, end_turn, fake_backend, init, items, real_repo, scope, send_params, start_params,
     subscribe, until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
@@ -333,7 +333,7 @@ async fn a_plain_thread_waits_only_with_the_host_setting_on() {
 
     let checkout = temp_dir();
     let repo = client.add(&real_repo(checkout.path())).await;
-    let scope = ProjectId::try_from(uuid::Uuid::from(repo.id)).unwrap();
+    let scope = scope(repo.id);
     subscribe(&mut client, scope, 0).await;
     let start = crate::open_pr::thread(Some(repo.id));
     let run_id = start.run_id;

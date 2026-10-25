@@ -29,7 +29,8 @@ use tempfile::TempDir;
 use tokio::time::Instant;
 
 use crate::agents::{
-    Conn, end_turn, fake, fake_backend, git, init, named_repo, send_params, text, until, updated_to,
+    Conn, end_turn, fake, fake_backend, git, init, named_repo, scope, send_params, text, until,
+    updated_to,
 };
 use crate::support::{InProcess, PATIENCE, eventually, kind, png, temp_dir};
 
@@ -258,10 +259,6 @@ impl Conn {
     async fn list(&mut self) -> ThreadListResult {
         self.call::<ThreadList>(ThreadListParams {}).await.unwrap()
     }
-}
-
-fn scope(repo: RepoId) -> ProjectId {
-    ProjectId::try_from(uuid::Uuid::from(repo)).unwrap()
 }
 
 #[tokio::test]

@@ -9,14 +9,14 @@ use std::path::{Path, PathBuf};
 use parallax_protocol::methods::{AgentCancel, AgentList, AgentOpenPr, AgentStart, ThreadStart};
 use parallax_protocol::{
     AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind, ParallaxEvent,
-    ProjectId, RepoId, RunId, ThreadStartParams,
+    RepoId, RunId, ThreadStartParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, find_program};
 use tempfile::TempDir;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, git, init, project_params, real_repo, start_params,
+    Conn, Host, create, end_turn, fake, git, init, project_params, real_repo, scope, start_params,
     subscribe, text, until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
@@ -232,12 +232,7 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
     let entry = client.add(&repo).await;
-    subscribe(
-        &mut client,
-        ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
-        0,
-    )
-    .await;
+    subscribe(&mut client, scope(entry.id), 0).await;
     let start = thread(Some(entry.id));
     let run_id = start.run_id;
     client.call::<ThreadStart>(start).await.unwrap();
@@ -280,7 +275,7 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
     let start = thread(None);
     let scratch = start.run_id;
     let started = client.call::<ThreadStart>(start).await.unwrap();
-    let scope = ProjectId::try_from(uuid::Uuid::from(started.thread.repo)).unwrap();
+    let scope = scope(started.thread.repo);
     subscribe(&mut client, scope, 0).await;
     // Not the first thread's `agent.updated` for the pull request it linked.
     until(&mut client, |event| {

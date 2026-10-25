@@ -14,15 +14,15 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     AcceptId, AgentAcceptParams, AgentCancelParams, AgentCommitParams, AgentGitStatusParams,
     AgentOutputItem, AgentPushParams, AgentStatus, ErrorKind, GitStatus, ParallaxEvent,
-    ProjectDeleteParams, ProjectId, QueueListParams, QueueSteerParams, RepoId, RunId,
-    ThreadDeleteParams, ThreadStartParams, TurnId,
+    ProjectDeleteParams, QueueListParams, QueueSteerParams, RepoId, RunId, ThreadDeleteParams,
+    ThreadStartParams, TurnId,
 };
 use plxd::backend::fake::Step;
 use tokio::task::JoinHandle;
 
 use crate::agents::{
-    Conn, Host, create, git, init, project_params, real_repo, send_params, start_params, subscribe,
-    text, until, updated_to,
+    Conn, Host, create, git, init, project_params, real_repo, scope, send_params, start_params,
+    subscribe, text, until, updated_to,
 };
 use crate::open_pr::{Tools, add_origin, editing, open, start, thread};
 use crate::support::{PATIENCE, kind, temp_dir};
@@ -128,12 +128,7 @@ async fn a_checkout_thread_commits_pushes_and_opens_a_pull_request_on_its_branch
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
     let entry = client.add(&repo).await;
-    subscribe(
-        &mut client,
-        ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
-        0,
-    )
-    .await;
+    subscribe(&mut client, scope(entry.id), 0).await;
     let start = ThreadStartParams {
         checkout: true,
         ..thread(Some(entry.id))
@@ -413,12 +408,7 @@ async fn a_thread_s_delete_is_refused_while_its_push_runs() {
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
     let entry = client.add(&repo).await;
-    subscribe(
-        &mut client,
-        ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
-        0,
-    )
-    .await;
+    subscribe(&mut client, scope(entry.id), 0).await;
     let start = thread(Some(entry.id));
     let run_id = start.run_id;
     client.call::<ThreadStart>(start).await.unwrap();

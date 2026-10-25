@@ -203,6 +203,11 @@ impl Host {
     }
 }
 
+/// The project id a repo entry's events carry: the entry's own id.
+pub(crate) fn scope(repo: RepoId) -> ProjectId {
+    ProjectId::try_from(uuid::Uuid::from(repo)).unwrap()
+}
+
 /// Params for a project on a new real repository under `dir`.
 pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
     ProjectCreateParams {
@@ -1415,10 +1420,7 @@ async fn runs_plxd_cannot_start_are_refused() {
                 backend: "codex".to_owned(),
             }),
             coordinator_thread: Some(CoordinatorThreadId::generate()),
-            ..start_params(
-                ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
-                "Fix it",
-            )
+            ..start_params(scope(entry.id), "Fix it")
         })
         .await
         .unwrap_err();
