@@ -194,7 +194,7 @@ test("copies the agent's reply into the composer, and right-click offers Copy an
   await message.press("Backspace");
 });
 
-test("the composer grows upward as it fills, up to 40% of the window (PLX-184)", async () => {
+test("the composer grows upward as it fills, up to its cap (PLX-184, PLX-995)", async () => {
   const message = page.getByRole("textbox", { name: "Message" });
   const before = (await message.boundingBox())!;
   const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
@@ -206,7 +206,10 @@ test("the composer grows upward as it fills, up to 40% of the window (PLX-184)",
   const after = (await message.boundingBox())!;
   expect(after.height).toBeGreaterThan(before.height);
   expect(Math.round(after.y + after.height)).toBe(Math.round(before.y + before.height));
-  expect(after.height).toBeLessThanOrEqual((await page.evaluate<number>("innerHeight")) * 0.4 + 1);
+  // At most seven 14px lines and its top padding, and never past 40% of the window.
+  expect(after.height).toBeLessThanOrEqual(
+    Math.min((await page.evaluate<number>("innerHeight")) * 0.4, 7 * 14 * 1.625 + 18) + 1,
+  );
   await message.press("ControlOrMeta+a");
   await message.press("Backspace");
 });
@@ -240,7 +243,8 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
   await edit("paste");
   const thumbnail = page.getByRole("img", { name: "Image 1" });
   await expect(thumbnail).toBeVisible();
-  await expect(message).toHaveText("");
+  // It also takes its place in the text, where it was pasted, with its size.
+  await expect(message).toHaveText(/^Image 1\d+(?: bytes| KB)\s*$/);
   // e2e/ has no DOM types.
   const width = (img: unknown) => (img as { naturalWidth: number }).naturalWidth;
   expect(await thumbnail.evaluate(width)).toBe(2000);
@@ -604,7 +608,8 @@ test("attaches another thread with @, sends it with the message, and opens it fr
   await page.screenshot({ path: test.info().outputPath("thread-picker.png") });
   await readme.click();
 
-  const chip = page.locator("form [data-thread-chip]");
+  // The thread sits in the text, where the `@` was.
+  const chip = page.locator('form [data-chip="threadRef"]');
   await expect(chip).toHaveText(/Tidy up the README/);
   await page.keyboard.type("that thread did here");
   await page.screenshot({ path: test.info().outputPath("thread-chip.png") });
@@ -613,7 +618,9 @@ test("attaches another thread with @, sends it with the message, and opens it fr
 
   // The sent message keeps its chip once plxd's turnStarted lists the thread, after a reload too.
   const transcript = page.getByRole("log", { name: "Transcript" });
-  await expect(transcript.getByText("Do what that thread did here")).toBeVisible();
+  await expect(
+    transcript.getByText('Do what @"Tidy up the README" that thread did here'),
+  ).toBeVisible();
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
   await page.reload();
   await openThread(page, /Tidy up the docs/);

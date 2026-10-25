@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { closeHistory } from "@tiptap/pm/history";
 import type { TiptapEditorHTMLElement } from "@tiptap/react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -6,7 +7,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, PromptImage } from "../protocol/generated/protocol";
-import { Composer, type ComposerProps } from "./Composer";
+import { Composer, rankThreads, type ComposerProps } from "./Composer";
 import type { ImageCaps } from "./images";
 import { setCliEnabled } from "./models";
 import { Notifications } from "./notifications";
@@ -103,7 +104,14 @@ function render(
     });
     await read();
   };
-  return { box, type, press, paste };
+  // Renders it again with `more` over its props, as a screen does when they change.
+  const rerender = (more: Partial<ComposerProps>) =>
+    act(() =>
+      root.render(
+        <Composer onSend={onSend} imageCaps={imageCaps ?? undefined} {...props} {...more} />,
+      ),
+    );
+  return { box, type, press, paste, rerender };
 }
 
 // Waits for the added files to be read and shown.
@@ -116,7 +124,10 @@ const pngFile = (name = "image.png") =>
   new File([Uint8Array.from(atob(png), (c) => c.charCodeAt(0))], name, { type: "image/png" });
 const sentPng: PromptImage = { mediaType: "image/png", data: png };
 const thumbnails = () =>
-  [...document.querySelectorAll("form img")].map((img) => img.getAttribute("alt"));
+  [...document.querySelectorAll("form fieldset img")].map((img) => img.getAttribute("alt"));
+/** The text's chips, as they read. */
+const chipsIn = (box: Element) =>
+  [...box.querySelectorAll("[data-node-view-wrapper]")].map((c) => c.textContent);
 /** The newest notification's body. */
 const alert = () => notices.querySelector('[aria-label="Notifications"] > div p')?.textContent;
 
@@ -396,21 +407,26 @@ test("a failed send puts the same text and images back, ahead of anything added 
   await paste(Array.from({ length: 10 }, () => pngFile()));
   await act(async () => fail("plxd is busy"));
   expect(alert()).toBe("plxd is busy");
-  expect(box.querySelector("ul")?.textContent).toBe("first");
-  // Still at most 10: the one sent, then the first nine added meanwhile.
+  // The GIF's chip, with its size.
+  expect(box.querySelector("ul")?.textContent).toBe("firstImage 13 bytes ");
+  // Still at most 10: the one sent, then the first nine added meanwhile. The tenth's place in the
+  // text names nothing.
   expect(thumbnails()).toHaveLength(10);
+  expect(chipsIn(box).at(-1)).toBe("Removed image");
 
   await press("Enter");
   const gif = { mediaType: "image/gif", data: "R0lG" };
+  const names = Array.from({ length: 9 }, (_, i) => `[Image ${i + 2}] `).join("");
   expect(onSend).toHaveBeenLastCalledWith(
-    "- first\n\nmore",
+    // The tenth's place names nothing.
+    `- first[Image 1] \n\nmore${names.trimEnd()}`,
     {},
     [gif, ...Array<PromptImage>(9).fill(sentPng)],
     [],
   );
 });
 
-test("a pasted image sits above the text, with its name nowhere in it, and is sent beside it", async () => {
+test("a pasted image sits above the text and in it where pasted, named by its number, never by its file name", async () => {
   const onSend = vi.fn(async () => undefined);
   const { box, type, press, paste } = render(onSend);
   // A copied image file's only text is its name.
@@ -419,9 +435,13 @@ test("a pasted image sits above the text, with its name nowhere in it, and is se
   });
   await paste([pngFile(), pngFile()]);
   expect(thumbnails()).toEqual(["Image 1", "Image 2", "Image 3"]);
-  expect(box.textContent).toBe("");
+  // Each with its size.
+  expect(chipsIn(box)).toEqual(["Image 172 bytes", "Image 272 bytes", "Image 372 bytes"]);
+  expect(box.textContent).not.toContain("Screenshot");
+  // Removing one takes its place in the text too, and the rest are numbered again.
   act(() => document.querySelector<HTMLElement>('[aria-label="Remove image 2"]')!.click());
   expect(thumbnails()).toEqual(["Image 1", "Image 2"]);
+  expect(chipsIn(box)).toEqual(["Image 172 bytes", "Image 272 bytes"]);
   // Clicking one opens it large, with the others beside it.
   HTMLDialogElement.prototype.showModal = vi.fn();
   HTMLDialogElement.prototype.close = function () {
@@ -432,15 +452,20 @@ test("a pasted image sits above the text, with its name nowhere in it, and is se
   act(() => document.querySelector<HTMLElement>('dialog [aria-label="Close"]')!.click());
   expect(document.querySelector("dialog")).toBeNull();
 
-  type("What's wrong here?");
+  type("what's wrong here?");
   await press("Enter");
-  expect(onSend).toHaveBeenCalledWith("What's wrong here?", {}, [sentPng, sentPng], []);
+  expect(onSend).toHaveBeenCalledWith(
+    "[Image 1] [Image 2] what's wrong here?",
+    {},
+    [sentPng, sentPng],
+    [],
+  );
   expect(thumbnails()).toEqual([]);
 
   // Images alone can be sent too.
   await paste([pngFile()]);
   await press("Enter");
-  expect(onSend).toHaveBeenLastCalledWith("", {}, [sentPng], []);
+  expect(onSend).toHaveBeenLastCalledWith("[Image 1]", {}, [sentPng], []);
 });
 
 test("an image copied from a browser, with its URL as text, pastes as the image", async () => {
@@ -451,7 +476,7 @@ test("an image copied from a browser, with its URL as text, pastes as the image"
     "text/html": `<meta charset="utf-8"><img src="${url}">`,
   });
   expect(thumbnails()).toEqual(["Image 1"]);
-  expect(box.textContent).toBe("");
+  expect(box.textContent).not.toContain(url);
 });
 
 test("text copied from an app with a picture of itself pastes as text", async () => {
@@ -563,7 +588,7 @@ test("with fileUploads, an image is also saved on the host and listed after the 
   });
   // The image still goes as an image too.
   expect(onSend).toHaveBeenCalledWith(
-    "Attached files:\n- /host/uploads/1/paper.pdf\n- /host/uploads/1/image-1.png",
+    "[Image 1]\n\nAttached files:\n- /host/uploads/1/paper.pdf\n- /host/uploads/1/image-1.png",
     {},
     [sentPng],
     [],
@@ -758,8 +783,14 @@ const withMenus = async (
   return { ...composer, type, runId };
 };
 const options = () =>
-  [...document.querySelectorAll('[role="option"]')].map((o) => o.firstChild?.textContent);
-const highlighted = () => document.querySelector('[aria-selected="true"]')?.firstChild?.textContent;
+  [...document.querySelectorAll('[role="option"] [data-label]')].map((o) => o.textContent);
+const highlighted = () =>
+  document.querySelector('[aria-selected="true"] [data-label]')?.textContent;
+const rows = () => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent);
+const groups = () =>
+  [...document.querySelectorAll('[role="listbox"] [role="presentation"]')].map(
+    (g) => g.textContent,
+  );
 const loadingRow = () => document.querySelector('[role="listbox"] [role="status"]')?.textContent;
 
 test("/ lists the composer's commands, then the CLI's, filtered as typed, and picks with the keyboard (PLX-359)", async () => {
@@ -770,10 +801,13 @@ test("/ lists the composer's commands, then the CLI's, filtered as typed, and pi
     "/model",
     "/effort",
     "/permissions",
-    "/ponytail:ponytail-help",
+    "/ponytail-help",
     "/review",
     "/code-review",
   ]);
+  // Under their headings, a plugin's skill with its plugin as a badge.
+  expect(groups()).toEqual(["Controls", "Commands and skills"]);
+  expect(rows()[3]).toContain("ponytail");
   // Names that start with it, then names that contain it.
   await type("rev");
   expect(options()).toEqual(["/review", "/code-review"]);
@@ -804,6 +838,8 @@ test("commands are fetched on the first /, once per host, backend, and run, with
   await act(async () => answer(commandsResult));
   expect(options()).toHaveLength(6);
   expect(loadingRow()).toBeUndefined();
+  // Kept on this computer too, so the next run of the app shows them before the CLI answers.
+  expect(localStorage.getItem("parallax:commands")).toContain(`"local/claude/${runId}"`);
   act(() => unmount());
 
   // Opening the thread again lists them without starting the CLI.
@@ -834,7 +870,9 @@ test("@ lists the thread's files, fetched again on each new @, and inserts @path
   expect(request).not.toHaveBeenCalled();
   await type("see @main");
   expect(request).toHaveBeenCalledExactlyOnceWith("local", "repo/files", { runId });
-  expect(options()).toEqual(["src/main.rs"]);
+  // Each file by its name, with its folder beside it.
+  expect(options()).toEqual(["main.rs"]);
+  expect(rows()).toEqual(["main.rssrc"]);
   await press("Enter");
   expect(box.textContent).toBe("see main.rs ");
 
@@ -848,10 +886,10 @@ test("@ lists the thread's files, fetched again on each new @, and inserts @path
   );
   await type("and @src/");
   expect(request).toHaveBeenCalledTimes(2);
-  expect(options()).toEqual(["src/lib.rs", "src/main.rs"]);
+  expect(options()).toEqual(["lib.rs", "main.rs"]);
   expect(loadingRow()).toBeUndefined();
   await act(async () => answer(["src/lib.rs", "src/main.rs", "src/new.rs"]));
-  expect(options()).toEqual(["src/lib.rs", "src/main.rs", "src/new.rs"]);
+  expect(options()).toEqual(["lib.rs", "main.rs", "new.rs"]);
 });
 
 test("Esc closes the menu, Enter then sends, and a plxd without composerMenus shows none (PLX-359)", async () => {
@@ -901,13 +939,8 @@ const hostThreads = (self: string, max = 8): AttachThreads => {
     self,
   };
 };
-const rows = () => [...document.querySelectorAll('[role="option"]')].map((o) => o.textContent);
-const groups = () =>
-  [...document.querySelectorAll('[role="listbox"] [role="presentation"]')].map(
-    (g) => g.textContent,
-  );
 const chips = () =>
-  [...document.querySelectorAll("form [data-thread-chip]")].map((c) => c.textContent);
+  [...document.querySelectorAll('form [data-chip="threadRef"]')].map((c) => c.textContent);
 
 test("@ lists the host's threads above the files: its newest, then what thread/search finds, and attaches one as a chip (PLX-378)", async () => {
   const onSend = vi.fn(async () => undefined);
@@ -921,35 +954,248 @@ test("@ lists the host's threads above the files: its newest, then what thread/s
     "Speed up CI1d",
     "Fix the flaky test2d",
     "README.md",
-    "src/lib.rs",
-    "src/main.rs",
+    "lib.rssrc",
+    "main.rssrc",
   ]);
   expect(request).not.toHaveBeenCalledWith("local", "thread/search", expect.anything());
 
-  // Typed, plxd's matches, and files only under their own heading.
+  // Typed, title matches first, then what plxd found in their messages.
   await type("flaky");
   expect(request).toHaveBeenCalledWith("local", "thread/search", { query: "flaky" });
   expect(rows()).toEqual(["Fix the flaky test2d", "Write the docs2h"]);
   await press("Enter");
-  expect(box.textContent).toBe("");
-  expect(chips()).toEqual(["Thread · 2dFix the flaky test"]);
+  // It takes the `@flaky`'s place in the text, as a chip.
+  expect(chips()).toEqual(["Fix the flaky test"]);
+  expect(box.textContent).toBe("Fix the flaky test ");
 
-  // An attached thread isn't offered again, and its chip comes off.
+  // An attached thread isn't offered again, and Backspace takes its chip off.
   await type("@docs");
   expect(rows()).toEqual(["Write the docs2h"]);
   await press("Enter");
-  act(() =>
-    document.querySelector<HTMLButtonElement>('[aria-label="Remove Fix the flaky test"]')!.click(),
-  );
-  expect(chips()).toEqual(["Thread · 2hWrite the docs"]);
+  expect(chips()).toEqual(["Fix the flaky test", "Write the docs"]);
+  // Just after the second chip, before the space that follows it.
+  box.editor!.commands.setTextSelection(box.editor!.state.selection.from - 1);
+  await press("Backspace");
+  expect(chips()).toEqual(["Fix the flaky test"]);
+  box.editor!.commands.focus("end");
   await type("summarize it");
   await press("Enter");
-  expect(onSend).toHaveBeenCalledWith("summarize it", expect.anything(), [], ["t-docs"]);
+  expect(onSend).toHaveBeenCalledWith(
+    '@"Fix the flaky test"  summarize it',
+    expect.anything(),
+    [],
+    ["t-flaky"],
+  );
   expect(chips()).toEqual([]);
 });
 
+test("Stop puts a prompt's threads back as their chips, each once, within the cap", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { press } = await withMenus(onSend, {
+    attach: hostThreads("run-self", 2),
+    onStop: async () => undefined,
+    unanswered: {
+      text: '@"Fix the flaky test" summarize it',
+      images: async () => [],
+      threads: ["t-flaky", "t-docs", "t-ci"],
+    },
+  });
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Stop"]')!.click(),
+  );
+  await settle();
+  // The one the text names is its chip again; the rest go at the end, up to the cap.
+  expect(chips()).toEqual(["Fix the flaky test", "Write the docs"]);
+  expect(alert()).toBe("A message takes at most 2 attached threads.");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    '@"Fix the flaky test" summarize it @"Write the docs"',
+    expect.anything(),
+    [],
+    ["t-flaky", "t-docs"],
+  );
+});
+
+test("a failed send puts its threads back within the cap, and another computer's can't be undone back", async () => {
+  let fail = (_error: string) => {};
+  const onSend = vi.fn(() => new Promise<string | undefined>((resolve) => (fail = resolve)));
+  const { type, press, rerender, box } = await withMenus(onSend, {
+    attach: hostThreads("run-self", 2),
+  });
+  await drop("local", "t-flaky");
+  await drop("local", "t-docs");
+  await press("Enter");
+  // One more while it's in flight, past the cap once the sent ones come back.
+  await drop("local", "t-ci");
+  await act(async () => fail("plxd is busy"));
+  await settle();
+  expect(chips()).toEqual(["Fix the flaky test", "Write the docs"]);
+  // Beside the send's own failure.
+  expect(notices.textContent).toContain("A message takes at most 2 attached threads.");
+
+  // On another computer the chips go, and none undo brings back is sent there.
+  Object.assign(window.parallax, {
+    onConnectionState: () => () => {},
+    connectionState: async () => ({ status: "disconnected" }),
+  });
+  const other = { ...hostThreads("run-other"), hostId: "ssh-box" };
+  act(() => box.editor!.view.dispatch(closeHistory(box.editor!.state.tr)));
+  rerender({ hostId: "ssh-box", attach: other });
+  await settle();
+  expect(chips()).toEqual([]);
+  act(() => void box.editor!.commands.undo());
+  await settle();
+  box.editor!.commands.focus("end");
+  onSend.mockClear();
+  await type(" go");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(expect.any(String), expect.anything(), [], []);
+});
+
+test("chips cut and pasted back in the box stay chips, still attached (PLX-997)", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press, paste } = await withMenus(onSend, { attach: hostThreads("run-self") });
+  await type("see ");
+  await paste([pngFile()]);
+  await drop("local", "t-flaky");
+  const data = new DataTransfer();
+  act(() => {
+    box.editor!.commands.selectAll();
+    box.dispatchEvent(new ClipboardEvent("cut", { clipboardData: data, bubbles: true }));
+  });
+  await settle();
+  expect(chipsIn(box)).toEqual([]);
+  act(() => {
+    box.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+  });
+  await settle();
+  expect(chipsIn(box)).toEqual(["Image 172 bytes", "Fix the flaky test"]);
+  await type("again");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    'see [Image 1] @"Fix the flaky test" again',
+    expect.anything(),
+    [sentPng],
+    ["t-flaky"],
+  );
+});
+
+test("a whole prompt copied from one box pastes into another with its images (PLX-997)", async () => {
+  const first = render(vi.fn(async () => undefined));
+  first.type("fix ");
+  await first.paste([pngFile()]);
+  first.type("please");
+  const data = new DataTransfer();
+  act(() => {
+    first.box.editor!.commands.selectAll();
+    first.box.dispatchEvent(new ClipboardEvent("copy", { clipboardData: data, bubbles: true }));
+  });
+  // As text, the image is named as it's sent.
+  expect(data.getData("text/plain")).toBe("fix [Image 1] please");
+  act(() => unmount());
+
+  // Another box, with nothing attached: the image comes along, as a thumbnail and its chip.
+  const onSend = vi.fn(async () => undefined);
+  const second = render(onSend);
+  act(() => {
+    second.box.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+  });
+  await settle();
+  expect(thumbnails()).toEqual(["Image 1"]);
+  expect(chipsIn(second.box)).toEqual(["Image 172 bytes"]);
+  // Pasted again, it's the same image, not a second one.
+  act(() => {
+    second.box.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true }));
+  });
+  await settle();
+  expect(thumbnails()).toEqual(["Image 1"]);
+  await second.press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    expect.stringMatching(/^fix \[Image 1\] please/),
+    {},
+    [sentPng],
+    [],
+  );
+});
+
+test("a pasted image chip only brings an image of a type plxd takes", async () => {
+  const { box, paste } = render(vi.fn(async () => undefined));
+  const svg = `data:image/svg+xml;base64,${btoa("<svg/>")}`;
+  await paste([], {
+    "text/plain": "[Image 1]",
+    "text/html": `<p data-pm-slice="1 1 []"><span data-plx-chip="imageRef" data-imageref="" data-key="x" data-src="${svg}"></span></p>`,
+  });
+  await settle();
+  expect(thumbnails()).toEqual([]);
+  expect(chipsIn(box)).toEqual(["Removed image"]);
+});
+
+test("a copy from another editor still pastes as its plain text, links and all", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { press, paste } = render(onSend);
+  // Linear and other ProseMirror editors mark their copies too, and their links are in the text.
+  await paste([], {
+    "text/plain": "See [the docs](https://example.com/docs)",
+    "text/html":
+      '<p data-pm-slice="1 1 []">See <a href="https://example.com/docs">the docs</a></p>',
+  });
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith("See [the docs](https://example.com/docs)", {}, [], []);
+});
+
+test("@ ranks threads by title, then project, then message matches", () => {
+  const thread = (id: string, repo: string, lastPromptAt: string, archived?: boolean) => ({
+    id,
+    repo,
+    createdAt: lastPromptAt,
+    lastPromptAt,
+    archived,
+  });
+  const state = {
+    ...emptyThreads,
+    repos: [
+      { id: "web", name: "website", path: "/w", createdAt: "" },
+      { id: "app", name: "parallax", path: "/p", createdAt: "" },
+    ],
+    threads: [
+      thread("contains", "web", "2026-10-05T00:00:00Z"),
+      thread("word", "web", "2026-10-01T00:00:00Z"),
+      thread("prefix", "web", "2026-10-02T00:00:00Z"),
+      thread("project", "app", "2026-10-04T00:00:00Z"),
+      thread("letters", "web", "2026-10-06T00:00:00Z"),
+      thread("old", "web", "2026-10-07T00:00:00Z", true),
+      thread("none", "web", "2026-10-08T00:00:00Z"),
+    ],
+    titles: {
+      contains: "Reconnect the relay",
+      word: "Fix the connect wizard",
+      prefix: "Connect to plxd",
+      project: "Speed up the connect flow",
+      letters: "Clean old notes chart",
+      old: "Connect, archived",
+      none: "Unrelated",
+    },
+  };
+  // Archived after the rest of its rank, newest first within each.
+  expect(rankThreads(state, "connect", ["none"])).toEqual([
+    "prefix",
+    "old",
+    "project",
+    "word",
+    "contains",
+    "none",
+  ]);
+  // Every word, across the title and the project.
+  expect(rankThreads(state, "parallax speed", [])).toEqual(["project"]);
+  // Letters scattered across a title don't count.
+  expect(rankThreads(state, "cldnts", [])).toEqual([]);
+  // Nothing typed: the newest, archived ones left out.
+  expect(rankThreads(state, "", [])[0]).toBe("none");
+  expect(rankThreads(state, "", [])).not.toContain("old");
+});
+
 // Drops a sidebar row's drag of thread `runId` on host `hostId` on the composer.
-const drop = (hostId: string, runId: string) => {
+const drop = async (hostId: string, runId: string) => {
   const data = new DataTransfer();
   dragThread(data, hostId, runId);
   // happy-dom's DragEvent takes no dataTransfer.
@@ -960,29 +1206,32 @@ const drop = (hostId: string, runId: string) => {
     form.dispatchEvent(event("dragover"));
     form.dispatchEvent(event("drop"));
   });
+  // A chip's view draws a moment after it's put in.
+  await settle();
 };
 
 test("a sidebar row dropped on the box attaches its thread once, but not another computer's, the open one, or past the cap (PLX-378)", async () => {
   const onSend = vi.fn(async () => undefined);
   const { type, press } = await withMenus(onSend, { attach: hostThreads("run-self", 2) });
-  drop("local", "t-flaky");
-  drop("local", "t-flaky");
-  drop("local", "run-self");
+  await drop("local", "t-flaky");
+  await drop("local", "t-flaky");
+  await drop("local", "run-self");
   expect(chips()).toHaveLength(1);
   expect(chips()[0]).toContain("Fix the flaky test");
   expect(alert()).toBeUndefined();
 
-  drop("ssh-box", "t-docs");
+  await drop("ssh-box", "t-docs");
   expect(alert()).toBe("A thread on another computer can't be attached here.");
-  drop("local", "t-docs");
-  drop("local", "t-ci");
+  await drop("local", "t-docs");
+  await drop("local", "t-ci");
   expect(alert()).toBe("A message takes at most 2 attached threads.");
   expect(chips()).toHaveLength(2);
 
   await type("compare these");
   await press("Enter");
+  // Dropped outside the text, each lands at its end, and the text names them where they are.
   expect(onSend).toHaveBeenCalledWith(
-    "compare these",
+    '@"Fix the flaky test" @"Write the docs" compare these',
     expect.anything(),
     [],
     ["t-flaky", "t-docs"],
@@ -991,7 +1240,7 @@ test("a sidebar row dropped on the box attaches its thread once, but not another
 
   // Without the capability, neither a drop nor `@` attaches anything.
   const without = await withMenus(onSend);
-  drop("local", "t-flaky");
+  await drop("local", "t-flaky");
   await without.type("@flaky");
   expect(chips()).toEqual([]);
   expect(request).not.toHaveBeenCalledWith("local", "thread/search", expect.anything());
@@ -1055,45 +1304,6 @@ test("choosing an explicit model from a default-model run hides its earlier requ
   )!;
   await act(async () => opus.click());
   expect(document.body.textContent).not.toContain("50K / 200K · 25%");
-});
-
-test("the appearance setting picks the ring, the inline row, or neither", async () => {
-  window.parallax = {
-    platform: "darwin",
-    request: vi.fn(async () => ({ error: { code: -32601, message: "Unavailable" } })),
-    onConnectionState: () => () => {},
-    connectionState: async () => ({ status: "disconnected" }),
-  } as unknown as ParallaxBridge;
-  const props = {
-    backend: "claude",
-    started: {},
-    hostId: "local",
-    connected: true,
-    accountId: "claude",
-    requestUsage: {
-      kind: "requestUsage" as const,
-      backend: "claude",
-      accountId: "claude",
-      at: "2026-10-11T00:00:00Z",
-      usage: { contextTokens: 50_000, contextWindow: 200_000 },
-    },
-  };
-  const ring = () => document.querySelector('button[aria-label^="Usage:"]');
-  const inline = () =>
-    document.querySelector('form [role="group"][aria-label="Usage"]:not([hidden])');
-  render(async () => undefined, caps, props);
-  expect(ring()?.getAttribute("aria-label")).toBe("Usage: 25% of context used");
-  expect(inline()).toBeNull();
-  await act(async () => setBehaviorPrefs({ composerUsage: "inline" }));
-  expect(ring()).toBeNull();
-  expect(inline()?.textContent).toContain("25% context");
-  // An earlier build's "row" still means the inline row.
-  await act(async () => setBehaviorPrefs({ composerUsage: "row" as never }));
-  expect(inline()).not.toBeNull();
-  await act(async () => setBehaviorPrefs({ composerUsage: "off" }));
-  expect(ring()).toBeNull();
-  expect(inline()).toBeNull();
-  await act(async () => setBehaviorPrefs({ composerUsage: behaviorDefaults.composerUsage }));
 });
 
 test("a known /skill or @file becomes one chip, sent as typed, and Backspace takes it whole", async () => {

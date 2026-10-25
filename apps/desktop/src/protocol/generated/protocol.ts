@@ -4061,8 +4061,10 @@ export type AgentRequestUsage = {
 	 */
 	outputTokens?: number,
 	/**
-	 * Milliseconds those output tokens took by the provider's own timing: Claude's API time for
-	 * the last turn, or `OpenCode`'s text and reasoning streaming time. Never wall-clock turn time.
+	 * Milliseconds those output tokens took by the provider's own timing: the time Claude's
+	 * main-session responses streamed in the last turn (its API time for the turn when it streamed
+	 * no partial messages), or `OpenCode`'s text and reasoning streaming time. Never wall-clock
+	 * turn time.
 	 */
 	outputMs?: number,
 };

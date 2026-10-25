@@ -406,13 +406,13 @@ export function NewThread({
 
   // While starting, laid out as AgentChat is, so opening the thread doesn't move anything. The
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.
-  // Before it starts, it's anchored by its bottom about where centering it a little above the
-  // middle would, so the Composer grows upward until the heading reaches the top.
+  // Before it starts, it's centered a little above the middle, so as the Composer grows to its
+  // seven lines the heading rises by only half as much, never toward the top.
   return (
     <div
       className={
         starting === undefined
-          ? "flex flex-1 flex-col items-center justify-end-safe px-6 pb-[calc(56vh-9.375rem)]"
+          ? "flex flex-1 flex-col items-center justify-center-safe px-6 pb-[16vh]"
           : "flex min-h-0 flex-1 flex-col"
       }
     >
@@ -485,9 +485,7 @@ export function NewThread({
               </>
             ) : (
               <>
-                <h1
-                  className={`${repoless(group) ? "mb-7" : "mb-2"} flex justify-center-safe text-display font-medium tracking-tight whitespace-pre`}
-                >
+                <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
                   {group.id === noRepo
                     ? "What should we work on "
                     : group.space
@@ -507,6 +505,12 @@ export function NewThread({
                     ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
                   ?
                 </h1>
+                {/* Without a repo, an empty line in its place, so the box doesn't move. */}
+                {repoless(group) && (
+                  <div aria-hidden className="invisible mb-9 text-reading">
+                    &nbsp;
+                  </div>
+                )}
                 {!repoless(group) && (
                   <div className="relative mb-9 text-center">
                     {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}

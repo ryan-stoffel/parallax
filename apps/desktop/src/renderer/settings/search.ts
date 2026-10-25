@@ -201,7 +201,6 @@ export const settingsIndex: SettingEntry[] = [
       "What marks added and removed lines",
       "diff colors colorblind red green blue orange",
     ],
-    ["Usage in the composer", "A ring, a row, or nothing", "ring inline limits context meter"],
   ]),
   // Browser (PLX-974)
   ...entries("browser", "Appearance", [

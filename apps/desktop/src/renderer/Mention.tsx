@@ -1,31 +1,48 @@
-import { Package } from "lucide-react";
+import { SquareSlash } from "lucide-react";
 import type { ReactNode } from "react";
 
-/** A mention in a message, as the composer draws one: an icon and a name, kept whole. Its box is
- * inline code's (index.css), in ems, so it scales with the text around it. */
+// Each kind of mention's colors: a skill in violet, a file in the accent, and a thread or an image
+// in the text's own color, faintly filled and outlined.
+const tones = {
+  skill: "bg-project-violet/12 text-project-violet",
+  file: "bg-accent/10 text-foreground",
+  thread: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
+  image: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
+};
+
+/** A mention in a message, as the composer draws one: icons and a name, kept whole, with `end`
+ * muted after the name. Its text is the text around it, at the same size and on the same baseline,
+ * with the chip drawn behind it, so a line reads the same with or without one. A long name is cut
+ * short. */
 export function Chip({
   icon,
   tone = "skill",
   title,
+  end,
   children,
 }: {
   icon: ReactNode;
-  tone?: "skill" | "file";
+  tone?: keyof typeof tones;
   title?: string;
+  end?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <span
       contentEditable={false}
       title={title}
-      className={`mx-[0.1em] inline-flex items-center gap-[0.3em] rounded-sm border px-[0.4em] py-[0.1em] align-baseline text-body leading-tight whitespace-nowrap text-foreground [&_img]:size-3.5 [&_img]:shrink-0 [&_svg]:size-3.5 [&_svg]:shrink-0 ${
-        tone === "file"
-          ? "border-accent/30 bg-accent/10"
-          : "border-project-violet/30 bg-project-violet/10"
-      }`}
+      // Baseline-aligned items make the chip's baseline its text's. Icons, which have none, sit a
+      // little below it, as glyphs do. Its padding stays inside the line's height.
+      className={`mx-[0.1em] inline-flex max-w-[24em] items-baseline gap-[0.3em] rounded-sm px-[0.35em] py-[0.12em] leading-none whitespace-nowrap [&_img]:relative [&_img]:top-[0.14em] [&_img]:size-3.5 [&_img]:shrink-0 [&_svg]:relative [&_svg]:top-[0.14em] [&_svg]:size-3.5 [&_svg]:shrink-0 ${tones[tone]}`}
     >
       {icon}
-      {children}
+      <span className="min-w-0 truncate">{children}</span>
+      {end && (
+        // Its icons a mark's size (0085), over the sizes they bring with them.
+        <span className="ml-[0.05em] inline-flex shrink-0 items-baseline gap-[0.35em] text-muted-foreground [&>*]:size-3!">
+          {end}
+        </span>
+      )}
     </span>
   );
 }
@@ -91,7 +108,7 @@ const byExtension: Record<string, string> = {
 };
 
 /** The icon for a file, by its extension, or Dockerfile by name. */
-function fileIcon(path: string): ReactNode {
+export function fileIcon(path: string): ReactNode {
   const name = path.slice(path.lastIndexOf("/") + 1);
   const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1).toLowerCase() : "";
   const look = name === "Dockerfile" ? "docker" : (byExtension[ext] ?? "file");
@@ -101,7 +118,16 @@ function fileIcon(path: string): ReactNode {
 /** A `/skill` or `@path` token as a chip: the skill's name, or the file's name with its path on
  * hover. What the token says is what's sent; the chip only draws it. */
 export function Mention({ token }: { token: string }) {
-  if (token[0] === "/") return <Chip icon={<Package />}>{token.slice(1)}</Chip>;
+  if (token[0] === "/") {
+    // A plugin's skill, `plugin:name`, shows its plugin dimmed.
+    const at = token.lastIndexOf(":");
+    return (
+      <Chip icon={<SquareSlash />} title={token}>
+        {at > 0 && <span className="opacity-60">{token.slice(1, at + 1)}</span>}
+        {token.slice(at > 0 ? at + 1 : 1)}
+      </Chip>
+    );
+  }
   const path = token.slice(1);
   return (
     <Chip icon={fileIcon(path)} tone="file" title={path}>
