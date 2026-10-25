@@ -1,8 +1,9 @@
-// Pieces of the sidebar (0075): the divider over Today with its View panel, and the small animated
-// parts the sidebar shares.
+// Pieces of the sidebar (0075): the divider over Today with its View panel, and the small parts the
+// sidebar shares.
 import { ArrowDown, ChevronsDownUp, ChevronsUpDown, SlidersHorizontal } from "lucide-react";
 import { useId, useState, type ReactNode, type ToggleEvent } from "react";
 
+import type { TodayGroup } from "./pins";
 import { menuPanel } from "./ui";
 
 /** Today's auto-archive choices, in hours, and never. */
@@ -107,8 +108,8 @@ export function TodayDivider({
   compact: boolean;
   onCompact: (compact: boolean) => void;
   /** How today's threads are grouped. */
-  group: "none" | "repo" | "day";
-  onGroup: (group: "none" | "repo" | "day") => void;
+  group: TodayGroup;
+  onGroup: (group: TodayGroup) => void;
   /** Whether the favorites and pins above are folded. */
   folded: boolean;
   /** Absent with nothing above to fold. */
@@ -252,3 +253,9 @@ export const shownRows = (also = "") =>
   [...document.querySelectorAll<HTMLElement>(`#sidebar [data-row]${also}`)].filter(
     (r) => !r.closest("[inert]"),
   );
+
+/** Runs `then` after closing the menu it's in, for a favorite's or pin's menu items. */
+export const close = (then: () => void) => (e: { currentTarget: HTMLElement }) => {
+  e.currentTarget.closest<HTMLElement>("[popover]")?.hidePopover();
+  then();
+};

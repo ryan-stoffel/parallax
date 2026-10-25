@@ -243,8 +243,11 @@ export function CloneDialog({
 
 type StepProps = { onBack: () => void; onAdded: (hostId: string, repo: Repo) => void };
 
+/** What the menu step picks: a way to add a repository, New Project, or New folder. */
+type MenuKind = WorkspaceSource | "project" | "folder";
+
 const menu: {
-  kind: WorkspaceSource | "project" | "folder";
+  kind: MenuKind;
   name: string;
   detail: string;
   icon: ReactNode;
@@ -290,7 +293,7 @@ function MenuStep({
   /** Whether there's more than one computer, so Local folder can be on any of them. */
   computers: boolean;
   onBack: () => void;
-  onPick: (kind: WorkspaceSource | "project" | "folder") => void;
+  onPick: (kind: MenuKind) => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -333,7 +336,7 @@ function MenuStep({
           list={list}
           label="Add"
           options={shown.map((m) => ({ id: m.kind, ...m }))}
-          onPick={(o) => onPick(o.id as WorkspaceSource | "project" | "folder")}
+          onPick={(o) => onPick(o.id as MenuKind)}
         />
         {shown.length === 0 && <Note>Nothing matches</Note>}
       </Body>

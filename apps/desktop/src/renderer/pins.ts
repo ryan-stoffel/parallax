@@ -90,6 +90,7 @@ export function folderPath(folders: Record<string, PinFolder>, key: string): Pin
 
 const strings = (raw: unknown, fallback: string[]) =>
   Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : fallback;
+const bool = (raw: unknown, fallback: boolean) => (typeof raw === "boolean" ? raw : fallback);
 
 /**
  * Threads marked unread, by key, until they're opened again, as Conductor and T3 Code offer. The
@@ -107,9 +108,7 @@ export const todayGroup = stored<TodayGroup>("parallax:todayGroup", "none", (raw
 export const favoriteOrder = stored<string[]>("parallax:favoriteOrder", [], strings);
 
 /** Whether the favorites and pins are folded away, leaving Today. */
-export const topCollapsed = stored<boolean>("parallax:topCollapsed", false, (raw, fallback) =>
-  typeof raw === "boolean" ? raw : fallback,
-);
+export const topCollapsed = stored("parallax:topCollapsed", false, bool);
 
 /** Today's groups folded shut, by group key (a repo's, or a day's). */
 export const todayFolded = stored<string[]>("parallax:todayFolded", [], strings);
@@ -126,14 +125,10 @@ export const autoClear = stored<number | null>("parallax:autoClear", null, (raw,
 );
 
 /** Today as one-line rows: icon, title, and status, as T3 Code users ask (#6085). */
-export const compactRows = stored<boolean>("parallax:compactRows", false, (raw, fallback) =>
-  typeof raw === "boolean" ? raw : fallback,
-);
+export const compactRows = stored("parallax:compactRows", false, bool);
 
 /** Whether the empty pins' "drag a thread here" hint was closed, so it stays away. */
-export const pinHintHidden = stored<boolean>("parallax:pinHintHidden", false, (raw, fallback) =>
-  typeof raw === "boolean" ? raw : fallback,
-);
+export const pinHintHidden = stored("parallax:pinHintHidden", false, bool);
 
 /** A folder to name in place, as one the add palette just made. */
 export const pinNaming = memory<string | null>(null);
@@ -299,9 +294,7 @@ export function wrapInFolder(entries: readonly PinEntry[], key: string): string 
 }
 
 /** Folders left open, by id, kept on this computer so they stay open across launches. */
-export const pinOpen = stored<string[]>("parallax:pinOpen", [], (raw, fallback) =>
-  Array.isArray(raw) ? raw.filter((id): id is string => typeof id === "string") : fallback,
-);
+export const pinOpen = stored<string[]>("parallax:pinOpen", [], strings);
 
 /**
  * Moves `key`, a pin or `folder:<id>`, just before or after `target`, in whatever folder holds
@@ -366,6 +359,7 @@ export function ungroup(entries: readonly PinEntry[], id: string) {
   const items = layout.folders[id]?.items ?? [];
   const holder = containerOf(layout, `folder:${id}`);
   const list = itemsOf(layout, holder).flatMap((k) => (k === `folder:${id}` ? items : [k]));
-  const { [id]: _gone, ...folders } = withItems(layout, holder, list).folders;
-  pinLayout.set({ ...withItems(layout, holder, list), folders });
+  const next = withItems(layout, holder, list);
+  const { [id]: _gone, ...folders } = next.folders;
+  pinLayout.set({ ...next, folders });
 }

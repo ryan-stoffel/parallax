@@ -75,9 +75,9 @@ const placeholders: Record<MenuPage, string> = {
   contents: "Search the thread's files for text…",
 };
 /** Parallax's own themes, which Settings > Appearance calls each just Parallax. */
-const parallaxThemes = [
-  { id: "parallax-light", name: "Parallax", mode: "light" as Mode },
-  { id: "parallax-dark", name: "Parallax", mode: "dark" as Mode },
+const parallaxThemes: { id: string; name: string; mode: Mode }[] = [
+  { id: "parallax-light", name: "Parallax", mode: "light" },
+  { id: "parallax-dark", name: "Parallax", mode: "dark" },
 ];
 
 /**

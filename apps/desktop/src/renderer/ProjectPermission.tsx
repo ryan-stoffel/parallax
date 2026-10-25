@@ -1,11 +1,9 @@
-import { useId, type ReactNode } from "react";
+import { useId } from "react";
 
 import type { ProjectAutonomy } from "../protocol/generated/protocol";
 
-type Option<T> = { value: T; name: string; detail: string };
-
 /** Each autonomy level (0043), with a line on who answers. */
-export const autonomyLevels: Option<ProjectAutonomy>[] = [
+export const autonomyLevels: { value: ProjectAutonomy; name: string; detail: string }[] = [
   {
     value: "ask",
     name: "Ask me",
@@ -24,39 +22,23 @@ export const autonomyLevels: Option<ProjectAutonomy>[] = [
   },
 ];
 
-/** A Project's autonomy (0043), in its Autonomy… dialog. */
-export function AutonomyChoice(props: {
-  value: ProjectAutonomy;
-  onChange: (value: ProjectAutonomy) => void;
-}) {
-  return (
-    <Choice legend="Autonomy" options={autonomyLevels} {...props}>
-      A child never waits on a question: it goes on with what it assumed. This decides who answers
-      it. Every answer shows on the Project tab.
-    </Choice>
-  );
-}
-
-/** A labeled set of radio cards, with a line of detail on each. */
-function Choice<T extends string>({
-  legend,
-  options,
+/** A Project's autonomy (0043), in its Autonomy… dialog: radio cards, with a line of detail on each. */
+export function AutonomyChoice({
   value,
   onChange,
-  children,
 }: {
-  legend: string;
-  options: Option<T>[];
-  value: T;
-  onChange: (value: T) => void;
-  children: ReactNode;
+  value: ProjectAutonomy;
+  onChange: (value: ProjectAutonomy) => void;
 }) {
   const name = useId();
   return (
     <fieldset className="flex flex-col gap-2">
-      <legend className="mb-1 text-body font-medium">{legend}</legend>
-      <p className="text-body text-muted-foreground">{children}</p>
-      {options.map((m) => (
+      <legend className="mb-1 text-body font-medium">Autonomy</legend>
+      <p className="text-body text-muted-foreground">
+        A child never waits on a question: it goes on with what it assumed. This decides who answers
+        it. Every answer shows on the Project tab.
+      </p>
+      {autonomyLevels.map((m) => (
         <label
           key={m.value}
           className="flex gap-2.5 rounded-lg border border-border px-3 py-2 hover:bg-hover has-checked:border-ring has-focus-visible:outline-2 has-focus-visible:outline-ring"

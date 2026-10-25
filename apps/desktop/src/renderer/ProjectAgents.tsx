@@ -5,8 +5,8 @@ import type { AgentRun } from "../protocol/generated/protocol";
 import { childOrder, runAttention } from "./attention";
 import { describeError } from "./errors";
 import { dismiss, notify } from "./notifications";
-import { instanceLogo, instanceName } from "./providers";
-import { backendLogos, statusLooks } from "./Sidebar";
+import { instanceName } from "./providers";
+import { backendLogo, statusLooks } from "./Sidebar";
 import { projectRuns, titleOf, type ThreadsState } from "./threads";
 import { accountLabel, statusLabel, type Approval } from "./transcript";
 import { uuidv7 } from "./uuidv7";
@@ -140,7 +140,7 @@ function AgentRow({
   onOpen: () => void;
 }) {
   const look = statusLooks[run.status] ?? statusLooks.completed!;
-  const Logo = backendLogos[run.backend] ?? instanceLogo(run.backend);
+  const Logo = backendLogo(run.backend);
   return (
     <li>
       <button

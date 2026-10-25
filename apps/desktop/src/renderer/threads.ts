@@ -303,29 +303,14 @@ export interface ThreadGroup {
   name: string;
   /** A Space (0069): chats with no repository of the user's. */
   space?: boolean;
-  /** Unarchived, newest first. */
-  threads: Thread[];
 }
 
-/**
- * The sidebar's groups: each repository, oldest first, then No Repo, always there. A thread whose
- * entry isn't known yet goes under No Repo: `thread/start` with no repo answers before plxd's
- * `repo.added` for the scratch entry arrives.
- */
-export function groupThreads({ repos, threads }: ThreadsState): {
-  groups: ThreadGroup[];
-  archived: Thread[];
-} {
-  const groups: ThreadGroup[] = [
-    ...repos
-      .filter((r) => !r.scratch)
-      .map((r) => ({ id: r.id, name: r.name, space: r.space, threads: [] })),
-    { id: noRepo, name: "No Repo", threads: [] },
+/** The sidebar's groups: each repository, oldest first, then No Repo, always there. */
+export function groupThreads({ repos }: ThreadsState): ThreadGroup[] {
+  return [
+    ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, space: r.space })),
+    { id: noRepo, name: "No Repo" },
   ];
-  const newestFirst = [...threads].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  for (const t of newestFirst.filter((t) => !t.archived))
-    (groups.find((g) => g.id === t.repo) ?? groups.at(-1)!).threads.push(t);
-  return { groups, archived: newestFirst.filter((t) => t.archived) };
 }
 
 /** A repository on a computer other than the open one. */
@@ -694,7 +679,7 @@ export function useThreads(
       dispatch({ type: "scope", events: [logged] });
       const { event } = logged;
       if (event.kind === "inbox.added" && event.item.kind === "needsYou" && logged.project)
-        needsYou.current?.(logged.project, event.item);
+        needsYou.current(logged.project, event.item);
     });
     return () => {
       stopped = true;
