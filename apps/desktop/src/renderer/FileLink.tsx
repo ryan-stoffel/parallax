@@ -193,7 +193,12 @@ function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: s
         aria-label={`Open ${doc.name}`}
         title={doc.path}
         disabled={!url}
-        onClick={() => setShown(true)}
+        onClick={(e) => {
+          // Not the FileLink a linked image may sit in, which would open the side panel too.
+          e.preventDefault();
+          e.stopPropagation();
+          setShown(true);
+        }}
         className="block cursor-zoom-in rounded-md"
       >
         {url ? (
@@ -207,17 +212,20 @@ function LinkedImage({ hostId, doc, alt }: { hostId: string; doc: DocRef; alt: s
           </span>
         )}
       </button>
-      {/* On the body, since a Markdown image sits in a paragraph, which can't hold a dialog. */}
+      {/* On the body, since a Markdown image sits in a paragraph, which can't hold a dialog. React
+          still bubbles its clicks to the image's parents, such as a FileLink, so they stop here. */}
       {shown &&
         url &&
         createPortal(
-          <Lightbox
-            images={[{ src: url, name: doc.name }]}
-            index={0}
-            onIndex={() => {}}
-            onClose={() => setShown(false)}
-            onDownload={() => loaded && download(doc.name, loaded.bytes)}
-          />,
+          <div onClick={(e) => e.stopPropagation()}>
+            <Lightbox
+              images={[{ src: url, name: doc.name }]}
+              index={0}
+              onIndex={() => {}}
+              onClose={() => setShown(false)}
+              onDownload={() => loaded && download(doc.name, loaded.bytes)}
+            />
+          </div>,
           document.body,
         )}
     </>

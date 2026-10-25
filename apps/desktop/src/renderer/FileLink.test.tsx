@@ -156,12 +156,15 @@ test("a Markdown image of a file in the folder opens in the Lightbox, not the si
   URL.createObjectURL = () => "blob:home";
   URL.revokeObjectURL = () => {};
   const root = createRoot(document.body.appendChild(document.createElement("div")));
+  // Linked to its file too, as `[![Home](shots/home.png)](shots/home.png)` is.
   act(() =>
     root.render(
       <FileRunContext value={{ hostId: "box", runId: "run-1" }}>
         <OpenDocumentContext value={open}>
           <p>
-            <FileImage path="shots/home.png" alt="Home" />
+            <FileLink path="shots/home.png">
+              <FileImage path="shots/home.png" alt="Home" />
+            </FileLink>
           </p>
         </OpenDocumentContext>
       </FileRunContext>,
@@ -178,5 +181,8 @@ test("a Markdown image of a file in the folder opens in the Lightbox, not the si
   expect(dialog.textContent).toContain("home.png");
   // On the body, outside the paragraph.
   expect(dialog.closest("p")).toBeNull();
+  // A click in it never reaches the link.
+  act(() => dialog.querySelector<HTMLButtonElement>('[aria-label="Close"]')!.click());
+  for (let i = 0; i < 5; i++) await act(async () => {});
   expect(open).not.toHaveBeenCalled();
 });
