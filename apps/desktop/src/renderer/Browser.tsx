@@ -354,8 +354,10 @@ export function Browser({
     const rest = tabs.filter((t) => t.id !== id);
     const agentLast = agent?.tabs.at(-1);
     if (!rest.length) {
-      if (agentLast) setAgentTab(agentLast.tabId);
-      else {
+      // An agent's tab already shown stays.
+      if (agentLast) {
+        if (!shownTab) setAgentTab(agentLast.tabId);
+      } else {
         rest.push(ownTab());
         onEmpty?.();
       }
