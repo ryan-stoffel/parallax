@@ -10,7 +10,7 @@ overrides:
   vitest: 5.0.1
 
 patchedDependencies:
-  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee: 6db364fa82820ad8f6256ebf840408e076fc526ea1f7441c27e7ce931cd95194
+  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee: 8b4817dd4ba2baf2a0ce3ef2a7aa2e7ed36c0fb387392dd6cffa6b6b24552d3c
 
 importers:
 
@@ -165,7 +165,7 @@ importers:
         version: link:shims/react-native
       react-native-enriched-markdown:
         specifier: 1.2.0-nightly-20261022-ca155ffee
-        version: 1.2.0-nightly-20261022-ca155ffee(patch_hash=6db364fa82820ad8f6256ebf840408e076fc526ea1f7441c27e7ce931cd95194)(katex@0.16.47)(react-native@shims+react-native)(react@19.3.0)
+        version: 1.2.0-nightly-20261022-ca155ffee(patch_hash=8b4817dd4ba2baf2a0ce3ef2a7aa2e7ed36c0fb387392dd6cffa6b6b24552d3c)(katex@0.16.47)(react-native@shims+react-native)(react@19.3.0)
       rehype-highlight:
         specifier: ^7.0.2
         version: 7.0.2
@@ -5965,7 +5965,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee(patch_hash=6db364fa82820ad8f6256ebf840408e076fc526ea1f7441c27e7ce931cd95194)(katex@0.16.47)(react-native@shims+react-native)(react@19.3.0):
+  react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee(patch_hash=8b4817dd4ba2baf2a0ce3ef2a7aa2e7ed36c0fb387392dd6cffa6b6b24552d3c)(katex@0.16.47)(react-native@shims+react-native)(react@19.3.0):
     dependencies:
       react: 19.3.0
       react-native: link:shims/react-native

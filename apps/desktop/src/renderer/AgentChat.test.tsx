@@ -414,6 +414,12 @@ test("a streaming message renders as the whole text does, at every line", async 
       const shape = container.cloneNode(true) as HTMLElement;
       for (const root of shape.querySelectorAll(".enrm-text")) root.replaceWith(...root.childNodes);
       for (const styled of shape.querySelectorAll("[style]")) styled.removeAttribute("style");
+      // An element React updated keeps its attributes' first order, one it made has its own.
+      for (const el of shape.querySelectorAll("*")) {
+        const attributes = [...el.attributes].map((a) => [a.name, a.value] as const).sort();
+        for (const [name] of attributes) el.removeAttribute(name);
+        for (const [name, value] of attributes) el.setAttribute(name, value);
+      }
       return shape.innerHTML.replaceAll(">\n<", "><").replace('"enriched streaming"', '"enriched"');
     };
   };
@@ -439,6 +445,16 @@ test("a short streaming message renders whole, without the split", async () => {
   act(() => unmount());
   row({ kind: "assistant", key: "a", text: text.padEnd(SPLIT_FROM, "!"), partial: true });
   expect(markdownBlocks).toHaveBeenCalled();
+});
+
+test("a numbered list split by a code block keeps counting after it", () => {
+  row({
+    kind: "assistant",
+    key: "a",
+    text: "1. Install\n\n```sh\npnpm i\n```\n\n2. Run\n3. Check",
+  });
+  const lists = [...document.querySelectorAll(".enriched ol")];
+  expect(lists.map((ol) => ol.getAttribute("start"))).toEqual([null, "2"]);
 });
 
 test("a code block names its language, highlights it, and copies its text", async () => {

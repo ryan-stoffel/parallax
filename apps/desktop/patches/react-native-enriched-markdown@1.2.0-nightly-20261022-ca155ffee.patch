@@ -208,3 +208,39 @@ index 93aa073c850ad125a38aedc7d162b63850d680d6..6a18658312d920ada7da12a42c2adf9d
  export async function parseMarkdown(markdown, {
    underline = false,
    latexMath = true,
+diff --git a/lib/module/web/renderers/ListRenderers.js b/lib/module/web/renderers/ListRenderers.js
+index 418612bb64a10be4b1278974fc5c9e25319c4002..ea6cff211ec8171998fd6570a3f0b410eeba044c 100644
+--- a/lib/module/web/renderers/ListRenderers.js
++++ b/lib/module/web/renderers/ListRenderers.js
+@@ -11,7 +11,8 @@ function ListRenderer({
+   parentType,
+   capabilities,
+   renderChildren,
+-  listTag: ListTag
++  listTag: ListTag,
++  start
+ }) {
+   const isNested = parentType === 'ListItem';
+   const hasTaskChild = !isNested && node.children?.some(child => child.attributes?.isTask === 'true');
+@@ -21,6 +22,7 @@ function ListRenderer({
+   return /*#__PURE__*/_jsx(ListTag, {
+     style: resolvedStyle,
+     dir: capabilities.blockDir,
++    start,
+     children: renderChildren(node)
+   });
+ }
+@@ -31,9 +33,12 @@ function UnorderedListRenderer(props) {
+   });
+ }
+ function OrderedListRenderer(props) {
++  // The number its first item has, which the parser keeps when it isn't 1.
++  const start = Number(props.node.attributes?.start) || undefined;
+   return /*#__PURE__*/_jsx(ListRenderer, {
+     ...props,
+-    listTag: "ol"
++    listTag: "ol",
++    start
+   });
+ }
+ function isNestedList(child) {
