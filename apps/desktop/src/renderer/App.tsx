@@ -282,6 +282,10 @@ export function App() {
     setPanelOpen(true);
     setShowDoc({ ...doc });
   };
+  // The file the command menu last picked (PLX-993), which a run's Files view opens, a new object
+  // each time, and each new request to show that view.
+  const [revealFile, setRevealFile] = useState<{ runId: string; path: string }>();
+  const [showFiles, setShowFiles] = useState<object>();
 
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
@@ -786,9 +790,11 @@ export function App() {
   const commandMenu = useRef<CommandMenuHandle>(null);
   const addDialog = useRef<AddDialogHandle>(null);
   const openAdd = (start?: "project") => {
+    // Inside a hidden sidebar, the palette would open with no size.
     flushSync(() => {
       setSettings(null);
       setMainPage(undefined);
+      setSidebarOpen(true);
     });
     addDialog.current?.open(start);
   };
@@ -1163,9 +1169,15 @@ export function App() {
           openProject(hostId, projectId);
           setShowHome({});
         }}
+        // A document or media file opens as presented files do; any other, such as code, in the
+        // Files view, which shows text.
         onOpenFile={(runId, path) => {
           const name = path.slice(path.lastIndexOf("/") + 1);
-          openDoc({ runId, path, name, kind: kindOf(name) });
+          const kind = kindOf(name);
+          if (kind !== "file") return openDoc({ runId, path, name, kind });
+          setPanelOpen(true);
+          setShowFiles({});
+          setRevealFile({ runId, path });
         }}
       />
       <NewThreadPicker
@@ -1692,6 +1704,7 @@ export function App() {
         pullRequest={showPr}
         showDevice={showDevice}
         showProject={showHome}
+        showFiles={showFiles}
         device={(shown) => (
           <DevicePanel hostId={host.id} runId={threadRun?.id} shown={shown} request={showDevice} />
         )}
@@ -1799,6 +1812,7 @@ export function App() {
                   : "Update Parallax on this host to browse a thread's files.")
               }
               editable={connected && "fileEdit" in connection.capabilities}
+              reveal={revealFile?.runId === filesRunId ? revealFile : undefined}
             />
           )
         }

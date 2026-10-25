@@ -28,8 +28,7 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_FILES: usize = 20_000;
 const MAX_FILES_BYTES: usize = 4 * 1024 * 1024;
 
-/// The most of git's output one `repo/grep` answer reads, and the most lines it lists.
-const MAX_GREP_BYTES: usize = 1024 * 1024;
+/// The most lines one `repo/grep` answer lists.
 const MAX_GREP_MATCHES: usize = 500;
 
 /// `agent/commands`: the backend's CLI, started in the thread's folder, else the home folder.
@@ -128,15 +127,13 @@ pub(crate) async fn grep(
         },
         None => RunFolder::Checkout(&root),
     };
-    let (mut matches, cut) = context
+    let (matches, truncated) = context
         .daemon
         .agents
         .worktrees()
-        .grep(folder, &query, MAX_GREP_BYTES)
+        .grep(folder, &query, MAX_GREP_MATCHES)
         .await
         .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))?;
-    let truncated = cut || matches.len() > MAX_GREP_MATCHES;
-    matches.truncate(MAX_GREP_MATCHES);
     Ok(RepoGrepResult { matches, truncated })
 }
 

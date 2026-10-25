@@ -107,6 +107,13 @@ test("with no query it lists the actions, then the most recent threads", () => {
   ]);
 });
 
+test("closed, it lists nothing, so its rows never stand in for the sidebar's", () => {
+  const { menu } = render();
+  expect(options()).toHaveLength(3);
+  act(() => menu.current!.toggle());
+  expect(options()).toEqual([]);
+});
+
 test("typing ranks threads fuzzily, adds message matches, and Enter opens the first", async () => {
   request.mockResolvedValue({
     result: {

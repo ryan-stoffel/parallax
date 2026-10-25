@@ -476,6 +476,29 @@ async fn grep(
 }
 
 #[tokio::test]
+async fn repo_grep_stops_at_its_cap_and_skips_overlong_lines() {
+    let host = Host::start(fake(editing()));
+    let path = repo_with_ignores(host.work.path());
+    // A minified line longer than plxd reads, then more matches than one answer lists.
+    let long = format!("{}needle\n", "x".repeat(100 * 1024));
+    let many = "needle\n".repeat(600);
+    std::fs::write(path.join("a.min.js"), long).unwrap();
+    std::fs::write(path.join("b.txt"), many).unwrap();
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    let params = RepoGrepParams {
+        query: "needle".to_owned(),
+        repo: Some(repo.id),
+        run_id: None,
+    };
+    let found = client.call::<RepoGrep>(params).await.unwrap();
+    assert!(found.truncated);
+    assert_eq!(found.matches.len(), 500);
+    assert!(found.matches.iter().all(|m| m.path == "b.txt"));
+    assert_eq!(found.matches[499].line, 500);
+}
+
+#[tokio::test]
 async fn repo_grep_finds_lines_in_a_threads_folder_ignoring_case_and_ignored_files() {
     let host = Host::start(fake(editing()));
     let path = repo_with_ignores(host.work.path());

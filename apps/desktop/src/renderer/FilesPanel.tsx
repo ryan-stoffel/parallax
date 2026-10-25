@@ -62,22 +62,31 @@ async function listFolder(hostId: string, runId: string, folder: string): Promis
  * and a menu on each entry, on right-click or its `…`: New file, New folder, Rename, and Delete.
  * Names are typed in the tree, where Enter or leaving the field saves and Escape cancels; F2
  * renames the focused entry and Delete deletes it, after asking.
+ *
+ * Each new `reveal` opens its file in the view, as the command menu's file picks do (PLX-993).
  */
 export function FilesPanel({
   hostId,
   runId,
   unavailable,
   editable,
+  reveal,
 }: {
   hostId: string;
   runId: string;
   unavailable?: string;
   editable?: boolean;
+  reveal?: { path: string };
 }) {
   // Each listed folder by path, the root's as "".
   const [listings, setListings] = useState<Record<string, Listing>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [openPath, setOpenPath] = useState<string>();
+  const [openPath, setOpenPath] = useState(reveal?.path);
+  const [revealed, setRevealed] = useState(reveal);
+  if (reveal !== revealed) {
+    setRevealed(reveal);
+    if (reveal) setOpenPath(reveal.path);
+  }
   const [draft, setDraft] = useState<Draft>();
   const [draftError, setDraftError] = useState<string>();
   // The draft on screen, and the one being saved, so Enter and the blur after it save once and a

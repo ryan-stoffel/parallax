@@ -1227,7 +1227,10 @@ const handlers: { [M in Method]?: Handler<M> } = {
     side: p.side,
     exists: true,
     size: 120,
-    content: `# ${p.path}\n\nPreview content: plxd isn't running, so this file isn't read from disk.\n`,
+    // Base64, as plxd sends it.
+    content: btoa(
+      `# ${p.path}\n\nPreview content: plxd isn't running, so this file isn't read from disk.\n`,
+    ),
     tooLarge: false,
   }),
 

@@ -12,16 +12,31 @@ use std::time::Duration;
 use parallax_protocol::{GitStatus, GrepMatch};
 
 use super::{
-    Commit, DEFAULT_TIMEOUT, GitOutput, WorktreeError, WorktreeManager, collect_capped,
-    describe_failure, owned_args,
+    Commit, DEFAULT_TIMEOUT, GitOutput, WorktreeError, WorktreeManager, describe_failure,
+    owned_args,
 };
-use crate::backend::process::ProcessSpec;
+use crate::backend::process::{Output, ProcessSpec};
 
 /// How long a push may take: it goes over the network and can carry a large branch.
 pub(super) const NETWORK_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// The most characters of a line `repo/grep` returns.
+/// The most characters of a line `repo/grep` returns, and the longest line it reads.
 const MAX_GREP_TEXT: usize = 300;
+const MAX_GREP_LINE_BYTES: usize = 64 * 1024;
+
+/// One line of `git grep --null --line-number`: `path NUL number NUL text`.
+fn grep_match(line: &[u8]) -> Option<GrepMatch> {
+    let line = String::from_utf8_lossy(line);
+    let mut parts = line.splitn(3, '\0');
+    let path = parts.next()?.to_owned();
+    let number = parts.next()?.parse().ok()?;
+    let text = parts.next()?.trim().chars().take(MAX_GREP_TEXT).collect();
+    Some(GrepMatch {
+        path,
+        line: number,
+        text,
+    })
+}
 
 /// Where a run's git calls run.
 #[derive(Clone, Copy, Debug)]
@@ -306,8 +321,10 @@ impl WorktreeManager {
 
     /// The lines of `folder`'s files that contain `query`, ignoring case, from `git grep` over
     /// tracked and untracked files that git doesn't ignore, binary ones skipped, in git's order:
-    /// for `repo/grep` (PLX-993). Reads at most `max_bytes` of git's output and says whether it
-    /// stopped there. No match is an empty list.
+    /// for `repo/grep` (PLX-993). Each line's text is cut to a few hundred characters as it
+    /// arrives, and a line longer than [`MAX_GREP_LINE_BYTES`], such as minified code, is skipped.
+    /// Stops after `max_matches` lines, killing git, and says whether it did. No match is an empty
+    /// list.
     ///
     /// # Errors
     ///
@@ -316,12 +333,14 @@ impl WorktreeManager {
         &self,
         folder: RunFolder<'_>,
         query: &str,
-        max_bytes: usize,
+        max_matches: usize,
     ) -> Result<(Vec<GrepMatch>, bool), WorktreeError> {
         let args = [
             "grep",
             "--null",
             "--line-number",
+            // A user's `grep.column` would add a column after the line number.
+            "--no-column",
             "-I",
             "--ignore-case",
             "--fixed-strings",
@@ -330,46 +349,44 @@ impl WorktreeManager {
             "-e",
             query,
         ];
-        let spec = self.folder_spec(folder, &args).await?;
+        let mut spec = self.folder_spec(folder, &args).await?;
+        spec.limits.max_line_bytes = MAX_GREP_LINE_BYTES;
         let cwd = folder.path();
-        let process = self.launcher.spawn(&spec)?;
-        let (stdout, exit, truncated) = tokio::time::timeout(
-            DEFAULT_TIMEOUT,
-            collect_capped(process, cwd, &args, max_bytes),
-        )
-        .await
-        .map_err(|_| WorktreeError::Timeout {
-            cwd: cwd.to_owned(),
-            args: owned_args(&args),
-            timeout: DEFAULT_TIMEOUT,
-        })??;
-        let stdout = String::from_utf8_lossy(&stdout).into_owned();
-        // git grep exits 1 when nothing matches; a cut run was killed, so its exit says nothing.
-        if let Some(exit) = exit
-            && !matches!(exit.info.code, Some(0 | 1))
-        {
-            return Err(GitOutput { stdout, exit }.failure(cwd, &args));
+        let mut process = self.launcher.spawn(&spec)?;
+        let read = async {
+            let mut matches = Vec::new();
+            loop {
+                match process.next().await {
+                    Some(Output::Line(line)) => {
+                        if matches.len() == max_matches {
+                            // Dropping the process kills git.
+                            return (matches, None);
+                        }
+                        matches.extend(grep_match(&line));
+                    }
+                    Some(Output::Oversized { .. }) => {}
+                    Some(Output::Exited(exit)) => return (matches, Some(exit)),
+                    None => unreachable!("Output::Exited always comes last"),
+                }
+            }
+        };
+        let (matches, exit) = tokio::time::timeout(DEFAULT_TIMEOUT, read)
+            .await
+            .map_err(|_| WorktreeError::Timeout {
+                cwd: cwd.to_owned(),
+                args: owned_args(&args),
+                timeout: DEFAULT_TIMEOUT,
+            })?;
+        match exit {
+            None => Ok((matches, true)),
+            // git grep exits 1 when nothing matches.
+            Some(exit) if matches!(exit.info.code, Some(0 | 1)) => Ok((matches, false)),
+            Some(exit) => Err(GitOutput {
+                stdout: String::new(),
+                exit,
+            }
+            .failure(cwd, &args)),
         }
-        // Each line is `path NUL number NUL text`. A cut run's last line may be partial.
-        let mut lines: Vec<&str> = stdout.lines().collect();
-        if truncated {
-            lines.pop();
-        }
-        let matches = lines
-            .into_iter()
-            .filter_map(|line| {
-                let mut parts = line.splitn(3, '\0');
-                let path = parts.next()?;
-                let number = parts.next()?.parse().ok()?;
-                let text: String = parts.next()?.trim().chars().take(MAX_GREP_TEXT).collect();
-                Some(GrepMatch {
-                    path: path.to_owned(),
-                    line: number,
-                    text,
-                })
-            })
-            .collect();
-        Ok((matches, truncated))
     }
 
     /// The branch `repo_path`'s checkout has out, or `None` on a detached HEAD.

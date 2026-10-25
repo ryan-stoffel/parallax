@@ -124,6 +124,8 @@ export function CommandMenu({
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const [page, setPage] = useState<MenuPage>("root");
+  // Closed, it lists nothing: no rows in the page, and nothing ranked on every render.
+  const [shown, setShown] = useState(false);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const listId = useId();
@@ -131,6 +133,7 @@ export function CommandMenu({
   const wordsKey = words.join(" ");
 
   const show = (next: MenuPage) => {
+    setShown(true);
     setPage(next);
     setQuery("");
     setActive(0);
@@ -194,11 +197,13 @@ export function CommandMenu({
     };
   }, [page, files?.hostId, files?.runId]);
 
-  // The lines `repo/grep` found, for the query they were for.
-  const [grepped, setGrepped] = useState<{ query: string; matches: GrepMatch[] } | string>();
+  // The lines `repo/grep` found, for the thread and query they were for.
+  const [grepped, setGrepped] = useState<
+    { runId: string; query: string; matches: GrepMatch[] } | string
+  >();
   const trimmed = query.trim();
   useEffect(() => {
-    if (page !== "contents" || !files || !trimmed) return;
+    if (page !== "contents" || !files || !grep || !trimmed) return;
     let live = true;
     const timer = setTimeout(async () => {
       const answer = await window.parallax.request(files.hostId, "repo/grep", {
@@ -209,20 +214,20 @@ export function CommandMenu({
       setGrepped(
         "error" in answer
           ? answer.error.message
-          : { query: trimmed, matches: answer.result.matches },
+          : { runId: files.runId, query: trimmed, matches: answer.result.matches },
       );
     }, 200);
     return () => {
       live = false;
       clearTimeout(timer);
     };
-  }, [page, trimmed, files?.hostId, files?.runId]);
+  }, [page, trimmed, grep, files?.hostId, files?.runId]);
 
   const appearance = useAppearance();
   const added = useAddedThemes();
   const threadRows = useMemo(
     () =>
-      hosts.flatMap(({ host, view }) =>
+      (shown ? hosts : []).flatMap(({ host, view }) =>
         view.state.threads.map((t) => {
           const repo = view.state.repos.find((r) => r.id === t.repo);
           const run = view.state.runs[t.id];
@@ -243,9 +248,10 @@ export function CommandMenu({
           };
         }),
       ),
-    [hosts],
+    [hosts, shown],
   );
 
+  const listed = shown ? page : undefined;
   const rows: Row[] = [];
   const add = (group: string, items: MenuItem[]) =>
     rows.push(...items.map((i) => ({ ...i, group })));
@@ -255,7 +261,7 @@ export function CommandMenu({
       [i.keywords ?? "", 0.6],
     ]);
 
-  if (page === "root") {
+  if (listed === "root") {
     const threadItem = (r: (typeof threadRows)[number], snippet?: string): MenuItem => ({
       id: `thread:${r.key}`,
       label: r.title,
@@ -331,12 +337,12 @@ export function CommandMenu({
           g.found.map((f) => f.item),
         );
     }
-  } else if (page === "repos") {
+  } else if (listed === "repos") {
     add(
       "Repositories",
       ranked(repos).map((r) => r.item),
     );
-  } else if (page === "theme") {
+  } else if (listed === "theme") {
     const shown = shownThemes(appearance, added);
     const themes = [
       ...parallaxThemes,
@@ -366,7 +372,7 @@ export function CommandMenu({
       "Themes",
       ranked(items).map((r) => r.item),
     );
-  } else if (page === "appearance") {
+  } else if (listed === "appearance") {
     const modes: [ThemePreference, string, ReactNode][] = [
       ["light", "Light", <Sun aria-hidden className="size-4" />],
       ["dark", "Dark", <Moon aria-hidden className="size-4" />],
@@ -384,7 +390,7 @@ export function CommandMenu({
       "Appearance",
       ranked(items).map((r) => r.item),
     );
-  } else if (page === "files" && files && typeof fileList === "object") {
+  } else if (listed === "files" && files && typeof fileList === "object") {
     const found = rank(fileList.files, words, (path) => [
       [path.slice(path.lastIndexOf("/") + 1), 1],
       [path, 0.7],
@@ -400,7 +406,13 @@ export function CommandMenu({
         run: () => onOpenFile(fileList.runId, path),
       })),
     );
-  } else if (page === "contents" && files && typeof grepped === "object" && trimmed) {
+  } else if (
+    listed === "contents" &&
+    files &&
+    typeof grepped === "object" &&
+    grepped.runId === files.runId &&
+    trimmed
+  ) {
     add(
       "Matches",
       grepped.matches.map((m) => ({
@@ -428,7 +440,7 @@ export function CommandMenu({
 
   // Why the page lists nothing, when it doesn't.
   let empty: string | undefined;
-  if (!rows.length) {
+  if (shown && !rows.length) {
     if (page === "files")
       empty = !files
         ? "Open a thread to search its files"
@@ -446,7 +458,7 @@ export function CommandMenu({
             ? "Type to search the thread's files"
             : typeof grepped === "string"
               ? grepped
-              : grepped?.query === trimmed
+              : grepped?.runId === files.runId && grepped.query === trimmed
                 ? "Nothing found"
                 : "Searching…";
     else if (page === "root" && words.length && !messageHits) empty = "Searching…";
@@ -458,6 +470,10 @@ export function CommandMenu({
       ref={dialog}
       aria-label="Command menu"
       onClose={() => {
+        // What was found for one thread never shows for the next.
+        setGrepped(undefined);
+        setFileList(undefined);
+        setShown(false);
         setPage("root");
         setQuery("");
         setActive(0);
