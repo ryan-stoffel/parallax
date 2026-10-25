@@ -30,6 +30,7 @@ import { plainChrome, unproject, type Turn } from "./deviceSpace";
 import {
   ORIENTATIONS,
   createDeviceStream,
+  duoDisplay,
   type DeviceOrientation,
   type DeviceScreen,
   type DeviceStream,
@@ -876,6 +877,10 @@ function Viewer({
   // while the device is turned or dragged. Facing front, and with no model, the flat artwork shows
   // and turns instead. The folding iPhone Duo is always 3D: its artwork is only its cover.
   const duo = /^iphone duo$/i.test(device.name);
+  // serve-sim reports a Duo's hinge only once it changes. Until then, the display it streams says
+  // whether it's shut on its cover or open.
+  const live = screen ? duoDisplay(screen.width, screen.height) : 1;
+  const fold = screen?.fold ?? (duo ? { display: live, angle: live === 3 ? 180 : 0 } : undefined);
   const [gl, setGl] = useState<HTMLCanvasElement | null>(null);
   const model = useRef<Device3d>(null);
   // The model on screen, once it has loaded: a rebuilt one is new, so it gets the turn again.
@@ -966,8 +971,8 @@ function Viewer({
     model.current?.setPose(orbit.pitch, orbit.yaw, roll);
   }, [orbit, roll, modelShown]);
   useEffect(() => {
-    if (screen?.fold) model.current?.fold(screen.fold.display, screen.fold.angle);
-  }, [screen, modelShown]);
+    if (fold) model.current?.fold(fold.display, fold.angle);
+  }, [fold?.display, fold?.angle, modelShown]);
   useEffect(() => {
     if (gl) model.current?.resize(gl.clientWidth, gl.clientHeight, window.devicePixelRatio);
   }, [box, gl, modelShown]);
@@ -1426,7 +1431,7 @@ function Viewer({
                 setFacing(next);
                 stream.current?.orient(next);
               })}
-              {screen?.fold && (
+              {fold && (
                 <>
                   <button
                     type="button"
@@ -1447,9 +1452,9 @@ function Viewer({
                   >
                     {(
                       [
-                        ["closed", "Closed", screen.fold.angle === 0],
-                        ["book", "Book", screen.fold.angle > 0 && screen.fold.angle < 180],
-                        ["open", "Open", screen.fold.angle === 180],
+                        ["closed", "Closed", fold.angle === 0],
+                        ["book", "Book", fold.angle > 0 && fold.angle < 180],
+                        ["open", "Open", fold.angle === 180],
                       ] as const
                     ).map(([pose, label, current]) => (
                       <button

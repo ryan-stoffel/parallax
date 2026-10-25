@@ -1,11 +1,13 @@
 {
   "name": "parallax-device-hub",
   "private": true,
-  "description": "Expo's device hub, which plxd runs to stream simulators and emulators to the Device panel. It is not a package anyone installs.",
+  "version": "0.15.3-0.1.49-beta.139.1",
+  "description": "Expo's device hub, which plxd runs to stream emulators to the Device panel, and upstream serve-sim, which streams simulators. Its version names both pins and the install folder. It is not a package anyone installs.",
   "engines": {
     "node": ">=22.13"
   },
   "dependencies": {
-    "expo-device-hub": "0.15.3"
+    "expo-device-hub": "0.15.3",
+    "serve-sim": "0.1.49-beta.139.1"
   }
 }

@@ -3,15 +3,18 @@
 //!
 //! - **Devices**: listed, booted, shut down, and captured with [`crate::mcp::device`]'s
 //!   `simctl`, `adb`, and `emulator` code, which the agents' `device_*` tools use too.
-//! - **Hub**: Expo's device hub (`expo-device-hub`, T3's pin) streams and drives them: serve-sim
-//!   for iOS, serve-emu for Android. It installs into `<data>/tools/device-hub/` only when the
-//!   user asks (`device/setup`), and runs as plxd's child on a random 127.0.0.1 port from the first
-//!   stream until plxd stops. Its wrapper exits when its stdin ends, so it never outlives plxd.
-//!   serve-sim has a shell-exec route and serve-emu's routes have no auth, so nothing reaches it
-//!   but this module, which opens only the stream routes below.
+//! - **Hub**: one sidecar streams and drives them: upstream serve-sim for iOS (PLX-988), at a beta
+//!   with its capture fixes, and Expo's device hub (`expo-device-hub`, T3's pin) with its serve-emu
+//!   for Android ([0084](../../docs/decisions/0084-upstream-serve-sim.md)). It installs into
+//!   `<data>/tools/device-hub/` only when the user asks (`device/setup`), and runs as plxd's child
+//!   on two random 127.0.0.1 ports, Expo's and on a Mac serve-sim's, from the first stream until
+//!   plxd stops. Its wrapper exits when its stdin ends, so it never outlives plxd. serve-sim also
+//!   serves its preview and host controls, and serve-emu's routes have no auth, so nothing reaches
+//!   them but this module, which opens only the stream routes below.
 //! - **Relay**: `device/stream` opens one of three upstreams for a booted device: iOS's AVCC video
-//!   body (`/helper/<udid>/stream.avcc`), iOS's input socket (`/helper/ws`), or Android's socket,
-//!   which carries both (`/ws`). What it sends goes to the connection that opened it as
+//!   body (`/serve-sim/helper/<udid>/stream.avcc`), iOS's input socket
+//!   (`/serve-sim/helper/<udid>/ws`), or Android's socket, which carries both
+//!   (`/vendor/serve-emu/ws`). What it sends goes to the connection that opened it as
 //!   `device/data`, in base64 unless it's text, and `device/send` writes back. It ends with the
 //!   upstream, `device/close`, or the connection.
 
@@ -43,7 +46,8 @@ use crate::backend::process::{Launcher, Output, ProcessSpec, StdinMode};
 use crate::mcp::device::{self as tools, Device, Platform, Toolchain};
 use crate::methods::Reply;
 
-/// Expo's device hub at T3 Code's pin, and the wrapper plxd starts it with.
+/// Expo's device hub at T3 Code's pin and upstream serve-sim, and the wrapper plxd starts them
+/// with. The sidecar's own version names both pins, and so its install folder.
 pub(crate) static HUB: NodeSdk = NodeSdk {
     name: "device hub",
     dir: "device-hub",
@@ -53,7 +57,7 @@ pub(crate) static HUB: NodeSdk = NodeSdk {
         "main.mjs",
         include_bytes!("../../sidecar/device-hub/src/main.mjs"),
     )],
-    pin: "/dependencies/expo-device-hub",
+    pin: "/version",
     npm: &["ci", "--omit=dev", "--no-audit", "--no-fund"],
     node_required: "Node.js 22.13 or newer is required",
 };
@@ -80,8 +84,15 @@ pub(crate) struct Devices {
 
 /// The running hub. Dropping it stops it.
 struct Hub {
-    port: u16,
+    ports: Ports,
     task: AbortHandle,
+}
+
+/// The hub's ports: Expo's, and on a Mac serve-sim's.
+#[derive(Clone, Copy)]
+struct Ports {
+    expo: u16,
+    sim: Option<u16>,
 }
 
 impl Drop for Hub {
@@ -344,14 +355,17 @@ impl Devices {
         {
             return Err(failed(android::ffmpeg_missing()));
         }
-        let port = self.hub().await.map_err(failed)?;
+        let ports = self.hub().await.map_err(failed)?;
+        let port = match params.platform {
+            DevicePlatform::Ios => ports
+                .sim
+                .ok_or_else(|| failed("Only a Mac runs iOS Simulators.".to_owned()))?,
+            DevicePlatform::Android => ports.expo,
+        };
         let path = upstream_path(params.platform, params.kind, &params.device_id);
         let upstream = match params.kind {
             DeviceStreamKind::Video => Upstream::Body(get(port, &path).await.map_err(failed)?),
             DeviceStreamKind::Control => {
-                if params.platform == DevicePlatform::Ios {
-                    prime_ios(port, &params.device_id).await;
-                }
                 let url = format!("ws://127.0.0.1:{port}{path}");
                 let tcp = connect(port).await.map_err(failed)?;
                 let (socket, _) =
@@ -415,13 +429,13 @@ impl Devices {
         close_relay(&mut lock(&self.streams), replies, &params.stream_id);
     }
 
-    /// The running hub's port, starting it first.
-    async fn hub(&self) -> Result<u16, String> {
+    /// The running hub's ports, starting it first.
+    async fn hub(&self) -> Result<Ports, String> {
         let mut hub = self.hub.lock().await;
         if let Some(running) = hub.as_ref()
             && !running.task.is_finished()
         {
-            return Ok(running.port);
+            return Ok(running.ports);
         }
         *hub = None;
         let Some(installed) = HUB.installed(&self.launcher) else {
@@ -429,9 +443,13 @@ impl Devices {
                 "The device hub isn't installed. Set it up in the Device panel.".to_owned(),
             );
         };
-        let port = free_port()
+        let reserved = free_ports(if cfg!(target_os = "macos") { 2 } else { 1 })
             .map_err(|error| format!("Couldn't reserve a port for the device hub: {error}"))?;
-        let spec = self.hub_spec(&installed, port)?;
+        let ports = Ports {
+            expo: reserved[0],
+            sim: reserved.get(1).copied(),
+        };
+        let spec = self.hub_spec(&installed, ports)?;
         let mut process = self
             .launcher
             .spawn(&spec)
@@ -459,15 +477,16 @@ impl Devices {
             }
         });
         let running = Hub {
-            port,
+            ports,
             task: task.abort_handle(),
         };
         let deadline = tokio::time::Instant::now() + HUB_READY;
         loop {
-            if ready(port).await {
+            // The wrapper serves serve-sim before it starts Expo's hub, so this answer means both.
+            if ready(ports.expo).await {
                 *lock(&self.hub_failure) = None;
                 *hub = Some(running);
-                return Ok(port);
+                return Ok(ports);
             }
             if let Some(why) = exited.borrow_and_update().clone() {
                 return Err(why);
@@ -484,8 +503,8 @@ impl Devices {
 }
 
 impl Devices {
-    /// How to start the hub installed in `installed` on `port`, with the Android SDK it uses.
-    fn hub_spec(&self, installed: &Path, port: u16) -> Result<ProcessSpec, String> {
+    /// How to start the hub installed in `installed` on `ports`, with the Android SDK it uses.
+    fn hub_spec(&self, installed: &Path, ports: Ports) -> Result<ProcessSpec, String> {
         let main = HUB
             .main_script(installed)
             .map_err(|error| format!("Couldn't prepare the device hub: {error}"))?;
@@ -493,21 +512,24 @@ impl Devices {
         spec.args = vec![
             main.into_os_string(),
             "--port".into(),
-            port.to_string().into(),
+            ports.expo.to_string().into(),
         ];
+        if let Some(sim) = ports.sim {
+            spec.args
+                .extend(["--ios-port".into(), sim.to_string().into()]);
+        }
+        // serve-sim streams the simulators, so Expo's hub never captures one too.
         spec.args.extend(
             [
                 "--host",
                 "127.0.0.1",
                 "--hide-sidebar",
                 "--hide-boot-device",
+                "--platform",
+                "android",
             ]
             .map(Into::into),
         );
-        if !cfg!(target_os = "macos") {
-            // Only a Mac lists simulators; elsewhere the hub's attempt reads as an error.
-            spec.args.extend(["--platform", "android"].map(Into::into));
-        }
         spec.stdin = StdinMode::Piped;
         spec.inject.set("FORCE_COLOR", "0").set("NO_COLOR", "1");
         if let Ok(android) = &self.tools().android
@@ -590,10 +612,10 @@ fn upstream_path(platform: DevicePlatform, kind: DeviceStreamKind, device: &str)
     let device = percent_encode(device);
     match (platform, kind) {
         (DevicePlatform::Ios, DeviceStreamKind::Video) => {
-            format!("/vendor/serve-sim/helper/{device}/stream.avcc")
+            format!("/serve-sim/helper/{device}/stream.avcc")
         }
         (DevicePlatform::Ios, DeviceStreamKind::Control) => {
-            format!("/vendor/serve-sim/helper/ws?device={device}")
+            format!("/serve-sim/helper/{device}/ws")
         }
         // The Android socket carries video and input both.
         (DevicePlatform::Android, _) => {
@@ -613,22 +635,6 @@ fn percent_encode(value: &str) -> String {
         }
     }
     out
-}
-
-/// serve-sim's helper only takes input and sends its screen size once screen capture runs, which
-/// the MJPEG stream starts and the AVCC one doesn't reliably, as T3 found. Reading its first bytes
-/// is enough.
-async fn prime_ios(port: u16, device: &str) {
-    let path = format!(
-        "/vendor/serve-sim/helper/{}/stream.mjpeg",
-        percent_encode(device)
-    );
-    let _ = tokio::time::timeout(Duration::from_secs(2), async {
-        if let Ok(mut body) = get(port, &path).await {
-            let _ = body.next().await;
-        }
-    })
-    .await;
 }
 
 enum Upstream {
@@ -753,12 +759,16 @@ fn notification<M: NotificationMethod>(params: M::Params) -> Notification {
     }
 }
 
-/// A free port on loopback, for the hub. Another process could take it before the hub binds it,
-/// and then the hub fails to start and the next stream tries again.
-fn free_port() -> std::io::Result<u16> {
-    Ok(std::net::TcpListener::bind(("127.0.0.1", 0))?
-        .local_addr()?
-        .port())
+/// `count` different free ports on loopback, for the hub. Another process could take one before
+/// the hub binds it, and then the hub fails to start and the next stream tries again.
+fn free_ports(count: usize) -> std::io::Result<Vec<u16>> {
+    // Held until all are bound, so no two are the same.
+    let held = (0..count)
+        .map(|_| std::net::TcpListener::bind(("127.0.0.1", 0)))
+        .collect::<std::io::Result<Vec<_>>>()?;
+    held.iter()
+        .map(|listener| Ok(listener.local_addr()?.port()))
+        .collect()
 }
 
 async fn connect(port: u16) -> Result<TcpStream, String> {
