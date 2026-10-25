@@ -66,7 +66,10 @@ Every interface icon is lucide's, the browser's included, which drew Material Sy
 | `size-4` | 16px controls: buttons, menu items, the composer |
 | `size-5` | 20px large buttons and tiles |
 
-Brand logos, file-type icons, and Parallax's own marks keep their own drawing.
+Outside these:
+- Illustrative icons in empty states, onboarding, and file cards draw at 24 or 32px.
+- Checks inside tiny checkboxes draw at their box's 8 to 10px, with their own heavier stroke.
+- Brand logos, file-type icons, and Parallax's own marks keep their own drawing.
 
 ### Exempt
 
