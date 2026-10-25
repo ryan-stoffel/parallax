@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import type { PullRequest } from "../../desktop/src/protocol/generated/protocol";
-import { activityOf, checksSummary, diffRows, reviewsSummary } from "./pullRequestLogic";
+import { activityOf, checksSummary, diffRows, reviewsSummary, shownRows, type PrFilters } from "./pullRequestLogic";
 
 test("a diff splits into files, hunks, and numbered lines", () => {
   const diff = [
@@ -69,4 +69,19 @@ test("a review's text shows once, with its verdict, among commits in time order"
     ["commit", undefined],
     ["comment", "approved"],
   ]);
+});
+
+test("the list's filters: open includes drafts, an unread one shows, and computer and repo narrow", () => {
+  const row = (n: number, host: string, pr?: Partial<PullRequest>) => ({
+    entry: { hostId: host, runId: `r${n}`, threadTitle: "A thread", url: `https://github.com/me/app${n % 2}/pull/${n}` },
+    read: pr && { pr: { state: "open", draft: false, labels: [], updatedAt: `2026-01-0${n}T00:00:00Z`, ...pr } as PullRequest },
+  });
+  const rows = [row(1, "a", { draft: true }), row(2, "a", { state: "merged" }), row(3, "b", { checksState: "failed" }), row(4, "b")];
+  const shown = (f: PrFilters, q = "") => shownRows(rows, q, f).map((r) => r.entry.runId);
+  expect(shown({ state: "open" })).toEqual(["r3", "r1", "r4"]);
+  expect(shown({ state: "draft" })).toEqual(["r1", "r4"]);
+  expect(shown({ state: "all", checks: "failed" })).toEqual(["r3", "r4"]);
+  expect(shown({ state: "all", hostId: "a" })).toEqual(["r2", "r1"]);
+  expect(shown({ state: "all", repo: "me/app0" })).toEqual(["r2", "r4"]);
+  expect(shown({ state: "all" }, "#3")).toEqual(["r3"]);
 });

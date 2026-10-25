@@ -1,18 +1,18 @@
 // Pull requests, laid out as T3 Code's mobile app lays them out: every one linked to a thread on
-// any computer (as the desktop's Pull requests page lists them), in a sheet with its own title and
-// close button, and one pull request's overview (status card, merge, labels, description, changed
-// files), activity, and diff, read through its thread's computer with `pr/view` and `pr/diff`, and
-// merged or closed with `pr/act`. plxd asks GitHub with the computer's own `gh`, so the phone needs
-// no GitHub sign-in.
+// any computer (as the desktop's Pull requests page lists them, with its search), in a sheet with
+// glass filter chips, and one pull request, pushed in the same sheet: its overview (status card,
+// merge, labels, description, changed files), activity, and diff, read through its thread's
+// computer with `pr/view` and `pr/diff`, and merged or closed with `pr/act`. plxd asks GitHub with
+// the computer's own `gh`, so the phone needs no GitHub sign-in.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Clipboard from "expo-clipboard";
-import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import * as Haptics from "expo-haptics";
 import type { LucideIcon } from "lucide-react-native";
 import {
   ArrowLeft,
   ArrowUpRight,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleCheck,
@@ -33,6 +33,7 @@ import {
   TriangleAlert,
   UserCheck,
   UserX,
+  X,
 } from "lucide-react-native";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -48,6 +49,7 @@ import {
   StyleSheet,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type {
   PrAction,
@@ -56,7 +58,9 @@ import type {
   PullRequest,
 } from "../../desktop/src/protocol/generated/protocol";
 import { githubText } from "../../desktop/src/renderer/github";
+import { numberOf, type PrEntry } from "../../desktop/src/renderer/pullRequestSearch";
 import { useComputer, useFleet, type Computer } from "./fleet";
+import { GlassButton } from "./Glass";
 import { ago, useNav, type Screens } from "./nav";
 import {
   Avatar,
@@ -65,6 +69,8 @@ import {
   DiffLine,
   DiffStats,
   Folding,
+  GlassChip,
+  GlassSearch,
   Heading,
   lookOf,
   Segmented,
@@ -72,17 +78,20 @@ import {
   toneColor,
   useCard,
 } from "./PullRequestParts";
-import { activityOf, checksSummary, diffRows, latestReviews, reviewsSummary, type DiffRow } from "./pullRequestLogic";
+import {
+  activityOf,
+  checksSummary,
+  defaultFilters,
+  diffRows,
+  latestReviews,
+  repoOf,
+  reviewsSummary,
+  shownRows,
+  type DiffRow,
+  type PrFilters,
+} from "./pullRequestLogic";
 import { font } from "./theme";
 import { Icon, Markdown, T, useColors } from "./ui";
-
-/** A pull request linked to a thread, on a computer. */
-interface PrEntry {
-  hostId: string;
-  runId: string;
-  threadTitle: string;
-  url: string;
-}
 
 /** Each linked pull request once, newest thread first. */
 function entriesOf(computers: Computer[]): PrEntry[] {
@@ -114,38 +123,115 @@ async function view(e: Pick<PrEntry, "hostId" | "runId" | "url">): Promise<PullR
   return pr;
 }
 
-const numberOf = (url: string) => url.split("/").pop() ?? "";
-/** `owner/name` from a pull request's URL, for before it's read. */
-const repoOf = (url: string) => url.split("/").slice(3, 5).join("/");
+/** Opens a pull request's link menu, for a row's long press: open it on GitHub or copy its link. */
+function linkMenu(url: string) {
+  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  ActionSheetIOS.showActionSheetWithOptions(
+    { title: `#${numberOf(url)} · ${repoOf(url)}`, options: ["Open on GitHub", "Copy link", "Cancel"], cancelButtonIndex: 2 },
+    (i) => {
+      if (i === 0) void Linking.openURL(url);
+      if (i === 1) void Clipboard.setStringAsync(url).then(() => Haptics.selectionAsync());
+    },
+  );
+}
 
-/** Which pull requests the list shows, by state, as T3's state filter. */
-type Filter = "open" | "merged" | "closed" | "all";
-const filters: Record<Filter, string> = { open: "Open", merged: "Merged", closed: "Closed", all: "All states" };
+/** Asks for one of `options` in an action sheet, the current one checked, as a filter chip's menu. */
+function choose<V>(title: string, options: { value: V; label: string }[], current: V, pick: (v: V) => void) {
+  ActionSheetIOS.showActionSheetWithOptions(
+    {
+      title,
+      options: [...options.map((o) => (o.value === current ? `${o.label} ✓` : o.label)), "Cancel"],
+      cancelButtonIndex: options.length,
+    },
+    (i) => i < options.length && pick(options[i]!.value),
+  );
+}
 
-/** The list's state filter: a glass chip that opens the choices. */
-function FilterChip({ value, onChange }: { value: Filter; onChange: (f: Filter) => void }) {
-  const c = useColors();
-  const keys = Object.keys(filters) as Filter[];
+const states: { value: PrFilters["state"]; label: string }[] = [
+  { value: "open", label: "Open" },
+  { value: "draft", label: "Draft" },
+  { value: "merged", label: "Merged" },
+  { value: "closed", label: "Closed" },
+  { value: "all", label: "All states" },
+];
+const checkChoices: { value: PrFilters["checks"]; label: string }[] = [
+  { value: undefined, label: "Any checks" },
+  { value: "failed", label: "Failing" },
+  { value: "pending", label: "Running" },
+  { value: "passed", label: "Passing" },
+];
+
+/**
+ * The glass filter chips under the search, in a row that scrolls sideways: state, checks, and,
+ * when there's more than one, the computer and the repository, then Clear once any narrows.
+ */
+function FilterChips({
+  value,
+  onChange,
+  computers,
+  repos,
+}: {
+  value: PrFilters;
+  onChange: (f: PrFilters) => void;
+  computers: { id: string; name: string }[];
+  repos: string[];
+}) {
+  const set = (patch: Partial<PrFilters>) => onChange({ ...value, ...patch });
+  const state = states.find((s) => s.value === value.state)!.label;
+  const checks = checkChoices.find((s) => s.value === value.checks)!.label;
+  const computer = computers.find((m) => m.id === value.hostId)?.name;
+  const narrowed = JSON.stringify(value) !== JSON.stringify(defaultFilters);
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={`State, ${filters[value]}`}
-      hitSlop={6}
-      onPress={() =>
-        ActionSheetIOS.showActionSheetWithOptions(
-          { title: "State", options: [...keys.map((k) => (k === value ? `${filters[k]} ✓` : filters[k])), "Cancel"], cancelButtonIndex: keys.length },
-          (i) => i < keys.length && onChange(keys[i]!),
-        )
-      }
-      style={{ alignSelf: "flex-start" }}
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{ gap: 8, paddingHorizontal: 16 }}
     >
-      <GlassView isInteractive style={[styles.chip, !isLiquidGlassAvailable() && { backgroundColor: c.selected }]}>
-        <T medium style={{ fontSize: 13, lineHeight: 17 }}>
-          {filters[value]}
-        </T>
-        <Icon icon={ChevronDown} size={12} color={c.mutedForeground} strokeWidth={2.4} />
-      </GlassView>
-    </Pressable>
+      <GlassChip
+        label={state}
+        accessibilityLabel={`State, ${state}`}
+        active={value.state !== "open"}
+        onPress={() => choose("State", states, value.state, (s) => set({ state: s }))}
+      />
+      <GlassChip
+        label={value.checks ? checks : "Checks"}
+        accessibilityLabel={`Checks, ${checks}`}
+        active={!!value.checks}
+        onPress={() => choose("Checks", checkChoices, value.checks, (s) => set({ checks: s }))}
+      />
+      {computers.length > 1 && (
+        <GlassChip
+          label={computer ?? "Computer"}
+          accessibilityLabel={`Computer, ${computer ?? "any"}`}
+          active={!!value.hostId}
+          onPress={() =>
+            choose(
+              "Computer",
+              [{ value: undefined, label: "Any computer" }, ...computers.map((m) => ({ value: m.id as string | undefined, label: m.name }))],
+              value.hostId,
+              (id) => set({ hostId: id }),
+            )
+          }
+        />
+      )}
+      {repos.length > 1 && (
+        <GlassChip
+          label={value.repo?.split("/")[1] ?? "Repository"}
+          accessibilityLabel={`Repository, ${value.repo ?? "any"}`}
+          active={!!value.repo}
+          onPress={() =>
+            choose(
+              "Repository",
+              [{ value: undefined, label: "Any repository" }, ...repos.map((r) => ({ value: r as string | undefined, label: r }))],
+              value.repo,
+              (r) => set({ repo: r }),
+            )
+          }
+        />
+      )}
+      {narrowed && <GlassChip label="Clear" icon={X} accessibilityLabel="Clear filters" onPress={() => onChange(defaultFilters)} />}
+    </ScrollView>
   );
 }
 
@@ -168,42 +254,60 @@ function ReviewMark({ pr }: { pr: PullRequest }) {
 }
 
 /**
- * A list row, as T3's: the state icon at the left; the author, repository and number, and age;
- * the title; then the thread that opened it, its checks and reviews, and its lines changed.
+ * A list row, as T3's: the state icon at the left, marked when it conflicts; the author,
+ * repository and number, and age; the title; then the thread that opened it, its checks and
+ * reviews, and its lines changed. Before it's read, its thread's title in its place, with a
+ * spinner, or why it can't be read. A long press opens its link menu.
  */
-function PrRow({ entry, pr, error }: { entry: PrEntry; pr?: PullRequest; error?: string }) {
+function PrRow({ entry, pr, error, offline }: { entry: PrEntry; pr?: PullRequest; error?: string; offline?: string }) {
   const c = useColors();
   const nav = useNav();
-  const [symbol, color] = lookOf(pr, c);
+  const [symbol, color, stateLabel] = lookOf(pr, c);
   const small = { fontSize: 12, lineHeight: 16 };
+  const problem = error ?? offline;
+  const number = pr?.number ?? numberOf(entry.url);
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={
+        pr
+          ? `Pull request ${number}, ${pr.title}, ${stateLabel}${pr.mergeState === "dirty" ? ", has conflicts" : ""}, by ${pr.author}${pr.checksState ? `, checks ${pr.checksState}` : ""}`
+          : `Pull request ${number}, ${entry.threadTitle}${problem ? `, ${problem}` : ", loading"}`
+      }
+      accessibilityHint="Touch and hold for its link."
       onPress={() => nav.navigate("PullRequest", { hostId: entry.hostId, runId: entry.runId, url: entry.url })}
+      onLongPress={() => linkMenu(entry.url)}
       style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hover }]}
     >
       <View style={{ paddingTop: 11 }}>
         <Icon icon={symbol} size={20} color={color} />
+        {pr?.mergeState === "dirty" && (
+          <View style={[styles.badge, { backgroundColor: c.background }]}>
+            <Icon icon={TriangleAlert} size={10} color={c.danger} strokeWidth={2.6} />
+          </View>
+        )}
       </View>
       <View style={[styles.rowBody, { borderBottomColor: c.border }]}>
         <View style={styles.line}>
           {pr && <Avatar login={pr.author} size={16} />}
           <T muted numberOfLines={1} style={{ ...small, flex: 1 }}>
-            {pr?.repo ?? repoOf(entry.url)} <T faint style={small}>#{pr?.number ?? numberOf(entry.url)}</T>
+            {pr?.repo ?? repoOf(entry.url)} <T faint style={small}>#{number}</T>
           </T>
-          {pr && (
+          {pr ? (
             <T faint style={{ ...small, fontVariant: ["tabular-nums"] }}>
               {ago(pr.updatedAt)}
             </T>
+          ) : (
+            !problem && <ActivityIndicator size="small" color={c.faintForeground} style={{ transform: [{ scale: 0.7 }], height: 16 }} />
           )}
         </View>
-        <T medium numberOfLines={2} style={{ fontSize: 16, lineHeight: 21 }}>
+        <T medium numberOfLines={2} style={{ fontSize: 16, lineHeight: 21, color: pr ? c.foreground : c.mutedForeground }}>
           {pr?.title ?? entry.threadTitle}
         </T>
         <View style={styles.line}>
-          <Icon icon={MessageSquare} size={11} color={error ? c.danger : c.faintForeground} />
+          <Icon icon={problem ? CircleAlert : MessageSquare} size={11} color={error ? c.danger : c.faintForeground} />
           <T faint numberOfLines={1} style={{ ...small, flex: 1, color: error ? c.danger : c.faintForeground }}>
-            {error ?? entry.threadTitle}
+            {pr ? entry.threadTitle : (problem ?? entry.threadTitle)}
           </T>
           {pr && <ChecksMark pr={pr} />}
           {pr && <ReviewMark pr={pr} />}
@@ -214,14 +318,44 @@ function PrRow({ entry, pr, error }: { entry: PrEntry; pr?: PullRequest; error?:
   );
 }
 
+/** The list's empty state, as T3's: a mark, a title, a line under it, and a way out when narrowed. */
+function Empty({ title, note, onClear }: { title: string; note: string; onClear?: () => void }) {
+  const c = useColors();
+  const card = useCard();
+  return (
+    <View style={styles.empty}>
+      <View style={[styles.emptyMark, { backgroundColor: card }]}>
+        <Icon icon={GitPullRequest} size={26} color={c.faintForeground} />
+      </View>
+      <T style={{ fontSize: 17, lineHeight: 22, fontWeight: "700", textAlign: "center" }}>{title}</T>
+      <T muted style={{ textAlign: "center" }}>
+        {note}
+      </T>
+      {onClear && (
+        <View style={{ marginTop: 8 }}>
+          <GlassChip label="Clear search and filters" icon={X} onPress={onClear} />
+        </View>
+      )}
+    </View>
+  );
+}
+
+/**
+ * The Pull requests sheet: every pull request linked to a thread on any computer, read with
+ * `pr/view`, under a glass search field (the desktop's search: title, number, branch, repository,
+ * author, labels, and `label:`, `state:`, and `author:` terms) and a row of glass filter chips.
+ * A row pushes its pull request in the same sheet.
+ */
 export function PullRequestList() {
   const c = useColors();
+  const insets = useSafeAreaInsets();
   const { computers } = useFleet();
   const entries = entriesOf(computers);
   const [, setVersion] = useState(0);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState<Filter>("open");
+  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<PrFilters>(defaultFilters);
   const connected = new Set(computers.filter((m) => m.connected).map((m) => m.machine.id));
   const key = entries.map((e) => `${e.url}@${connected.has(e.hostId)}`).join();
 
@@ -241,17 +375,34 @@ export function PullRequestList() {
   );
   useEffect(() => void load(false), [load]);
 
-  // One not read yet counts as open, so it shows while it loads.
-  const shown = entries.filter((e) => filter === "all" || (reads.get(e.url)?.state ?? "open") === filter);
+  const rows = entries.map((entry) => ({ entry, read: { pr: reads.get(entry.url) } }));
+  const shown = shownRows(rows, query, filters);
+  const repos = [...new Set(rows.map((r) => r.read.pr?.repo ?? repoOf(r.entry.url)))].sort();
+  const narrowed = !!query.trim() || JSON.stringify(filters) !== JSON.stringify(defaultFilters);
+  const clear = () => {
+    setQuery("");
+    setFilters(defaultFilters);
+  };
+  const names = new Map(computers.map((m) => [m.machine.id, m.machine.name]));
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <FlatList
         data={shown}
-        keyExtractor={(e) => e.url}
+        keyExtractor={(r) => r.entry.url}
+        keyboardDismissMode="on-drag"
+        keyboardShouldPersistTaps="handled"
         ListHeaderComponent={
-          <View style={{ paddingHorizontal: 16, paddingTop: 2, paddingBottom: 6 }}>
-            <FilterChip value={filter} onChange={setFilter} />
+          <View style={{ gap: 10, paddingTop: 4, paddingBottom: 6 }}>
+            <View style={{ paddingHorizontal: 16 }}>
+              <GlassSearch value={query} onChange={setQuery} placeholder="Search pull requests" />
+            </View>
+            <FilterChips
+              value={filters}
+              onChange={setFilters}
+              computers={computers.map((m) => ({ id: m.machine.id, name: m.machine.name }))}
+              repos={repos}
+            />
           </View>
         }
         refreshControl={
@@ -263,20 +414,33 @@ export function PullRequestList() {
             }}
           />
         }
-        renderItem={({ item }) => <PrRow entry={item} pr={reads.get(item.url)} error={errors[item.url]} />}
+        renderItem={({ item: { entry, read } }) => (
+          <PrRow
+            entry={entry}
+            pr={read.pr}
+            error={errors[entry.url]}
+            offline={connected.has(entry.hostId) ? undefined : `${names.get(entry.hostId) ?? "Its computer"} is offline`}
+          />
+        )}
         ListEmptyComponent={
-          <View style={styles.empty}>
-            <T style={{ fontSize: 17, lineHeight: 22, fontWeight: "700", textAlign: "center" }}>
-              {entries.length ? `No ${filters[filter].toLowerCase()} pull requests` : "No pull requests"}
-            </T>
-            <T muted style={{ textAlign: "center" }}>
-              {entries.length
-                ? "Pull requests in other states are under the filter above."
-                : "Pull requests your threads open show up here."}
-            </T>
-          </View>
+          !entries.length ? (
+            <Empty title="No pull requests yet" note="A pull request a thread opens or links shows up here." />
+          ) : query.trim() ? (
+            <Empty title="No results" note={`No pull requests match "${query.trim()}".`} onClear={clear} />
+          ) : narrowed ? (
+            <Empty title="Nothing matches" note="Try other filters, or clear them." onClear={clear} />
+          ) : (
+            <Empty title="No open pull requests" note="Merged and closed ones are under the State filter." />
+          )
         }
-        contentContainerStyle={{ paddingBottom: 40 }}
+        ListFooterComponent={
+          narrowed && shown.length ? (
+            <T faint style={{ fontSize: 12, lineHeight: 16, textAlign: "center", paddingTop: 14 }}>
+              {shown.length} of {entries.length} pull requests
+            </T>
+          ) : null
+        }
+        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
       />
     </View>
   );
@@ -532,6 +696,7 @@ function Diff({
   focus?: string;
 }) {
   const c = useColors();
+  const insets = useSafeAreaInsets();
   const list = useRef<FlatList<DiffRow>>(null);
   const [state, setState] = useState<{ rows: DiffRow[]; truncated: boolean } | string | undefined>(() =>
     diffs.get(url),
@@ -587,7 +752,7 @@ function Diff({
           </T>
         ) : null
       }
-      contentContainerStyle={{ paddingBottom: 40 }}
+      contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
     />
   );
 }
@@ -598,6 +763,7 @@ export function PullRequestScreen({
 }: NativeStackScreenProps<Screens, "PullRequest">) {
   const { hostId, runId, url } = route.params;
   const c = useColors();
+  const insets = useSafeAreaInsets();
   const card = useCard();
   const computer = useComputer(hostId);
   const [pr, setPr] = useState<PullRequest | undefined>(reads.get(url));
@@ -668,17 +834,28 @@ export function PullRequestScreen({
     );
   }
 
+  // The header sits on the page's own background, with no hairline, a glass back button at the
+  // left, as the sheet's own close button, and the menu at the right.
   useLayoutEffect(() => {
     navigation.setOptions({
       title: `#${numberOf(url)}`,
       headerTitle: () => <HeaderTitle number={numberOf(url)} repo={pr?.repo ?? repoOf(url)} />,
-      headerRight: () => (
-        <Pressable accessibilityRole="button" accessibilityLabel="More" hitSlop={10} onPress={more}>
-          <Icon icon={Ellipsis} size={22} color={c.foreground} />
-        </Pressable>
+      headerStyle: { backgroundColor: c.background },
+      headerShadowVisible: false,
+      headerLeft: () => (
+        <GlassButton label="Back" onPress={() => navigation.goBack()}>
+          <Icon icon={ChevronLeft} size={22} />
+        </GlassButton>
       ),
+      headerRight: () => (
+        <GlassButton label="More" onPress={more}>
+          <Icon icon={Ellipsis} size={20} />
+        </GlassButton>
+      ),
+      headerLeftBackgroundVisible: false,
+      headerRightBackgroundVisible: false,
     });
-  }, [navigation, url, pr, c.foreground]);
+  }, [navigation, url, pr, c.background]);
 
   const [symbol, color, stateLabel] = lookOf(pr, c);
   const updated = pr && ago(pr.updatedAt);
@@ -762,7 +939,7 @@ export function PullRequestScreen({
   return (
     <ScrollView
       style={{ backgroundColor: c.background }}
-      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 48 }}
+      contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: insets.bottom + 32 }}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -885,10 +1062,11 @@ export function PullRequestScreen({
 
 const styles = StyleSheet.create({
   line: { flexDirection: "row", alignItems: "center", gap: 6 },
-  chip: { flexDirection: "row", alignItems: "center", gap: 6, height: 34, paddingHorizontal: 14, borderRadius: 17, overflow: "hidden" },
   row: { flexDirection: "row", gap: 12, paddingLeft: 16 },
   rowBody: { flex: 1, gap: 4, paddingVertical: 10, paddingRight: 16, borderBottomWidth: StyleSheet.hairlineWidth },
-  empty: { alignItems: "center", gap: 8, paddingTop: 80, paddingHorizontal: 40 },
+  badge: { position: "absolute", right: -4, bottom: -4, width: 14, height: 14, borderRadius: 7, alignItems: "center", justifyContent: "center" },
+  empty: { alignItems: "center", gap: 8, paddingTop: 72, paddingHorizontal: 40 },
+  emptyMark: { width: 56, height: 56, borderRadius: 28, alignItems: "center", justifyContent: "center", marginBottom: 6 },
   branch: { fontFamily: font.mono, fontSize: 12, lineHeight: 16 },
   split: { flexDirection: "row", borderRadius: 12, overflow: "hidden" },
   merge: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingHorizontal: 12, borderRadius: 12 },

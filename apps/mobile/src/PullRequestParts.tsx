@@ -1,6 +1,8 @@
 // The pull request screens' pieces, in the layout of T3 Code's mobile app: a pull request's state
-// look, avatars, +/- counts, the grouped card and its rows, a capsule segmented control, a body that
-// folds past a height under a fade, the activity timeline, and the diff with line numbers.
+// look, avatars, +/- counts, the list's glass search and filter chips, the grouped card and its
+// rows, a capsule segmented control, a body that folds past a height under a fade, the activity
+// timeline, and the diff with line numbers.
+import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import type { LucideIcon } from "lucide-react-native";
 import {
   Check,
@@ -8,6 +10,7 @@ import {
   ChevronRight,
   ChevronUp,
   CircleMinus,
+  CircleX,
   FileDiff,
   FileText,
   GitCommitHorizontal,
@@ -16,9 +19,10 @@ import {
   GitPullRequestClosed,
   GitPullRequestDraft,
   MessageSquareText,
+  Search,
 } from "lucide-react-native";
 import { useState, type ReactNode } from "react";
-import { Image, Pressable, StyleSheet, useColorScheme, View } from "react-native";
+import { Image, Pressable, StyleSheet, TextInput, useColorScheme, View } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 
 import type { PrReviewState, PullRequest } from "../../desktop/src/protocol/generated/protocol";
@@ -163,6 +167,97 @@ export function CardRow({
         ))}
       {onPress && <Icon icon={chevron} size={12} color={c.faintForeground} strokeWidth={2.4} />}
     </Pressable>
+  );
+}
+
+const glass = isLiquidGlassAvailable();
+
+/**
+ * A filter's glass chip, as T3's: its label and a chevron, filled with the accent while it narrows
+ * the list. Where the system has no Liquid Glass, a translucent capsule.
+ */
+export function GlassChip({
+  label,
+  active,
+  icon,
+  accessibilityLabel,
+  onPress,
+}: {
+  label: string;
+  active?: boolean;
+  /** In place of the chevron, such as an X for Clear. */
+  icon?: LucideIcon;
+  accessibilityLabel?: string;
+  onPress: () => void;
+}) {
+  const c = useColors();
+  const fg = active ? "#ffffff" : c.foreground;
+  const body = (
+    <>
+      <T medium numberOfLines={1} style={{ fontSize: 13, lineHeight: 17, color: fg, maxWidth: 180 }}>
+        {label}
+      </T>
+      <Icon icon={icon ?? ChevronDown} size={12} color={active ? fg : c.mutedForeground} strokeWidth={2.4} />
+    </>
+  );
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ selected: !!active }}
+      hitSlop={4}
+      onPress={onPress}
+      style={({ pressed }) => pressed && { opacity: 0.7 }}
+    >
+      {glass ? (
+        <GlassView isInteractive tintColor={active ? c.accent : undefined} style={styles.chip}>
+          {body}
+        </GlassView>
+      ) : (
+        <View style={[styles.chip, { backgroundColor: active ? c.accent : c.selected }]}>{body}</View>
+      )}
+    </Pressable>
+  );
+}
+
+/** A glass capsule around a search box, with a clear button once there's text. */
+export function GlassSearch({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (text: string) => void;
+  placeholder: string;
+}) {
+  const c = useColors();
+  const body = (
+    <>
+      <Icon icon={Search} size={17} color={c.mutedForeground} />
+      <TextInput
+        accessibilityLabel={placeholder}
+        value={value}
+        onChangeText={onChange}
+        placeholder={placeholder}
+        placeholderTextColor={c.faintForeground}
+        selectionColor={c.accent}
+        autoCapitalize="none"
+        autoCorrect={false}
+        returnKeyType="search"
+        clearButtonMode="never"
+        style={[styles.input, { color: c.foreground }]}
+      />
+      {!!value && (
+        <Pressable accessibilityRole="button" accessibilityLabel="Clear search" hitSlop={10} onPress={() => onChange("")}>
+          <Icon icon={CircleX} size={17} color={c.faintForeground} />
+        </Pressable>
+      )}
+    </>
+  );
+  return glass ? (
+    <GlassView style={styles.field}>{body}</GlassView>
+  ) : (
+    <View style={[styles.field, { backgroundColor: c.selected }]}>{body}</View>
   );
 }
 
@@ -405,6 +500,9 @@ const styles = StyleSheet.create({
   caption: { fontSize: 12, lineHeight: 16 },
   card: { borderRadius: 22, borderWidth: StyleSheet.hairlineWidth, overflow: "hidden" },
   row: { minHeight: 46, flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingVertical: 11 },
+  chip: { flexDirection: "row", alignItems: "center", gap: 6, height: 34, paddingHorizontal: 14, borderRadius: 17, overflow: "hidden" },
+  field: { height: 44, flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 14, borderRadius: 22, overflow: "hidden" },
+  input: { flex: 1, height: 44, fontSize: 16 },
   segments: { flexDirection: "row", borderRadius: 999, padding: 3, minHeight: 34 },
   segment: { flex: 1, alignItems: "center", justifyContent: "center", borderRadius: 999, paddingVertical: 6 },
   raised: { shadowColor: "#000000", shadowOpacity: 0.08, shadowRadius: 3, shadowOffset: { width: 0, height: 1 } },

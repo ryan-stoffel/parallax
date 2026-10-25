@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { PullRequest } from "../protocol/generated/protocol";
-import { matches, sortRows, type PrRow } from "./PullRequestsPage";
+import { matches, sortRows, type PrRow } from "./pullRequestSearch";
 
 const row = (n: number, pr?: Partial<PullRequest>, thread = "A thread"): PrRow => ({
   entry: {
@@ -32,7 +32,6 @@ const row = (n: number, pr?: Partial<PullRequest>, thread = "A thread"): PrRow =
       checks: [],
       ...pr,
     },
-    at: "2026-10-06T00:00:00Z",
   },
 });
 

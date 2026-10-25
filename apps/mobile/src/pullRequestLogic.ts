@@ -1,7 +1,44 @@
-// The pull request screens' pure pieces: a unified diff split into rows with line numbers, the
-// checks' and reviews' one-line summaries, and the activity timeline, as T3 Code's mobile app
-// summarizes them. Pure, for the test.
+// The pull request screens' pure pieces: the list's filters over the desktop's search, a unified
+// diff split into rows with line numbers, the checks' and reviews' one-line summaries, and the
+// activity timeline, as T3 Code's mobile app summarizes them. Pure, for the test.
 import type { PrCheck, PrReview, PrReviewState, PullRequest } from "../../desktop/src/protocol/generated/protocol";
+import { matches, sortRows, type PrRow } from "../../desktop/src/renderer/pullRequestSearch";
+
+/** `owner/name` from a pull request's URL, for before it's read. */
+export const repoOf = (url: string) => url.split("/").slice(3, 5).join("/");
+
+/**
+ * The list's filters: a state (Open includes drafts, as GitHub's does, and Draft is only them),
+ * what its checks say, and the computer and repository it's on.
+ */
+export interface PrFilters {
+  state: "open" | "draft" | "merged" | "closed" | "all";
+  checks?: "passed" | "failed" | "pending";
+  hostId?: string;
+  repo?: string;
+}
+
+export const defaultFilters: PrFilters = { state: "open" };
+
+/**
+ * The rows the list shows, by the desktop Pull requests page's search and its state and checks
+ * filters, then the computer and repository, most recently updated first. One not read yet skips
+ * the state and checks filters, so it shows while it loads.
+ */
+export function shownRows<R extends PrRow>(rows: R[], query: string, f: PrFilters): R[] {
+  const states = f.state === "all" ? [] : f.state === "open" ? ["open", "draft"] : [f.state];
+  const chosen = new Set([...states, ...(f.checks ? [f.checks] : [])]);
+  const none = new Set<string>();
+  return sortRows(
+    rows.filter(
+      (r) =>
+        (!f.hostId || r.entry.hostId === f.hostId) &&
+        (!f.repo || (r.read?.pr?.repo ?? repoOf(r.entry.url)) === f.repo) &&
+        matches(r, query, r.read?.pr ? chosen : none),
+    ),
+    "updated",
+  );
+}
 
 export type DiffRow =
   | { kind: "file"; path: string; additions: number; deletions: number }

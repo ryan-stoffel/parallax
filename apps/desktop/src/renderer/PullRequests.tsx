@@ -46,6 +46,7 @@ import { tabItem } from "./Composer";
 import { describeError, githubProblem } from "./errors";
 import { dismiss, notify } from "./notifications";
 import { Lightbox } from "./Lightbox";
+import { numberOf } from "./pullRequestSearch";
 import { locale } from "./locale";
 import { behaviorPrefs } from "./prefs";
 import { age } from "./Sidebar";
@@ -189,8 +190,7 @@ export const RUNNING_POLL_MS = 15_000;
 /** How long a check runs before it counts as stuck and its pull request is read every POLL_MS. */
 export const STUCK_MS = 30 * 60_000;
 
-/** A pull request's number, from its URL. */
-export const numberOf = (url: string) => /\/pull\/(\d+)/.exec(url)?.[1] ?? "?";
+export { numberOf };
 /** Which of `urls`, a thread's linked pull requests, `href` goes to, on any of its tabs. */
 export const linkedPr = (href: string, urls: readonly string[]) => {
   const pr = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.exec(href)?.[0].toLowerCase();
