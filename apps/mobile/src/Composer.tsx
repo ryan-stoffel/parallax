@@ -42,6 +42,7 @@ import Animated, { FadeIn, FadeOut, LinearTransition, useAnimatedStyle, withTimi
 
 import type {
   AgentEffort,
+  AgentCommand,
   AgentPermission,
   AgentRun,
   PromptImage,
@@ -64,6 +65,7 @@ import { openLightbox } from "./Lightbox";
 import { ProviderLogo } from "./logos";
 import { allAccess, useOffers, type Offer } from "./offers";
 import { usePrefs } from "./prefs";
+import { byName, replaceSlash, slashAt } from "./slash";
 import { SendButton } from "./SendButton";
 import { Sheet, sheetTitle } from "./Sheet";
 import { Icon, T, useColors } from "./ui";
@@ -140,6 +142,31 @@ function modelLine(m: Model): string | undefined {
 }
 
 type Page = "model" | "provider" | "access";
+
+/** The commands the prompt box's own controls take, which no CLI gets, as on the desktop. */
+const ownCommands = new Set(["model", "effort", "fast", "permissions"]);
+
+/** The most rows the `/` menu shows. */
+const maxCommands = 8;
+
+// Each CLI's commands by computer, provider, and folder, kept while the app runs, since listing
+// them starts the CLI. A failed fetch isn't kept, so the next `/` asks again.
+const commandLists = new Map<string, Promise<AgentCommand[]>>();
+
+/** The commands `agent/commands` lists for a thread on `backend`, once per computer and folder. */
+function listCommands(hostId: string, backend: string, repo?: string, runId?: string) {
+  const key = `${hostId}/${backend}/${runId ?? repo ?? ""}`;
+  let list = commandLists.get(key);
+  if (!list) {
+    list = window.parallax.request(hostId, "agent/commands", { backend, repo, runId }).then((r) => {
+      if ("result" in r) return r.result.commands;
+      commandLists.delete(key);
+      return [];
+    });
+    commandLists.set(key, list);
+  }
+  return list;
+}
 
 /** Each access level's short name, for the prompt box's pill. */
 const accessShort: Record<AgentPermission, string> = {
@@ -426,6 +453,7 @@ export function Composer({
   onDraft,
   onStop = () => {},
   onStart,
+  repo,
   placeholder,
   bottom,
 }: {
@@ -438,6 +466,8 @@ export function Composer({
   onStop?: () => void;
   /** Starts a new thread with the message. Resolves to why it couldn't, for people. */
   onStart?: (start: Start) => Promise<string | undefined>;
+  /** A new thread's repository, whose folder its `/` commands come from. */
+  repo?: string;
   placeholder?: string;
   bottom: number;
 }) {
@@ -647,8 +677,80 @@ export function Composer({
     }
   }
 
+  // The `/` menu: the command being typed at the cursor, and the CLI's commands that match it.
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+  // Where a picked command puts the cursor, until the input reports it there.
+  const [placed, setPlaced] = useState<{ start: number; end: number }>();
+  const slash = changes && selection.start === selection.end ? slashAt(text, selection.start) : undefined;
+  const commandsKey = hostId && offer.id ? `${hostId}/${offer.id}/${runId ?? repo ?? ""}` : undefined;
+  const [commands, setCommands] = useState<{ key: string; list: AgentCommand[] }>();
+  const wantsCommands = !!slash && !!commandsKey;
+  useEffect(() => {
+    if (!wantsCommands || !hostId || !commandsKey) return;
+    let live = true;
+    void listCommands(hostId, offer.id, repo, runId).then((list) => live && setCommands({ key: commandsKey, list }));
+    return () => {
+      live = false;
+    };
+  }, [wantsCommands, commandsKey]);
+  const loaded = commands && commands.key === commandsKey ? commands.list : undefined;
+  const matches = slash
+    ? byName((loaded ?? []).filter((m) => !ownCommands.has(m.name)), slash.query, (m) => m.name).slice(0, maxCommands)
+    : [];
+  const menu = !!slash && (loaded === undefined || matches.length > 0);
+  /** Puts `command` in place of the `/` being typed, as the desktop's menu does. */
+  const pickCommand = (command: AgentCommand, from = text) => {
+    const at = slashAt(from, selection.start);
+    if (!at) return;
+    void Haptics.selectionAsync();
+    const next = replaceSlash(from, at, `${command.text} `);
+    onDraft(next.text);
+    setPlaced({ start: next.cursor, end: next.cursor });
+  };
+  /** The text as typed, except that Return while the menu shows picks its first command. */
+  const changeText = (next: string) => {
+    const cursor = selection.start;
+    if (menu && matches[0] && next === `${text.slice(0, cursor)}\n${text.slice(cursor)}`) return pickCommand(matches[0]);
+    onDraft(next);
+  };
+
   return (
     <View style={{ paddingHorizontal: 10, paddingBottom: bottom, paddingTop: 6 }}>
+      {menu && (
+        <View style={[styles.menu, { backgroundColor: c.surface, borderColor: c.border }]}>
+          {loaded === undefined ? (
+            <T faint style={{ fontSize: 14, padding: 14 }}>
+              Loading commands…
+            </T>
+          ) : (
+            <ScrollView keyboardShouldPersistTaps="always" style={{ maxHeight: 280 }}>
+              {matches.map((m, i) => (
+                <Pressable
+                  key={`${i}:${m.text}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={m.text}
+                  onPress={() => pickCommand(m)}
+                  style={({ pressed }) => [
+                    styles.command,
+                    i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
+                    (pressed || i === 0) && { backgroundColor: c.selected },
+                  ]}
+                >
+                  <Text numberOfLines={1} style={{ fontSize: 15, color: c.foreground }}>
+                    <Text style={{ fontWeight: "600" }}>{m.text}</Text>
+                    {m.argumentHint && <Text style={{ color: c.faintForeground }}> {m.argumentHint}</Text>}
+                  </Text>
+                  {!!m.description && (
+                    <T muted numberOfLines={2} style={{ fontSize: 13, lineHeight: 18 }}>
+                      {m.description}
+                    </T>
+                  )}
+                </Pressable>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+      )}
       {error && (
         <T alert style={{ color: c.danger, fontSize: 13, paddingHorizontal: 8, paddingBottom: 6 }}>
           {error}
@@ -695,7 +797,12 @@ export function Composer({
           accessibilityLabel="Message"
           multiline
           value={text}
-          onChangeText={onDraft}
+          onChangeText={changeText}
+          selection={placed}
+          onSelectionChange={(e) => {
+            setSelection(e.nativeEvent.selection);
+            if (placed) setPlaced(undefined);
+          }}
           placeholder={placeholder ?? (working ? "Steer, or queue a follow-up" : "Reply")}
           placeholderTextColor={c.faintForeground}
           style={[styles.input, { color: c.foreground }]}
@@ -821,6 +928,18 @@ export function Composer({
 }
 
 const styles = StyleSheet.create({
+  menu: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 18,
+    borderCurve: "continuous",
+    overflow: "hidden",
+    marginBottom: 8,
+    shadowColor: "#1e1b4b",
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+  },
+  command: { paddingHorizontal: 14, paddingVertical: 10, gap: 2 },
   access: {
     height: 38,
     borderRadius: 19,

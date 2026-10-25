@@ -352,6 +352,7 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
         draft={draft}
         onDraft={setDraft}
         onStart={start}
+        repo={repo?.id}
         placeholder={repo ? `Ask anything in ${repo.name}` : "Ask anything"}
         bottom={Math.max(insets.bottom, 8)}
       />
