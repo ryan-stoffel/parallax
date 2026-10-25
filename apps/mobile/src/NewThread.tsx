@@ -28,6 +28,7 @@ import { greeting } from "./greeting";
 import type { Screens } from "./nav";
 import { getPrefs, setPrefs } from "./prefs";
 import { RepoIcon, useSharedIcons } from "./RepoIcon";
+import { setStarted } from "./started";
 import { DeviceIcon, Icon, Section, T, useColors } from "./ui";
 
 /** `path` with the home folder as `~`. */
@@ -104,9 +105,17 @@ function Choice({
  */
 export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, "NewThread">) {
   const c = useColors();
+  const insets = useSafeAreaInsets();
   const { computers, defaultId } = useFleet();
   const shared = useSharedIcons();
   const [query, setQuery] = useState("");
+  // The title is the page's own, on the sheet's background: a native header in a sheet this tall
+  // leaves the list's foot under the screen's edge.
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerShown: false });
+  }, [navigation]);
+  // Past the home indicator, so the last row scrolls up to where it can be tapped.
+  const page = [styles.page, { paddingBottom: insets.bottom + 24 }];
   /** The picked repository's name, null for no repo; kept while sliding back so the page stays drawn. */
   const [picked, setPicked] = useState<string | null>();
   const [step, setStep] = useState(0);
@@ -153,12 +162,16 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
       <Animated.View style={{ flex: 1, flexDirection: "row", width: width * 2, transform: [{ translateX }] }}>
         <ScrollView
           style={{ width }}
-          contentContainerStyle={styles.page}
+          contentContainerStyle={page}
+          contentInsetAdjustmentBehavior="never"
           keyboardShouldPersistTaps="handled"
           automaticallyAdjustKeyboardInsets
           accessibilityElementsHidden={step !== 0}
           importantForAccessibility={step !== 0 ? "no-hide-descendants" : "auto"}
         >
+          <T accessibilityRole="header" style={styles.title}>
+            New thread
+          </T>
           <View style={[styles.search, { backgroundColor: c.selected }]}>
             <Icon icon={Search} size={16} color={c.faintForeground} />
             <TextInput
@@ -207,7 +220,8 @@ export function NewThreadScreen({ navigation }: NativeStackScreenProps<Screens, 
         </ScrollView>
         <ScrollView
           style={{ width }}
-          contentContainerStyle={styles.page}
+          contentContainerStyle={page}
+          contentInsetAdjustmentBehavior="never"
           accessibilityElementsHidden={step !== 1}
           importantForAccessibility={step !== 1 ? "no-hide-descendants" : "auto"}
         >
@@ -306,7 +320,9 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
     }
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setPrefs({ lastStart: { hostId, groupId: at } });
-    navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId } }] });
+    setStarted(runId, text);
+    // In place, with no transition, so the page seems to become the thread.
+    navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId, instant: true } }] });
     return undefined;
   }
 
@@ -344,7 +360,9 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
 }
 
 const styles = StyleSheet.create({
-  page: { padding: 16, gap: 18 },
+  // Room on top for the sheet's grabber.
+  page: { paddingHorizontal: 16, paddingTop: 22, gap: 18 },
+  title: { fontSize: 17, fontWeight: "600", textAlign: "center", lineHeight: 22 },
   search: {
     height: 40,
     borderRadius: 12,

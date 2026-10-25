@@ -1,5 +1,5 @@
 // The thread's message box, as the desktop's Composer, for a phone: the text, photos and files to
-// attach, and the model, reasoning effort, and access for what follows, each a sheet of choices.
+// attach, and the model, reasoning effort, and access for what follows, in one sheet.
 // Photos go to the agent as images and are saved on the computer too, and files are saved there
 // with `host/upload` and listed after the text (0071), as the desktop sends them.
 import * as DocumentPicker from "expo-document-picker";
@@ -8,12 +8,13 @@ import * as Haptics from "expo-haptics";
 import { ImageManipulator, SaveFormat } from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { Asset, type AssetMetadata } from "expo-media-library";
-import { Check, ChevronLeft, ChevronRight, FileText, Plus, X } from "lucide-react-native";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Plus, X } from "lucide-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Image,
   Keyboard,
-  Modal,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -22,7 +23,8 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { ScrollView as GestureScrollView } from "react-native-gesture-handler";
+import Animated, { FadeIn, FadeOut, LinearTransition, useAnimatedStyle, withTiming } from "react-native-reanimated";
 
 import type {
   AgentEffort,
@@ -41,11 +43,14 @@ import { defaultBackend } from "../../desktop/src/renderer/settings/shared";
 import type { ThreadStart } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { AttachSheet } from "./AttachSheet";
+import { EffortSlider } from "./EffortSlider";
 import type { Computer } from "./fleet";
+import { GlassButton } from "./Glass";
 import { openLightbox } from "./Lightbox";
 import { ProviderLogo } from "./logos";
 import { allAccess, useOffers, type Offer } from "./offers";
 import { SendButton } from "./SendButton";
+import { Sheet, sheetTitle } from "./Sheet";
 import { Icon, T, useColors } from "./ui";
 
 /**
@@ -119,11 +124,12 @@ function modelLine(m: Model): string | undefined {
   return parts.length ? parts.join(" · ") : undefined;
 }
 
-type Page = "model" | "all" | "provider" | "effort" | "access";
+type Page = "model" | "provider" | "access";
 
 /**
- * The model sheet, as Claude's app has it: the provider's models in a card, then Effort and
- * Access rows that open their own choices, a close button and title on top.
+ * The model sheet, as Claude's app has it: the provider with its mark, the model as a list that
+ * opens in place, the reasoning slider, and Access, which opens its own choices, under a close
+ * button and title.
  */
 function ModelSheet({
   open,
@@ -163,12 +169,21 @@ function ModelSheet({
   onPermission: (permission: AgentPermission) => void;
 }) {
   const c = useColors();
-  const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
+  // The model list, open in place; it closes each time the sheet does.
+  const [listing, setListing] = useState(false);
+  useEffect(() => {
+    if (!open) setListing(false);
+  }, [open]);
+  const turn = useAnimatedStyle(() => ({
+    transform: [{ rotate: withTiming(listing ? "180deg" : "0deg", { duration: 200 }) }],
+  }));
   const choose = (then: () => void) => {
     void Haptics.selectionAsync();
     then();
   };
+  const current = offers.find((o) => o.id === provider);
+  const level = effortLevels.find((l) => l.value === effort);
   const card = [styles.card, { backgroundColor: c.surface }];
   const option = (
     key: string,
@@ -200,131 +215,161 @@ function ModelSheet({
       </View>
     </Pressable>
   );
-  const link = (label: string, value: string, onPress: () => void, leading?: React.ReactNode) => (
+  /** A row with its value on the right, which opens more. */
+  const row = (label: string, value: React.ReactNode, onPress: () => void, trailing: React.ReactNode, a11y: string) => (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={a11y}
       onPress={onPress}
-      style={({ pressed }) => [...card, styles.link, pressed && { backgroundColor: c.hover }]}
+      style={({ pressed }) => [styles.link, pressed && { backgroundColor: c.hover }]}
     >
-      {leading}
-      <T style={{ fontSize: 17, flex: 1 }}>{label}</T>
-      <T muted style={{ fontSize: 16 }}>
-        {value}
-      </T>
-      <Icon icon={ChevronRight} size={17} color={c.faintForeground} />
+      <T style={{ fontSize: 17 }}>{label}</T>
+      <View style={styles.value}>{value}</View>
+      {trailing}
     </Pressable>
   );
-  const title = {
-    model: "Select model",
-    all: "More models",
-    provider: "Provider",
-    effort: "Effort",
-    access: "Access",
-  }[page];
-  // The first four, as Claude's sheet lists them, and the chosen one if it's further down.
-  const first = models.filter((m, i) => i < 4 || m.id === model);
-  const list = (shown: Model[]) => (
-    <View style={card}>
-      {shown.map((m, i) =>
-        option(m.id || "default", shortName(m.name), modelLine(m), m.id === model, () => {
-          onModel(m.id);
-          onClose();
-        }, i === shown.length - 1),
-      )}
-    </View>
-  );
+  const chevron = <Icon icon={ChevronRight} size={17} color={c.faintForeground} />;
+  const title = { model: "Select model", provider: "Provider", access: "Access" }[page];
+  const shown = models.find((m) => m.id === model);
   return (
-    <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel="Close" />
-      <View
-        style={[
-          styles.sheet,
-          { backgroundColor: c.sidebar, marginBottom: Math.max(insets.bottom - 26, 8), paddingBottom: 16 },
-        ]}
-      >
-        <View style={[styles.grabber, { backgroundColor: c.border }]} />
+    <Sheet
+      open={open}
+      onClose={onClose}
+      head={
         <View style={styles.sheetHead}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={page === "model" ? "Close" : "Back"}
+          <T style={sheetTitle}>{title}</T>
+          <GlassButton
+            label={page === "model" ? "Close" : "Back"}
+            size={40}
             onPress={() => (page === "model" ? onClose() : onPage("model"))}
-            style={[styles.close, { backgroundColor: c.surface, borderColor: c.border }]}
           >
             <Icon icon={page === "model" ? X : ChevronLeft} size={20} color={c.foreground} />
-          </Pressable>
-          <T style={{ fontSize: 17, fontWeight: "600" }}>{title}</T>
-          <View style={{ width: 40 }} />
+          </GlassButton>
         </View>
-        <ScrollView
-          style={{ maxHeight: height * 0.78 }}
-          contentContainerStyle={{ gap: 12, paddingHorizontal: 16 }}
-        >
-          {page === "model" && (
-            <>
-              {offers.length > 1 &&
-                link(
+      }
+    >
+      <GestureScrollView
+        style={{ maxHeight: height * 0.72 }}
+        contentContainerStyle={{ gap: 12, paddingHorizontal: 16 }}
+      >
+        {page === "model" && (
+          <>
+            {offers.length > 1 && (
+              <View style={card}>
+                {row(
                   "Provider",
-                  offers.find((o) => o.id === provider)?.name ?? provider,
+                  <>
+                    <ProviderLogo kind={current?.kind} size={18} />
+                    <T muted numberOfLines={1} style={{ fontSize: 16, flexShrink: 1 }}>
+                      {current?.name ?? provider}
+                    </T>
+                  </>,
                   () => onPage("provider"),
-                  <ProviderLogo kind={offers.find((o) => o.id === provider)?.kind} size={20} />,
+                  chevron,
+                  `Provider: ${current?.name ?? provider}`,
                 )}
-              {list(first)}
-              {efforts &&
-                effort &&
-                link("Effort", effortLevels.find((l) => l.value === effort)?.name ?? effort, () => onPage("effort"))}
-              {permission && link("Access", accessLevels[permission].label, () => onPage("access"))}
-              {models.length > first.length && link("More models", "", () => onPage("all"))}
-            </>
-          )}
-          {page === "all" && list(models)}
-          {page === "provider" && (
-            <View style={card}>
-              {offers.map((o, i) => {
-                const can = canMove(o.id);
-                return (
-                  <View key={o.id} style={!can && { opacity: 0.45 }} pointerEvents={can ? "auto" : "none"}>
-                    {option(
-                      o.id,
-                      o.name,
-                      can
-                        ? `${o.models.length} model${o.models.length === 1 ? "" : "s"}`
-                        : "Start a new thread to switch to it here.",
-                      o.id === provider,
+              </View>
+            )}
+            <Animated.View layout={LinearTransition.duration(200)} style={card}>
+              {row(
+                "Model",
+                <T muted numberOfLines={1} style={{ fontSize: 16, flexShrink: 1 }}>
+                  {shortName(shown?.name ?? (model || "Default"))}
+                </T>,
+                () => choose(() => setListing((l) => !l)),
+                <Animated.View style={turn}>
+                  <Icon icon={ChevronDown} size={17} color={c.faintForeground} />
+                </Animated.View>,
+                `Model: ${shown?.name ?? (model || "Default")}`,
+              )}
+              {listing && (
+                <Animated.View
+                  entering={FadeIn.duration(180)}
+                  exiting={FadeOut.duration(120)}
+                  style={{ borderTopColor: c.border, borderTopWidth: StyleSheet.hairlineWidth }}
+                >
+                  {models.map((m, i) =>
+                    option(
+                      m.id || "default",
+                      shortName(m.name),
+                      modelLine(m),
+                      m.id === model,
                       () => {
-                        onProvider(o.id);
-                        onPage("model");
+                        onModel(m.id);
+                        setListing(false);
                       },
-                      i === offers.length - 1,
-                      <ProviderLogo kind={o.kind} size={24} />,
-                    )}
-                  </View>
-                );
-              })}
-            </View>
-          )}
-          {page === "effort" && (
-            <View style={card}>
-              {effortLevels.map((l, i) =>
-                option(l.value, l.name, l.blurb, l.value === effort, () => {
-                  onEffort(l.value);
-                  onPage("model");
-                }, i === effortLevels.length - 1),
+                      i === models.length - 1,
+                      <ProviderLogo kind={current?.kind || m.provider} size={22} />,
+                    ),
+                  )}
+                </Animated.View>
               )}
-            </View>
-          )}
-          {page === "access" && (
-            <View style={card}>
-              {permissions.map((p, i) =>
-                option(p, accessLevels[p].label, accessLevels[p].description, p === permission, () => {
-                  onPermission(p);
-                  onPage("model");
-                }, i === permissions.length - 1),
-              )}
-            </View>
-          )}
-        </ScrollView>
-      </View>
-    </Modal>
+            </Animated.View>
+            {efforts && (
+              <Animated.View layout={LinearTransition.duration(200)} style={[...card, styles.reasoning]}>
+                <View style={{ gap: 2 }}>
+                  <T style={{ fontSize: 17 }}>
+                    Reasoning <T muted style={{ fontSize: 17 }}>{level?.name ?? "Default"}</T>
+                  </T>
+                  <T faint numberOfLines={1} style={{ fontSize: 13, lineHeight: 18 }}>
+                    {level?.blurb ?? "As the provider sets it, until you pick one"}
+                  </T>
+                </View>
+                <EffortSlider value={effort} onChange={onEffort} />
+              </Animated.View>
+            )}
+            {permission && (
+              <Animated.View layout={LinearTransition.duration(200)} style={card}>
+                {row(
+                  "Access",
+                  <T muted numberOfLines={1} style={{ fontSize: 16, flexShrink: 1 }}>
+                    {accessLevels[permission].label}
+                  </T>,
+                  () => onPage("access"),
+                  chevron,
+                  `Access: ${accessLevels[permission].label}`,
+                )}
+              </Animated.View>
+            )}
+          </>
+        )}
+        {page === "provider" && (
+          <View style={card}>
+            {offers.map((o, i) => {
+              const can = canMove(o.id);
+              return (
+                <View key={o.id} style={!can && { opacity: 0.45 }} pointerEvents={can ? "auto" : "none"}>
+                  {option(
+                    o.id,
+                    o.name,
+                    can
+                      ? `${o.models.length} model${o.models.length === 1 ? "" : "s"}`
+                      : "Start a new thread to switch to it here.",
+                    o.id === provider,
+                    () => {
+                      onProvider(o.id);
+                      onPage("model");
+                    },
+                    i === offers.length - 1,
+                    <ProviderLogo kind={o.kind} size={24} />,
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
+        {page === "access" && (
+          <View style={card}>
+            {permissions.map((p, i) =>
+              option(p, accessLevels[p].label, accessLevels[p].description, p === permission, () => {
+                onPermission(p);
+                onPage("model");
+              }, i === permissions.length - 1),
+            )}
+          </View>
+        )}
+      </GestureScrollView>
+    </Sheet>
   );
 }
 
@@ -426,8 +471,11 @@ export function Composer({
 
   const maxImages = caps?.maxImages ?? 10;
 
-  /** Attaches photos from the library's picker or the camera. Resolves to whether any were. */
-  async function pickPhotos(camera: boolean): Promise<boolean> {
+  /**
+   * Attaches photos from the library's picker or the camera. The camera opens only once it's
+   * allowed, which `launchCameraAsync` doesn't ask for itself: it refuses until then.
+   */
+  async function pickPhotos(camera: boolean) {
     const options: ImagePicker.ImagePickerOptions = {
       mediaTypes: ["images"],
       quality: 1,
@@ -435,30 +483,36 @@ export function Composer({
       selectionLimit: maxImages,
     };
     try {
+      if (camera && !(await ImagePicker.requestCameraPermissionsAsync()).granted)
+        return Alert.alert("Camera is off for Parallax", "Allow it in Settings to take a photo for your message.", [
+          { text: "Not now", style: "cancel" },
+          { text: "Open Settings", onPress: () => void Linking.openSettings() },
+        ]);
       const picked = camera
         ? await ImagePicker.launchCameraAsync(options)
         : await ImagePicker.launchImageLibraryAsync(options);
-      if (picked.canceled) return false;
+      if (picked.canceled) return;
       const photos = await Promise.all(picked.assets.map((a) => photo(a)));
       setAttached((a) => [...a, ...photos]);
-      return true;
     } catch (e) {
       setError((e as Error).message);
-      return false;
     }
   }
 
-  /** Attaches files from the document picker. Resolves to whether any were. */
-  async function pickFiles(): Promise<boolean> {
-    const picked = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
-    if (picked.canceled) return false;
-    setAttached((a) => [
-      ...a,
-      ...picked.assets.map(
-        (f): Attached => ({ kind: "file", key: uuidv7(), name: f.name, uri: f.uri, size: f.size ?? 0 }),
-      ),
-    ]);
-    return true;
+  /** Attaches files from the document picker. */
+  async function pickFiles() {
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({ multiple: true, copyToCacheDirectory: true });
+      if (picked.canceled) return;
+      setAttached((a) => [
+        ...a,
+        ...picked.assets.map(
+          (f): Attached => ({ kind: "file", key: uuidv7(), name: f.name, uri: f.uri, size: f.size ?? 0 }),
+        ),
+      ]);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   /** Attaches a recent photo tapped in the attach sheet, or takes it off when it's attached. */
@@ -673,9 +727,9 @@ export function Composer({
         onClose={() => setAttaching(false)}
         selected={[...attached.flatMap((a) => (a.kind === "image" && a.asset ? [a.asset] : [])), ...pending]}
         onToggle={(p) => void toggleRecent(p)}
-        onPhotos={() => pickPhotos(false)}
-        onCamera={() => pickPhotos(true)}
-        onFiles={pickFiles}
+        onPhotos={() => void pickPhotos(false)}
+        onCamera={() => void pickPhotos(true)}
+        onFiles={() => void pickFiles()}
       />
       <ModelSheet
         open={!!sheet}
@@ -746,35 +800,10 @@ const styles = StyleSheet.create({
   },
   input: { fontSize: 17, minHeight: 44, maxHeight: 160, paddingHorizontal: 16, paddingTop: 10 },
   bar: { flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 10, paddingTop: 6 },
-  // Taps outside close the sheet; the screen behind stays as it is, not dimmed.
-  scrim: { flex: 1 },
-  // Floating, rounded on every corner, as iOS 26's sheets and Claude's are.
-  sheet: {
-    marginHorizontal: 8,
-    borderRadius: 38,
-    paddingTop: 8,
-    shadowColor: "#000000",
-    shadowOpacity: 0.18,
-    shadowRadius: 30,
-    shadowOffset: { width: 0, height: 8 },
-  },
-  grabber: { alignSelf: "center", width: 40, height: 5, borderRadius: 3, marginBottom: 8 },
-  sheetHead: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-  },
-  close: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  card: { borderRadius: 20, overflow: "hidden" },
+  sheetHead: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingBottom: 14 },
+  card: { borderRadius: 20, borderCurve: "continuous", overflow: "hidden" },
+  value: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 7 },
+  reasoning: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 12, gap: 14 },
   option: { flexDirection: "row", alignItems: "center", paddingLeft: 18 },
   leading: { width: 32, height: 32, borderRadius: 9, alignItems: "center", justifyContent: "center", marginRight: 12 },
   optionBody: { flex: 1, flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14, paddingRight: 18 },
