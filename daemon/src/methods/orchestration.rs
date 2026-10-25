@@ -25,6 +25,11 @@ use crate::{graph, threads};
 /// The most events a snapshot or history page carries, as `agent/events`' default page.
 const PAGE_EVENTS: usize = 500;
 
+/// About the most event bytes a thread's snapshot carries. Opening a thread waits on it, and over
+/// a slow link, such as Connect through Tailscale's relay, a 4 MiB page takes seconds; older
+/// events follow as `orchestration/threadHistory` pages (PLX-1001).
+const SNAPSHOT_PAGE_BYTES: usize = 128 * 1024;
+
 pub(super) async fn dispatch(
     context: &Context,
     command: OrchestrationCommand,
@@ -194,12 +199,7 @@ pub(super) async fn subscribe_thread(
             let requests = graph::requests(db, Some(thread_id.into()))?;
             let watching = crate::pr_watch::urls(db, thread_id.into())?;
             let (stored, more) = db
-                .run_events_before(
-                    thread_id.into(),
-                    seq + 1,
-                    PAGE_EVENTS,
-                    MAX_EVENTS_PAGE_BYTES,
-                )
+                .run_events_before(thread_id.into(), seq + 1, PAGE_EVENTS, SNAPSHOT_PAGE_BYTES)
                 .map_err(error)?;
             let events = stored
                 .into_iter()

@@ -494,7 +494,7 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
   const computer = useComputer(hostId);
   const { drafts } = useFleet();
   const connected = !!computer?.connected;
-  const { transcript, error, sent, queue, cancel, held, background, watching, runs } = useAgentRun(hostId, runId, connected);
+  const { transcript, error, sent, queue, cancel, held, background, watching, runs, older, loadOlder } = useAgentRun(hostId, runId, connected);
   const [draft, setDraft] = useState(drafts.get(runId) ?? "");
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   // What the trace sheet last opened on, as it was then, and a count that makes each opening fresh.
@@ -712,6 +712,9 @@ export function ThreadScreen({ route, navigation }: NativeStackScreenProps<Scree
             contentContainerStyle={styles.transcript}
             keyboardDismissMode="interactive"
             accessibilityLabel="Transcript"
+            // Inverted, the end is the top: scrolling up to it loads the older page (PLX-1001).
+            onEndReached={older ? loadOlder : undefined}
+            onEndReachedThreshold={1}
             ListHeaderComponent={
               <View style={{ gap: 14, marginTop: 14 }}>
                 {first && (
