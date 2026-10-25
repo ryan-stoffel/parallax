@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 
-import { buildContext, buildLaunchPrompt, buildSeedPrompt } from "./doctor-prompt.mjs";
+import { buildContext, buildLaunchPrompt, buildSeedPrompt, MARKS } from "./doctor-prompt.mjs";
 import { fetchReleases, pickRelease } from "./releases.mjs";
 
 /**
@@ -88,10 +88,10 @@ import { fetchReleases, pickRelease } from "./releases.mjs";
 
 /** @typedef {{ errors: number, warnings: number, recent: string[] }} LogProblems */
 
-export const REPO = "https://github.com/ryan-stoffel/parallax";
+const REPO = "https://github.com/ryan-stoffel/parallax";
 
 /** The agent CLIs the doctor can hand off to, in the order it offers them. */
-export const AGENTS = [
+const AGENTS = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
 ];
@@ -327,7 +327,7 @@ function probePipe(dataDir) {
  * @param {number} timeoutMs
  * @returns {Promise<Answers>}
  */
-export function askPlxd(plxd, version, timeoutMs = 15_000) {
+function askPlxd(plxd, version, timeoutMs = 15_000) {
   /** @type {[keyof Answers, string, object][]} */
   const requests = [
     ["initialize", "initialize", { protocol: { min: 1, max: 1 }, client: { name: "plx-connect doctor", version }, capabilities: {} }],
@@ -387,7 +387,7 @@ export function askPlxd(plxd, version, timeoutMs = 15_000) {
  *   from an earlier gather, so a recheck doesn't fetch them again.
  * @returns {Promise<Facts>}
  */
-export async function gather(version, newest) {
+async function gather(version, newest) {
   const platform = process.platform;
   const env = process.env;
   const home = os.homedir();
@@ -398,10 +398,10 @@ export async function gather(version, newest) {
 
   const lockedPid = platform === "win32" ? undefined : lockPid(dataDir);
   const runningExe = lockedPid === undefined ? undefined : exeOf(lockedPid);
-  // A stale lock's pid reused by another program isn't plxd. Where the OS can't say, trust it.
-  const pid = runningExe === undefined || /^plxd(\.exe)?$/.test(path.basename(runningExe.replace(/ \(deleted\)$/, ""))) ? lockedPid : undefined;
-  const running = platform === "win32" ? await probePipe(dataDir) : pid !== undefined;
   const exeOnDisk = runningExe?.replace(/ \(deleted\)$/, "");
+  // A stale lock's pid reused by another program isn't plxd. Where the OS can't say, trust it.
+  const pid = exeOnDisk === undefined || /^plxd(\.exe)?$/.test(path.basename(exeOnDisk)) ? lockedPid : undefined;
+  const running = platform === "win32" ? await probePipe(dataDir) : pid !== undefined;
   const runningExeVersion = exeOnDisk && exeOnDisk !== plxd && isFile(exeOnDisk) ? versionOf(exeOnDisk) : exeOnDisk === plxd ? plxdVersion : undefined;
   const answers = running && plxd ? await askPlxd(plxd, version) : undefined;
 
@@ -562,10 +562,8 @@ export function evaluate(facts) {
 /** @param {unknown} error */
 const message = (error) => (error instanceof Error ? error.message : String(error));
 
-const MARKS = { ok: "✓", warn: "!", fail: "✗", skip: "-" };
-
 /** One check as a line, with its name in a column and the home folder as `~`. @param {Checked} checked */
-export const line = ({ name, result }) => `${MARKS[result.state]} ${name.padEnd(14)} ${result.detail.replaceAll(os.homedir(), "~")}`;
+const line = ({ name, result }) => `${MARKS[result.state]} ${name.padEnd(14)} ${result.detail.replaceAll(os.homedir(), "~")}`;
 
 /**
  * Ignores Ctrl+C and Ctrl+\ while a child has the terminal: the terminal sends them to the doctor
@@ -589,7 +587,7 @@ function holdSignals() {
  * @param {string[]} args
  * @param {import("node:child_process").SpawnOptions} options
  */
-export function spawnCommand(file, args, options) {
+function spawnCommand(file, args, options) {
   const shell = process.platform === "win32" && (/\.(cmd|bat)$/i.test(file) || !/[\\/]/.test(file));
   const quote = (/** @type {string} */ arg) => `"${arg}"`;
   return shell ? spawn(quote(file), args.map(quote), { ...options, shell: true }) : spawn(file, args, options);
@@ -654,25 +652,24 @@ const launchedAs = () => (process.env.npm_command === "exec" ? "npx plx-connect 
 export async function doctor(options) {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  const newPrompt = () => (interactive ? createInterface({ input: process.stdin, output: process.stdout }) : undefined);
-  let prompt = newPrompt();
+  const newPrompt = () => createInterface({ input: process.stdin, output: process.stdout });
+  let prompt = interactive ? newPrompt() : undefined;
   try {
     console.log(`Parallax doctor (plx-connect ${pkg.version})\n`);
     let facts = await gather(pkg.version);
     let results = evaluate(facts);
     for (const checked of results) console.log(line(checked));
 
-    const fixable = results.filter(({ result }) => result.state === "fail" && result.fix);
-    if (fixable.length > 0 && prompt) {
+    const fixes = results.flatMap(({ result }) => (result.state === "fail" && result.fix ? [result.fix] : []));
+    if (fixes.length > 0 && prompt) {
       console.log("");
       let fixed = false;
-      for (const { result } of fixable) {
-        const fix = /** @type {Fix} */ (result.fix);
+      for (const fix of fixes) {
         if (!(await ask(prompt, `${fix.title}?`, true))) continue;
         // A sign-in asks its own questions, so it gets the terminal to itself.
         if (fix.input === undefined) prompt.close();
         await runFix(fix);
-        if (fix.input === undefined) prompt = /** @type {import("node:readline/promises").Interface} */ (newPrompt());
+        if (fix.input === undefined) prompt = newPrompt();
         fixed = true;
       }
       if (fixed) {

@@ -45,7 +45,7 @@ export const WINDOWS_DETAILS = `$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:
  * @param {string} machine
  * @returns {Arch | undefined}
  */
-export function normalizeArch(machine) {
+function normalizeArch(machine) {
   const value = machine.trim().toLowerCase();
   if (value === "arm64" || value === "aarch64") return "arm64";
   if (value === "x86_64" || value === "amd64" || value === "x64") return "x64";

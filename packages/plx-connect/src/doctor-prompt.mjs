@@ -11,6 +11,9 @@ import path from "node:path";
 /** @typedef {import("./doctor.mjs").Facts} Facts */
 /** @typedef {import("./doctor.mjs").Checked} Checked */
 
+/** Each check state's mark, as the doctor prints it. */
+export const MARKS = { ok: "✓", warn: "!", fail: "✗", skip: "-" };
+
 export const PLAYBOOK_URL = "https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/packages/plx-connect/src/doctor-playbook.md";
 
 /**
@@ -54,7 +57,6 @@ const serviceFile = (kind) =>
 export function buildContext({ generatedAt, version, launchedAs, facts, results, sourceCache }) {
   const { dataDir, answers } = facts;
   const data = (/** @type {string[]} */ ...parts) => path.join(dataDir, ...parts);
-  const mark = { ok: "✓", warn: "!", fail: "✗", skip: "-" };
   const providers = answers?.providers?.providers ?? [];
   const service =
     facts.platform === "darwin"
@@ -98,7 +100,7 @@ ${
 
 ## Checks
 
-${results.map(({ name, result }) => `- ${mark[result.state]} ${name}: ${result.detail}`).join("\n")}
+${results.map(({ name, result }) => `- ${MARKS[result.state]} ${name}: ${result.detail}`).join("\n")}
 
 ## Paths
 

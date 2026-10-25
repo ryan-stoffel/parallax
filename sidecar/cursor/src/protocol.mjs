@@ -29,7 +29,7 @@ const TODO_STATUS = {
 };
 
 /** The longest tool output plxd is sent, in characters. */
-export const MAX_OUTPUT = 32_000;
+const MAX_OUTPUT = 32_000;
 
 /**
  * @param {unknown} toolCall

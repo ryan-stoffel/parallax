@@ -26,7 +26,7 @@ type Attachment =
   | { role: "stream"; stream: string };
 
 /** Why the relay refused a request, with its HTTP status. */
-export type Refusal = { status: number; error: string };
+type Refusal = { status: number; error: string };
 
 /** What plxd answers a webhook with. */
 export type HookReply = { status: number; body: unknown };
@@ -110,7 +110,7 @@ const PROOF_PAST = 5 * 60_000;
 const PROOF_FUTURE = 30_000;
 
 /** The header a `clock_skew` refusal carries the relay's time in, in milliseconds. */
-export const TIME_HEADER = "x-parallax-relay-time";
+const TIME_HEADER = "x-parallax-relay-time";
 
 /** The header plxd's proof comes in: `<milliseconds>.<signature>`. */
 export const PROOF_HEADER = "x-parallax-host-proof";
@@ -182,7 +182,7 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /** plxd's control socket. */
-  private host(): WebSocket | undefined {
+  private host() {
     return this.ctx.getWebSockets("host").find((ws) => ws.readyState === WebSocket.OPEN);
   }
 
@@ -271,9 +271,10 @@ export class HostRelay extends DurableObject<Env> {
 
   /**
    * plxd's control socket, opened with its proof: the time in milliseconds, signed with the host
-   * key. The relay takes it only within [`PROOF_WINDOW`] of its own clock and newer than the last
-   * one it took, so a proof works once. No socket opens without one, so strangers who know the
-   * host id, which is in every webhook URL, have nothing to hold open or push out.
+   * key. The relay takes it only within [`PROOF_PAST`] and [`PROOF_FUTURE`] of its own clock and
+   * newer than the last one it took, so a proof works once. No socket opens without one, so
+   * strangers who know the host id, which is in every webhook URL, have nothing to hold open or
+   * push out.
    */
   private async hostSocket(proof: string) {
     const owner = await this.owner();
@@ -404,9 +405,10 @@ export class HostRelay extends DurableObject<Env> {
       // Already closed.
     }
     const attachment = ws.deserializeAttachment() as Attachment | null;
-    if (attachment?.role === "client") await this.saveTraffic();
-    if (attachment?.role === "client")
+    if (attachment?.role === "client") {
+      await this.saveTraffic();
       this.ctx.getWebSockets(`h:${attachment.stream}`)[0]?.close(1000, "closed");
+    }
     if (attachment?.role === "stream")
       this.ctx.getWebSockets(`c:${attachment.stream}`)[0]?.close(1000, "closed");
   }

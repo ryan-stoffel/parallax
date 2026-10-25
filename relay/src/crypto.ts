@@ -7,7 +7,7 @@ export function base64url(bytes: ArrayBuffer | Uint8Array): string {
 }
 
 /** base64url, padded or not, as bytes. Throws on anything else. */
-export function decodeBase64url(text: string): Uint8Array<ArrayBuffer> {
+function decodeBase64url(text: string): Uint8Array<ArrayBuffer> {
   const plain = atob(text.replace(/-/g, "+").replace(/_/g, "/"));
   return Uint8Array.from(plain, (c) => c.charCodeAt(0));
 }

@@ -36,7 +36,7 @@
  *   `.sha256` asset is, or neither. {@link withSha256} makes it an {@link Installer}.
  */
 
-export const RELEASES_URL = "https://api.github.com/repos/ryan-stoffel/parallax/releases?per_page=30";
+const RELEASES_URL = "https://api.github.com/repos/ryan-stoffel/parallax/releases?per_page=30";
 
 const OS_NAMES = { macos: "macOS", linux: "Linux", windows: "Windows" };
 
