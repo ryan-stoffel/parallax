@@ -150,7 +150,7 @@ export function AgentsBar({
         id={id}
         popover="auto"
         onBeforeToggle={(e) => setOpen(e.newState === "open")}
-        className={`inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] overflow-y-auto rounded-2xl border border-border bg-surface p-1.5 text-foreground shadow-composer [position-try-fallbacks:flip-block] ${compact ? popoverBeside : "w-[anchor-size(width)] [position-area:top_span-right]"}`}
+        className={`inset-auto m-0 mb-2 max-h-[min(60vh,32rem)] overflow-y-auto rounded-xl border border-border bg-surface p-1.5 text-foreground shadow-composer [position-try-fallbacks:flip-block] ${compact ? popoverBeside : "w-[anchor-size(width)] [position-area:top_span-right]"}`}
       >
         {open && (
           <>

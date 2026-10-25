@@ -52,7 +52,7 @@ const monthName = new Intl.DateTimeFormat("en", { month: "short" });
 const monthDay = new Intl.DateTimeFormat("en", { month: "short", day: "numeric" });
 const hourName = () => new Intl.DateTimeFormat("en", { hour: "numeric", ...hourCycle() });
 
-const card = "rounded-2xl border border-border bg-surface";
+const card = "rounded-xl border border-border bg-surface";
 const heading = "text-body font-medium text-muted-foreground";
 const outlineButton =
   "flex items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
@@ -295,7 +295,7 @@ function ProfileCard({
           )}
         </div>
 
-        <h2 className="mt-3 truncate font-brand text-display font-semibold tracking-tight">
+        <h2 className="mt-3 truncate text-display font-semibold tracking-tight">
           {profile.name || profile.email}
         </h2>
         {profile.name && (
@@ -390,7 +390,7 @@ function Stat({
         <Icon />
       </span>
       <dt className="mt-3 text-meta text-muted-foreground">{label}</dt>
-      <dd className="font-brand text-display font-semibold tabular-nums">
+      <dd className="text-display font-semibold tabular-nums">
         {value.toLocaleString("en")}
         {unit && (
           <span className="ml-0.5 text-reading font-normal text-muted-foreground">{unit}</span>
@@ -648,7 +648,7 @@ function Tokens({
       </div>
       {total > 0 ? (
         <>
-          <p className="mt-1 font-brand text-display font-semibold tabular-nums">
+          <p className="mt-1 text-display font-semibold tabular-nums">
             {compact.format(total)}
             <span className="ml-1 text-reading font-normal text-muted-foreground">tokens</span>
           </p>

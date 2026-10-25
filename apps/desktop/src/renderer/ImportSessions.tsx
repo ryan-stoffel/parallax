@@ -674,13 +674,13 @@ export function ImportButton({ what }: { what: keyof typeof imports }) {
         ref={dialog}
         aria-labelledby={titleId}
         onClose={() => setOpen(false)}
-        className="m-auto h-[38rem] max-h-[90vh] w-[38rem] max-w-[94vw] rounded-2xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50 backdrop:backdrop-blur-sm"
+        className="m-auto h-[38rem] max-h-[90vh] w-[38rem] max-w-[94vw] rounded-xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50 backdrop:backdrop-blur-sm"
       >
         <div className="flex h-full flex-col px-6 pt-5 pb-5">
           <div className="mb-4 flex items-start gap-3">
             <AppLogos apps={apps} className="mt-0.5" />
             <div className="min-w-0 flex-1">
-              <h2 id={titleId} className="font-brand text-heading font-semibold tracking-tight">
+              <h2 id={titleId} className="text-heading font-semibold tracking-tight">
                 {title}
               </h2>
               <p className="mt-0.5 text-body text-muted-foreground">{line}</p>

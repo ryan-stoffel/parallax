@@ -255,7 +255,7 @@ export function NewProjectForm({
   );
 }
 
-const iconTile = "grid size-16 place-items-center rounded-2xl border border-border bg-background";
+const iconTile = "grid size-16 place-items-center rounded-xl border border-border bg-background";
 
 /** `project/create` on a host that isn't open. Its list has the Project once it's opened. */
 async function createOn(

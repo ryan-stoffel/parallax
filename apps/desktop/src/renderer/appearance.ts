@@ -63,9 +63,11 @@ export const defaults: Appearance = {
 export const uiSizes = [11, 12, 13, 14, 15, 16, 17, 18, 20];
 export const codeSizes = [10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24];
 
-/** Fonts that ship with Parallax (index.css), so every computer has them. */
+/**
+ * Fonts that ship with Parallax (index.css) beside the default, Inter, so every computer has them.
+ */
 export const bundledFonts = {
-  ui: ["Inter Variable", "Geist Variable"],
+  ui: ["Geist Variable"],
   code: ["Geist Mono Variable", "Fira Code Variable", "Source Code Pro Variable"],
 };
 

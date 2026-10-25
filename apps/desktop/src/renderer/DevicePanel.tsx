@@ -273,8 +273,8 @@ function Skeleton() {
   return (
     <div aria-busy className="grid grid-cols-[repeat(auto-fill,minmax(148px,1fr))] gap-3 p-4">
       {[0, 1, 2].map((i) => (
-        <div key={i} className="flex flex-col items-center gap-3 rounded-2xl p-3">
-          <div className="h-[180px] w-[86px] animate-pulse rounded-2xl bg-selected" />
+        <div key={i} className="flex flex-col items-center gap-3 rounded-xl p-3">
+          <div className="h-[180px] w-[86px] animate-pulse rounded-xl bg-selected" />
           <div className="h-2.5 w-16 animate-pulse rounded-full bg-selected" />
         </div>
       ))}
@@ -457,7 +457,7 @@ function Gallery({
                   busy={!!busy[`new:${p}`]}
                   onClick={() => onCreate(p)}
                 >
-                  <div className="grid h-[180px] w-[86px] place-items-center rounded-2xl border-[1.5px] border-dashed border-border text-muted-foreground transition-colors group-hover:border-faint-foreground group-hover:text-foreground">
+                  <div className="grid h-[180px] w-[86px] place-items-center rounded-xl border-[1.5px] border-dashed border-border text-muted-foreground transition-colors group-hover:border-faint-foreground group-hover:text-foreground">
                     <Plus aria-hidden className="size-5" />
                   </div>
                 </Card>
@@ -480,7 +480,7 @@ function Gallery({
 /** A phone outline, for a host with no devices. */
 function EmptyPhone() {
   return (
-    <div className="relative h-[132px] w-[64px] rounded-2xl border-[1.5px] border-border">
+    <div className="relative h-[132px] w-[64px] rounded-xl border-[1.5px] border-border">
       <div className="absolute top-2 left-1/2 h-1.5 w-5 -translate-x-1/2 rounded-full bg-border" />
     </div>
   );
@@ -581,7 +581,7 @@ function Card({
       title={title}
       onClick={onClick}
       disabled={busy}
-      className="group flex w-full flex-col items-center gap-3 rounded-2xl px-2 pt-4 pb-3 outline-none transition-colors hover:bg-hover focus-visible:bg-hover disabled:pointer-events-none"
+      className="group flex w-full flex-col items-center gap-3 rounded-xl px-2 pt-4 pb-3 outline-none transition-colors hover:bg-hover focus-visible:bg-hover disabled:pointer-events-none"
     >
       <div className="relative grid h-[196px] place-items-center [perspective:900px]">
         <div
@@ -609,7 +609,7 @@ function Card({
 function Thumbnail({ hostId, device }: { hostId: string; device: DeviceInfo }) {
   const chrome = useChrome(hostId, device);
   if (chrome === undefined) {
-    return <div className="h-[180px] w-[86px] animate-pulse rounded-2xl bg-selected" />;
+    return <div className="h-[180px] w-[86px] animate-pulse rounded-xl bg-selected" />;
   }
   const art =
     chrome ??

@@ -110,7 +110,7 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
         if (e.key === "ArrowRight" && slide < tour.length - 1) setSlide(slide + 1);
         if (e.key === "ArrowLeft" && slide > 0) setSlide(slide - 1);
       }}
-      className="m-auto h-[40rem] max-h-[92vh] w-[48rem] max-w-[94vw] overflow-hidden rounded-2xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50 backdrop:backdrop-blur-sm"
+      className="m-auto h-[40rem] max-h-[92vh] w-[48rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50 backdrop:backdrop-blur-sm"
     >
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between gap-4 px-5 pt-4">
@@ -272,14 +272,14 @@ function AccountStep({
   return (
     <div className="flex flex-col items-center pt-4 text-center">
       <Hero />
-      <h1 id={titleId} className="font-brand text-display font-semibold tracking-tight">
+      <h1 id={titleId} className="text-display font-semibold tracking-tight">
         Welcome to Parallax
       </h1>
       <p className="mt-2 max-w-md text-reading text-muted-foreground">
         Run Claude Code, Codex, Cursor, and more side by side, on every computer you use.
       </p>
       {profile ? (
-        <div className="onboard-rise mt-9 flex items-center gap-3 rounded-2xl border border-border bg-surface py-3 pr-5 pl-3 text-left">
+        <div className="onboard-rise mt-9 flex items-center gap-3 rounded-xl border border-border bg-surface py-3 pr-5 pl-3 text-left">
           <Avatar profile={profile} size={40} />
           <div className="min-w-0">
             <p className="truncate text-reading font-medium">
@@ -315,7 +315,7 @@ function AccountStep({
 function Heading({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
     <div className="mb-5">
-      <h1 id={id} className="font-brand text-display font-semibold tracking-tight">
+      <h1 id={id} className="text-display font-semibold tracking-tight">
         {title}
       </h1>
       <p className="mt-1 text-body text-muted-foreground">{children}</p>
@@ -669,7 +669,7 @@ function Delegate() {
       <Layer depth={24}>
         <div
           style={pos(200, 60)}
-          className="onboard-pop absolute -translate-1/2 rounded-2xl border border-border bg-surface px-4 py-2.5 shadow-composer"
+          className="onboard-pop absolute -translate-1/2 rounded-xl border border-border bg-surface px-4 py-2.5 shadow-composer"
         >
           <p className="flex items-center gap-2 text-body font-semibold">
             <ParallaxMark className="size-5" />
@@ -773,7 +773,7 @@ function Anywhere() {
         <Layer key={name} depth={depth}>
           <div
             style={{ left: `${18 + i * 32}%`, ...after(i * 150) }}
-            className={`onboard-pop absolute top-1/2 flex -translate-1/2 flex-col items-center rounded-2xl border border-border bg-surface shadow-composer ${i === 1 ? "px-6 py-4" : "px-4 py-3"}`}
+            className={`onboard-pop absolute top-1/2 flex -translate-1/2 flex-col items-center rounded-xl border border-border bg-surface shadow-composer ${i === 1 ? "px-6 py-4" : "px-4 py-3"}`}
           >
             <Icon aria-hidden className={`text-accent ${i === 1 ? "size-8" : "size-6"}`} />
             <p className="mt-2 text-meta font-medium whitespace-nowrap">{name}</p>
@@ -821,7 +821,7 @@ function Tour({
   const { title, body, Scene } = tour[slide]!;
   return (
     <div>
-      <div className="relative h-64 overflow-hidden rounded-2xl border border-border bg-sidebar">
+      <div className="relative h-64 overflow-hidden rounded-xl border border-border bg-sidebar">
         <Layer depth={-8} className="onboard-dots">
           <span className="onboard-glow absolute top-[-20%] left-[10%] size-48 rounded-full bg-mark-blue/25 blur-3xl" />
           <span className="onboard-glow absolute right-[5%] bottom-[-30%] size-48 rounded-full bg-mark-coral/25 blur-3xl [animation-delay:-3s]" />
@@ -831,7 +831,7 @@ function Tour({
         </div>
       </div>
       <div key={`text-${slide}`} className="onboard-rise mt-6">
-        <h1 id={titleId} className="font-brand text-display font-semibold tracking-tight">
+        <h1 id={titleId} className="text-display font-semibold tracking-tight">
           {title}
         </h1>
         <p className="mt-1.5 max-w-xl text-body text-muted-foreground">{body}</p>
@@ -879,7 +879,7 @@ function DoneStep({
 }) {
   const on = providers?.filter((p) => p.instance.enabled && ready(p)) ?? [];
   const card =
-    "onboard-rise flex items-center gap-3 rounded-2xl border border-border bg-surface p-4";
+    "onboard-rise flex items-center gap-3 rounded-xl border border-border bg-surface p-4";
   return (
     <div className="flex flex-col items-center pt-4 text-center">
       <svg aria-hidden viewBox="0 0 16 16" className="plan-check-draw mb-5 size-16 text-added">
@@ -894,7 +894,7 @@ function DoneStep({
           strokeLinejoin="round"
         />
       </svg>
-      <h1 id={titleId} className="font-brand text-display font-semibold tracking-tight">
+      <h1 id={titleId} className="text-display font-semibold tracking-tight">
         {profile?.firstName ? `You're all set, ${profile.firstName}` : "You're all set"}
       </h1>
       <p className="mt-2 max-w-md text-body text-muted-foreground">

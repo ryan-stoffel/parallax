@@ -272,7 +272,7 @@ export function QueueStrip({
       <div
         id={id}
         popover="auto"
-        className={`inset-auto m-0 mb-2 overflow-hidden rounded-2xl border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`}
+        className={`inset-auto m-0 mb-2 overflow-hidden rounded-xl border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block] ${popoverBeside}`}
       >
         {list}
       </div>

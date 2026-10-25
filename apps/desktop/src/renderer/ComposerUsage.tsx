@@ -506,7 +506,7 @@ export function UsageRing({ data }: { data: ComposerUsageData }) {
             />
           )}
         </svg>
-        <span aria-hidden>{Math.round(summary.used)}%</span>
+        <span aria-hidden>{Math.floor(summary.used)}%</span>
       </button>
       <div
         id={card}

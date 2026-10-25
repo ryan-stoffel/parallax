@@ -191,14 +191,14 @@
 :root.dark,
 .scheme-dark {
   color-scheme: dark;
-  /* Neutral grays with no tint, as T3 Code's and Claude's dark modes have: the sidebar a step
-     darker than the thread, and raised surfaces (the composer, cards, menus) a step lighter. */
-  --background: #161616;
-  --sidebar: #101010;
-  --surface: #1f1f1f;
-  --foreground: #ececec;
+  /* Near black with no tint, as T3 Code's dark mode is: a black sidebar, the thread a step above
+     it, and raised surfaces (the composer, cards, menus) a step above that. */
+  --background: #0a0a0a;
+  --sidebar: #000000;
+  --surface: #141414;
+  --foreground: #ededed;
   --muted-foreground: #a3a3a3;
-  --faint-foreground: #8f8f8f;
+  --faint-foreground: #8a8a8a;
   --border: rgb(255 255 255 / 8%);
   --hover: rgb(255 255 255 / 5%);
   --selected: rgb(255 255 255 / 8%);
@@ -207,12 +207,12 @@
   /* The accent, darkened a little: mixed toward a black with no chroma or hue, so it keeps the
      accent's, and dark enough for white text. */
   --send: color-mix(in oklch, var(--accent) 84%, oklch(0 none none));
-  --primary: #ececec;
-  --primary-foreground: #161616;
+  --primary: #ededed;
+  --primary-foreground: #0a0a0a;
   --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
-  --code: #101010;
+  --code: #111111;
   --syntax-keyword: #7b9bff;
   --syntax-string: #ff8a65;
   --syntax-number: #c4b5fd;
@@ -444,18 +444,21 @@
   --text-heading: 18px;
   --text-display: 24px;
   --text-hero: 40px;
-  /* The radius scale: marks, controls, rows and menus, panels and dialogs, the composer. */
+  /* The radius scale: marks, controls, rows and menus, and surfaces (panels, dialogs, the
+     composer). */
   --radius-*: initial;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
-  --radius-2xl: 16px;
 }
 
 @theme inline {
-  /* A font the user picked in Appearance comes first. */
-  --font-sans: var(--ui-font, -apple-system), BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  /* A font the user picked in Appearance comes first, else Inter, the same on every OS
+     (0085). */
+  --font-sans:
+    var(--ui-font, "Inter Variable"), -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
   --font-mono:
     var(--code-font, "JetBrains Mono Nerd Font"), "JetBrainsMono Nerd Font", ui-monospace,
     SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
@@ -715,11 +718,10 @@ body {
 .markdown > :is(h1, h2, h3, h4):first-child {
   margin-top: 0;
 }
-.markdown h1 {
-  font-size: 1.35em;
-}
-.markdown h2 {
-  font-size: 1.15em;
+/* Headings on the type scale (0085): h1 and h2 at --text-heading, h3 and h4 at the text's own
+   size, set apart by weight. */
+.markdown :is(h1, h2) {
+  font-size: 18px;
 }
 .markdown :is(h3, h4) {
   font-size: 1em;
@@ -783,7 +785,8 @@ body {
   background: var(--code);
   padding: 0.1em 0.35em;
   font-family: var(--font-mono);
-  font-size: 0.86em;
+  /* --text-body, wherever it sits. */
+  font-size: 13px;
 }
 /* A table scrolls on its own, in a rounded box, with its header on a fill. */
 .markdown table {
