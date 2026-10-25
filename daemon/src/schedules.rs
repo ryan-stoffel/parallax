@@ -6,8 +6,8 @@
 //! A task is a row of `scheduled_tasks`: its next run, and the [`ScheduledTask`] with its
 //! webhook token as JSON. A webhook's signing secret is in the host's keystore under a key the
 //! row names (PLX-648), given in the save or as a `secretRef` from `request_secret`; [`run`] first
-//! moves any a plxd before that kept in the row. [`run`] keeps one timer for the earliest next run, re-armed
-//! whenever a task changes, and none while no task has one.
+//! moves any a plxd before that kept in the row. [`run`] keeps one timer for the earliest next
+//! run, re-armed whenever a task changes, and none while no task has one.
 //!
 //! A fire takes the task's orchestrator lane and commits in one writer job: a receipt for
 //! `scheduled-task:<fire key>`, the task's next run and run count, and a `thread.wake` effect
@@ -45,6 +45,7 @@ use zeroize::Zeroizing;
 
 use crate::server::Daemon;
 use crate::store::{Tx, store_error};
+use crate::threads::store;
 
 /// The shortest interval, as T3's.
 const MIN_INTERVAL_MS: u64 = 60_000;
@@ -166,14 +167,20 @@ pub(crate) enum To {
     },
 }
 
+/// Runs `job` on the store's read connection.
+async fn reader<T: Send + 'static>(
+    daemon: &Daemon,
+    job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
+) -> Result<T, ErrorObject> {
+    daemon.reader.run(&CancellationToken::new(), job).await
+}
+
 /// `schedule/list`.
 pub(crate) async fn list(daemon: &Daemon) -> Result<ScheduleListResult, ErrorObject> {
-    let rows = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            db.scheduled_tasks().map_err(|e| store_error(&e))
-        })
-        .await?;
+    let rows = reader(daemon, |db| {
+        db.scheduled_tasks().map_err(|e| store_error(&e))
+    })
+    .await?;
     let origin = origin(daemon).await;
     let mut tasks = Vec::with_capacity(rows.len());
     for (id, payload) in rows {
@@ -193,13 +200,11 @@ const KEYSTORE: bool = cfg!(any(target_os = "macos", target_os = "linux"));
 /// SHA-256, in base64url. The relay answers any other URL 404, without counting or holding it
 /// (PLX-652, 0068).
 pub(crate) async fn hook_keys(daemon: &Daemon) -> Vec<String> {
-    let rows = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            db.scheduled_tasks().map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap_or_default();
+    let rows = reader(daemon, |db| {
+        db.scheduled_tasks().map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap_or_default();
     rows.into_iter()
         .filter_map(|(_, payload)| {
             let stored = serde_json::from_str::<Stored>(&payload).ok()?;
@@ -227,47 +232,35 @@ pub(crate) async fn save(
     let replacing = params.id.is_some();
     let _lane = daemon.orchestrator.lane(id).await;
     let checked = params.clone();
-    let legacy = daemon
-        .reader
-        .run(&CancellationToken::new(), move |db| {
-            let existing = read(db, id)?;
-            if replacing && existing.is_none() {
-                return Err(not_found(id));
-            }
-            check_targets(db, &checked)?;
-            let legacy = existing
-                .as_ref()
-                .is_some_and(|stored| stored.secret.is_some());
-            build(id, checked, existing, new_key, Timestamp::now()).map(|_| legacy)
-        })
-        .await?;
+    let legacy = reader(daemon, move |db| {
+        let existing = existing(db, id, replacing, &checked)?;
+        let legacy = existing
+            .as_ref()
+            .is_some_and(|stored| stored.secret.is_some());
+        build(id, checked, existing, new_key, Timestamp::now()).map(|_| legacy)
+    })
+    .await?;
     let staging = daemon.schedules.staging.lock().await;
     if let (Some(key), Some(secret)) = (new_key, new_secret(daemon, &mut params).await?) {
         stage_secret(daemon, key, secret).await?;
     }
-    let saved = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let existing = read(db, id)?;
-            if replacing && existing.is_none() {
-                return Err(not_found(id));
-            }
-            check_targets(db, &params)?;
-            let old_key = existing.as_ref().and_then(|stored| stored.secret_key);
-            let stored = build(id, params, existing, new_key, Timestamp::now())?;
-            if legacy {
-                put_wiping(db, &stored)?;
-            } else {
-                put(db, &stored)?;
-            }
-            let old_key = old_key.filter(|old| stored.secret_key != Some(*old));
-            change_unused(db, |keys| {
-                keys.retain(|key| Some(*key) != new_key);
-                keys.extend(old_key);
-            })?;
-            Ok((stored, old_key))
-        })
-        .await;
+    let saved = store(daemon, move |db| {
+        let existing = existing(db, id, replacing, &params)?;
+        let old_key = existing.as_ref().and_then(|stored| stored.secret_key);
+        let stored = build(id, params, existing, new_key, Timestamp::now())?;
+        if legacy {
+            put_wiping(db, &stored)?;
+        } else {
+            put(db, &stored)?;
+        }
+        let old_key = old_key.filter(|old| stored.secret_key != Some(*old));
+        change_unused(db, |keys| {
+            keys.retain(|key| Some(*key) != new_key);
+            keys.extend(old_key);
+        })?;
+        Ok((stored, old_key))
+    })
+    .await;
     drop(staging);
     // Whichever key the row doesn't name goes: the new one if the row failed, else the old.
     let stored = match saved {
@@ -301,12 +294,7 @@ async fn stage_secret(
     key: AccountId,
     secret: Zeroizing<String>,
 ) -> Result<(), ErrorObject> {
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            change_unused(db, |keys| keys.push(key))
-        })
-        .await?;
+    store(daemon, move |db| change_unused(db, |keys| keys.push(key))).await?;
     let keys = Arc::clone(&daemon.keys);
     tokio::task::spawn_blocking(move || keys.set(key, &secret))
         .await
@@ -321,12 +309,10 @@ async fn forget_secret(daemon: &Daemon, key: AccountId) {
         warn!(%key, "could not remove an unused webhook secret from the keystore");
         return;
     }
-    let dropped = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            change_unused(db, |keys| keys.retain(|recorded| *recorded != key))
-        })
-        .await;
+    let dropped = store(daemon, move |db| {
+        change_unused(db, |keys| keys.retain(|recorded| *recorded != key))
+    })
+    .await;
     if let Err(error) = dropped {
         warn!(%key, error = %error.message, "could not drop a removed webhook secret's record");
     }
@@ -336,20 +322,16 @@ async fn forget_secret(daemon: &Daemon, key: AccountId) {
 /// before a crash, or one [`forget_secret`] couldn't remove. Runs at startup and after each save.
 async fn forget_unused(daemon: &Daemon) {
     let _staging = daemon.schedules.staging.lock().await;
-    let recorded = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            let used: Vec<AccountId> = db
-                .scheduled_tasks()
-                .map_err(|e| store_error(&e))?
-                .into_iter()
-                .filter_map(|(_, payload)| {
-                    serde_json::from_str::<Stored>(&payload).ok()?.secret_key
-                })
-                .collect();
-            Ok((unused(db)?, used))
-        })
-        .await;
+    let recorded = reader(daemon, |db| {
+        let used: Vec<AccountId> = db
+            .scheduled_tasks()
+            .map_err(|e| store_error(&e))?
+            .into_iter()
+            .filter_map(|(_, payload)| serde_json::from_str::<Stored>(&payload).ok()?.secret_key)
+            .collect();
+        Ok((unused(db)?, used))
+    })
+    .await;
     let Ok((recorded, used)) = recorded else {
         return;
     };
@@ -360,12 +342,10 @@ async fn forget_unused(daemon: &Daemon) {
         }
     }
     if !dropped.is_empty() {
-        let _ = daemon
-            .store
-            .run(&CancellationToken::new(), move |db| {
-                change_unused(db, |keys| keys.retain(|key| !dropped.contains(key)))
-            })
-            .await;
+        let _ = store(daemon, move |db| {
+            change_unused(db, |keys| keys.retain(|key| !dropped.contains(key)))
+        })
+        .await;
     }
 }
 
@@ -405,15 +385,13 @@ pub(crate) async fn delete(
 ) -> Result<ScheduleDeleteResult, ErrorObject> {
     let id = task_id(&params.id)?;
     let _lane = daemon.orchestrator.lane(id).await;
-    let (deleted, key) = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let key = read(db, id)?.and_then(|stored| stored.secret_key);
-            let deleted = db.delete_scheduled_task(id).map_err(|e| store_error(&e))?;
-            change_unused(db, |keys| keys.extend(key))?;
-            Ok((deleted, key))
-        })
-        .await?;
+    let (deleted, key) = store(daemon, move |db| {
+        let key = read(db, id)?.and_then(|stored| stored.secret_key);
+        let deleted = db.delete_scheduled_task(id).map_err(|e| store_error(&e))?;
+        change_unused(db, |keys| keys.extend(key))?;
+        Ok((deleted, key))
+    })
+    .await?;
     if let Some(key) = key {
         forget_secret(daemon, key).await;
     }
@@ -439,16 +417,14 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     move_old_secrets(&daemon).await;
     forget_unused(&daemon).await;
     loop {
-        let next = daemon
-            .reader
-            .run(&CancellationToken::new(), |db| {
-                db.next_scheduled_at().map_err(|e| store_error(&e))
-            })
-            .await
-            .unwrap_or_else(|error| {
-                warn!(error = %error.message, "could not read when the next scheduled task is due");
-                None
-            });
+        let next = reader(&daemon, |db| {
+            db.next_scheduled_at().map_err(|e| store_error(&e))
+        })
+        .await
+        .unwrap_or_else(|error| {
+            warn!(error = %error.message, "could not read when the next scheduled task is due");
+            None
+        });
         let wait = next.map(|at| {
             Duration::try_from(at.duration_since(Timestamp::now()))
                 .unwrap_or_default()
@@ -467,13 +443,11 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
 /// Fires every task due now, one at a time. A task that fails to fire, such as one whose row
 /// can't be read, is tried again [`MAX_SLEEP`] later rather than at once, so the timer never spins.
 async fn fire_due(daemon: &Daemon) {
-    let due = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            db.due_scheduled_tasks(Timestamp::now())
-                .map_err(|e| store_error(&e))
-        })
-        .await;
+    let due = reader(daemon, |db| {
+        db.due_scheduled_tasks(Timestamp::now())
+            .map_err(|e| store_error(&e))
+    })
+    .await;
     let due = match due {
         Ok(due) => due,
         Err(error) => return warn!(error = %error.message, "could not read the due tasks"),
@@ -482,13 +456,11 @@ async fn fire_due(daemon: &Daemon) {
         if let Err(error) = fire(daemon, id, Trigger::Scheduled).await {
             warn!(%id, error = %error.message, "a scheduled task could not fire");
             let retry = Timestamp::now() + SignedDuration::try_from(MAX_SLEEP).unwrap_or_default();
-            let postponed = daemon
-                .store
-                .run(&CancellationToken::new(), move |db| {
-                    db.postpone_scheduled_task(id, retry)
-                        .map_err(|e| store_error(&e))
-                })
-                .await;
+            let postponed = store(daemon, move |db| {
+                db.postpone_scheduled_task(id, retry)
+                    .map_err(|e| store_error(&e))
+            })
+            .await;
             if let Err(error) = postponed {
                 warn!(%id, error = %error.message, "could not postpone a scheduled task");
             }
@@ -499,12 +471,10 @@ async fn fire_due(daemon: &Daemon) {
 /// Fires task `id` in its lane: see the module documentation.
 async fn fire(daemon: &Daemon, id: Uuid, trigger: Trigger) -> Result<Fired, ErrorObject> {
     let _lane = daemon.orchestrator.lane(id).await;
-    let fired = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            fire_job(db, id, trigger, Timestamp::now())
-        })
-        .await?;
+    let fired = store(daemon, move |db| {
+        fire_job(db, id, trigger, Timestamp::now())
+    })
+    .await?;
     if matches!(fired, Fired::Sent(_)) {
         daemon.orchestrator.notify();
     }
@@ -610,12 +580,10 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
     let sent = match to {
         To::Thread { run_id, turn_id } => send(daemon, run_id, turn_id, text).await,
         To::Coordinator { project, turn_id } => {
-            let coordinator = daemon
-                .store
-                .run(&CancellationToken::new(), move |db| {
-                    crate::agents::coordinator::coordinator_of(db, project.into())
-                })
-                .await;
+            let coordinator = store(daemon, move |db| {
+                crate::agents::coordinator::coordinator_of(db, project.into())
+            })
+            .await;
             match coordinator {
                 Ok(Some(run_id)) => send(daemon, run_id, turn_id, text).await,
                 Ok(None) => Err(ErrorObject::invalid_params(format!(
@@ -668,22 +636,20 @@ pub(crate) async fn deliver(daemon: &Arc<Daemon>, wake: Wake) {
         return;
     };
     let _lane = daemon.orchestrator.lane(task).await;
-    let recorded = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let Some(mut stored) = read(db, task)? else {
-                return Ok(());
+    let recorded = store(daemon, move |db| {
+        let Some(mut stored) = read(db, task)? else {
+            return Ok(());
+        };
+        if stored.task.last_run_status == ScheduleRunStatus::Running {
+            (stored.task.last_run_status, stored.task.last_run_error) = match sent {
+                Ok(()) => (ScheduleRunStatus::Succeeded, None),
+                Err(error) => (ScheduleRunStatus::Failed, Some(error.message)),
             };
-            if stored.task.last_run_status == ScheduleRunStatus::Running {
-                (stored.task.last_run_status, stored.task.last_run_error) = match sent {
-                    Ok(()) => (ScheduleRunStatus::Succeeded, None),
-                    Err(error) => (ScheduleRunStatus::Failed, Some(error.message)),
-                };
-                put(db, &stored)?;
-            }
-            Ok(())
-        })
-        .await;
+            put(db, &stored)?;
+        }
+        Ok(())
+    })
+    .await;
     if let Err(error) = recorded {
         warn!(%task, error = %error.message, "could not record a scheduled task's run");
     }
@@ -742,10 +708,7 @@ pub(crate) async fn hook(
         return not_found;
     };
     let reading = daemon.schedules.keys.read().await;
-    let stored = daemon
-        .reader
-        .run(&CancellationToken::new(), move |db| read(db, id))
-        .await;
+    let stored = reader(daemon, move |db| read(db, id)).await;
     let stored = match stored {
         Ok(Some(stored)) => stored,
         Ok(None) => return not_found,
@@ -769,10 +732,11 @@ pub(crate) async fn hook(
         return (429, json!({ "error": "rate_limited" }));
     }
     if let Some(signature) = signature {
-        let Some(key) = stored.secret_key else {
-            return (503, json!({ "error": "keychain_unavailable" }));
+        let secret = match stored.secret_key {
+            Some(key) => keystore_secret(daemon, key).await,
+            None => None,
         };
-        let Some(secret) = keystore_secret(daemon, key).await else {
+        let Some(secret) = secret else {
             return (503, json!({ "error": "keychain_unavailable" }));
         };
         if secret.is_empty() || !webhook::verify(signature, &secret, headers, body) {
@@ -844,7 +808,6 @@ fn time_of_day_parts(text: &str) -> Option<(i8, i8)> {
     (hour < 24 && minute < 60).then_some((hour, minute))
 }
 
-/// Refuses a save whose fields are out of range.
 /// Refuses a save that can't be valid, and on a host without a keystore, one that sets a
 /// signature's secret, as `request_secret` is refused there.
 fn check(params: &ScheduleSaveParams, keystore: bool) -> Result<(), ErrorObject> {
@@ -891,6 +854,22 @@ fn check(params: &ScheduleSaveParams, keystore: bool) -> Result<(), ErrorObject>
         Schedule::Unknown => invalid("schedule's type must be interval, fixed_time, or webhook"),
         _ => Ok(()),
     }
+}
+
+/// The task `params` saves over, if any, once its targets are checked. Fails when it
+/// is `replacing` a task that doesn't exist.
+fn existing(
+    db: &Tx,
+    id: Uuid,
+    replacing: bool,
+    params: &ScheduleSaveParams,
+) -> Result<Option<Stored>, ErrorObject> {
+    let existing = read(db, id)?;
+    if replacing && existing.is_none() {
+        return Err(not_found(id));
+    }
+    check_targets(db, params)?;
+    Ok(existing)
 }
 
 /// Refuses a save whose thread, Project, or repo entry doesn't exist.
@@ -1017,34 +996,28 @@ fn new_secret_given(params: &ScheduleSaveParams) -> bool {
 /// wipes them from the store: the update runs with `secure_delete` on, and [`wipe_store`] then
 /// rebuilds the database and empties its WAL. A store migration 43 marked, one that kept secrets
 /// in rows, is wiped even with nothing to move, since a task deleted before then left its secret
-/// in a freed page. On a host
-/// with no keystore the secrets stay put, and those tasks' signed requests are refused.
+/// in a freed page. On a host with no keystore the secrets stay put, and those tasks' signed
+/// requests are refused.
 async fn move_old_secrets(daemon: &Daemon) {
-    let (old, pending) = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            let old = db
-                .scheduled_tasks()
-                .map_err(|e| store_error(&e))?
-                .into_iter()
-                .filter_map(|(id, payload)| {
-                    let stored: Stored = serde_json::from_str(&payload).ok()?;
-                    stored.secret.map(|_| id)
-                })
-                .collect::<Vec<_>>();
-            let pending = db.wipe_freed_pages().map_err(|e| store_error(&e))?;
-            Ok((old, pending))
-        })
-        .await
-        .unwrap_or_default();
+    let (old, pending) = reader(daemon, |db| {
+        let old = db
+            .scheduled_tasks()
+            .map_err(|e| store_error(&e))?
+            .into_iter()
+            .filter_map(|(id, payload)| {
+                let stored: Stored = serde_json::from_str(&payload).ok()?;
+                stored.secret.map(|_| id)
+            })
+            .collect::<Vec<_>>();
+        let pending = db.wipe_freed_pages().map_err(|e| store_error(&e))?;
+        Ok((old, pending))
+    })
+    .await
+    .unwrap_or_default();
     let mut moved = false;
     for id in old {
         let _lane = daemon.orchestrator.lane(id).await;
-        let Ok(Some(mut stored)) = daemon
-            .reader
-            .run(&CancellationToken::new(), move |db| read(db, id))
-            .await
-        else {
+        let Ok(Some(mut stored)) = reader(daemon, move |db| read(db, id)).await else {
             continue;
         };
         let Some(secret) = stored.secret.take() else {
@@ -1061,13 +1034,11 @@ async fn move_old_secrets(daemon: &Daemon) {
             continue;
         }
         stored.secret_key = Some(key);
-        let saved = daemon
-            .store
-            .run(&CancellationToken::new(), move |db| {
-                put_wiping(db, &stored)?;
-                change_unused(db, |keys| keys.retain(|staged| *staged != key))
-            })
-            .await;
+        let saved = store(daemon, move |db| {
+            put_wiping(db, &stored)?;
+            change_unused(db, |keys| keys.retain(|staged| *staged != key))
+        })
+        .await;
         drop(staging);
         if let Err(error) = saved {
             forget_secret(daemon, key).await;
@@ -1078,12 +1049,10 @@ async fn move_old_secrets(daemon: &Daemon) {
     }
     let wiped = (moved || pending) && wipe_store(daemon).await;
     if wiped && pending && scrub_backup(daemon).await {
-        let cleared = daemon
-            .store
-            .run(&CancellationToken::new(), |db| {
-                db.set_wipe_freed_pages(false).map_err(|e| store_error(&e))
-            })
-            .await;
+        let cleared = store(daemon, |db| {
+            db.set_wipe_freed_pages(false).map_err(|e| store_error(&e))
+        })
+        .await;
         if let Err(error) = cleared {
             warn!(error = %error.message, "could not record that the store was wiped");
         }

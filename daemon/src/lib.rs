@@ -148,13 +148,7 @@ pub fn executable() -> std::io::Result<std::path::PathBuf> {
 /// `bytes`' SHA-256, in lowercase hex.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
-    use std::fmt::Write as _;
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+    data_encoding::HEXLOWER.encode(&Sha256::digest(bytes))
 }
 
 /// The version in [`VERSION_FILE`] beside `exe`, if the file is there and not blank.

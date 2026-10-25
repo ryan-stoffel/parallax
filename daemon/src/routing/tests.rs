@@ -194,14 +194,41 @@ fn subscription_choice() -> AccountChoice {
     }
 }
 
+/// `resolve` for a `WorkspaceWrite` run of `role`, on a registry of one backend that never runs.
+fn resolve_idle(
+    accounts: &FixedAccounts,
+    defaults: &Defaults,
+    role: Role,
+    requested: Option<AccountChoice>,
+) -> Result<super::Resolved, RoutingError> {
+    let registry = registry(Arc::new(ScriptedBackend::new(Vec::new())));
+    resolve(
+        &registry,
+        accounts,
+        defaults,
+        role,
+        requested,
+        ToolPolicy::WorkspaceWrite,
+    )
+}
+
+/// A backend whose one attempt completes.
+fn completing() -> Arc<ScriptedBackend> {
+    Arc::new(ScriptedBackend::new(vec![vec![finished(
+        Outcome::Completed { result: None },
+    )]]))
+}
+
+fn no_keys() -> Arc<dyn KeyStore> {
+    Arc::new(MemoryKeyStore::new())
+}
+
 // ---------------------------------------------------------------------------------------------
 // resolve()
 // ---------------------------------------------------------------------------------------------
 
 #[test]
 fn an_explicit_choice_is_used_even_when_the_roles_default_differs() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(backend);
     let key_id = AccountId::generate();
     let mut accounts = FixedAccounts::default();
     accounts.providers.insert(key_id, Provider::Anthropic);
@@ -212,13 +239,11 @@ fn an_explicit_choice_is_used_even_when_the_roles_default_differs() {
         worker: Some(subscription_choice()),
     };
 
-    let resolved = resolve(
-        &registry,
+    let resolved = resolve_idle(
         &accounts,
         &defaults,
         Role::Worker,
         Some(AccountChoice::Key { id: key_id }),
-        ToolPolicy::WorkspaceWrite,
     )
     .unwrap();
     assert_eq!(resolved.account_id(), key_id.to_string());
@@ -226,40 +251,22 @@ fn an_explicit_choice_is_used_even_when_the_roles_default_differs() {
 
 #[test]
 fn the_roles_default_is_used_when_nothing_is_requested() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(backend);
-    let accounts = FixedAccounts::default();
     let defaults = Defaults {
         coordinator: None,
         worker: Some(subscription_choice()),
     };
 
-    let resolved = resolve(
-        &registry,
-        &accounts,
-        &defaults,
-        Role::Worker,
-        None,
-        ToolPolicy::WorkspaceWrite,
-    )
-    .unwrap();
+    let resolved = resolve_idle(&FixedAccounts::default(), &defaults, Role::Worker, None).unwrap();
     assert_eq!(resolved.account_id(), "claude");
 }
 
 #[test]
 fn the_coordinator_always_gets_no_write_however_it_is_requested() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(backend);
-    let accounts = FixedAccounts::default();
-    let defaults = Defaults::default();
-
-    let resolved = resolve(
-        &registry,
-        &accounts,
-        &defaults,
+    let resolved = resolve_idle(
+        &FixedAccounts::default(),
+        &Defaults::default(),
         Role::Coordinator,
         Some(subscription_choice()),
-        ToolPolicy::WorkspaceWrite,
     )
     .unwrap();
     assert_eq!(resolved.policy(), ToolPolicy::NoWrite);
@@ -267,18 +274,11 @@ fn the_coordinator_always_gets_no_write_however_it_is_requested() {
 
 #[test]
 fn a_worker_keeps_the_policy_it_was_given() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(backend);
-    let accounts = FixedAccounts::default();
-    let defaults = Defaults::default();
-
-    let resolved = resolve(
-        &registry,
-        &accounts,
-        &defaults,
+    let resolved = resolve_idle(
+        &FixedAccounts::default(),
+        &Defaults::default(),
         Role::Worker,
         Some(subscription_choice()),
-        ToolPolicy::WorkspaceWrite,
     )
     .unwrap();
     assert_eq!(resolved.policy(), ToolPolicy::WorkspaceWrite);
@@ -286,18 +286,11 @@ fn a_worker_keeps_the_policy_it_was_given() {
 
 #[test]
 fn no_default_and_nothing_requested_is_an_error() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(backend);
-    let accounts = FixedAccounts::default();
-    let defaults = Defaults::default();
-
-    let error = resolve(
-        &registry,
-        &accounts,
-        &defaults,
+    let error = resolve_idle(
+        &FixedAccounts::default(),
+        &Defaults::default(),
         Role::Worker,
         None,
-        ToolPolicy::WorkspaceWrite,
     )
     .unwrap_err();
     assert_eq!(error, RoutingError::NoAccount { role: Role::Worker });
@@ -305,20 +298,13 @@ fn no_default_and_nothing_requested_is_an_error() {
 
 #[test]
 fn an_unregistered_backend_name_is_an_error() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(backend);
-    let accounts = FixedAccounts::default();
-    let defaults = Defaults::default();
-
-    let error = resolve(
-        &registry,
-        &accounts,
-        &defaults,
+    let error = resolve_idle(
+        &FixedAccounts::default(),
+        &Defaults::default(),
         Role::Worker,
         Some(AccountChoice::Subscription {
             backend: "codex".into(),
         }),
-        ToolPolicy::WorkspaceWrite,
     )
     .unwrap_err();
     assert_eq!(
@@ -331,19 +317,13 @@ fn an_unregistered_backend_name_is_an_error() {
 
 #[test]
 fn an_unknown_key_account_id_is_an_error() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(backend);
-    let accounts = FixedAccounts::default();
-    let defaults = Defaults::default();
     let id = AccountId::generate();
 
-    let error = resolve(
-        &registry,
-        &accounts,
-        &defaults,
+    let error = resolve_idle(
+        &FixedAccounts::default(),
+        &Defaults::default(),
         Role::Worker,
         Some(AccountChoice::Key { id }),
-        ToolPolicy::WorkspaceWrite,
     )
     .unwrap_err();
     assert_eq!(error, RoutingError::UnknownKeyAccount { id });
@@ -351,20 +331,15 @@ fn an_unknown_key_account_id_is_an_error() {
 
 #[test]
 fn a_key_accounts_provider_with_no_backend_is_an_error() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(backend);
     let mut accounts = FixedAccounts::default();
     let id = AccountId::generate();
     accounts.providers.insert(id, Provider::Openai);
-    let defaults = Defaults::default();
 
-    let error = resolve(
-        &registry,
+    let error = resolve_idle(
         &accounts,
-        &defaults,
+        &Defaults::default(),
         Role::Worker,
         Some(AccountChoice::Key { id }),
-        ToolPolicy::WorkspaceWrite,
     )
     .unwrap_err();
     assert_eq!(
@@ -411,17 +386,20 @@ fn resolved_for_role(backend: Arc<dyn Backend>, role: Role, policy: ToolPolicy) 
 
 #[tokio::test]
 async fn start_sends_no_write_to_the_backend_for_a_coordinator() {
-    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
-        Outcome::Completed { result: None },
-    )]]));
+    let backend = completing();
     let resolved = resolved_for_role(
         backend.clone(),
         Role::Coordinator,
         ToolPolicy::WorkspaceWrite,
     );
-    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
 
-    let mut started = start(keys, &FixedAccounts::default(), resolved, request(&root())).unwrap();
+    let mut started = start(
+        no_keys(),
+        &FixedAccounts::default(),
+        resolved,
+        request(&root()),
+    )
+    .unwrap();
     rest(&mut started.events).await;
 
     let sent = &backend.calls()[0];
@@ -455,18 +433,15 @@ fn coordinator_tools() -> ThreadTools {
 /// and its only `--settings` keeps its task list its own (PLX-251).
 #[tokio::test]
 async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() {
-    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
-        Outcome::Completed { result: None },
-    )]]));
+    let backend = completing();
     let resolved = resolved_for_role(backend.clone(), Role::Coordinator, ToolPolicy::NoWrite);
-    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
     let tools = coordinator_tools();
     let request = RunRequest {
         coordinator_tools: Some(tools.clone()),
         ..request(&root())
     };
 
-    let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
+    let mut started = start(no_keys(), &FixedAccounts::default(), resolved, request).unwrap();
     rest(&mut started.events).await;
 
     let sent = &backend.calls()[0];
@@ -504,17 +479,14 @@ async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() 
 
 #[tokio::test]
 async fn a_worker_never_gets_the_coordinator_tools() {
-    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
-        Outcome::Completed { result: None },
-    )]]));
+    let backend = completing();
     let resolved = resolved_for_role(backend.clone(), Role::Worker, ToolPolicy::WorkspaceWrite);
-    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
     let request = RunRequest {
         coordinator_tools: Some(coordinator_tools()),
         ..request(&root())
     };
 
-    let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
+    let mut started = start(no_keys(), &FixedAccounts::default(), resolved, request).unwrap();
     rest(&mut started.events).await;
 
     assert_eq!(backend.calls()[0].coordinator_tools, None);
@@ -524,11 +496,8 @@ async fn a_worker_never_gets_the_coordinator_tools() {
 #[tokio::test]
 async fn only_a_thread_gets_the_thread_tools() {
     for thread in [true, false] {
-        let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
-            Outcome::Completed { result: None },
-        )]]));
+        let backend = completing();
         let resolved = resolved_for_role(backend.clone(), Role::Worker, ToolPolicy::WorkspaceWrite);
-        let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
         let tools = ThreadTools {
             program: PathBuf::from("/usr/local/bin/plxd"),
             data_dir: PathBuf::from("/data"),
@@ -539,7 +508,7 @@ async fn only_a_thread_gets_the_thread_tools() {
             thread_tools: Some(tools.clone()),
             ..request(&root())
         };
-        let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
+        let mut started = start(no_keys(), &FixedAccounts::default(), resolved, request).unwrap();
         rest(&mut started.events).await;
         let kept = backend.calls()[0].thread_tools.clone();
         assert_eq!(kept, thread.then_some(tools), "thread: {thread}");
@@ -561,15 +530,12 @@ fn claude_refuses_the_coordinator_tools_on_a_worker() {
 #[cfg(unix)]
 #[tokio::test]
 async fn start_passes_a_worker_its_sandbox() {
-    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
-        Outcome::Completed { result: None },
-    )]]));
+    let backend = completing();
     let resolved = resolved_for_role(backend.clone(), Role::Worker, ToolPolicy::WorkspaceWrite);
-    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
     let request = request(&root());
     let sandbox = request.sandbox.clone();
 
-    let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
+    let mut started = start(no_keys(), &FixedAccounts::default(), resolved, request).unwrap();
     rest(&mut started.events).await;
 
     let sent = &backend.calls()[0];
@@ -651,9 +617,8 @@ async fn without_a_configured_key_account_there_is_no_fallback() {
     ))]]));
     let resolved = resolved_subscription(backend.clone());
     let accounts = FixedAccounts::default(); // no fallback configured for Anthropic
-    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
 
-    let mut started = start(keys, &accounts, resolved, request(&root())).unwrap();
+    let mut started = start(no_keys(), &accounts, resolved, request(&root())).unwrap();
     let events = rest(&mut started.events).await;
 
     assert_eq!(
@@ -702,9 +667,7 @@ async fn a_key_accounts_own_failure_never_falls_back_to_a_subscription() {
 #[tokio::test]
 async fn a_successful_run_never_falls_back_even_with_a_key_configured() {
     let fallback_id = AccountId::generate();
-    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
-        Outcome::Completed { result: None },
-    )]]));
+    let backend = completing();
     let resolved = resolved_subscription(backend.clone());
     let accounts = accounts_with_fallback(fallback_id);
     let keys = key_store_with(fallback_id, "sk-ant-fallback-key");
@@ -821,7 +784,6 @@ async fn a_new_session_in_place_of_the_resumed_one_totals_only_its_own_usage() {
     ]]));
     let resolved = resolved_subscription(backend.clone());
     let accounts = accounts_with_fallback(AccountId::generate());
-    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
     let mut request = request(&root());
     request.resume = Some(Resume {
         usage_totals: vec![ModelUsage {
@@ -831,7 +793,7 @@ async fn a_new_session_in_place_of_the_resumed_one_totals_only_its_own_usage() {
         ..Resume::new("t-0")
     });
 
-    let mut started = start(keys, &accounts, resolved, request).unwrap();
+    let mut started = start(no_keys(), &accounts, resolved, request).unwrap();
     let events = rest(&mut started.events).await;
 
     assert_eq!(
@@ -932,8 +894,7 @@ fn said(text: &str) -> Event {
 async fn run_resuming(attempts: Vec<Vec<Event>>) -> (Vec<Event>, Vec<RunRequest>) {
     let backend = Arc::new(ScriptedBackend::new(attempts));
     let resolved = resolved_subscription(backend.clone());
-    let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
-    let mut started = start(keys, &FixedAccounts::default(), resolved, resuming()).unwrap();
+    let mut started = start(no_keys(), &FixedAccounts::default(), resolved, resuming()).unwrap();
     (rest(&mut started.events).await, backend.calls())
 }
 

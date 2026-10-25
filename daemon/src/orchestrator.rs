@@ -40,6 +40,7 @@ use uuid::Uuid;
 
 use crate::server::Daemon;
 use crate::store::{Tx, store_error};
+use crate::threads::store;
 
 /// How many effects run at once, host-wide, as T3's four workers.
 const MAX_RUNNING: usize = 4;
@@ -153,10 +154,7 @@ impl Orchestrator {
         command: Command,
     ) -> Result<Outcome, ErrorObject> {
         debug_assert_eq!(lane.id, command.thread);
-        let committed = daemon
-            .store
-            .run(&CancellationToken::new(), move |db| commit(db, command))
-            .await?;
+        let committed = store(daemon, move |db| commit(db, command)).await?;
         match committed {
             Committed::Done { rows, effects } => {
                 if effects {
@@ -374,6 +372,22 @@ pub(crate) fn capture_effect(thread: Uuid, turn: TurnId, ordinal: u32) -> NewEff
     }
 }
 
+/// Command `command_id`'s effect number `index`, for `thread`, as its row.
+fn new_effect(
+    command_id: &str,
+    index: usize,
+    thread: Uuid,
+    effect: &Effect,
+) -> Result<NewEffect, ErrorObject> {
+    Ok(NewEffect {
+        id: format!("{command_id}/{index}"),
+        command_id: command_id.to_owned(),
+        thread_id: thread,
+        kind: effect.kind().to_owned(),
+        payload: serde_json::to_string(effect).map_err(ErrorObject::internal_error)?,
+    })
+}
+
 /// Enqueues `wake` as command `command_id`'s one effect, in `thread`'s lane and `db`'s
 /// transaction (0063). Call [`Orchestrator::notify`] once the job commits.
 pub(crate) fn enqueue_wake(
@@ -382,15 +396,8 @@ pub(crate) fn enqueue_wake(
     thread: Uuid,
     wake: crate::schedules::Wake,
 ) -> Result<(), ErrorObject> {
-    let effect = Effect::Wake(wake);
-    db.enqueue_effect(&NewEffect {
-        id: format!("{command_id}/0"),
-        command_id: command_id.to_owned(),
-        thread_id: thread,
-        kind: effect.kind().to_owned(),
-        payload: serde_json::to_string(&effect).map_err(ErrorObject::internal_error)?,
-    })
-    .map_err(|e| store_error(&e))
+    let effect = new_effect(command_id, 0, thread, &Effect::Wake(wake))?;
+    db.enqueue_effect(&effect).map_err(|e| store_error(&e))
 }
 
 /// A worktree to remove, with its branch.
@@ -400,6 +407,26 @@ struct Removal {
     repo_path: String,
     path: String,
     branch: String,
+}
+
+impl From<Worktree> for Removal {
+    fn from(worktree: Worktree) -> Self {
+        Self {
+            repo_path: worktree.repo_path,
+            path: worktree.path,
+            branch: worktree.branch,
+        }
+    }
+}
+
+impl From<crate::delegation::Shared> for Removal {
+    fn from(shared: crate::delegation::Shared) -> Self {
+        Self {
+            repo_path: shared.repo_path,
+            path: shared.path,
+            branch: shared.branch,
+        }
+    }
 }
 
 /// What the commit job did.
@@ -449,14 +476,8 @@ fn commit(db: &mut Tx, command: Command) -> Result<Committed, ErrorObject> {
     })
     .map_err(|e| store_error(&e))?;
     for (index, effect) in decision.effects.iter().enumerate() {
-        db.enqueue_effect(&NewEffect {
-            id: format!("{id}/{index}"),
-            command_id: id.clone(),
-            thread_id: thread,
-            kind: effect.kind().to_owned(),
-            payload: serde_json::to_string(effect).map_err(ErrorObject::internal_error)?,
-        })
-        .map_err(|e| store_error(&e))?;
+        db.enqueue_effect(&new_effect(&id, index, thread, effect)?)
+            .map_err(|e| store_error(&e))?;
     }
     Ok(Committed::Done {
         rows: Box::new(thread_rows(db, thread)?),
@@ -464,13 +485,13 @@ fn commit(db: &mut Tx, command: Command) -> Result<Committed, ErrorObject> {
     })
 }
 
-/// A command whose receipt exists: its stored rejection, or the thread's rows now.
-fn replay(
-    db: &Tx,
+/// The rejection `receipt` stored, if any. Fails with `idConflict` when its command was for a
+/// thread other than `thread` or a type other than `kind`.
+fn stored_rejection(
     receipt: &OrchestrationReceipt,
     thread: Uuid,
     kind: &str,
-) -> Result<Committed, ErrorObject> {
+) -> Result<Option<ErrorObject>, ErrorObject> {
     if receipt.thread_id != thread || receipt.kind != kind {
         return Err(ErrorObject::parallax(
             ErrorKind::IdConflict,
@@ -480,10 +501,22 @@ fn replay(
             ),
         ));
     }
-    if let Some(error) = &receipt.error {
-        return Ok(Committed::Rejected(
-            serde_json::from_str(error).map_err(ErrorObject::internal_error)?,
-        ));
+    receipt
+        .error
+        .as_deref()
+        .map(|error| serde_json::from_str(error).map_err(ErrorObject::internal_error))
+        .transpose()
+}
+
+/// A command whose receipt exists: its stored rejection, or the thread's rows now.
+fn replay(
+    db: &Tx,
+    receipt: &OrchestrationReceipt,
+    thread: Uuid,
+    kind: &str,
+) -> Result<Committed, ErrorObject> {
+    if let Some(error) = stored_rejection(receipt, thread, kind)? {
+        return Ok(Committed::Rejected(error));
     }
     Ok(Committed::Done {
         rows: Box::new(thread_rows(db, thread)?),
@@ -525,11 +558,7 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
             }
             let (shared, left) = crate::delegation::on_delete(db, thread)?;
             rows.shared = shared;
-            rows.left = left.map(|left| Removal {
-                repo_path: left.repo_path,
-                path: left.path,
-                branch: left.branch,
-            });
+            rows.left = left.map(Removal::from);
             rows.children = db
                 .list_threads()
                 .map_err(error)?
@@ -559,7 +588,6 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
 }
 
 /// Decides what `action` does to `thread`, from `rows` alone.
-#[expect(clippy::too_many_lines, reason = "one arm per command")]
 fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal> {
     let rejected = |kind, message: String| Refusal::Rejected(ErrorObject::parallax(kind, message));
     let thread_not_found = || {
@@ -630,40 +658,7 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
                     format!("no run has id {thread}"),
                 ));
             }
-            // A worktree another thread works in stays, and its last thread removes it (0063).
-            let worktree = worktree
-                .filter(|_| !rows.shared)
-                .map(|worktree| Removal {
-                    repo_path: worktree.repo_path,
-                    path: worktree.path,
-                    branch: worktree.branch,
-                })
-                .or(rows.left);
-            // A scratch repository goes whole, refs and all.
-            let refs = (!rows.scratch)
-                .then(|| {
-                    worktree
-                        .as_ref()
-                        .map(|worktree| worktree.repo_path.clone())
-                        .or(rows.repo_path)
-                })
-                .flatten();
-            let effects = if worktree.is_some() || rows.scratch || refs.is_some() {
-                vec![Effect::ThreadCleanup {
-                    worktree,
-                    scratch: rows.scratch,
-                    refs,
-                }]
-            } else {
-                Vec::new()
-            };
-            Ok(Decision {
-                changes: vec![Change::Delete {
-                    repo: rows.thread.thread.map(|row| row.repo_id),
-                    children: rows.children,
-                }],
-                effects,
-            })
+            Ok(decide_delete(worktree, rows))
         }
         Action::DeleteProject => {
             let Some(repo_path) = rows.project else {
@@ -680,6 +675,40 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
                 effects: vec![Effect::ProjectCleanup { repo_path }],
             })
         }
+    }
+}
+
+/// `thread.delete` for a thread that exists, whose actor had `worktree`.
+fn decide_delete(worktree: Option<Worktree>, rows: Rows) -> Decision {
+    // A worktree another thread works in stays, and its last thread removes it (0063).
+    let worktree = worktree
+        .filter(|_| !rows.shared)
+        .map(Removal::from)
+        .or(rows.left);
+    // A scratch repository goes whole, refs and all.
+    let refs = (!rows.scratch)
+        .then(|| {
+            worktree
+                .as_ref()
+                .map(|worktree| worktree.repo_path.clone())
+                .or(rows.repo_path)
+        })
+        .flatten();
+    let effects = if worktree.is_some() || rows.scratch || refs.is_some() {
+        vec![Effect::ThreadCleanup {
+            worktree,
+            scratch: rows.scratch,
+            refs,
+        }]
+    } else {
+        Vec::new()
+    };
+    Decision {
+        changes: vec![Change::Delete {
+            repo: rows.thread.thread.map(|row| row.repo_id),
+            children: rows.children,
+        }],
+        effects,
     }
 }
 
@@ -802,7 +831,6 @@ pub(crate) async fn replayed(
     let Some(command_id) = command_id else {
         return Ok(false);
     };
-    let thread = thread.into();
     let id = command_id.hyphenated().to_string();
     let receipt = daemon
         .reader
@@ -813,17 +841,8 @@ pub(crate) async fn replayed(
     let Some(receipt) = receipt else {
         return Ok(false);
     };
-    if receipt.thread_id != thread || receipt.kind != kind {
-        return Err(ErrorObject::parallax(
-            ErrorKind::IdConflict,
-            format!(
-                "command {command_id} was already used for {} on {}",
-                receipt.kind, receipt.thread_id
-            ),
-        ));
-    }
-    match receipt.error {
-        Some(error) => Err(serde_json::from_str(&error).map_err(ErrorObject::internal_error)?),
+    match stored_rejection(&receipt, thread.into(), kind)? {
+        Some(error) => Err(error),
         None => Ok(true),
     }
 }
@@ -836,12 +855,10 @@ pub(crate) const PROJECT_DELETE: &str = "project.delete";
 
 /// Start-up recovery, before the worker starts: see the module documentation.
 pub(crate) async fn recover(daemon: &Daemon) -> Result<(), ErrorObject> {
-    let (requeued, cancelled) = daemon
-        .store
-        .run(&CancellationToken::new(), |db| {
-            db.recover_effects(REPLAY_SAFE).map_err(|e| store_error(&e))
-        })
-        .await?;
+    let (requeued, cancelled) = store(daemon, |db| {
+        db.recover_effects(REPLAY_SAFE).map_err(|e| store_error(&e))
+    })
+    .await?;
     if requeued + cancelled > 0 {
         info!(
             requeued,
@@ -857,16 +874,14 @@ pub(crate) async fn work(daemon: Arc<Daemon>, stop: CancellationToken) {
     let mut running = JoinSet::new();
     loop {
         let free = MAX_RUNNING - running.len();
-        let claimed = daemon
-            .store
-            .run(&CancellationToken::new(), move |db| {
-                let claimed = db
-                    .claim_effects(Timestamp::now(), free)
-                    .map_err(|e| store_error(&e))?;
-                let next = db.next_effect_at().map_err(|e| store_error(&e))?;
-                Ok((claimed, next))
-            })
-            .await;
+        let claimed = store(&daemon, move |db| {
+            let claimed = db
+                .claim_effects(Timestamp::now(), free)
+                .map_err(|e| store_error(&e))?;
+            let next = db.next_effect_at().map_err(|e| store_error(&e))?;
+            Ok((claimed, next))
+        })
+        .await;
         let mut wait = None;
         match claimed {
             Ok((claimed, next)) => {
@@ -916,12 +931,10 @@ async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
     };
     let _lane = daemon.orchestrator.lane(claimed.thread_id).await;
     let id = claimed.id;
-    let finished = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            db.finish_effect(&id, &outcome).map_err(|e| store_error(&e))
-        })
-        .await;
+    let finished = store(&daemon, move |db| {
+        db.finish_effect(&id, &outcome).map_err(|e| store_error(&e))
+    })
+    .await;
     if let Err(error) = finished {
         warn!(error = %error.message, "could not record how an effect ended");
     }
@@ -936,6 +949,7 @@ async fn perform(
     thread: Uuid,
     effect: Effect,
 ) -> Result<(), (String, bool)> {
+    let corrupt = || (corrupt(thread).message, true);
     match effect {
         Effect::ThreadCleanup {
             worktree,
@@ -964,15 +978,13 @@ async fn perform(
                 }
             }
             if scratch {
-                let run_id =
-                    RunId::try_from(thread).map_err(|_| (corrupt(thread).message, true))?;
+                let run_id = RunId::try_from(thread).map_err(|_| corrupt())?;
                 crate::threads::remove_scratch_and_context(daemon, run_id);
             }
             Ok(())
         }
         Effect::ProjectCleanup { repo_path } => {
-            let project =
-                ProjectId::try_from(thread).map_err(|_| (corrupt(thread).message, true))?;
+            let project = ProjectId::try_from(thread).map_err(|_| corrupt())?;
             let worktrees = daemon.agents.worktrees();
             worktrees
                 .remove_integration(Path::new(&repo_path), project)
@@ -1004,7 +1016,7 @@ async fn perform(
             Ok(())
         }
         Effect::SessionDetach => {
-            let run_id = RunId::try_from(thread).map_err(|_| (corrupt(thread).message, true))?;
+            let run_id = RunId::try_from(thread).map_err(|_| corrupt())?;
             crate::agents::detach(daemon, run_id).await;
             Ok(())
         }
@@ -1024,13 +1036,11 @@ async fn perform(
                 };
                 let effect = dispatch::stop_effect(&format!("{id}/{child}"), child, grandchildren)
                     .map_err(|error| (error.message, true))?;
-                daemon
-                    .store
-                    .run(&CancellationToken::new(), move |db| {
-                        db.enqueue_effect(&effect).map_err(|e| store_error(&e))
-                    })
-                    .await
-                    .map_err(|error| (error.message, false))?;
+                store(daemon, move |db| {
+                    db.enqueue_effect(&effect).map_err(|e| store_error(&e))
+                })
+                .await
+                .map_err(|error| (error.message, false))?;
                 daemon.orchestrator.notify();
             }
             Ok(())

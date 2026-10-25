@@ -15,9 +15,10 @@ use uuid::Uuid;
 
 #[cfg(unix)]
 use super::hook;
-use super::{Fired, Trigger, fire, fire_job, next_run, put, read, run, save};
+use super::{Fired, Trigger, fire, fire_job, next_run, put, read, reader, run, save};
 use crate::server::Daemon;
 use crate::store::store_error;
+use crate::threads::store;
 
 fn check(params: &ScheduleSaveParams) -> Result<(), parallax_protocol::jsonrpc::ErrorObject> {
     super::check(params, true)
@@ -53,9 +54,14 @@ fn at(text: &str) -> Timestamp {
     text.parse().unwrap()
 }
 
+/// A connection of its own to the database in `dir`.
+fn db(dir: &Path) -> rusqlite::Connection {
+    rusqlite::Connection::open(dir.join("plxd.sqlite3")).unwrap()
+}
+
 /// The thread.wake effects' payloads for task `id`, oldest first.
 fn wakes(dir: &Path, id: Uuid) -> Vec<String> {
-    let conn = rusqlite::Connection::open(dir.join("plxd.sqlite3")).unwrap();
+    let conn = db(dir);
     let mut stmt = conn
         .prepare("SELECT payload FROM effects WHERE thread_id = ?1 ORDER BY rowid")
         .unwrap();
@@ -67,21 +73,17 @@ fn wakes(dir: &Path, id: Uuid) -> Vec<String> {
 
 /// Moves task `id`'s next run to `due`, as if it came due.
 async fn due_at(daemon: &Daemon, id: Uuid, due: Timestamp) {
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let mut stored = read(db, id)?.unwrap();
-            stored.task.next_run_at = Some(due);
-            put(db, &stored)
-        })
-        .await
-        .unwrap();
+    store(daemon, move |db| {
+        let mut stored = read(db, id)?.unwrap();
+        stored.task.next_run_at = Some(due);
+        put(db, &stored)
+    })
+    .await
+    .unwrap();
 }
 
 async fn stored(daemon: &Daemon, id: Uuid) -> super::Stored {
-    daemon
-        .reader
-        .run(&CancellationToken::new(), move |db| read(db, id))
+    reader(daemon, move |db| read(db, id))
         .await
         .unwrap()
         .unwrap()
@@ -209,11 +211,7 @@ async fn a_fixed_time_missed_by_more_than_ten_minutes_is_skipped() {
     let missed = Timestamp::now() - SignedDuration::from_mins(11);
     due_at(&daemon, id, missed).await;
     let now = Timestamp::now();
-    let skipped = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            fire_job(db, id, Trigger::Scheduled, now)
-        })
+    let skipped = store(&daemon, move |db| fire_job(db, id, Trigger::Scheduled, now))
         .await
         .unwrap();
     assert!(matches!(skipped, Fired::Skipped));
@@ -233,14 +231,12 @@ async fn the_timer_fires_a_task_when_it_comes_due() {
     // neither spins the timer nor holds back the task after it.
     let broken = Uuid::now_v7();
     let overdue = Timestamp::now() - SignedDuration::from_secs(1);
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            db.put_scheduled_task(broken, Some(overdue), "not json")
-                .map_err(|e| crate::store::store_error(&e))
-        })
-        .await
-        .unwrap();
+    store(&daemon, move |db| {
+        db.put_scheduled_task(broken, Some(overdue), "not json")
+            .map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
     let id = Uuid::try_parse(&save(&daemon, params(HOURLY)).await.unwrap().id).unwrap();
     due_at(
         &daemon,
@@ -257,8 +253,7 @@ async fn the_timer_fires_a_task_when_it_comes_due() {
     .await
     .expect("the timer fired");
     assert_eq!(stored(&daemon, id).await.task.run_count, 1);
-    let retry: String = rusqlite::Connection::open(dir.path().join("plxd.sqlite3"))
-        .unwrap()
+    let retry: String = db(dir.path())
         .query_row(
             "SELECT next_run_at FROM scheduled_tasks WHERE id = ?1",
             [broken.to_string()],
@@ -304,14 +299,12 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
         panic!("{:?}", task.schedule);
     };
     assert_eq!(signature.secret, None, "never shown");
-    let row = daemon
-        .reader
-        .run(&CancellationToken::new(), move |db| {
-            db.scheduled_task(id).map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap()
-        .unwrap();
+    let row = reader(&daemon, move |db| {
+        db.scheduled_task(id).map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap()
+    .unwrap();
     assert!(!row.contains("s3cret"), "the keystore keeps it: {row}");
 
     let body = br#"{"action":"published","release":{"tag_name":"v1.2"}}"#;
@@ -524,7 +517,7 @@ async fn a_failed_row_write_keeps_the_previous_working_secret() {
     let (daemon, keys) = fault_daemon(dir.path());
     let task = save(&daemon, signed("working-value")).await.unwrap();
     let id = Uuid::try_parse(&task.id).unwrap();
-    let conn = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
+    let conn = db(dir.path());
     conn.execute_batch("CREATE TRIGGER reject_schedule BEFORE INSERT ON scheduled_tasks BEGIN SELECT RAISE(FAIL, 'test row failure'); END;").unwrap();
     let mut replacement = signed("replacement-value");
     replacement.id = Some(task.id.clone());
@@ -569,16 +562,14 @@ async fn legacy_secrets_migrate_and_are_wiped_only_with_a_working_store() {
     let task = save(&daemon, signed(LEGACY)).await.unwrap();
     let id = Uuid::try_parse(&task.id).unwrap();
     keys.values.lock().unwrap().clear();
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let mut row = read(db, id)?.unwrap();
-            row.secret_key = None;
-            row.secret = Some(LEGACY.to_owned());
-            put(db, &row)
-        })
-        .await
-        .unwrap();
+    store(&daemon, move |db| {
+        let mut row = read(db, id)?.unwrap();
+        row.secret_key = None;
+        row.secret = Some(LEGACY.to_owned());
+        put(db, &row)
+    })
+    .await
+    .unwrap();
     keys.fail_write.store(true, SeqCst);
     super::move_old_secrets(&daemon).await;
     assert_eq!(stored(&daemon, id).await.secret.as_deref(), Some(LEGACY));
@@ -622,18 +613,16 @@ async fn the_first_start_wipes_a_deleted_legacy_secret() {
     let daemon = daemon(dir.path());
     let task = save(&daemon, params(HOURLY)).await.unwrap();
     let id = Uuid::try_parse(&task.id).unwrap();
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let mut row = read(db, id)?.unwrap();
-            row.secret = Some(LEGACY.to_owned());
-            // As migration 43 marks a store that kept secrets in rows.
-            db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))?;
-            put(db, &row)
-        })
-        .await
-        .unwrap();
-    let conn = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
+    store(&daemon, move |db| {
+        let mut row = read(db, id)?.unwrap();
+        row.secret = Some(LEGACY.to_owned());
+        // As migration 43 marks a store that kept secrets in rows.
+        db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))?;
+        put(db, &row)
+    })
+    .await
+    .unwrap();
+    let conn = db(dir.path());
     conn.execute_batch(
         "PRAGMA secure_delete = OFF; DELETE FROM scheduled_tasks; PRAGMA wal_checkpoint(TRUNCATE);",
     )
@@ -645,13 +634,11 @@ async fn the_first_start_wipes_a_deleted_legacy_secret() {
         !holds(dir.path(), LEGACY),
         "the store retains deleted plaintext"
     );
-    let pending = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            db.wipe_freed_pages().map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap();
+    let pending = reader(&daemon, |db| {
+        db.wipe_freed_pages().map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
     assert!(!pending, "it wipes once");
 }
 
@@ -676,18 +663,16 @@ async fn validation_and_transient_read_errors_preserve_a_secret_ref() {
     let key = parallax_protocol::AccountId::generate();
     let thread = parallax_protocol::RunId::generate();
     keys.set(key, "ref-test-value").unwrap();
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            db.add_secret_ref(
-                key.into(),
-                thread.into(),
-                Timestamp::now() + SignedDuration::from_hours(1),
-            )
-            .map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap();
+    store(&daemon, move |db| {
+        db.add_secret_ref(
+            key.into(),
+            thread.into(),
+            Timestamp::now() + SignedDuration::from_hours(1),
+        )
+        .map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
     let secret_ref = format!("secret-ref:{key}");
     let mut invalid = signed("unused");
     invalid.from = Some(thread);
@@ -730,15 +715,13 @@ async fn a_write_during_the_wipe_waits_and_succeeds() {
     use std::sync::atomic::Ordering::Relaxed;
     let dir = tempfile::tempdir().unwrap();
     let daemon = daemon(dir.path());
-    daemon
-        .store
-        .run(&CancellationToken::new(), |db| {
-            db.set_busy_timeout(Duration::from_millis(200))
-                .map_err(|e| store_error(&e))?;
-            db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap();
+    store(&daemon, |db| {
+        db.set_busy_timeout(Duration::from_millis(200))
+            .map_err(|e| store_error(&e))?;
+        db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
     crate::store::VACUUM_HOLD_MS.store(500, Relaxed);
     let wiping = tokio::spawn({
         let daemon = Arc::clone(&daemon);
@@ -755,13 +738,11 @@ async fn a_write_during_the_wipe_waits_and_succeeds() {
         "it queued: {waited:?}"
     );
     wiping.await.unwrap();
-    let pending = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            db.wipe_freed_pages().map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap();
+    let pending = reader(&daemon, |db| {
+        db.wipe_freed_pages().map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
     assert!(!pending, "the wipe finished");
     tracing::debug!(?waited, "a write waited behind the wipe");
 }
@@ -811,13 +792,11 @@ async fn the_wipe_scrubs_the_pre_41_copy() {
         std::fs::write(leftover, "partial").unwrap();
     }
     let daemon = daemon(dir.path());
-    daemon
-        .store
-        .run(&CancellationToken::new(), |db| {
-            db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap();
+    store(&daemon, |db| {
+        db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
     super::move_old_secrets(&daemon).await;
     assert_eq!(held(), 0, "the copy retains secrets");
     assert!(leftovers.iter().all(|leftover| !leftover.exists()));
@@ -852,23 +831,19 @@ async fn a_key_staged_before_a_crash_goes_at_the_next_start() {
     .unwrap();
     // The crash: no row names it. A record of a key in use, which a save never leaves, stays
     // harmless.
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            super::change_unused(db, |keys| keys.push(used))
-        })
-        .await
-        .unwrap();
+    store(&daemon, move |db| {
+        super::change_unused(db, |keys| keys.push(used))
+    })
+    .await
+    .unwrap();
     super::forget_unused(&daemon).await;
     let values: Vec<String> = keys.values.lock().unwrap().values().cloned().collect();
     assert_eq!(values, ["working-value"]);
-    let recorded = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            db.unused_secret_keys().map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap();
+    let recorded = reader(&daemon, |db| {
+        db.unused_secret_keys().map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
     assert_eq!(recorded, None);
 }
 
@@ -893,12 +868,10 @@ async fn a_replaced_key_that_couldnt_be_removed_goes_later() {
     keys.fail_delete.store(false, SeqCst);
     save(&daemon, replacement).await.unwrap();
     assert_eq!(held(), ["new-value"]);
-    let recorded = daemon
-        .reader
-        .run(&CancellationToken::new(), |db| {
-            db.unused_secret_keys().map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap();
+    let recorded = reader(&daemon, |db| {
+        db.unused_secret_keys().map_err(|e| store_error(&e))
+    })
+    .await
+    .unwrap();
     assert_eq!(recorded, None);
 }

@@ -34,12 +34,12 @@ use parallax_protocol::{
 use parallax_store::{Lineage, Store, ThreadFields};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::agents::{self, NewRun, NewThread, RunOptions};
 use crate::server::Daemon;
 use crate::store::store_error;
+use crate::threads::store;
 
 /// A delegated task's relationship to its parent, as T3's lineage names it.
 const SUBAGENT: &str = "subagent";
@@ -176,11 +176,20 @@ fn payload(lineage: &Lineage) -> Payload {
     serde_json::from_str(&lineage.payload).unwrap_or_default()
 }
 
-async fn store<T: Send + 'static>(
-    daemon: &Daemon,
-    job: impl FnOnce(&mut crate::store::Tx) -> Result<T, ErrorObject> + Send + 'static,
-) -> Result<T, ErrorObject> {
-    daemon.store.run(&CancellationToken::new(), job).await
+/// Stores `payload` as `lineage`'s and saves the row for `run`.
+fn save_payload(
+    db: &Store,
+    run: Uuid,
+    lineage: &mut Lineage,
+    payload: &Payload,
+) -> Result<(), ErrorObject> {
+    lineage.payload = serde_json::to_string(payload).map_err(ErrorObject::internal_error)?;
+    db.put_lineage(run, lineage).map_err(|e| store_error(&e))
+}
+
+/// Whether a run in `status` is running a turn.
+fn in_turn(status: AgentStatus) -> bool {
+    matches!(status, AgentStatus::Starting | AgentStatus::Running)
 }
 
 /// `task/delegate`: see the module documentation. Idempotent on the run id.
@@ -213,50 +222,46 @@ pub(crate) async fn delegate(
         delivery: TaskDelivery::Pending,
     });
     let (row, scope, inserted) = store(&daemon, move |db| claim(db, run_id, owner, task)).await?;
-    // A new thread's first turn takes its slot now, or the thread isn't made.
-    if inserted {
-        match daemon.agents.shared_slots.take(run_id) {
-            Ok(slot) => daemon.agents.shared_slots.reserve(run_id, slot),
-            Err(error) => {
-                forget(&daemon, run_id, inserted).await;
-                return Err(error);
-            }
+    let started = async {
+        // A new thread's first turn takes its slot now, or the thread isn't made.
+        if inserted {
+            let slot = daemon.agents.shared_slots.take(run_id)?;
+            daemon.agents.shared_slots.reserve(run_id, slot);
         }
+        let options = inherit(&row, account.as_ref(), model, effort, permission)
+            .map_err(ErrorObject::invalid_params)?;
+        let new = NewRun {
+            run_id,
+            scope,
+            prompt,
+            images: Vec::new(),
+            threads: Vec::new(),
+            account: Some(
+                account.unwrap_or_else(|| agents::session_account(&row.state.account_id)),
+            ),
+            coordinator_thread: None,
+            notify: task.is_some(),
+            options,
+            // As a thread the user starts: it asks the app (0034).
+            approvals: true,
+            explore: false,
+            thread: Some(NewThread {
+                scratch: None,
+                branch_slug: None,
+                checkout: true,
+                git_ref: None,
+                parent: task.map(|_| owner),
+                fields: ThreadFields {
+                    forked_from: None,
+                    title,
+                },
+                fork: None,
+            }),
+        };
+        agents::create(Arc::clone(&daemon), new).await
     }
-    let options = match inherit(&row, account.as_ref(), model, effort, permission) {
-        Ok(options) => options,
-        Err(error) => {
-            forget(&daemon, run_id, inserted).await;
-            return Err(ErrorObject::invalid_params(error));
-        }
-    };
-    let new = NewRun {
-        run_id,
-        scope,
-        prompt,
-        images: Vec::new(),
-        threads: Vec::new(),
-        account: Some(account.unwrap_or_else(|| agents::session_account(&row.state.account_id))),
-        coordinator_thread: None,
-        notify: task.is_some(),
-        options,
-        // As a thread the user starts: it asks the app (0034).
-        approvals: true,
-        explore: false,
-        thread: Some(NewThread {
-            scratch: None,
-            branch_slug: None,
-            checkout: true,
-            git_ref: None,
-            parent: task.map(|_| owner),
-            fields: ThreadFields {
-                forked_from: None,
-                title,
-            },
-            fork: None,
-        }),
-    };
-    let created = match agents::create(Arc::clone(&daemon), new).await {
+    .await;
+    let created = match started {
         Ok(created) => created,
         Err(error) => {
             forget(&daemon, run_id, inserted).await;
@@ -339,8 +344,7 @@ fn claim(
     }
     // A retry may come after the owner's turn ended.
     let retry = db.get_run(run_id.into()).map_err(error)?.is_some();
-    let status = agents::snapshot(&row, None)?.status;
-    if !retry && !matches!(status, AgentStatus::Starting | AgentStatus::Running) {
+    if !retry && !in_turn(agents::snapshot(&row, None)?.status) {
         return Err(ErrorObject::invalid_params(format!(
             "thread {owner} isn't running a turn: threads start in its workspace from inside \
              one"
@@ -457,9 +461,7 @@ pub(crate) async fn status(
         }
         if task != before {
             stored.task = Some(task);
-            lineage.payload =
-                serde_json::to_string(&stored).map_err(ErrorObject::internal_error)?;
-            db.put_lineage(task_id.into(), &lineage).map_err(error)?;
+            save_payload(db, task_id.into(), &mut lineage, &stored)?;
         }
         Ok(DelegatedTask {
             task_id,
@@ -497,10 +499,7 @@ pub(crate) fn wakes(db: &Store, child: Uuid, parent: Uuid) -> Result<Option<bool
     }
     if task.completion_wake == CompletionWake::SettledOnly
         && let Some(parent) = db.get_run(parent).map_err(error)?
-        && matches!(
-            agents::snapshot(&parent, None)?.status,
-            AgentStatus::Starting | AgentStatus::Running
-        )
+        && in_turn(agents::snapshot(&parent, None)?.status)
     {
         return Ok(None);
     }
@@ -627,8 +626,7 @@ pub(crate) fn dispose_tasks(db: &Store, parent: Uuid) -> Result<(), ErrorObject>
             continue;
         };
         pending.delivery = TaskDelivery::Disposed;
-        lineage.payload = serde_json::to_string(&stored).map_err(ErrorObject::internal_error)?;
-        db.put_lineage(task, &lineage).map_err(error)?;
+        save_payload(db, task, &mut lineage, &stored)?;
     }
     Ok(())
 }

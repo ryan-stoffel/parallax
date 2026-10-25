@@ -24,10 +24,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 use uuid::Uuid;
 
-use super::{DELEGATED_TASKS_STOP, Effect};
+use super::{Effect, new_effect, stored_rejection};
 use crate::agents::{self, Delivery, QueueOp};
 use crate::server::Daemon;
 use crate::store::store_error;
+use crate::threads::store;
 
 /// Runs `command` as `orchestration/dispatch`: see the module documentation.
 pub(crate) async fn dispatch(
@@ -48,17 +49,8 @@ pub(crate) async fn dispatch(
         })
         .await?;
     if let Some(receipt) = receipt {
-        if receipt.thread_id != Uuid::from(thread) || receipt.kind != kind {
-            return Err(ErrorObject::parallax(
-                ErrorKind::IdConflict,
-                format!(
-                    "command {key} was already used for {} on {}",
-                    receipt.kind, receipt.thread_id
-                ),
-            ));
-        }
-        return match receipt.error {
-            Some(error) => Err(serde_json::from_str(&error).map_err(ErrorObject::internal_error)?),
+        return match stored_rejection(&receipt, thread.into(), kind)? {
+            Some(error) => Err(error),
             None => Ok(DispatchResult {
                 seq: receipt.result_seq.unwrap_or_else(|| daemon.log.head()),
             }),
@@ -86,25 +78,23 @@ pub(crate) async fn dispatch(
         result_seq: error.is_none().then_some(seq),
         error,
     };
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            // Rollback publishes its receipt atomically with the restored run and graph.
-            if db
-                .orchestration_receipt(&receipt.command_id)
-                .map_err(|error| store_error(&error))?
-                .is_none()
-            {
-                db.insert_orchestration_receipt(&receipt)
-                    .map_err(|error| store_error(&error))?;
-            }
-            if let Some(effect) = &effect {
-                db.enqueue_effect(effect)
-                    .map_err(|error| store_error(&error))?;
-            }
-            Ok(())
-        })
-        .await?;
+    store(daemon, move |db| {
+        // Rollback publishes its receipt atomically with the restored run and graph.
+        if db
+            .orchestration_receipt(&receipt.command_id)
+            .map_err(|error| store_error(&error))?
+            .is_none()
+        {
+            db.insert_orchestration_receipt(&receipt)
+                .map_err(|error| store_error(&error))?;
+        }
+        if let Some(effect) = &effect {
+            db.enqueue_effect(effect)
+                .map_err(|error| store_error(&error))?;
+        }
+        Ok(())
+    })
+    .await?;
     if woke {
         daemon.orchestrator.notify();
     }
@@ -279,13 +269,11 @@ async fn graph_runs(
     daemon: &Daemon,
     thread: RunId,
 ) -> Result<Vec<parallax_protocol::ThreadRun>, ErrorObject> {
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            db.import_thread(thread.into())?;
-            crate::graph::runs(db, thread.into())
-        })
-        .await
+    store(daemon, move |db| {
+        db.import_thread(thread.into())?;
+        crate::graph::runs(db, thread.into())
+    })
+    .await
 }
 
 /// Fails with `queuedMessageNotFound` unless run `id` waits in `thread`'s queue.
@@ -334,12 +322,10 @@ pub(super) async fn stop(
     let hold = hold_queue && !coordinator;
     // A held Stop drops the wake-ups its stopped tasks would owe, as `task_cancel` does (0063).
     if hold {
-        daemon
-            .store
-            .run(&CancellationToken::new(), move |db| {
-                crate::delegation::dispose_tasks(db, thread.into())
-            })
-            .await?;
+        store(daemon, move |db| {
+            crate::delegation::dispose_tasks(db, thread.into())
+        })
+        .await?;
     }
     let work = {
         let daemon = Arc::clone(daemon);
@@ -364,12 +350,10 @@ pub(super) fn stop_effect(
     thread: RunId,
     children: Vec<RunId>,
 ) -> Result<NewEffect, ErrorObject> {
-    let effect = Effect::DelegatedTasksStop { children };
-    Ok(NewEffect {
-        id: format!("{command_id}/0"),
-        command_id: command_id.to_owned(),
-        thread_id: thread.into(),
-        kind: DELEGATED_TASKS_STOP.to_owned(),
-        payload: serde_json::to_string(&effect).map_err(ErrorObject::internal_error)?,
-    })
+    new_effect(
+        command_id,
+        0,
+        thread.into(),
+        &Effect::DelegatedTasksStop { children },
+    )
 }

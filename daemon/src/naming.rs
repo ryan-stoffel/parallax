@@ -16,14 +16,13 @@ use parallax_protocol::{
     AgentEffort, AgentRun, MAX_THREAD_TITLE_BYTES, ParallaxEvent, ProviderKind, RunId, ThreadNaming,
 };
 use parallax_store::ThreadUpdate;
-use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::agents;
 use crate::backend::fake;
 use crate::backend::namer::{self, Name};
 use crate::server::Daemon;
-use crate::threads::thread_entry;
+use crate::threads::{store, store_error, thread_entry};
 use crate::worktree::valid_branch_slug;
 
 /// How long one model has to answer.
@@ -177,33 +176,30 @@ fn ensure(dir: std::path::PathBuf) -> Result<std::path::PathBuf, String> {
 /// Sets thread `run_id`'s title from `name` unless it has one, and renames its branch.
 async fn apply(daemon: &Arc<Daemon>, run_id: RunId, name: Name) -> Result<(), String> {
     if let Some(title) = title(&name.title) {
-        daemon
-            .store
-            .run(&CancellationToken::new(), move |db| {
-                let id = run_id.into();
-                let untitled = db
-                    .get_thread(id)
-                    .map_err(|e| agents::store_error(&e))?
-                    .is_some_and(|row| row.fields.title.is_none());
-                if untitled {
-                    let update = ThreadUpdate {
-                        title: Some(Some(title)),
-                        ..ThreadUpdate::default()
-                    };
-                    let (row, _) = db
-                        .update_thread(id, &update)
-                        .map_err(|e| agents::store_error(&e))?;
-                    let thread = thread_entry(&row)?;
-                    db.stage(
-                        Timestamp::now(),
-                        None,
-                        ParallaxEvent::ThreadUpdated { thread },
-                    );
-                }
-                Ok(())
-            })
-            .await
-            .map_err(|error| error.message)?;
+        store(daemon, move |db| {
+            let id = run_id.into();
+            let untitled = db
+                .get_thread(id)
+                .map_err(|e| store_error(&e))?
+                .is_some_and(|row| row.fields.title.is_none());
+            if !untitled {
+                return Ok(());
+            }
+            let update = ThreadUpdate {
+                title: Some(Some(title)),
+                ..ThreadUpdate::default()
+            };
+            let (row, _) = db.update_thread(id, &update).map_err(|e| store_error(&e))?;
+            let thread = thread_entry(&row)?;
+            db.stage(
+                Timestamp::now(),
+                None,
+                ParallaxEvent::ThreadUpdated { thread },
+            );
+            Ok(())
+        })
+        .await
+        .map_err(|error| error.message)?;
     }
     if let Some(slug) = slug(&name.branch) {
         agents::rename_branch(daemon, run_id, slug)

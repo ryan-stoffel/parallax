@@ -104,6 +104,25 @@ mod tests {
         }
     }
 
+    /// A usage delta of `input` and `output` tokens, on no model.
+    fn delta(input: u64, output: u64) -> Event {
+        Event::Usage(ModelUsage {
+            model: None,
+            usage: usage(input, output),
+        })
+    }
+
+    /// A run that completed with session totals of `input` and `output` tokens, on no model.
+    fn completed(input: u64, output: u64) -> Event {
+        Event::Finished {
+            outcome: Outcome::Completed { result: None },
+            usage_totals: vec![ModelUsage {
+                model: None,
+                usage: usage(input, output),
+            }],
+        }
+    }
+
     /// A run resuming an existing session: `SessionStarted` carries no usage of its own, two
     /// `Usage` deltas accumulate, a `RateLimit` snapshots the account's window, and `Finished`
     /// replaces the session's running totals.
@@ -178,10 +197,7 @@ mod tests {
             run_id,
             "claude-max",
             "sess-resume",
-            &Event::Usage(ModelUsage {
-                model: None,
-                usage: usage(1000, 100),
-            }),
+            &delta(1000, 100),
         )
         .unwrap();
         record_event(
@@ -189,13 +205,7 @@ mod tests {
             run_id,
             "claude-max",
             "sess-resume",
-            &Event::Finished {
-                outcome: Outcome::Completed { result: None },
-                usage_totals: vec![ModelUsage {
-                    model: None,
-                    usage: usage(1000, 100),
-                }],
-            },
+            &completed(1000, 100),
         )
         .unwrap();
 
@@ -208,10 +218,7 @@ mod tests {
             resumed_run,
             "claude-max",
             "sess-resume",
-            &Event::Usage(ModelUsage {
-                model: None,
-                usage: usage(200, 20),
-            }),
+            &delta(200, 20),
         )
         .unwrap();
         record_event(
@@ -219,13 +226,7 @@ mod tests {
             resumed_run,
             "claude-max",
             "sess-resume",
-            &Event::Finished {
-                outcome: Outcome::Completed { result: None },
-                usage_totals: vec![ModelUsage {
-                    model: None,
-                    usage: usage(1200, 120),
-                }],
-            },
+            &completed(1200, 120),
         )
         .unwrap();
 
@@ -267,10 +268,7 @@ mod tests {
             first_run,
             "claude-max",
             session_id,
-            &Event::Usage(ModelUsage {
-                model: None,
-                usage: usage(100, 10),
-            }),
+            &delta(100, 10),
         )
         .unwrap();
         record_event(
@@ -278,13 +276,7 @@ mod tests {
             first_run,
             "claude-max",
             session_id,
-            &Event::Finished {
-                outcome: Outcome::Completed { result: None },
-                usage_totals: vec![ModelUsage {
-                    model: None,
-                    usage: usage(100, 10),
-                }],
-            },
+            &completed(100, 10),
         )
         .unwrap();
 
@@ -312,10 +304,7 @@ mod tests {
             resumed_run,
             "claude-max",
             session_id,
-            &Event::Usage(ModelUsage {
-                model: None,
-                usage: usage(20, 2),
-            }),
+            &delta(20, 2),
         )
         .unwrap();
         record_event(
@@ -323,13 +312,7 @@ mod tests {
             resumed_run,
             "claude-max",
             session_id,
-            &Event::Finished {
-                outcome: Outcome::Completed { result: None },
-                usage_totals: vec![ModelUsage {
-                    model: None,
-                    usage: usage(120, 12),
-                }],
-            },
+            &completed(120, 12),
         )
         .unwrap();
 
@@ -374,17 +357,7 @@ mod tests {
     fn an_unknown_account_has_no_effect_on_others() {
         let (_dir, mut store) = open();
         let run_id = RunId::generate();
-        record_event(
-            &mut store,
-            run_id,
-            "claude-max",
-            "sess",
-            &Event::Usage(ModelUsage {
-                model: None,
-                usage: usage(10, 1),
-            }),
-        )
-        .unwrap();
+        record_event(&mut store, run_id, "claude-max", "sess", &delta(10, 1)).unwrap();
 
         let far_past = "2020-01-01T00:00:00Z".parse().unwrap();
         let far_future = "2030-01-01T00:00:00Z".parse().unwrap();
@@ -402,17 +375,7 @@ mod tests {
     fn a_crash_failure_still_leaves_recorded_deltas_intact() {
         let (_dir, mut store) = open();
         let run_id = RunId::generate();
-        record_event(
-            &mut store,
-            run_id,
-            "claude-max",
-            "sess",
-            &Event::Usage(ModelUsage {
-                model: None,
-                usage: usage(10, 1),
-            }),
-        )
-        .unwrap();
+        record_event(&mut store, run_id, "claude-max", "sess", &delta(10, 1)).unwrap();
         record_event(
             &mut store,
             run_id,

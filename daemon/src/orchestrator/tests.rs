@@ -50,12 +50,14 @@ fn delete(command_id: Uuid, project: ProjectId) -> Command {
     Command::new(Some(command_id), project, Action::DeleteProject)
 }
 
+/// A connection of its own to the database in `dir`.
+fn db(dir: &Path) -> rusqlite::Connection {
+    rusqlite::Connection::open(dir.join("plxd.sqlite3")).unwrap()
+}
+
 /// One count from the database, read on a connection of its own.
 fn count(dir: &Path, sql: &str) -> i64 {
-    rusqlite::Connection::open(dir.join("plxd.sqlite3"))
-        .unwrap()
-        .query_row(sql, [], |row| row.get(0))
-        .unwrap()
+    db(dir).query_row(sql, [], |row| row.get(0)).unwrap()
 }
 
 fn thread_row(title: Option<&str>, settled: bool, archived: bool) -> Thread {
@@ -198,8 +200,7 @@ async fn a_command_commits_its_change_event_receipt_and_effect_together_or_not_a
     let daemon = daemon(dir.path());
     let project = project(&daemon).await;
     let head = daemon.log.head();
-    rusqlite::Connection::open(dir.path().join("plxd.sqlite3"))
-        .unwrap()
+    db(dir.path())
         .execute_batch(
             "CREATE TRIGGER no_receipts BEFORE INSERT ON orchestration_receipts
              BEGIN SELECT RAISE(FAIL, 'injected'); END;",
@@ -216,8 +217,7 @@ async fn a_command_commits_its_change_event_receipt_and_effect_together_or_not_a
     assert_eq!(count(dir.path(), "SELECT COUNT(*) FROM effects"), 0);
     assert_eq!(daemon.log.head(), head, "nothing was published");
 
-    rusqlite::Connection::open(dir.path().join("plxd.sqlite3"))
-        .unwrap()
+    db(dir.path())
         .execute_batch("DROP TRIGGER no_receipts")
         .unwrap();
     let command_id = Uuid::now_v7();
@@ -312,8 +312,7 @@ async fn effects_replay_or_retire_after_a_crash() {
         .dispatch(&crashed, delete(Uuid::now_v7(), pending))
         .await
         .unwrap();
-    rusqlite::Connection::open(dir.path().join("plxd.sqlite3"))
-        .unwrap()
+    db(dir.path())
         .execute(
             "INSERT INTO effects (id, command_id, thread_id, kind, payload, status, attempts,
                  available_at, created_at)
