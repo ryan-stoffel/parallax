@@ -674,7 +674,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     <>
       <div className="mb-8 text-reading">{picker}</div>
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
-        <h1 className="text-body font-medium text-muted-foreground">Providers</h1>
+        <h1 className="text-reading font-semibold">Providers</h1>
         {asking ? (
           // Cancel takes the trash's place and focus, so a double click or a second Enter can't remove.
           <div className="flex items-center gap-2 text-body text-muted-foreground">
