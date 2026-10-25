@@ -65,7 +65,10 @@ pub struct GitStatus {
     pub origin: bool,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde's predicate takes a reference.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde passes a reference"
+)]
 fn is_zero(count: &u64) -> bool {
     *count == 0
 }

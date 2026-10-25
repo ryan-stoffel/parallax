@@ -1,4 +1,4 @@
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 use crate::Store;
@@ -22,25 +22,23 @@ pub enum RoleDefault {
     },
 }
 
-fn from_row(
+/// A `role_defaults` row's `account_kind`, `backend`, and `key_account_id`.
+type Raw = (String, Option<String>, Option<String>);
+
+fn into_default(
     role: &str,
-    row: &Row<'_>,
-) -> rusqlite::Result<Result<Option<RoleDefault>, StoreError>> {
-    let kind: String = row.get(0)?;
-    let backend: Option<String> = row.get(1)?;
-    let key_account_id: Option<String> = row.get(2)?;
-    let parsed = match (kind.as_str(), backend, key_account_id) {
-        ("subscription", Some(backend), _) => Ok(Some(RoleDefault::Subscription { backend })),
-        ("key", _, Some(id)) => match Uuid::parse_str(&id) {
-            Ok(account_id) => Ok(Some(RoleDefault::Key { account_id })),
-            Err(error) => Err(StoreError::InvalidId(error)),
-        },
+    (kind, backend, key_account_id): Raw,
+) -> Result<RoleDefault, StoreError> {
+    match (kind.as_str(), backend, key_account_id) {
+        ("subscription", Some(backend), _) => Ok(RoleDefault::Subscription { backend }),
+        ("key", _, Some(id)) => Ok(RoleDefault::Key {
+            account_id: Uuid::parse_str(&id)?,
+        }),
         (kind, _, _) => Err(StoreError::InvalidRoleDefault {
             role: role.to_owned(),
             kind: kind.to_owned(),
         }),
-    };
-    Ok(parsed)
+    }
 }
 
 impl Store {
@@ -87,10 +85,11 @@ impl Store {
             .query_row(
                 "SELECT account_kind, backend, key_account_id FROM role_defaults WHERE role = ?1",
                 params![role],
-                |row| from_row(role, row),
+                |row| Raw::try_from(row),
             )
             .optional()?
-            .unwrap_or(Ok(None))
+            .map(|raw| into_default(role, raw))
+            .transpose()
     }
 }
 

@@ -291,7 +291,7 @@ impl Message {
                 Ok(Self::Response(Response::success(id, result)))
             }
             (None, Some(error), id) => match ErrorObject::deserialize(error) {
-                Ok(error) => Ok(Self::Response(Response::error(known_id_of(id), error))),
+                Ok(error) => Ok(Self::Response(Response::error(id.into_id(), error))),
                 Err(_) => Err(MalformedMessage::invalid(
                     known_id,
                     "error must be an object with an integer code and a string message",
@@ -311,10 +311,13 @@ enum IdMember {
     Id(RequestId),
 }
 
-fn known_id_of(id: IdMember) -> Option<RequestId> {
-    match id {
-        IdMember::Id(id) => Some(id),
-        IdMember::Absent | IdMember::Null => None,
+impl IdMember {
+    /// The id, when the message has one that isn't `null`.
+    fn into_id(self) -> Option<RequestId> {
+        match self {
+            Self::Id(id) => Some(id),
+            Self::Absent | Self::Null => None,
+        }
     }
 }
 

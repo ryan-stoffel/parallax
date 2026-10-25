@@ -114,10 +114,7 @@ impl Store {
             "SELECT id FROM scheduled_tasks
              WHERE next_run_at IS NOT NULL AND next_run_at <= ?1 ORDER BY next_run_at",
         )?;
-        let rows = stmt.query_map(params![timestamp::format(now)], |row| {
-            row.get::<_, String>(0)
-        })?;
-        rows.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
+        crate::ids(&mut stmt, params![timestamp::format(now)])
     }
 
     /// How many of `thread_id`'s effects are pending or running.

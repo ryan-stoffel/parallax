@@ -115,8 +115,7 @@ impl Store {
             "SELECT l.thread_id FROM thread_lineage AS l JOIN runs AS r ON r.id = l.thread_id
              WHERE r.parent = ?1 AND l.relationship = 'subagent'",
         )?;
-        let rows = stmt.query_map(params![parent.to_string()], |row| row.get::<_, String>(0))?;
-        rows.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
+        crate::ids(&mut stmt, params![parent.to_string()])
     }
 
     /// Records a pending context transfer `id` of `kind` from `source`, through its `seq`, to
@@ -160,8 +159,7 @@ impl Store {
             "SELECT source FROM context_transfers WHERE target = ?1 AND status = 'pending'
              GROUP BY source ORDER BY MIN(created_at)",
         )?;
-        let rows = stmt.query_map(params![target.to_string()], |row| row.get::<_, String>(0))?;
-        rows.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
+        crate::ids(&mut stmt, params![target.to_string()])
     }
 
     /// Records one-time secret ref `id`, which thread `thread` asked for, until `expires_at`.

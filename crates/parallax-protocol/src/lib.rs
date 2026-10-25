@@ -310,6 +310,37 @@ mod tests {
         }
     }
 
+    /// A `project/create` that leaves every optional field out.
+    fn create_params() -> ProjectCreateParams {
+        ProjectCreateParams {
+            id: ProjectId::generate(),
+            name: "parallax".to_owned(),
+            repo_path: "/".to_owned(),
+            icon: None,
+            permission: None,
+            autonomy: None,
+            base_branch: None,
+        }
+    }
+
+    /// A `project/update` of `project` that changes nothing.
+    fn update_params(project: ProjectId) -> ProjectUpdateParams {
+        ProjectUpdateParams {
+            project,
+            name: None,
+            icon: None,
+            permission: None,
+            autonomy: None,
+            base_branch: None,
+            auto_land: None,
+            allow_api_keys: None,
+            max_children: None,
+            checks: None,
+            proposed_checks: None,
+            computer: None,
+        }
+    }
+
     fn key_account() -> KeyAccount {
         KeyAccount {
             id: AccountId::generate(),
@@ -425,7 +456,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "one round trip per edit field")]
     fn project_edit_types_round_trip_and_omit_what_is_absent() {
         let icons = [
             ProjectIcon {
@@ -459,13 +489,8 @@ mod tests {
             };
             round_trip(&with_icon);
             round_trip(&ProjectCreateParams {
-                id: ProjectId::generate(),
-                name: "parallax".to_owned(),
-                repo_path: "/".to_owned(),
                 icon: icon.clone(),
-                permission: None,
-                autonomy: None,
-                base_branch: None,
+                ..create_params()
             });
             round_trip(&ProjectUpdateResult {
                 project: with_icon.clone(),
@@ -479,18 +504,9 @@ mod tests {
             });
             for name in [None, Some("roster".to_owned())] {
                 round_trip(&ProjectUpdateParams {
-                    project: ProjectId::generate(),
                     name,
                     icon: icon.clone(),
-                    permission: None,
-                    autonomy: None,
-                    base_branch: None,
-                    auto_land: None,
-                    allow_api_keys: None,
-                    max_children: None,
-                    checks: None,
-                    proposed_checks: None,
-                    computer: None,
+                    ..update_params(ProjectId::generate())
                 });
             }
         }
@@ -504,21 +520,7 @@ mod tests {
         );
         let id = ProjectId::generate();
         assert_eq!(
-            serde_json::to_value(ProjectUpdateParams {
-                project: id,
-                name: None,
-                icon: None,
-                permission: None,
-                autonomy: None,
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
-            })
-            .unwrap(),
+            serde_json::to_value(update_params(id)).unwrap(),
             json!({"project": id}),
             "absent fields are left out, so an older peer reads them as unchanged"
         );
@@ -549,27 +551,12 @@ mod tests {
                 ..project()
             });
             round_trip(&ProjectCreateParams {
-                id: ProjectId::generate(),
-                name: "parallax".to_owned(),
-                repo_path: "/".to_owned(),
-                icon: None,
                 permission: Some(permission),
-                autonomy: None,
-                base_branch: None,
+                ..create_params()
             });
             round_trip(&ProjectUpdateParams {
-                project: ProjectId::generate(),
-                name: None,
-                icon: None,
                 permission: Some(permission),
-                autonomy: None,
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
+                ..update_params(ProjectId::generate())
             });
         }
         assert_eq!(
@@ -596,27 +583,12 @@ mod tests {
                 ..project()
             });
             round_trip(&ProjectCreateParams {
-                id: ProjectId::generate(),
-                name: "parallax".to_owned(),
-                repo_path: "/".to_owned(),
-                icon: None,
-                permission: None,
                 autonomy: Some(autonomy),
-                base_branch: None,
+                ..create_params()
             });
             round_trip(&ProjectUpdateParams {
-                project: ProjectId::generate(),
-                name: None,
-                icon: None,
-                permission: None,
                 autonomy: Some(autonomy),
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
+                ..update_params(ProjectId::generate())
             });
         }
         assert_eq!(

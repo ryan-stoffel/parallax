@@ -308,8 +308,8 @@ impl Store {
     }
 
     /// Deletes run `id` with its worktree row, stored events, sent turns, images, wake-up state,
-    /// queued messages, and questions, in one transaction: how `project/delete` (PLX-338) removes a Project's run. Returns
-    /// whether the run existed.
+    /// queued messages, and questions, in one transaction: how `project/delete` (PLX-338) removes
+    /// a Project's run. Returns whether the run existed.
     ///
     /// # Errors
     ///
@@ -341,12 +341,9 @@ impl Store {
              WHERE ?1 IS NULL OR project_id = ?1
              ORDER BY created_at ASC, id ASC"
         ))?;
-        let rows = stmt.query_map(params![project.map(|id| id.to_string())], RawRun::from_row)?;
-        let mut runs = Vec::new();
-        for row in rows {
-            runs.push(row?.into_run()?);
-        }
-        Ok(runs)
+        stmt.query_map(params![project.map(|id| id.to_string())], RawRun::from_row)?
+            .map(|row| row?.into_run())
+            .collect()
     }
 
     /// The ids of runs whose status is one of `statuses`, oldest first.
@@ -360,12 +357,7 @@ impl Store {
              ORDER BY created_at ASC, id ASC",
             vec!["?"; statuses.len()].join(", ")
         ))?;
-        let ids = stmt.query_map(params_from_iter(statuses), |row| row.get::<_, String>(0))?;
-        let mut runs = Vec::new();
-        for id in ids {
-            runs.push(Uuid::parse_str(&id?)?);
-        }
-        Ok(runs)
+        crate::ids(&mut stmt, params_from_iter(statuses))
     }
 
     /// Whether any run wakes `parent` when it finishes (PLX-380).
@@ -393,8 +385,7 @@ impl Store {
              WHERE parent = ?1 AND status IN ('starting', 'running', 'waiting')
              ORDER BY created_at",
         )?;
-        let ids = stmt.query_map(params![parent.to_string()], |row| row.get::<_, String>(0))?;
-        ids.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
+        crate::ids(&mut stmt, params![parent.to_string()])
     }
 
     /// [`Store::list_runs`] with each run's worktree, `None` for a run without one, in one query
@@ -423,15 +414,14 @@ impl Store {
             };
             Ok((RawRun::from_row(row)?, worktree))
         })?;
-        let mut runs = Vec::new();
-        for row in rows {
+        rows.map(|row| {
             let (run, worktree) = row?;
-            runs.push((
+            Ok((
                 run.into_run()?,
                 worktree.map(RawWorktree::into_worktree).transpose()?,
-            ));
-        }
-        Ok(runs)
+            ))
+        })
+        .collect()
     }
 
     /// Replaces run `id`'s state and returns the updated row.
@@ -466,10 +456,7 @@ impl Store {
                 timestamp::now()
             ],
         )?;
-        if changed == 0 {
-            return Err(StoreError::NotFound { id });
-        }
-        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
+        updated(&self.conn, id, changed)
     }
 
     /// Replaces accepted run `id`'s state and deletes its worktree's row, in one transaction:
@@ -510,11 +497,17 @@ impl Store {
                 timestamp::now()
             ],
         )?;
-        if changed == 0 {
-            return Err(StoreError::NotFound { id });
-        }
-        fetch(&self.conn, id)?.ok_or(StoreError::NotFound { id })
+        updated(&self.conn, id, changed)
     }
+}
+
+/// Run `id` as an update that changed `changed` rows left it: [`StoreError::NotFound`] when it
+/// changed none.
+fn updated(conn: &Connection, id: Uuid, changed: usize) -> Result<Run, StoreError> {
+    if changed == 0 {
+        return Err(StoreError::NotFound { id });
+    }
+    fetch(conn, id)?.ok_or(StoreError::NotFound { id })
 }
 
 fn update(conn: &Connection, id: Uuid, state: &RunState) -> Result<Run, StoreError> {
@@ -548,10 +541,7 @@ fn update(conn: &Connection, id: Uuid, state: &RunState) -> Result<Run, StoreErr
             state.resume_tries,
         ],
     )?;
-    if changed == 0 {
-        return Err(StoreError::NotFound { id });
-    }
-    fetch(conn, id)?.ok_or(StoreError::NotFound { id })
+    updated(conn, id, changed)
 }
 
 pub(crate) fn insert_run(

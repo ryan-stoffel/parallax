@@ -193,15 +193,29 @@ impl RawProject {
     }
 }
 
+/// Sets `field` to `value` when they differ, and says whether it did.
+fn replace<T: PartialEq + Clone>(field: &mut T, value: &T) -> bool {
+    if field == value {
+        return false;
+    }
+    field.clone_from(value);
+    true
+}
+
+/// A `SELECT` of the projects `rest` picks, in [`RawProject::from_row`]'s column order.
+fn select(rest: &str) -> String {
+    format!(
+        "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
+             integration_branch, autonomy, auto_land, {ICON_COLUMNS}, max_children,
+             allow_api_keys, checks, proposed_checks, computer
+         FROM projects {rest}"
+    )
+}
+
 fn fetch_raw(conn: &Connection, id_text: &str) -> Result<Option<RawProject>, StoreError> {
     Ok(conn
         .query_row(
-            &format!(
-                "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
-                     integration_branch, autonomy, auto_land, {ICON_COLUMNS}, max_children,
-                     allow_api_keys, checks, proposed_checks, computer
-                 FROM projects WHERE id = ?1"
-            ),
+            &select("WHERE id = ?1"),
             params![id_text],
             RawProject::from_row,
         )
@@ -297,20 +311,12 @@ impl Store {
     /// Returns a database error, or an error if a stored id or timestamps
     /// are corrupt.
     pub fn list_projects(&self) -> Result<Vec<Project>, StoreError> {
-        let mut stmt = self.conn.prepare(&format!(
-            "SELECT id, name, repo_path, created_at, updated_at, permission, base_branch,
-                     integration_branch, autonomy, auto_land, {ICON_COLUMNS}, max_children,
-                     allow_api_keys, checks, proposed_checks, computer
-             FROM projects
-             ORDER BY created_at ASC, id ASC"
-        ))?;
-        let rows = stmt.query_map([], RawProject::from_row)?;
-
-        let mut projects = Vec::new();
-        for row in rows {
-            projects.push(row?.into_project()?);
-        }
-        Ok(projects)
+        let mut stmt = self
+            .conn
+            .prepare(&select("ORDER BY created_at ASC, id ASC"))?;
+        stmt.query_map([], RawProject::from_row)?
+            .map(|row| row?.into_project())
+            .collect()
     }
 
     /// Renames project `id`, or sets its icon, permission mode, autonomy level, base branch,
@@ -334,49 +340,29 @@ impl Store {
         let mut raw = fetch_raw(&tx, &id_text)?.ok_or(StoreError::NotFound { id })?;
 
         let mut changed = false;
-        if let Some(name) = &edit.name
-            && *name != raw.name
-        {
-            raw.name.clone_from(name);
-            changed = true;
+        if let Some(name) = &edit.name {
+            changed |= replace(&mut raw.name, name);
         }
-        if edit.icon.is_some() && edit.icon != raw.icon {
-            raw.icon.clone_from(&edit.icon);
-            changed = true;
+        if edit.icon.is_some() {
+            changed |= replace(&mut raw.icon, &edit.icon);
         }
-        if let Some(permission) = &edit.permission
-            && *permission != raw.permission
-        {
-            raw.permission.clone_from(permission);
-            changed = true;
+        if let Some(permission) = &edit.permission {
+            changed |= replace(&mut raw.permission, permission);
         }
-        if let Some(autonomy) = &edit.autonomy
-            && *autonomy != raw.autonomy
-        {
-            raw.autonomy.clone_from(autonomy);
-            changed = true;
+        if let Some(autonomy) = &edit.autonomy {
+            changed |= replace(&mut raw.autonomy, autonomy);
         }
-        if edit.base_branch.is_some() && edit.base_branch != raw.base_branch {
-            raw.base_branch.clone_from(&edit.base_branch);
-            changed = true;
+        if edit.base_branch.is_some() {
+            changed |= replace(&mut raw.base_branch, &edit.base_branch);
         }
-        if let Some(auto_land) = edit.auto_land
-            && auto_land != raw.auto_land
-        {
-            raw.auto_land = auto_land;
-            changed = true;
+        if let Some(auto_land) = &edit.auto_land {
+            changed |= replace(&mut raw.auto_land, auto_land);
         }
-        if let Some(max) = edit.max_children
-            && max != raw.max_children
-        {
-            raw.max_children = max;
-            changed = true;
+        if let Some(max) = &edit.max_children {
+            changed |= replace(&mut raw.max_children, max);
         }
-        if let Some(allow) = edit.allow_api_keys
-            && allow != raw.allow_api_keys
-        {
-            raw.allow_api_keys = allow;
-            changed = true;
+        if let Some(allow) = &edit.allow_api_keys {
+            changed |= replace(&mut raw.allow_api_keys, allow);
         }
         if let Some(checks) = &edit.checks {
             let checks = (!checks.is_empty()).then(|| checks.clone());
@@ -387,17 +373,11 @@ impl Store {
             }
         } else if let Some(proposed) = &edit.proposed_checks {
             let proposed = (!proposed.is_empty()).then(|| proposed.clone());
-            if proposed != raw.proposed_checks {
-                raw.proposed_checks = proposed;
-                changed = true;
-            }
+            changed |= replace(&mut raw.proposed_checks, &proposed);
         }
         if let Some(computer) = &edit.computer {
             let computer = (!computer.is_empty()).then(|| computer.clone());
-            if computer != raw.computer {
-                raw.computer = computer;
-                changed = true;
-            }
+            changed |= replace(&mut raw.computer, &computer);
         }
 
         if changed {

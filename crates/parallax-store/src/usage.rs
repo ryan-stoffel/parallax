@@ -6,8 +6,8 @@
 //! `session_usage_totals` from replacing an existing row for the unnamed model.
 
 use jiff::Timestamp;
-use rusqlite::params;
 use rusqlite::types::Type;
+use rusqlite::{Row, params};
 use uuid::Uuid;
 
 use crate::Store;
@@ -20,6 +20,17 @@ fn model_key(model: Option<&str>) -> &str {
 
 fn model_value(text: String) -> Option<String> {
     if text.is_empty() { None } else { Some(text) }
+}
+
+/// The summed cost in column `sum`, or `None` when column `count`, how many deltas reported one,
+/// is zero.
+fn reported_cost(row: &Row<'_>, sum: usize, count: usize) -> rusqlite::Result<Option<u64>> {
+    let reported: i64 = row.get(count)?;
+    if reported > 0 {
+        row.get(sum).map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// One run's token and cost delta for one model, ready to append.
@@ -106,7 +117,8 @@ impl RawLimitSnapshot {
             used_percent: self.used_percent,
             resets_at: self
                 .resets_at
-                .map(|text| timestamp::parse(&text))
+                .as_deref()
+                .map(timestamp::parse)
                 .transpose()?,
             captured_at: timestamp::parse(&self.captured_at)?,
         })
@@ -170,18 +182,12 @@ impl Store {
                     timestamp::format(until)
                 ],
                 |row| {
-                    let reported: i64 = row.get(5)?;
-                    let cost_usd_micros = if reported > 0 {
-                        Some(row.get::<_, u64>(4)?)
-                    } else {
-                        None
-                    };
                     Ok(UsageSummary {
                         input_tokens: row.get(0)?,
                         output_tokens: row.get(1)?,
                         cache_read_tokens: row.get(2)?,
                         cache_write_tokens: row.get(3)?,
-                        cost_usd_micros,
+                        cost_usd_micros: reported_cost(row, 4, 5)?,
                     })
                 },
             )
@@ -223,12 +229,6 @@ impl Store {
                 let hour = row.get::<_, String>(0)?.parse().map_err(|error| {
                     rusqlite::Error::FromSqlConversionFailure(0, Type::Text, Box::new(error))
                 })?;
-                let reported: i64 = row.get(8)?;
-                let cost_usd_micros = if reported > 0 {
-                    Some(row.get::<_, u64>(7)?)
-                } else {
-                    None
-                };
                 Ok(UsageHour {
                     hour,
                     account_id: row.get(1)?,
@@ -237,7 +237,7 @@ impl Store {
                     output_tokens: row.get(4)?,
                     cache_read_tokens: row.get(5)?,
                     cache_write_tokens: row.get(6)?,
-                    cost_usd_micros,
+                    cost_usd_micros: reported_cost(row, 7, 8)?,
                 })
             },
         )?;
@@ -331,11 +331,7 @@ impl Store {
                 captured_at: row.get(4)?,
             })
         })?;
-        let mut snapshots = Vec::new();
-        for row in rows {
-            snapshots.push(row?.into_snapshot()?);
-        }
-        Ok(snapshots)
+        rows.map(|row| row?.into_snapshot()).collect()
     }
 
     /// Replaces `session_id`'s running usage totals wholesale with `totals`, so they match the

@@ -46,7 +46,8 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use rusqlite::{Connection, Error as SqliteError, ErrorCode};
+use rusqlite::{Connection, Error as SqliteError, ErrorCode, Params, Statement};
+use uuid::Uuid;
 
 pub use accounts::{Account, AccountFields};
 pub use areas::{Area, AreaFields};
@@ -226,6 +227,13 @@ impl Store {
     }
 }
 
+/// Runs `stmt`, whose first column is an id, and parses each row's.
+fn ids(stmt: &mut Statement<'_>, params: impl Params) -> Result<Vec<Uuid>, StoreError> {
+    stmt.query_map(params, |row| row.get::<_, String>(0))?
+        .map(|id| Ok(Uuid::parse_str(&id?)?))
+        .collect()
+}
+
 /// Sets the pragmas every connection needs: a busy timeout so lock
 /// contention waits instead of failing immediately, WAL journaling so
 /// readers never block on a writer, and foreign key enforcement.
@@ -250,10 +258,10 @@ fn configure(conn: &Connection) -> Result<(), StoreError> {
 fn set_wal_mode(conn: &Connection) -> Result<(), StoreError> {
     let deadline = Instant::now() + BUSY_TIMEOUT;
     loop {
-        let attempt = conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0));
+        let attempt = conn
+            .pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0));
         match attempt {
             Ok(mode) => {
-                let mode: String = mode;
                 return if mode.eq_ignore_ascii_case("wal") {
                     Ok(())
                 } else {

@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 use crate::Store;
@@ -77,13 +77,14 @@ impl Store {
         let mut stmt = self
             .conn
             .prepare("SELECT turn_id, text FROM turns WHERE run_id = ?1")?;
-        let rows = stmt.query_map(params![run_id.to_string()], row_to_turn)?;
-        let mut turns = Vec::new();
-        for row in rows {
+        let rows = stmt.query_map(params![run_id.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get(1)?))
+        })?;
+        rows.map(|row| {
             let (turn_id, text) = row?;
-            turns.push((Uuid::parse_str(&turn_id)?, text));
-        }
-        Ok(turns)
+            Ok((Uuid::parse_str(&turn_id)?, text))
+        })
+        .collect()
     }
 
     /// The id of `run_id`'s newest recorded turn, or `None` if it has none: where a fork with no
@@ -119,10 +120,6 @@ impl Store {
         )?;
         at.as_deref().map(timestamp::parse).transpose()
     }
-}
-
-fn row_to_turn(row: &Row<'_>) -> rusqlite::Result<(String, String)> {
-    Ok((row.get(0)?, row.get(1)?))
 }
 
 #[cfg(test)]
