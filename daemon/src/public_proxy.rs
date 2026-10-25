@@ -8,8 +8,7 @@
 //! literal or a `localhost` name: a public name that resolves to loopback (`localtest.me`, or a
 //! page rebinding its own name) is refused. A public page can still send blind requests to an
 //! allowed loopback address, as any browser's pages can, but can't read the answers across
-//! origins. It carries bytes only, so
-//! HTTP, TLS, and `WebSocket`s pass through unchanged.
+//! origins. It carries bytes only, so HTTP, TLS, and `WebSocket`s pass through unchanged.
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -80,33 +79,8 @@ async fn serve(mut client: TcpStream, loopback: bool) -> io::Result<()> {
     client.write_all(&[5, 0]).await?;
     let mut request = [0; 4];
     client.read_exact(&mut request).await?;
-    let host = match request[3] {
-        1 => {
-            let mut ip = [0; 4];
-            client.read_exact(&mut ip).await?;
-            Host::Ip(Ipv4Addr::from(ip).into())
-        }
-        3 => {
-            let mut len = [0; 1];
-            client.read_exact(&mut len).await?;
-            let mut name = vec![0; usize::from(len[0])];
-            client.read_exact(&mut name).await?;
-            Host::Name(String::from_utf8_lossy(&name).into_owned())
-        }
-        4 => {
-            let mut ip = [0; 16];
-            client.read_exact(&mut ip).await?;
-            Host::Ip(Ipv6Addr::from(ip).into())
-        }
-        _ => return reply(&mut client, UNSUPPORTED).await,
-    };
-    // Chrome sends an address in a URL, such as 127.0.0.1 or [::1], as a name.
-    let host = match host {
-        Host::Name(name) => match name.trim_start_matches('[').trim_end_matches(']').parse() {
-            Ok(ip) => Host::Ip(ip),
-            Err(_) => Host::Name(name),
-        },
-        ip @ Host::Ip(_) => ip,
+    let Some(host) = read_host(&mut client, request[3]).await? else {
+        return reply(&mut client, UNSUPPORTED).await;
     };
     let mut port = [0; 2];
     client.read_exact(&mut port).await?;
@@ -115,25 +89,10 @@ async fn serve(mut client: TcpStream, loopback: bool) -> io::Result<()> {
     if request[0] != 5 || request[1] != 1 || request[2] != 0 || port == 0 {
         return reply(&mut client, UNSUPPORTED).await;
     }
-    // Loopback only by an address or a `localhost` name, never by a name that resolves there. A
-    // `localhost` name is loopback without DNS, as browsers treat it.
-    let localhost = matches!(&host, Host::Name(name)
-        if { let name = name.trim_end_matches('.').to_ascii_lowercase(); name == "localhost" || name.ends_with(".localhost") });
+    // Loopback only by an address or a `localhost` name, never by a name that resolves there.
+    let localhost = matches!(&host, Host::Name(name) if is_localhost(name));
     let loopback = loopback && (localhost || matches!(host, Host::Ip(_)));
-    let addresses: Vec<SocketAddr> = match host {
-        Host::Ip(ip) => vec![SocketAddr::new(ip, port)],
-        Host::Name(_) if localhost => vec![
-            SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port),
-            SocketAddr::new(Ipv6Addr::LOCALHOST.into(), port),
-        ],
-        Host::Name(name) => {
-            match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((name, port))).await
-            {
-                Ok(Ok(found)) => found.collect(),
-                _ => Vec::new(),
-            }
-        }
-    };
+    let addresses = resolve(host, port, localhost).await;
     if addresses.is_empty() {
         return reply(&mut client, UNREACHABLE).await;
     }
@@ -159,6 +118,62 @@ async fn serve(mut client: TcpStream, loopback: bool) -> io::Result<()> {
 enum Host {
     Ip(IpAddr),
     Name(String),
+}
+
+/// The host a CONNECT request names with address type `kind`, or `None` for a type SOCKS5
+/// doesn't have.
+async fn read_host(client: &mut TcpStream, kind: u8) -> io::Result<Option<Host>> {
+    let host = match kind {
+        1 => {
+            let mut ip = [0; 4];
+            client.read_exact(&mut ip).await?;
+            Host::Ip(Ipv4Addr::from(ip).into())
+        }
+        3 => {
+            let mut len = [0; 1];
+            client.read_exact(&mut len).await?;
+            let mut name = vec![0; usize::from(len[0])];
+            client.read_exact(&mut name).await?;
+            let name = String::from_utf8_lossy(&name).into_owned();
+            // Chrome sends an address in a URL, such as 127.0.0.1 or [::1], as a name.
+            match name.trim_start_matches('[').trim_end_matches(']').parse() {
+                Ok(ip) => Host::Ip(ip),
+                Err(_) => Host::Name(name),
+            }
+        }
+        4 => {
+            let mut ip = [0; 16];
+            client.read_exact(&mut ip).await?;
+            Host::Ip(Ipv6Addr::from(ip).into())
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(host))
+}
+
+/// Whether `name` is `localhost` or under it, which is loopback without DNS, as browsers treat it.
+fn is_localhost(name: &str) -> bool {
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    name == "localhost" || name.ends_with(".localhost")
+}
+
+/// Where `host` is at `port`: its address, this machine's loopback for a `localhost` name, or
+/// what the name resolves to within [`CONNECT_TIMEOUT`], which may be nothing.
+async fn resolve(host: Host, port: u16, localhost: bool) -> Vec<SocketAddr> {
+    match host {
+        Host::Ip(ip) => vec![SocketAddr::new(ip, port)],
+        Host::Name(_) if localhost => vec![
+            SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port),
+            SocketAddr::new(Ipv6Addr::LOCALHOST.into(), port),
+        ],
+        Host::Name(name) => {
+            match tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((name, port))).await
+            {
+                Ok(Ok(found)) => found.collect(),
+                _ => Vec::new(),
+            }
+        }
+    }
 }
 
 /// Whether the proxy refuses `ip`: a local network's, or this machine's own unless `loopback`
@@ -222,15 +237,13 @@ fn local_v6(ip: Ipv6Addr) -> bool {
 /// translator routes to.
 fn embedded_v4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     let bits = u128::from(ip);
+    let octets = ip.octets();
+    let v4 = |at: usize| Ipv4Addr::new(octets[at], octets[at + 1], octets[at + 2], octets[at + 3]);
     if bits >> 32 == 0x0064_ff9b_u128 << 64 {
-        return Some(Ipv4Addr::from(
-            ip.octets()[12..16].try_into().unwrap_or([0; 4]),
-        ));
+        return Some(v4(12));
     }
     if bits >> 112 == 0x2002 {
-        return Some(Ipv4Addr::from(
-            ip.octets()[2..6].try_into().unwrap_or([0; 4]),
-        ));
+        return Some(v4(2));
     }
     None
 }

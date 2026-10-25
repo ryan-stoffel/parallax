@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 
 use super::{
     InstallOutcome, ServiceError, ServiceState, Status, UninstallOutcome, check_label_serves,
-    home_dir, prepare_install, remove_file, run, run_ok, stop_outside_serve, write_file,
+    escape_xml, home_dir, prepare_install, remove_file, run, run_ok, stop_outside_serve,
+    unescape_xml, write_file,
 };
 use crate::paths::{DATA_DIR_ENV, DataDir};
 
@@ -42,10 +43,10 @@ pub fn plist_path(label: &str) -> Result<PathBuf, ServiceError> {
 /// included, throttled to one start every 10 s. Only `launchctl bootout` keeps it stopped.
 #[must_use]
 pub fn render_plist(label: &str, program: &Path, data_dir: &DataDir) -> String {
-    let label = escape_plist_text(label);
-    let program = escape_plist_text(&program.display().to_string());
-    let data_dir_value = escape_plist_text(&data_dir.root().display().to_string());
-    let log = escape_plist_text(&data_dir.log_file().display().to_string());
+    let label = escape_xml(label);
+    let program = escape_xml(&program.display().to_string());
+    let data_dir_value = escape_xml(&data_dir.root().display().to_string());
+    let log = escape_xml(&data_dir.log_file().display().to_string());
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
@@ -74,13 +75,6 @@ pub fn render_plist(label: &str, program: &Path, data_dir: &DataDir) -> String {
          </dict>\n\
          </plist>\n"
     )
-}
-
-// Only text content is ever generated (never an attribute), so quotes need no escaping.
-fn escape_plist_text(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 /// Installs or updates the per-user `LaunchAgent` for `label`, running the current `plxd`
@@ -140,11 +134,7 @@ pub fn install(
         run_ok(LAUNCHCTL, &["kickstart", &format!("{uid_target}/{label}")])?;
     }
 
-    Ok(if already_loaded {
-        InstallOutcome::Reinstalled
-    } else {
-        InstallOutcome::Installed
-    })
+    Ok(InstallOutcome::of(already_loaded))
 }
 
 /// Runs `launchctl`, the program at `launchctl`, with `args`, a `bootstrap`, trying again every
@@ -180,11 +170,7 @@ pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
         )?;
     }
     let removed_file = remove_file(&plist_path(label)?)?;
-    Ok(if was_loaded || removed_file {
-        UninstallOutcome::Removed
-    } else {
-        UninstallOutcome::NotInstalled
-    })
+    Ok(UninstallOutcome::of(was_loaded || removed_file))
 }
 
 /// Reports what launchd knows about `label`, and whether `data_dir`'s socket answers right now.
@@ -209,12 +195,7 @@ fn plist_program(plist: &str) -> Option<PathBuf> {
     let (_, rest) = plist.split_once("<key>ProgramArguments</key>")?;
     let (_, rest) = rest.split_once("<string>")?;
     let (program, _) = rest.split_once("</string>")?;
-    Some(PathBuf::from(
-        program
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&amp;", "&"),
-    ))
+    Some(PathBuf::from(unescape_xml(program)))
 }
 
 /// Asks launchd about `label` with `launchctl print`. A label nothing has bootstrapped yet is
@@ -249,7 +230,7 @@ mod tests {
     use std::path::Path;
     use std::time::{Duration, Instant};
 
-    use super::{bootstrap, escape_plist_text, parse_print_output, plist_path, render_plist};
+    use super::{bootstrap, escape_xml, parse_print_output, plist_path, render_plist};
     use crate::paths::DataDir;
     use crate::service::DEFAULT_LABEL;
     use crate::service::tests::fake_program;
@@ -322,8 +303,8 @@ mod tests {
 
     #[test]
     fn escaping_handles_the_reserved_characters_and_leaves_the_rest_alone() {
-        assert_eq!(escape_plist_text("a&b<c>d"), "a&amp;b&lt;c&gt;d");
-        assert_eq!(escape_plist_text("plain"), "plain");
+        assert_eq!(escape_xml("a&b<c>d"), "a&amp;b&lt;c&gt;d");
+        assert_eq!(escape_xml("plain"), "plain");
     }
 
     #[test]

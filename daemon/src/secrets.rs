@@ -116,31 +116,13 @@ pub(crate) async fn request(
         }
         Some(_) => {}
         None => {
-            let project = running(daemon, run_id).await?.ok_or_else(|| {
-                ErrorObject::invalid_params(format!(
-                    "thread {run_id} isn't running a turn: a secret is asked for from inside one"
-                ))
-            })?;
-            {
-                let mut requests = secrets.lock();
-                requests.retain(|_, request| request.at.elapsed() < REMEMBERED);
-                requests.insert(
-                    id,
-                    Request {
-                        run: run_id,
-                        status: SecretStatus::Pending,
-                        secret_ref: None,
-                        at: Instant::now(),
-                    },
-                );
-            }
             let item = AgentOutputItem::SecretRequested {
                 request_id: id.hyphenated().to_string(),
                 label,
                 reason,
                 placeholder,
             };
-            log(daemon, run_id, project, item).await;
+            begin(daemon, run_id, id, item).await?;
         }
     }
     let deadline = Instant::now() + Duration::from_millis(wait_ms.into()).min(MAX_WAIT);
@@ -164,6 +146,35 @@ pub(crate) async fn request(
             }
         }
     }
+}
+
+/// Records request `id` of `run`, which must be running a turn, and logs its `item`.
+async fn begin(
+    daemon: &Daemon,
+    run: RunId,
+    id: Uuid,
+    item: AgentOutputItem,
+) -> Result<(), ErrorObject> {
+    let project = running(daemon, run).await?.ok_or_else(|| {
+        ErrorObject::invalid_params(format!(
+            "thread {run} isn't running a turn: a secret is asked for from inside one"
+        ))
+    })?;
+    {
+        let mut requests = daemon.secrets.lock();
+        requests.retain(|_, request| request.at.elapsed() < REMEMBERED);
+        requests.insert(
+            id,
+            Request {
+                run,
+                status: SecretStatus::Pending,
+                secret_ref: None,
+                at: Instant::now(),
+            },
+        );
+    }
+    log(daemon, run, project, item).await;
+    Ok(())
 }
 
 /// `secret/answer`: see the module documentation. Answers to one request run one at a time, and
@@ -270,11 +281,7 @@ async fn end(
         request.secret_ref = secret_ref;
     }
     daemon.secrets.changed.notify_waiters();
-    let project = daemon
-        .reader
-        .run(&CancellationToken::new(), move |db| {
-            db.get_run(run.into()).map_err(|e| store_error(&e))
-        })
+    let project = run_row(daemon, run)
         .await
         .ok()
         .flatten()
@@ -308,13 +315,19 @@ async fn log(daemon: &Daemon, run: RunId, project: ProjectId, item: AgentOutputI
     }
 }
 
-/// `run`'s scope while it is running a turn, else `None`.
-async fn running(daemon: &Daemon, run: RunId) -> Result<Option<ProjectId>, ErrorObject> {
-    let row = daemon
+/// `run`'s row, if it exists.
+async fn run_row(daemon: &Daemon, run: RunId) -> Result<Option<parallax_store::Run>, ErrorObject> {
+    daemon
         .reader
         .run(&CancellationToken::new(), move |db| {
             db.get_run(run.into()).map_err(|e| store_error(&e))
         })
+        .await
+}
+
+/// `run`'s scope while it is running a turn, else `None`.
+async fn running(daemon: &Daemon, run: RunId) -> Result<Option<ProjectId>, ErrorObject> {
+    let row = run_row(daemon, run)
         .await?
         .ok_or_else(|| crate::agents::run_not_found(run))?;
     let status = crate::agents::snapshot(&row, None)?.status;

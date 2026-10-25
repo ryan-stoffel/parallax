@@ -18,7 +18,7 @@ use std::time::Duration;
 use parallax_protocol::jsonrpc::{ErrorObject, INTERNAL_ERROR, INVALID_PARAMS, Notification};
 use parallax_protocol::methods::{NotificationMethod, TerminalExit, TerminalOutput};
 use parallax_protocol::{
-    TerminalExitParams, TerminalKey, TerminalOpenParams, TerminalOutputParams,
+    TerminalCommand, TerminalExitParams, TerminalKey, TerminalOpenParams, TerminalOutputParams,
 };
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::{broadcast, mpsc};
@@ -96,12 +96,7 @@ impl Terminals {
         stopped: &CancellationToken,
     ) -> Result<(), ErrorObject> {
         let key = (params.thread_id.clone(), params.terminal_id.clone());
-        let size = PtySize {
-            rows: params.rows.max(1),
-            cols: params.cols.max(1),
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+        let size = pty_size(params.cols, params.rows);
         let terminal = {
             let mut open = lock(&self.open);
             if let Some(terminal) = open.get(&key) {
@@ -153,12 +148,7 @@ impl Terminals {
     /// `terminal/resize`.
     pub(crate) fn resize(&self, thread_id: String, terminal_id: String, cols: u16, rows: u16) {
         if let Some(terminal) = lock(&self.open).get(&(thread_id, terminal_id)) {
-            terminal.resize(PtySize {
-                rows: rows.max(1),
-                cols: cols.max(1),
-                pixel_width: 0,
-                pixel_height: 0,
-            });
+            terminal.resize(pty_size(cols, rows));
         }
     }
 
@@ -202,12 +192,7 @@ impl Terminals {
             cols: 120,
             rows: 30,
         };
-        let size = PtySize {
-            rows: params.rows,
-            cols: params.cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
+        let size = pty_size(params.cols, params.rows);
         let terminal = start(key.clone(), params, size, Arc::clone(&self.open), env)?;
         if let Some(old) = lock(&self.open).insert(key, Arc::clone(&terminal)) {
             old.kill();
@@ -289,10 +274,6 @@ impl Terminal {
 
 /// Starts `params`' program, or the user's login shell (`PowerShell` on Windows), in a new
 /// pseudo-terminal, with the threads that serve it.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one sequence of steps, each of which must happen before the next"
-)]
 fn start(
     key: Key,
     params: TerminalOpenParams,
@@ -316,7 +297,54 @@ fn start(
         )
     };
     let command = params.command.is_some();
-    let mut builder = match params.command {
+    let (builder, shell) = command_builder(params.command, cwd, env);
+    let pair = native_pty_system().openpty(size).map_err(|e| failed(&e))?;
+    let child = pair.slave.spawn_command(builder).map_err(|e| failed(&e))?;
+    #[cfg(unix)]
+    let tty = pair.master.tty_name().map(|path| {
+        path.to_string_lossy()
+            .trim_start_matches("/dev/")
+            .to_owned()
+    });
+    #[cfg(unix)]
+    let pid = child.process_id();
+    drop(pair.slave);
+    let reader = pair.master.try_clone_reader().map_err(|e| failed(&e))?;
+    let writer = pair.master.take_writer().map_err(|e| failed(&e))?;
+    let (input, typed) = std_mpsc::channel();
+    let terminal = Arc::new(Terminal {
+        key,
+        command,
+        shared: Mutex::new(Shared {
+            history: History::new(MAX_LINES, MAX_BYTES),
+            master: Some(pair.master),
+            exit: None,
+        }),
+        output: broadcast::channel(LAG).0,
+        input,
+        killer: Mutex::new(child.clone_killer()),
+        streams: Mutex::default(),
+        shell,
+        #[cfg(unix)]
+        pid,
+        #[cfg(unix)]
+        tty,
+    });
+    if let Err(error) = serve(&terminal, reader, writer, typed, child, open) {
+        terminal.kill();
+        return Err(failed(&error));
+    }
+    Ok(terminal)
+}
+
+/// The command for `command`, or else the user's login shell (`PowerShell` on Windows), in `cwd`
+/// or its home folder, with `env`; and the program it runs.
+fn command_builder(
+    command: Option<TerminalCommand>,
+    cwd: Option<String>,
+    env: &[(&str, &str)],
+) -> (CommandBuilder, String) {
+    let mut builder = match command {
         Some(command) => {
             let mut builder = CommandBuilder::new(command.program);
             builder.args(command.args);
@@ -354,77 +382,48 @@ fn start(
     {
         builder.env("LANG", "en_US.UTF-8");
     }
+    (builder, shell)
+}
 
-    let pair = native_pty_system().openpty(size).map_err(|e| failed(&e))?;
-    let mut child = pair.slave.spawn_command(builder).map_err(|e| failed(&e))?;
-    #[cfg(unix)]
-    let tty = pair.master.tty_name().map(|path| {
-        path.to_string_lossy()
-            .trim_start_matches("/dev/")
-            .to_owned()
-    });
-    #[cfg(unix)]
-    let pid = child.process_id();
-    drop(pair.slave);
-    let reader = pair.master.try_clone_reader().map_err(|e| failed(&e))?;
-    let writer = pair.master.take_writer().map_err(|e| failed(&e))?;
-    let (input, typed) = std_mpsc::channel();
-    let terminal = Arc::new(Terminal {
-        key,
-        command,
-        shared: Mutex::new(Shared {
-            history: History::new(MAX_LINES, MAX_BYTES),
-            master: Some(pair.master),
-            exit: None,
-        }),
-        output: broadcast::channel(LAG).0,
-        input,
-        killer: Mutex::new(child.clone_killer()),
-        streams: Mutex::default(),
-        shell,
-        #[cfg(unix)]
-        pid,
-        #[cfg(unix)]
-        tty,
-    });
-
+/// Starts `terminal`'s three threads: one reads what it prints from `reader`, one writes what's
+/// `typed` to `writer`, and one waits for `child` to exit, then forgets it in `open`.
+fn serve(
+    terminal: &Arc<Terminal>,
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+    typed: std_mpsc::Receiver<String>,
+    mut child: Box<dyn portable_pty::Child + Send + Sync>,
+    open: Open,
+) -> std::io::Result<()> {
     let (read_done, reading) = std_mpsc::channel::<()>();
-    let printed = Arc::clone(&terminal);
-    let spawned = std::thread::Builder::new()
+    let printed = Arc::clone(terminal);
+    std::thread::Builder::new()
         .name("terminal-read".to_owned())
         .spawn(move || {
             let _done = read_done;
             read(&printed, reader);
-        })
-        .and_then(|_| {
-            std::thread::Builder::new()
-                .name("terminal-write".to_owned())
-                .spawn(move || write(writer, &typed))
-        })
-        .and_then(|_| {
-            let exited = Arc::clone(&terminal);
-            std::thread::Builder::new()
-                .name("terminal-wait".to_owned())
-                .spawn(move || {
-                    let code = child
-                        .wait()
-                        .ok()
-                        .and_then(|status| i32::try_from(status.exit_code()).ok())
-                        .unwrap_or(-1);
-                    // A Windows pseudo-console's output ends only once it closes. Closing it waits
-                    // for the reader, which needs the lock, so it's dropped outside it.
-                    let master = lock(&exited.shared).master.take();
-                    drop(master);
-                    // The last of its output, unless a process it left behind holds the terminal.
-                    let _ = reading.recv_timeout(Duration::from_secs(2));
-                    finish(&exited, code, &open);
-                })
-        });
-    if let Err(error) = spawned {
-        terminal.kill();
-        return Err(failed(&error));
-    }
-    Ok(terminal)
+        })?;
+    std::thread::Builder::new()
+        .name("terminal-write".to_owned())
+        .spawn(move || write(writer, &typed))?;
+    let exited = Arc::clone(terminal);
+    std::thread::Builder::new()
+        .name("terminal-wait".to_owned())
+        .spawn(move || {
+            let code = child
+                .wait()
+                .ok()
+                .and_then(|status| i32::try_from(status.exit_code()).ok())
+                .unwrap_or(-1);
+            // A Windows pseudo-console's output ends only once it closes. Closing it waits for
+            // the reader, which needs the lock, so it's dropped outside it.
+            let master = lock(&exited.shared).master.take();
+            drop(master);
+            // The last of its output, unless a process it left behind holds the terminal.
+            let _ = reading.recv_timeout(Duration::from_secs(2));
+            finish(&exited, code, &open);
+        })?;
+    Ok(())
 }
 
 /// Asks for the cursor's position, which a Windows pseudo-console does first, and prints nothing
@@ -804,6 +803,16 @@ fn string(text: &str) -> Option<(usize, &str)> {
         _ => return None,
     };
     Some((end + terminator, &text[..end]))
+}
+
+/// A terminal `cols` wide and `rows` high, at least one of each.
+fn pty_size(cols: u16, rows: u16) -> PtySize {
+    PtySize {
+        rows: rows.max(1),
+        cols: cols.max(1),
+        pixel_width: 0,
+        pixel_height: 0,
+    }
 }
 
 fn notification<N: NotificationMethod>(params: N::Params) -> Notification {

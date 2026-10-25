@@ -122,7 +122,7 @@ impl Base {
         let authority = rest.split('/').next().unwrap_or_default();
         let (host, port) = match authority.rsplit_once(':') {
             Some((host, port)) => (host, port.parse().map_err(|_| bad("a bad port"))?),
-            None => (authority, if tls { 443 } else { 80 }),
+            None => (authority, default_port(tls)),
         };
         let local = host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
         if !tls && !local {
@@ -136,7 +136,7 @@ impl Base {
     }
 
     fn authority(&self) -> String {
-        if self.port == if self.tls { 443 } else { 80 } {
+        if self.port == default_port(self.tls) {
             self.host.clone()
         } else {
             format!("{}:{}", self.host, self.port)
@@ -164,6 +164,19 @@ impl Base {
             .await?;
         Ok(Box::new(tls))
     }
+}
+
+/// HTTPS's port, or HTTP's.
+fn default_port(tls: bool) -> u16 {
+    if tls { 443 } else { 80 }
+}
+
+/// What a relay call signed in with the user's Clerk session answers when the relay refuses it.
+const SIGN_IN_REFUSED: &str = "The relay didn't accept this sign-in.";
+
+/// What a relay call answers when it couldn't reach the relay.
+fn cant_reach(error: &Error) -> String {
+    format!("Parallax couldn't reach the relay: {error}")
 }
 
 /// One JSON request to the relay, signed in with `token`: its status and JSON body.
@@ -482,12 +495,12 @@ pub(crate) async fn register(daemon: &Daemon, token: &str) -> Result<(), String>
             relay.changed.notify_one();
             Ok(())
         }
-        Ok((401, _)) => Err("The relay didn't accept this sign-in.".to_owned()),
+        Ok((401, _)) => Err(SIGN_IN_REFUSED.to_owned()),
         Ok((status, body)) => Err(format!(
             "The relay answered {status}: {}",
             body["error"].as_str().unwrap_or("no reason")
         )),
-        Err(error) => Err(format!("Parallax couldn't reach the relay: {error}")),
+        Err(error) => Err(cant_reach(&error)),
     }
 }
 
@@ -498,9 +511,9 @@ pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<Vec<RelayHost>
     let answered = http(&daemon.relay.url, "GET", "/v1/hosts", token, None).await;
     let body = match answered {
         Ok((200, body)) => body,
-        Ok((401, _)) => return Err("The relay didn't accept this sign-in.".to_owned()),
+        Ok((401, _)) => return Err(SIGN_IN_REFUSED.to_owned()),
         Ok((status, _)) => return Err(format!("The relay answered {status}.")),
-        Err(error) => return Err(format!("Parallax couldn't reach the relay: {error}")),
+        Err(error) => return Err(cant_reach(&error)),
     };
     let listed = body["hosts"].as_array().cloned().unwrap_or_default();
     Ok(listed
@@ -533,9 +546,9 @@ pub(crate) async fn remove(daemon: &Daemon, token: &str, host_id: &str) -> Resul
             info!(%host_id, "removed a host from the relay");
             Ok(())
         }
-        Ok((401, _)) => Err("The relay didn't accept this sign-in.".to_owned()),
+        Ok((401, _)) => Err(SIGN_IN_REFUSED.to_owned()),
         Ok((status, _)) => Err(format!("The relay answered {status}.")),
-        Err(error) => Err(format!("Parallax couldn't reach the relay: {error}")),
+        Err(error) => Err(cant_reach(&error)),
     }
 }
 
@@ -581,7 +594,7 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
                 failures += 1;
                 relay.set(Status {
                     connected: None,
-                    problem: Some(format!("Parallax couldn't reach the relay: {error}")),
+                    problem: Some(cant_reach(&error)),
                 });
                 Some(backoff(failures))
             }
@@ -713,7 +726,6 @@ async fn serve(
     stop: &CancellationToken,
 ) -> Result<Ended, Error> {
     let (mut sink, mut frames) = socket.split();
-    let send = |text: String| Message::text(text);
     let (replies, mut answered) = mpsc::channel::<String>(16);
     // The streams close with this connection.
     let streams = stop.child_token();
@@ -731,7 +743,7 @@ async fn serve(
     // The webhook URLs this plxd serves, so the relay refuses the rest for free.
     let hooks = || async {
         let keys = crate::schedules::hook_keys(daemon).await;
-        send(json!({ "t": "hooks", "keys": keys }).to_string())
+        Message::text(json!({ "t": "hooks", "keys": keys }).to_string())
     };
     sink.send(hooks().await).await.map_err(failed)?;
     loop {
@@ -751,15 +763,15 @@ async fn serve(
                     return Err(Error::Protocol("the relay stopped answering".to_owned()));
                 }
                 heard = false;
-                sink.send(send("ping".to_owned())).await.map_err(failed)?;
+                sink.send(Message::text("ping")).await.map_err(failed)?;
             }
-            Some(reply) = answered.recv() => sink.send(send(reply)).await.map_err(failed)?,
+            Some(reply) = answered.recv() => sink.send(Message::text(reply)).await.map_err(failed)?,
             () = daemon.relay.hooks_changed.notified() => {
                 sink.send(hooks().await).await.map_err(failed)?;
             }
             Ok(()) = events.changed() => {
                 for push in pushes(&daemon.log, &mut after) {
-                    sink.send(send(push)).await.map_err(failed)?;
+                    sink.send(Message::text(push)).await.map_err(failed)?;
                 }
             }
             frame = frames.next() => {

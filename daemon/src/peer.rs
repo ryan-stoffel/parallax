@@ -70,6 +70,9 @@ type Stream = Box<dyn Io>;
 type Connector =
     Arc<dyn Fn() -> BoxFuture<'static, Result<(Stream, ClientInfo), String>> + Send + Sync>;
 
+/// Where a [`Plxd`]'s `events/event` notifications go, from [`Plxd::notify`].
+type Notify = Arc<Mutex<Option<mpsc::UnboundedSender<Incoming>>>>;
+
 /// The longest a [`Plxd`] keeps using a connection it hasn't written to: under plxd's 90 s idle
 /// timeout, so plxd never closes a connection just as a call is sent on it, and over the 60 s an
 /// `agent/wait` takes, so a waiting `thread_wait` keeps its connection.
@@ -113,8 +116,7 @@ pub struct Plxd {
     connection: Arc<tokio::sync::Mutex<Option<Arc<Connection>>>>,
     next_id: Arc<AtomicI64>,
     timing: Timing,
-    /// Where `events/event` notifications go.
-    notify: Arc<Mutex<Option<mpsc::UnboundedSender<Incoming>>>>,
+    notify: Notify,
     /// A connection has opened, so the next one is a reconnect.
     opened: Arc<AtomicBool>,
 }
@@ -250,9 +252,8 @@ impl Plxd {
         &self,
         params: M::Params,
     ) -> Result<Result<M::Result, ErrorObject>, String> {
-        let id = RequestId::Number(self.next_id.fetch_add(1, Ordering::Relaxed) + 1);
         let request = Request {
-            id,
+            id: next_request_id(&self.next_id),
             method: M::NAME.to_owned(),
             params: Some(crate::commands::with_command_id(M::NAME, params)),
         };
@@ -423,11 +424,7 @@ impl Plxd {
 }
 
 impl Connection {
-    async fn open(
-        connector: &Connector,
-        notify: &Arc<Mutex<Option<mpsc::UnboundedSender<Incoming>>>>,
-        idle: Duration,
-    ) -> Result<Self, String> {
+    async fn open(connector: &Connector, notify: &Notify, idle: Duration) -> Result<Self, String> {
         let (stream, client) = connector().await?;
         let (read, write) = tokio::io::split(stream);
         let state = Arc::new(Mutex::new(State {
@@ -542,7 +539,7 @@ impl Drop for Connection {
 async fn answer_callers(
     mut frames: FramedRead<ReadHalf<Stream>, FrameCodec>,
     state: Arc<Mutex<State>>,
-    notify: Arc<Mutex<Option<mpsc::UnboundedSender<Incoming>>>>,
+    notify: Notify,
 ) {
     while let Some(Ok(frame)) = frames.next().await {
         match Message::from_frame(&frame) {
@@ -584,8 +581,7 @@ async fn heartbeat(connection: Weak<Connection>, next_id: Arc<AtomicI64>, period
         if !connection.subscribed.load(Ordering::Relaxed) {
             continue;
         }
-        let id = RequestId::Number(next_id.fetch_add(1, Ordering::Relaxed) + 1);
-        let request = Request::new::<HostHealth>(id, HostHealthParams {});
+        let request = Request::new::<HostHealth>(next_request_id(&next_id), HostHealthParams {});
         let Ok(answer) = connection.send(&request).await else {
             connection.close();
             return;
@@ -596,6 +592,11 @@ async fn heartbeat(connection: Weak<Connection>, next_id: Arc<AtomicI64>, period
             return;
         }
     }
+}
+
+/// The next id from a client's counter. `initialize` is 0, so ids start at 1.
+fn next_request_id(next_id: &AtomicI64) -> RequestId {
+    RequestId::Number(next_id.fetch_add(1, Ordering::Relaxed) + 1)
 }
 
 fn lost(error: &dyn std::fmt::Display) -> String {

@@ -170,6 +170,28 @@ pub enum UninstallOutcome {
     NotInstalled,
 }
 
+impl InstallOutcome {
+    /// The outcome of an install, by whether the label was loaded before it.
+    fn of(was_loaded: bool) -> Self {
+        if was_loaded {
+            Self::Reinstalled
+        } else {
+            Self::Installed
+        }
+    }
+}
+
+impl UninstallOutcome {
+    /// The outcome of an uninstall, by whether it stopped or removed anything.
+    fn of(removed: bool) -> Self {
+        if removed {
+            Self::Removed
+        } else {
+            Self::NotInstalled
+        }
+    }
+}
+
 /// What the service manager reports about a label.
 ///
 /// Loaded and running are kept as one enum rather than two bools, so a report can't be misread
@@ -447,10 +469,9 @@ fn remove_file(path: &Path) -> Result<bool, ServiceError> {
 }
 
 fn run(program: &str, args: &[&str]) -> Result<Output, ServiceError> {
-    Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|error| ServiceError::io(format!("running {program} {}", args.join(" ")), error))
+    Command::new(program).args(args).output().map_err(|error| {
+        ServiceError::io(format!("running {}", command_line(program, args)), error)
+    })
 }
 
 /// Runs `program` and turns a non-zero exit into [`ServiceError::Failed`].
@@ -460,10 +481,29 @@ fn run_ok(program: &str, args: &[&str]) -> Result<Output, ServiceError> {
         Ok(output)
     } else {
         Err(ServiceError::Failed {
-            command: format!("{program} {}", args.join(" ")),
+            command: command_line(program, args),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         })
     }
+}
+
+fn command_line(program: &str, args: &[&str]) -> String {
+    format!("{program} {}", args.join(" "))
+}
+
+/// `text` as the text of an element in a plist or a task's XML. Only text content is ever
+/// generated (never an attribute), so quotes need no escaping.
+fn escape_xml(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Undoes [`escape_xml`], to read a path back from a file plxd wrote.
+fn unescape_xml(text: &str) -> String {
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 #[cfg(test)]

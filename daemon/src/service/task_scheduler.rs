@@ -15,14 +15,14 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use std::time::{Duration, Instant};
 
-use super::ServiceError;
-#[cfg(any(windows, test))]
-use super::ServiceState;
 #[cfg(windows)]
 use super::{
     InstallOutcome, STOP_TIMEOUT, Status, UninstallOutcome, check_label_serves, home_dir,
     prepare_install, remove_file, run, run_ok, write_file,
 };
+use super::{ServiceError, escape_xml};
+#[cfg(any(windows, test))]
+use super::{ServiceState, unescape_xml};
 #[cfg(windows)]
 use crate::paths::DataDir;
 
@@ -143,13 +143,6 @@ fn quote_arg(text: &str) -> String {
     format!("\"{text}{}\"", "\\".repeat(trailing))
 }
 
-// Only text content is ever generated (never an attribute), so quotes need no escaping.
-fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// `text` as `schtasks /create /xml` reads it most reliably: UTF-16 LE with a byte order mark,
 /// which [`render_task`]'s declaration names.
 #[cfg(any(windows, test))]
@@ -174,10 +167,7 @@ fn task_action(file: &[u8]) -> Option<(PathBuf, PathBuf)> {
     let xml = String::from_utf16(&units).ok()?;
     let (_, rest) = xml.split_once("<Arguments>")?;
     let (arguments, _) = rest.split_once("</Arguments>")?;
-    let arguments = arguments
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&");
+    let arguments = unescape_xml(arguments);
     // Neither path can hold `"`, so the quotes `quote_arg` added mark where each one ends.
     let rest = arguments.strip_prefix("--headless \"")?;
     let (program, rest) = rest.split_once("\" serve --data-dir \"")?;
@@ -261,11 +251,7 @@ pub fn install(
         stop_serve(data_dir)?;
     }
     run_ok(SCHTASKS, &["/run", "/tn", label])?;
-    Ok(if state.loaded() {
-        InstallOutcome::Reinstalled
-    } else {
-        InstallOutcome::Installed
-    })
+    Ok(InstallOutcome::of(state.loaded()))
 }
 
 /// Removes the task for `label`: ends it if it's running, and stops its `serve`, for the data
@@ -297,11 +283,7 @@ pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
         stop_serve(data_dir)?;
     }
     let removed_file = remove_file(&file)?;
-    Ok(if state.loaded() || removed_file {
-        UninstallOutcome::Removed
-    } else {
-        UninstallOutcome::NotInstalled
-    })
+    Ok(UninstallOutcome::of(state.loaded() || removed_file))
 }
 
 /// Reports what Task Scheduler knows about `label`, and whether `data_dir`'s pipe answers right
