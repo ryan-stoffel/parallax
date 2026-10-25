@@ -65,8 +65,6 @@ export function SshHostDialog({ host, onDone }: { host?: Host; onDone: () => voi
   useEffect(() => {
     dialog.current?.showModal();
     hostField.current?.focus();
-  }, []);
-  useEffect(() => {
     void window.parallax.sshSuggestions().then(setSuggestions);
   }, []);
 

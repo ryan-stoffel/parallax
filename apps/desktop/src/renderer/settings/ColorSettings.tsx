@@ -2,23 +2,17 @@ import { Braces, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { IconButton, Segmented } from "../ui";
-import { colorTokens, customColors, parseJsonc, type Mode, type Tokens } from "../vscodeThemes";
+import {
+  colorTokens,
+  customColors,
+  parseJsonc,
+  schemeTokens,
+  type Mode,
+  type Tokens,
+} from "../vscodeThemes";
 import { field, primaryButton, quietButton, Row, Section } from "./parts";
 
 type Theme = { id: string; name: string; mode: Mode; tokens?: Tokens };
-
-/** Parallax's own colors for `mode`, as index.css's .scheme-light or .scheme-dark sets them. */
-function schemeTokens(mode: Mode): Tokens {
-  const probe = document.createElement("span");
-  probe.className = `scheme-${mode}`;
-  document.body.append(probe);
-  const style = getComputedStyle(probe);
-  const tokens = Object.fromEntries(
-    Object.keys(colorTokens).map((t) => [t, style.getPropertyValue(t).trim()]),
-  );
-  probe.remove();
-  return tokens;
-}
 
 /** `color` as the #rrggbb a color picker takes, or black where it can't be one. */
 function toHex(color: string | undefined) {
@@ -54,7 +48,10 @@ export function ColorSettings({
   const [errors, setErrors] = useState<string[]>([]);
   const theme = themes.find((t) => t.id === shown[mode])!;
   const changed = colors[theme.id] ?? {};
-  const base = useMemo(() => ({ ...schemeTokens(mode), ...theme.tokens }), [mode, theme]);
+  const base = useMemo(
+    () => ({ ...schemeTokens(mode, Object.keys(colorTokens)), ...theme.tokens }),
+    [mode, theme],
+  );
 
   const save = (tokens: Tokens) => {
     const { [theme.id]: _, ...rest } = colors;

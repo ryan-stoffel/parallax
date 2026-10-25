@@ -22,7 +22,7 @@ export const settingsSections: { id: SettingsSection; name: string; keywords?: s
  * One setting a search can find. `title` is its row's or section's title on its page, whose
  * `data-setting` is `anchorOf(title)`, unless `anchor` names another.
  */
-export interface SettingEntry {
+interface SettingEntry {
   section: SettingsSection;
   title: string;
   group?: string;
@@ -360,7 +360,7 @@ function entries(
 }
 
 /** A search's hit: a section, or a setting on one with the `data-setting` to show. */
-export interface SettingsResult {
+interface SettingsResult {
   section: SettingsSection;
   title: string;
   /** Where a setting is, for people: "General › Preferences". None for a section. */
@@ -368,20 +368,8 @@ export interface SettingsResult {
   anchor?: string;
 }
 
-const sectionResult = (s: (typeof settingsSections)[number]): SettingsResult => ({
-  section: s.id,
-  title: s.name,
-});
-
-const settingResult = (e: SettingEntry): SettingsResult => {
-  const name = settingsSections.find((s) => s.id === e.section)!.name;
-  return {
-    section: e.section,
-    title: e.title,
-    place: e.group && e.group !== e.title ? `${name} › ${e.group}` : name,
-    anchor: e.anchor ?? anchorOf(e.title),
-  };
-};
+/** A section or setting as search sees it: its result, and its fields with their weights. */
+type Searchable = { result: SettingsResult; fields: [text: string | undefined, weight: number][] };
 
 const wordsOf = (text = "") => text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
 
@@ -430,12 +418,7 @@ function wordScore(q: string, words: string[], fuzzy: boolean): number {
  * Scores an entry for typed words: each must match its title, keywords, group, section, or
  * description, which count in that order. 0 when one doesn't match.
  */
-function score(
-  query: string,
-  typed: string[],
-  fields: [text: string | undefined, weight: number][],
-  fuzzy: boolean,
-) {
+function score(query: string, typed: string[], fields: Searchable["fields"], fuzzy: boolean) {
   const words = fields.map(([text, weight]) => {
     const ws = wordsOf(text);
     // Run together, so "darkmode" finds "dark mode".
@@ -457,10 +440,7 @@ function score(
  * Entries matching `query`'s words, best first; ties keep the index's order. Typos count only
  * when nothing matches without them, so "clock" doesn't also find "block".
  */
-function byWords(
-  query: string,
-  list: { result: SettingsResult; fields: [string | undefined, number][] }[],
-) {
+function byWords(query: string, list: Searchable[]) {
   const q = query.trim().toLowerCase();
   const typed = wordsOf(q);
   if (!typed.length) return list.map((e) => e.result);
@@ -474,24 +454,32 @@ function byWords(
   return exact.length ? exact : ranked(true);
 }
 
-const sectionFields = (s: (typeof settingsSections)[number]) => ({
-  result: sectionResult(s),
+const sectionFields = (s: (typeof settingsSections)[number]): Searchable => ({
+  result: { section: s.id, title: s.name },
   fields: [
     [s.name, 10],
     [s.keywords, 6],
-  ] as [string | undefined, number][],
+  ],
 });
 
-const settingFields = (e: SettingEntry) => ({
-  result: settingResult(e),
-  fields: [
-    [e.title, 10],
-    [e.keywords, 6],
-    [e.group, 3],
-    [settingsSections.find((s) => s.id === e.section)!.name, 3],
-    [e.description, 2],
-  ] as [string | undefined, number][],
-});
+const settingFields = (e: SettingEntry): Searchable => {
+  const name = settingsSections.find((s) => s.id === e.section)!.name;
+  return {
+    result: {
+      section: e.section,
+      title: e.title,
+      place: e.group && e.group !== e.title ? `${name} › ${e.group}` : name,
+      anchor: e.anchor ?? anchorOf(e.title),
+    },
+    fields: [
+      [e.title, 10],
+      [e.keywords, 6],
+      [e.group, 3],
+      [name, 3],
+      [e.description, 2],
+    ],
+  };
+};
 
 /**
  * Sections and settings matching `query`, best first: each typed word must match a word of

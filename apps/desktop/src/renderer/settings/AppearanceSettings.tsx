@@ -6,13 +6,7 @@ import {
   type ThemePreference,
   type WindowMaterial,
 } from "../../preload/bridge";
-import {
-  seesThrough,
-  setAppearance,
-  shownThemes,
-  useAppearance,
-  type Appearance,
-} from "../appearance";
+import { seesThrough, setAppearance, shownThemes, useAppearance } from "../appearance";
 import { ParallaxMark } from "../logos";
 import { IconButton, Picker, Segmented, menuItem, type PickerOption } from "../ui";
 import {
@@ -35,7 +29,6 @@ const parallaxThemes: ColorTheme[] = [
   { id: "parallax-dark", name: "Parallax", mode: "dark" },
 ];
 
-/** What each usage view shows, for its row's description. */
 /**
  * A small drawing of the app in `theme`'s `mode`: the sidebar, a few lines, a card, and the
  * composer. It draws with the real tokens, which .scheme-light or .scheme-dark beside the
@@ -108,14 +101,13 @@ export function AppearanceSettings({
   onThemeChange: (theme: ThemePreference) => void;
 }) {
   const appearance = useAppearance();
-  const set = (change: Partial<Appearance>) => setAppearance(change);
   // The mode whose menu opened Add theme, which gets the added theme.
   const [adding, setAdding] = useState<Mode>();
   const added = useAddedThemes();
   useEffect(() => void fillIcons(), []);
   const picked = shownThemes(appearance, added);
   const slot = (mode: Mode, id: string) =>
-    set(mode === "light" ? { lightTheme: id } : { darkTheme: id });
+    setAppearance(mode === "light" ? { lightTheme: id } : { darkTheme: id });
   // The mode showing now, ringed in the previews.
   const showing = (mode: Mode) =>
     theme === mode ||
@@ -279,7 +271,7 @@ export function AppearanceSettings({
         themes={[...parallaxThemes, ...added.flatMap((e) => e.themes)]}
         shown={picked}
         colors={appearance.colors}
-        onChange={(colors) => set({ colors })}
+        onChange={(colors) => setAppearance({ colors })}
       />
 
       {canSet && (
@@ -302,7 +294,7 @@ export function AppearanceSettings({
                   ? "opaque"
                   : appearance.windowMaterial
               }
-              onChange={(windowMaterial) => set({ windowMaterial })}
+              onChange={(windowMaterial) => setAppearance({ windowMaterial })}
             />
           </Row>
           {needsTransparentWindow(appearance.windowMaterial, window.parallax.platform) &&
@@ -334,7 +326,7 @@ export function AppearanceSettings({
                 step={5}
                 value={appearance.backgroundOpacity}
                 disabled={!through}
-                onChange={(e) => set({ backgroundOpacity: Number(e.target.value) })}
+                onChange={(e) => setAppearance({ backgroundOpacity: Number(e.target.value) })}
                 className="w-40 accent-accent"
               />
               <span className="w-9 text-right text-body text-muted-foreground tabular-nums">
@@ -357,7 +349,7 @@ export function AppearanceSettings({
               { value: "more", name: "More" },
             ]}
             value={appearance.contrast}
-            onChange={(contrast) => set({ contrast })}
+            onChange={(contrast) => setAppearance({ contrast })}
           />
         </Row>
         <Row
@@ -367,7 +359,7 @@ export function AppearanceSettings({
           <Switch
             label="Reduce motion"
             checked={appearance.motion === "reduce"}
-            onChange={(on) => set({ motion: on ? "reduce" : "system" })}
+            onChange={(on) => setAppearance({ motion: on ? "reduce" : "system" })}
           />
         </Row>
         <Row
@@ -381,7 +373,7 @@ export function AppearanceSettings({
               { value: "blueOrange", name: "Blue & orange" },
             ]}
             value={appearance.diffColors}
-            onChange={(diffColors) => set({ diffColors })}
+            onChange={(diffColors) => setAppearance({ diffColors })}
           />
         </Row>
       </Section>

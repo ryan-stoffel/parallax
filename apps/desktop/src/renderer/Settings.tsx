@@ -47,7 +47,7 @@ import { ConnectionSettings } from "./settings/ConnectionSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
 import { KeybindSettings } from "./settings/KeybindSettings";
 import {
-  dangerButton,
+  ConfirmRemove,
   field,
   HostPicker,
   PageTitle,
@@ -412,6 +412,24 @@ function HostClis({ host, picker }: { host: Host; picker: ReactNode }) {
   );
 }
 
+/** What a provider's pane gets from its list, beside the CLI or instance it shows. */
+type PaneProps = {
+  id: string;
+  tabId: string;
+  hidden: boolean;
+  /** Whether its sign-in terminal is open. */
+  signingIn: boolean;
+  /** Opens its sign-in terminal, closing any other, or closes it. */
+  onSignIn: (open: boolean) => void;
+  hostId: string;
+  usage?: ReadonlyMap<string, AccountUsage>;
+  period: Period;
+  onPeriod: (period: Period) => void;
+  keys?: KeyAccount[];
+  onKeys: (update: (keys?: KeyAccount[]) => KeyAccount[] | undefined) => void;
+  onSignedIn: () => void;
+};
+
 /**
  * A CLI's pane, `hidden` unless its tab is chosen: its account, with Sign in (in a terminal under it, after which the CLIs
  * are probed again with `onSignedIn`) or Install; its usage over `period`; the API keys for its
@@ -431,23 +449,7 @@ function ProviderPane({
   keys,
   onKeys,
   onSignedIn,
-}: {
-  id: string;
-  tabId: string;
-  hidden: boolean;
-  /** Whether this CLI's sign-in terminal is open. */
-  signingIn: boolean;
-  /** Opens its sign-in terminal, closing any other, or closes it. */
-  onSignIn: (open: boolean) => void;
-  hostId: string;
-  cli: DetectedCli;
-  usage?: ReadonlyMap<string, AccountUsage>;
-  period: Period;
-  onPeriod: (period: Period) => void;
-  keys?: KeyAccount[];
-  onKeys: (update: (keys?: KeyAccount[]) => KeyAccount[] | undefined) => void;
-  onSignedIn: () => void;
-}) {
+}: PaneProps & { cli: DetectedCli }) {
   const info = cliInfo[cli.cli];
   const name = info?.name ?? cli.cli;
   const Logo = backendLogos[cli.cli];
@@ -676,28 +678,17 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
       <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
         <h1 className="text-reading font-semibold">Providers</h1>
         {asking ? (
-          // Cancel takes the trash's place and focus, so a double click or a second Enter can't remove.
+          // Remove and Cancel take the trash's place.
           <div className="flex items-center gap-2 text-body text-muted-foreground">
             <span>
               Remove <span className="font-medium text-foreground">{current.instance.name}</span>?
               Its settings and secrets leave this host; its threads keep their transcripts.
             </span>
-            <button
-              type="button"
+            <ConfirmRemove
               disabled={removing}
-              onClick={() => void remove(current.instance.id)}
-              className={dangerButton}
-            >
-              Remove
-            </button>
-            <button
-              type="button"
-              autoFocus
-              onClick={() => setConfirming(undefined)}
-              className={quietButton}
-            >
-              Cancel
-            </button>
+              onRemove={() => void remove(current.instance.id)}
+              onCancel={() => setConfirming(undefined)}
+            />
           </div>
         ) : (
           <div className="flex items-center gap-1 text-body text-muted-foreground">
@@ -924,23 +915,7 @@ function InstancePane({
   keys,
   onKeys,
   onSignedIn,
-}: {
-  id: string;
-  tabId: string;
-  hidden: boolean;
-  /** Whether its sign-in terminal is open. */
-  signingIn: boolean;
-  /** Opens its sign-in terminal, closing any other, or closes it. */
-  onSignIn: (open: boolean) => void;
-  hostId: string;
-  info: ProviderInfo;
-  usage?: ReadonlyMap<string, AccountUsage>;
-  period: Period;
-  onPeriod: (period: Period) => void;
-  keys?: KeyAccount[];
-  onKeys: (update: (keys?: KeyAccount[]) => KeyAccount[] | undefined) => void;
-  onSignedIn: () => void;
-}) {
+}: PaneProps & { info: ProviderInfo }) {
   const { instance } = info;
   const kind = kindOf(instance.kind);
   const KindLogo = logoOf(instance);
@@ -1023,9 +998,7 @@ function InstancePane({
       });
     };
   }, [cursorWaiting, hostId, instance.id]);
-  useEffect(() => {
-    if (cursorWaiting && info.signedIn === true) setCursorWaiting(false);
-  }, [cursorWaiting, info.signedIn]);
+  if (cursorWaiting && info.signedIn === true) setCursorWaiting(false);
   // plxd reports a login that failed in the browser or was rejected, as T3 Code's "failed" phase.
   useEffect(() => {
     if (cursorWaiting && info.signInError) {
@@ -1473,27 +1446,13 @@ function KeyRow({
         </span>
         {usage}
       </div>
-      {/* Cancel takes Remove's place and focus, so a double click or a second Enter can't remove. */}
       <div className="flex shrink-0 gap-1">
         {confirming ? (
-          <>
-            <button
-              type="button"
-              disabled={removing}
-              onClick={() => void remove()}
-              className={dangerButton}
-            >
-              Remove
-            </button>
-            <button
-              type="button"
-              autoFocus
-              className={quietButton}
-              onClick={() => setConfirming(false)}
-            >
-              Cancel
-            </button>
-          </>
+          <ConfirmRemove
+            disabled={removing}
+            onRemove={() => void remove()}
+            onCancel={() => setConfirming(false)}
+          />
         ) : (
           <button type="button" className={quietButton} onClick={() => setConfirming(true)}>
             Remove
@@ -1542,7 +1501,7 @@ function KeysSection({
   hostId: string;
   provider: Provider;
   keys: KeyAccount[];
-  onKeys: (update: (keys?: KeyAccount[]) => KeyAccount[] | undefined) => void;
+  onKeys: PaneProps["onKeys"];
   usage?: ReadonlyMap<string, AccountUsage>;
   period: Period;
 }) {

@@ -231,7 +231,6 @@ export function GeneralSettings() {
 /** Notifications, then the clock, what sends a prompt, and where pull requests open (`behaviorPrefs`). */
 function Behavior() {
   const prefs = behaviorPrefs.use();
-  const set = (patch: Partial<BehaviorPrefs>) => setBehaviorPrefs(patch);
   const mac = window.parallax.platform === "darwin";
   return (
     <>
@@ -243,7 +242,7 @@ function Behavior() {
           <Switch
             label="System notifications"
             checked={prefs.systemNotifications}
-            onChange={(systemNotifications) => set({ systemNotifications })}
+            onChange={(systemNotifications) => setBehaviorPrefs({ systemNotifications })}
           />
         </Row>
         <Row
@@ -253,7 +252,7 @@ function Behavior() {
           <Switch
             label="In-app notifications"
             checked={prefs.inAppNotifications}
-            onChange={(inAppNotifications) => set({ inAppNotifications })}
+            onChange={(inAppNotifications) => setBehaviorPrefs({ inAppNotifications })}
           />
         </Row>
       </Section>
@@ -263,7 +262,7 @@ function Behavior() {
             field
             label="Time format"
             value={prefs.timeFormat}
-            onChange={(v) => set({ timeFormat: v as BehaviorPrefs["timeFormat"] })}
+            onChange={(v) => setBehaviorPrefs({ timeFormat: v as BehaviorPrefs["timeFormat"] })}
             options={[
               { value: "system", label: "System default" },
               { value: "12", label: "12-hour" },
@@ -285,7 +284,7 @@ function Behavior() {
             field
             label="Send shortcut"
             value={prefs.sendKey}
-            onChange={(v) => set({ sendKey: v as BehaviorPrefs["sendKey"] })}
+            onChange={(v) => setBehaviorPrefs({ sendKey: v as BehaviorPrefs["sendKey"] })}
             options={[
               { value: "enter", label: "Enter" },
               { value: "modEnter", label: mac ? "⌘ Enter" : "Ctrl+Enter" },
@@ -302,7 +301,7 @@ function Behavior() {
             field
             label="Open pull requests in"
             value={prefs.openPrsIn}
-            onChange={(v) => set({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
+            onChange={(v) => setBehaviorPrefs({ openPrsIn: v as BehaviorPrefs["openPrsIn"] })}
             options={[
               { value: "external", label: "System browser" },
               { value: "browser", label: "Side panel browser" },

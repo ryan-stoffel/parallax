@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
-import { describeLimit, describeUsage, limitMeter, limitName } from "./Usage";
+import { describeLimit, describeUsage, limitName } from "./Usage";
+import { limitMeter } from "./usageStats";
 
 const now = Date.parse("2026-09-28T12:00:00Z");
 const period = (tokens: Partial<Record<string, number>>) => ({

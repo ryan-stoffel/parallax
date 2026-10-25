@@ -392,7 +392,7 @@ const checkIcons: Record<string, { Icon: LucideIcon; color: string }> = {
 const noCheck = { Icon: CircleMinus, color: "text-faint-foreground" };
 
 /** A span of time in a few words: `45s`, `3m 12s`, or `1h 4m`. */
-export function span(ms: number): string {
+function span(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -400,7 +400,7 @@ export function span(ms: number): string {
 }
 
 /** Where a check is, in words: queued, running for how long, or how it ended and how long it took. */
-export function checkStatus(c: PrCheck, now = Date.now()): string {
+function checkStatus(c: PrCheck, now = Date.now()): string {
   const started = c.startedAt ? Date.parse(c.startedAt) : undefined;
   const took = started && span((c.completedAt ? Date.parse(c.completedAt) : now) - started);
   if (c.state === "pending") return took ? `Running for ${took}` : "Queued";
@@ -431,6 +431,7 @@ function CheckRow({
   const { Icon, color } = checkIcons[check.state] ?? noCheck;
   const action =
     "-my-0.5 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-hover hover:text-foreground";
+  const detail = "flex items-center gap-1 rounded-md border border-border px-2 py-1 hover:bg-hover";
   return (
     <li className="group/check">
       <div className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-body group-hover/check:bg-hover group-focus-within/check:bg-hover">
@@ -488,31 +489,23 @@ function CheckRow({
           </dl>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {check.url && (
-              <button
-                type="button"
-                onClick={() => onOpen(check.url!)}
-                className="flex items-center gap-1 rounded-md border border-border px-2 py-1 hover:bg-hover"
-              >
-                <ArrowUpRight aria-hidden className="size-3.5" />
-                Open on GitHub
-              </button>
-            )}
-            {check.url && (
-              <button
-                type="button"
-                onClick={() => void navigator.clipboard.writeText(check.url!)}
-                className="flex items-center gap-1 rounded-md border border-border px-2 py-1 hover:bg-hover"
-              >
-                <Link aria-hidden className="size-3.5" />
-                Copy link
-              </button>
+              <>
+                <button type="button" onClick={() => onOpen(check.url!)} className={detail}>
+                  <ArrowUpRight aria-hidden className="size-3.5" />
+                  Open on GitHub
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard.writeText(check.url!)}
+                  className={detail}
+                >
+                  <Link aria-hidden className="size-3.5" />
+                  Copy link
+                </button>
+              </>
             )}
             {check.state === "failed" && (
-              <button
-                type="button"
-                onClick={onFix}
-                className="flex items-center gap-1 rounded-md border border-border px-2 py-1 hover:bg-hover"
-              >
+              <button type="button" onClick={onFix} className={detail}>
                 <Hammer aria-hidden className="size-3.5" />
                 Fix in this thread
               </button>
@@ -810,7 +803,7 @@ export function parseDiff(diff: string): DiffFile[] {
  * One file of the Code tab, and of the Changes view (0062): a header that folds it, with its path,
  * size, and Viewed when `onViewed` is given, over its lines numbered on both sides.
  */
-export function DiffFileView({
+function DiffFileView({
   file,
   viewed = false,
   onViewed,
@@ -1678,5 +1671,3 @@ export function PullRequestView({
     </div>
   );
 }
-
-export { githubText, shotName };

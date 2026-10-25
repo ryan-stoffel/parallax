@@ -7,7 +7,7 @@ import { merged, stored } from "./stored";
  * them in Settings > General; a thread's composer still changes its own. A default the host
  * can't honor, such as a model its catalog lacks, falls back as an unset one does.
  */
-export type NewThreadPrefs = {
+type NewThreadPrefs = {
   /** The computer a new thread starts on, by host id. One that's gone or offline: the open one. */
   host: string;
   /** The default model, by instance and id. Unset: the backend's first model. */

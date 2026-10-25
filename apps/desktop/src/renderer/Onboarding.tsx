@@ -37,6 +37,7 @@ import { agents, finishOnboarding, infoOf, ready, setUpAgents, type Agent } from
 import { Avatar, useProfile } from "./profile";
 import { kindOf, loadProviders, useProviders } from "./providers";
 import { ImportStepBody } from "./ImportSessions";
+import { capitalized } from "./settings/shared";
 import { IconButton } from "./ui";
 
 const SignInTerminal = lazy(() =>
@@ -56,10 +57,6 @@ const quiet =
   "flex items-center gap-1 rounded-lg px-3 py-2 text-body text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4";
 const small =
   "shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-body font-medium hover:bg-hover";
-
-/** A plan a CLI reports in lowercase ("max") capitalized; an email as it is. */
-const capitalized = (text: string) =>
-  text.includes("@") ? text : text.charAt(0).toUpperCase() + text.slice(1);
 
 /**
  * First-launch onboarding (PLX-806), a native modal <dialog> open while it's mounted: a Parallax

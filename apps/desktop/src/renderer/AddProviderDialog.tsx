@@ -1,5 +1,5 @@
 import { ExternalLink, Plus, Search, X } from "lucide-react";
-import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { HOME_VARS, type RegistryAgent } from "../preload/bridge";
 import type { ProviderEnvVar, ProviderInstance } from "../protocol/generated/protocol";
@@ -19,7 +19,7 @@ import { field, primaryButton, quietButton } from "./settings/parts";
 import { IconButton, Segmented } from "./ui";
 
 /** What a new instance starts as: a card's preset, or a registry agent's, with its icon. */
-export type Draft = Omit<Preset, "blurb"> & { icon?: string };
+type Draft = Omit<Preset, "blurb"> & { icon?: string };
 
 /**
  * Registry agents plxd runs as a kind of its own, tuned to it, by registry id: they start from the
@@ -43,7 +43,7 @@ const tuned: Record<string, Draft> = {
  * `agent`'s Draft: a kind plxd tunes, or an ACP agent run with npx, or uvx, or else its binary
  * for `platform`, if it has one.
  */
-export function registryDraft(agent: RegistryAgent, platform: string): Draft | undefined {
+function registryDraft(agent: RegistryAgent, platform: string): Draft | undefined {
   const own = tuned[agent.id];
   if (own) return own;
   const { npx, uvx, binary } = agent.distribution;
@@ -266,24 +266,22 @@ export function AddProviderDialog({
           {step === 2 && draft && (
             <div className="flex flex-col gap-4">
               {draft.kind === "pi" ? (
-                <>
-                  <label className="text-body text-muted-foreground">
-                    Binary path
-                    <input
-                      autoFocus
-                      placeholder="pi"
-                      value={valueOf("PI_ACP_PI_COMMAND")}
-                      // The `pi` Pi's ACP adapter runs.
-                      onChange={(e) => setVar("PI_ACP_PI_COMMAND", e.target.value)}
-                      spellCheck={false}
-                      autoComplete="off"
-                      className={`${field} font-mono`}
-                    />
-                    <span className="mt-1 block text-faint-foreground">
-                      Path to the Pi coding agent binary.
-                    </span>
-                  </label>
-                </>
+                <label className="text-body text-muted-foreground">
+                  Binary path
+                  <input
+                    autoFocus
+                    placeholder="pi"
+                    value={valueOf("PI_ACP_PI_COMMAND")}
+                    // The `pi` Pi's ACP adapter runs.
+                    onChange={(e) => setVar("PI_ACP_PI_COMMAND", e.target.value)}
+                    spellCheck={false}
+                    autoComplete="off"
+                    className={`${field} font-mono`}
+                  />
+                  <span className="mt-1 block text-faint-foreground">
+                    Path to the Pi coding agent binary.
+                  </span>
+                </label>
               ) : draft.kind === "opencode" ? (
                 <>
                   <label className="text-body text-muted-foreground">
@@ -431,9 +429,7 @@ export function AddProviderDialog({
 
 /** A registry agent's icon, drawn in the text's color: its SVG is a mask over it. */
 function RegistryIcon({ url }: { url?: string }) {
-  const style = url
-    ? ({ mask: `url("${url}") center / contain no-repeat` } as CSSProperties)
-    : undefined;
+  const style = url ? { mask: `url("${url}") center / contain no-repeat` } : undefined;
   return <span aria-hidden style={style} className="size-5 shrink-0 bg-current" />;
 }
 

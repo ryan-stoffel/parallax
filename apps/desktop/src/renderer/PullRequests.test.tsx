@@ -9,7 +9,6 @@ import type { ParallaxBridge } from "../preload/bridge";
 import type { PrDiffResult, PullRequest } from "../protocol/generated/protocol";
 import {
   fileKind,
-  githubText,
   LinkedPullRequests,
   lineBreakdown,
   linkedPr,
@@ -21,6 +20,7 @@ import {
   RUNNING_POLL_MS,
   usePullRequests,
 } from "./PullRequests";
+import { githubText } from "./github";
 import "./markdownTest";
 import { Notifications } from "./notifications";
 import { setBehaviorPrefs } from "./prefs";

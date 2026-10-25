@@ -92,7 +92,7 @@ export function useNeedsYouAlarm(
 /** What a thread's notifications follow: its attention, or that its run waits on a usage limit. */
 export type ThreadMark = Attention | "waiting";
 
-export function markOf(thread: Thread, run: AgentRun | undefined, asks: number): ThreadMark {
+function markOf(thread: Thread, run: AgentRun | undefined, asks: number): ThreadMark {
   if (asks === 0 && run?.status === "waiting") return "waiting";
   return attentionOf(thread, run, asks);
 }

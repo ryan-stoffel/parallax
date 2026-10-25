@@ -41,7 +41,7 @@ export type HostPlan = {
   providers: ProviderUpdate[];
 };
 
-export const cliNames: Record<CliKind, string> = {
+const cliNames: Record<CliKind, string> = {
   claude: "Claude Code",
   codex: "Codex",
   cursor: "Cursor",
@@ -288,7 +288,7 @@ export const unsettled = (status: ItemStatus) =>
  * release and provider version already tried on its own, so an automatic one that failed isn't
  * run again.
  */
-export type UpdateRun = {
+type UpdateRun = {
   statuses: Record<string, ItemStatus>;
   taken?: UpdateItem[];
   tried: ReadonlySet<string>;
@@ -297,7 +297,6 @@ export type UpdateRun = {
 let run: UpdateRun = { statuses: {}, tried: new Set() };
 const runListeners = new Set<() => void>();
 export const updateRun = {
-  get: () => run,
   set(change: Partial<UpdateRun>) {
     run = { ...run, ...change };
     for (const listener of runListeners) listener();
@@ -351,7 +350,7 @@ export async function updateEverything(
   continueThreads: boolean | undefined,
   appReady: boolean,
   upgraded: (hostId: string, cli: CliKind) => void,
-  onStatus: (key: string, status: ItemStatus) => void = () => {},
+  onStatus: (key: string, status: ItemStatus) => void,
 ): Promise<void> {
   for (const plan of plans) {
     if (plan.app) onStatus("app", { state: "waiting" });

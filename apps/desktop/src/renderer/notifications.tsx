@@ -16,7 +16,7 @@ import { behaviorPrefs } from "./prefs";
 // what an action did goes here, not in a line under the control that ran it (PLX-930).
 
 /** A notice's color and icon: done, waiting on the user, gone wrong, or just news. */
-export type Tone = "success" | "attention" | "error" | "info";
+type Tone = "success" | "attention" | "error" | "info";
 
 export type Notice = {
   /**

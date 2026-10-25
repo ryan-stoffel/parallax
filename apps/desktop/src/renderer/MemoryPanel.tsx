@@ -15,7 +15,7 @@ import { dismiss, notify } from "./notifications";
 export type Memory = MemoryFile & { scope: MemoryScope; stale?: boolean };
 
 /** The entry groups, in 0044's order. A kind a newer plxd adds isn't shown. */
-export const kindGroups: { kind: MemoryKind; label: string; one: string }[] = [
+const kindGroups: { kind: MemoryKind; label: string; one: string }[] = [
   { kind: "preference", label: "Preferences", one: "Preference" },
   { kind: "convention", label: "Conventions", one: "Convention" },
   { kind: "decision", label: "Decisions", one: "Decision" },
@@ -29,7 +29,7 @@ const scopeLabels: Record<MemoryScope["kind"], string> = {
 };
 
 /** The scopes a view shows, You first, as plxd orders its index (0044). */
-export function scopesOf(project?: string, repo?: string): MemoryScope[] {
+function scopesOf(project?: string, repo?: string): MemoryScope[] {
   return [
     { kind: "you" },
     ...(repo ? [{ kind: "repo", id: repo } as const] : []),
@@ -81,7 +81,7 @@ const dayWords = (at: number, now = Date.now()) => {
 };
 
 /** The day of `date`, `YYYY-MM-DD` as an entry's header gives it, in words (`dayWords`). */
-export function dayOf(date: string, now = Date.now()): string {
+function dayOf(date: string, now = Date.now()): string {
   const [y, m, d] = date.split("-").map(Number);
   if (!y || !m || !d) return date;
   return dayWords(new Date(y, m - 1, d).getTime(), now);
@@ -346,6 +346,14 @@ export function MemoryPanel({
       onChanged={reload}
     />
   );
+  // A section of rows under its heading and count, while it has any.
+  const list = (label: string, files: Memory[] | undefined, kind: RowKind) =>
+    !!files?.length && (
+      <section aria-label={label}>
+        <Heading label={label} count={files.length} />
+        <ul className={group}>{files.map((f) => row(f, kind))}</ul>
+      </section>
+    );
   const entries = sections?.entries.filter((g) => g.files.length > 0) ?? [];
   const empty =
     sections &&
@@ -359,12 +367,7 @@ export function MemoryPanel({
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
         {start?.(files ?? [])}
-        {sections && sections.proposals.length > 0 && (
-          <section aria-label="To review">
-            <Heading label="To review" count={sections.proposals.length} />
-            <ul className={group}>{sections.proposals.map((f) => row(f, "proposal"))}</ul>
-          </section>
-        )}
+        {list("To review", sections?.proposals, "proposal")}
         {project && sections && (
           <Brief project={project} file={sections.brief} calls={calls} onChanged={reload} />
         )}
@@ -384,18 +387,8 @@ export function MemoryPanel({
             ))}
           </section>
         )}
-        {sections && sections.review.length > 0 && (
-          <section aria-label="Unused or stale">
-            <Heading label="Unused or stale" count={sections.review.length} />
-            <ul className={group}>{sections.review.map((f) => row(f, "review"))}</ul>
-          </section>
-        )}
-        {sections && sections.knowledge.length > 0 && (
-          <section aria-label="Documents">
-            <Heading label="Documents" count={sections.knowledge.length} />
-            <ul className={group}>{sections.knowledge.map((f) => row(f, "document"))}</ul>
-          </section>
-        )}
+        {list("Unused or stale", sections?.review, "review")}
+        {list("Documents", sections?.knowledge, "document")}
         {empty && (
           <p className="px-1 pt-6 text-body text-muted-foreground">
             No memory yet. Agents propose lasting facts as they work.

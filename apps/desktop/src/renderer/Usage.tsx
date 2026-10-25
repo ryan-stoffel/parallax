@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { AccountUsage, UsageLimitWindow, UsagePeriod } from "../protocol/generated/protocol";
 import { locale } from "./locale";
 import { hourCycle } from "./prefs";
-import { capitalize, duration, usd } from "./usageStats";
+import { capitalize, dollars, duration } from "./usageStats";
 
 /** The two periods `usage/get` reports: today, and this week from Monday, in the host's local time. */
 export type Period = "today" | "week";
@@ -100,7 +100,6 @@ export const compact = new Intl.NumberFormat("en", {
   notation: "compact",
   maximumFractionDigits: 1,
 });
-export { usd };
 
 const tokensIn = (p: UsagePeriod) =>
   p.inputTokens + p.outputTokens + p.cacheReadTokens + p.cacheWriteTokens;
@@ -111,11 +110,7 @@ export function describeUsage(spent: UsagePeriod | undefined, period: Period): s
   if (!spent || tokensIn(spent) === 0) return `No usage ${when}`;
   const micros = spent.costUsdMicros;
   const cost =
-    micros === undefined
-      ? ""
-      : micros < 5000
-        ? ", under $0.01"
-        : `, about ${usd.format(micros / 1_000_000)}`;
+    micros === undefined ? "" : micros < 5000 ? ", under $0.01" : `, about ${dollars(micros)}`;
   return `${compact.format(tokensIn(spent))} tokens ${when}${cost}`;
 }
 
@@ -168,5 +163,3 @@ export function limitDetails(limit: UsageLimitWindow): string {
   const resets = limit.resetsAt ? `Resets ${at(limit.resetsAt)}. ` : "";
   return `${resets}Reported ${at(limit.capturedAt)}.`;
 }
-
-export { limitMeter, type LimitTone } from "./usageStats";
