@@ -40,6 +40,8 @@ import { Avatar, nameOf, useAccount } from "./Account";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { useNav, type PhonePage, type SettingsScreens } from "./nav";
 import { FindComputers } from "./Onboarding";
+import { accessLevels } from "../../desktop/src/renderer/catalog";
+import { allAccess } from "./offers";
 import { setPrefs, usePrefs, type Prefs } from "./prefs";
 import { askForNotifications, notificationsOn, notify, registerWithRelay } from "./push";
 import { pages, type SettingsPage } from "./settingsLogic";
@@ -256,9 +258,10 @@ export function PhoneSettingsScreen({ route }: NativeStackScreenProps<SettingsSc
   return <Page>{route.params.page === "general" ? <GeneralPage /> : <AppearancePage />}</Page>;
 }
 
-/** Threads' setting of this phone's own: the computer new threads start on. */
+/** Threads' settings of this phone's own: the computer new threads start on, and their access. */
 export function NewThreadsSection() {
   const { computers, defaultId, setDefault } = useFleet();
+  const { access } = usePrefs();
   return (
     <Section title="New threads">
       <SelectRow
@@ -267,6 +270,20 @@ export function NewThreadsSection() {
         value={defaultId ?? ""}
         options={computers.map((m) => ({ value: m.machine.id, label: m.machine.name }))}
         onChange={setDefault}
+      />
+      <SelectRow
+        title="Access"
+        detail="What a new thread may do without asking. The prompt box's Access can change it for one thread."
+        value={access ?? "default"}
+        options={[
+          { value: "default", label: "Provider's default" },
+          ...allAccess.map((level) => ({
+            value: level,
+            label: accessLevels[level].label,
+            description: accessLevels[level].description,
+          })),
+        ]}
+        onChange={(value) => setPrefs({ access: value === "default" ? undefined : value })}
         last
       />
     </Section>

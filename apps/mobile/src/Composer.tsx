@@ -49,6 +49,7 @@ import { GlassButton } from "./Glass";
 import { openLightbox } from "./Lightbox";
 import { ProviderLogo } from "./logos";
 import { allAccess, useOffers, type Offer } from "./offers";
+import { usePrefs } from "./prefs";
 import { SendButton } from "./SendButton";
 import { Sheet, sheetTitle } from "./Sheet";
 import { Icon, T, useColors } from "./ui";
@@ -465,7 +466,11 @@ export function Composer({
   const modelName =
     offer.models.find((m) => m.id === shownModel)?.name ?? (shownModel || offer.name || "Default model");
   const shownEffort = effort ?? run?.effort;
-  const shownAccess = permission ?? run?.permission;
+  // A new thread starts with Settings' default access, where its provider takes it.
+  const defaultAccess = usePrefs().access;
+  const startAccess = onStart && defaultAccess && offer.permissions.includes(defaultAccess) ? defaultAccess : undefined;
+  const chosenAccess = permission ?? startAccess;
+  const shownAccess = chosenAccess ?? run?.permission;
   const text = draft;
   const ready = !!(text.trim() || attached.length) && !!computer && !sending;
 
@@ -579,7 +584,7 @@ export function Composer({
             ...(changes && (model ?? (read ? shownModel : "")) !== "" && { model: model ?? shownModel }),
             ...(moved && { account: { kind: "subscription" as const, backend: moved } }),
             ...(changes && effort && offer.efforts && { effort }),
-            ...(changes && permission && offer.permissions.includes(permission) && { permission }),
+            ...(changes && chosenAccess && offer.permissions.includes(chosenAccess) && { permission: chosenAccess }),
           },
         });
         if (failed) throw new Error(failed);
