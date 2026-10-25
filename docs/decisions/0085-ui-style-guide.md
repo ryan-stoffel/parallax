@@ -42,4 +42,4 @@ Parallax Dark uses neutral grays: the sidebar `#101010`, a step darker than the 
 
 - A change that needs a size between two steps takes the nearer step, or changes this record.
 - Colors already come only from `index.css`'s tokens. Raw palette classes such as `text-emerald-500` that remain are follow-up work.
-- The mobile app's theme (`apps/mobile/src/theme.ts`) keeps its own colors.
+- The mobile app's theme (`apps/mobile/src/theme.ts`) repeats these colors, and its test holds it to them.
