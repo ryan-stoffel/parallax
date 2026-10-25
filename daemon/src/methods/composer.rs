@@ -1,5 +1,6 @@
 //! `agent/commands` and `repo/files`, for the composer's `/` and `@` menus (PLX-359), behind the
-//! `composerMenus` capability.
+//! `composerMenus` capability, and `repo/grep`, for the command menu's Search project contents
+//! (PLX-993), behind `repoGrep`.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,8 +8,8 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentCommandsParams, AgentCommandsResult, ErrorKind, RepoFilesParams, RepoFilesResult, RepoId,
-    RunId,
+    AgentCommandsParams, AgentCommandsResult, ErrorKind, RepoFilesParams, RepoFilesResult,
+    RepoGrepParams, RepoGrepResult, RepoId, RunId,
 };
 
 use super::Context;
@@ -26,6 +27,9 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 /// keeps it well inside 0007's 8 MiB frame.
 const MAX_FILES: usize = 20_000;
 const MAX_FILES_BYTES: usize = 4 * 1024 * 1024;
+
+/// The most lines one `repo/grep` answer lists.
+const MAX_GREP_MATCHES: usize = 500;
 
 /// `agent/commands`: the backend's CLI, started in the thread's folder, else the home folder.
 pub(crate) async fn list_commands(
@@ -98,6 +102,39 @@ pub(crate) async fn files(
     let truncated = files.len() > fits;
     files.truncate(fits);
     Ok(RepoFilesResult { files, truncated })
+}
+
+/// `repo/grep`: `git grep` for plain text in the thread's folder, capped.
+pub(crate) async fn grep(
+    context: &Context,
+    params: RepoGrepParams,
+) -> Result<RepoGrepResult, ErrorObject> {
+    let RepoGrepParams {
+        query,
+        repo,
+        run_id,
+    } = params;
+    if query.trim().is_empty() {
+        return Err(ErrorObject::invalid_params("repo/grep needs a query"));
+    }
+    let (root, git_dir) = folder(&context.daemon, repo, run_id)
+        .await?
+        .ok_or_else(|| ErrorObject::invalid_params("repo/grep needs a repo or a runId"))?;
+    let folder = match &git_dir {
+        Some(git_dir) => RunFolder::Worktree {
+            path: &root,
+            git_dir,
+        },
+        None => RunFolder::Checkout(&root),
+    };
+    let (matches, truncated) = context
+        .daemon
+        .agents
+        .worktrees()
+        .grep(folder, &query, MAX_GREP_MATCHES)
+        .await
+        .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))?;
+    Ok(RepoGrepResult { matches, truncated })
 }
 
 /// The thread's folder and its pinned git folder, if any: the run's, else the repo entry's

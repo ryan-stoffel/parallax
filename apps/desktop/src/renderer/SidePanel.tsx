@@ -137,7 +137,7 @@ const unopened: Scoped = { tabs: [], recent: [], listing: false };
  * one the Pull requests view. Each new `documents.open` opens that presented file's tab (PLX-755),
  * shown only while its thread, `documents.runId`, is open, as a pull request's is. `device` draws
  * the Device view (PLX-886), told whether it's shown, and each new `showDevice` opens it. Each new
- * `showProject` shows an open Project's Project tab.
+ * `showProject` shows an open Project's Project tab, and each new `showFiles` opens the Files view.
  */
 export function SidePanel({
   scope,
@@ -166,6 +166,7 @@ export function SidePanel({
   device,
   showDevice,
   showProject,
+  showFiles,
 }: {
   scope: string;
   width?: number;
@@ -203,6 +204,8 @@ export function SidePanel({
   showDevice?: object;
   /** A new request shows an open Project's Project tab. */
   showProject?: object;
+  /** A new request opens the Files view, as the command menu's file picks do (PLX-993). */
+  showFiles?: object;
 }) {
   // Each scope's panel. A thread shows the last view it showed that's still open, else the last one
   // its scope showed, else the list.
@@ -284,6 +287,11 @@ export function SidePanel({
   if (showDevice !== deviceShown) {
     setDeviceShown(showDevice);
     if (showDevice) openView(deviceSurface);
+  }
+  const [filesShown, setFilesShown] = useState(showFiles);
+  if (showFiles !== filesShown) {
+    setFilesShown(showFiles);
+    if (showFiles) openView(surfaces.find((surface) => surface.name === "Files")!);
   }
   const [projectShown, setProjectShown] = useState(showProject);
   if (showProject !== projectShown) {

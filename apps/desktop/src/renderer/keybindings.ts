@@ -3,6 +3,9 @@ import type { KeyPress } from "./ui";
 
 /** An app command a keybinding runs. App, ThreadList, and OpenMenu act on them. */
 export type Command =
+  | "commandMenu"
+  | "goToFile"
+  | "searchContents"
   | "newThread"
   | "noRepoThread"
   | "sidebar"
@@ -28,6 +31,10 @@ export type Command =
  * is the same press everywhere. `elsewhere` replaces the defaults off macOS.
  */
 export const commands: { id: Command; name: string; defaults: string[]; elsewhere?: string[] }[] = [
+  // The command menu and its file pages (PLX-993).
+  { id: "commandMenu", name: "Open command menu", defaults: ["Mod+KeyK"] },
+  { id: "goToFile", name: "Go to file", defaults: ["Mod+KeyP"] },
+  { id: "searchContents", name: "Search project contents", defaults: ["Mod+Shift+KeyF"] },
   { id: "newThread", name: "New thread", defaults: ["Mod+KeyN"] },
   { id: "noRepoThread", name: "New thread without a repository", defaults: ["Mod+Shift+KeyN"] },
   { id: "sidebar", name: "Toggle sidebar", defaults: ["Mod+KeyS"] },

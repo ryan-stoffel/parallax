@@ -114,7 +114,8 @@ pub use cli_account::{
     GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
 };
 pub use composer::{
-    AgentCommand, AgentCommandsParams, AgentCommandsResult, RepoFilesParams, RepoFilesResult,
+    AgentCommand, AgentCommandsParams, AgentCommandsResult, GrepMatch, RepoFilesParams,
+    RepoFilesResult, RepoGrepParams, RepoGrepResult,
 };
 pub use computer::{
     ComputerAnswer, ComputerAskParams, ComputerAskResult, ComputerForgetParams, ComputerStatus,

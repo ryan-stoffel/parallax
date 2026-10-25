@@ -193,7 +193,7 @@ function totals(nodes: TreeNode[]): { added: number; removed: number } {
 }
 
 /** A file's icon by its type, or a plain file for a type the icons don't know. */
-function FileIcon({ path }: { path: string }) {
+export function FileIcon({ path }: { path: string }) {
   const icon = fileIcon(path);
   if (!icon) return <File aria-hidden className="size-4 shrink-0 text-faint-foreground" />;
   const img = "size-4 shrink-0";

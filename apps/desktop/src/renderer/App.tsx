@@ -3,9 +3,20 @@ import {
   ChevronLeft,
   ChevronRight,
   Columns2,
+  FileSearch,
   Folder,
+  FolderGit2,
+  FolderPlus,
   GitFork,
+  GitPullRequest,
   Globe,
+  ChartColumn,
+  Palette,
+  Settings as SettingsIcon,
+  SquareDashed,
+  SquarePen,
+  SunMoon,
+  TextSearch,
   X,
   PanelBottom,
   PanelLeftOpen,
@@ -13,9 +24,12 @@ import {
   Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { flushSync } from "react-dom";
 
 import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/generated/protocol";
 import { type RepoAction } from "./Actions";
+import type { AddDialogHandle } from "./AddDialog";
+import { CommandMenu, type CommandMenuHandle, type MenuItem } from "./CommandMenu";
 import { AgentChat } from "./AgentChat";
 import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
 import { ChildStrip } from "./ChildStrip";
@@ -101,7 +115,7 @@ import {
   type ThreadsView,
 } from "./threads";
 import { cloneOnto, type CloneAsk } from "./clone";
-import { isRunning } from "./transcript";
+import { isRunning, kindOf } from "./transcript";
 import { fileStarted, folderPath, pinLayout, startIn } from "./pins";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
@@ -268,6 +282,14 @@ export function App() {
     setPanelOpen(true);
     setShowDoc({ ...doc });
   };
+  // The file the command menu last picked (PLX-993), which a run's Files view opens, a new object
+  // each time, and each new request to show that view.
+  const [revealFile, setRevealFile] = useState<{ runId: string; path: string }>();
+  const [showFiles, setShowFiles] = useState<object>();
+  // Once the Files view has taken a pick, it's dropped, so the view doesn't open it again later.
+  useEffect(() => {
+    if (revealFile) setRevealFile(undefined);
+  }, [revealFile]);
 
   const connection = useConnection(host.id);
   const connected = connection?.status === "connected";
@@ -767,6 +789,169 @@ export function App() {
   };
   // Mod+N's picker of the repository a new thread goes in.
   const picker = useRef<HTMLDialogElement>(null);
+  // Mod+K's command menu (PLX-993), and the sidebar's add palette, which its New Project and Add
+  // repository open. The palette shows with the thread list, so Settings closes first.
+  const commandMenu = useRef<CommandMenuHandle>(null);
+  const addDialog = useRef<AddDialogHandle>(null);
+  const openAdd = (start?: "project") => {
+    // Inside a hidden sidebar, the palette would open with no size.
+    flushSync(() => {
+      setSettings(null);
+      setMainPage(undefined);
+      setSidebarOpen(true);
+    });
+    addDialog.current?.open(start);
+  };
+  const openMainPage = (next: "pullRequests" | "browser") => {
+    setSettings(null);
+    setMainPage(next);
+  };
+  // The repositories a new thread can start in, the computer new threads start on's first.
+  const menuRepos: MenuItem[] = [
+    ...startGroups
+      .filter((g) => !g.space && g.id !== noRepo)
+      .map((g): MenuItem => {
+        const repo = startState.repos.find((r) => r.id === g.id);
+        return {
+          id: `repo:${start.id}/${g.id}`,
+          label: g.name,
+          text: g.name,
+          keywords: repo?.path,
+          hint: repo && `${start.name} · ${repo.path}`,
+          icon: <RepoIcon repo={repo} />,
+          run: () => (start.id === host.id ? newThread(g.id) : pickRepoOn(start.id, g.id)),
+        };
+      }),
+    ...startElsewhere.map((o): MenuItem => ({
+      id: `repo:${o.host.id}/${o.repo.id}`,
+      label: o.repo.name,
+      text: o.repo.name,
+      keywords: o.repo.path,
+      hint: `${o.host.name} · ${o.repo.path}`,
+      icon: <RepoIcon repo={o.repo} />,
+      run: () => pickRepoOn(o.host.id, o.repo.id),
+    })),
+  ];
+  // The open thread's or New thread's repository, which the first action starts a thread in.
+  const hereRepo =
+    selection.kind !== "project" && !repoless(group) && !settings ? group : undefined;
+  const menuActions: MenuItem[] = [
+    ...(hereRepo
+      ? [
+          {
+            id: "newThreadHere",
+            label: (
+              <>
+                New thread in <strong className="font-semibold">{hereRepo.name}</strong>
+              </>
+            ),
+            text: `New thread in ${hereRepo.name}`,
+            icon: <SquarePen />,
+            run: () => newThread(hereRepo.id),
+          },
+        ]
+      : []),
+    {
+      id: "newThreadIn",
+      label: "New thread in…",
+      text: "New thread in",
+      icon: <SquarePen />,
+      command: "newThread",
+      page: "repos",
+    },
+    {
+      id: "noRepoThread",
+      label: "New thread without a repository",
+      text: "New thread without a repository",
+      icon: <SquareDashed />,
+      command: "noRepoThread",
+      run: () => newThread(noRepo),
+    },
+    {
+      id: "goToFile",
+      label: "Go to file",
+      text: "Go to file",
+      keywords: "open find",
+      icon: <FileSearch />,
+      command: "goToFile",
+      page: "files",
+    },
+    {
+      id: "searchContents",
+      label: "Search project contents",
+      text: "Search project contents",
+      keywords: "grep find text code",
+      icon: <TextSearch />,
+      command: "searchContents",
+      page: "contents",
+    },
+    {
+      id: "newProject",
+      label: "New Project",
+      text: "New Project",
+      keywords: "create coordinator",
+      icon: <FolderPlus />,
+      run: () => openAdd("project"),
+    },
+    {
+      id: "addRepo",
+      label: "Add repository",
+      text: "Add repository",
+      keywords: "folder clone github new",
+      icon: <FolderGit2 />,
+      run: () => openAdd(),
+    },
+    {
+      id: "theme",
+      label: "Change theme",
+      text: "Change theme",
+      keywords: "color",
+      icon: <Palette />,
+      page: "theme",
+    },
+    {
+      id: "appearance",
+      label: "Change appearance",
+      text: "Change appearance",
+      keywords: "light dark system mode",
+      icon: <SunMoon />,
+      page: "appearance",
+    },
+    {
+      id: "pullRequests",
+      label: "Pull requests",
+      text: "Pull requests",
+      keywords: "pr github",
+      icon: <GitPullRequest />,
+      run: () => openMainPage("pullRequests"),
+    },
+    {
+      id: "browser",
+      label: "Browser",
+      text: "Browser",
+      keywords: "web open",
+      icon: <Globe />,
+      run: () => openMainPage("browser"),
+    },
+    {
+      id: "usage",
+      label: "Usage",
+      text: "Usage",
+      keywords: "limits tokens cost",
+      icon: <ChartColumn />,
+      command: "usage",
+      run: () => openSettings("usage"),
+    },
+    {
+      id: "settings",
+      label: "Settings",
+      text: "Settings",
+      keywords: "preferences",
+      icon: <SettingsIcon />,
+      command: "settings",
+      run: () => openSettings("general"),
+    },
+  ];
   const deleteThread = async (hostId: string, thread: Thread) => {
     const view = views[hostId] ?? idleThreads;
     const error = await view.remove(thread);
@@ -845,7 +1030,14 @@ export function App() {
       const command = appShortcut(e);
       // A new thread waits for an open dialog, the picker included, to close.
       const dialog = !!document.querySelector("dialog[open]");
-      if (command === "panel") setPanelOpen(!panelOpen);
+      // The command menu's shortcuts work in it too: its own toggles it, the others go to a page.
+      const menuOpen = !!document.querySelector('dialog[aria-label="Command menu"][open]');
+      if (command === "commandMenu") {
+        if (menuOpen || !dialog) commandMenu.current?.toggle();
+      } else if (command === "goToFile" || command === "searchContents") {
+        if (menuOpen || !dialog)
+          commandMenu.current?.open(command === "goToFile" ? "files" : "contents");
+      } else if (command === "panel") setPanelOpen(!panelOpen);
       else if (command === "browser" && !settings) toggleBrowser();
       else if (command === "sidebar") setSidebarOpen((open) => !open);
       else if (command === "terminal" && folder) toggleDrawer();
@@ -959,6 +1151,39 @@ export function App() {
       ))}
       <Notifications />
       {onboarding && <Onboarding onStart={() => picker.current?.showModal()} />}
+      <CommandMenu
+        ref={commandMenu}
+        hosts={listed}
+        actions={menuActions}
+        repos={menuRepos}
+        files={
+          filesRunId && !settings && connected && "composerMenus" in connection.capabilities
+            ? { hostId: host.id, runId: filesRunId }
+            : undefined
+        }
+        grep={connected && "repoGrep" in connection.capabilities}
+        theme={theme}
+        onThemeChange={setTheme}
+        onOpenThread={(hostId, threadId) => {
+          setMainPage(undefined);
+          openHostThread(hostId, threadId);
+        }}
+        onOpenProject={(hostId, projectId) => {
+          setSettings(null);
+          openProject(hostId, projectId);
+          setShowHome({});
+        }}
+        // A document or media file opens as presented files do; any other, such as code, in the
+        // Files view, which shows text.
+        onOpenFile={(runId, path) => {
+          const name = path.slice(path.lastIndexOf("/") + 1);
+          const kind = kindOf(name);
+          if (kind !== "file") return openDoc({ runId, path, name, kind });
+          setPanelOpen(true);
+          setShowFiles({});
+          setRevealFile({ runId, path });
+        }}
+      />
       <NewThreadPicker
         ref={picker}
         groups={startGroups.filter((g) => !g.space)}
@@ -1015,6 +1240,7 @@ export function App() {
               setMainPage("browser");
             }}
             onDelete={deleteThread}
+            addDialog={addDialog}
             onNewThread={() => picker.current?.showModal()}
             onNewFolderThread={(id) => {
               newThread();
@@ -1482,6 +1708,7 @@ export function App() {
         pullRequest={showPr}
         showDevice={showDevice}
         showProject={showHome}
+        showFiles={showFiles}
         device={(shown) => (
           <DevicePanel hostId={host.id} runId={threadRun?.id} shown={shown} request={showDevice} />
         )}
@@ -1589,6 +1816,7 @@ export function App() {
                   : "Update Parallax on this host to browse a thread's files.")
               }
               editable={connected && "fileEdit" in connection.capabilities}
+              reveal={revealFile?.runId === filesRunId ? revealFile : undefined}
             />
           )
         }
