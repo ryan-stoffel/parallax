@@ -6,7 +6,8 @@ import { createContext, useContext } from "react";
 import type { SettingsPage } from "./settingsLogic";
 
 export type Screens = {
-  Thread: { hostId: string; runId: string };
+  /** `instant`: shown without a transition, as a new thread its page started becomes. */
+  Thread: { hostId: string; runId: string; instant?: boolean };
   ThreadDetails: { hostId: string; runId: string };
   Computer: { id: string };
   ComputerSettings: { id: string; page: SettingsPage };
