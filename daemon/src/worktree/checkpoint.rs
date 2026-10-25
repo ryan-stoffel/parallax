@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::folder::RunFolder;
-use super::{GitOutput, WorktreeError, WorktreeManager, collect_capped};
+use super::{
+    DEFAULT_TIMEOUT, GitOutput, WorktreeError, WorktreeManager, collect_capped, timed_out,
+};
 
 /// `-c` overrides for a capture's writes: fsynced objects and refs, and no filesystem monitor,
 /// which a checkout's own config could otherwise turn on.
@@ -123,12 +125,9 @@ impl WorktreeManager {
         spec.inject
             .set("GIT_INDEX_FILE", index.to_string_lossy().into_owned());
         let cwd = folder.path();
-        let (stdout, exit) = self.exec(&spec, cwd, &args, super::DEFAULT_TIMEOUT).await?;
-        GitOutput {
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            exit,
-        }
-        .ok(cwd, &args)
+        self.exec_output(&spec, cwd, &args, DEFAULT_TIMEOUT)
+            .await?
+            .ok(cwd, &args)
     }
 
     /// Points `reference` at `commit`, which holds a folder's files already: a new worktree's
@@ -196,15 +195,11 @@ impl WorktreeManager {
         let cwd = folder.path();
         let process = self.launcher.spawn(&spec)?;
         let (stdout, exit, truncated) = tokio::time::timeout(
-            super::DEFAULT_TIMEOUT,
+            DEFAULT_TIMEOUT,
             collect_capped(process, cwd, &args, max_bytes),
         )
         .await
-        .map_err(|_| WorktreeError::Timeout {
-            cwd: cwd.to_owned(),
-            args: super::owned_args(&args),
-            timeout: super::DEFAULT_TIMEOUT,
-        })??;
+        .map_err(|_| timed_out(cwd, &args, DEFAULT_TIMEOUT))??;
         let stdout = String::from_utf8_lossy(&stdout).into_owned();
         // A cut diff's git was killed, so only a whole one's exit says anything.
         match exit {

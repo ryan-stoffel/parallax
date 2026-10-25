@@ -7,9 +7,9 @@
 //! working tree: [`WorktreeManager::accept`] (#157), when the user accepts a run, and it refuses
 //! rather than touch uncommitted changes (see `review`), and [`WorktreeManager::switch`], when a
 //! Current checkout thread starts on a ref the user picked, which git refuses likewise (see
-//! `refs`). Otherwise `worktree add`, `worktree
-//! remove`, `worktree prune`, and the `branch -m` that names a thread's branch (0058) only touch
-//! `.git/worktrees` metadata and refs, and `status`, `rev-parse`, and `diff` are read-only.
+//! `refs`). Otherwise `worktree add`, `worktree remove`, `worktree prune`, and the `branch -m`
+//! that names a thread's branch (0058) only touch `.git/worktrees` metadata and refs, and
+//! `status`, `rev-parse`, and `diff` are read-only.
 //!
 //! The runner (`crate::agents`, #156) is its caller: `agent/start` creates a run's worktree here
 //! and stores its row, including [`CreatedWorktree::git_dir`], in `parallax-store`'s `worktrees`
@@ -29,10 +29,10 @@
 //! repo's directory name plus a short hash of its canonical path (so two repos named the same
 //! thing never collide, and the folder stays readable). Its branch is `parallax/<short run id>`
 //! (or `parallax/<slug>` for a named one, which [`WorktreeManager::rename_branch`] can rename to
-//! once a thread is named),
-//! `<short run id>` being the first 8 hex digits of the SHA-256 of the run id — the same
-//! short-hash idea [`crate::paths::DataDir`] uses for its socket fallback, and collision-free in
-//! the way a prefix of the run id's own (time-ordered) `UUIDv7` bytes would not be.
+//! once a thread is named), `<short run id>` being the first 8 hex digits of the SHA-256 of the
+//! run id — the same short-hash idea [`crate::paths::DataDir`] uses for its socket fallback, and
+//! collision-free in the way a prefix of the run id's own (time-ordered) `UUIDv7` bytes would not
+//! be.
 //!
 //! # Base and identity
 //!
@@ -44,12 +44,11 @@
 //! as checking out any other commit. [`CreatedWorktree::base_dirty`] flags the latter case — the
 //! repo's tracked files had uncommitted changes at that moment — so a caller can tell the user
 //! those edits aren't in the run; an explicit `base` is never flagged, since the caller chose it on
-//! purpose. [`WorktreeManager::commit_all`]
-//! resolves `user.name`/`user.email` itself, from the repository the user actually works in
-//! (`repo_root`, see [`WorktreeManager::resolve_identity`]), and scrubs every environment
-//! variable that could override them anyway (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `EMAIL`), so a
-//! commit is always attributed to whatever the repo itself says, never to whatever plxd
-//! inherited.
+//! purpose. [`WorktreeManager::commit_all`] resolves `user.name`/`user.email` itself, from the
+//! repository the user actually works in (`repo_root`, see
+//! [`WorktreeManager::resolve_identity`]), and scrubs every environment variable that could
+//! override them anyway (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`, `EMAIL`), so a commit is always
+//! attributed to whatever the repo itself says, never to whatever plxd inherited.
 //!
 //! # A worker's worktree is hostile input (#166)
 //!
@@ -74,9 +73,8 @@
 //! commands run against `repo_root`, the user's own checkout, which a sandboxed worker never
 //! writes, so there is no `.git` file or repo-local config of the worker's to distrust there. A
 //! coordinator or a worker in Bypass Permissions can write it, but either can already run any
-//! command as the user (0027). They still run
-//! with hooks off, like every git call plxd makes (#157, #191): once a run is accepted, the
-//! checkout's hooks can include files the worker wrote.
+//! command as the user (0027). They still run with hooks off, like every git call plxd makes
+//! (#157, #191): once a run is accepted, the checkout's hooks can include files the worker wrote.
 //!
 //! **Known gap (#175):** a `-c` override wins over a config value no matter how that value was
 //! set, including through an `include`/`includeIf`, so hooks and hooksPath stay closed either
@@ -494,14 +492,7 @@ impl WorktreeManager {
             .root
             .join(project_dir_name(&repo_root))
             .join(run_id.to_string());
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|source| WorktreeError::Io {
-                    path: parent.to_owned(),
-                    source,
-                })?;
-        }
+        create_parent(&path).await?;
 
         let path_arg = path.to_string_lossy().into_owned();
         self.run_git_ok(
@@ -769,47 +760,12 @@ impl WorktreeManager {
         let base = if kept {
             None
         } else {
-            // `origin/<default>` rather than the local default branch, which a merge never moves.
-            let remote = self
-                .run_git(
-                    &repo_root,
-                    &[
-                        "symbolic-ref",
-                        "--quiet",
-                        "--short",
-                        "refs/remotes/origin/HEAD",
-                    ],
-                )
-                .await?;
-            let default = if remote.success() {
-                remote.stdout.trim().to_owned()
-            } else {
-                // With no `origin/HEAD`, as after `remote add` and a push on git before 2.48.
-                let local = self
-                    .default_branch(&repo_root)
-                    .await
-                    .unwrap_or_else(|_| "HEAD".to_owned());
-                if self
-                    .has_ref(&repo_root, &format!("refs/remotes/origin/{local}"))
-                    .await?
-                {
-                    format!("origin/{local}")
-                } else {
-                    local
-                }
-            };
+            let default = self.origin_default(&repo_root).await?;
             Some(self.fetch_base(&repo_root, &default).await?)
         };
         let guard = self.lock_repo(&repo_root).await;
         self.run_git_ok(&repo_root, &["worktree", "prune"]).await?;
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|source| WorktreeError::Io {
-                    path: parent.to_owned(),
-                    source,
-                })?;
-        }
+        create_parent(path).await?;
         let path_arg = path.to_string_lossy().into_owned();
         let mut add = vec!["worktree", "add", "--no-checkout"];
         match &base {
@@ -819,13 +775,13 @@ impl WorktreeManager {
         self.run_git_ok(&repo_root, &add).await?;
         drop(guard);
         // The one moment the worktree's `.git` file is trusted, as in `create_named` (#166).
-        let checked_out = match self.run_git_ok(path, &["reset", "--hard", "--quiet"]).await {
-            Ok(_) => {
-                self.run_git_ok(path, &["rev-parse", "--absolute-git-dir"])
-                    .await
-            }
-            Err(error) => Err(error),
-        };
+        let checked_out = async {
+            self.run_git_ok(path, &["reset", "--hard", "--quiet"])
+                .await?;
+            self.run_git_ok(path, &["rev-parse", "--absolute-git-dir"])
+                .await
+        }
+        .await;
         match checked_out {
             Ok(git_dir) => Ok((PathBuf::from(git_dir.trim()), base)),
             Err(error) => {
@@ -843,6 +799,38 @@ impl WorktreeManager {
                 Err(error)
             }
         }
+    }
+
+    /// The branch a restored worktree's branch is made again from: `origin/<default>` rather than
+    /// the local default branch, which a merge never moves.
+    async fn origin_default(&self, repo_root: &Path) -> Result<String, WorktreeError> {
+        let remote = self
+            .run_git(
+                repo_root,
+                &[
+                    "symbolic-ref",
+                    "--quiet",
+                    "--short",
+                    "refs/remotes/origin/HEAD",
+                ],
+            )
+            .await?;
+        if remote.success() {
+            return Ok(remote.stdout.trim().to_owned());
+        }
+        // With no `origin/HEAD`, as after `remote add` and a push on git before 2.48.
+        let local = self
+            .default_branch(repo_root)
+            .await
+            .unwrap_or_else(|_| "HEAD".to_owned());
+        let tracked = self
+            .has_ref(repo_root, &format!("refs/remotes/origin/{local}"))
+            .await?;
+        Ok(if tracked {
+            format!("origin/{local}")
+        } else {
+            local
+        })
     }
 
     /// Removes a folder plxd owns directly, with no git command, so nothing here may discover a
@@ -915,8 +903,8 @@ impl WorktreeManager {
     /// nothing new, and the index already matches `HEAD`.
     async fn stage_all(&self, worktree_path: &Path, git_dir: &Path) -> Result<(), WorktreeError> {
         self.run_worktree_git_ok(worktree_path, git_dir, &["add", "-A"])
-            .await?;
-        Ok(())
+            .await
+            .map(drop)
     }
 
     /// Whether the repository's tracked files have uncommitted changes, staged or unstaged (#257).
@@ -1009,13 +997,8 @@ impl WorktreeManager {
         args: &[&str],
         limit: Duration,
     ) -> Result<GitOutput, WorktreeError> {
-        let (stdout, exit) = self
-            .exec(&self.git_spec(cwd, args), cwd, args, limit)
-            .await?;
-        Ok(GitOutput {
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            exit,
-        })
+        self.exec_output(&self.git_spec(cwd, args), cwd, args, limit)
+            .await
     }
 
     /// Runs `spec`, `git args` in `cwd`, and reads all of its stdout, killing it after `limit`.
@@ -1029,11 +1012,22 @@ impl WorktreeManager {
         let process = self.launcher.spawn(spec)?;
         timeout(limit, collect(process, cwd, args))
             .await
-            .map_err(|_| WorktreeError::Timeout {
-                cwd: cwd.to_owned(),
-                args: owned_args(args),
-                timeout: limit,
-            })?
+            .map_err(|_| timed_out(cwd, args, limit))?
+    }
+
+    /// [`Self::exec`], with its stdout as text.
+    async fn exec_output(
+        &self,
+        spec: &ProcessSpec,
+        cwd: &Path,
+        args: &[&str],
+        limit: Duration,
+    ) -> Result<GitOutput, WorktreeError> {
+        let (stdout, exit) = self.exec(spec, cwd, args, limit).await?;
+        Ok(GitOutput {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            exit,
+        })
     }
 
     /// The process spec [`WorktreeManager::run_git`] runs.
@@ -1073,11 +1067,8 @@ impl WorktreeManager {
     ) -> Result<GitOutput, WorktreeError> {
         let mut spec = self.worktree_spec(work_tree, git_dir, args).await?;
         spec.limits.max_line_bytes = self.max_git_line_bytes;
-        let (stdout, exit) = self.exec(&spec, work_tree, args, DEFAULT_TIMEOUT).await?;
-        Ok(GitOutput {
-            stdout: String::from_utf8_lossy(&stdout).into_owned(),
-            exit,
-        })
+        self.exec_output(&spec, work_tree, args, DEFAULT_TIMEOUT)
+            .await
     }
 
     /// The process spec for `git args` scoped to a worker's worktree: see
@@ -1088,12 +1079,7 @@ impl WorktreeManager {
         git_dir: &Path,
         args: &[&str],
     ) -> Result<ProcessSpec, WorktreeError> {
-        tokio::fs::create_dir_all(&self.git_safe_home)
-            .await
-            .map_err(|source| WorktreeError::Io {
-                path: self.git_safe_home.clone(),
-                source,
-            })?;
+        create_dir_all(&self.git_safe_home).await?;
 
         let mut spec = ProcessSpec::new("git", work_tree);
         spec.args = worktree_argv(work_tree, git_dir, args);
@@ -1157,11 +1143,7 @@ impl GitOutput {
 
     /// [`WorktreeError::GitFailed`] for this, the output of `git args` in `cwd`.
     fn failure(&self, cwd: &Path, args: &[&str]) -> WorktreeError {
-        WorktreeError::GitFailed {
-            cwd: cwd.to_owned(),
-            args: owned_args(args),
-            detail: describe_failure(self),
-        }
+        git_failed(cwd, args, describe_failure(self))
     }
 
     /// Its stdout, or [`Self::failure`] for a non-zero exit.
@@ -1186,6 +1168,42 @@ fn owned_args(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_owned()).collect()
 }
 
+/// [`WorktreeError::GitFailed`] for `git args` in `cwd`, with `detail`.
+fn git_failed(cwd: &Path, args: &[&str], detail: String) -> WorktreeError {
+    WorktreeError::GitFailed {
+        cwd: cwd.to_owned(),
+        args: owned_args(args),
+        detail,
+    }
+}
+
+/// [`WorktreeError::Timeout`] for `git args` in `cwd`, killed after `limit`.
+fn timed_out(cwd: &Path, args: &[&str], limit: Duration) -> WorktreeError {
+    WorktreeError::Timeout {
+        cwd: cwd.to_owned(),
+        args: owned_args(args),
+        timeout: limit,
+    }
+}
+
+/// Creates `path` and the folders above it.
+async fn create_dir_all(path: &Path) -> Result<(), WorktreeError> {
+    tokio::fs::create_dir_all(path)
+        .await
+        .map_err(|source| WorktreeError::Io {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+/// Creates the folder `path` goes in.
+async fn create_parent(path: &Path) -> Result<(), WorktreeError> {
+    match path.parent() {
+        Some(parent) => create_dir_all(parent).await,
+        None => Ok(()),
+    }
+}
+
 /// Reads every line of `process`'s stdout until it exits, joining lines back with `\n`. The exact
 /// framing of the original bytes doesn't matter here: every caller either parses the result line
 /// by line or trims it as one block of text.
@@ -1194,28 +1212,12 @@ fn owned_args(args: &[&str]) -> Vec<String> {
 /// rather than being skipped (PLX-143): a `-z` output is one line, so skipping it would read as
 /// no output at all, such as a commit with no changed files.
 async fn collect(
-    mut process: Process,
+    process: Process,
     cwd: &Path,
     args: &[&str],
 ) -> Result<(Vec<u8>, Exit), WorktreeError> {
-    let mut stdout = Vec::new();
-    loop {
-        match process.next().await {
-            Some(Output::Line(line)) => {
-                stdout.extend_from_slice(&line);
-                stdout.push(b'\n');
-            }
-            Some(Output::Oversized { bytes }) => {
-                return Err(WorktreeError::GitFailed {
-                    cwd: cwd.to_owned(),
-                    args: owned_args(args),
-                    detail: format!("it wrote a {bytes}-byte line, too long for plxd to read"),
-                });
-            }
-            Some(Output::Exited(exit)) => return Ok((stdout, exit)),
-            None => unreachable!("Output::Exited always comes last"),
-        }
-    }
+    let (stdout, exit, _) = collect_capped(process, cwd, args, usize::MAX).await?;
+    Ok((stdout, exit.expect("an uncapped read runs to the exit")))
 }
 
 /// [`collect`], stopping once stdout passes `max_bytes`: the process is killed, and the output is
@@ -1238,11 +1240,8 @@ async fn collect_capped(
                 }
             }
             Some(Output::Oversized { bytes }) => {
-                return Err(WorktreeError::GitFailed {
-                    cwd: cwd.to_owned(),
-                    args: owned_args(args),
-                    detail: format!("it wrote a {bytes}-byte line, too long for plxd to read"),
-                });
+                let detail = format!("it wrote a {bytes}-byte line, too long for plxd to read");
+                return Err(git_failed(cwd, args, detail));
             }
             Some(Output::Exited(exit)) => return Ok((stdout, Some(exit), false)),
             None => unreachable!("Output::Exited always comes last"),

@@ -197,8 +197,8 @@ impl WorktreeManager {
         self.run_git_ok(&path, &["update-ref", &reference, commit, tip])
             .await?;
         self.run_git_ok(&path, &["symbolic-ref", "HEAD", &reference])
-            .await?;
-        Ok(())
+            .await
+            .map(drop)
     }
 
     /// The lines `theirs` adds since its merge base with `tip` that hold a leftover conflict
@@ -281,7 +281,7 @@ impl WorktreeManager {
         git_dir: &Path,
     ) -> Result<(), WorktreeError> {
         self.run_worktree_git_ok(worktree_path, git_dir, &["merge", "--abort"])
-            .await?;
-        Ok(())
+            .await
+            .map(drop)
     }
 }

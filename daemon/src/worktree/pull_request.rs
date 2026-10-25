@@ -211,7 +211,7 @@ impl WorktreeManager {
 }
 
 /// One pull request in `gh pr list --json=url,isCrossRepository`.
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Listed {
     url: String,
