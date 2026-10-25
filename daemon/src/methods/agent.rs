@@ -14,7 +14,7 @@ use parallax_protocol::{
     AgentEventsParams, AgentEventsResult, AgentListParams, AgentListResult, AgentOpenPrParams,
     AgentOpenPrResult, AgentPolicy, AgentRequestChangesParams, AgentResumeNowParams,
     AgentRunResult, AgentSendParams, AgentStartParams, AgentStopTaskParams, AgentStopTaskResult,
-    ErrorKind, GitStatus, LoggedEvent, PromptImage, RunId,
+    ErrorKind, GitStatus, LoggedEvent, PromptImage, RunId, TurnId,
 };
 
 use super::Context;
@@ -76,11 +76,8 @@ pub(crate) async fn start(
     }
     check_message("prompt", &params.prompt, &params.images)?;
     params.threads = agents::attached::check(&context.daemon, params.threads).await?;
-    let daemon = Arc::clone(&context.daemon);
     let run = context
-        .daemon
-        .agents
-        .detached(agents::start(daemon, params))
+        .detached(|daemon| agents::start(daemon, params))
         .await?;
     Ok(AgentRunResult { run })
 }
@@ -91,24 +88,42 @@ pub(crate) async fn send(
 ) -> Result<AgentRunResult, ErrorObject> {
     check_message("text", &params.text, &params.images)?;
     params.threads = agents::attached::check(&context.daemon, params.threads).await?;
-    let daemon = Arc::clone(&context.daemon);
     let run = context
-        .daemon
-        .agents
-        .detached(agents::send(daemon, params))
+        .detached(|daemon| agents::send(daemon, params))
         .await?;
     Ok(AgentRunResult { run })
+}
+
+/// `agent/send`'s params for a plain message: `text` alone, with none of a message's options.
+pub(super) fn plain_message(
+    run_id: RunId,
+    turn_id: TurnId,
+    text: String,
+    from: Option<RunId>,
+) -> AgentSendParams {
+    AgentSendParams {
+        run_id,
+        turn_id,
+        text,
+        model: None,
+        effort: None,
+        permission: None,
+        context_window: None,
+        fast: None,
+        account: None,
+        images: Vec::new(),
+        threads: Vec::new(),
+        from,
+        delivery: None,
+    }
 }
 
 pub(crate) async fn cancel(
     context: &Context,
     params: AgentCancelParams,
 ) -> Result<AgentRunResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     let run = context
-        .daemon
-        .agents
-        .detached(agents::cancel(daemon, params.run_id, params.from))
+        .detached(|daemon| agents::cancel(daemon, params.run_id, params.from))
         .await?;
     Ok(AgentRunResult { run })
 }
@@ -118,11 +133,8 @@ pub(crate) async fn resume_now(
     context: &Context,
     params: AgentResumeNowParams,
 ) -> Result<AgentRunResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     let run = context
-        .daemon
-        .agents
-        .detached(agents::resume_now(daemon, params.run_id))
+        .detached(|daemon| agents::resume_now(daemon, params.run_id))
         .await?;
     Ok(AgentRunResult { run })
 }
@@ -141,15 +153,12 @@ pub(crate) async fn auto_resume(
     context: &Context,
     params: AgentAutoResumeParams,
 ) -> Result<AgentRunResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     let AgentAutoResumeParams {
         run_id,
         auto_resume,
     } = params;
     let run = context
-        .daemon
-        .agents
-        .detached(agents::set_auto_resume(daemon, run_id, auto_resume))
+        .detached(|daemon| agents::set_auto_resume(daemon, run_id, auto_resume))
         .await?;
     Ok(AgentRunResult { run })
 }
@@ -200,11 +209,8 @@ pub(crate) async fn approve(
             ));
         }
     }
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(agents::approve(daemon, params))
+        .detached(|daemon| agents::approve(daemon, params))
         .await
 }
 
@@ -237,11 +243,8 @@ pub(crate) async fn accept(
     context: &Context,
     params: AgentAcceptParams,
 ) -> Result<AgentAcceptResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(agents::accept(daemon, params))
+        .detached(|daemon| agents::accept(daemon, params))
         .await
 }
 
@@ -266,11 +269,8 @@ pub(crate) async fn open_pr(
             "body must be at most {MAX_PR_BODY_BYTES} bytes"
         )));
     }
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(agents::open_pr(daemon, run_id, title, body))
+        .detached(|daemon| agents::open_pr(daemon, run_id, title, body))
         .await
 }
 
@@ -298,11 +298,8 @@ pub(super) async fn git(
     run_id: RunId,
     action: GitAction,
 ) -> Result<GitStatus, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(agents::git(daemon, run_id, action))
+        .detached(|daemon| agents::git(daemon, run_id, action))
         .await
 }
 
@@ -316,25 +313,7 @@ pub(crate) async fn request_changes(
         turn_id,
         text,
     } = params;
-    send(
-        context,
-        AgentSendParams {
-            run_id,
-            turn_id,
-            text,
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-            from: None,
-            delivery: None,
-        },
-    )
-    .await
+    send(context, plain_message(run_id, turn_id, text, None)).await
 }
 
 pub(crate) async fn events(

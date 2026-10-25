@@ -119,9 +119,11 @@ async fn create_or_get(
         .await?;
     if !existed {
         // Detached, so a dropped connection never leaves a worktree half checked out.
-        let (daemon, id) = (Arc::clone(&context.daemon), result.project.id);
-        let cut = async move { agents::integration(&daemon, id).await };
-        match context.daemon.agents.detached(cut).await {
+        let id = result.project.id;
+        let cut = context
+            .detached(|daemon| async move { agents::integration(&daemon, id).await })
+            .await;
+        match cut {
             Ok(Some(row)) => {
                 result.project.base_branch = row.base_branch;
                 result.project.integration_branch = row.integration_branch;
@@ -142,11 +144,8 @@ pub(crate) async fn start(
     params: ProjectStartParams,
 ) -> Result<AgentRunResult, ErrorObject> {
     super::agent::check_message("prompt", &params.prompt, &params.images)?;
-    let daemon = Arc::clone(&context.daemon);
     let run = context
-        .daemon
-        .agents
-        .detached(coordinator::start(daemon, params))
+        .detached(|daemon| coordinator::start(daemon, params))
         .await?;
     Ok(AgentRunResult { run })
 }
@@ -208,7 +207,6 @@ pub(crate) async fn from_threads(
         },
     )
     .await?;
-    let daemon = Arc::clone(&context.daemon);
     let start = ProjectStartParams {
         project: id,
         run_id,
@@ -221,9 +219,7 @@ pub(crate) async fn from_threads(
         approvals: true,
     };
     let run = context
-        .daemon
-        .agents
-        .detached(async move {
+        .detached(|daemon| async move {
             let run = match coordinator::start(Arc::clone(&daemon), start).await {
                 Ok(run) => run,
                 Err(error) => {
@@ -494,11 +490,9 @@ pub(crate) async fn delete(
     context: &Context,
     params: ProjectDeleteParams,
 ) -> Result<ProjectDeleteResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
+    let command_id = context.command_id;
     context
-        .daemon
-        .agents
-        .detached(remove(daemon, params.project, context.command_id))
+        .detached(|daemon| remove(daemon, params.project, command_id))
         .await
 }
 

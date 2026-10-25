@@ -95,10 +95,9 @@ fn add_account(
             && existing.label == fields.label
             && existing.masked_key == fields.masked_key;
         if same_fields {
-            let stored = keys.get(id).map_err(|error| {
-                error!(%error, "could not read a key from the keychain");
-                map_keychain_error(&error)
-            })?;
+            let stored = keys
+                .get(id)
+                .map_err(keychain_failed("read a key from the keychain"))?;
             if stored.as_deref().map(String::as_str) == Some(key) {
                 return Ok(AccountsKeysAddResult {
                     account: store::key_account(existing)?,
@@ -107,10 +106,8 @@ fn add_account(
         }
         return Err(account_store_error(&StoreError::IdConflict { id: uuid }));
     }
-    keys.set(id, key).map_err(|error| {
-        error!(%error, "could not store a key in the keychain");
-        map_keychain_error(&error)
-    })?;
+    keys.set(id, key)
+        .map_err(keychain_failed("store a key in the keychain"))?;
     let created = store.run_blocking(move |db| {
         db.create_account(uuid, &fields)
             .map_err(|error| account_store_error(&error))
@@ -188,10 +185,8 @@ fn remove_account(
     }
     // The Keychain first, so a failed removal never leaves an account with no record but a key
     // that is still stored.
-    keys.delete(id).map_err(|error| {
-        error!(%error, "could not remove a key from the keychain");
-        map_keychain_error(&error)
-    })?;
+    keys.delete(id)
+        .map_err(keychain_failed("remove a key from the keychain"))?;
     store.run_blocking(move |db| {
         db.delete_account(uuid)
             .map_err(|error| account_store_error(&error))
@@ -209,6 +204,14 @@ pub(crate) fn map_keychain_error(error: &KeyStoreError) -> ErrorObject {
         ErrorObject::parallax(ErrorKind::KeychainUnavailable, UNAVAILABLE_MESSAGE)
     } else {
         ErrorObject::internal_error("the keychain failed")
+    }
+}
+
+/// Logs a failed `KeyStore` call that tried to `doing`, then maps it with [`map_keychain_error`].
+fn keychain_failed(doing: &'static str) -> impl Fn(KeyStoreError) -> ErrorObject {
+    move |error| {
+        error!(%error, "could not {doing}");
+        map_keychain_error(&error)
     }
 }
 
@@ -305,8 +308,8 @@ mod tests {
     use std::io;
     use std::sync::{Arc, Mutex, PoisonError};
 
-    use parallax_protocol::jsonrpc::INVALID_PARAMS;
-    use parallax_protocol::{AccountId, ErrorKind, Provider, RawKey};
+    use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
+    use parallax_protocol::{AccountId, AccountsKeysAddResult, ErrorKind, Provider, RawKey};
     use tracing_subscriber::fmt::MakeWriter;
 
     use super::{add_account, check, mask_key, remove_account};
@@ -317,6 +320,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = StoreHandle::open(&dir.path().join("plxd.sqlite3"), 10, usize::MAX, usize::MAX);
         (dir, store)
+    }
+
+    /// Adds an Anthropic key account `id`, labeled `label`, as `accounts/keys/add` would.
+    fn add(
+        store: &StoreHandle,
+        keys: &MemoryKeyStore,
+        id: AccountId,
+        label: &str,
+        key: &str,
+    ) -> Result<AccountsKeysAddResult, ErrorObject> {
+        add_account(store, keys, id, Provider::Anthropic, label.to_owned(), key)
     }
 
     fn raw_key(text: &str) -> RawKey {
@@ -418,12 +432,11 @@ mod tests {
         let (_dir, db_store) = temp_store();
         let keys = MemoryKeyStore::new();
         let id = AccountId::generate();
-        add_account(
+        add(
             &db_store,
             &keys,
             id,
-            Provider::Anthropic,
-            "Personal".to_owned(),
+            "Personal",
             "sk-ant-averylongthrowawaykeyabcd1234",
         )
         .unwrap();
@@ -445,24 +458,8 @@ mod tests {
         let id = AccountId::generate();
         let key = "sk-ant-averylongthrowawaykeyabcd1234";
 
-        let first = add_account(
-            &db_store,
-            &keys,
-            id,
-            Provider::Anthropic,
-            "Personal".to_owned(),
-            key,
-        )
-        .unwrap();
-        let second = add_account(
-            &db_store,
-            &keys,
-            id,
-            Provider::Anthropic,
-            "Personal".to_owned(),
-            key,
-        )
-        .unwrap();
+        let first = add(&db_store, &keys, id, "Personal", key).unwrap();
+        let second = add(&db_store, &keys, id, "Personal", key).unwrap();
 
         assert_eq!(first.account, second.account);
         assert_eq!(
@@ -476,22 +473,20 @@ mod tests {
         let (_dir, db_store) = temp_store();
         let keys = MemoryKeyStore::new();
         let id = AccountId::generate();
-        add_account(
+        add(
             &db_store,
             &keys,
             id,
-            Provider::Anthropic,
-            "Personal".to_owned(),
+            "Personal",
             "sk-ant-averylongthrowawaykeyabcd1234",
         )
         .unwrap();
 
-        let error = add_account(
+        let error = add(
             &db_store,
             &keys,
             id,
-            Provider::Anthropic,
-            "Work".to_owned(),
+            "Work",
             "sk-ant-averylongthrowawaykeyabcd1234",
         )
         .unwrap_err();
@@ -514,25 +509,9 @@ mod tests {
         );
         assert_ne!(first_key, second_key);
 
-        add_account(
-            &db_store,
-            &keys,
-            id,
-            Provider::Anthropic,
-            "Personal".to_owned(),
-            first_key,
-        )
-        .unwrap();
+        add(&db_store, &keys, id, "Personal", first_key).unwrap();
 
-        let error = add_account(
-            &db_store,
-            &keys,
-            id,
-            Provider::Anthropic,
-            "Personal".to_owned(),
-            second_key,
-        )
-        .unwrap_err();
+        let error = add(&db_store, &keys, id, "Personal", second_key).unwrap_err();
         assert_eq!(error.parallax_data().unwrap().kind, ErrorKind::IdConflict);
         assert_eq!(
             keys.get(id).unwrap().as_deref().map(String::as_str),
@@ -554,12 +533,11 @@ mod tests {
         let keys = MemoryKeyStore::new();
         let id = AccountId::generate();
 
-        let result = add_account(
+        let result = add(
             &db_store,
             &keys,
             id,
-            Provider::Anthropic,
-            "Personal".to_owned(),
+            "Personal",
             "sk-ant-averylongthrowawaykeyabcd1234",
         );
 
@@ -615,15 +593,8 @@ mod tests {
             // Retry until this scoped subscriber actually sees the add, then check its output.
             for _ in 0..20 {
                 tracing::callsite::rebuild_interest_cache();
-                add_account(
-                    &db_store,
-                    &keys,
-                    AccountId::generate(),
-                    Provider::Anthropic,
-                    "Personal".to_owned(),
-                    secret,
-                )
-                .expect("add should succeed");
+                add(&db_store, &keys, AccountId::generate(), "Personal", secret)
+                    .expect("add should succeed");
                 if buffer
                     .lock()
                     .unwrap()

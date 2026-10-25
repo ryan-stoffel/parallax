@@ -21,8 +21,7 @@ pub(crate) async fn link(
         crate::pr_watch::unwatch(&context.daemon, params.clone()).await?;
     }
     let PrViewParams { run_id, url } = params;
-    let daemon = Arc::clone(&context.daemon);
-    let run = agents::link_pr(daemon, run_id, url, linked).await?;
+    let run = agents::link_pr(Arc::clone(&context.daemon), run_id, url, linked).await?;
     Ok(AgentRunResult { run })
 }
 
@@ -35,10 +34,7 @@ pub(crate) async fn act(
     if params.action == PrAction::Unknown {
         return Err(ErrorObject::invalid_params("unknown pull request action"));
     }
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(agents::act_pr(daemon, params))
+        .detached(|daemon| agents::act_pr(daemon, params))
         .await
 }

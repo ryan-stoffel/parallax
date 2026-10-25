@@ -101,11 +101,10 @@ pub(super) async fn subscribe_shell(
     let mut waiting: BTreeMap<RunId, RunWaiting> = agents::backgrounds(&context.daemon)
         .into_iter()
         .map(|(run_id, background)| {
-            let watching = Vec::new();
             let run = RunWaiting {
                 run_id,
                 background,
-                watching,
+                watching: Vec::new(),
             };
             (run_id, run)
         })

@@ -65,6 +65,7 @@ impl Connect {
 }
 
 /// What a served connection shares with the server's own.
+#[derive(Clone)]
 pub(super) struct Serving {
     pub daemon: Arc<Daemon>,
     pub connections: TaskTracker,

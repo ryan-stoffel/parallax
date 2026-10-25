@@ -586,9 +586,7 @@ impl Server {
             Ok(listener) => listener,
             Err(error) => {
                 socket.remove();
-                daemon.store.stop().await;
-                daemon.reader.stop().await;
-                lock.release();
+                release(&daemon, lock).await;
                 return Err(error);
             }
         };
@@ -603,9 +601,7 @@ impl Server {
         {
             #[cfg(unix)]
             socket.remove();
-            daemon.store.stop().await;
-            daemon.reader.stop().await;
-            lock.release();
+            release(&daemon, lock).await;
             return Err(io::Error::other(error.message));
         }
         if daemon.store.state() != parallax_protocol::StoreState::Unavailable {
@@ -613,89 +609,62 @@ impl Server {
         }
         let cut = agents::recover(&daemon).await;
         crate::setup_scripts::recover(&daemon).await;
+        let stop = &shutdown.graceful;
         // Before what waits is sent: a turn waits for its thread's checkpoint captures (0062).
-        let effects = tokio::spawn(crate::orchestrator::work(
+        let mut background = vec![tokio::spawn(crate::orchestrator::work(
             Arc::clone(&daemon),
-            shutdown.graceful.clone(),
-        ));
+            stop.clone(),
+        ))];
         agents::deliver_queued(&daemon, cut).await;
         crate::methods::land::resume(&daemon).await;
-        let compact = {
-            let daemon = Arc::clone(&daemon);
-            let stop = shutdown.graceful.clone();
-            tokio::spawn(async move {
-                crate::agents::compact::run(daemon, stop).await;
-            })
-        };
-        let cleanup = {
-            let daemon = Arc::clone(&daemon);
-            let stop = shutdown.graceful.clone();
-            tokio::spawn(async move {
-                crate::agents::cleanup::run(daemon, stop).await;
-            })
-        };
-        let board = tokio::spawn(crate::board::run(
-            Arc::clone(&daemon),
-            shutdown.graceful.clone(),
-        ));
-        let import = tokio::spawn(crate::graph::sweep(
-            Arc::clone(&daemon),
-            shutdown.graceful.clone(),
-        ));
-        let schedules = tokio::spawn(crate::schedules::run(
-            Arc::clone(&daemon),
-            shutdown.graceful.clone(),
-        ));
-        let pr_watches = tokio::spawn(crate::pr_watch::run(
-            Arc::clone(&daemon),
-            shutdown.graceful.clone(),
-        ));
-        let relay = tokio::spawn(crate::relay::run(
-            Arc::clone(&daemon),
-            shutdown.graceful.clone(),
-        ));
         // A `host/update` handover shuts the server down as a signal would (PLX-700).
         let handover = {
             let restart = daemon.self_update.restart.clone();
-            let stop = shutdown.clone();
-            tokio::spawn(async move {
+            let shutdown = shutdown.clone();
+            async move {
                 tokio::select! {
-                    () = restart.cancelled() => stop.trigger(),
-                    () = stop.graceful.cancelled() => {}
+                    () = restart.cancelled() => shutdown.trigger(),
+                    () = shutdown.graceful.cancelled() => {}
                 }
-            })
+            }
         };
-        let you_sync = tokio::spawn(crate::context::you_sync::run(
-            Arc::clone(&daemon),
-            config.you_sync_interval,
-            config.you_sync_port.unwrap_or(config.connect_port),
-            shutdown.graceful.clone(),
-        ));
-        let secrets = tokio::spawn(crate::secrets::run(
-            Arc::clone(&daemon),
-            shutdown.graceful.clone(),
-        ));
+        background.extend([
+            tokio::spawn(crate::agents::compact::run(
+                Arc::clone(&daemon),
+                stop.clone(),
+            )),
+            tokio::spawn(crate::agents::cleanup::run(
+                Arc::clone(&daemon),
+                stop.clone(),
+            )),
+            tokio::spawn(crate::board::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::graph::sweep(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::schedules::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::pr_watch::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::relay::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(handover),
+            tokio::spawn(crate::context::you_sync::run(
+                Arc::clone(&daemon),
+                config.you_sync_interval,
+                config.you_sync_port.unwrap_or(config.connect_port),
+                stop.clone(),
+            )),
+            tokio::spawn(crate::secrets::run(Arc::clone(&daemon), stop.clone())),
+        ]);
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
+        let serving = tailnet::Serving {
+            daemon: Arc::clone(&daemon),
+            connections: connections.clone(),
+            stop_reading: stop.clone(),
+            abort: abort.clone(),
+        };
         let tailnet = tokio::spawn(tailnet::run(
-            tailnet::Serving {
-                daemon: Arc::clone(&daemon),
-                connections: connections.clone(),
-                stop_reading: shutdown.graceful.clone(),
-                abort: abort.clone(),
-            },
+            serving.clone(),
             config.connect_check_interval,
-            shutdown.graceful.clone(),
+            stop.clone(),
         ));
-        let remote = tokio::spawn(remote::run(
-            tailnet::Serving {
-                daemon: Arc::clone(&daemon),
-                connections: connections.clone(),
-                stop_reading: shutdown.graceful.clone(),
-                abort: abort.clone(),
-            },
-            shutdown.graceful.clone(),
-        ));
+        let remote = tokio::spawn(remote::run(serving, stop.clone()));
         let period = config.socket_check_interval;
         let mut check = time::interval_at(time::Instant::now() + period, period);
         check.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -759,23 +728,21 @@ impl Server {
             connections.wait().await;
         }
         daemon.agents.shutdown().await;
-        let _ = compact.await;
-        let _ = cleanup.await;
-        let _ = board.await;
-        let _ = import.await;
-        let _ = effects.await;
-        let _ = schedules.await;
-        let _ = pr_watches.await;
-        let _ = relay.await;
-        let _ = handover.await;
-        let _ = secrets.await;
-        let _ = you_sync.await;
-        daemon.store.stop().await;
-        daemon.reader.stop().await;
-        lock.release();
+        for task in background {
+            let _ = task.await;
+        }
+        release(&daemon, lock).await;
         info!("stopped");
         Ok(())
     }
+}
+
+/// Stops the store and its reader, then lets go of the instance lock: the last step of a
+/// shutdown, or of a `run` that couldn't start.
+async fn release(daemon: &Daemon, lock: InstanceLock) {
+    daemon.store.stop().await;
+    daemon.reader.stop().await;
+    lock.release();
 }
 
 struct Accepted<'a> {

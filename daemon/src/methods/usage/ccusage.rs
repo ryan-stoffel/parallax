@@ -9,6 +9,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use parallax_protocol::{CliKind, UsageDay, UsageSessions};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::backend::claude::usd_micros;
 use crate::backend::process::Launcher;
@@ -99,13 +100,11 @@ struct SessionMetadata {
 /// `zone` of their last activity. A session without one is left out. `None` if it isn't that
 /// report.
 fn parse_sessions(stdout: &str, zone: &TimeZone) -> Option<Vec<UsageSessions>> {
-    let report: SessionReport = serde_json::from_str(&stdout[stdout.find('{')?..]).ok()?;
+    let report: SessionReport = report(stdout)?;
     let mut counts: HashMap<(Date, CliKind), u32> = HashMap::new();
     for session in report.session {
-        let agent = match session.agent.as_str() {
-            "claude" => CliKind::Claude,
-            "codex" => CliKind::Codex,
-            _ => continue,
+        let Some(agent) = agent(&session.agent) else {
+            continue;
         };
         let Some(at) = session.metadata.and_then(|m| m.last_activity) else {
             continue;
@@ -164,17 +163,14 @@ struct Breakdown {
 /// `ccusage daily --json --by-agent`'s report as rows, Claude Code's and Codex's only: Cursor
 /// comes from its own API, and plxd runs no other agent. `None` if it isn't that report.
 fn parse(stdout: &str) -> Option<Vec<UsageDay>> {
-    // Past anything a wrapper such as npx printed first.
-    let report: Report = serde_json::from_str(&stdout[stdout.find('{')?..]).ok()?;
+    let report: Report = report(stdout)?;
     let mut days = Vec::new();
     for day in report.daily {
-        for agent in day.agents {
-            let agent_kind = match agent.agent.as_str() {
-                "claude" => CliKind::Claude,
-                "codex" => CliKind::Codex,
-                _ => continue,
+        for entry in day.agents {
+            let Some(agent_kind) = agent(&entry.agent) else {
+                continue;
             };
-            days.extend(agent.model_breakdowns.into_iter().map(|model| UsageDay {
+            days.extend(entry.model_breakdowns.into_iter().map(|model| UsageDay {
                 date: day.period,
                 agent: agent_kind,
                 model: model.model_name,
@@ -187,6 +183,20 @@ fn parse(stdout: &str) -> Option<Vec<UsageDay>> {
         }
     }
     Some(days)
+}
+
+/// A ccusage JSON report, past anything a wrapper such as npx printed first.
+fn report<T: DeserializeOwned>(stdout: &str) -> Option<T> {
+    serde_json::from_str(&stdout[stdout.find('{')?..]).ok()
+}
+
+/// The CLI ccusage's agent `name` is, when it's Claude Code or Codex.
+fn agent(name: &str) -> Option<CliKind> {
+    match name {
+        "claude" => Some(CliKind::Claude),
+        "codex" => Some(CliKind::Codex),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

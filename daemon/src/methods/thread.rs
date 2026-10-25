@@ -7,8 +7,6 @@
 //! straight from `mod.rs`.
 //! `repo/files` is `composer.rs`'s, behind `composerMenus`.
 
-use std::sync::Arc;
-
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     RepoAddResult, RepoCloneParams, SpaceDeleteParams, SpaceDeleteResult, ThreadDeleteParams,
@@ -28,11 +26,8 @@ pub(super) async fn start(
 ) -> Result<ThreadStartResult, ErrorObject> {
     super::agent::check_message("prompt", &params.prompt, &params.images)?;
     params.threads = agents::attached::check(&context.daemon, params.threads).await?;
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(threads::start(daemon, params))
+        .detached(|daemon| threads::start(daemon, params))
         .await
 }
 
@@ -41,11 +36,8 @@ pub(super) async fn clone(
     context: &Context,
     params: RepoCloneParams,
 ) -> Result<RepoAddResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(crate::repo_clone::clone(daemon, params))
+        .detached(|daemon| crate::repo_clone::clone(daemon, params))
         .await
 }
 
@@ -53,11 +45,8 @@ pub(super) async fn fork(
     context: &Context,
     params: ThreadForkParams,
 ) -> Result<ThreadStartResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(threads::fork(daemon, params))
+        .detached(|daemon| threads::fork(daemon, params))
         .await
 }
 
@@ -65,11 +54,8 @@ pub(super) async fn import(
     context: &Context,
     params: ThreadImportParams,
 ) -> Result<ThreadStartResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(crate::importer::import(daemon, params))
+        .detached(|daemon| crate::importer::import(daemon, params))
         .await
 }
 
@@ -77,11 +63,8 @@ pub(super) async fn import_chat(
     context: &Context,
     params: ThreadImportChatParams,
 ) -> Result<ThreadStartResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(crate::importer::import_chat(daemon, params))
+        .detached(|daemon| crate::importer::import_chat(daemon, params))
         .await
 }
 
@@ -89,12 +72,9 @@ pub(super) async fn delete(
     context: &Context,
     params: ThreadDeleteParams,
 ) -> Result<ThreadDeleteResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     let command_id = context.command_id;
     context
-        .daemon
-        .agents
-        .detached(async move { threads::delete(&daemon, params.run_id, command_id).await })
+        .detached(|daemon| async move { threads::delete(&daemon, params.run_id, command_id).await })
         .await
 }
 
@@ -102,10 +82,7 @@ pub(super) async fn space_delete(
     context: &Context,
     params: SpaceDeleteParams,
 ) -> Result<SpaceDeleteResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
     context
-        .daemon
-        .agents
-        .detached(async move { crate::spaces::delete(&daemon, params).await })
+        .detached(|daemon| async move { crate::spaces::delete(&daemon, params).await })
         .await
 }
