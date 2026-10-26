@@ -277,7 +277,8 @@ function restored(scope: string | undefined): { tabs: OwnTab[]; current: number 
  * whose new windows open as tabs here. Each new `page` opens in the current tab while it's blank,
  * or else in a new one. Its own tabs are saved under `scope` and come back after a restart
  * (PLX-964). `remoteHost`, the open host's name when it's an SSH host, notes that localhost is
- * this computer. Closing its last tab calls `onEmpty`.
+ * this computer. Only the side panel's browser gets it: the permanent one has nothing to do with
+ * the open host (PLX-1013). Closing its last tab calls `onEmpty`.
  */
 export function Browser({
   page,
