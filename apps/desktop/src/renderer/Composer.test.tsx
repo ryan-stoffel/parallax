@@ -484,3 +484,16 @@ test("a sidebar row dropped on the box attaches its thread once, but not another
   expect(chips()).toEqual([]);
   expect(request).not.toHaveBeenCalledWith("local", "thread/search", expect.anything());
 });
+
+test("scrolled up from the end, an empty box steps back until it's focused or holds text", async () => {
+  const { box, type, rerender } = render(async () => undefined, caps, { away: true });
+  const form = () => box.closest("form")!;
+  expect(form().dataset["back"]).toBe("true");
+  act(() => box.focus());
+  expect(form().dataset["back"]).toBeUndefined();
+  type("Draft");
+  act(() => box.blur());
+  expect(form().dataset["back"]).toBeUndefined();
+  rerender({ away: false });
+  expect(form().dataset["back"]).toBeUndefined();
+});

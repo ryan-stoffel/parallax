@@ -13,9 +13,6 @@ import {
   FoldVertical,
   Folder,
   FolderGit2,
-  GitBranch,
-  GitPullRequest,
-  GitPullRequestArrow,
   Globe,
   Hammer,
   ImageOff,
@@ -82,7 +79,6 @@ import { CiteSelection, type Citation } from "./Cite";
 import { Composer, listCommands, tabItem, type ComposerProps, type Unanswered } from "./Composer";
 import { offlineReason, useConnection } from "./ConnectionStatus";
 import { isEmpty, threadDrafts, type ComposerContents } from "./drafts";
-import { describeError, githubProblem } from "./errors";
 import { dismiss as dismissNotice, notify } from "./notifications";
 import { ForkButton, ForkContext, type ForkTarget } from "./Fork";
 import type { Host } from "./hosts";
@@ -137,7 +133,7 @@ import {
   SubagentsContext,
   type NativeSubagent,
 } from "./Subagents";
-import { titleOf, type ForkChoice } from "./threads";
+import type { ForkChoice } from "./threads";
 import {
   backgroundCalls,
   failureText,
@@ -248,21 +244,15 @@ export function PinnedApprovals(
  */
 export function AgentChat({
   hostId,
-  host,
   runId,
-  title,
   prompt,
   going,
   listed,
-  noRepo,
   space,
   tab,
   strip,
   others,
   projectMode,
-  pullRequests,
-  onPrOpened,
-  onSetUpGithub,
   compose,
   onComposed,
   threadLinks,
@@ -277,8 +267,6 @@ export function AgentChat({
 }: {
   hostId: string;
   runId: string;
-  /** The thread's title, which Open PR names the pull request after. Else, its run's. */
-  title?: string;
   /**
    * The run's first prompt, shown while the transcript holds no rows: before it loads only while
    * `going`, so a new thread opens on it.
@@ -291,13 +279,12 @@ export function AgentChat({
   going?: boolean;
   /** The run as the thread list has it, which the composer shows until the transcript loads. */
   listed?: AgentRun;
-  /** A thread with no repo: its scratch repository has no origin, so it gets no run tab or Open PR. */
-  noRepo?: boolean;
-  /** A chat in a Space: no Access picker, and no run tab, since it has no repository. */
+  /** A chat in a Space: no Access picker. */
   space?: boolean;
-  /** The host the run is on, named in the composer's tab. */
-  host?: Host;
-  /** The composer's tab in place of the run's worktree, such as a coordinator's repository. */
+  /**
+   * The tab tucked under the composer, such as a coordinator's repository. A thread's own has
+   * none: where it runs and its branch show in Thread details, as a new thread's picker did.
+   */
   tab?: ReactNode;
   /** The back tab over the composer, behind the plan's, such as a Project's agents. */
   strip?: ComposerTab;
@@ -308,12 +295,6 @@ export function AgentChat({
   others?: readonly Asked[];
   /** The Project's permission mode, shown in place of Access, for a run in a Project (0042). */
   projectMode?: ComposerProps["projectMode"];
-  /** The run tab's link to its linked pull requests (PLX-319), in place of Open PR. */
-  pullRequests?: ReactNode;
-  /** Opens the pull request Open PR opened, in place of linking to it. */
-  onPrOpened?: (url: string) => void;
-  /** Offered when Open PR fails because `gh` is missing or signed out (PLX-423). */
-  onSetUpGithub?: () => void;
   /**
    * A message from outside the chat, such as the PR view's: sent, or put in the composer to finish.
    * `onComposed` says it's taken, so each one is taken once.
@@ -388,16 +369,6 @@ export function AgentChat({
     (body?: string) => body && notify({ tone: "error", title: "Couldn't send the message", body }),
     [],
   );
-  // Open PR's failure, with Set up GitHub when `gh` is missing or signed out.
-  const prFailed = (error: RpcError) => {
-    const short = onSetUpGithub && githubProblem(error);
-    notify({
-      tone: "error",
-      title: "Couldn't create the pull request",
-      body: short || describeError(error),
-      action: short ? { label: "Set up GitHub", run: onSetUpGithub } : undefined,
-    });
-  };
   // Dropped follow-ups already sent again, so their Send again goes away (back on failure).
   const [resent, setResent] = useState<ReadonlySet<string>>(new Set());
   const resend = useCallback(
@@ -716,19 +687,15 @@ export function AgentChat({
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";
   else if (box && !box.approvals) manualDenied = "run";
-  // A finished run with a commit can go to GitHub (PLX-168), until Accept removes its branch.
-  const canOpenPr =
-    connected &&
-    "openPr" in connection.capabilities &&
-    !noRepo &&
-    !!box?.diff &&
-    !isRunning(box.status) &&
-    box.status !== "accepted";
 
   // Each turn's run, for its changes card: by its prompt row's turn id, and the first prompt's,
   // whose row has none, by `undefined`. A fork's first run is its copied prompt's, which has no
   // checkpoint, so its copied first reply shows no changes.
   const [folds, setFolds] = useState<ReadonlyMap<string, boolean>>(new Map());
+  // Whether the transcript is scrolled up from its end, where the composer steps back.
+  const [away, setAway] = useState(false);
+  // Whether the composer stepped back for it, which shrinks its tabs too.
+  const [back, setBack] = useState(false);
   const turnChanges = useMemo<TurnChangesTarget>(() => {
     const turns = new Map<string | undefined, ThreadRun>();
     for (const r of runs) {
@@ -875,6 +842,7 @@ export function AgentChat({
                 loadImage={showImage}
                 onCite={setCite}
                 onNearTop={older ? loadOlder : undefined}
+                onScrolledUp={setAway}
                 onEdit={
                   live && !editing && unanswered?.row
                     ? { key: unanswered.row.key, edit: () => void edit() }
@@ -917,66 +885,59 @@ export function AgentChat({
       <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
         {/* Requests waiting on the user, pinned so they can't scroll away. */}
         {pinned}
-        <ComposerTabs tabs={tabs} />
-        <Composer
-          // One sent before the transcript loads stays in the box.
-          onSend={(text, options, images, threads) =>
-            run
-              ? sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
-              : Promise.resolve("")
-          }
-          onSteer={
-            queueEnabled && running
-              ? (text, options, images, threads) =>
-                  sendText(text, options, images, threads, "steer")
-              : undefined
-          }
-          history={history}
-          onStop={isRunning(box?.status) ? stop : undefined}
-          unanswered={stopBack}
-          disabledReason={disabledReason}
-          tab={
-            tab ??
-            (box && !space && !noRepo && (
-              <RunTab run={box} host={host}>
-                {pullRequests ||
-                  (canOpenPr && (
-                    <OpenPr
-                      hostId={hostId}
-                      run={box}
-                      title={title ?? titleOf(box)}
-                      onError={prFailed}
-                      onOpened={onPrOpened}
-                    />
-                  ))}
-              </RunTab>
-            ))
-          }
-          backend={box?.backend}
-          started={box}
-          accountId={box?.accountId}
-          requestUsage={transcript.requestUsage}
-          threadUsage={transcript.threadUsage}
-          connected={connected}
-          hostId={hostId}
-          contextAndFast={connected && "contextAndFast" in connection.capabilities}
-          unavailable={unavailable}
-          optionsDisabled={optionsDisabled}
-          imageCaps={imageCaps(connection)}
-          uploadBytes={uploadBytes(connection)}
-          manualDenied={manualDenied}
-          noAccess={space}
-          projectMode={projectMode}
-          insert={compose && !compose.send ? compose.text : undefined}
-          cite={cite}
-          menus={
-            connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
-          }
-          attach={attachThreads(connection, threadLinks, runId)}
-          // What the box last held, where a subagent's view took it away, else the saved draft.
-          initial={contents.current ?? draft}
-          contents={contents}
-        />
+        {/* Narrows with a composer that steps back, its tabs with it. */}
+        <div
+          className={`transition-[margin] duration-200 ease-out motion-reduce:transition-none ${back ? "mx-10" : ""}`}
+        >
+          <ComposerTabs tabs={tabs} short={back} />
+          <Composer
+            // One sent before the transcript loads stays in the box.
+            onSend={(text, options, images, threads) =>
+              run
+                ? sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
+                : Promise.resolve("")
+            }
+            onSteer={
+              queueEnabled && running
+                ? (text, options, images, threads) =>
+                    sendText(text, options, images, threads, "steer")
+                : undefined
+            }
+            history={history}
+            onStop={isRunning(box?.status) ? stop : undefined}
+            unanswered={stopBack}
+            disabledReason={disabledReason}
+            tab={tab}
+            backend={box?.backend}
+            started={box}
+            accountId={box?.accountId}
+            requestUsage={transcript.requestUsage}
+            threadUsage={transcript.threadUsage}
+            connected={connected}
+            hostId={hostId}
+            contextAndFast={connected && "contextAndFast" in connection.capabilities}
+            unavailable={unavailable}
+            optionsDisabled={optionsDisabled}
+            imageCaps={imageCaps(connection)}
+            uploadBytes={uploadBytes(connection)}
+            manualDenied={manualDenied}
+            noAccess={space}
+            projectMode={projectMode}
+            insert={compose && !compose.send ? compose.text : undefined}
+            cite={cite}
+            menus={
+              connected && "composerMenus" in connection.capabilities
+                ? { hostId, runId }
+                : undefined
+            }
+            attach={attachThreads(connection, threadLinks, runId)}
+            // What the box last held, where a subagent's view took it away, else the saved draft.
+            initial={contents.current ?? draft}
+            contents={contents}
+            away={away}
+            onBack={setBack}
+          />
+        </div>
       </div>
     </SubagentsContext>
   );
@@ -1144,6 +1105,7 @@ export function TranscriptView({
   backend,
   onEdit,
   onCite,
+  onScrolledUp,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
@@ -1171,6 +1133,8 @@ export function TranscriptView({
   onEdit?: { key: string; edit: () => void };
   /** Offers Cite over agent text the user selects, which hands it here with their comment. */
   onCite?: (citation: Citation) => void;
+  /** Told whether it's scrolled up from the end, and `false` as it unmounts. */
+  onScrolledUp?: (up: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const links = useContext(ThreadLinksContext);
@@ -1276,6 +1240,10 @@ export function TranscriptView({
   const total = virtualizer.getTotalSize();
   // Whether it's scrolled up from the end, which offers Scroll to end.
   const [scrolledUp, setScrolledUp] = useState(false);
+  useEffect(() => {
+    onScrolledUp?.(scrolledUp);
+    return () => onScrolledUp?.(false);
+  }, [scrolledUp, onScrolledUp]);
   // The user's prompts, for the rail, and which one is being read.
   const prompts = useMemo(() => promptsOf(view, sent), [view, sent]);
   const [reading, setReading] = useState(-1);
@@ -3004,9 +2972,9 @@ function DiffLines({ text }: { text: string }) {
 }
 
 /**
- * Where a run works in the composer's tab, as icons: the host's, then the checkout's or worktree's.
- * The hover title and accessible name read `{host} · Local checkout` or `{host} · Worktree`, as
- * New Thread's `RunTargetMenu` does. A Project's composer shows it too.
+ * Where a Project's coordinator works, in its composer's tab, as icons: the host's, then the
+ * checkout's or worktree's. The hover title and accessible name read `{host} · Local checkout` or
+ * `{host} · Worktree`, as New Thread's `RunTargetMenu` does.
  */
 export function CheckoutLabel({ host, checkout }: { host?: Host; checkout: boolean }) {
   const place = checkout ? "Local checkout" : "Worktree";
@@ -3016,94 +2984,6 @@ export function CheckoutLabel({ host, checkout }: { host?: Host; checkout: boole
       {host && hostIcon(host)}
       {checkout ? <Folder aria-hidden /> : <FolderGit2 aria-hidden />}
     </span>
-  );
-}
-
-/**
- * An open run in the composer's tab: its host and checkout, then `children`, such as Open PR,
- * and the worktree's branch.
- */
-export function RunTab({
-  run,
-  host,
-  children,
-}: {
-  run: AgentRun;
-  host?: Host;
-  children?: ReactNode;
-}) {
-  return (
-    <>
-      <CheckoutLabel host={host} checkout={!!run.checkout} />
-      <span className="flex min-w-0 items-center">
-        {children}
-        {run.branch && (
-          <span className={tabItem} title={`Worktree branch: ${run.branch}`}>
-            <GitBranch aria-hidden />
-            <span className="truncate">{run.branch}</span>
-          </span>
-        )}
-      </span>
-    </>
-  );
-}
-
-/**
- * Open PR: plxd pushes the run's branch and opens a pull request titled like the thread, then
- * this links to it, in the browser, or hands it to `onOpened`. It unmounts while the run works, so
- * after another turn the button is back, to push the new commit to the same pull request.
- */
-function OpenPr({
-  hostId,
-  run,
-  title,
-  onError,
-  onOpened,
-}: {
-  hostId: string;
-  run: AgentRun;
-  title: string;
-  onError: (error: RpcError) => void;
-  onOpened?: (url: string) => void;
-}) {
-  const [url, setUrl] = useState<string>();
-  const [opening, setOpening] = useState(false);
-  if (url) {
-    const number = /\/pull\/(\d+)$/.exec(url)?.[1];
-    return (
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer"
-        title={url}
-        className={`${tabItem} rounded-md hover:bg-hover hover:text-foreground`}
-      >
-        <GitPullRequest aria-hidden />
-        {number ? `PR #${number}` : "Pull request"}
-      </a>
-    );
-  }
-  const open = async () => {
-    setOpening(true);
-    const answer = await window.parallax.request(hostId, "agent/openPr", {
-      runId: run.id,
-      title,
-    });
-    setOpening(false);
-    if ("error" in answer) onError(answer.error);
-    else if (onOpened) onOpened(answer.result.url);
-    else setUrl(answer.result.url);
-  };
-  return (
-    <button
-      type="button"
-      disabled={opening}
-      onClick={() => void open()}
-      className={`${tabItem} rounded-md enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-60`}
-    >
-      <GitPullRequestArrow aria-hidden />
-      {opening ? "Opening PR…" : "Open PR"}
-    </button>
   );
 }
 
