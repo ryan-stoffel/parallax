@@ -260,7 +260,7 @@ export async function load(
   const opened: Opened = isMedia(doc.kind)
     ? { kind: "media" }
     : doc.kind === "docx"
-      ? { kind: "docx", docx: openDocx(bytes) }
+      ? { kind: "docx", docx: await openDocx(bytes) }
       : doc.kind === "xlsx"
         ? { kind: "xlsx", xlsx: openXlsx(bytes) }
         : doc.kind === "pptx"
