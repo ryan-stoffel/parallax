@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
-import { activeAt, attentionOf, snoozed } from "./attention";
+import { activeAt, attentionOf, shortBranch, snoozed } from "./attention";
 
 const thread = (over: Partial<Thread> = {}): Thread => ({
   id: "t",
@@ -52,4 +52,12 @@ test("a thread is active as of its last prompt, or when its run stopped after it
     "2026-10-01T12:00:00Z",
   );
   expect(activeAt(thread(), undefined)).toBe("2026-10-01T10:00:00Z");
+});
+
+test("a long branch is cut in the middle at a word break, keeping its start and last word", () => {
+  expect(shortBranch("feature/PLX-49-full-sidebar-implementation", 32)).toBe(
+    "feature/PLX-49-…implementation",
+  );
+  expect(shortBranch("parallax/attach-rate-limit")).toBe("parallax/attach-…limit");
+  expect(shortBranch("bug/PLX-7-short")).toBe("bug/PLX-7-short");
 });

@@ -62,9 +62,6 @@ export const todayGroup = stored<TodayGroup>("parallax:todayGroup", "none", (raw
 /** The favorites in the order they were moved into, by key; ones it doesn't name follow. */
 export const favoriteOrder = stored<string[]>("parallax:favoriteOrder", [], strings);
 
-/** Whether the Projects, favorites, and pins are folded away, leaving Today. */
-export const topCollapsed = stored("parallax:topCollapsed", false, bool);
-
 /** Today's groups folded shut, by group key (a repo's, or a day's). */
 export const todayFolded = stored<string[]>("parallax:todayFolded", [], strings);
 

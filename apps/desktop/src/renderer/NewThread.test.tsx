@@ -305,7 +305,7 @@ test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens
   const draft = () => document.querySelector<HTMLElement>('#sidebar li[data-kind="draft"] button');
   const rows = document.querySelectorAll('#sidebar ul[aria-label="Threads"] > li');
   expect(rows[0]!.getAttribute("data-kind")).toBe("draft");
-  expect(draft()!.textContent).toBe('@"Fix the flaky test" Tidy the READMEDraftparallax');
+  expect(draft()!.textContent).toBe('parallaxDraft@"Fix the flaky test" Tidy the README');
 
   await act(async () => draft()!.click());
   await settle();

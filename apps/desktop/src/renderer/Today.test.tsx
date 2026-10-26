@@ -142,23 +142,6 @@ const waitForArchives = (n: number) =>
 const button = (text: string) =>
   [...document.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === text);
 
-test("Clear archives the finished threads already seen, not one waiting out a usage limit", async () => {
-  threads = [thread("older", 30), thread("newer", 20), thread("limited", 10), thread("unread", 5)];
-  runs = [
-    run("older", "completed", 30),
-    run("newer", "completed", 20),
-    run("limited", "waiting", 10),
-    run("unread", "completed", 5),
-  ];
-  threads[3]!.seenAt = undefined;
-  await renderApp();
-  await act(async () => button("Clear")!.click());
-  await waitForArchives(2);
-  await settle();
-  expect(archived()).toEqual(["newer", "older"]);
-  expect(document.body.textContent).toContain("Cleared 2 threads");
-});
-
 test("auto-archive waits for quiet since the last prompt or run, skips usage limits, and an Undo sticks", async () => {
   autoClear.set(1);
   threads = [thread("quiet", 180), thread("ran-late", 180), thread("on-limit", 180)];
@@ -180,23 +163,23 @@ test("auto-archive waits for quiet since the last prompt or run, skips usage lim
   expect(archived()).toEqual(["quiet"]);
 });
 
-test("Clear leaves a thread one it started is still working for, or waiting out a usage limit", async () => {
+test("auto-archive leaves a thread one it started is still working for, or waiting out a usage limit", async () => {
+  autoClear.set(1);
   threads = [
-    thread("lead", 30),
-    thread("helper", 20, { parent: "lead" }),
-    thread("paused", 25),
-    thread("limited", 15, { parent: "paused" }),
-    thread("plain", 10),
+    thread("lead", 200),
+    thread("helper", 190, { parent: "lead" }),
+    thread("paused", 195),
+    thread("limited", 185, { parent: "paused" }),
+    thread("plain", 180),
   ];
   runs = [
-    run("lead", "completed", 30),
-    run("helper", "running", 5),
-    run("paused", "completed", 25),
-    run("limited", "waiting", 15),
-    run("plain", "completed", 10),
+    run("lead", "completed", 200),
+    run("helper", "running", 190),
+    run("paused", "completed", 195),
+    run("limited", "waiting", 185),
+    run("plain", "completed", 180),
   ];
   await renderApp();
-  await act(async () => button("Clear")!.click());
   await waitForArchives(1);
   await settle();
   expect(archived()).toEqual(["plain"]);

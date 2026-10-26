@@ -101,6 +101,7 @@ import {
 import {
   activeAt,
   attentionOf,
+  shortBranch,
   initials,
   lastUserPrompt,
   mostUrgent,
@@ -181,10 +182,9 @@ import {
   pinUnread,
   todayGroup,
   todayFolded,
-  topCollapsed,
 } from "./pins";
 import { Favorites, type FavoriteAction } from "./Favorites";
-import { close, Fold, quietFor, shownRows, Tick, TodayDivider } from "./SidebarParts";
+import { close, Fold, quietFor, shownRows, Tick, ViewOptions } from "./SidebarParts";
 import { DropLine, PinList, type PinDrag } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 import { cancelPrefetch, prefetchThread } from "./threadWatches";
@@ -879,11 +879,10 @@ export function ThreadList({
           .filter((i) => !isFolded(groupKey(i)))
           .sort((a, b) => groupPlace.get(groupKey(a))! - groupPlace.get(groupKey(b))!);
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // Projects' and pinned threads' rows, unless folded away, then Today's threads, then Working's,
-  // while it's open.
-  const topFolded = topCollapsed.use();
+  // Projects' and pinned threads' rows, then Today's threads, then Working's, while it's open.
   const listed = [
-    ...(topFolded && !words.length ? [] : [...projects, ...pinnedRows]),
+    ...projects,
+    ...pinnedRows,
     ...todayRows,
     ...(sections.working ? workingTops : []),
   ];
@@ -1512,9 +1511,7 @@ export function ThreadList({
           </div>
           <Fold open={open}>
             {/* Under its repo's heading, a row needn't name the repo: title and status, then details. */}
-            <ul className="flex flex-col gap-0.5">
-              {g.rows.map((i) => row(i, groupBy === "repo"))}
-            </ul>
+            <ul className={cardGap}>{g.rows.map((i) => row(i, groupBy === "repo"))}</ul>
           </Fold>
         </li>
       );
@@ -1526,7 +1523,7 @@ export function ThreadList({
     return (
       // It fills the space left, so a pinned thread can drop anywhere under the divider to unpin.
       <div {...unpinZone} className={`flex-1 rounded-lg transition-colors ${unpinLook}`}>
-        <ul aria-label="Threads" className="flex flex-col gap-0.5">
+        <ul aria-label="Threads" className={cardGap}>
           {draftRows.map(({ draft, repo }) => (
             <DraftRow
               key={draft.id}
@@ -1544,9 +1541,9 @@ export function ThreadList({
     );
   };
 
-  // Clear archives every finished thread in Today already seen, but not one waiting out a usage
-  // limit (0049), which resumes on its own, or one whose family is still at work.
-  const clearable = topThreads.filter(
+  // What auto-archive may archive: a finished thread in Today already seen, but not one waiting
+  // out a usage limit (0049), which resumes on its own, or one whose family is still at work.
+  const archivable = topThreads.filter(
     (i) =>
       i.kind === "thread" &&
       rowAttention(i) === "settled" &&
@@ -1559,7 +1556,7 @@ export function ThreadList({
   useEffect(() => {
     if (autoHours === null) return;
     const cutoff = now - autoHours * 36e5;
-    const stale = clearable.flatMap((i) =>
+    const stale = archivable.flatMap((i) =>
       i.kind === "thread" &&
       Math.max(Date.parse(i.at), i.run ? Date.parse(i.run.updatedAt) : 0) < cutoff &&
       !autoArchived.has(i.key)
@@ -1579,30 +1576,6 @@ export function ThreadList({
       );
     });
   });
-  const clearToday = async () => {
-    const threads = clearable.flatMap((i) =>
-      i.kind === "thread" && !leaving.current.has(i.key) ? [i] : [],
-    );
-    if (!threads.length) return;
-    for (const i of threads) leaving.current.add(i.key);
-    // Swept away first, top to bottom, as Arc's Clear does, then archived.
-    const sweep = sweepOut(
-      threads.map((i) => i.key),
-      "translateY(10px) scale(.97)",
-      35,
-    );
-    if (sweep.done) await sweep.done;
-    const errors = await Promise.all(threads.map((i) => i.view.archive(i.thread.id, true)));
-    for (const i of threads) leaving.current.delete(i.key);
-    // Those plxd didn't archive come back.
-    sweep.restore(threads.flatMap((i, n) => (errors[n] ? [i.key] : [])));
-    actionFailed(errors.find(Boolean), "Couldn't archive every thread");
-    const cleared = threads.filter((_, n) => !errors[n]);
-    if (!cleared.length) return;
-    toast(`Cleared ${plural(cleared.length, "thread")}`, () => {
-      for (const i of cleared) void viewOf(i.host.id)?.archive(i.thread.id, false);
-    });
-  };
   // A Project's own menu items, where its plxd allows each (0043, PLX-803).
   const projectActions = (item: Item & { kind: "project" }): FavoriteAction[] => {
     const { project, view } = item;
@@ -1670,7 +1643,7 @@ export function ThreadList({
     .sort((a, b) => favRank(a.key) - favRank(b.key));
   // The Projects, as rows like a thread's (PLX-1043).
   const projectList = projects.length > 0 && (
-    <ul aria-label="Projects" className="mb-2 flex flex-col gap-0.5">
+    <ul aria-label="Projects" className={`mb-1.5 ${cardGap}`}>
       {projects.map((p) => {
         const n = modHeld ? listed.indexOf(p) : -1;
         return (
@@ -1696,60 +1669,37 @@ export function ThreadList({
       })}
     </ul>
   );
-  // Folding hides the Projects, favorites, and pins, so Today's threads have the sidebar; it needs
-  // something above to fold.
-  const folded =
-    topFolded && (projects.length > 0 || favorites.length > 0 || pinnedRows.length > 0);
+  // No line or Clear between what's kept and Today (PLX-1043); View lives in the filter menu.
   const list = (
     <>
-      <Fold open={!folded || words.length > 0}>
-        {projectList}
-        <Favorites
-          items={favorites}
-          onReorder={
-            words.length
-              ? undefined
-              : (keys) =>
-                  favoriteOrder.set([
-                    ...keys,
-                    ...favoriteOrder.get().filter((k) => !keys.includes(k)),
-                  ])
-          }
-          onRest={restKeyed}
-          onLeave={hideCard}
-          onOpen={openKeyed}
-          onAdd={(key) => {
-            forgetPin(key);
-            favorite(key);
-          }}
-          onPinRow={(hostId, threadId) => {
-            const item = byKey.get(`${hostId}/${threadId}`);
-            if (item?.kind !== "thread" || item.thread.parent) return;
-            if (!item.thread.pinned) void pin(item);
-            favorite(item.key);
-          }}
-          onRemove={unfavorite}
-        />
-        {pinList}
-      </Fold>
-      <TodayDivider
-        folded={folded}
-        onFold={
-          projects.length > 0 || favorites.length > 0 || pinnedRows.length > 0
-            ? (next) => topCollapsed.set(next)
-            : undefined
+      {projectList}
+      <Favorites
+        items={favorites}
+        onReorder={
+          words.length
+            ? undefined
+            : (keys) =>
+                favoriteOrder.set([
+                  ...keys,
+                  ...favoriteOrder.get().filter((k) => !keys.includes(k)),
+                ])
         }
-        clearable={clearable.length}
-        onClear={() => void clearToday()}
-        autoHours={autoHours}
-        onAutoHours={(hours) => autoClear.set(hours)}
-        compact={compact}
-        onCompact={(on) => compactRows.set(on)}
-        projects={projectsOn}
-        onProjects={(on) => showProjects.set(on)}
-        group={groupBy}
-        onGroup={(next) => todayGroup.set(next)}
+        onRest={restKeyed}
+        onLeave={hideCard}
+        onOpen={openKeyed}
+        onAdd={(key) => {
+          forgetPin(key);
+          favorite(key);
+        }}
+        onPinRow={(hostId, threadId) => {
+          const item = byKey.get(`${hostId}/${threadId}`);
+          if (item?.kind !== "thread" || item.thread.parent) return;
+          if (!item.thread.pinned) void pin(item);
+          favorite(item.key);
+        }}
+        onRemove={unfavorite}
       />
+      {pinList}
       {threadList(topThreads)}
     </>
   );
@@ -1802,6 +1752,18 @@ export function ThreadList({
           many={many}
           needs={needsIn}
           outside={outside}
+          view={
+            <ViewOptions
+              autoHours={autoHours}
+              onAutoHours={(hours) => autoClear.set(hours)}
+              compact={compact}
+              onCompact={(on) => compactRows.set(on)}
+              projects={projectsOn}
+              onProjects={(on) => showProjects.set(on)}
+              group={groupBy}
+              onGroup={(next) => todayGroup.set(next)}
+            />
+          }
         />
         <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
           <FolderPlus />
@@ -2108,9 +2070,7 @@ function Drawer<T>({
           className="size-4 shrink-0 transition-transform group-open/drawer:rotate-180"
         />
       </summary>
-      {open && (
-        <ul className={`flex flex-col gap-0.5 ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>
-      )}
+      {open && <ul className={`${cardGap} ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>}
       {open && more > 0 && (
         <button
           type="button"
@@ -2127,9 +2087,9 @@ function Drawer<T>({
 
 /**
  * The repo filter (PLX-789, 0033): a searchable menu of All threads, every repo, and No repo, each
- * row with how many of its threads need the user. Where the repo's plxd keeps icons, its gear opens
- * the icon picker. Its button stays pressed while a repo is chosen, with a dot in its color, and
- * counts what needs the user elsewhere.
+ * row with how many of its threads need the user, then the sidebar's View options (PLX-1043).
+ * Where the repo's plxd keeps icons, its gear opens the icon picker. Its button stays pressed while
+ * a repo is chosen, with a dot in its color, and counts what needs the user elsewhere.
  */
 function ScopeMenu({
   hosts,
@@ -2139,6 +2099,7 @@ function ScopeMenu({
   many,
   needs,
   outside,
+  view,
 }: {
   hosts: HostThreads[];
   scope: Scope;
@@ -2150,6 +2111,8 @@ function ScopeMenu({
   needs: (scope: Scope) => number;
   /** How many threads outside the chosen scope need the user. */
   outside: number;
+  /** The View options (PLX-1043), under the repos. */
+  view: ReactNode;
 }) {
   const menuId = useId();
   const pickerId = useId();
@@ -2328,6 +2291,7 @@ function ScopeMenu({
             <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
           )}
         </div>
+        <div className="shrink-0 border-t border-border p-3">{view}</div>
         <div className="flex shrink-0 gap-3 border-t border-border px-3.5 py-1.5 text-caption text-faint-foreground">
           <span>↑↓ move</span>
           <span>↵ open</span>
@@ -2652,6 +2616,90 @@ function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[]
 }
 
 /**
+ * A card's top line (PLX-1043): where it is, its icon and name, then `status` at the end, what it
+ * asks of the user or how long ago it was last active. Hovering or focusing the card hides the
+ * status for its actions and keeps the place clear of them.
+ */
+function RowTop({
+  place,
+  status,
+  oneAction = false,
+}: {
+  place?: ReactNode;
+  status: ReactNode;
+  /** Whether the card shows only its actions button. */
+  oneAction?: boolean;
+}) {
+  const clear = oneAction
+    ? "group-has-[:focus-visible]/row:pr-7 group-hover/row:pr-7"
+    : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34";
+  return (
+    <span
+      className={`flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground ${clear}`}
+    >
+      <span className="flex min-w-0 flex-1 items-center">{place}</span>
+      <span
+        data-status
+        className="shrink-0 group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
+      >
+        {status}
+      </span>
+    </span>
+  );
+}
+
+/** A card's title (PLX-1043): bold, and bolder while hovered. */
+function RowTitle({ title, color }: { title: ReactNode; color: string }) {
+  return (
+    <span
+      data-title
+      className={`w-full min-w-0 truncate text-body font-semibold transition-colors group-hover/row:font-bold ${color}`}
+    >
+      {title}
+    </span>
+  );
+}
+
+// Measures text for `BranchName`, made once.
+let measure: CanvasRenderingContext2D | null | undefined;
+
+/**
+ * A branch name in the room its line leaves, cut in the middle at word breaks to fit
+ * (`shortBranch`), as `feature/PLX-49-…implementation`, and refit as the sidebar resizes. Its title
+ * is the whole name.
+ */
+function BranchName({ branch, words }: { branch: string; words: readonly string[] }) {
+  const self = useRef<HTMLSpanElement>(null);
+  const [max, setMax] = useState(branch.length);
+  useLayoutEffect(() => {
+    const el = self.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      measure ??= document.createElement("canvas").getContext("2d");
+      if (!measure || !el.clientWidth) return;
+      measure.font = getComputedStyle(el).font;
+      let n = branch.length;
+      while (n > 12 && measure.measureText(shortBranch(branch, n)).width > el.clientWidth) n--;
+      setMax(n);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [branch]);
+  return (
+    <span ref={self} title={branch} className="min-w-0 flex-1 truncate">
+      <Marked text={shortBranch(branch, max)} words={words} />
+    </span>
+  );
+}
+
+/** A card's look: outlined, so each card reads as one (PLX-1043). */
+const cardLook = "ring-1 ring-inset";
+/** The space between cards in a list. */
+const cardGap = "flex flex-col gap-1.5";
+
+/**
  * The look of a thread's linked pull requests: that of the most common state among those read,
  * and the newest linked one on a tie.
  */
@@ -2680,7 +2728,7 @@ function DraftStatus() {
 }
 
 /**
- * An unsent New Thread prompt's row (PLX-788): its first line and a Draft status, then its repo,
+ * An unsent New Thread prompt's card (PLX-788): its repo and a Draft status, then its first line,
  * outlined in the warning color and spaced off its neighbors (PLX-932). Opening it reopens New
  * Thread with it, which takes it off the list.
  */
@@ -2694,21 +2742,19 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2 py-1.5 text-left hover:bg-hover"
+        className="group/row flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2.5 py-2 text-left hover:bg-hover"
       >
-        <RowHead title={title} status={<DraftStatus />} />
-        <span className="flex w-full text-meta text-faint-foreground">
-          <RowPlace repo={repo} />
-        </span>
+        <RowTop place={<RowPlace repo={repo} />} status={<DraftStatus />} oneAction />
+        <RowTitle title={title} color="text-foreground" />
       </button>
     </li>
   );
 }
 
 /**
- * A Project's row (PLX-1043), shaped like a thread's: its name and status (what it asks of the user,
- * how many of its runs work, or how long ago it was last active), then its icon and how many threads
- * it holds, if any. Hovering or focusing it shows its actions button, whose menu also opens by
+ * A Project's card (PLX-1043), shaped like a thread's: its icon, "Project", and how many threads it
+ * holds, with its status at the end (what it asks of the user, how many of its runs work, or how
+ * long ago it was last active), then its name in bold. Hovering or focusing it shows its actions button, whose menu also opens by
  * right-clicking the row, or with A: Rename, Change icon, and the rest its plxd allows.
  */
 function ProjectRow({
@@ -2764,7 +2810,7 @@ function ProjectRow({
       ref={row}
       data-kind="project"
       data-flip={rowKey}
-      className={`group/row relative rounded-lg transition-colors duration-100 ${selected ? current : "group-hover/row:bg-hover"}`}
+      className={`group/row relative rounded-lg transition-colors duration-100 ${cardLook} ${selected ? `${current} ring-foreground/15` : "ring-border group-hover/row:bg-hover"}`}
     >
       <button
         type="button"
@@ -2774,25 +2820,34 @@ function ProjectRow({
         onClick={onOpen}
         onKeyDown={onKeys}
         onContextMenu={actions.length ? (e) => openOnContextMenu(e, trigger.current) : undefined}
-        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${oneLine ? "py-[5px]" : "py-2"}`}
+        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2.5 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${oneLine ? "py-[5px]" : "py-2"}`}
       >
-        <RowHead
-          icon={oneLine && icon}
-          title={<Marked text={project.name} words={words} />}
-          titleColor={titleColor}
-          status={status}
-          oneAction
-        />
-        {!oneLine && (
-          <span className="flex w-full items-center gap-1.5 text-meta text-faint-foreground">
-            {icon}
-            <span className="min-w-0 flex-1 truncate">Project</span>
-            {runs.length > 0 && (
-              <span className="shrink-0 tabular-nums">
-                {runs.length} {runs.length === 1 ? "thread" : "threads"}
-              </span>
-            )}
-          </span>
+        {oneLine ? (
+          <RowHead
+            icon={icon}
+            title={<Marked text={project.name} words={words} />}
+            titleColor={titleColor}
+            status={status}
+            oneAction
+          />
+        ) : (
+          <>
+            <RowTop
+              place={
+                <span className="flex min-w-0 items-center gap-1.5">
+                  {icon}
+                  <span className="min-w-0 truncate">
+                    Project
+                    {runs.length > 0 &&
+                      ` · ${runs.length} ${runs.length === 1 ? "thread" : "threads"}`}
+                  </span>
+                </span>
+              }
+              status={status}
+              oneAction
+            />
+            <RowTitle title={<Marked text={project.name} words={words} />} color={titleColor} />
+          </>
         )}
       </button>
       {actions.length > 0 && (
@@ -2837,9 +2892,10 @@ function ProjectRow({
 }
 
 /**
- * A thread's row (0033, 0075): its title and status (what it asks of the user, or how long ago it
- * was last active), then its repo, its git status, a pin, linked pull requests (the number of one, or
- * +N for more) and their checks, and provider. Its branch is on its card.
+ * A thread's card (0033, 0075, PLX-1043): its repo's icon and name with its status at the end (what
+ * it asks of the user, or how long ago it was last active), its title in bold, then its branch, cut
+ * in the middle (`shortBranch`), its git status, a pin, linked pull requests (the number of one, or
+ * +N for more) and their checks, its computer, and its provider, in color while it's open.
  * Under a search, the words found are marked, and a match only in its messages shows a line of
  * them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
  * Archive, and more actions, which also open by right-clicking the row: native popovers, so
@@ -3094,11 +3150,13 @@ function ThreadRow({
   const oneLine = look === "compact" && !nested;
   // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887), and
   // spaces it off its neighbors. An open thread holds its own draft, so neither shows while it's open.
-  const rowLook = picked
-    ? "bg-accent/14 ring-1 ring-accent/38 ring-inset"
-    : selected
-      ? current
-      : `group-hover/row:bg-hover ${drafted ? "ring-1 ring-warning ring-inset" : ""}`;
+  const rowLook = `${cardLook} ${
+    picked
+      ? "bg-accent/14 ring-accent/38"
+      : selected
+        ? `${current} ring-foreground/15`
+        : `group-hover/row:bg-hover ${drafted ? "ring-warning" : "ring-border"}`
+  }`;
   return (
     <li
       data-kind="thread"
@@ -3135,62 +3193,80 @@ function ThreadRow({
         onDragEnd={pinDrag?.onDragEnd}
         className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-2"}`}
       >
-        <RowHead
-          icon={oneLine && <RepoIcon repo={repo} />}
-          title={titleText}
-          titleColor={titleColor}
-          status={shownStatus}
-          renaming={!oneLine && renaming}
-        />
-        {/* Two-line rows: the title, then where it is and its details. One-line rows keep to one
-            line under a repo's heading too, and a row under its repo's heading leaves out the repo. */}
-        {look !== "compact" && (!nested || hasDetails) && (
-          <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
-            {!nested && <RowPlace repo={repo} words={words} />}
-            {/* Never under its content's width, so a long repo name truncates instead. */}
-            <span className="flex flex-1 items-center gap-1">{git && <GitCounts git={git} />}</span>
-            {thread.pinned && (
-              <span title="Pinned" role="img" aria-label="Pinned" className="flex shrink-0">
-                <Pin className="size-3" />
-              </span>
-            )}
-            {prs.urls.length > 0 && (
-              <span
-                title={`${prs.urls.length} linked pull ${prs.urls.length === 1 ? "request" : "requests"}`}
-                className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
-              >
-                <prLook.Icon aria-hidden className="size-3.5" />
-                {prs.urls.length > 1 ? (
-                  <span>+{prs.urls.length - 1}</span>
-                ) : (
-                  // Inside the row's button, so a span: clicking it opens the thread with the PR
-                  // in its side panel, not GitHub.
-                  <span
-                    className="hover:underline"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onOpenPr(prs.urls[0]!);
-                    }}
-                  >
-                    <Marked text={`#${numberOf(prs.urls[0]!)}`} words={words} />
+        {look === "compact" ? (
+          <RowHead
+            icon={oneLine && <RepoIcon repo={repo} />}
+            title={titleText}
+            titleColor={titleColor}
+            status={shownStatus}
+            renaming={!oneLine && renaming}
+          />
+        ) : (
+          // A card (PLX-1043): where it is and its status, its title in bold, then its branch and
+          // details. Under its repo's heading, it leaves out the repo.
+          <>
+            <RowTop
+              place={!nested && <RowPlace repo={repo} words={words} />}
+              status={shownStatus}
+            />
+            <RowTitle title={titleText} color={titleColor} />
+            {(run?.branch || hasDetails) && (
+              <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
+                <span className="flex min-w-0 flex-1 items-center gap-1">
+                  {run?.branch && (
+                    <>
+                      <GitBranch aria-hidden className="size-3 shrink-0" />
+                      <BranchName branch={run.branch} words={words} />
+                    </>
+                  )}
+                  {git && <GitCounts git={git} />}
+                </span>
+                {thread.pinned && (
+                  <span title="Pinned" role="img" aria-label="Pinned" className="flex shrink-0">
+                    <Pin className="size-3" />
                   </span>
                 )}
-                {checksState && <ChecksMark state={checksState} />}
+                {prs.urls.length > 0 && (
+                  <span
+                    title={`${prs.urls.length} linked pull ${prs.urls.length === 1 ? "request" : "requests"}`}
+                    className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
+                  >
+                    <prLook.Icon aria-hidden className="size-3.5" />
+                    {prs.urls.length > 1 ? (
+                      <span>+{prs.urls.length - 1}</span>
+                    ) : (
+                      // Inside the row's button, so a span: clicking it opens the thread with the PR
+                      // in its side panel, not GitHub.
+                      <span
+                        className="hover:underline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onOpenPr(prs.urls[0]!);
+                        }}
+                      >
+                        <Marked text={`#${numberOf(prs.urls[0]!)}`} words={words} />
+                      </span>
+                    )}
+                    {checksState && <ChecksMark state={checksState} />}
+                  </span>
+                )}
+                {device?.icon && (
+                  <span
+                    title={device.name}
+                    role="img"
+                    aria-label={device.name}
+                    className="flex shrink-0"
+                  >
+                    <DeviceIcon icon={device.icon} className="size-3.5" />
+                  </span>
+                )}
+                {/* In gray, so a list isn't striped with providers' colors, but in color while open. */}
+                {Logo && (
+                  <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />
+                )}
               </span>
             )}
-            {device?.icon && (
-              <span
-                title={device.name}
-                role="img"
-                aria-label={device.name}
-                className="flex shrink-0"
-              >
-                <DeviceIcon icon={device.icon} className="size-3.5" />
-              </span>
-            )}
-            {/* In gray, so a list of rows isn't striped with providers' colors. */}
-            {Logo && <Logo className="size-3.5 shrink-0 opacity-80 grayscale" />}
-          </span>
+          </>
         )}
         {snippet && (
           <span className="flex w-full min-w-0 items-center gap-1.5 text-meta text-faint-foreground">

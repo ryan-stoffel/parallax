@@ -95,6 +95,22 @@ export function activeAt(thread: Thread, run: AgentRun | undefined, stoppedAt?: 
 /** When the user last sent a thread a message, for Working's clock: wake-ups don't reset it (PLX-1012). */
 export const lastUserPrompt = (thread: Thread) => thread.lastUserPromptAt ?? lastPrompt(thread);
 
+/**
+ * A branch name cut to about `max` characters in the middle, at word breaks (`-`, `/`, `_`, `.`),
+ * keeping its start and its last word: `feature/PLX-49-…implementation` (PLX-1043).
+ */
+export function shortBranch(branch: string, max = 24): string {
+  if (branch.length <= max) return branch;
+  const parts = branch.split(/(?<=[-/_.])/);
+  let tail = parts.pop()!;
+  let head = "";
+  while (parts.length && head.length + parts[0]!.length + tail.length + 1 <= max)
+    head += parts.shift();
+  while (parts.length && head.length + parts.at(-1)!.length + tail.length + 1 <= max)
+    tail = parts.pop() + tail;
+  return parts.length ? `${head}…${tail}` : head + tail;
+}
+
 /** A repo's default icon: the first letters of its name's first two words, or its first two. */
 export function initials(name: string): string {
   const words = name.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
