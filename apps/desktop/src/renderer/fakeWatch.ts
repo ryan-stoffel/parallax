@@ -60,7 +60,7 @@ async function shell(call: Call, host: string): Promise<ShellSnapshot | RpcError
   const failed = answers.find((a) => a.error)?.error;
   if (failed) return failed;
   const [list, listed, projects] = answers.map((a) => a.result) as [
-    Pick<ShellSnapshot, "repos" | "threads" | "areas"> & { seq: number },
+    Pick<ShellSnapshot, "repos" | "threads"> & { seq: number },
     { runs: AgentRun[]; seq: number },
     { projects: ShellSnapshot["projects"]; seq?: number },
   ];
@@ -74,7 +74,6 @@ async function shell(call: Call, host: string): Promise<ShellSnapshot | RpcError
     projects: projects.projects,
     repos: list.repos,
     threads: list.threads,
-    ...(list.areas && { areas: list.areas }),
     runs: listed.runs,
     requests,
   };

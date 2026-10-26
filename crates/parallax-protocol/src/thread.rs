@@ -25,8 +25,8 @@ use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, Area, ProjectIcon, ProjectId,
-    PromptImage, RunId, TurnId,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, ProjectId, PromptImage,
+    RunId, TurnId,
 };
 
 /// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
@@ -116,7 +116,7 @@ pub struct Thread {
     /// Whether the user or an agent marked it settled: nothing left to do (0041).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub settled: bool,
-    /// Whether the user pinned it to the top of the sidebar (PLX-789), behind `areas`.
+    /// Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
 }
@@ -133,7 +133,7 @@ pub struct ForkedFrom {
 
 /// Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
 /// `threadAttention` capability, sets its title or settled flag (0041), behind `threadLineage`,
-/// or pins it (PLX-789), behind `areas`.
+/// or pins it (PLX-789), behind `pins`.
 ///
 /// `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
 /// past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
@@ -159,7 +159,7 @@ pub struct ThreadUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub settled: Option<bool>,
-    /// True to pin it, false to unpin it (PLX-789), behind `areas`.
+    /// True to pin it, false to unpin it (PLX-789), behind `pins`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub pinned: Option<bool>,
@@ -257,9 +257,6 @@ pub struct ThreadListResult {
     pub repos: Vec<Repo>,
     /// Every thread, oldest first.
     pub threads: Vec<Thread>,
-    /// Every area (PLX-789), oldest first. Absent from a plxd without `areas`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub areas: Vec<Area>,
     /// The event log's `seq` from before the list was read. Subscribe to host-level events with
     /// `after` set to it. The list may already reflect some events after it, and replaying them is
     /// harmless.
@@ -526,7 +523,7 @@ pub struct ThreadSearchResult {
     pub threads: Vec<Thread>,
     /// For each returned thread that matched in its messages, one line of its best-matching
     /// message, around the matching words, at most 120 characters, with `…` where it was cut
-    /// (PLX-789). Absent for a thread that matched only by title, and from a plxd without `areas`.
+    /// (PLX-789). Absent for a thread that matched only by title, and from an older plxd.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub snippets: std::collections::BTreeMap<RunId, String>,
 }

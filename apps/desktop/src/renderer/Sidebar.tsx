@@ -54,6 +54,7 @@ import {
 } from "lucide-react";
 import {
   createContext,
+  Fragment,
   useContext,
   useEffect,
   useId,
@@ -63,7 +64,6 @@ import {
   useState,
   type ComponentProps,
   type ComponentType,
-  type CSSProperties,
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent,
@@ -99,9 +99,9 @@ import {
   type Scope,
 } from "./scope";
 import {
+  activeAt,
   attentionOf,
   initials,
-  lastPrompt,
   lastUserPrompt,
   mostUrgent,
   projectAttention,
@@ -140,7 +140,6 @@ import {
   threadProjects,
   type ForkChoice,
   type ProjectChange,
-  type ThreadsState,
   type ThreadsView,
 } from "./threads";
 import { accountLabel, isRunning, statusLabel as runStatusLabel } from "./transcript";
@@ -170,24 +169,19 @@ import { flushToasts, toast, undo, useToasts } from "./undo";
 import {
   autoClear,
   compactRows,
-  createFolder,
   draggedPin,
   favoriteOrder,
-  folderHolding,
   forgetPin,
   pinDragType,
   pinIcons,
   pinFavorites,
-  pinLayout,
-  pinNaming,
   pinUnread,
   todayGroup,
   todayFolded,
   topCollapsed,
-  type PinFolder,
 } from "./pins";
 import { Favorites, type FavoriteAction } from "./Favorites";
-import { Fold, quietFor, shownRows, Tick, TodayDivider } from "./SidebarParts";
+import { close, Fold, quietFor, shownRows, Tick, TodayDivider } from "./SidebarParts";
 import { PinList, type Pin as PinData } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 import { cancelPrefetch, prefetchThread } from "./threadWatches";
@@ -300,8 +294,6 @@ interface ThreadListProps {
   addDialog?: Ref<AddDialogHandle>;
   /** New thread, which opens Mod+N's picker of the repository it goes in. */
   onNewThread: () => void;
-  /** Folder `id`'s New thread, which opens New thread on the open repository, without the picker. */
-  onNewFolderThread: (id: string) => void;
   /** The two threads open side by side (PLX-587), shown together above the list. */
   split?: Split;
   /** Opens a thread of the open host beside the open thread. */
@@ -364,17 +356,6 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
   return `var(--project-${palette[Math.abs(hash) % palette.length]!.key})`;
 }
 
-/** A pinned folder's icon in its color (pins.ts), where a thread's repo icon goes. */
-function FolderMark({ folder }: { folder: PinFolder }) {
-  return (
-    <Folder
-      aria-hidden
-      style={{ color: folder.color ? `var(--project-${folder.color})` : undefined }}
-      className={`size-4 shrink-0 ${folder.color ? "" : "text-muted-foreground"}`}
-    />
-  );
-}
-
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
  * another computer, or else its initials on a tile in a color picked from its name. No Repo is a
@@ -427,7 +408,7 @@ type Item = (
   view: ThreadsView;
   repo?: Repo;
   attention: Attention;
-  /** When it was last prompted, for the order. */
+  /** When it was last active (`activeAt`), for the order. */
   at: string;
   title: string;
   /** What search reads besides its messages: its title, repo, branch, and pull request numbers. */
@@ -469,6 +450,8 @@ const autoArchived = new Set<string>();
 const short = (text: string) => (text.length > 30 ? `${text.slice(0, 28).trimEnd()}…` : text);
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 const working = (a: Attention) => a === "working" || a === "monitoring" || a === "waiting";
+/** Whether a host keeps thread pins: `pins`, or `areas` on a plxd from before areas were removed. */
+const pinsOn = (view: ThreadsView) => "pins" in view.capabilities || "areas" in view.capabilities;
 
 /**
  * Slides sidebar rows out, each `stagger` ms after the one above, before they're archived; the
@@ -510,12 +493,13 @@ function sweepOut(keys: string[], to: string, stagger = 0) {
 
 /**
  * Search, the repo filter, a menu to create a Project or add a repository, and New thread, then
- * (0075) the favorites, every host's Projects and the pinned threads moved up, the pinned threads
- * in their folders, a divider with Clear and the View panel, and Today: every other open thread,
- * most recently active first, grouped as View says. A thread row shows its title, how long ago it
- * was prompted or what it asks of the user, its repo or folder, git status, and pull request; its
- * card adds its branch, which search also matches. Threads another thread started don't list (0041); a Project's show only inside it
- * (0042). While a thread is working it sits in a Working drawer above Snoozed and Archived, until it
+ * every host's Projects as rows (PLX-1043), the favorites (pinned threads moved up), the other
+ * pinned threads (0075), a divider with Clear and the View panel, and Today: every other open
+ * thread, most recently active first, so one that finishes rises to the top, grouped as View says.
+ * Nothing left, Today is blank. A thread row shows its title, how long ago it was last active or
+ * what it asks of the user, its repo, git status, and pull request; its card adds its branch, which
+ * search also matches. Threads another thread started don't list (0041); a Project's show only
+ * inside it (0042). While a thread is working it sits in a Working drawer above Snoozed and Archived, until it
  * finishes. Rows that move slide to their place. Changes the user makes show a toast with Undo,
  * which ⌘Z also runs. Resting on a thread shows a card.
  */
@@ -532,7 +516,6 @@ export function ThreadList({
   onDelete,
   addDialog: addDialogRef,
   onNewThread,
-  onNewFolderThread,
   split,
   onOpenBeside,
   onClosePane,
@@ -550,15 +533,6 @@ export function ThreadList({
   const [doomed, setDoomed] = useState<ReadonlySet<string>>(new Set());
   // Threads sliding out to be archived, so a second E, click, or Clear meanwhile does nothing.
   const leaving = useRef(new Set<string>());
-  // Bumped when the last open thread is archived, to burst confetti out of the caught-up check.
-  const [confetti, setConfetti] = useState(0);
-  // It ends here rather than in Confetti, so a pop that never showed, say behind a draft row,
-  // can't play later.
-  useEffect(() => {
-    if (!confetti) return;
-    const timer = setTimeout(() => setConfetti(0), 1000);
-    return () => clearTimeout(timer);
-  }, [confetti]);
   const [query, setQuery] = useState("");
   const { workingSection, pageArchived } = sidebarPrefs.use();
   // The rows picked with ⌘-click, ⇧-click, or X, by key, and where a ⇧-click range starts.
@@ -588,11 +562,10 @@ export function ThreadList({
   const many = hosts.length > 1;
   // Threads marked unread (pins.ts) read as Done or Failed again until opened.
   const unread = pinUnread.use();
-  const pinFolders = pinLayout.use().folders;
   const sharedIcons = useContext(SharedRepoIcons);
 
   // A chosen repo that's gone, deleted or not loaded yet, shows everything, keeping the choice
-  // for its return. A scope from when areas and Spaces showed (0073) shows everything too.
+  // for its return. A Space chosen while Spaces showed (0073) shows everything too.
   const chosen = scopeStore.use();
   const parsed = parseScope(chosen);
   const scopeRepo =
@@ -601,8 +574,7 @@ export function ThreadList({
           .find((h) => h.host.id === parsed.hostId)
           ?.view.state.repos.find((r) => !r.scratch && !r.space && r.id === parsed.id)
       : undefined;
-  const scope: Scope =
-    parsed.kind === "area" || (parsed.kind === "repo" && !scopeRepo) ? "all" : chosen;
+  const scope: Scope = parsed.kind === "repo" && !scopeRepo ? "all" : chosen;
   const scopeLabel = scopeRepo
     ? { name: scopeRepo.name, color: repoColor(scopeRepo, repoIconOf(scopeRepo, sharedIcons)) }
     : scope === "none"
@@ -652,7 +624,7 @@ export function ThreadList({
             run,
             unread.includes(`${h.id}/${t.id}`),
           ),
-          at: lastPrompt(t),
+          at: activeAt(t, run),
           title,
           text: [
             title,
@@ -673,7 +645,12 @@ export function ThreadList({
         view,
         repo: state.repos.find((r) => r.path === p.repoPath),
         attention: projectAttention(runs, (id) => asksOf(state, id)),
-        at: p.updatedAt,
+        // Its last change, or when one of its runs last stopped, so finished work raises it too.
+        at: runs.reduce(
+          (at, r) =>
+            !isRunning(r.status) && Date.parse(r.updatedAt) > Date.parse(at) ? r.updatedAt : at,
+          p.updatedAt,
+        ),
         title: p.name,
         text: p.name,
       };
@@ -711,11 +688,8 @@ export function ThreadList({
   }
   // What a row shows, and where: its own status, or its family's news.
   const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
-  // Where a thread is, for its card: its repo, or its folder in place of No repo.
+  // Where a thread is, for its card: its repo, or No repo.
   const placeOf = (item: Item) => {
-    const folder = folderHolding(pinFolders, item.key);
-    if (folder && (!item.repo || item.repo.scratch))
-      return { name: folder.name, icon: <FolderMark folder={folder} /> };
     return {
       name: item.repo && !item.repo.scratch ? item.repo.name : "No Repo",
       icon: <RepoIcon repo={item.repo} />,
@@ -796,15 +770,14 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  // Projects, most recently active first, as threads are (PLX-1043).
   const projects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
-  // The favorites stay in the order they're moved into (pins.ts), the rest after by name, so they
-  // don't shuffle as their Projects get busy.
+  // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
   const favRank = (key: string) => {
     const n = favOrder.indexOf(key);
     return n < 0 ? Infinity : n;
   };
-  projects.sort((a, b) => favRank(a.key) - favRank(b.key) || a.title.localeCompare(b.title));
   const pool = shown.filter((i) => i.kind === "thread" && !isArchived(i) && !isSnoozed(i));
   const snoozedItems = shown.filter((i) => !isArchived(i) && isSnoozed(i));
   const archived = shown.filter(isArchived);
@@ -1031,10 +1004,6 @@ export function ThreadList({
     actionFailed(error, was ? "Couldn't unarchive the thread" : "Couldn't archive the thread");
     if (error) return sweep?.restore();
     focusAfter(item.key, focusAt);
-    const lastOpen = items.every(
-      (i) => i.kind !== "thread" || i.thread.archived || i.key === item.key,
-    );
-    if (!was && lastOpen) setConfetti((n) => n + 1);
     toast(was ? "Unarchived" : `Archived “${short(item.title)}”`, () => {
       void viewOf(h.id)?.archive(t.id, was);
     });
@@ -1141,8 +1110,8 @@ export function ThreadList({
           });
       });
     } else {
-      // Only top-level threads, where plxd keeps pins (`areas`).
-      const tops = list.filter(({ item, t }) => !t.parent && "areas" in item.view.capabilities);
+      // Only top-level threads, where plxd keeps pins.
+      const tops = list.filter(({ item, t }) => !t.parent && pinsOn(item.view));
       if (!tops.length) return;
       const on = !tops.every(({ t }) => t.pinned);
       errors.push(
@@ -1175,7 +1144,7 @@ export function ThreadList({
     } else if (key === "e" && thread) act(() => void archive(item, at));
     else if (key === "s" && can("threadAttention") && !e.shiftKey)
       act(() => void snoozeUntil(item, new Date(Date.now() + 3_600_000), at));
-    else if (key === "p" && can("areas") && item.kind === "thread" && !item.thread.parent)
+    else if (key === "p" && thread && pinsOn(item.view) && !item.thread.parent)
       act(() => void pin(item), { key: item.key });
     else if (key === "r" && can("threadLineage")) act(() => setRenaming(item.key));
     else if (key === "u" && thread && item.attention === "settled") act(() => markUnread(item));
@@ -1197,12 +1166,11 @@ export function ThreadList({
     const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
     const selected = item.key === openKey;
     const { thread: t, view } = item;
-    const pinnable = "areas" in view.capabilities && !t.parent;
+    const pinnable = pinsOn(view) && !t.parent;
     return (
       <ThreadRow
         key={item.key}
         look={compact ? "compact" : undefined}
-        folder={folderHolding(pinFolders, item.key)}
         rowKey={item.key}
         thread={t}
         hostId={item.host.id}
@@ -1322,7 +1290,7 @@ export function ThreadList({
     else deleteDialog.current?.close();
   };
 
-  // The pinned threads, in the order and folders the user makes (pins.ts), each with the icon
+  // The pinned threads, in the order the user makes (pins.ts), each with the icon
   // chosen for it, else its repo's, in its color.
   const pinIconsNow = pinIcons.use();
   const [unpinOver, setUnpinOver] = useState(false);
@@ -1423,7 +1391,6 @@ export function ThreadList({
 
   const pinList = (
     <PinList
-      onNewThread={onNewFolderThread}
       onFavorite={favorite}
       onPlaced={unfavorite}
       onMarkUnread={(key) => {
@@ -1554,15 +1521,12 @@ export function ThreadList({
       );
     });
   };
+  // With nothing left, Today is blank (PLX-1043); a search that finds nothing says so.
   const threadList = (rows: Item[]) => {
     const empty = draftRows.length === 0 && rows.length === 0;
-    const caughtUp = empty && !words.length;
     return (
-      // Caught up, it fills the space left so its note sits in the middle.
-      <div
-        {...unpinZone}
-        className={`rounded-lg transition-colors ${caughtUp ? "flex flex-1 flex-col" : ""} ${unpinLook}`}
-      >
+      // It fills the space left, so a pinned thread can drop anywhere under the divider to unpin.
+      <div {...unpinZone} className={`flex-1 rounded-lg transition-colors ${unpinLook}`}>
         <ul aria-label="Threads" className="flex flex-col gap-0.5">
           {draftRows.map(({ draft, repo }) => (
             <DraftRow
@@ -1576,11 +1540,7 @@ export function ThreadList({
           ))}
           {grouped(rows)}
         </ul>
-        {caughtUp ? (
-          <CaughtUp burst={confetti} />
-        ) : (
-          empty && <p className={emptyNote}>Nothing matches</p>
-        )}
+        {empty && words.length > 0 && <p className={emptyNote}>Nothing matches</p>}
       </div>
     );
   };
@@ -1693,26 +1653,12 @@ export function ThreadList({
         : []),
     ];
   };
-  // The favorites: the Projects, then the pinned threads moved up, in the order moved into.
-  const favorites = [
-    ...projects.map((p) => ({
-      key: p.key,
-      kind: "project" as const,
-      title: p.title,
-      icon: <ProjectIcon icon={p.project.icon} className="size-5" />,
-      attention: p.attention,
-      project: projectStatus(p.view.state, p.runs),
-      selected: p.key === openKey,
-      badge: modHeld && listed.indexOf(p) >= 0 && listed.indexOf(p) < 9 && (
-        <RowBadge index={listed.indexOf(p)} />
-      ),
-      actions: projectActions(p),
-    })),
-    ...favoriteThreads.map((i) => {
+  // The pinned threads moved up into the favorites, in the order moved into.
+  const favorites = favoriteThreads
+    .map((i) => {
       const pin = pinOf(i);
       return {
         key: i.key,
-        kind: "thread" as const,
         title: i.title,
         icon: pin.icon,
         attention: pin.attention,
@@ -1721,14 +1667,43 @@ export function ThreadList({
         actions: pin.actions,
         onKeys: pin.onKeys,
       };
-    }),
-  ].sort((a, b) => favRank(a.key) - favRank(b.key) || 0);
-  // Folding hides the favorites and pins, so Today's threads have the sidebar; it needs something
-  // above to fold.
-  const folded = topFolded && (favorites.length > 0 || pins.length > 0);
+    })
+    .sort((a, b) => favRank(a.key) - favRank(b.key));
+  // The Projects, as rows like a thread's (PLX-1043).
+  const projectList = projects.length > 0 && (
+    <ul aria-label="Projects" className="mb-2 flex flex-col gap-0.5">
+      {projects.map((p) => {
+        const n = modHeld ? listed.indexOf(p) : -1;
+        return (
+          <ProjectRow
+            key={p.key}
+            rowKey={p.key}
+            look={compact ? "compact" : undefined}
+            project={p.project}
+            runs={p.runs}
+            at={p.at}
+            attention={p.attention}
+            selected={p.key === openKey}
+            badge={n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined}
+            words={words}
+            actions={projectActions(p)}
+            onOpen={() => {
+              setPicked(new Set());
+              openItem(p);
+            }}
+            onKeys={(e) => rowKeys(e, p)}
+          />
+        );
+      })}
+    </ul>
+  );
+  // Folding hides the Projects, favorites, and pins, so Today's threads have the sidebar; it needs
+  // something above to fold.
+  const folded = topFolded && (projects.length > 0 || favorites.length > 0 || pins.length > 0);
   const list = (
     <>
       <Fold open={!folded || words.length > 0}>
+        {projectList}
         <Favorites
           items={favorites}
           onReorder={
@@ -1760,7 +1735,9 @@ export function ThreadList({
       <TodayDivider
         folded={folded}
         onFold={
-          favorites.length > 0 || pins.length > 0 ? (next) => topCollapsed.set(next) : undefined
+          projects.length > 0 || favorites.length > 0 || pins.length > 0
+            ? (next) => topCollapsed.set(next)
+            : undefined
         }
         clearable={clearable.length}
         onClear={() => void clearToday()}
@@ -1896,7 +1873,7 @@ export function ThreadList({
           count={pickedItems.length}
           can={{
             snooze: pickedItems.some((i) => "threadAttention" in i.view.capabilities),
-            pin: pickedItems.some((i) => !i.thread.parent && "areas" in i.view.capabilities),
+            pin: pickedItems.some((i) => !i.thread.parent && pinsOn(i.view)),
           }}
           onAction={(a) => void bulk(a)}
           onClear={() => setPicked(new Set())}
@@ -1906,11 +1883,6 @@ export function ThreadList({
       <Toasts />
       <AddDialog
         ref={addDialog}
-        onNewFolder={() => {
-          // Named in place, so the top unfolds to show it.
-          topCollapsed.set(false);
-          pinNaming.set(createFolder());
-        }}
         hosts={hosts.map((h) => h.host)}
         unbrowsable={unbrowsable(hosts)}
         hostId={host.id}
@@ -2061,53 +2033,6 @@ function Toasts() {
   );
 }
 
-/**
- * Today's empty state, centered in the space it fills. Each new `burst` pops its check and bursts
- * confetti out of it; 0 shows it at rest.
- */
-function CaughtUp({ burst }: { burst: number }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 py-6 text-body text-faint-foreground">
-      <span key={burst} className={`relative ${burst ? "caught-up-pop" : ""}`}>
-        <CircleCheck aria-hidden className="size-5" strokeWidth={1.75} />
-        {burst > 0 && <Confetti />}
-      </span>
-      All caught up
-    </div>
-  );
-}
-
-// Twelve rays fanned over the 220° above the check, clear of the text under it, alternating near
-// and far, cycling the Project colors.
-const confettiRays = Array.from({ length: 12 }, (_, i) => ({
-  "--angle": `${160 + i * 20}deg`,
-  "--distance": i % 2 ? "18px" : "24px",
-  background: ["var(--project-pink)", "var(--project-yellow)", "var(--project-sky)"][i % 3],
-})) as CSSProperties[];
-
-/** One burst of confetti rays out of its parent's center, for archiving the last open thread. */
-function Confetti() {
-  return (
-    <span aria-hidden className="confetti">
-      {confettiRays.map((style, i) => (
-        <span key={i} style={style} />
-      ))}
-    </span>
-  );
-}
-
-/**
- * A Project favorite's status (0083): whether any of its runs works, and how many wait on the
- * user, counted from the approvals the host reports. Questions a coordinator escalates live in the
- * open Project's inbox only, so they count once plxd sends each run's state (PLX-967).
- */
-export function projectStatus(state: ThreadsState, runs: readonly AgentRun[]) {
-  return {
-    working: runs.some((r) => isRunning(r.status)),
-    waiting: runs.filter((r) => asksOf(state, r.id) > 0).length,
-  };
-}
-
 /** The rest of Delete Project's warning, after "“name” goes for good", for a Project of `agents` runs. */
 function projectLoss(agents: number): string {
   if (agents === 0) return ".";
@@ -2232,7 +2157,7 @@ function ScopeMenu({
   const [editing, setEditing] = useState<{ view: ThreadsView; repo: Repo }>();
   const sharedIcons = useContext(SharedRepoIcons);
   const q = query.trim().toLowerCase();
-  // Spaces (0069) don't list: pinned folders keep chats instead (0075).
+  // Spaces (0069) don't list.
   const repos = hosts
     .flatMap(({ host, view }) =>
       view.state.repos.filter((r) => !r.scratch && !r.space).map((repo) => ({ host, view, repo })),
@@ -2483,7 +2408,7 @@ function Marked({ text, words }: { text: string; words: readonly string[] }) {
   );
 }
 
-/** What a Project favorite's menu opens (Favorites.tsx). */
+/** What a Project row's menu opens. */
 type ProjectDialog = "rename" | "icon" | "access" | "autonomy";
 /** Says why a sidebar action failed, when `error` says one did, and closes that once one works. */
 function actionFailed(error: string | undefined, title: string) {
@@ -2496,7 +2421,7 @@ type ProjectDialogsHandle = {
 };
 
 /**
- * A Project's dialogs, opened from its favorite's menu: Rename, the icon picker under its square,
+ * A Project's dialogs, opened from its row's menu: Rename, the icon picker beside its row,
  * Full access (a one-way move to Bypass), and Autonomy (0043). Each saves through `project/update`
  * and reports plxd's error through `onError`. Only the one open is drawn.
  */
@@ -2666,8 +2591,8 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 export const backendLogo = (backend: string) => backendLogos[backend] ?? instanceLogo(backend);
 
 /**
- * A thread row's first line: `icon`, if any, its title, then `status`: what it asks of the user, or
- * how long ago it was prompted. Hovering or focusing the row hides the status and keeps the title
+ * A row's first line: `icon`, if any, its title, then `status`: what it asks of the user, or how
+ * long ago it was last active. Hovering or focusing the row hides the status and keeps the title
  * clear of the row's actions.
  */
 function RowHead({
@@ -2676,6 +2601,7 @@ function RowHead({
   titleColor = "text-foreground",
   status,
   renaming = false,
+  oneAction = false,
 }: {
   /** Where it is, on a one-line row. */
   icon?: ReactNode;
@@ -2684,11 +2610,16 @@ function RowHead({
   status: ReactNode;
   /** While its title is edited in place, the line is the box's, with the actions hidden. */
   renaming?: boolean;
+  /** Whether the row shows only its actions button, so the title keeps more of the line. */
+  oneAction?: boolean;
 }) {
+  const clear = renaming
+    ? ""
+    : oneAction
+      ? "group-has-[:focus-visible]/row:pr-7 group-hover/row:pr-7"
+      : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34";
   return (
-    <span
-      className={`flex w-full items-center gap-2 ${renaming ? "" : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34"}`}
-    >
+    <span className={`flex w-full items-center gap-2 ${clear}`}>
       {icon}
       <span
         data-title
@@ -2706,29 +2637,13 @@ function RowHead({
   );
 }
 
-/**
- * Where a row's thread is, at the start of its second line: its repo's icon and name, or its
- * pinned folder's where it has no repo, else No repo.
- */
-function RowPlace({
-  repo,
-  folder,
-  words = [],
-}: {
-  repo?: Repo;
-  /** The pinned folder holding it (pins.ts), named in place of No repo. */
-  folder?: PinFolder;
-  words?: readonly string[];
-}) {
-  const inFolder = folder && (!repo || repo.scratch);
+/** Where a row's thread is, at the start of its second line: its repo's icon and name, or No repo. */
+function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[] }) {
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      {inFolder ? <FolderMark folder={folder} /> : <RepoIcon repo={repo} />}
+      <RepoIcon repo={repo} />
       <span className="min-w-0 truncate">
-        <Marked
-          text={inFolder ? folder.name : repo && !repo.scratch ? repo.name : "No repo"}
-          words={words}
-        />
+        <Marked text={repo && !repo.scratch ? repo.name : "No repo"} words={words} />
       </span>
     </span>
   );
@@ -2789,8 +2704,139 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
 }
 
 /**
+ * A Project's row (PLX-1043), shaped like a thread's: its name and status (what it asks of the user,
+ * how many of its runs work, or how long ago it was last active), then its icon and how many threads
+ * it holds, if any. Hovering or focusing it shows its actions button, whose menu also opens by
+ * right-clicking the row, or with A: Rename, Change icon, and the rest its plxd allows.
+ */
+function ProjectRow({
+  rowKey,
+  look,
+  project,
+  runs,
+  at,
+  attention,
+  selected,
+  badge,
+  words,
+  actions,
+  onOpen,
+  onKeys,
+}: {
+  /** Its key in the list, for keyboard moves and sliding when the list moves. */
+  rowKey: string;
+  /** Today's one-line look (pins.ts): its icon, name, and status. */
+  look?: "compact";
+  project: Project;
+  /** Its coordinator's and children's runs (0042). */
+  runs: readonly AgentRun[];
+  /** When it was last active, for its age. */
+  at: string;
+  attention: Attention;
+  selected: boolean;
+  /** Its Mod+number badge, shown in place of its status while Mod is held. */
+  badge?: ReactNode;
+  /** A search's words, marked where they're found. */
+  words: readonly string[];
+  /** Its menu's items, each run with the row, which the icon picker opens beside. */
+  actions: FavoriteAction[];
+  onOpen: () => void;
+  /** Keyboard moves on the focused row. */
+  onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
+}) {
+  const menuId = useId();
+  const row = useRef<HTMLLIElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const working = runs.filter((r) => isRunning(r.status)).length;
+  const status =
+    badge ??
+    (attention === "settled" ? age(at) : <AttentionBadge attention={attention} count={working} />);
+  const icon = <ProjectIcon icon={project.icon} className="size-4 shrink-0" />;
+  const oneLine = look === "compact";
+  const titleColor =
+    selected || attention !== "settled"
+      ? "text-foreground"
+      : "text-foreground/70 group-hover/row:text-foreground";
+  return (
+    <li
+      ref={row}
+      data-kind="project"
+      data-flip={rowKey}
+      className={`group/row relative rounded-lg transition-colors duration-100 ${selected ? current : "group-hover/row:bg-hover"}`}
+    >
+      <button
+        type="button"
+        aria-current={selected ? "page" : undefined}
+        data-row={rowKey}
+        data-kind="project"
+        onClick={onOpen}
+        onKeyDown={onKeys}
+        onContextMenu={actions.length ? (e) => openOnContextMenu(e, trigger.current) : undefined}
+        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${oneLine ? "py-[5px]" : "py-2"}`}
+      >
+        <RowHead
+          icon={oneLine && icon}
+          title={<Marked text={project.name} words={words} />}
+          titleColor={titleColor}
+          status={status}
+          oneAction
+        />
+        {!oneLine && (
+          <span className="flex w-full items-center gap-1.5 text-meta text-faint-foreground">
+            {icon}
+            <span className="min-w-0 flex-1 truncate">Project</span>
+            {runs.length > 0 && (
+              <span className="shrink-0 tabular-nums">
+                {runs.length} {runs.length === 1 ? "thread" : "threads"}
+              </span>
+            )}
+          </span>
+        )}
+      </button>
+      {actions.length > 0 && (
+        <>
+          <button
+            ref={trigger}
+            type="button"
+            aria-label="Project actions"
+            title="More (or right-click)"
+            popoverTarget={menuId}
+            className="absolute top-1 right-1 grid size-5.5 cursor-pointer place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-4"
+          >
+            <Ellipsis />
+          </button>
+          <Menu
+            id={menuId}
+            label="Project actions"
+            align="end"
+            focus='[role^="menuitem"]'
+            className="min-w-56 p-1"
+          >
+            {actions.map((a, n) => (
+              <Fragment key={a.label}>
+                {/* Delete sits apart, as in a thread's menu. */}
+                {a.danger && n > 0 && <div role="separator" className="my-1 h-px bg-border" />}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className={`${menuItem} ${a.danger ? "text-danger" : ""}`}
+                  onClick={close(() => row.current && a.run(row.current))}
+                >
+                  {a.icon}
+                  {a.label}
+                </button>
+              </Fragment>
+            ))}
+          </Menu>
+        </>
+      )}
+    </li>
+  );
+}
+
+/**
  * A thread's row (0033, 0075): its title and status (what it asks of the user, or how long ago it
- * was prompted), then its repo, its git status, a pin, linked pull requests (the number of one, or
+ * was last active), then its repo, its git status, a pin, linked pull requests (the number of one, or
  * +N for more) and their checks, and provider. Its branch is on its card.
  * Under a search, the words found are marked, and a match only in its messages shows a line of
  * them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
@@ -2799,7 +2845,6 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
  */
 function ThreadRow({
   look,
-  folder,
   rowKey,
   thread,
   hostId,
@@ -2837,8 +2882,6 @@ function ThreadRow({
 }: {
   /** Today's one-line look (pins.ts): where it is, its title, and its status. */
   look?: "compact";
-  /** The pinned folder holding it (pins.ts), named where it has no repo. */
-  folder?: PinFolder;
   /** Its key in the list, for keyboard moves and sliding when the list moves. */
   rowKey: string;
   thread: Thread;
@@ -2984,7 +3027,7 @@ function ThreadRow({
       drafted ? (
         <DraftStatus />
       ) : (
-        age(lastPrompt(thread))
+        age(activeAt(thread, run))
       )
     ) : (
       <AttentionBadge attention={attention} since={lastUserPrompt(thread)} />
@@ -3067,14 +3110,7 @@ function ThreadRow({
         className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-2"}`}
       >
         <RowHead
-          icon={
-            oneLine &&
-            (folder && (!repo || repo.scratch) ? (
-              <FolderMark folder={folder} />
-            ) : (
-              <RepoIcon repo={repo} />
-            ))
-          }
+          icon={oneLine && <RepoIcon repo={repo} />}
           title={titleText}
           titleColor={titleColor}
           status={status}
@@ -3084,7 +3120,7 @@ function ThreadRow({
             line under a repo's heading too, and a row under its repo's heading leaves out the repo. */}
         {look !== "compact" && (!nested || hasDetails) && (
           <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
-            {!nested && <RowPlace repo={repo} folder={folder} words={words} />}
+            {!nested && <RowPlace repo={repo} words={words} />}
             {/* Never under its content's width, so a long repo name truncates instead. */}
             <span className="flex flex-1 items-center gap-1">{git && <GitCounts git={git} />}</span>
             {thread.pinned && (

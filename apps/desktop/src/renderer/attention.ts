@@ -77,8 +77,19 @@ export const mostUrgent = (attentions: Attention[]): Attention =>
 export const snoozed = (thread: Thread, attention: Attention, now = Date.now()) =>
   !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > now && attention !== "needsYou";
 
-/** When a thread's newest message was sent, for the sidebar's order. */
+/** When a thread's newest message was sent. */
 export const lastPrompt = (thread: Thread) => thread.lastPromptAt ?? thread.createdAt;
+
+/**
+ * When a thread was last active, for the sidebar's order (PLX-1043): its newest message, or when its
+ * run last stopped after that, so a thread that finishes rises to the top. A running thread keeps its
+ * message's time, so its row doesn't move while it works.
+ */
+export function activeAt(thread: Thread, run: AgentRun | undefined): string {
+  const prompt = lastPrompt(thread);
+  if (!run || isRunning(run.status)) return prompt;
+  return Date.parse(run.updatedAt) > Date.parse(prompt) ? run.updatedAt : prompt;
+}
 
 /** When the user last sent a thread a message, for Working's clock: wake-ups don't reset it (PLX-1012). */
 export const lastUserPrompt = (thread: Thread) => thread.lastUserPromptAt ?? lastPrompt(thread);

@@ -195,11 +195,8 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  // One favorite for the Project, atop the sidebar (0075).
-  await expect(page.locator('#sidebar [aria-label="Favorites"] button[data-row]')).toHaveAttribute(
-    "aria-label",
-    "ember",
-  );
+  // One row for the Project, atop the sidebar (0087).
+  await expect(page.locator('#sidebar [aria-label="Projects"] [data-title]')).toHaveText(["ember"]);
 });
 
 test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (PLX-46)", async () => {
@@ -232,7 +229,7 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
 
   await page.reload();
-  await page.locator('#sidebar [aria-label="Favorites"] button[data-row]').first().click();
+  await page.locator('#sidebar [aria-label="Projects"] button[data-row]').first().click();
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 
   // Stop plxd with the coordinator running. The app reconnects through a new `serve`, which

@@ -1,6 +1,6 @@
 use parallax_store::{
-    ForkedFrom, ProjectFields, RepoFields, RunFields, RunState, Store, StoredEvent, StoredImage,
-    ThreadFields, ThreadUpdate, WakeState, WorktreeFields,
+    ForkedFrom, RepoFields, RunFields, RunState, Store, StoredEvent, StoredImage, ThreadFields,
+    ThreadUpdate, WakeState, WorktreeFields,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -543,91 +543,4 @@ fn deleting_a_parent_leaves_its_children_with_no_parent() {
     assert_eq!(orphan.fields.forked_from, None);
     assert_eq!(store.get_run(child).unwrap().unwrap().fields.parent, None);
     assert_eq!(store.get_thread(other).unwrap(), Some(untouched));
-}
-
-/// An area keeps only top-level threads and Projects, once each in the order given, and loses a
-/// member when it is deleted (PLX-789).
-#[test]
-fn an_area_keeps_top_level_members_until_they_are_deleted() {
-    let (_dir, mut store) = open();
-    let repo = store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    let [parent, child, other] = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
-    for (id, parent) in [(parent, None), (child, Some(parent)), (other, None)] {
-        let fields = RunFields {
-            parent,
-            ..run_fields(repo.id)
-        };
-        store
-            .create_thread_run(
-                id,
-                repo.id,
-                &fields,
-                &state(),
-                None,
-                &ThreadFields::default(),
-            )
-            .unwrap();
-    }
-    let project = Uuid::now_v7();
-    let project_fields = ProjectFields {
-        name: "app".to_owned(),
-        repo_path: "/src/app".to_owned(),
-        icon: None,
-        permission: "auto".to_owned(),
-        autonomy: "routine".to_owned(),
-        base_branch: None,
-    };
-    store.create_project(project, &project_fields).unwrap();
-
-    let id = Uuid::now_v7();
-    let threads = [other, child, Uuid::now_v7(), parent, other];
-    let projects = [Uuid::now_v7(), project, project];
-    let area = store
-        .save_area(id, "Work", "violet", Some(&threads), Some(&projects), None)
-        .unwrap();
-    assert_eq!(area.fields.threads, [other, parent]);
-    assert_eq!(area.fields.projects, [project]);
-    let second = store
-        .save_area(Uuid::now_v7(), "Play", "teal", Some(&threads), None, None)
-        .unwrap();
-    assert!(second.fields.projects.is_empty());
-    let ids: Vec<Uuid> = store.list_areas().unwrap().iter().map(|a| a.id).collect();
-    assert_eq!(ids, [id, second.id], "oldest first");
-
-    // A member that joins a Project keeps its place through a recolor, and leaves only when
-    // the threads are sent again.
-    store.join_project(other, project, parent).unwrap();
-    let recolored = store
-        .save_area(id, "Work", "teal", None, None, None)
-        .unwrap();
-    assert_eq!(recolored.fields.threads, [other, parent]);
-    assert_eq!(recolored.fields.projects, [project]);
-    assert_eq!(recolored.created_at, area.created_at);
-    let resent = store
-        .save_area(
-            id,
-            "Work",
-            "teal",
-            Some(&recolored.fields.threads),
-            None,
-            None,
-        )
-        .unwrap();
-    assert_eq!(resent.fields.threads, [parent]);
-
-    assert!(store.in_area(parent).unwrap());
-    assert!(!store.in_area(child).unwrap());
-    store.delete_thread(parent).unwrap();
-    store.delete_project(project).unwrap();
-    assert!(!store.in_area(parent).unwrap());
-    let left = store.get_area(id).unwrap().unwrap();
-    assert!(left.fields.threads.is_empty());
-    assert!(left.fields.projects.is_empty());
-
-    assert!(store.delete_area(id).unwrap());
-    assert!(!store.delete_area(id).unwrap());
-    assert_eq!(store.get_area(id).unwrap(), None);
-    assert!(store.get_thread(other).unwrap().is_some(), "members stay");
 }

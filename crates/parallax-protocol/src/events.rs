@@ -5,8 +5,8 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::{
     AgentBackgroundTask, AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun,
-    AgentRunState, Area, ContextFile, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId,
-    RunId, ScriptStatus, ScriptTrigger, Thread, TurnCheckpoint, TurnId,
+    AgentRunState, ContextFile, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId, RunId,
+    ScriptStatus, ScriptTrigger, Thread, TurnCheckpoint, TurnId,
 };
 
 uuid_v7_id! {
@@ -267,13 +267,6 @@ pub enum ParallaxEvent {
     RepoUpdated {
         /// The entry as it stands.
         repo: Repo,
-    },
-    /// `area/create`, `area/update`, or `area/delete` changed an area (PLX-789), or deleting a
-    /// thread or Project took it out of one. Host-level.
-    #[serde(rename = "areas.changed")]
-    AreasChanged {
-        /// Every area as it stands, oldest first.
-        areas: Vec<Area>,
     },
     /// `space/delete` removed a Space (0069), after its threads' `thread.deleted`. Host-level.
     #[serde(rename = "repo.removed")]

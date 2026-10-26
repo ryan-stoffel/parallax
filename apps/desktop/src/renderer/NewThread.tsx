@@ -1,4 +1,4 @@
-import { ChevronDown, Folder, House, MessagesSquare, Plus } from "lucide-react";
+import { Folder, House, MessagesSquare, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { PromptImage, Repo } from "../protocol/generated/protocol";
@@ -77,8 +77,6 @@ interface NewThreadProps {
   threadLinks?: ThreadLinks;
   /** The draft it reopens (PLX-788), by id. Read once, as it mounts. */
   draftId?: string;
-  /** The pinned folder the thread goes in (0075), which the heading names in place of the repository. */
-  folder?: { name: string; color?: string };
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -118,7 +116,6 @@ export function NewThread({
   disabledReason,
   threadLinks,
   draftId: reopened,
-  folder,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
@@ -438,101 +435,54 @@ export function NewThread({
       >
         {starting === undefined && (
           <>
-            {folder ? (
-              <>
-                {/* One line: only the name shrinks, truncating with an ellipsis. */}
-                <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
-                  What should we work on in{" "}
-                  <span
-                    title={folder.name}
-                    className="min-w-0 truncate"
-                    style={{
-                      color: folder.color ? `var(--project-${folder.color})` : undefined,
-                    }}
-                  >
-                    {folder.name}
-                  </span>
-                  {shared &&
-                    !repoless(group) &&
-                    ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
-                  ?
-                </h1>
-                <div className="mb-9 text-center">
-                  <button
-                    type="button"
-                    popoverTarget={repoMenu}
-                    aria-haspopup="menu"
-                    aria-label={`Repository: ${group.id === noRepo ? "No repo" : group.name}`}
-                    className="inline-flex max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-reading text-muted-foreground hover:text-foreground focus-visible:text-foreground [&_svg]:size-3.5 [&_svg]:shrink-0"
-                  >
-                    {group.id === noRepo ? (
-                      <House />
-                    ) : group.space ? (
-                      <MessagesSquare />
-                    ) : (
-                      <Folder />
-                    )}
-                    <span className="truncate" title={group.id === noRepo ? undefined : group.name}>
-                      {group.id === noRepo ? "No repo" : group.name}
-                    </span>
-                    <ChevronDown />
-                  </button>
-                </div>
-              </>
+            <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
+              {group.id === noRepo
+                ? "What should we work on "
+                : group.space
+                  ? "What should we talk about in "
+                  : "What should we build in "}
+              <button
+                type="button"
+                popoverTarget={repoMenu}
+                aria-haspopup="menu"
+                title={group.id === noRepo ? undefined : group.name}
+                className="min-w-0 truncate rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
+              >
+                {group.id === noRepo ? "without a repo" : group.name}
+              </button>
+              {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
+              ?
+            </h1>
+            {/* Without a repo, an empty line in its place, so the box doesn't move. */}
+            {repoless(group) ? (
+              <div aria-hidden className="invisible mb-9 text-reading">
+                &nbsp;
+              </div>
             ) : (
-              <>
-                <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
-                  {group.id === noRepo
-                    ? "What should we work on "
-                    : group.space
-                      ? "What should we talk about in "
-                      : "What should we build in "}
-                  <button
-                    type="button"
-                    popoverTarget={repoMenu}
-                    aria-haspopup="menu"
-                    title={group.id === noRepo ? undefined : group.name}
-                    className="min-w-0 truncate rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
-                  >
-                    {group.id === noRepo ? "without a repo" : group.name}
-                  </button>
-                  {shared &&
-                    !repoless(group) &&
-                    ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
-                  ?
-                </h1>
-                {/* Without a repo, an empty line in its place, so the box doesn't move. */}
-                {repoless(group) ? (
-                  <div aria-hidden className="invisible mb-9 text-reading">
-                    &nbsp;
-                  </div>
-                ) : (
-                  <div className="relative mb-9 text-center">
-                    {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setChoices(undefined);
-                        onGroupChange(noRepo);
-                      }}
-                      aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
-                      className="group relative rounded-md text-reading text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
+              <div className="relative mb-9 text-center">
+                {/* Its shortcut, Mod+Shift+N unless rebound, shows under it on hover or focus. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setChoices(undefined);
+                    onGroupChange(noRepo);
+                  }}
+                  aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
+                  className="group relative rounded-md text-reading text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
+                >
+                  or start without a repo
+                  {noRepoKeys && (
+                    <kbd
+                      aria-hidden
+                      className="pointer-events-none invisible absolute top-full left-1/2 z-20 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-meta text-muted-foreground group-hover:visible group-focus-visible:visible"
                     >
-                      or start without a repo
-                      {noRepoKeys && (
-                        <kbd
-                          aria-hidden
-                          className="pointer-events-none invisible absolute top-full left-1/2 z-20 mt-1 -translate-x-1/2 rounded-md border border-border bg-surface px-2 py-1 font-sans text-meta text-muted-foreground group-hover:visible group-focus-visible:visible"
-                        >
-                          {noRepoKeys}
-                        </kbd>
-                      )}
-                    </button>
-                  </div>
-                )}
-              </>
+                      {noRepoKeys}
+                    </kbd>
+                  )}
+                </button>
+              </div>
             )}
-            {/* Menu only: the repository name in the heading, or under a folder's, opens it. */}
+            {/* Menu only: the repository name in the heading opens it. */}
             <Picker
               id={repoMenu}
               button={false}

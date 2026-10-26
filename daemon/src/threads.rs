@@ -234,13 +234,12 @@ pub(crate) fn stage_started(
 
 /// `thread/list`.
 pub(crate) async fn list(daemon: &Arc<Daemon>) -> Result<ThreadListResult, ErrorObject> {
-    let ((repos, threads, areas), seq) = daemon
+    let ((repos, threads), seq) = daemon
         .reader
         .snapshot(&CancellationToken::new(), |db| {
             let repos = db.list_repos().map_err(|e| store_error(&e))?;
             let threads = db.list_threads().map_err(|e| store_error(&e))?;
-            let areas = crate::areas::list(db)?;
-            Ok((repos, threads, areas))
+            Ok((repos, threads))
         })
         .await?;
     Ok(ThreadListResult {
@@ -249,7 +248,6 @@ pub(crate) async fn list(daemon: &Arc<Daemon>) -> Result<ThreadListResult, Error
             .map(repo_entry)
             .collect::<Result<_, _>>()?,
         threads: threads.iter().map(thread_entry).collect::<Result<_, _>>()?,
-        areas,
         seq,
     })
 }

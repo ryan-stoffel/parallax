@@ -450,21 +450,6 @@ export type ParallaxRequests = {
 	 */
 	"space/delete": { params: SpaceDeleteParams, result: SpaceDeleteResult },
 	/**
-	 * `area/create`: makes an area, a hand-picked list of threads and Projects (PLX-789).
-	 * Idempotent on its client-generated id. Gated on the `areas` capability.
-	 */
-	"area/create": { params: AreaCreateParams, result: AreaResult },
-	/**
-	 * `area/update`: renames an area, recolors it, or replaces its members (PLX-789). Gated
-	 * on the `areas` capability.
-	 */
-	"area/update": { params: AreaUpdateParams, result: AreaResult },
-	/**
-	 * `area/delete`: deletes an area, leaving its threads and Projects where they are
-	 * (PLX-789). Gated on the `areas` capability.
-	 */
-	"area/delete": { params: AreaDeleteParams, result: AreaDeleteResult },
-	/**
 	 * `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
 	 * stopping its CLI first if it runs.
 	 */
@@ -1049,9 +1034,6 @@ export const REQUEST_METHODS = [
 	"repo/update",
 	"space/create",
 	"space/delete",
-	"area/create",
-	"area/update",
-	"area/delete",
 	"thread/delete",
 	"project/start",
 	"coordinator/fresh",
@@ -3579,11 +3561,7 @@ export type ParallaxEvent = { "kind": "project.created",
 	/**
 	 * The entry as it stands.
 	 */
-	repo: Repo, } | { "kind": "areas.changed",
-	/**
-	 * Every area as it stands, oldest first.
-	 */
-	areas: Array<Area>, } | { "kind": "repo.removed",
+	repo: Repo, } | { "kind": "repo.removed",
 	/**
 	 * The removed entry's id.
 	 */
@@ -4249,50 +4227,6 @@ export type AgentRunState = {
 };
 
 /**
- * A named, colored list of threads and Projects.
- */
-export type Area = {
-	/**
-	 * The area's id.
-	 */
-	id: AreaId,
-	/**
-	 * Its name: 1 to [`MAX_AREA_NAME_CHARS`] characters, unique among the host's areas ignoring
-	 * case.
-	 */
-	name: string,
-	/**
-	 * The palette key of its color, as a project icon's (0032), such as `violet`.
-	 */
-	color: string,
-	/**
-	 * Its top-level threads, by run id, in the order they were added.
-	 */
-	threads: Array<RunId>,
-	/**
-	 * Its Projects, in the order they were added.
-	 */
-	projects: Array<ProjectId>,
-	/**
-	 * Its repo entries and Spaces, never the scratch entry, in the order they were added, behind
-	 * `areaRepos`. Absent from an older plxd.
-	 */
-	repos?: Array<RepoId>,
-};
-
-/**
- * An area's id: a version 7 UUID that the client generates once and sends again on every
- * retry of `area/create`.
- */
-export type AreaId = string;
-
-/**
- * A repo entry's id: a version 7 UUID that the client generates once and sends again on
- * every retry of `repo/add`. plxd generates the scratch entry's.
- */
-export type RepoId = string;
-
-/**
  * A finished turn rewritten in place as one `agent.output` row (0052).
  */
 export type Compacted = {
@@ -4406,6 +4340,12 @@ export type Repo = {
 };
 
 /**
+ * A repo entry's id: a version 7 UUID that the client generates once and sends again on
+ * every retry of `repo/add`. plxd generates the scratch entry's.
+ */
+export type RepoId = string;
+
+/**
  * Where a script is.
  *
  * A newer plxd may send a status this version does not know; treat it as unknown.
@@ -4477,7 +4417,7 @@ export type Thread = {
 	 */
 	settled?: boolean,
 	/**
-	 * Whether the user pinned it to the top of the sidebar (PLX-789), behind `areas`.
+	 * Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
 	 */
 	pinned?: boolean,
 };
@@ -5762,10 +5702,6 @@ export type ThreadListResult = {
 	 */
 	threads: Array<Thread>,
 	/**
-	 * Every area (PLX-789), oldest first. Absent from a plxd without `areas`.
-	 */
-	areas?: Array<Area>,
-	/**
 	 * The event log's `seq` from before the list was read. Subscribe to host-level events with
 	 * `after` set to it. The list may already reflect some events after it, and replaying them is
 	 * harmless.
@@ -6288,7 +6224,7 @@ export type ThreadArchiveResult = {
 /**
  * Params of `thread/update`: marks a thread seen, or snoozes it (0033), behind the
  * `threadAttention` capability, sets its title or settled flag (0041), behind `threadLineage`,
- * or pins it (PLX-789), behind `areas`.
+ * or pins it (PLX-789), behind `pins`.
  *
  * `seen` sets `seenAt` to plxd's clock now. `snoozedUntil` replaces the snooze; a time in the
  * past ends it. A change appends `thread.updated`; an update that changes nothing appends none.
@@ -6317,7 +6253,7 @@ export type ThreadUpdateParams = {
 	 */
 	settled?: boolean,
 	/**
-	 * True to pin it, false to unpin it (PLX-789), behind `areas`.
+	 * True to pin it, false to unpin it (PLX-789), behind `pins`.
 	 */
 	pinned?: boolean,
 };
@@ -6410,98 +6346,6 @@ export type SpaceDeleteParams = {
  * Result of `space/delete`.
  */
 export type SpaceDeleteResult = Record<symbol, never>;
-
-/**
- * Params of `area/create`: makes an area. Idempotent on `id`: a retry with the same name returns
- * the area, another name fails with `idConflict`. A name another area has, ignoring case, fails
- * with `invalidParams`. Ids that name no top-level thread, Project, or non-scratch repo entry are
- * dropped, so the result says what was kept. Appends `areas.changed`.
- */
-export type AreaCreateParams = {
-	/**
-	 * The area's id, a version 7 UUID generated by the client.
-	 */
-	id: AreaId,
-	/**
-	 * Its name, trimmed.
-	 */
-	name: string,
-	/**
-	 * The palette key of its color: 1 to 32 characters of `a-z`, `0-9`, and `-`.
-	 */
-	color: string,
-	/**
-	 * Its threads.
-	 */
-	threads: Array<RunId>,
-	/**
-	 * Its Projects.
-	 */
-	projects: Array<ProjectId>,
-	/**
-	 * Its repo entries and Spaces, behind `areaRepos`.
-	 */
-	repos?: Array<RepoId>,
-};
-
-/**
- * Result of `area/create` and `area/update`.
- */
-export type AreaResult = {
-	/**
-	 * The area as it stands.
-	 */
-	area: Area,
-};
-
-/**
- * Params of `area/update`: renames an area, recolors it, or replaces its members, checked as
- * `area/create` checks them. A change appends `areas.changed`; an update that changes nothing
- * appends none. Fails with `areaNotFound` for an unknown area.
- */
-export type AreaUpdateParams = {
-	/**
-	 * The area's id.
-	 */
-	area: AreaId,
-	/**
-	 * Its new name.
-	 */
-	name?: string,
-	/**
-	 * Its new color.
-	 */
-	color?: string,
-	/**
-	 * Its threads, replacing the old list.
-	 */
-	threads?: Array<RunId>,
-	/**
-	 * Its Projects, replacing the old list.
-	 */
-	projects?: Array<ProjectId>,
-	/**
-	 * Its repo entries and Spaces, replacing the old list, behind `areaRepos`.
-	 */
-	repos?: Array<RepoId>,
-};
-
-/**
- * Params of `area/delete`: deletes an area. Its threads, Projects, and repo entries stay where
- * they are.
- * Deleting an unknown area succeeds and appends nothing; otherwise it appends `areas.changed`.
- */
-export type AreaDeleteParams = {
-	/**
-	 * The area's id.
-	 */
-	area: AreaId,
-};
-
-/**
- * Result of `area/delete`.
- */
-export type AreaDeleteResult = Record<symbol, never>;
 
 /**
  * Params of `thread/delete`: deletes a thread, its run, its worktree and branch, a thread with
@@ -7314,7 +7158,7 @@ export type ThreadSearchResult = {
 	/**
 	 * For each returned thread that matched in its messages, one line of its best-matching
 	 * message, around the matching words, at most 120 characters, with `…` where it was cut
-	 * (PLX-789). Absent for a thread that matched only by title, and from a plxd without `areas`.
+	 * (PLX-789). Absent for a thread that matched only by title, and from an older plxd.
 	 */
 	snippets?: { [key in RunId]: string },
 };
@@ -10042,11 +9886,6 @@ export type ShellSnapshot = {
 	 * `pr.watches` events replace each part. Absent means none.
 	 */
 	waiting?: Array<RunWaiting>,
-	/**
-	 * Every area (PLX-789), oldest first. Later `areas.changed` events replace the list. Absent
-	 * from a plxd without `areas`.
-	 */
-	areas?: Array<Area>,
 };
 
 /**
@@ -10696,7 +10535,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "areaNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it

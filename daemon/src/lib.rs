@@ -50,7 +50,6 @@
 #![warn(missing_docs)]
 
 mod agents;
-mod areas;
 pub mod attach;
 pub mod backend;
 mod board;

@@ -172,10 +172,10 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-// Each Project's favorite, by name, in the sidebar's order (0075).
+// Each Project's row, by name, in the sidebar's order (PLX-1043).
 const projectRows = () =>
-  [...document.querySelectorAll('#sidebar [aria-label="Favorites"] button[data-row]')].map((b) =>
-    b.getAttribute("aria-label"),
+  [...document.querySelectorAll('#sidebar [aria-label="Projects"] [data-title]')].map(
+    (t) => t.textContent,
   );
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
@@ -225,9 +225,9 @@ const openNewProject = async () => {
 const workspaceButton = () =>
   dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");
 
-test("lists plxd's Projects as favorites by name, keeping the order they're moved into, and adds one from project.created", async () => {
+test("lists plxd's Projects as rows, most recently active first, and adds one from project.created", async () => {
   await renderApp();
-  expect(projectRows()).toEqual(["ember", "photon"]);
+  expect(projectRows()).toEqual(["photon", "ember"]);
 
   await act(async () =>
     deliver({
@@ -240,16 +240,7 @@ test("lists plxd's Projects as favorites by name, keeping the order they're move
       },
     }),
   );
-  expect(projectRows()).toEqual(["ember", "parallax", "photon"]);
-  // Moved, it stays put, however busy the others get.
-  act(
-    () =>
-      void rowButton("photon").dispatchEvent(
-        new KeyboardEvent("keydown", { key: "ArrowLeft", altKey: true, bubbles: true }),
-      ),
-  );
-  await settle();
-  expect(projectRows()).toEqual(["ember", "photon", "parallax"]);
+  expect(projectRows()).toEqual(["parallax", "photon", "ember"]);
 });
 
 test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
@@ -345,17 +336,20 @@ test("a failed clone says why above the folders, where a long list can't push it
   expect(dialog().open).toBe(true);
 });
 
-const favorites = () => document.querySelector<HTMLElement>('#sidebar [aria-label="Favorites"]')!;
-/** A Project's favorite square in the sidebar, by its name (0075). */
+/** A Project's row in the sidebar, by its name (PLX-1043). */
 const rowButton = (name: string) =>
-  favorites().querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
-// The favorites' menu, as a right-click on `name`'s square fills it in.
+  [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '#sidebar [aria-label="Projects"] button[data-row]',
+    ),
+  ].find((b) => b.querySelector("[data-title]")?.textContent === name)!;
+// A Project row's menu, which a right-click on it opens.
 const menuItems = (name: string) => {
   act(() => void rowButton(name).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
   return [
-    ...document.querySelectorAll<HTMLButtonElement>(
-      '[role="menu"][aria-label="Favorite"] [role="menuitem"]',
-    ),
+    ...rowButton(name)
+      .closest("li")!
+      .querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]'),
   ];
 };
 const menuItem = (name: string, item: string) =>
@@ -755,7 +749,9 @@ const withThread = () => {
 };
 /** Every row's title, in the sidebar's order. */
 const sidebarTitles = () =>
-  [...document.querySelectorAll("#sidebar li[data-kind] [data-title]")].map((t) => t.textContent);
+  [...document.querySelectorAll('#sidebar li[data-kind="thread"] [data-title]')].map(
+    (t) => t.textContent,
+  );
 
 const deleteDialog = () =>
   [...document.querySelectorAll("dialog")].find((d) =>
@@ -772,9 +768,6 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
   await click(rowButton("ember"));
   expect(crumbs()).toEqual(["This Mac", "ember"]);
   expect(menuItems("ember").map((b) => b.textContent)).toEqual([
-    "Open",
-    "Move left",
-    "Move right",
     "Rename…",
     "Change icon…",
     "Delete…",

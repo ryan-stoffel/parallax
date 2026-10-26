@@ -12,7 +12,6 @@ import { flushToasts } from "./undo";
 import { drafts, threadDrafts } from "./drafts";
 import { dragThread } from "./threadDrag";
 import { fakeWatch } from "./fakeWatch";
-import { startIn } from "./pins";
 import { newThreadDefaults, newThreadPrefs } from "./prefs";
 import { sectionsStore } from "./Sidebar";
 
@@ -64,7 +63,6 @@ beforeEach(() => {
   request.mockClear();
   capabilities = {};
   localStorage.clear();
-  startIn.set(null);
   // Working starts folded (0075); these tests read the rows in it.
   sectionsStore.set({ all: { working: true } });
   accessPrefs.set(accessDefaults);

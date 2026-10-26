@@ -132,9 +132,8 @@ pub(crate) fn initialize(
 /// under its coordinator, which an older plxd would silently ignore, starting a scratch thread.
 /// `projectFromThreads` (PLX-419, 0042): `project/fromThreads`, which makes a Project from
 /// threads on one repo entry, each with its own worktree.
-/// `areas` (PLX-789, 0073): `area/create`, `area/update`, `area/delete`, `areas.changed`, and
-/// `areas` on `thread/list` and the shell snapshot; `pinned` on `Thread` and `thread/update`; and
-/// `snippets` on `thread/search`, which an older plxd would silently drop.
+/// `pins` (PLX-789): `pinned` on `Thread` and `thread/update`, and `snippets` on
+/// `thread/search`, which an older plxd would silently drop.
 /// `board` (PLX-940, 0081): `board/list`, `board/add`, `board/update`, and `board/remove`, and
 /// `notes.md` and `archived.md` rendered from the items, which `context/write` refuses.
 /// `spaces` (PLX-732, 0069): `space/create`, `space/delete`, `repo.removed`, `name` on
@@ -325,8 +324,6 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "agentWait",
     "agents",
     "approvals",
-    "areaRepos",
-    "areas",
     "autoResume",
     "board",
     "chatImport",
@@ -357,6 +354,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "openPr",
     "orchestration",
     "peerGit",
+    "pins",
     "prDiff",
     "prWatch",
     "projectArtifacts",

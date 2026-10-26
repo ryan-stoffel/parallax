@@ -845,6 +845,15 @@ const MIGRATIONS: &[Migration] = &[
             deleted INTEGER NOT NULL
         );",
     },
+    // Areas are gone (0087, PLX-1043): drop migrations 46 and 47's tables, members first. Their
+    // indexes go with them. `threads.pinned` stays.
+    Migration {
+        version: 53,
+        sql: "DROP TABLE area_repos;
+        DROP TABLE area_threads;
+        DROP TABLE area_projects;
+        DROP TABLE areas;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

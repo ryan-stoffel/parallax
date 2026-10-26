@@ -59,8 +59,11 @@ export function openFromHash() {
   const project = params.get("project");
   if (project)
     steps.push(() =>
-      [...document.querySelectorAll<HTMLElement>('ul[aria-label="Favorites"] button')].find(
-        (el) => el.getAttribute("aria-label")?.toLowerCase() === project.toLowerCase(),
+      [
+        ...document.querySelectorAll<HTMLElement>('ul[aria-label="Projects"] button[data-row]'),
+      ].find(
+        (el) =>
+          el.querySelector("[data-title]")?.textContent?.toLowerCase() === project.toLowerCase(),
       ),
     );
   const thread = params.get("thread");

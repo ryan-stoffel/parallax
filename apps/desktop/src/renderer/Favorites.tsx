@@ -1,5 +1,5 @@
-// The sidebar's favorites (pins.ts, 0075): the Projects, and any pinned thread moved up, as squares
-// that fill the row, above the pinned threads, as Arc's favorites sit above its tabs.
+// The sidebar's favorites (pins.ts, 0075): pinned threads moved up, as squares that fill the row,
+// above the pinned threads, as Arc's favorites sit above its tabs. Projects list as rows (PLX-1043).
 import { ArrowLeft, ArrowRight, ArrowUpRight, StarOff } from "lucide-react";
 import {
   useId,
@@ -18,28 +18,22 @@ import { close, shownRows } from "./SidebarParts";
 import { dragThread, draggedThread, threadDragType } from "./threadDrag";
 import { Menu, menuItem, openOnContextMenu } from "./ui";
 
-/** One favorite: a Project, or a pinned thread moved up here. */
+/** One favorite: a pinned thread moved up here. */
 export interface Favorite {
   key: string;
-  kind: "project" | "thread";
   title: string;
   icon: ReactNode;
   attention: Attention;
-  /** A Project's status in place of a dot (0083): whether any of its runs works, and how many
-   * wait on the user. */
-  project?: { working: boolean; waiting: number };
   selected: boolean;
-  /** Its Mod+number badge while Mod is held. */
-  badge?: ReactNode;
-  /** A thread's host and id, which its drag carries, so it drops on the composer like a row. */
-  thread?: { hostId: string; id: string };
-  /** What else its menu offers, as a Project's Rename and Delete, each run with its square. */
+  /** Its host and id, which its drag carries, so it drops on the composer like a row. */
+  thread: { hostId: string; id: string };
+  /** What else its menu offers, as Archive and Delete, each run with its square. */
   actions?: FavoriteAction[];
   /** A thread's keys, as E and ⌫ on its row, for those the square doesn't take itself. */
   onKeys?: (e: ReactKeyboardEvent<HTMLElement>) => void;
 }
 
-/** One item in a favorite's or pin's menu, after its own, run with its square or row. */
+/** One item in a favorite's, pin's, or Project row's menu, run with its square or row. */
 export interface FavoriteAction {
   label: string;
   icon: ReactNode;
@@ -54,24 +48,19 @@ const favoriteDragType = "application/x-parallax-favorite";
 
 // A thread's dot, and its words for a screen reader and the tooltip: only for what finished,
 // failed, or waits on the user. Work in progress shows nothing, as the Working drawer keeps it out
-// of sight. A Project shows its working ring and waiting count instead.
+// of sight.
 const dots: Partial<Record<Attention, { color: string; words: string }>> = {
   needsYou: { color: "bg-warning", words: "needs you" },
   failed: { color: "bg-danger", words: "failed" },
   done: { color: "bg-added", words: "done" },
 };
 
-/** What a favorite's mark says, for a screen reader and the tooltip. */
-function wordsOf(f: Favorite): string | undefined {
-  if (!f.project) return dots[f.attention]?.words;
-  const { working, waiting } = f.project;
-  const words = [working && "working", waiting > 0 && `${waiting} waiting on you`].filter(Boolean);
-  return words.length ? words.join(", ") : undefined;
-}
+/** What a favorite's dot says, for a screen reader and the tooltip. */
+const wordsOf = (f: Favorite) => dots[f.attention]?.words;
 
 /**
- * The favorites: squares, as many to a row as fit and stretched to fill it, so two Projects take
- * half the width each. Dragging one between others moves it there. Dropping a
+ * The favorites: squares, as many to a row as fit and stretched to fill it, so two take half the
+ * width each. Dragging one between others moves it there. Dropping a
  * pinned thread, or a thread row, here makes it a favorite; dragging one back down to the pins, or
  * Remove from favorites, puts it back. Left and Right move between them, and with Alt, or Move left
  * and Move right in the menu, move one. A opens one's menu, and a thread's E, S, and ⌫ work as on
@@ -205,8 +194,8 @@ export function Favorites({
               else tiles.current.delete(f.key);
             }}
             className="grow-in relative"
-            onMouseEnter={(e) => f.thread && onRest?.(f.key, e.currentTarget)}
-            onMouseLeave={() => f.thread && onLeave?.()}
+            onMouseEnter={(e) => onRest?.(f.key, e.currentTarget)}
+            onMouseLeave={() => onLeave?.()}
             onDragOver={(e) => {
               if (!reordering(e)) return;
               e.dataTransfer.dropEffect = "move";
@@ -224,21 +213,18 @@ export function Favorites({
             <button
               type="button"
               data-row={f.key}
-              // A thread's card names it.
-              title={
-                f.thread && onRest ? undefined : `${f.title}${wordsOf(f) ? `, ${wordsOf(f)}` : ""}`
-              }
+              // Its card names it.
+              title={onRest ? undefined : `${f.title}${wordsOf(f) ? `, ${wordsOf(f)}` : ""}`}
               aria-label={f.title}
               aria-description={wordsOf(f)}
               aria-current={f.selected ? "page" : undefined}
-              draggable={!!onReorder || !!f.thread}
+              draggable
               onDragStart={(e) => {
                 onLeave?.();
                 setDragging(f.key);
                 if (onReorder) e.dataTransfer.setData(favoriteDragType, f.key);
                 e.dataTransfer.effectAllowed = "copyMove";
-                // A thread can also go back down to the pins, or onto the composer.
-                if (!f.thread) return;
+                // It can also go back down to the pins, or onto the composer.
                 setDraggedPin({ key: f.key, kind: "thread" });
                 e.dataTransfer.setData(pinDragType, f.key);
                 dragThread(e.dataTransfer, f.thread.hostId, f.thread.id);
@@ -278,27 +264,12 @@ export function Favorites({
               className={`relative grid w-full place-items-center rounded-xl transition-[background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none h-11 [&_svg]:size-5 ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_14%,transparent)]" : "bg-foreground/[0.045] hover:bg-foreground/[0.08]"}`}
             >
               {f.icon}
-              {f.project ? (
-                <>
-                  {f.project.working && <span aria-hidden className="project-working" />}
-                  {f.project.waiting > 0 && (
-                    <span
-                      aria-hidden
-                      className="absolute -top-1.5 -right-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-warning px-1 text-micro leading-none font-semibold text-background tabular-nums ring-2 ring-sidebar"
-                    >
-                      {f.project.waiting}
-                    </span>
-                  )}
-                </>
-              ) : (
-                dots[f.attention] && (
-                  <span
-                    aria-hidden
-                    className={`dot-in absolute size-[7px] rounded-full top-1.5 right-1.5 ${dots[f.attention]!.color}`}
-                  />
-                )
+              {dots[f.attention] && (
+                <span
+                  aria-hidden
+                  className={`dot-in absolute size-[7px] rounded-full top-1.5 right-1.5 ${dots[f.attention]!.color}`}
+                />
               )}
-              {f.badge && <span className="absolute right-1 bottom-1">{f.badge}</span>}
             </button>
             {/* The context menu's anchor, so it opens beside this square. */}
             <button
@@ -365,17 +336,15 @@ export function Favorites({
                 </button>
               </>
             )}
-            {editing.kind === "thread" && (
-              <button
-                type="button"
-                role="menuitem"
-                className={menuItem}
-                onClick={close(() => onRemove(editing.key))}
-              >
-                <StarOff aria-hidden />
-                Remove from favorites
-              </button>
-            )}
+            <button
+              type="button"
+              role="menuitem"
+              className={menuItem}
+              onClick={close(() => onRemove(editing.key))}
+            >
+              <StarOff aria-hidden />
+              Remove from favorites
+            </button>
             {editing.actions && editing.actions.length > 0 && <hr className="my-1 border-border" />}
             {editing.actions?.map((a) => (
               <button

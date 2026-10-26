@@ -182,7 +182,7 @@ test("holdQuiet holds the end of a run's background work until the agent has had
   const quiet = holdQuiet((e) => applied.push(e), 1000);
   const task = { taskId: "b1", kind: "command", description: "build" } as AgentBackgroundTask;
   const ended: ParallaxEvent = { kind: "agent.background", runId: "r", tasks: [] };
-  const other: ParallaxEvent = { kind: "areas.changed", areas: [] };
+  const other: ParallaxEvent = { kind: "project.deleted", project: "p1" };
 
   quiet.pass(other);
   quiet.pass(ended);

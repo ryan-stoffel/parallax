@@ -4,7 +4,6 @@ import {
   ChevronRight,
   Columns2,
   FileSearch,
-  Folder,
   FolderGit2,
   FolderPlus,
   GitFork,
@@ -112,7 +111,6 @@ import {
 } from "./threads";
 import { cloneOnto, type CloneAsk } from "./clone";
 import { isRunning, kindOf } from "./transcript";
-import { fileStarted, folderPath, pinLayout, startIn } from "./pins";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { useShortcutLabel } from "./keybindings";
@@ -189,10 +187,6 @@ export function App() {
   if (mainPage === "browser" && !browserPage) setBrowserPage(true);
 
   useEffect(() => setMainPage(undefined), [selection]);
-  // A folder's New thread files only what starts from the New thread screen it opens.
-  useEffect(() => {
-    if (selection.kind !== "new") startIn.set(null);
-  }, [selection.kind]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
     setMainPage(undefined);
     setSettings(section);
@@ -313,10 +307,6 @@ export function App() {
     [hosts, views],
   );
   const groups = groupThreads(threads.state);
-  const pinFolders = pinLayout.use().folders;
-  // The pinned folder New Thread starts in, from that folder's New thread (pins.ts).
-  const startId = startIn.use();
-  const startFolder = startId ? pinFolders[startId] : undefined;
   // The other computers' repositories, which New Thread and Mod+N's picker list too.
   const elsewhere = useMemo(() => otherRepos(hosts, views, host.id), [hosts, views, host.id]);
   // The computer New thread opens on: Settings > Threads' while it's listed and connected, else
@@ -621,34 +611,14 @@ export function App() {
     if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
     const groupRepo = threads.state.repos.find((r) => r.id === group.id);
-    // A chat in a pinned folder, or a folder's New thread, shows the folder in No Repo's place
-    // (pins.ts). Nested folders read as a path: School / Math.
-    const path =
-      groupRepo && !groupRepo.scratch
-        ? []
-        : selection.kind === "thread"
-          ? folderPath(pinFolders, `${host.id}/${selection.threadId}`)
-          : startId && startFolder
-            ? [...folderPath(pinFolders, `folder:${startId}`), startFolder]
-            : [];
-    const folder = path.at(-1);
-    const repo = folder
-      ? {
-          label: path.map((f) => f.name).join(" / "),
-          icon: (
-            <Folder
-              style={{ color: folder.color ? `var(--project-${folder.color})` : undefined }}
-            />
-          ),
-        }
-      : {
-          label: group.name,
-          icon: <RepoIcon repo={groupRepo} />,
-          onClick:
-            selection.kind === "thread"
-              ? () => setSelection({ kind: "new", groupId: group.id })
-              : undefined,
-        };
+    const repo = {
+      label: group.name,
+      icon: <RepoIcon repo={groupRepo} />,
+      onClick:
+        selection.kind === "thread"
+          ? () => setSelection({ kind: "new", groupId: group.id })
+          : undefined,
+    };
     const page =
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
@@ -764,15 +734,12 @@ export function App() {
   // Opens New Thread on another computer with one of its repositories.
   // Mod+N's pick of another computer's repository, a plain New thread as `newThread` is.
   const pickRepoOn = (hostId: string, groupId: string) => {
-    startIn.set(null);
     openOnHost(hostId, { kind: "new", groupId });
   };
 
-  // A plain New thread, so not in the folder a folder's New thread put it in. It opens on the
-  // computer new threads start on, in the repository of the same name there, or No Repo when it
-  // has none.
+  // A New thread. It opens on the computer new threads start on, in the repository of the same
+  // name there, or No Repo when it has none.
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
-    startIn.set(null);
     if (start.id !== host.id) {
       const name = groups.find((g) => g.id === groupId)?.name;
       return openOnHost(start.id, {
@@ -1218,8 +1185,6 @@ export function App() {
             onSelect={(hostId, next) => {
               // The open row, picked again, leaves Pull requests or the browser too.
               setMainPage(undefined);
-              // A draft opened from the list isn't in the folder either.
-              if (next.kind === "new") startIn.set(null);
               openOnHost(hostId, next);
               // A Project opens on its coordinator's chat and the Project tab (0083).
               if (next.kind === "project") setShowHome({});
@@ -1232,10 +1197,6 @@ export function App() {
             onDelete={deleteThread}
             addDialog={addDialog}
             onNewThread={() => picker.current?.showModal()}
-            onNewFolderThread={(id) => {
-              newThread();
-              startIn.set(id);
-            }}
             split={split}
             onOpenBeside={openBeside}
             onClosePane={closePane}
@@ -1532,12 +1493,8 @@ export function App() {
                       start={threads.start}
                       runOptions={connected && "runOptions" in connection.capabilities}
                       onStarted={(threadId, background) => {
-                        // Started from a pinned folder's New thread: pinned there (pins.ts).
-                        if (fileStarted(`${host.id}/${threadId}`))
-                          void threads.update(threadId, { pinned: true });
                         if (!background) setSelection({ kind: "thread", threadId, started: true });
                       }}
-                      folder={startFolder}
                       disabledReason={offline}
                       threadLinks={threadLinks}
                     />

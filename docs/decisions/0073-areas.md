@@ -1,6 +1,6 @@
 # 0073: An area is a named list of threads and Projects plxd stores, and a pin is a flag on the thread
 
-- Status: accepted
+- Status: superseded by [0087](0087-sidebar-rows-no-areas-or-folders.md) for areas, which plxd no longer keeps; pins stay
 - Date: 2026-10-15
 - Issue: PLX-789
 

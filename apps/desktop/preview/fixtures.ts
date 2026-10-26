@@ -20,7 +20,6 @@ import type {
   ProviderInfo,
   Question,
   Repo,
-  Area,
   Thread,
   UsageDay,
   UsageSessions,
@@ -50,7 +49,6 @@ interface ContextDoc {
 interface Fixtures {
   repos: Repo[];
   /** Hand-picked lists of threads and Projects (PLX-789). */
-  areas: Area[];
   projects: Project[];
   threads: Thread[];
   runs: AgentRun[];
@@ -120,8 +118,6 @@ export const ids = {
   physics: uuid(123),
   essay: uuid(124),
   names: uuid(125),
-  areaLaunch: uuid(90),
-  areaAcme: uuid(91),
 } as const;
 
 const OPUS = "claude-opus-5-5";
@@ -1264,7 +1260,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     .finish(ago(29), { status: "failed", failure: "setupFailed", message: linksError });
   docsLinks.error = linksError;
 
-  // ---- A client's two repositories, grouped in an area (PLX-789) ---------------------------
+  // ---- A client's two repositories ---------------------------------------------------------
 
   const checkout = thread({
     id: ids.checkout,
@@ -1502,23 +1498,6 @@ export function createFixtures(now = Date.now()): Fixtures {
     started: 60 * 24 * 3,
     updated: 45,
   });
-
-  const areas: Area[] = [
-    {
-      id: ids.areaLaunch,
-      name: "Parallax launch",
-      color: "violet",
-      threads: [ids.tahoe, ids.updater, ids.docsSearch],
-      projects: [ids.projectParallax],
-    },
-    {
-      id: ids.areaAcme,
-      name: "Acme client",
-      color: "orange",
-      threads: [ids.checkout, ids.webhooks, ids.cart],
-      projects: [],
-    },
-  ];
 
   // ---- Questions and the inbox --------------------------------------------------------------
 
@@ -2120,7 +2099,6 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
 
   return {
     repos,
-    areas,
     projects,
     threads,
     runs,

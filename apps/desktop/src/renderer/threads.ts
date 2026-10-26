@@ -5,7 +5,6 @@ import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   AgentBackgroundTask,
   AgentStatus,
-  Area,
   AccountChoice,
   Capabilities,
   AgentRun,
@@ -37,8 +36,6 @@ export interface ThreadsState {
   projects: Project[];
   repos: Repo[];
   threads: Thread[];
-  /** The host's areas (PLX-789), oldest first: hand-picked lists of threads and Projects. */
-  areas: Area[];
   /**
    * By run id: a thread's own title from plxd (0041), or else its run's (`titleOf`). Runs with no
    * thread, such as a Project's, have their run's.
@@ -132,7 +129,6 @@ export const emptyThreads: ThreadsState = {
   projects: [],
   repos: [],
   threads: [],
-  areas: [],
   titles: {},
   runs: {},
   approvals: {},
@@ -168,7 +164,6 @@ export type ThreadsAction =
       projects: Project[];
       repos: Repo[];
       threads: Thread[];
-      areas?: Area[];
       runs: AgentRun[];
       waiting?: RunWaiting[];
     }
@@ -189,7 +184,6 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         projects: action.projects,
         repos: action.repos,
         threads: action.threads,
-        areas: action.areas ?? [],
         titles: withThreadTitles(titlesOf(action.runs), action.threads),
         runs: byId(action.runs),
         approvals: {},
@@ -277,8 +271,6 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
         }
         case "thread.deleted":
           return { ...state, threads: state.threads.filter((t) => t.id !== e.runId) };
-        case "areas.changed":
-          return { ...state, areas: e.areas };
         case "agent.background":
           return {
             ...state,
@@ -718,9 +710,9 @@ export function useThreads(
         return setError(old ? undefined : message.error.message);
       }
       if (message.type === "snapshot") {
-        const { projects, repos, threads, areas, runs, requests, waiting } = message.snapshot;
+        const { projects, repos, threads, runs, requests, waiting } = message.snapshot;
         quiet.clear();
-        dispatch({ type: "snapshot", projects, repos, threads, areas, runs, waiting });
+        dispatch({ type: "snapshot", projects, repos, threads, runs, waiting });
         dispatch({ type: "approvals", events: requests });
         setError(undefined);
         setOutdated(false);
