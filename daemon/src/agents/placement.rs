@@ -37,8 +37,8 @@ use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AccountsDefaultsGetResult, AgentRun, ErrorKind, InboxKind, ProjectId,
-    ProjectPermission, PromptImage, ProviderKind, Role, RunId,
+    AccountChoice, AgentRun, ErrorKind, InboxKind, ProjectId, ProjectPermission, PromptImage,
+    ProviderKind, Role, RunId,
 };
 use parallax_store::LimitSnapshot;
 use serde::{Deserialize, Serialize};
@@ -48,7 +48,6 @@ use super::actor::{Command, session_account};
 use super::convert::{NO_WRITE, RUNNING, STARTING, WAITING};
 use super::worker::StoredKeyAccounts;
 use super::{ask, in_mode, project_mode, store, store_error, wake};
-use crate::routing::Defaults;
 use crate::server::Daemon;
 
 /// How often the dispatcher looks at a queue with children in it when nothing woke it, for limits
@@ -175,22 +174,29 @@ pub(crate) fn decide(
     }
 }
 
-/// The member of a pool with `members` that a new run starts on: the usable one with the most
-/// headroom, the first listed on a tie, or with none usable, the first listed, which then fails
-/// saying why. `None` for a pool with no members.
+/// The member of a pool with `members` that a new run on `model` starts on: the usable one that
+/// serves the model with the most headroom, the first listed on a tie. With none that serves it,
+/// any usable one the same way, and with none usable, the first listed, which then fails saying
+/// why. `None` for a pool with no members.
 pub(crate) fn pick_member(
     members: &[String],
+    model: Option<&str>,
     instances: &[Instance],
     now: Timestamp,
 ) -> Option<String> {
+    let usable: Vec<&Instance> = members
+        .iter()
+        .filter_map(|member| instances.iter().find(|i| i.id == *member))
+        .filter(|instance| instance.usable())
+        .collect();
+    let serving: Vec<&Instance> = usable
+        .iter()
+        .copied()
+        .filter(|instance| instance.serves(model))
+        .collect();
+    let candidates = if serving.is_empty() { usable } else { serving };
     let mut best: Option<(&Instance, f64)> = None;
-    for member in members {
-        let Some(instance) = instances.iter().find(|i| i.id == *member) else {
-            continue;
-        };
-        if !instance.usable() {
-            continue;
-        }
+    for instance in candidates {
         let headroom = instance.headroom(now);
         if best.is_none_or(|(_, most)| headroom > most) {
             best = Some((instance, headroom));
@@ -200,11 +206,12 @@ pub(crate) fn pick_member(
         .or_else(|| members.first().cloned())
 }
 
-/// `account` with a pool replaced by the member [`pick_member`] picks; any other account as it
-/// is.
+/// `account` with a pool replaced by the member [`pick_member`] picks for `model`; any other
+/// account as it is.
 pub(super) async fn pool_member(
     daemon: &Arc<Daemon>,
     account: Option<AccountChoice>,
+    model: Option<&str>,
 ) -> Result<Option<AccountChoice>, ErrorObject> {
     let Some(AccountChoice::Subscription { backend }) = &account else {
         return Ok(account);
@@ -213,25 +220,11 @@ pub(super) async fn pool_member(
         return Ok(account);
     };
     let instances = instances(daemon, None).await?;
-    let Some(member) = pick_member(&members, &instances, Timestamp::now()) else {
+    let Some(member) = pick_member(&members, model, &instances, Timestamp::now()) else {
         return Ok(account);
     };
     info!(pool = %backend, %member, "starting a pool's run on its member");
     Ok(Some(AccountChoice::Subscription { backend: member }))
-}
-
-/// A run's `requested` account and the host's `defaults`, each with a pool replaced by its
-/// member, since a pool is never a backend.
-pub(super) async fn pool_members(
-    daemon: &Arc<Daemon>,
-    requested: Option<AccountChoice>,
-    defaults: AccountsDefaultsGetResult,
-) -> Result<(Option<AccountChoice>, Defaults), ErrorObject> {
-    let defaults = Defaults {
-        coordinator: pool_member(daemon, defaults.coordinator).await?,
-        worker: pool_member(daemon, defaults.worker).await?,
-    };
-    Ok((pool_member(daemon, requested).await?, defaults))
 }
 
 /// A waiting child's reason, for people, in `zone`'s time: "Waiting for Claude Code quota,
@@ -638,7 +631,7 @@ mod tests {
     #[test]
     fn a_pool_starts_on_its_usable_member_with_the_most_headroom() {
         let members = ["a".to_owned(), "b".to_owned()];
-        let pick = |instances: &[Instance]| pick_member(&members, instances, now());
+        let pick = |instances: &[Instance]| pick_member(&members, None, instances, now());
         // Neither has used anything: the first listed.
         assert_eq!(pick(&[claude("a"), claude("b")]).as_deref(), Some("a"));
         // The one with more left, whichever window is fuller.
@@ -653,6 +646,16 @@ mod tests {
         let mut off = claude("a");
         off.enabled = false;
         assert_eq!(pick(&[off]).as_deref(), Some("a"));
+        // A member that doesn't serve the model gives way to one that does, though it has less
+        // left, and with none that serves it, the usual choice.
+        let mut other = claude("b");
+        other.models = vec!["opus".to_owned()];
+        let mut serving = used(claude("a"), 60.0, 60);
+        serving.models = vec!["sonnet".to_owned()];
+        let instances = [serving, other];
+        let model = |m| pick_member(&members, Some(m), &instances, now());
+        assert_eq!(model("sonnet").as_deref(), Some("a"));
+        assert_eq!(model("haiku").as_deref(), Some("b"));
     }
 
     #[test]

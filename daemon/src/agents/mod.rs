@@ -95,7 +95,7 @@ use self::worker::{StoredKeyAccounts, sandbox_path, worker_unavailable};
 use crate::backend::{Backend, ToolPolicy, check_argument};
 use crate::context::memory;
 use crate::orchestrator::{self, Lane};
-use crate::routing::{self, BackendRegistry, Resolved, RoutingError};
+use crate::routing::{self, BackendRegistry, Defaults, Resolved, RoutingError};
 use crate::server::Daemon;
 use crate::worktree::{CreatedWorktree, PrError, WorktreeError, WorktreeManager, github_pr_urls};
 
@@ -365,6 +365,8 @@ pub(super) async fn prepare(
     role: Role,
     full_claude: bool,
 ) -> Result<(Prepared, String), ErrorObject> {
+    // A pool is never a backend: a run that still names one starts on a member (PLX-1033).
+    let requested = placement::pool_member(daemon, requested, None).await?;
     prepare_run(daemon, project, run, requested, role, full_claude, false).await
 }
 
@@ -413,9 +415,12 @@ async fn prepare_run(
             ))
         })
         .await?;
-    let (requested, defaults) = placement::pool_members(daemon, requested, defaults).await?;
     let chosen = requested.as_ref().or(defaults.worker.as_ref());
     placement::api_keys(role, project_row.as_ref(), chosen, &mut accounts)?;
+    let defaults = Defaults {
+        coordinator: defaults.coordinator,
+        worker: defaults.worker,
+    };
     let policy = match role {
         Role::Coordinator => ToolPolicy::NoWrite,
         Role::Worker => ToolPolicy::WorkspaceWrite,
@@ -1168,7 +1173,7 @@ pub(crate) async fn create_started(
     let attached = attached::prompt(&daemon, run_id, &threads, &prompt).await?;
     let (sent, seen) = (attached.text, attached.seen);
     // A pool's run starts on its member, which a Project's rules then place (PLX-1033).
-    let mut account = placement::pool_member(&daemon, account).await?;
+    let mut account = placement::pool_member(&daemon, account, options.model.as_deref()).await?;
     // A Project's child goes where its rules say, or waits (0046).
     let requested = account.clone();
     let mut waiting = None;
