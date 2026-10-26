@@ -1653,6 +1653,7 @@ export function ThreadList({
             look={compact ? "compact" : undefined}
             project={p.project}
             runs={p.runs}
+            device={many && p.host.icon ? p.host : undefined}
             at={p.at}
             attention={p.attention}
             selected={p.key === openKey}
@@ -2752,7 +2753,8 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
 /**
  * A Project's card (PLX-1043), shaped like a thread's: its icon, "Project", and how many threads it
  * holds, with its status at the end (what it asks of the user, how many of its runs work, or how
- * long ago it was last active), then its name in bold. Hovering or focusing it shows its actions button, whose menu also opens by
+ * long ago it was last active), then its name in bold, then its branch, its computer, and its
+ * coordinator's provider, in color while it's open. Hovering or focusing it shows its actions button, whose menu also opens by
  * right-clicking the row, or with A: Rename, Change icon, and the rest its plxd allows.
  */
 function ProjectRow({
@@ -2760,6 +2762,7 @@ function ProjectRow({
   look,
   project,
   runs,
+  device,
   at,
   attention,
   selected,
@@ -2776,6 +2779,8 @@ function ProjectRow({
   project: Project;
   /** Its coordinator's and children's runs (0042). */
   runs: readonly AgentRun[];
+  /** Its computer, whose icon shows beside the provider's while there are several (0056). */
+  device?: Host;
   /** When it was last active, for its age. */
   at: string;
   attention: Attention;
@@ -2799,6 +2804,10 @@ function ProjectRow({
     (attention === "settled" ? age(at) : <AttentionBadge attention={attention} count={working} />);
   const icon = <ProjectIcon icon={project.icon} className="size-4 shrink-0" />;
   const oneLine = look === "compact";
+  // Its branch (0045), and its coordinator's provider.
+  const branch = project.integrationBranch ?? project.branch;
+  const coordinator = runs.find((r) => r.id === project.coordinator);
+  const Logo = coordinator?.backend ? backendLogo(coordinator.backend) : undefined;
   const titleColor =
     selected || attention !== "settled"
       ? "text-foreground"
@@ -2845,6 +2854,31 @@ function ProjectRow({
               oneAction
             />
             <RowTitle title={<Marked text={project.name} words={words} />} color={titleColor} />
+            {(branch || device?.icon || Logo) && (
+              <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
+                <span className="flex min-w-0 flex-1 items-center gap-1">
+                  {branch && (
+                    <>
+                      <GitBranch aria-hidden className="size-3 shrink-0" />
+                      <BranchName branch={branch} words={words} />
+                    </>
+                  )}
+                </span>
+                {device?.icon && (
+                  <span
+                    title={device.name}
+                    role="img"
+                    aria-label={device.name}
+                    className="flex shrink-0"
+                  >
+                    <DeviceIcon icon={device.icon} className="size-3.5" />
+                  </span>
+                )}
+                {Logo && (
+                  <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />
+                )}
+              </span>
+            )}
           </>
         )}
       </button>
