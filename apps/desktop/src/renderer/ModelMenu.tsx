@@ -10,6 +10,7 @@ import {
   type Model,
   type Provider,
 } from "./models";
+import { isNew } from "./catalog";
 import { kindOf, logoOf } from "./providers";
 import { menuButton, menuPanel, moveFocus } from "./ui";
 
@@ -344,7 +345,7 @@ export function ModelMenu({
                   >
                     <span className="flex min-w-0 flex-1 items-center gap-2 text-body">
                       <span className="truncate">{m.name}</span>
-                      {m.isNew && (
+                      {isNew(m) && (
                         <span className="rounded-sm border border-accent px-1 text-caption font-semibold text-accent">
                           NEW
                         </span>
