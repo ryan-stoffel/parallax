@@ -60,6 +60,43 @@ fn state() -> RunState {
     }
 }
 
+/// A wake-up or another thread's message moves `last_prompt_at` but not `last_user_prompt_at`,
+/// which the app's Working clock counts from (PLX-1012).
+#[test]
+fn only_the_users_turns_move_last_user_prompt_at() {
+    let (_dir, mut store) = open();
+    let repo = store
+        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
+        .unwrap();
+    let id = Uuid::now_v7();
+    let (thread, _, _) = store
+        .create_thread_run(
+            id,
+            repo.id,
+            &run_fields(repo.id),
+            &state(),
+            None,
+            &ThreadFields::default(),
+        )
+        .unwrap();
+    assert_eq!(thread.last_user_prompt_at, thread.created_at);
+
+    store.record_turn(id, Uuid::now_v7(), "Fix it").unwrap();
+    let prompted = store.get_thread(id).unwrap().unwrap();
+    assert!(prompted.last_user_prompt_at > thread.created_at);
+    assert_eq!(prompted.last_user_prompt_at, prompted.last_prompt_at);
+
+    store
+        .record_turn_from(id, Uuid::now_v7(), "CI failed on your pull request", false)
+        .unwrap();
+    store
+        .record_turn(id, Uuid::now_v7(), "Parallax, not the user: a wake-up")
+        .unwrap();
+    let woken = store.get_thread(id).unwrap().unwrap();
+    assert!(woken.last_prompt_at > prompted.last_prompt_at);
+    assert_eq!(woken.last_user_prompt_at, prompted.last_user_prompt_at);
+}
+
 #[test]
 fn deleting_a_thread_removes_every_row_kept_for_it_and_nothing_else() {
     let (_dir, mut store) = open();

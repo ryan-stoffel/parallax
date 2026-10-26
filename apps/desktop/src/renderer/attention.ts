@@ -80,6 +80,9 @@ export const snoozed = (thread: Thread, attention: Attention, now = Date.now()) 
 /** When a thread's newest message was sent, for the sidebar's order. */
 export const lastPrompt = (thread: Thread) => thread.lastPromptAt ?? thread.createdAt;
 
+/** When the user last sent a thread a message, for Working's clock: wake-ups don't reset it (PLX-1012). */
+export const lastUserPrompt = (thread: Thread) => thread.lastUserPromptAt ?? lastPrompt(thread);
+
 /** A repo's default icon: the first letters of its name's first two words, or its first two. */
 export function initials(name: string): string {
   const words = name.split(/[^\p{L}\p{N}]+/u).filter(Boolean);

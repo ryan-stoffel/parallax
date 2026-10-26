@@ -94,6 +94,12 @@ pub struct Thread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub last_prompt_at: Option<Timestamp>,
+    /// When the user last sent it a message: its newest turn the user wrote, or its creation
+    /// (PLX-1012). Wake-ups and other threads' messages don't move it, so the app's Working clock
+    /// spans them. Absent from an older plxd.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub last_user_prompt_at: Option<Timestamp>,
     /// The run that launched it (0041), from `thread/start`'s `parent`. Absent for a thread the
     /// user started, and once the parent is deleted.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -121,6 +121,7 @@ pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, Error
         seen_at: row.seen_at,
         snoozed_until: row.snoozed_until,
         last_prompt_at: Some(row.last_prompt_at),
+        last_user_prompt_at: Some(row.last_user_prompt_at),
         parent: row.parent.map(run).transpose()?,
         forked_from,
         title: row.fields.title.clone(),

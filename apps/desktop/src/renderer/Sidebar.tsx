@@ -101,6 +101,7 @@ import {
   attentionOf,
   initials,
   lastPrompt,
+  lastUserPrompt,
   mostUrgent,
   projectAttention,
   snoozeChoices,
@@ -2970,7 +2971,7 @@ function ThreadRow({
         age(lastPrompt(thread))
       )
     ) : (
-      <AttentionBadge attention={attention} since={lastPrompt(thread)} />
+      <AttentionBadge attention={attention} since={lastUserPrompt(thread)} />
     ));
   const titleColor =
     selected || attention !== "settled"
