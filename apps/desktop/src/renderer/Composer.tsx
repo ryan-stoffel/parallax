@@ -1790,7 +1790,9 @@ export function Composer({
             addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
           }
         }}
-        onFocus={() => setFocused(true)}
+        // Only the text's focus brings a stepped-back box back, so Attach and Stop, which a press
+        // focuses, take their click where they are.
+        onFocus={(e) => textArea.current?.contains(e.target) && setFocused(true)}
         onBlur={(e) => {
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
@@ -2017,7 +2019,7 @@ export function Composer({
       </form>
       {back && pickers ? (
         // A thin tray tucked under the stepped-back line, in place of any tab, as low as it can be.
-        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button]:py-0.5">
+        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
           {pickers}
         </div>
       ) : (

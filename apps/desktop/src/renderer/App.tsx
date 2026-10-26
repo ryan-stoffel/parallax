@@ -1615,15 +1615,17 @@ export function App() {
                   }
                   git={
                     selection.kind === "thread" ||
+                    agent ||
                     (selection.kind === "new" && !repoless(group) && !group.space)
                       ? {
                           hostId: host.id,
-                          run: threadRun,
+                          // A Project's child thread has one too, as its composer's tab had.
+                          run: threadRun ?? agent,
                           repo: selection.kind === "new" ? (group.id as RepoId) : undefined,
                           title:
                             selection.kind === "thread"
                               ? threads.state.titles[selection.threadId]
-                              : undefined,
+                              : agentTitle,
                           onPrOpened: linksPrs ? openPr : undefined,
                           onSetUpGithub: setUpGithub,
                           onChanges: () => {

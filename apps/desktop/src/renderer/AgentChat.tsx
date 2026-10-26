@@ -1133,7 +1133,10 @@ export function TranscriptView({
   onEdit?: { key: string; edit: () => void };
   /** Offers Cite over agent text the user selects, which hands it here with their comment. */
   onCite?: (citation: Citation) => void;
-  /** Told whether it's scrolled up from the end, and `false` as it unmounts. */
+  /**
+   * Told whether it's scrolled well up from the end, and `false` as it unmounts. It turns on past
+   * `awayGap` and off at the end, so a composer that shrinks for it can't flip it back.
+   */
   onScrolledUp?: (up: boolean) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1240,10 +1243,11 @@ export function TranscriptView({
   const total = virtualizer.getTotalSize();
   // Whether it's scrolled up from the end, which offers Scroll to end.
   const [scrolledUp, setScrolledUp] = useState(false);
+  const [away, setAway] = useState(false);
   useEffect(() => {
-    onScrolledUp?.(scrolledUp);
+    onScrolledUp?.(away);
     return () => onScrolledUp?.(false);
-  }, [scrolledUp, onScrolledUp]);
+  }, [away, onScrolledUp]);
   // The user's prompts, for the rail, and which one is being read.
   const prompts = useMemo(() => promptsOf(view, sent), [view, sent]);
   const [reading, setReading] = useState(-1);
@@ -1284,6 +1288,7 @@ export function TranscriptView({
     ending.current = true;
     scrolled(false);
     setScrolledUp(false);
+    setAway(false);
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
   const jump = (prompt: Prompt) => {
@@ -1320,13 +1325,14 @@ export function TranscriptView({
           aria-label="Transcript"
           onScroll={(e) => {
             const el = e.currentTarget;
-            atBottom.current = follows(
-              el.scrollHeight - el.scrollTop - el.clientHeight,
-              way.current,
-            );
+            const gap = el.scrollHeight - el.scrollTop - el.clientHeight;
+            atBottom.current = follows(gap, way.current);
             if (atBottom.current) ending.current = false;
             // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
-            if (!ending.current) setScrolledUp(!atBottom.current);
+            if (!ending.current) {
+              setScrolledUp(!atBottom.current);
+              if (atBottom.current || gap > awayGap) setAway(!atBottom.current);
+            }
             if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
             follow();
           }}
@@ -1401,6 +1407,10 @@ export function TranscriptView({
   );
   return <FileRunContext value={fileRun}>{transcript}</FileRunContext>;
 }
+
+// How far up from the end, in pixels, the transcript tells `onScrolledUp`: past what a composer
+// that shrinks for it gives back, so the shrink can't bring the end into reach.
+const awayGap = 160;
 
 // Rows of the agent's work, which sit closer to one another and to the messages around them, as
 // T3 Code's work log does (PLX-584, PLX-770).

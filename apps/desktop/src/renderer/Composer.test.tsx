@@ -489,6 +489,9 @@ test("scrolled up from the end, an empty box steps back until it's focused or ho
   const { box, type, rerender } = render(async () => undefined, caps, { away: true });
   const form = () => box.closest("form")!;
   expect(form().dataset["back"]).toBe("true");
+  // A press on Attach focuses it, which leaves the box stepped back so the click lands.
+  act(() => document.querySelector<HTMLButtonElement>('[aria-label="Attach files"]')!.focus());
+  expect(form().dataset["back"]).toBe("true");
   act(() => box.focus());
   expect(form().dataset["back"]).toBeUndefined();
   type("Draft");
