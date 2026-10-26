@@ -1180,7 +1180,10 @@ export function TranscriptView({
   const titles = links?.state.titles;
   const hostId = links?.hostId;
   const fileRun = useMemo(() => (hostId && runId ? { hostId, runId } : undefined), [hostId, runId]);
+  // Whether the list follows new output, which `follows` decides as it scrolls.
   const atBottom = useRef(true);
+  // The way the user last scrolled by wheel or key (PLX-1031).
+  const way = useRef<"up" | "down">(undefined);
   // Whether Scroll to end's smooth scroll is on its way down.
   const ending = useRef(false);
   // Which tool calls and thoughts are expanded, kept here since rows unmount off screen.
@@ -1305,6 +1308,7 @@ export function TranscriptView({
     const el = scrollRef.current;
     if (!el) return;
     ending.current = true;
+    way.current = "down";
     setScrolledUp(false);
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
@@ -1342,17 +1346,33 @@ export function TranscriptView({
           aria-label="Transcript"
           onScroll={(e) => {
             const el = e.currentTarget;
-            atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+            atBottom.current = follows(
+              el.scrollHeight - el.scrollTop - el.clientHeight,
+              way.current,
+            );
             if (atBottom.current) ending.current = false;
             // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
             if (!ending.current) setScrolledUp(!atBottom.current);
             if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
             follow();
           }}
-          // Scrolling by hand cuts Scroll to end's scroll short.
-          onWheel={() => (ending.current = false)}
+          // Scrolling by hand cuts Scroll to end's scroll short. Scrolling up stops following at
+          // once, before the scroll lands, so an update in between can't pull the list back down.
+          onWheel={(e) => {
+            ending.current = false;
+            if (e.deltaY !== 0) way.current = e.deltaY < 0 ? "up" : "down";
+            if (e.deltaY < 0) atBottom.current = false;
+          }}
           onPointerDown={() => (ending.current = false)}
-          onKeyDown={() => (ending.current = false)}
+          onKeyDown={(e) => {
+            ending.current = false;
+            // Space pages down, and up with Shift.
+            const key = e.key === " " ? (e.shiftKey ? "PageUp" : "PageDown") : e.key;
+            if (upKeys.has(key)) {
+              way.current = "up";
+              atBottom.current = false;
+            } else if (downKeys.has(key)) way.current = "down";
+          }}
           className="min-h-0 flex-1 overflow-y-auto select-text"
         >
           <div className="relative w-full" style={{ height: total }}>
@@ -1409,6 +1429,20 @@ export function TranscriptView({
 // Rows of the agent's work, which sit closer to one another and to the messages around them, as
 // T3 Code's work log does (PLX-584, PLX-770).
 const listKinds = new Set(["work", "plan", "todo", "musing", "compaction", "epoch"]);
+
+// The keys that scroll the transcript up, and down.
+const upKeys = new Set(["ArrowUp", "PageUp", "Home"]);
+const downKeys = new Set(["ArrowDown", "PageDown", "End"]);
+
+/**
+ * Whether the transcript follows new output, from its distance to the end (`gap`) and the way the
+ * user last scrolled by wheel or key (PLX-1031). Once they scroll up it doesn't, however near the
+ * end, until they scroll back down near it or reach the end itself. Scrolls the user didn't make,
+ * such as the list keeping rows in place as they're measured, don't change their way.
+ */
+function follows(gap: number, way: "up" | "down" | undefined) {
+  return gap < 1 || (gap < 48 && way !== "up");
+}
 
 /**
  * The user's prompts among `view`'s rows, for the rail: a follow-up's text from `sent` when the
