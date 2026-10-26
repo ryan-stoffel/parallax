@@ -3,16 +3,16 @@
 //! `run_scheduled_task_now` through `schedule/*`, and `link_pull_request`,
 //! `unlink_pull_request`, `watch_pull_request`, `unwatch_pull_request`, and
 //! `list_thread_pull_requests` through `pr/*`, and Parallax's own `pull_request_status`
-//! (PLX-837). Every caller gets them, and [`INSTRUCTIONS`], which tell the agent to use them
-//! instead of `gh`.
+//! (PLX-837) and `ci_failure_log` (PLX-1019). Every caller gets them, and [`INSTRUCTIONS`], which
+//! tell the agent to use them instead of `gh`.
 
 use parallax_protocol::methods::{
-    PrLink, PrStatus, PrUnlink, PrUnwatch, PrWatch, PrWatches, ScheduleDelete, ScheduleList,
-    ScheduleRun, ScheduleSave, ThreadList,
+    PrFailureLog, PrLink, PrStatus, PrUnlink, PrUnwatch, PrWatch, PrWatches, ScheduleDelete,
+    ScheduleList, ScheduleRun, ScheduleSave, ThreadList,
 };
 use parallax_protocol::{
-    AccountChoice, AgentRun, PrViewParams, PrWatchesParams, RunId, Schedule, ScheduleIdParams,
-    ScheduleListParams, ScheduleSaveParams, ScheduledTask, ThreadListParams,
+    AccountChoice, AgentRun, PrFailureLogParams, PrViewParams, PrWatchesParams, RunId, Schedule,
+    ScheduleIdParams, ScheduleListParams, ScheduleSaveParams, ScheduledTask, ThreadListParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -34,12 +34,13 @@ pub const TOOLS: &[&str] = &[
     "unwatch_pull_request",
     "list_thread_pull_requests",
     "pull_request_status",
+    "ci_failure_log",
 ];
 
 /// What every thread's agent is told at startup, through MCP's `instructions`, as T3 Code's
 /// runtime instructions tell it (PLX-837): without it, each agent reads and waits on its pull
 /// requests its own way, with `gh` loops, sleeps, and watchers that spend the shared GitHub quota.
-pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's checks, reviews, unresolved review threads, conflicts, and whether it is ready to merge with pull_request_status, not gh. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Use gh only for what these tools don't do, such as reading a failed job's log, replying to or resolving a review thread, and merging.";
+pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's checks, reviews, unresolved review threads, conflicts, and whether it is ready to merge with pull_request_status, not gh. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Read why a check failed with ci_failure_log, not gh run list, gh run view --log-failed, or gh api: it returns each failed job's error lines and reads each log from GitHub once. Use gh only for what these tools don't do, such as replying to or resolving a review thread, and merging.";
 
 /// What `link_pull_request` and `list_thread_pull_requests` remind the agent of, as T3's do.
 const REGISTER: &str = "Register every pull request you open for this thread, including each layer of a stack, right after creating it.";
@@ -182,6 +183,21 @@ pub fn definitions() -> Vec<Value> {
             target(),
             true,
         ),
+        tool(
+            "ci_failure_log",
+            "Read why a pull request's checks failed: for each failed check on its head commit, its name, how it failed, its workflow run and job ids, its link, and its log cut to the lines around errors, failures, and panics. Use this instead of gh run list, gh run view --log-failed, or gh api for a job's log: Parallax reads each job's log from GitHub once per head commit and keeps it, so call it again freely. Pass check to read only the failed checks whose name contains it. A spent GitHub rate limit is an error saying when it resets; don't retry with gh before then.",
+            object(
+                json!({
+                    "url": {"type": "string", "description": "The pull request's URL, such as https://github.com/owner/repo/pull/123. Preferred when you have it."},
+                    "repository": {"type": "string", "description": "owner/repo. With number, when url is omitted."},
+                    "number": {"type": "integer", "minimum": 1, "description": "The pull request's number. With repository, when url is omitted."},
+                    "host": {"type": "string", "description": "github.com, the only host Parallax reads."},
+                    "check": {"type": "string", "description": "Only failed checks whose name contains this, ignoring case. Omit for all."},
+                }),
+                &[],
+            ),
+            true,
+        ),
     ]
 }
 
@@ -285,6 +301,17 @@ pub(super) async fn call(
         "list_thread_pull_requests" => {
             let ThreadArgs { thread_id } = parse(arguments)?;
             pull_requests(binding, thread_id.unwrap_or(binding.run)).await
+        }
+        "ci_failure_log" => {
+            // `check`, then the rest as any pull request tool's target.
+            let mut arguments = arguments;
+            let check = arguments
+                .as_object_mut()
+                .and_then(|args| args.remove("check"));
+            let check = check.map(parse::<String>).transpose()?;
+            let url = target_url(parse(arguments)?)?;
+            let params = PrFailureLogParams { url, check };
+            Ok(pretty(&plxd.call::<PrFailureLog>(params).await?))
         }
         _ => pull_request(binding, name, parse(arguments)?).await,
     }

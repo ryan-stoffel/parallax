@@ -823,6 +823,12 @@ export type ParallaxRequests = {
 	 */
 	"pr/status": { params: PrViewParams, result: PrStatusResult },
 	/**
+	 * `pr/failureLog` (PLX-1019): the error lines of each failed check's log on a GitHub
+	 * pull request's head, each log read from GitHub once per head and job. Gated on
+	 * `prWatch`.
+	 */
+	"pr/failureLog": { params: PrFailureLogParams, result: PrFailureLogResult },
+	/**
 	 * `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
 	 * declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
 	 * `setupScripts` capability, like `repo/saveScripts`.
@@ -1094,6 +1100,7 @@ export const REQUEST_METHODS = [
 	"pr/unwatch",
 	"pr/watches",
 	"pr/status",
+	"pr/failureLog",
 	"repo/scripts",
 	"repo/saveScripts",
 	"task/delegate",
@@ -9241,6 +9248,70 @@ export type PrStatusThread = {
 	 * The comment on GitHub.
 	 */
 	url?: string,
+};
+
+/**
+ * Params of `pr/failureLog` (PLX-1019).
+ */
+export type PrFailureLogParams = {
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+	/**
+	 * Only the failed checks whose name contains this, ignoring case.
+	 */
+	check?: string,
+};
+
+/**
+ * Result of `pr/failureLog`: the failed checks on a pull request's head, each with its log's
+ * error lines.
+ */
+export type PrFailureLogResult = {
+	/**
+	 * The pull request's URL.
+	 */
+	url: string,
+	/**
+	 * The head commit.
+	 */
+	headSha?: string,
+	/**
+	 * Its failed checks, by name. Empty when none failed.
+	 */
+	failures: Array<PrFailureLog>,
+};
+
+/**
+ * A failed check in a [`PrFailureLogResult`].
+ */
+export type PrFailureLog = {
+	/**
+	 * The check's name.
+	 */
+	name: string,
+	/**
+	 * How it failed, in lowercase: `failure`, `cancelled`, `timed out`, and so on.
+	 */
+	how: string,
+	/**
+	 * Its GitHub Actions workflow run, when it is an Actions job.
+	 */
+	workflowRunId?: number,
+	/**
+	 * Its GitHub Actions job, when it is one.
+	 */
+	jobId?: number,
+	/**
+	 * Its log or details page.
+	 */
+	url?: string,
+	/**
+	 * The log's lines around errors, failures, and panics, at most 8 KiB. Says why instead when
+	 * there is no log, such as for a check that isn't an Actions job.
+	 */
+	log: string,
 };
 
 /**

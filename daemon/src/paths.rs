@@ -19,6 +19,8 @@
 //! - `tools/`: CLIs plxd installs itself: `gh` (`tools/gh/`, PLX-423), and on Linux the `bwrap`
 //!   and `socat` a release plxd carries (`tools/sandbox/`, PLX-895). See [`DataDir::tools_dir`].
 //! - `logs/plxd.log`: the log.
+//! - `ci-logs/`: failed CI jobs' log excerpts, one file per head commit and job (PLX-1019). See
+//!   [`DataDir::ci_logs_dir`].
 //!
 //! One folder is outside it: `/tmp/parallax-<hash>/`, which holds each worker run's own temp folder
 //! (PLX-130). See [`DataDir::run_temp_roots`].
@@ -218,6 +220,13 @@ impl DataDir {
     #[must_use]
     pub fn uploads_dir(&self) -> PathBuf {
         self.root.join(UPLOADS_DIR)
+    }
+
+    /// `ci-logs/`: `pr/failureLog`'s cache (PLX-1019), `<head sha>/<job id>.log`, each the
+    /// trimmed log of a failed CI job.
+    #[must_use]
+    pub fn ci_logs_dir(&self) -> PathBuf {
+        self.root.join("ci-logs")
     }
 
     /// The folder holding every project's shared context (0005, #155): `context/` in the data

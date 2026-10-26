@@ -229,7 +229,8 @@ pub(crate) fn initialize(
 /// `relay` (PLX-652, 0068): `relay` in `host/settings`, `relay/register`, `relay/hosts`,
 /// `relay/remove`, and `relay` in `remote/sessions`.
 /// `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener serves.
-/// `prWatch` (0063): `pr/watch`, `pr/unwatch`, `pr/watches`, and `pr/status` (PLX-837).
+/// `prWatch` (0063): `pr/watch`, `pr/unwatch`, `pr/watches`, `pr/status` (PLX-837), and
+/// `pr/failureLog` (PLX-1019).
 /// `setupScripts` (PLX-650): `repo/scripts`, `repo/saveScripts`, and the `thread.script` event.
 /// `fileUploads` (PLX-779, 0071): `host/upload`, which saves a file attached to a message on the
 /// host for the agent to read, and `host/readUpload`, which reads it back for the transcript.
