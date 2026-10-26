@@ -3126,8 +3126,8 @@ function ThreadRow({
                 <DeviceIcon icon={device.icon} className="size-3.5" />
               </span>
             )}
-            {/* In its own colors, as the agent's identity, as the composer shows it. */}
-            {Logo && <Logo className="size-3.5 shrink-0" />}
+            {/* Gray and faint, so a list of rows isn't striped with providers' colors. */}
+            {Logo && <Logo className="size-3 shrink-0 opacity-50 grayscale" />}
           </span>
         )}
         {snippet && (

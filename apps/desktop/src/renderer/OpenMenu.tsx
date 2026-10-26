@@ -2,11 +2,11 @@ import { Check, ChevronDown, FolderOpen, SquareTerminal } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { OpenTarget, TerminalApp } from "../preload/bridge";
-import cursorIcon from "./assets/cursor.svg";
 import vscodeIcon from "./assets/vscode.svg";
 import ghosttyIcon from "./assets/ghostty.svg";
 import alacrittyIcon from "./assets/alacritty.svg";
 import { useShortcutLabel } from "./keybindings";
+import { CursorLogo } from "./logos";
 import { appShortcut, Menu, menuItem, splitChevron } from "./ui";
 
 /** Where the last target chosen is kept; Settings > General sets it too. */
@@ -16,7 +16,8 @@ export const TERMINAL_CHOSEN = "parallax:terminalChosen";
 
 // Supplied editor artwork, with fallback marks for native file managers and terminals.
 const marks: Record<OpenTarget, ReactNode> = {
-  cursor: <img src={cursorIcon} alt="" className="size-4 shrink-0" />,
+  // In the text's color, so its black artwork doesn't vanish on a dark theme.
+  cursor: <CursorLogo className="size-4 shrink-0" />,
   vscode: <img src={vscodeIcon} alt="" className="size-4 shrink-0" />,
   files: <FolderOpen />,
   terminal: <SquareTerminal />,

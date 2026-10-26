@@ -322,7 +322,7 @@ function contextComponents(files: ContextFile[], onOpen: (path: string) => void)
   };
 }
 
-const inlineIcon = "mr-1 inline size-3.5 align-[-0.15em]";
+const inlineIcon = "mr-1.5 inline size-3.5 align-[-0.15em]";
 
 /** A task's checkbox as an open or a check circle. */
 const taskIcon: Components["input"] = ({ type, checked }) =>

@@ -2487,8 +2487,9 @@ const markdownStyle: MarkdownStyle = (() => {
       fontSize: 12,
       // The text's color, so code that's a link's text is the link's.
       color: "inherit",
-      backgroundColor: "var(--code)",
-      borderColor: "var(--border)",
+      // A light fill with no border, as .markdown's inline code.
+      backgroundColor: "color-mix(in oklab, var(--foreground) 7%, transparent)",
+      borderColor: "transparent",
     },
     codeBlock: {
       ...body,

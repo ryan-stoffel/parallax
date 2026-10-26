@@ -85,61 +85,66 @@ export function MiniPrompt({
   };
 
   return (
-    // A fade over its top edge, so what scrolls under the box goes soft rather than cut.
+    // In a narrow panel, a rule over it ends the list it sits under, so no row is cut by the box.
     <div
-      className={`relative before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-pane before:to-transparent ${large ? "mx-auto w-full max-w-2xl px-6 pb-6" : "px-3 pb-3"}`}
+      className={
+        large ? "mx-auto w-full max-w-2xl px-6 pb-6" : "border-t border-border px-3 pt-3 pb-3"
+      }
     >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send();
-        }}
-        className={`relative z-10 flex items-end gap-2 border border-border bg-surface shadow-composer transition-colors focus-within:border-foreground/20 ${large ? "rounded-xl py-2.5 pr-2.5 pl-5" : "rounded-xl py-1.5 pr-1.5 pl-3.5"}`}
-      >
-        <textarea
-          ref={box}
-          aria-label="Change knowledge"
-          placeholder={
-            coordinator
-              ? large
-                ? "Tell the Project what changed, what to remember, or what to forget"
-                : "Change what it knows, in plain words"
-              : "Start the coordinator to change what it knows"
-          }
-          rows={large ? 2 : 1}
-          value={text}
-          disabled={off || busy}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
-            // Settings > General's send shortcut: Cmd/Ctrl+Enter sends, and Enter is a new line.
-            if (behaviorPrefs.get().sendKey === "modEnter" && !(e.metaKey || e.ctrlKey)) return;
+      {/* The box and its tray cast one shadow. */}
+      <div className="rounded-xl shadow-composer">
+        <form
+          onSubmit={(e) => {
             e.preventDefault();
             void send();
           }}
-          className={`field-sizing-content max-h-40 min-w-0 flex-1 resize-none bg-transparent placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-60 ${large ? "py-1.5 text-reading leading-relaxed" : "py-1 text-body leading-snug"}`}
-        />
-        <button
-          type="submit"
-          aria-label="Send"
-          disabled={!canSend}
-          className={`send-sky grid shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground ${large ? "size-9" : "size-7"}`}
+          className={`relative z-10 flex items-end gap-2 border border-border bg-surface transition-colors focus-within:border-foreground/20 ${large ? "rounded-xl py-2.5 pr-2.5 pl-5" : "rounded-xl py-1.5 pr-1.5 pl-3.5"}`}
         >
-          {busy ? (
-            <LoaderCircle className="size-3.5 animate-spin" />
-          ) : (
-            <ArrowUp className={large ? "size-4" : "size-3.5"} />
-          )}
-        </button>
-      </form>
-      {model && (
-        // Tucked under the box, as the composer's tab is.
-        <div
-          className={`tucked -mt-4 flex items-center rounded-b-xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-3 px-1"}`}
-        >
-          <ModelPick providers={providers} models={offered} value={model} onChange={setPicked} />
-        </div>
-      )}
+          <textarea
+            ref={box}
+            aria-label="Change knowledge"
+            placeholder={
+              coordinator
+                ? large
+                  ? "Tell the Project what changed, what to remember, or what to forget"
+                  : "Change what it knows, in plain words"
+                : "Start the coordinator to change what it knows"
+            }
+            rows={large ? 2 : 1}
+            value={text}
+            disabled={off || busy}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+              // Settings > General's send shortcut: Cmd/Ctrl+Enter sends, and Enter is a new line.
+              if (behaviorPrefs.get().sendKey === "modEnter" && !(e.metaKey || e.ctrlKey)) return;
+              e.preventDefault();
+              void send();
+            }}
+            className={`field-sizing-content max-h-40 min-w-0 flex-1 resize-none bg-transparent placeholder:text-faint-foreground focus-visible:outline-none disabled:opacity-60 ${large ? "py-1.5 text-reading leading-relaxed" : "py-1 text-body leading-snug"}`}
+          />
+          <button
+            type="submit"
+            aria-label="Send"
+            disabled={!canSend}
+            className={`send-sky grid shrink-0 place-items-center rounded-full bg-send text-send-foreground disabled:bg-selected disabled:text-faint-foreground ${large ? "size-9" : "size-7"}`}
+          >
+            {busy ? (
+              <LoaderCircle className="size-3.5 animate-spin" />
+            ) : (
+              <ArrowUp className={large ? "size-4" : "size-3.5"} />
+            )}
+          </button>
+        </form>
+        {model && (
+          // Attached under the box, as the composer's tab is.
+          <div
+            className={`composer-tray flex items-center rounded-b-xl border border-t-0 border-border bg-tray py-0.5 ${large ? "px-2" : "px-1"}`}
+          >
+            <ModelPick providers={providers} models={offered} value={model} onChange={setPicked} />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -105,7 +105,7 @@ export function Switch({
         e.stopPropagation();
         onChange(!checked);
       }}
-      className="relative h-5 w-9 shrink-0 rounded-full bg-faint-foreground transition-colors outline-offset-2 aria-checked:bg-accent disabled:opacity-50"
+      className="relative h-5 w-9 shrink-0 rounded-full bg-foreground/20 transition-colors outline-offset-2 aria-checked:bg-send disabled:opacity-50"
     >
       <span
         aria-hidden

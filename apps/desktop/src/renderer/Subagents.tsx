@@ -182,13 +182,19 @@ export function SubagentCard({
         </span>
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="text-body font-medium text-foreground">{subs.length} subagents</span>
-          <span className="truncate text-meta text-faint-foreground">
-            {counts.map(({ state, n }, i) => (
-              <span key={state} className={state === "running" ? "text-working" : undefined}>
-                {i > 0 && ", "}
-                {n} {subagentLabels[state].toLowerCase()}
-              </span>
-            ))}
+          {/* Gray words, with a blue dot before what's working: blue text reads as a link. */}
+          <span className="flex min-w-0 items-center gap-1.5 truncate text-meta text-faint-foreground">
+            {states.includes("running") && (
+              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-working" />
+            )}
+            <span className="truncate">
+              {counts.map(({ state, n }, i) => (
+                <span key={state}>
+                  {i > 0 && ", "}
+                  {n} {subagentLabels[state].toLowerCase()}
+                </span>
+              ))}
+            </span>
           </span>
         </span>
         {since && states.includes("running") ? (

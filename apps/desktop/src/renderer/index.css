@@ -151,7 +151,7 @@
   --ring: var(--accent);
   --danger: #d4330f;
   /* The semantic amber, for marks and icons beside a label (--danger is the red). */
-  --warning: #b45309;
+  --warning: #a16207;
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
   --added: #15803d;
   /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
@@ -163,12 +163,11 @@
   --syntax-type: #be185d;
   --syntax-comment: #6b6b6b;
   --working: var(--accent);
-  /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
-     each mixed into the surface so they stay opaque. Both modes compute from their own surface,
-     which leaves the neutral lighter than the tint in light and darker in dark, apart in both. */
+  /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a lighter tint of it, then a
+     neutral, each opaque. Dark mode sets its own tint and neutral. */
   --chart-1: var(--accent);
   --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
-  --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
+  --chart-3: color-mix(in oklab, var(--foreground) 26%, var(--surface));
   --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 18%);
   /* A Project icon's colors (projectIcons.ts), by the key plxd keeps. Each keeps at least 3:1
      on the sidebar, the dialogs, and a selected row, in both themes. */
@@ -219,6 +218,10 @@
   --syntax-type: #f9a8d4;
   --syntax-comment: #8a8a8a;
   --shadow-composer: 0 14px 36px -18px rgb(0 0 0 / 80%);
+  /* The chart's tint goes toward white here, so it stays lighter than the accent, as in light
+     mode, and its neutral a step brighter to read on the dark card. */
+  --chart-2: color-mix(in oklab, var(--accent) 55%, white);
+  --chart-3: color-mix(in oklab, var(--foreground) 30%, var(--surface));
   --project-red: #f87171;
   --project-orange: #fb923c;
   --project-yellow: #facc15;
@@ -477,6 +480,7 @@ svg.lucide[stroke-width="2"] * {
   --color-pane: var(--pane);
   --color-pane-sidebar: var(--pane-sidebar);
   --color-surface: var(--surface);
+  --color-tray: var(--tray);
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted-foreground);
   --color-faint-foreground: var(--faint-foreground);
@@ -587,10 +591,19 @@ body {
   background-color: color-mix(in srgb, var(--surface) 82%, transparent);
   backdrop-filter: var(--glass);
 }
-/* A tray tucked 1rem under a prompt box (.tucked, -mt-4) would show its top through the box's
-   glass: its side borders and a second layer of fill. Through glass it starts where the box ends. */
-:root.translucent .tucked {
-  mask-image: linear-gradient(transparent 1rem, #000 1rem);
+/* A prompt box's attached pieces: the tabs over it (.composer-tabs) and the tray under it
+   (.composer-tray) share its width and border, so the three read as one box, the pieces a step
+   recessed from the box's own fill. The box squares its corners where a piece attaches. */
+:root {
+  --tray: color-mix(in oklab, var(--foreground) 3%, var(--background));
+}
+.composer-tabs + .composer > form {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+form:has(+ .composer-tray) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 /* A nightly's sky fades into the glass rather than into the sidebar's solid color. */
 :root.nightly.translucent .night-sky-host {
@@ -775,14 +788,13 @@ body {
   padding-left: 0.9em;
   color: var(--muted-foreground);
 }
+/* Inline code: a light fill, no border, a little under the text's size so it keeps the line. */
 .markdown :not(pre) > code {
-  border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--code);
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
   padding: 0.1em 0.35em;
   font-family: var(--font-mono);
-  /* --text-body, wherever it sits. */
-  font-size: 13px;
+  font-size: 0.88em;
 }
 /* A table scrolls on its own, in a rounded box, with its header on a fill. */
 .markdown table {
@@ -831,6 +843,10 @@ body {
 }
 .enriched > * + * {
   margin-top: 10px;
+}
+/* Its first block sits at the top, without the margin a heading carries. */
+.enriched .enrm-text > :first-child {
+  margin-top: 0 !important;
 }
 /* Bold at the scale's heaviest weight (0085), over the renderer's inline 700. */
 .enriched :is(strong, b) {
@@ -1067,7 +1083,7 @@ body {
   color: var(--foreground);
 }
 .context-board .markdown .board-section {
-  margin: 1.6em 0.25em 0.6em;
+  margin: 1.6em 0 0.6em;
   font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.08em;
@@ -1076,6 +1092,12 @@ body {
 }
 .context-board .markdown li + li {
   margin-top: 0.6em;
+}
+/* A task's wrapped lines start under its text, not its circle (ContextPanel's taskIcon, 14px and
+   a 6px gap). */
+.context-board .markdown .task-list-item {
+  padding-left: 20px;
+  text-indent: -20px;
 }
 .context-board .markdown strong {
   font-weight: 600;

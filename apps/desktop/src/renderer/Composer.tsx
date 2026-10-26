@@ -1752,7 +1752,8 @@ export function Composer({
   );
 
   return (
-    <div className="w-full">
+    // The box and its tray cast one shadow.
+    <div className={`composer w-full rounded-xl ${back ? "" : "shadow-composer"}`}>
       <form
         ref={box}
         onSubmit={(e) => {
@@ -1797,7 +1798,7 @@ export function Composer({
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
         data-back={back || undefined}
-        className={`relative z-10 rounded-xl border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_7%,var(--background))] hover:bg-[color-mix(in_oklab,var(--foreground)_10%,var(--background))]" : "bg-surface shadow-composer"}`}
+        className={`relative z-10 rounded-xl border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_7%,var(--background))] hover:bg-[color-mix(in_oklab,var(--foreground)_10%,var(--background))]" : "bg-surface"}`}
       >
         {menuOpen && (
           <div
@@ -1997,7 +1998,7 @@ export function Composer({
               aria-label={stopping ? "Stopping" : "Stop"}
               disabled={stopping}
               onClick={() => void stop()}
-              className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground enabled:hover:opacity-85 disabled:opacity-50"
+              className="grid size-9 place-items-center rounded-full bg-foreground/12 text-foreground enabled:hover:bg-foreground/18 disabled:opacity-50"
             >
               {stopping ? (
                 <LoaderCircle className="size-4 animate-spin" />
@@ -2018,14 +2019,14 @@ export function Composer({
         </div>
       </form>
       {back && pickers ? (
-        // A thin tray tucked under the stepped-back line, in place of any tab, as low as it can be.
-        <div className="tucked mx-3 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+        // A thin tray under the stepped-back line, in place of any tab, as low as it can be.
+        <div className="composer-tray flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-tray px-1.5 py-0.5 [&_button[aria-haspopup]]:py-0.5">
           {pickers}
         </div>
       ) : (
         tab && (
-          // Tucked under the box, so what it shows reads as part of it.
-          <div className="tucked mx-3 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
+          // Attached under the box, so what it shows reads as part of it.
+          <div className="composer-tray flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-tray px-3 py-1.5">
             {tab}
           </div>
         )

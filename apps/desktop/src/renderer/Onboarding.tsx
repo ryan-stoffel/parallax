@@ -109,7 +109,7 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
         if (e.key === "ArrowRight" && slide < tour.length - 1) setSlide(slide + 1);
         if (e.key === "ArrowLeft" && slide > 0) setSlide(slide - 1);
       }}
-      className="m-auto h-[37rem] max-h-[92vh] w-[44rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/40 backdrop:backdrop-blur-sm focus-visible:outline-none"
+      className="m-auto h-[37rem] max-h-[92vh] w-[44rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/30 backdrop:backdrop-blur-sm focus-visible:outline-none"
     >
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between gap-4 px-5 pt-4">
@@ -138,7 +138,7 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
 
         <div key={step} className="onboard-step min-h-0 flex-1 overflow-y-auto px-12 pt-6 pb-4">
           {step === 0 ? (
-            <AccountStep titleId={titleId} profile={profile} onSignedIn={next} />
+            <AccountStep titleId={titleId} profile={profile} onSignedIn={next} onSkip={next} />
           ) : step === 1 ? (
             <AgentsStep titleId={titleId} hostName={host.name} />
           ) : step === 2 ? (
@@ -150,58 +150,50 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
           )}
         </div>
 
-        <footer className="flex items-center justify-between gap-4 border-t border-border px-5 py-3">
-          {step > 0 ? (
-            <button
-              type="button"
-              onClick={() =>
-                step === tourStep && slide > 0 ? setSlide(slide - 1) : setStep(step - 1)
-              }
-              className={quiet}
-            >
-              <ArrowLeft aria-hidden />
-              Back
-            </button>
-          ) : (
-            <span />
-          )}
-          {step === 0 ? (
-            profile ? (
+        {/* The account step, signed out, offers Not now under its own buttons instead. */}
+        {(step > 0 || profile) && (
+          <footer className="flex items-center justify-between gap-4 border-t border-border px-5 py-3">
+            {step > 0 ? (
+              <button
+                type="button"
+                onClick={() =>
+                  step === tourStep && slide > 0 ? setSlide(slide - 1) : setStep(step - 1)
+                }
+                className={quiet}
+              >
+                <ArrowLeft aria-hidden />
+                Back
+              </button>
+            ) : (
+              <span />
+            )}
+            {step < tourStep ? (
               <button type="button" onClick={next} className={bigPrimary}>
                 Continue
                 <ArrowRight aria-hidden />
               </button>
-            ) : (
-              <button type="button" onClick={next} className={quiet}>
-                Not now
-              </button>
-            )
-          ) : step < tourStep ? (
-            <button type="button" onClick={next} className={bigPrimary}>
-              Continue
-              <ArrowRight aria-hidden />
-            </button>
-          ) : step === tourStep ? (
-            <button
-              type="button"
-              onClick={() => (slide < tour.length - 1 ? setSlide(slide + 1) : next())}
-              className={bigPrimary}
-            >
-              {slide < tour.length - 1 ? "Next" : "Continue"}
-              <ArrowRight aria-hidden />
-            </button>
-          ) : (
-            <span className="flex gap-2">
-              <button type="button" onClick={() => finish(false)} className={quiet}>
-                Explore on my own
-              </button>
-              <button type="button" autoFocus onClick={() => finish(true)} className={bigPrimary}>
-                Start a thread
+            ) : step === tourStep ? (
+              <button
+                type="button"
+                onClick={() => (slide < tour.length - 1 ? setSlide(slide + 1) : next())}
+                className={bigPrimary}
+              >
+                {slide < tour.length - 1 ? "Next" : "Continue"}
                 <ArrowRight aria-hidden />
               </button>
-            </span>
-          )}
-        </footer>
+            ) : (
+              <span className="flex gap-2">
+                <button type="button" onClick={() => finish(false)} className={quiet}>
+                  Explore on my own
+                </button>
+                <button type="button" autoFocus onClick={() => finish(true)} className={bigPrimary}>
+                  Start a thread
+                  <ArrowRight aria-hidden />
+                </button>
+              </span>
+            )}
+          </footer>
+        )}
       </div>
     </dialog>
   );
@@ -238,10 +230,13 @@ function AccountStep({
   titleId,
   profile,
   onSignedIn,
+  onSkip,
 }: {
   titleId: string;
   profile: Profile | null | undefined;
   onSignedIn: () => void;
+  /** Goes on without an account. */
+  onSkip: () => void;
 }) {
   const [waiting, setWaiting] = useState(false);
   const [asked, setAsked] = useState(false);
@@ -293,6 +288,13 @@ function AccountStep({
           </button>
           <button type="button" onClick={() => void signIn(false)} className={bigOutline}>
             I already have an account
+          </button>
+          <button
+            type="button"
+            onClick={onSkip}
+            className="mx-auto mt-1 rounded-md px-2 py-1 text-body text-muted-foreground hover:text-foreground"
+          >
+            Not now
           </button>
           <p role="status" className="mt-2 min-h-10 text-body text-muted-foreground">
             {waiting

@@ -101,8 +101,12 @@ const HOUR = 3_600_000;
 /** The chart's fills for its parts, bottom up (index.css). */
 const fills = ["bg-chart-1", "bg-chart-2", "bg-chart-3"];
 const card = "rounded-xl border border-border bg-surface";
-/** A strip of figures in one card, split by hairlines. */
-const strip = "grid gap-px overflow-hidden rounded-xl border border-border bg-border";
+/**
+ * A strip of figures in one card, split by hairlines: the gaps show its fill, the border's color
+ * made opaque over the surface, since a see-through border over black matches a dark surface.
+ */
+const strip =
+  "grid gap-px overflow-hidden rounded-xl border border-border bg-[color-mix(in_oklab,var(--foreground)_10%,var(--surface))]";
 const heading = "mb-2.5 text-body font-medium text-muted-foreground";
 
 /** Counts a request in flight until it settles, so Refresh can show it's working. */

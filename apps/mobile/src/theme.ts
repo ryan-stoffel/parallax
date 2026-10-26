@@ -11,7 +11,7 @@ export const light = {
   selected: "rgba(0, 0, 0, 0.065)",
   accent: "#2b5cff",
   danger: "#d4330f",
-  warning: "#b45309",
+  warning: "#a16207",
   code: "#f7f7f7",
   sidebar: "#f7f7f7",
   hover: "rgba(0, 0, 0, 0.04)",
