@@ -157,10 +157,13 @@ export function CiteSelection({
 
   const rects = picked?.range.getClientRects();
   const end = rects?.[rects.length - 1];
+  // Only while the selection's end is in the transcript's view, not over the composer or top bar.
+  const view = log.current?.getBoundingClientRect();
+  const shown = !!end && !!view && end.bottom > view.top && end.bottom < view.bottom;
   return (
     <>
       {picked &&
-        end &&
+        shown &&
         createPortal(
           <button
             type="button"
