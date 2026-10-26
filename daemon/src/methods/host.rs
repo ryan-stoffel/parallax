@@ -316,7 +316,9 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
 }
 
 /// The capabilities [`capabilities_advertised`] always advertises with no options.
+/// `accountPools` includes pool members and host-expanded, separate account homes (PLX-1033).
 const PLAIN_CAPABILITIES: &[&str] = &[
+    "accountPools",
     "accounts",
     "agentClis",
     "agentReview",

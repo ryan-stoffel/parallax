@@ -53,6 +53,7 @@ const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
 const capabilities: Capabilities = Object.fromEntries(
   [
     "accounts",
+    "accountPools",
     "agentClis",
     "agentReview",
     "agentWait",
@@ -1189,18 +1190,41 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "providers/upgrade": () => ({ version: "0.163.0" }),
   "providers/save": (p) => {
     const i = db.providers.findIndex((x) => x.instance.id === p.instance.id);
-    if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
-    // A new one: OpenCode is on this Mac, the rest aren't.
-    else
-      db.providers.push({
+    const members = p.instance.members;
+    // An account pool (PLX-1033) reports its members' state, as plxd does.
+    const pooled = members && db.providers.filter((x) => members.includes(x.instance.id));
+    if (pooled) {
+      const pool: ProviderInfo = {
         instance: p.instance,
-        installed: p.instance.kind === "opencode",
-        ...(p.instance.kind === "opencode" && { version: "1.4.2" }),
-        models: [],
-        permissions: [],
-        efforts: false,
-        coordinator: false,
-      });
+        installed: pooled.some((x) => x.installed),
+        signedIn: pooled.some((x) => x.signedIn === true) || undefined,
+        models: pooled.flatMap((x) => x.models),
+        permissions: pooled[0]?.permissions ?? [],
+        efforts: pooled[0]?.efforts ?? false,
+        coordinator: pooled[0]?.coordinator ?? false,
+      };
+      if (i >= 0) db.providers[i] = pool;
+      else db.providers.push(pool);
+    } else if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
+    else {
+      // Another account of an agent on this Mac, such as a second Codex with its own home: the
+      // same CLI, signed out until its sign-in.
+      const same = db.providers.find((x) => x.instance.kind === p.instance.kind && x.installed);
+      // A new one: OpenCode is on this Mac, the rest aren't.
+      db.providers.push(
+        same
+          ? { ...same, instance: p.instance, signedIn: false, account: undefined, models: [] }
+          : {
+              instance: p.instance,
+              installed: p.instance.kind === "opencode",
+              ...(p.instance.kind === "opencode" && { version: "1.4.2" }),
+              models: [],
+              permissions: [],
+              efforts: false,
+              coordinator: false,
+            },
+      );
+    }
     return { providers: db.providers, checkedAt: now() };
   },
   "providers/remove": (p) => {

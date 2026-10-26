@@ -10,6 +10,12 @@
 //! starts on one as `AccountChoice::Subscription { backend: <id> }`. A built-in instance with no
 //! settings runs the backend plxd registered at startup; one the host doesn't list isn't routed
 //! to, though key accounts keep their startup backends.
+//!
+//! An account pool (PLX-1033) is an instance with `members`: other instances of its kind. It is
+//! never a backend. It lists its members' models and state, and `agents::placement::pool_member`
+//! starts its threads on the member with the most headroom.
+
+mod identity;
 
 use std::collections::HashMap;
 use std::ffi::OsString;
@@ -366,6 +372,7 @@ impl Providers {
                     env: Vec::new(),
                     models: Vec::new(),
                     reserve: None,
+                    members: None,
                 };
                 stored.push(Stored {
                     instance,
@@ -428,15 +435,15 @@ impl Providers {
     /// [`CACHE_TTL`], or all of them with `refresh`.
     pub async fn list(&self, detector: &CliDetector, refresh: bool) -> ProvidersListResult {
         let stored = self.stored.lock().await.clone();
-        let probes = stored
-            .iter()
-            .map(|entry| self.found(detector, entry, refresh));
+        let probes = stored.iter().map(|entry| async move {
+            if entry.instance.members.is_some() {
+                Found::default()
+            } else {
+                self.found(detector, entry, refresh).await
+            }
+        });
         let found = futures_util::future::join_all(probes).await;
-        let providers = stored
-            .into_iter()
-            .zip(found)
-            .map(|(entry, found)| info(entry.instance, found))
-            .collect();
+        let providers = with_pools(stored, found);
         ProvidersListResult {
             providers,
             checked_at: Timestamp::now(),
@@ -449,7 +456,7 @@ impl Providers {
     /// or models.
     pub async fn known(&self, detector: &CliDetector) -> Vec<ProviderInfo> {
         let stored = self.stored.lock().await.clone();
-        let mut known = Vec::with_capacity(stored.len());
+        let mut known: Vec<(Stored, Found)> = Vec::with_capacity(stored.len());
         for entry in stored {
             let cached = self
                 .cache
@@ -471,9 +478,36 @@ impl Providers {
                     _ => Found::default(),
                 },
             };
-            known.push(info(entry.instance, found));
+            known.push((entry, found));
         }
-        known
+        let (stored, found) = known.into_iter().unzip();
+        with_pools(stored, found)
+    }
+
+    /// The members of the pool `id`, or `None` when `id` isn't a pool.
+    pub async fn members(&self, id: &str) -> Option<Vec<String>> {
+        self.stored
+            .lock()
+            .await
+            .iter()
+            .find(|entry| entry.instance.id == id)
+            .and_then(|entry| entry.instance.members.clone())
+    }
+
+    /// A pool's members for a new run. Disabled pools cannot start runs, even through RPC.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` when the named pool is disabled.
+    pub async fn enabled_members(&self, id: &str) -> Result<Option<Vec<String>>, ErrorObject> {
+        let stored = self.stored.lock().await;
+        let Some(instance) = stored.iter().find(|entry| entry.instance.id == id) else {
+            return Ok(None);
+        };
+        if instance.instance.members.is_some() && !instance.instance.enabled {
+            return Err(ErrorObject::invalid_params("this account pool is disabled"));
+        }
+        Ok(instance.instance.members.clone())
     }
 
     /// Adds `instance`, or replaces the one with its id, keeping stored secrets it sends no value
@@ -500,6 +534,12 @@ impl Providers {
             return Err(ErrorObject::invalid_params(
                 "an instance's kind can't change; add a new instance instead",
             ));
+        }
+        check_pool(&instance, &self.stored.lock().await)?;
+        if let Some(home) = &instance.home
+            && old.as_ref().and_then(|entry| entry.instance.home.as_ref()) != Some(home)
+        {
+            instance.home = Some(own_home(home)?);
         }
         if on_hermes(&instance) && instance.home.is_none() {
             instance.home = Some(self.ollama_cloud_home(&instance.id)?);
@@ -613,6 +653,17 @@ impl Providers {
         let Some(i) = stored.iter().position(|s| s.instance.id == id) else {
             return Err(ErrorObject::invalid_params(format!("no provider {id}")));
         };
+        if let Some(pool) = stored.iter().find(|s| {
+            s.instance
+                .members
+                .as_ref()
+                .is_some_and(|members| members.iter().any(|member| member == id))
+        }) {
+            return Err(ErrorObject::invalid_params(format!(
+                "{} is in the pool {}; take it out of the pool first",
+                stored[i].instance.name, pool.instance.name
+            )));
+        }
         let entry = stored.remove(i);
         self.write(&stored)?;
         self.registry.remove(id);
@@ -650,7 +701,7 @@ impl Providers {
     /// the keychain, which can ask the user first.
     fn register(&self, entry: &Stored) {
         let instance = &entry.instance;
-        if !instance.enabled {
+        if !instance.enabled || instance.members.is_some() {
             self.registry.remove(&instance.id);
             return;
         }
@@ -751,6 +802,18 @@ impl Providers {
             return found;
         }
         let env = plain_env(entry);
+        if matches!(instance.kind, ProviderKind::Claude | ProviderKind::Codex) {
+            let mut account_env = env.clone();
+            account_env.extend(home_var(instance, &preset));
+            identity::probe(
+                &self.launcher,
+                instance,
+                &program_of(instance, &preset),
+                account_env,
+                &mut found,
+            )
+            .await;
+        }
         match (&preset.driver, preset.models_url) {
             // Ollama Cloud's Hermes Agent too: its models are the service's, so it isn't started.
             (_, Some((url, key_name))) => {
@@ -1523,7 +1586,10 @@ fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
             "{built_in} is a built-in provider of another kind"
         )));
     }
-    if instance.kind == ProviderKind::Acp && instance.program.is_none() {
+    if instance.kind == ProviderKind::Acp
+        && instance.program.is_none()
+        && instance.members.is_none()
+    {
         return Err(ErrorObject::invalid_params(
             "an ACP agent needs the program that starts it",
         ));
@@ -1546,6 +1612,134 @@ fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
         ));
     }
     Ok(())
+}
+
+/// An instance's home folder as plxd keeps it: `~` at its start is this host's home folder, and
+/// the folder is made if it's missing, so a second account added as `~/.codex-work` has its own
+/// `CODEX_HOME` to sign in to (PLX-1033).
+fn own_home(home: &str) -> Result<String, ErrorObject> {
+    let rest = home
+        .strip_prefix("~/")
+        .or_else(|| home.strip_prefix("~\\"))
+        .or((home == "~").then_some(""));
+    let path = match rest {
+        Some(rest) => std::env::home_dir()
+            .ok_or_else(|| ErrorObject::internal_error("this host's home folder is unknown"))?
+            .join(rest),
+        None => PathBuf::from(home),
+    };
+    if !path.is_absolute() {
+        return Err(ErrorObject::invalid_params(
+            "an account home must be an absolute path or start with ~/",
+        ));
+    }
+    std::fs::create_dir_all(&path).map_err(|error| {
+        ErrorObject::invalid_params(format!("couldn't make {}: {error}", path.display()))
+    })?;
+    Ok(path.display().to_string())
+}
+
+/// The checks `providers/save` makes on a pool, against the host's `stored` instances: two or
+/// more members, each an instance of the pool's kind that isn't a pool, and an instance in a pool
+/// can't become one.
+fn check_pool(instance: &ProviderInstance, stored: &[Stored]) -> Result<(), ErrorObject> {
+    let Some(members) = &instance.members else {
+        return Ok(());
+    };
+    let mut seen: Vec<&String> = Vec::new();
+    for member in members {
+        if seen.contains(&member) {
+            continue;
+        }
+        seen.push(member);
+        let Some(entry) = stored.iter().find(|s| s.instance.id == *member) else {
+            return Err(ErrorObject::invalid_params(format!("no provider {member}")));
+        };
+        if entry.instance.id == instance.id || entry.instance.members.is_some() {
+            return Err(ErrorObject::invalid_params("a pool can't hold a pool"));
+        }
+        if entry.instance.kind != instance.kind {
+            return Err(ErrorObject::invalid_params(format!(
+                "{} is another kind of provider than the pool",
+                entry.instance.name
+            )));
+        }
+    }
+    if seen.len() < 2 {
+        return Err(ErrorObject::invalid_params(
+            "a pool needs two or more providers",
+        ));
+    }
+    let pooled = stored.iter().any(|s| {
+        s.instance
+            .members
+            .as_ref()
+            .is_some_and(|members| members.contains(&instance.id))
+    });
+    if pooled {
+        return Err(ErrorObject::invalid_params(
+            "a provider in a pool can't be a pool",
+        ));
+    }
+    Ok(())
+}
+
+/// `providers/list`'s answer for `stored` instances with what was `found` for each: a pool's from
+/// its members. It is installed and signed in when any member is, signed out when every member
+/// is, offers every member's models, and has no sign-in of its own.
+fn with_pools(stored: Vec<Stored>, found: Vec<Found>) -> Vec<ProviderInfo> {
+    let pooled: Vec<Found> = stored
+        .iter()
+        .map(|entry| {
+            let Some(members) = &entry.instance.members else {
+                return Found::default();
+            };
+            let mine: Vec<&Found> = stored
+                .iter()
+                .zip(&found)
+                .filter(|(other, _)| members.contains(&other.instance.id))
+                .map(|(_, found)| found)
+                .collect();
+            let mut models: Vec<ProviderModel> = Vec::new();
+            for model in mine.iter().flat_map(|found| &found.models).chain(
+                stored
+                    .iter()
+                    .filter(|other| members.contains(&other.instance.id))
+                    .flat_map(|other| &other.instance.models),
+            ) {
+                if !models.iter().any(|m| m.id == model.id) {
+                    models.push(model.clone());
+                }
+            }
+            let signed_in = if mine.iter().any(|f| f.signed_in == Some(true)) {
+                Some(true)
+            } else if !mine.is_empty() && mine.iter().all(|f| f.signed_in == Some(false)) {
+                Some(false)
+            } else {
+                None
+            };
+            Found {
+                installed: mine.iter().any(|f| f.installed),
+                signed_in,
+                models,
+                ..Found::default()
+            }
+        })
+        .collect();
+    stored
+        .into_iter()
+        .zip(found)
+        .zip(pooled)
+        .map(|((entry, found), pooled)| {
+            if entry.instance.members.is_none() {
+                return info(entry.instance, found);
+            }
+            let mut info = info(entry.instance, pooled);
+            info.login = None;
+            info.login_env = Vec::new();
+            info
+        })
+        .collect()
 }
 
 /// What `providers/list` says about one instance.
@@ -1659,7 +1853,7 @@ mod tests {
 
     use parallax_protocol::{ProviderEnvVar, ProviderInstance, ProviderKind};
 
-    use super::{Providers, Stored};
+    use super::{Found, Providers, Stored, with_pools};
     use crate::backend::process::{Environment, Launcher};
     use crate::keystore::{KeyStore, MemoryKeyStore};
     use crate::paths::DataDir;
@@ -1688,6 +1882,7 @@ mod tests {
             env: Vec::new(),
             models: Vec::new(),
             reserve: None,
+            members: None,
         }
     }
 
@@ -1753,5 +1948,118 @@ mod tests {
                 .any(|(name, value)| name == "ANTHROPIC_AUTH_TOKEN" && value == "ollama-key")
         );
         assert!(registry.by_backend_name("ollama").is_some());
+    }
+
+    #[tokio::test]
+    async fn an_account_home_is_created_only_when_added_or_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (providers, _) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
+        let home = dir.path().join("account");
+        let mut account = ProviderInstance {
+            home: Some(home.display().to_string()),
+            ..instance("work", ProviderKind::Codex, "Work")
+        };
+        providers.save(account.clone()).await.unwrap();
+        assert!(home.is_dir());
+
+        // An unavailable home must not prevent renaming or disabling the account.
+        std::fs::remove_dir(&home).unwrap();
+        std::fs::write(&home, "unavailable folder").unwrap();
+        account.name = "Personal".into();
+        account.enabled = false;
+        providers.save(account.clone()).await.unwrap();
+        assert!(home.is_file());
+
+        let changed = dir.path().join("changed");
+        account.home = Some(changed.display().to_string());
+        providers.save(account.clone()).await.unwrap();
+        assert!(changed.is_dir());
+
+        account.home = Some("relative-account-home".into());
+        assert!(providers.save(account).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_pool_holds_two_instances_of_its_kind_and_is_never_a_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let (providers, registry) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
+        for id in ["work", "home"] {
+            providers
+                .save(instance(id, ProviderKind::Codex, id))
+                .await
+                .unwrap();
+        }
+        providers
+            .save(instance("claude-x", ProviderKind::Claude, "Claude X"))
+            .await
+            .unwrap();
+        let pool = |members: &[&str]| ProviderInstance {
+            members: Some(members.iter().map(|&m| m.to_owned()).collect()),
+            ..instance("pool", ProviderKind::Codex, "Codex pool")
+        };
+
+        assert!(providers.save(pool(&["work"])).await.is_err(), "one member");
+        assert!(providers.save(pool(&["work", "work"])).await.is_err());
+        assert!(providers.save(pool(&["work", "claude-x"])).await.is_err());
+        assert!(providers.save(pool(&["work", "gone"])).await.is_err());
+        providers.save(pool(&["work", "home"])).await.unwrap();
+        assert!(registry.by_backend_name("pool").is_none());
+        assert!(registry.by_backend_name("work").is_some());
+        assert_eq!(
+            providers.members("pool").await,
+            Some(vec!["work".to_owned(), "home".to_owned()])
+        );
+        assert_eq!(providers.members("work").await, None);
+
+        // A member leaves the pool before it can go.
+        assert!(providers.remove("work").await.is_err());
+        providers.remove("pool").await.unwrap();
+        providers.remove("work").await.unwrap();
+    }
+
+    #[test]
+    fn a_pool_lists_its_members_models_and_sign_in() {
+        let entry = |instance| Stored {
+            instance,
+            secrets: None,
+        };
+        let model = |id: &str| parallax_protocol::ProviderModel {
+            id: id.into(),
+            name: id.into(),
+        };
+        let stored = vec![
+            entry(ProviderInstance {
+                models: vec![model("custom"), model("gpt-5")],
+                ..instance("work", ProviderKind::Codex, "Work")
+            }),
+            entry(instance("home", ProviderKind::Codex, "Home")),
+            entry(ProviderInstance {
+                members: Some(vec!["work".into(), "home".into()]),
+                ..instance("pool", ProviderKind::Codex, "Pool")
+            }),
+        ];
+        let found = vec![
+            Found {
+                installed: true,
+                signed_in: Some(false),
+                models: vec![model("gpt-5")],
+                ..Found::default()
+            },
+            Found {
+                installed: true,
+                signed_in: Some(true),
+                models: vec![model("gpt-5"), model("gpt-5-mini")],
+                ..Found::default()
+            },
+            Found::default(),
+        ];
+        let listed = with_pools(stored, found);
+        let pool = &listed[2];
+        assert!(pool.installed);
+        assert_eq!(pool.signed_in, Some(true));
+        let ids: Vec<&str> = pool.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["gpt-5", "gpt-5-mini", "custom"]);
+        assert_eq!(pool.login, None);
+        assert_eq!(listed[0].signed_in, Some(false));
     }
 }

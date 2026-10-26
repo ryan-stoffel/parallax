@@ -6,7 +6,7 @@ import type {
   ThreadStartParams,
 } from "../protocol/generated/protocol";
 import { instanceModels, models, type Model, type Provider } from "./catalog";
-import { useProviders } from "./providers";
+import { accountLabel, useProviders } from "./providers";
 import { merged, stored } from "./stored";
 
 /**
@@ -43,11 +43,15 @@ export const setCliEnabled = (cli: string, on: boolean) =>
 export interface Instance {
   id: string;
   name: string;
+  /** Sign-in identity or plan reported by the provider. */
+  account?: string;
   kind: string;
   enabled: boolean;
   permissions: AgentPermission[];
   efforts: boolean;
   coordinator: boolean;
+  /** Set for an account pool (PLX-1033): the instances of its kind it starts threads on. */
+  members?: string[];
 }
 
 /** A host's instances, and the models it offers on them, in the order the model picker lists them. */
@@ -149,12 +153,14 @@ export function catalogOf(
     ? listed.map((info) => ({
         instance: {
           id: info.instance.id,
-          name: info.instance.name,
+          name: accountLabel(info),
+          ...(info.account && { account: info.account }),
           kind: info.instance.kind,
           enabled: info.instance.enabled,
           permissions: info.permissions,
           efforts: info.efforts,
           coordinator: info.coordinator,
+          ...(info.instance.members && { members: info.instance.members }),
         },
         models: instanceModels(info),
       }))

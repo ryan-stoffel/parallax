@@ -25,6 +25,10 @@
 //!
 //! An API key account is used only when the Project allows it: `agents::prepare_run` refuses one
 //! otherwise, and turns off routing's automatic fallback to one (0012) for a Project's children.
+//!
+//! An account pool (PLX-1033) is not an instance a run can start on. [`pool_member`] turns a
+//! choice of one into its member with the most headroom, by the same windows, before any rule
+//! here or routing sees it, for every run, in a Project or not.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -170,6 +174,59 @@ pub(crate) fn decide(
     }
 }
 
+/// The member of a pool with `members` that a new run on `model` starts on: the usable one that
+/// serves the model with the most headroom, the first listed on a tie. With none that serves it,
+/// any usable one the same way, and with none usable, the first listed, which then fails saying
+/// why. `None` for a pool with no members.
+pub(crate) fn pick_member(
+    members: &[String],
+    model: Option<&str>,
+    instances: &[Instance],
+    now: Timestamp,
+) -> Option<String> {
+    let usable: Vec<&Instance> = members
+        .iter()
+        .filter_map(|member| instances.iter().find(|i| i.id == *member))
+        .filter(|instance| instance.usable())
+        .collect();
+    let serving: Vec<&Instance> = usable
+        .iter()
+        .copied()
+        .filter(|instance| instance.serves(model))
+        .collect();
+    let candidates = if serving.is_empty() { usable } else { serving };
+    let mut best: Option<(&Instance, f64)> = None;
+    for instance in candidates {
+        let headroom = instance.headroom(now);
+        if best.is_none_or(|(_, most)| headroom > most) {
+            best = Some((instance, headroom));
+        }
+    }
+    best.map(|(instance, _)| instance.id.clone())
+        .or_else(|| members.first().cloned())
+}
+
+/// `account` with a pool replaced by the member [`pick_member`] picks for `model`; any other
+/// account as it is.
+pub(super) async fn pool_member(
+    daemon: &Arc<Daemon>,
+    account: Option<AccountChoice>,
+    model: Option<&str>,
+) -> Result<Option<AccountChoice>, ErrorObject> {
+    let Some(AccountChoice::Subscription { backend }) = &account else {
+        return Ok(account);
+    };
+    let Some(members) = daemon.providers.enabled_members(backend).await? else {
+        return Ok(account);
+    };
+    let instances = instances(daemon, None).await?;
+    let Some(member) = pick_member(&members, model, &instances, Timestamp::now()) else {
+        return Ok(account);
+    };
+    info!(pool = %backend, %member, "starting a pool's run on its member");
+    Ok(Some(AccountChoice::Subscription { backend: member }))
+}
+
 /// A waiting child's reason, for people, in `zone`'s time: "Waiting for Claude Code quota,
 /// resets at 3:40 PM PDT".
 pub(crate) fn quota_reason(name: &str, until: Option<Timestamp>, zone: &TimeZone) -> String {
@@ -232,7 +289,7 @@ pub(super) async fn place(
     let Some(AccountChoice::Subscription { backend: picked }) = account.cloned().or(default) else {
         return Ok(slot(running, max, None).unwrap_or(Placed::Picked));
     };
-    let instances = instances(daemon, mode).await?;
+    let instances = instances(daemon, Some(mode)).await?;
     let decision = decide(&picked, model, &instances, Timestamp::now());
     // Where it goes, or waits, when that isn't the instance it asked for.
     let elsewhere = match &decision {
@@ -270,21 +327,24 @@ fn slot(running: usize, max: u32, on: Option<AccountChoice>) -> Option<Placed> {
     })
 }
 
-/// The host's instances as [`decide`] sees them, with their limit windows from the store.
+/// The host's instances but its pools, as [`decide`] sees them, with their limit windows from the
+/// store. Without a Project's `mode`, every instance with a backend is in mode.
 async fn instances(
     daemon: &Arc<Daemon>,
-    mode: ProjectPermission,
+    mode: Option<ProjectPermission>,
 ) -> Result<Vec<Instance>, ErrorObject> {
     let known = daemon.providers.known(&daemon.cli_detector).await;
     let mut instances: Vec<Instance> = known
         .into_iter()
+        .filter(|info| info.instance.members.is_none())
         .map(|info| {
             let backend = daemon.agents.backends().by_backend_name(&info.instance.id);
             let mut models: Vec<String> = info.models.into_iter().map(|m| m.id).collect();
             models.extend(info.instance.models.into_iter().map(|m| m.id));
             Instance {
-                in_mode: backend
-                    .is_some_and(|(_, backend)| in_mode(backend.as_ref(), mode).is_ok()),
+                in_mode: backend.is_some_and(|(_, backend)| {
+                    mode.is_none_or(|mode| in_mode(backend.as_ref(), mode).is_ok())
+                }),
                 id: info.instance.id,
                 kind: info.instance.kind,
                 name: info.instance.name,
@@ -518,7 +578,7 @@ mod tests {
     use parallax_protocol::ProviderKind;
     use parallax_store::LimitSnapshot;
 
-    use super::{Decision, Instance, decide};
+    use super::{Decision, Instance, decide, pick_member};
 
     fn now() -> Timestamp {
         "2026-10-04T12:00:00Z".parse().unwrap()
@@ -566,6 +626,36 @@ mod tests {
         let mut reserved = instances.clone();
         reserved[0].reserve = 30;
         assert_eq!(decide("a", None, &reserved, now()), start("b"));
+    }
+
+    #[test]
+    fn a_pool_starts_on_its_usable_member_with_the_most_headroom() {
+        let members = ["a".to_owned(), "b".to_owned()];
+        let pick = |instances: &[Instance]| pick_member(&members, None, instances, now());
+        // Neither has used anything: the first listed.
+        assert_eq!(pick(&[claude("a"), claude("b")]).as_deref(), Some("a"));
+        // The one with more left, whichever window is fuller.
+        let instances = [used(claude("a"), 40.0, 60), used(claude("b"), 10.0, 60)];
+        assert_eq!(pick(&instances).as_deref(), Some("b"));
+        // A signed-out member is skipped, and an instance outside the pool never counts.
+        let mut out = claude("b");
+        out.signed_in = Some(false);
+        let instances = [used(claude("a"), 90.0, 60), out, claude("c")];
+        assert_eq!(pick(&instances).as_deref(), Some("a"));
+        // With none usable, the first listed, which fails saying why.
+        let mut off = claude("a");
+        off.enabled = false;
+        assert_eq!(pick(&[off]).as_deref(), Some("a"));
+        // A member that doesn't serve the model gives way to one that does, though it has less
+        // left, and with none that serves it, the usual choice.
+        let mut other = claude("b");
+        other.models = vec!["opus".to_owned()];
+        let mut serving = used(claude("a"), 60.0, 60);
+        serving.models = vec!["sonnet".to_owned()];
+        let instances = [serving, other];
+        let model = |m| pick_member(&members, Some(m), &instances, now());
+        assert_eq!(model("sonnet").as_deref(), Some("a"));
+        assert_eq!(model("haiku").as_deref(), Some("b"));
     }
 
     #[test]

@@ -1,10 +1,11 @@
-import { ArrowUpRight, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import {
   lazy,
   Suspense,
   useCallback,
   useEffect,
   useId,
+  useRef,
   useState,
   type InputHTMLAttributes,
   type KeyboardEvent,
@@ -29,7 +30,9 @@ import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
+import { PoolPane, poolStatus } from "./PoolSettings";
 import {
+  accountLabel,
   kindOf,
   logoOf,
   loadProviders,
@@ -619,10 +622,18 @@ const instanceTone = (info: ProviderInfo) =>
  */
 function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const providers = useProviders(host.id);
+  const connection = useConnection(host.id);
+  const accountPools =
+    connection?.status === "connected" && "accountPools" in connection.capabilities;
   const [keys, setKeys] = useState<KeyAccount[]>();
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
   const [selected, setSelected] = useState("claude");
+  const [openedAccount, setOpenedAccount] = useState<string>();
+  const memberBack = useRef<HTMLButtonElement>(null);
+  const memberOrigin = useRef<HTMLElement | null>(null);
+  const focusMemberBack = useRef(false);
+  const focusMemberOrigin = useRef(false);
   // The one sign-in terminal: main runs one per window.
   const [signingIn, setSigningIn] = useState<string>();
   const [adding, setAdding] = useState(false);
@@ -658,8 +669,26 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     if (failed) notify({ tone: "error", title: `Couldn't save ${instance.name}`, body: failed });
   };
 
-  const list = providers?.providers;
-  const current = list?.find((p) => p.instance.id === selected) ?? list?.[0];
+  const list = providers?.providers.filter((p) => accountPools || !p.instance.members);
+  // Pool members stay in the full list for editing and sign-in, with only their pool in the rail.
+  const pooled = new Set(list?.flatMap((p) => p.instance.members ?? []));
+  const topLevel = list?.filter((p) => !pooled.has(p.instance.id));
+  const current =
+    topLevel?.find((p) => p.instance.id === selected) ??
+    topLevel?.find((p) => p.instance.members?.includes(selected)) ??
+    topLevel?.[0];
+  const member = list?.find(
+    (p) => p.instance.id === openedAccount && current?.instance.members?.includes(p.instance.id),
+  );
+  const shownAccount = member ?? current;
+  const memberId = member?.instance.id;
+  useEffect(() => {
+    if (memberId && focusMemberBack.current) memberBack.current?.focus();
+    if (!memberId && focusMemberOrigin.current) {
+      memberOrigin.current?.focus();
+      focusMemberOrigin.current = false;
+    }
+  }, [memberId]);
   const asking = confirming !== undefined && confirming === current?.instance.id;
   const remove = async (id: string) => {
     const name = list?.find((p) => p.instance.id === id)?.instance.name ?? "the provider";
@@ -725,8 +754,12 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         <AddProviderDialog
           hostId={host.id}
           hostName={host.name}
-          instances={list.map((p) => p.instance)}
-          onAdded={setSelected}
+          list={list}
+          accountPools={accountPools}
+          onAdded={(id) => {
+            setSelected(id);
+            setOpenedAccount(undefined);
+          }}
           onClose={() => setAdding(false)}
         />
       )}
@@ -762,7 +795,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
               onKeyDown={moveTab}
               className="flex flex-col border-b border-border @3xl:overflow-y-auto @3xl:border-r @3xl:border-b-0"
             >
-              {list.map((info) => {
+              {topLevel?.map((info) => {
                 const { instance } = info;
                 const Logo = logoOf(instance);
                 const chosen = info === current;
@@ -779,15 +812,20 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                       type="button"
                       role="tab"
                       aria-selected={chosen}
-                      aria-controls={`${tabs}-${instance.id}-pane`}
+                      aria-controls={`${tabs}-${chosen && member ? member.instance.id : instance.id}-pane`}
                       tabIndex={chosen ? 0 : -1}
-                      onClick={() => setSelected(instance.id)}
+                      onClick={() => {
+                        setSelected(instance.id);
+                        setOpenedAccount(undefined);
+                      }}
                       className={`flex min-w-0 flex-1 items-start gap-3 py-3.5 pl-4 text-left ${instance.enabled ? "" : "opacity-60"}`}
                     >
                       <Logo className="mt-0.5 size-4 shrink-0" />
                       <span className="min-w-0">
                         <span className="flex items-baseline gap-2">
-                          <span className="truncate text-body font-medium">{instance.name}</span>
+                          <span className="truncate text-body font-medium">
+                            {accountLabel(info)}
+                          </span>
                           {info.version && (
                             <span className="truncate font-mono text-meta text-faint-foreground">
                               {info.version}
@@ -800,7 +838,11 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                               <StatusDot tone={tone} />
                             </span>
                           )}
-                          {instance.enabled ? instanceStatus(info) : "Off"}
+                          {!instance.enabled
+                            ? "Off"
+                            : instance.members
+                              ? poolStatus(instance.members)
+                              : instanceStatus(info)}
                         </span>
                       </span>
                     </button>
@@ -817,24 +859,74 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
               })}
             </div>
             {/* Every pane stays mounted, so a sign-in outlives a switch to another tab. */}
-            {list.map((info) => (
-              <InstancePane
-                key={info.instance.id}
-                id={`${tabs}-${info.instance.id}-pane`}
-                tabId={`${tabs}-${info.instance.id}`}
-                hidden={info !== current}
-                signingIn={signingIn === info.instance.id}
-                onSignIn={(open) => setSigningIn(open ? info.instance.id : undefined)}
-                hostId={host.id}
-                info={info}
-                usage={usage}
-                period={period}
-                onPeriod={setPeriod}
-                keys={keys}
-                onKeys={setKeys}
-                onSignedIn={() => void loadProviders(host.id, true)}
-              />
-            ))}
+            {list.map((info) =>
+              info.instance.members ? (
+                <PoolPane
+                  key={info.instance.id}
+                  id={`${tabs}-${info.instance.id}-pane`}
+                  tabId={`${tabs}-${info.instance.id}`}
+                  hidden={info !== current || !!member}
+                  hostId={host.id}
+                  info={info}
+                  list={list}
+                  nameField={(onSave) => (
+                    <SavedField
+                      aria-label="Display name"
+                      required
+                      maxLength={64}
+                      value={info.instance.name}
+                      onSave={(name) => onSave(name.trim())}
+                    />
+                  )}
+                  onOpen={(account, signIn = true) => {
+                    memberOrigin.current =
+                      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+                    focusMemberBack.current = !signIn;
+                    setSelected(info.instance.id);
+                    setOpenedAccount(account);
+                    if (signIn) setSigningIn(account);
+                  }}
+                />
+              ) : (
+                <div
+                  key={info.instance.id}
+                  hidden={info !== shownAccount}
+                  className="min-h-0 min-w-0 @3xl:overflow-y-auto"
+                >
+                  {member === info && (
+                    <button
+                      type="button"
+                      ref={memberBack}
+                      onClick={() => {
+                        focusMemberOrigin.current = true;
+                        setOpenedAccount(undefined);
+                      }}
+                      className={`${quietButton} mt-4 ml-5 flex items-center gap-1.5 [&_svg]:size-3.5`}
+                    >
+                      <ArrowLeft aria-hidden />
+                      Back to {current.instance.name}
+                    </button>
+                  )}
+                  <InstancePane
+                    id={`${tabs}-${info.instance.id}-pane`}
+                    tabId={`${tabs}-${member === info ? current.instance.id : info.instance.id}`}
+                    hidden={info !== shownAccount}
+                    signingIn={signingIn === info.instance.id}
+                    onSignIn={(open) => setSigningIn(open ? info.instance.id : undefined)}
+                    hostId={host.id}
+                    info={info}
+                    inPool={pooled.has(info.instance.id)}
+                    lastEnabled={info.instance.enabled && on.length === 1}
+                    usage={usage}
+                    period={period}
+                    onPeriod={setPeriod}
+                    keys={keys}
+                    onKeys={setKeys}
+                    onSignedIn={() => void loadProviders(host.id, true)}
+                  />
+                </div>
+              ),
+            )}
           </div>
         </div>
       )}
@@ -909,13 +1001,15 @@ function InstancePane({
   onSignIn,
   hostId,
   info,
+  inPool = false,
+  lastEnabled = false,
   usage,
   period,
   onPeriod,
   keys,
   onKeys,
   onSignedIn,
-}: PaneProps & { info: ProviderInfo }) {
+}: PaneProps & { info: ProviderInfo; inPool?: boolean; lastEnabled?: boolean }) {
   const { instance } = info;
   const kind = kindOf(instance.kind);
   const KindLogo = logoOf(instance);
@@ -1034,7 +1128,7 @@ function InstancePane({
   };
 
   let account = instanceStatus(info);
-  // The pane names the email the list leaves out; a plan reads as the list says it.
+  // Show the sign-in identity even when the account has a custom display label.
   if (info.signedIn === true && info.account?.includes("@"))
     account = `Authenticated as ${info.account}`;
   // Such as "Pi isn't installed on this host": for Pi, the `pi` its adapter runs, not npx.
@@ -1053,7 +1147,7 @@ function InstancePane({
           <KindLogo className="size-5" />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate text-reading font-semibold">{instance.name}</h2>
+          <h2 className="truncate text-reading font-semibold">{accountLabel(info)}</h2>
           {/* What it is, unless its name says so, and its version. */}
           <p className="truncate text-body text-muted-foreground">
             {kind.name !== instance.name && kind.name}
@@ -1068,6 +1162,21 @@ function InstancePane({
         </p>
       )}
       <Card label="Account">
+        {inPool && (
+          <Row
+            title="Enabled"
+            description="Allow new threads to use this account, on its own or through a pool."
+          >
+            <span title={lastEnabled ? "One provider stays on, for new threads." : undefined}>
+              <Switch
+                label={`Use ${instance.name}`}
+                checked={instance.enabled}
+                disabled={lastEnabled}
+                onChange={(enabled) => void save({ enabled })}
+              />
+            </span>
+          </Row>
+        )}
         <Row title="Display name" description="How threads and model menus name it.">
           <SavedField
             aria-label="Display name"
