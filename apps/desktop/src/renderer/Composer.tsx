@@ -10,6 +10,8 @@ import {
   LoaderCircle,
   MessagesSquare,
   Paperclip,
+  Pencil,
+  Quote,
   Sparkles,
   Square,
   SquareSlash,
@@ -81,6 +83,7 @@ import type { RequestUsage, ThreadUsage } from "./transcript";
 import { EffortMenu } from "./EffortMenu";
 import { accessPrefs } from "./accessPrefs";
 import { FileCard } from "./FileCard";
+import { citationText, CommentBox, type Citation } from "./Cite";
 import { Chip, fileIcon, Mention } from "./Mention";
 import { imageFromUrl, imageUrl, readImage, type ImageCaps } from "./images";
 import { Lightbox } from "./Lightbox";
@@ -133,7 +136,7 @@ function imageKey(image: PromptImage): string {
 }
 
 /** The inline nodes that stand for something attached, each drawn as a chip and deleted whole. */
-const chipNodes = new Set(["mention", "threadRef", "imageRef"]);
+const chipNodes = new Set(["mention", "threadRef", "imageRef", "citeRef"]);
 
 /** An inline atom drawn by `view`, with `attrs` as its attributes. */
 const chipNode = (
@@ -252,6 +255,60 @@ const ImageRefNode = chipNode("imageRef", { key: "", src: null }, ({ node }) => 
   <ImageRef imageKey={node.attrs["key"] as string} />
 ));
 
+/** Cited agent text (Cite.tsx): the user's comment, or the text itself, and a pencil to edit it. */
+function CiteRef({ node, updateAttributes, editor }: NodeViewProps) {
+  const { quote, comment } = node.attrs as Citation;
+  const [editing, setEditing] = useState<DOMRect>();
+  // Back to the box, where typing goes on, unless a click away put focus somewhere else.
+  const close = () => {
+    setEditing(undefined);
+    // Closing gives focus back to the pencil, in the box.
+    const at = document.activeElement;
+    const away =
+      at && at !== document.body && !editor.view.dom.contains(at) && !at.closest("[popover]");
+    if (!away) editor.commands.focus();
+  };
+  return (
+    <>
+      <Chip
+        tone="cite"
+        title={quote}
+        icon={<Quote aria-hidden />}
+        end={
+          <button
+            type="button"
+            aria-label="Edit comment"
+            onClick={(e) =>
+              setEditing(e.currentTarget.closest("[data-chip]")!.getBoundingClientRect())
+            }
+            className="inline-flex hover:text-foreground"
+          >
+            <Pencil aria-hidden />
+          </button>
+        }
+      >
+        {comment || quote}
+      </Chip>
+      {editing && (
+        <CommentBox
+          at={editing}
+          initial={comment}
+          onClose={close}
+          onSave={(comment) => {
+            updateAttributes({ comment });
+            close();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+// Cited agent text with the user's comment, sent on lines of its own as citationText writes it.
+const CiteRefNode = chipNode("citeRef", { quote: "", comment: "" }, CiteRef).extend({
+  renderText: ({ node }) => citationText(node.attrs as Citation),
+});
+
 /** `fragment` with each image chip in it replaced by what `map` makes of it, or dropped for null. */
 function mapImageRefs(
   fragment: Fragment,
@@ -362,6 +419,7 @@ const extensions = [
   MentionNode,
   ThreadRefNode,
   ImageRefNode,
+  CiteRefNode,
   typedAs(Bold, /(?:^|\s)(\*\*([^*\s](?:[^*]*[^*\s])?)\*\*)$/),
   typedAs(Italic, /(?:^|\s)(\*([^*\s](?:[^*]*[^*\s])?)\*)$/),
 ];
@@ -401,7 +459,20 @@ const markdown = new MarkdownSerializer(
       const name = (state.options as Naming).imageName?.(node.attrs["key"] as string);
       if (name) state.text(`[${name}]`, false);
     },
-    text: (state, node) => state.text(node.text!, false),
+    // A paragraph apart from the text around it.
+    citeRef: (state, node, parent, index) => {
+      const before = index > 0 ? "\n\n" : "";
+      const after = index < parent.childCount - 1 ? "\n\n" : "";
+      state.text(`${before}${citationText(node.attrs as Citation)}${after}`, false);
+    },
+    // Text beside a citation, which sits a paragraph apart, without the spaces around the chip.
+    text: (state, node, parent, index) => {
+      const cited = (i: number) => parent.maybeChild(i)?.type.name === "citeRef";
+      let text = node.text!;
+      if (cited(index - 1)) text = text.trimStart();
+      if (cited(index + 1)) text = text.trimEnd();
+      state.text(text, false);
+    },
   },
   {
     // So does inline code.
@@ -745,6 +816,8 @@ export interface ComposerProps {
    * value is added once.
    */
   insert?: string;
+  /** Agent text to cite, added at the end of the box as a chip, which takes focus. Each new value is added once. */
+  cite?: Citation;
   /** The thread's earlier prompts, oldest first, which Up and Down recall into an empty box. */
   history?: readonly string[];
   /**
@@ -811,6 +884,7 @@ export function Composer({
   noAccess,
   projectMode,
   insert,
+  cite,
   history = [],
   menus,
   attach,
@@ -1255,7 +1329,7 @@ export function Composer({
       (id) => id !== attach?.self && attach?.state.threads.some((t) => t.id === id),
     );
     // Without the space a chip leaves after itself at the end.
-    let sentText = toMarkdown(editor.state.doc, { imageName }).replace(/[ \t]+$/, "");
+    let sentText = toMarkdown(editor.state.doc, { imageName }).replace(/\s+$/, "");
     // Images too, so the agent has each as a file as well as seeing it (PLX-799).
     const uploads = canUpload
       ? [...sentFiles, ...sentImages.map((image, i) => encodedImage(image, i + 1))]
@@ -1595,6 +1669,20 @@ export function Composer({
       .insertContent(space + insert)
       .run();
   }, [insert, editor]);
+
+  useEffect(() => {
+    if (!cite) return;
+    const space = editor.isEmpty || /\s$/.test(editor.getText()) ? "" : " ";
+    editor
+      .chain()
+      .focus("end")
+      .insertContent([
+        ...(space ? [{ type: "text", text: space }] : []),
+        { type: "citeRef", attrs: cite },
+        { type: "text", text: " " },
+      ])
+      .run();
+  }, [cite, editor]);
 
   return (
     <div className="w-full">

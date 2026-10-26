@@ -148,6 +148,25 @@ test("Markdown formats as you type and is sent as Markdown, with the text as typ
   expect(box.textContent).toBe("");
 });
 
+test("cited agent text is sent as a quote and its comment, a paragraph apart from what's typed", async () => {
+  const onSend = vi.fn(async () => undefined);
+  const { box, type, press, rerender } = render(onSend);
+  type("See this:");
+  rerender({
+    cite: { quote: "The tab reports itself as hidden.\n\nIt stays throttled.", comment: "Why?" },
+  });
+  await settle();
+  expect(chipsIn(box)).toEqual(["Why?"]);
+  type("Fix it");
+  await press("Enter");
+  expect(onSend).toHaveBeenCalledWith(
+    "See this:\n\n> The tab reports itself as hidden.\n>\n> It stays throttled.\n\nWhy?\n\nFix it",
+    expect.anything(),
+    [],
+    [],
+  );
+});
+
 test("typed text that only looks like Markdown is sent as typed", async () => {
   const onSend = vi.fn(async () => undefined);
   const { type, press } = render(onSend);

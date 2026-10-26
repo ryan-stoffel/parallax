@@ -78,6 +78,7 @@ import {
   type ToolLook,
 } from "./Approval";
 import { duration, useSeconds } from "./AttentionMark";
+import { CiteSelection, type Citation } from "./Cite";
 import { Composer, listCommands, tabItem, type ComposerProps, type Unanswered } from "./Composer";
 import { offlineReason, useConnection } from "./ConnectionStatus";
 import { isEmpty, threadDrafts, type ComposerContents } from "./drafts";
@@ -422,6 +423,13 @@ export function AgentChat({
   const [cancelled, setCancelled] = useState<ReadonlySet<string>>(new Set());
   // The sent message being edited in place, with its row, which it hides.
   const [editing, setEditing] = useState<Editing>();
+  // The agent text last cited from the transcript, which the composer adds as a chip.
+  const [cite, setCite] = useState<Citation>();
+  // Taken once: the composer's effect, a child's, has added it by now, and a composer that mounts
+  // again, as after a subagent's view, mustn't add it again.
+  useEffect(() => {
+    if (cite) setCite(undefined);
+  }, [cite]);
   const unsent = useMemo(
     () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
     [sent, resent],
@@ -864,6 +872,7 @@ export function AgentChat({
                 copiedAt={forked ? run?.createdAt : undefined}
                 onResend={resend}
                 loadImage={showImage}
+                onCite={setCite}
                 onNearTop={older ? loadOlder : undefined}
                 onEdit={
                   live && !editing && unanswered?.row
@@ -958,6 +967,7 @@ export function AgentChat({
           noAccess={space}
           projectMode={projectMode}
           insert={compose && !compose.send ? compose.text : undefined}
+          cite={cite}
           menus={
             connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
           }
@@ -1132,6 +1142,7 @@ export function TranscriptView({
   runId,
   backend,
   onEdit,
+  onCite,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
@@ -1157,6 +1168,8 @@ export function TranscriptView({
   copiedAt?: string;
   /** The row, by key, whose message the pencil edits, and what it does. */
   onEdit?: { key: string; edit: () => void };
+  /** Offers Cite over agent text the user selects, which hands it here with their comment. */
+  onCite?: (citation: Citation) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const links = useContext(ThreadLinksContext);
@@ -1385,6 +1398,7 @@ export function TranscriptView({
         {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
         {scrolledUp && <ScrollToEnd onClick={scrollToEnd} />}
         {findBar}
+        {onCite && <CiteSelection log={scrollRef} onCite={onCite} />}
       </div>
     </RowContext>
   );
