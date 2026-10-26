@@ -259,10 +259,14 @@ const ImageRefNode = chipNode("imageRef", { key: "", src: null }, ({ node }) => 
 function CiteRef({ node, updateAttributes, editor }: NodeViewProps) {
   const { quote, comment } = node.attrs as Citation;
   const [editing, setEditing] = useState<DOMRect>();
-  // Back to the box, where typing goes on.
+  // Back to the box, where typing goes on, unless a click away put focus somewhere else.
   const close = () => {
     setEditing(undefined);
-    editor.commands.focus();
+    // Closing gives focus back to the pencil, in the box.
+    const at = document.activeElement;
+    const away =
+      at && at !== document.body && !editor.view.dom.contains(at) && !at.closest("[popover]");
+    if (!away) editor.commands.focus();
   };
   return (
     <>

@@ -78,7 +78,7 @@ export function CommentBox({
         value={comment}
         onChange={(e) => setComment(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key !== "Enter" || e.shiftKey) return;
+          if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
           e.preventDefault();
           e.currentTarget.form?.requestSubmit();
         }}
@@ -139,7 +139,8 @@ export function CiteSelection({
     // After the browser settles the selection: a click inside one clears it on the way up.
     const onUp = () => setTimeout(() => setPicked(selectedIn(el)));
     const onChange = () => getSelection()?.isCollapsed && setPicked(undefined);
-    const onScroll = () => setPicked(undefined);
+    // Cite follows the text as it scrolls, by hand or as a reply streams in.
+    const onScroll = () => setPicked((p) => p && { ...p });
     el.addEventListener("pointerup", onUp);
     el.addEventListener("scroll", onScroll);
     document.addEventListener("selectionchange", onChange);

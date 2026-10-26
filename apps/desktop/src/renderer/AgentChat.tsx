@@ -425,6 +425,11 @@ export function AgentChat({
   const [editing, setEditing] = useState<Editing>();
   // The agent text last cited from the transcript, which the composer adds as a chip.
   const [cite, setCite] = useState<Citation>();
+  // Taken once: the composer's effect, a child's, has added it by now, and a composer that mounts
+  // again, as after a subagent's view, mustn't add it again.
+  useEffect(() => {
+    if (cite) setCite(undefined);
+  }, [cite]);
   const unsent = useMemo(
     () => new Map([...sent].filter(([turnId]) => !resent.has(turnId))),
     [sent, resent],
