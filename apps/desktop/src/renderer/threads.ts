@@ -4,6 +4,7 @@ import type { RpcError } from "../preload/bridge";
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   AgentBackgroundTask,
+  AgentStatus,
   Area,
   AccountChoice,
   Capabilities,
@@ -27,7 +28,7 @@ import type { Host } from "./hosts";
 import type { RunOptions } from "./models";
 import { slugify } from "./naming";
 import { newThreadPrefs } from "./prefs";
-import { trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
+import { isRunning, trackApprovals, updateRun, type ApprovalsByRun } from "./transcript";
 import { useWatchKey } from "./useWatchKey";
 import { uuidv7 } from "./uuidv7";
 
@@ -70,6 +71,62 @@ interface Waiting {
  * command exits too, as a build it waits on does.
  */
 const wakes = (tasks: AgentBackgroundTask[] = []) => tasks.length > 0;
+
+/**
+ * How long news that a run's agent waits on no more background work or watched pull requests is
+ * held back (PLX-1015).
+ */
+const QUIET_MS = 5000;
+
+// A run status that ends a hold: it woke, or it can't wake now.
+const endsHold = (status: AgentStatus) =>
+  isRunning(status) || status === "cancelled" || status === "failed" || status === "interrupted";
+
+/**
+ * Passes host events to `apply`, holding for `ms` an `agent.background` with no tasks or a
+ * `pr.watches` with no URLs. The agent usually wakes for what ended, and plxd reports its turn
+ * starting just after, so applying it at once would show the thread done for a moment. A newer
+ * event of the same kind for the run replaces a held one. The run showing running applies its
+ * held ones at once, since it woke, as does its stopping or failing, since it can't wake now.
+ * `clear` drops every held one.
+ */
+export function holdQuiet(apply: (event: ParallaxEvent) => void, ms = QUIET_MS) {
+  const held = new Map<
+    string,
+    { runId: string; event: ParallaxEvent; timer: ReturnType<typeof setTimeout> }
+  >();
+  return {
+    pass(event: ParallaxEvent) {
+      if (event.kind !== "agent.background" && event.kind !== "pr.watches") {
+        apply(event);
+        if (event.kind === "agent.updated" && endsHold(event.state.status))
+          for (const [key, h] of held)
+            if (h.runId === event.runId) {
+              clearTimeout(h.timer);
+              held.delete(key);
+              apply(h.event);
+            }
+        return;
+      }
+      const quiet =
+        event.kind === "agent.background" ? !wakes(event.tasks) : event.urls.length === 0;
+      const { runId } = event;
+      const key = `${event.kind}/${runId}`;
+      clearTimeout(held.get(key)?.timer);
+      held.delete(key);
+      if (!quiet) return apply(event);
+      const timer = setTimeout(() => {
+        held.delete(key);
+        apply(event);
+      }, ms);
+      held.set(key, { runId, event, timer });
+    },
+    clear() {
+      for (const h of held.values()) clearTimeout(h.timer);
+      held.clear();
+    },
+  };
+}
 
 export const emptyThreads: ThreadsState = {
   projects: [],
@@ -651,6 +708,7 @@ export function useThreads(
     }
 
     setLoading(true);
+    const quiet = holdQuiet((event) => dispatch({ type: "event", event }));
     const stop = window.parallax.watch(hostId, { shell: true }, (message) => {
       if (stopped) return;
       if (message.type === "error") {
@@ -661,6 +719,7 @@ export function useThreads(
       }
       if (message.type === "snapshot") {
         const { projects, repos, threads, areas, runs, requests, waiting } = message.snapshot;
+        quiet.clear();
         dispatch({ type: "snapshot", projects, repos, threads, areas, runs, waiting });
         dispatch({ type: "approvals", events: requests });
         setError(undefined);
@@ -675,7 +734,7 @@ export function useThreads(
       // A host-level event changes the lists, and a scope's its runs and their requests; each
       // action leaves the other's kinds alone.
       const logged = message.event;
-      dispatch({ type: "event", event: logged.event });
+      quiet.pass(logged.event);
       dispatch({ type: "scope", events: [logged] });
       const { event } = logged;
       if (event.kind === "inbox.added" && event.item.kind === "needsYou" && logged.project)
@@ -683,6 +742,7 @@ export function useThreads(
     });
     return () => {
       stopped = true;
+      quiet.clear();
       stop();
     };
   }, [hostId, watchKey, failed]);

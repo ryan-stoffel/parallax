@@ -1,7 +1,8 @@
-import { expect, test } from "vite-plus/test";
+import { expect, test, vi } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/threads.json";
 import type {
+  AgentBackgroundTask,
   AgentRun,
   EventsEventParams,
   ThreadStartResult,
@@ -10,6 +11,7 @@ import type {
 import {
   asksOf,
   emptyThreads,
+  holdQuiet,
   projectRuns,
   threadProjects,
   threadsReducer,
@@ -172,4 +174,45 @@ test("a thread is in a Project when its run or an ancestor's is one of the Proje
     "grandchild",
     "own",
   ]);
+});
+
+test("holdQuiet holds the end of a run's background work until the agent has had time to wake (PLX-1015)", () => {
+  vi.useFakeTimers();
+  const applied: ParallaxEvent[] = [];
+  const quiet = holdQuiet((e) => applied.push(e), 1000);
+  const task = { taskId: "b1", kind: "command", description: "build" } as AgentBackgroundTask;
+  const ended: ParallaxEvent = { kind: "agent.background", runId: "r", tasks: [] };
+  const other: ParallaxEvent = { kind: "areas.changed", areas: [] };
+
+  quiet.pass(other);
+  quiet.pass(ended);
+  expect(applied).toEqual([other]);
+  // New work before the hold ends replaces it.
+  const more: ParallaxEvent = { kind: "agent.background", runId: "r", tasks: [task] };
+  quiet.pass(more);
+  vi.advanceTimersByTime(1000);
+  expect(applied).toEqual([other, more]);
+  // With nothing new, it applies once the hold ends.
+  quiet.pass(ended);
+  vi.advanceTimersByTime(999);
+  expect(applied).toHaveLength(2);
+  vi.advanceTimersByTime(1);
+  expect(applied).toEqual([other, more, ended]);
+  // The agent waking for it applies it at once.
+  quiet.pass(ended);
+  const woke = { kind: "agent.updated", runId: "r", state: { status: "running" } } as ParallaxEvent;
+  quiet.pass(woke);
+  expect(applied).toEqual([other, more, ended, woke, ended]);
+  vi.advanceTimersByTime(1000);
+  expect(applied).toHaveLength(5);
+  // So does its stopping, since it can't wake now.
+  quiet.pass(ended);
+  const stopped = {
+    kind: "agent.updated",
+    runId: "r",
+    state: { status: "cancelled" },
+  } as ParallaxEvent;
+  quiet.pass(stopped);
+  expect(applied.slice(5)).toEqual([stopped, ended]);
+  vi.useRealTimers();
 });
