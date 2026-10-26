@@ -4,6 +4,7 @@ import type { RpcError } from "../preload/bridge";
 import { ErrorCodes } from "../protocol/generated/protocol";
 import type {
   AgentBackgroundTask,
+  AgentStatus,
   Area,
   AccountChoice,
   Capabilities,
@@ -77,12 +78,17 @@ const wakes = (tasks: AgentBackgroundTask[] = []) => tasks.length > 0;
  */
 const QUIET_MS = 5000;
 
+// A run status that ends a hold: it woke, or it can't wake now.
+const endsHold = (status: AgentStatus) =>
+  isRunning(status) || status === "cancelled" || status === "failed" || status === "interrupted";
+
 /**
  * Passes host events to `apply`, holding for `ms` an `agent.background` with no tasks or a
  * `pr.watches` with no URLs. The agent usually wakes for what ended, and plxd reports its turn
  * starting just after, so applying it at once would show the thread done for a moment. A newer
- * event of the same kind for the run replaces a held one, and the run showing running applies
- * its held ones at once, since it woke. `clear` drops every held one.
+ * event of the same kind for the run replaces a held one. The run showing running applies its
+ * held ones at once, since it woke, as does its stopping or failing, since it can't wake now.
+ * `clear` drops every held one.
  */
 export function holdQuiet(apply: (event: ParallaxEvent) => void, ms = QUIET_MS) {
   const held = new Map<
@@ -93,7 +99,7 @@ export function holdQuiet(apply: (event: ParallaxEvent) => void, ms = QUIET_MS) 
     pass(event: ParallaxEvent) {
       if (event.kind !== "agent.background" && event.kind !== "pr.watches") {
         apply(event);
-        if (event.kind === "agent.updated" && isRunning(event.state.status))
+        if (event.kind === "agent.updated" && endsHold(event.state.status))
           for (const [key, h] of held)
             if (h.runId === event.runId) {
               clearTimeout(h.timer);

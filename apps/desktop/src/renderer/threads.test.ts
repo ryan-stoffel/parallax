@@ -205,5 +205,14 @@ test("holdQuiet holds the end of a run's background work until the agent has had
   expect(applied).toEqual([other, more, ended, woke, ended]);
   vi.advanceTimersByTime(1000);
   expect(applied).toHaveLength(5);
+  // So does its stopping, since it can't wake now.
+  quiet.pass(ended);
+  const stopped = {
+    kind: "agent.updated",
+    runId: "r",
+    state: { status: "cancelled" },
+  } as ParallaxEvent;
+  quiet.pass(stopped);
+  expect(applied.slice(5)).toEqual([stopped, ended]);
   vi.useRealTimers();
 });

@@ -103,7 +103,7 @@ export function notify(notice: Notice) {
         0,
         MAX_LOGGED,
       ),
-      unseen: log.unseen + 1,
+      unseen: Math.min(log.unseen + 1, MAX_LOGGED),
     });
   // Settings > General turns off the OS alerts and the toasts of notices that have an OS alert.
   const { systemNotifications, inAppNotifications } = behaviorPrefs.get();
