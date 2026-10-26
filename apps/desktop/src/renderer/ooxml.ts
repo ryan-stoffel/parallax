@@ -1,11 +1,12 @@
 import { strFromU8, unzipSync } from "fflate";
 
 /**
- * The shared parts of the Office files the side panel opens (PLX-755): a .docx, .xlsx, or .pptx is
- * a zip of XML parts, linked by `_rels` files. Each format module reads the parts it shows.
+ * The shared parts of the Office files the side panel opens itself (PLX-755): an .xlsx or .pptx is a
+ * zip of XML parts, linked by `_rels` files. Each format module reads the parts it shows. A .docx
+ * goes through docx-preview instead (docx.ts).
  */
 
-/** A package's parts by path, such as `word/document.xml`. */
+/** A package's parts by path, such as `xl/workbook.xml`. */
 export type Parts = Record<string, Uint8Array>;
 
 export const unzip = (bytes: Uint8Array): Parts => unzipSync(bytes);
@@ -79,6 +80,5 @@ function toBase64(bytes: Uint8Array): string {
 export const fromBase64 = (text: string): Uint8Array =>
   Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
-/** Office's units: twentieths of a point (twips) and English Metric Units, as CSS pixels. */
-export const twipsToPx = (twips: number) => twips / 15;
+/** Office's English Metric Units as CSS pixels. */
 export const emuToPx = (emu: number) => emu / 9525;
