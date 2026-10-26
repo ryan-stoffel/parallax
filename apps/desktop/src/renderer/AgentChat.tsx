@@ -821,9 +821,71 @@ export function AgentChat({
     tabs.push({ key: "queue", node: strip(false), compact: strip(true) });
   }
 
+  const dock = (
+    // A column the window bounds, so a pinned card's preview gives way to a grown composer. Only
+    // what's in it takes the pointer, so the transcript under its margins still scrolls.
+    <div className="pointer-events-none mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5 *:pointer-events-auto">
+      {/* Requests waiting on the user, pinned so they can't scroll away. */}
+      {pinned}
+      {/* Narrows with a composer that steps back, its tabs with it. */}
+      <div
+        className={`transition-[margin] duration-200 ease-out motion-reduce:transition-none ${back ? "mx-10" : ""}`}
+      >
+        <ComposerTabs tabs={tabs} short={back} />
+        <Composer
+          // One sent before the transcript loads stays in the box.
+          onSend={(text, options, images, threads) =>
+            run
+              ? sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
+              : Promise.resolve("")
+          }
+          onSteer={
+            queueEnabled && running
+              ? (text, options, images, threads) =>
+                  sendText(text, options, images, threads, "steer")
+              : undefined
+          }
+          history={history}
+          onStop={isRunning(box?.status) ? stop : undefined}
+          unanswered={stopBack}
+          disabledReason={disabledReason}
+          tab={tab}
+          backend={box?.backend}
+          started={box}
+          accountId={box?.accountId}
+          requestUsage={transcript.requestUsage}
+          threadUsage={transcript.threadUsage}
+          connected={connected}
+          hostId={hostId}
+          contextAndFast={connected && "contextAndFast" in connection.capabilities}
+          unavailable={unavailable}
+          optionsDisabled={optionsDisabled}
+          imageCaps={imageCaps(connection)}
+          uploadBytes={uploadBytes(connection)}
+          manualDenied={manualDenied}
+          noAccess={space}
+          projectMode={projectMode}
+          insert={compose && !compose.send ? compose.text : undefined}
+          cite={cite}
+          menus={
+            connected && "composerMenus" in connection.capabilities ? { hostId, runId } : undefined
+          }
+          attach={attachThreads(connection, threadLinks, runId)}
+          // What the box last held, where a subagent's view took it away, else the saved draft.
+          initial={contents.current ?? draft}
+          contents={contents}
+          away={away}
+          onBack={setBack}
+        />
+      </div>
+    </div>
+  );
+
+  // With a transcript, the composer floats over its bottom, which scrolls under it.
+  const hasRows = rows.length > 0 || !!editing;
   return (
     <SubagentsContext value={subagents}>
-      {rows.length > 0 || editing ? (
+      {hasRows ? (
         <ThreadLinksContext value={threadLinks}>
           <ForkContext value={forkTarget}>
             <TurnChangesContext value={turnChanges}>
@@ -843,6 +905,7 @@ export function AgentChat({
                 onCite={setCite}
                 onNearTop={older ? loadOlder : undefined}
                 onScrolledUp={setAway}
+                dock={dock}
                 onEdit={
                   live && !editing && unanswered?.row
                     ? { key: unanswered.row.key, edit: () => void edit() }
@@ -881,64 +944,7 @@ export function AgentChat({
           )}
         </div>
       )}
-      {/* A column the window bounds, so a pinned card's preview gives way to a grown composer. */}
-      <div className="mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5">
-        {/* Requests waiting on the user, pinned so they can't scroll away. */}
-        {pinned}
-        {/* Narrows with a composer that steps back, its tabs with it. */}
-        <div
-          className={`transition-[margin] duration-200 ease-out motion-reduce:transition-none ${back ? "mx-10" : ""}`}
-        >
-          <ComposerTabs tabs={tabs} short={back} />
-          <Composer
-            // One sent before the transcript loads stays in the box.
-            onSend={(text, options, images, threads) =>
-              run
-                ? sendText(text, options, images, threads, queueEnabled ? "queue" : undefined)
-                : Promise.resolve("")
-            }
-            onSteer={
-              queueEnabled && running
-                ? (text, options, images, threads) =>
-                    sendText(text, options, images, threads, "steer")
-                : undefined
-            }
-            history={history}
-            onStop={isRunning(box?.status) ? stop : undefined}
-            unanswered={stopBack}
-            disabledReason={disabledReason}
-            tab={tab}
-            backend={box?.backend}
-            started={box}
-            accountId={box?.accountId}
-            requestUsage={transcript.requestUsage}
-            threadUsage={transcript.threadUsage}
-            connected={connected}
-            hostId={hostId}
-            contextAndFast={connected && "contextAndFast" in connection.capabilities}
-            unavailable={unavailable}
-            optionsDisabled={optionsDisabled}
-            imageCaps={imageCaps(connection)}
-            uploadBytes={uploadBytes(connection)}
-            manualDenied={manualDenied}
-            noAccess={space}
-            projectMode={projectMode}
-            insert={compose && !compose.send ? compose.text : undefined}
-            cite={cite}
-            menus={
-              connected && "composerMenus" in connection.capabilities
-                ? { hostId, runId }
-                : undefined
-            }
-            attach={attachThreads(connection, threadLinks, runId)}
-            // What the box last held, where a subagent's view took it away, else the saved draft.
-            initial={contents.current ?? draft}
-            contents={contents}
-            away={away}
-            onBack={setBack}
-          />
-        </div>
-      </div>
+      {!hasRows && dock}
     </SubagentsContext>
   );
 }
@@ -1106,6 +1112,7 @@ export function TranscriptView({
   onEdit,
   onCite,
   onScrolledUp,
+  dock,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
@@ -1138,8 +1145,20 @@ export function TranscriptView({
    * `awayGap` and off at the end, so a composer that shrinks for it can't flip it back.
    */
   onScrolledUp?: (up: boolean) => void;
+  /** Floats over the list's bottom, such as the composer, with the list scrolling under it. */
+  dock?: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  // The dock's height, which the list leaves free past its end so the last row clears it.
+  const [docked, setDocked] = useState(0);
+  useLayoutEffect(() => {
+    const el = dockRef.current;
+    if (!el) return setDocked(0);
+    const observer = new ResizeObserver(() => setDocked(el.offsetHeight));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [!!dock]);
   const links = useContext(ThreadLinksContext);
   const known = useKnownMentions(links?.hostId, backend, runId, rows, sent);
   const rowContext = useMemo(() => ({ root, loadImage, known }), [root, loadImage, known]);
@@ -1267,13 +1286,13 @@ export function TranscriptView({
     const el = scrollRef.current;
     if (el && atBottom.current) el.scrollTop = el.scrollHeight;
     follow();
-  }, [total, view.length, follow, !!end]);
+  }, [total, view.length, follow, !!end, docked]);
   // Near the top, the next older page loads.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (el && onNearTop && el.scrollTop < el.clientHeight) onNearTop();
   });
-  // As the composer grows it shrinks the list from below: keep the latest output in view.
+  // As the window shrinks the list from below, keep the latest output in view.
   useEffect(() => {
     const el = scrollRef.current!;
     const observer = new ResizeObserver(() => {
@@ -1396,12 +1415,18 @@ export function TranscriptView({
             })}
           </div>
           {end && <div className="mx-auto max-w-3xl px-10 pb-6">{end}</div>}
+          <div aria-hidden style={{ height: docked }} />
         </div>
         {/* One prompt is no choice of where to go, so there's no rail for it. */}
         {prompts.length > 1 && <PromptRail prompts={prompts} current={reading} onJump={jump} />}
-        {scrolledUp && <ScrollToEnd onClick={scrollToEnd} />}
+        {scrolledUp && <ScrollToEnd onClick={scrollToEnd} bottom={docked} />}
         {findBar}
         {onCite && <CiteSelection log={scrollRef} onCite={onCite} />}
+        {dock && (
+          <div ref={dockRef} className="absolute inset-x-0 bottom-0 flex max-h-full flex-col">
+            {dock}
+          </div>
+        )}
       </div>
     </RowContext>
   );

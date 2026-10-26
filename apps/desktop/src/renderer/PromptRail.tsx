@@ -103,13 +103,14 @@ export function PromptRail({
   );
 }
 
-/** "Scroll to end", over the bottom of a transcript scrolled up from it. */
-export function ScrollToEnd({ onClick }: { onClick: () => void }) {
+/** "Scroll to end", over the bottom of a transcript scrolled up from it, `bottom` pixels above it. */
+export function ScrollToEnd({ onClick, bottom = 0 }: { onClick: () => void; bottom?: number }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-surface py-1.5 pr-3.5 pl-2.5 text-body text-muted-foreground shadow-composer hover:text-foreground [&_svg]:size-4"
+      style={{ bottom: bottom + 12 }}
+      className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-surface py-1.5 pr-3.5 pl-2.5 text-body text-muted-foreground shadow-composer hover:text-foreground [&_svg]:size-4"
     >
       <ChevronDown aria-hidden />
       Scroll to end
