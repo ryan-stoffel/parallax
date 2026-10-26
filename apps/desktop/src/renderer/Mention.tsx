@@ -1,13 +1,14 @@
 import { SquareSlash } from "lucide-react";
 import type { ReactNode } from "react";
 
-// Each kind of mention's colors: a skill in violet, a file in the accent, and a thread or an image
-// in the text's own color, faintly filled and outlined.
+// Each kind of mention's colors: a skill in violet, a file in the accent, a thread or an image in
+// the text's own color, faintly filled and outlined, and cited text outlined in the accent.
 const tones = {
   skill: "bg-project-violet/12 text-project-violet",
   file: "bg-accent/10 text-foreground",
   thread: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
   image: "bg-foreground/[0.06] text-foreground ring-1 ring-foreground/10 ring-inset",
+  cite: "bg-accent/10 text-foreground ring-1 ring-accent/40 ring-inset",
 };
 
 /** A mention in a message, as the composer draws one: icons and a name, kept whole, with `end`

@@ -822,6 +822,12 @@ body {
    GitHub's, Linear's, or a globe, in the text's color. */
 .enriched {
   overflow-wrap: anywhere;
+  /* Enriched Markdown paints ::selection with this, and transparent while it's unset. */
+  --enrm-selection-bg: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+/* Agent text being cited keeps its highlight while the comment box has focus (Cite.tsx). */
+::highlight(cite) {
+  background-color: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 .enriched > * + * {
   margin-top: 10px;
