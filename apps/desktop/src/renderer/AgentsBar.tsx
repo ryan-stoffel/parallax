@@ -102,7 +102,7 @@ export function AgentsBar({
         popoverTarget={id}
         aria-expanded={open}
         title={open ? `Hide the ${label.toLowerCase()}` : `Show the ${label.toLowerCase()}`}
-        className={`flex min-w-0 items-center gap-2.5 text-left text-body hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-1.5 pr-3.5 pl-2"}`}
+        className={`flex min-w-0 items-center gap-2.5 text-left text-body hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-0.5 pr-3.5 pl-2"}`}
       >
         {/* The providers at work, as one quiet group. */}
         <span className="flex h-6 shrink-0 items-center gap-1.5 rounded-full border border-border bg-background px-2 [&_svg]:size-3.5">

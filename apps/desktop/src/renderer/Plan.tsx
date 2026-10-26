@@ -224,7 +224,7 @@ export function PlanStrip({
         popoverTarget={id}
         aria-expanded={open}
         title={open ? "Hide the plan" : "Show the plan"}
-        className={`flex min-w-0 items-center gap-2.5 text-left text-body hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-1.5 pr-3.5 pl-4"}`}
+        className={`flex min-w-0 items-center gap-2.5 text-left text-body hover:bg-hover ${compact ? "h-7 rounded-lg px-1.5" : "w-full py-0.5 pr-3.5 pl-4"}`}
       >
         <span className="grid size-4 shrink-0 place-items-center">
           <Marker state={now ? "now" : next ? "todo" : "done"} />
