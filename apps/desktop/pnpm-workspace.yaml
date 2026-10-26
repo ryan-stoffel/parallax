@@ -19,7 +19,8 @@ overrides:
 
 # Enriched Markdown's web renderer parses only after a render, so a message's first frame was empty
 # and a virtualized transcript measured it at that height. The patch parses in the render once the
-# parser has loaded (MarkdownText, AgentChat.tsx); worth offering upstream.
+# parser has loaded (MarkdownText, AgentChat.tsx). It also adds `renderLinkContent`, which draws
+# an icon before a link's text. Both worth offering upstream.
 patchedDependencies:
   react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee: patches/react-native-enriched-markdown@1.2.0-nightly-20261022-ca155ffee.patch
 

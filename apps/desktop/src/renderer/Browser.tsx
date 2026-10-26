@@ -37,6 +37,7 @@ import { Extensions } from "./Extensions";
 import { fitSize, MONITOR, PageFrame, type Fit, type Size } from "./PageFrame";
 import { backendLogo } from "./Sidebar";
 import { instanceName } from "./providers";
+import { askSiteIcon, siteIcons, siteOf } from "./siteIcons";
 import { memory, stored } from "./stored";
 import {
   Add,
@@ -543,24 +544,6 @@ const driverOf = (backend?: string): Driver =>
         Logo: backendLogo(backend),
       }
     : { name: "The agent" };
-
-/** `url`'s origin, which its site's favicon is kept by, or "" for none. */
-const siteOf = (url: string) => {
-  const origin = URL.parse(url)?.origin;
-  return origin && origin !== "null" ? origin : "";
-};
-// The sites' favicons fetched for agents' tabs, by origin, each asked for once.
-// ponytail: kept for the app's life and never retried; expire entries if dev servers on one port
-// changing icons matters.
-const siteIcons = memory<Readonly<Record<string, string>>>({});
-const askedSites = new Set<string>();
-function askSiteIcon(site: string) {
-  if (!site || askedSites.has(site)) return;
-  askedSites.add(site);
-  void window.parallax.siteIcon(site).then((icon) => {
-    if (icon) siteIcons.set({ ...siteIcons.get(), [site]: icon });
-  });
-}
 
 /** A browser tab as its top bar draws it: its key is `a:` and an agent tab's id, or `o:` and an own tab's. */
 interface BrowserTabFace {

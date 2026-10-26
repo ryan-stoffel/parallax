@@ -1,7 +1,7 @@
 diff --git a/lib/module/index.web.js b/lib/module/index.web.js
 index a41f6b72cc839e2192dd9f979e7a2374fbd29b1e..ee22210da3cec430314c0041f93c234fdbcf2c47 100644
 --- a/lib/module/index.web.js
-+++ b/lib/module/index.web.js
++++ b/lib/module/index.web.js	
 @@ -1,5 +1,6 @@
  "use strict";
  
@@ -11,9 +11,9 @@ index a41f6b72cc839e2192dd9f979e7a2374fbd29b1e..ee22210da3cec430314c0041f93c234f
  //# sourceMappingURL=index.web.js.map
 \ No newline at end of file
 diff --git a/lib/module/web/EnrichedMarkdownText.js b/lib/module/web/EnrichedMarkdownText.js
-index 0f36f61944780629c41c8cd059ddc0f0a370fb89..32d47124b236286cfd631c9d26c6d26cff73924d 100644
+index 0f36f61944780629c41c8cd059ddc0f0a370fb89..d314f2269a8e98f6a5dceabe552f4e2ae69055ee 100644
 --- a/lib/module/web/EnrichedMarkdownText.js
-+++ b/lib/module/web/EnrichedMarkdownText.js
++++ b/lib/module/web/EnrichedMarkdownText.js	
 @@ -3,14 +3,14 @@
  import { useState, useEffect, useMemo, useRef } from 'react';
  import { normalizeMarkdownStyle } from "../normalizeMarkdownStyle.web.js";
@@ -31,7 +31,15 @@ index 0f36f61944780629c41c8cd059ddc0f0a370fb89..32d47124b236286cfd631c9d26c6d26c
  import { ENRM_TEXT_CLASS, ENRM_SELECTION_BG_VAR } from "./globalStyles.js";
  import { filterNativeOnlyProps } from "./nativeProps.js";
  import { isDev } from "../utils/isDev.js";
-@@ -64,7 +64,35 @@ export const EnrichedMarkdownText = ({
+@@ -29,6 +29,7 @@ export const EnrichedMarkdownText = ({
+   onImagePress,
+   onTaskListItemPress,
+   onCodeBlockPress,
++  renderLinkContent,
+   renderers,
+   resolveImageSource,
+   enableTaskListItemToggle = true,
+@@ -64,7 +65,35 @@ export const EnrichedMarkdownText = ({
    linkRecognitionRef.current = linkRecognition;
    const textLinkKey = linkRecognition?.text?.toString() ?? null;
    const inlineCodeLinkKey = linkRecognition?.inlineCode?.toString() ?? null;
@@ -67,7 +75,7 @@ index 0f36f61944780629c41c8cd059ddc0f0a370fb89..32d47124b236286cfd631c9d26c6d26c
      let cancelled = false;
      const katexPromise = latexMath ? loadKaTeX() : Promise.resolve(null);
      Promise.all([parseMarkdown(markdown, {
-@@ -98,7 +126,10 @@ export const EnrichedMarkdownText = ({
+@@ -98,15 +127,19 @@ export const EnrichedMarkdownText = ({
      return () => {
        cancelled = true;
      };
@@ -79,16 +87,19 @@ index 0f36f61944780629c41c8cd059ddc0f0a370fb89..32d47124b236286cfd631c9d26c6d26c
    const callbacks = useMemo(() => ({
      onLinkPress,
      onLinkLongPress,
-@@ -106,7 +137,7 @@ export const EnrichedMarkdownText = ({
+     onImagePress,
      onTaskListItemPress,
-     onCodeBlockPress
-   }), [onLinkPress, onLinkLongPress, onImagePress, onTaskListItemPress, onCodeBlockPress]);
+-    onCodeBlockPress
+-  }), [onLinkPress, onLinkLongPress, onImagePress, onTaskListItemPress, onCodeBlockPress]);
 -  const renderedBlocks = useRenderedBlocks(collected.blocks, renderers);
++    onCodeBlockPress,
++    renderLinkContent
++  }), [onLinkPress, onLinkLongPress, onImagePress, onTaskListItemPress, onCodeBlockPress, renderLinkContent]);
 +  const renderedBlocks = useRenderedBlocks(shownCollected.blocks, renderers);
    const blockSlots = useMemo(() => {
      if (!renderersEnabled) return undefined;
      const slots = new Map();
-@@ -118,15 +149,15 @@ export const EnrichedMarkdownText = ({
+@@ -118,15 +151,15 @@ export const EnrichedMarkdownText = ({
      }
      return slots;
    }, [renderersEnabled, renderedBlocks]);
@@ -107,7 +118,7 @@ index 0f36f61944780629c41c8cd059ddc0f0a370fb89..32d47124b236286cfd631c9d26c6d26c
    const lastChildStyle = useMemo(() => allowTrailingMargin ? normalizedStyle : zeroTrailingMargins(normalizedStyle), [normalizedStyle, allowTrailingMargin]);
    const styles = useMemo(() => buildStyles(normalizedStyle), [normalizedStyle]);
    const lastChildStyles = useMemo(() => buildStyles(lastChildStyle), [lastChildStyle]);
-@@ -142,7 +173,7 @@ export const EnrichedMarkdownText = ({
+@@ -142,7 +175,7 @@ export const EnrichedMarkdownText = ({
      } : null)
    }), [containerStyle, selectable, selectionColor]);
    const domProps = filterNativeOnlyProps(rest);
@@ -116,7 +127,7 @@ index 0f36f61944780629c41c8cd059ddc0f0a370fb89..32d47124b236286cfd631c9d26c6d26c
      return /*#__PURE__*/_jsx("div", {
        className: ENRM_TEXT_CLASS,
        style: wrapperStyle,
-@@ -155,8 +186,8 @@ export const EnrichedMarkdownText = ({
+@@ -155,8 +188,8 @@ export const EnrichedMarkdownText = ({
        })
      });
    }
@@ -130,7 +141,7 @@ index 0f36f61944780629c41c8cd059ddc0f0a370fb89..32d47124b236286cfd631c9d26c6d26c
 diff --git a/lib/module/web/katex.js b/lib/module/web/katex.js
 index b0dbf6aee9f73208a1a2431aeb3aa7217e7bdf23..879950418fe3b14d7c211427693935ed14106d0f 100644
 --- a/lib/module/web/katex.js
-+++ b/lib/module/web/katex.js
++++ b/lib/module/web/katex.js	
 @@ -1,6 +1,13 @@
  "use strict";
  
@@ -156,7 +167,7 @@ index b0dbf6aee9f73208a1a2431aeb3aa7217e7bdf23..879950418fe3b14d7c211427693935ed
 diff --git a/lib/module/web/parseMarkdown.js b/lib/module/web/parseMarkdown.js
 index 93aa073c850ad125a38aedc7d162b63850d680d6..6a18658312d920ada7da12a42c2adf9d4026ac8f 100644
 --- a/lib/module/web/parseMarkdown.js
-+++ b/lib/module/web/parseMarkdown.js
++++ b/lib/module/web/parseMarkdown.js	
 @@ -16,12 +16,17 @@
  // Caching the Promise (not the resolved value) means concurrent callers share
  // a single WASM initialization — no duplicate loading.
@@ -208,10 +219,27 @@ index 93aa073c850ad125a38aedc7d162b63850d680d6..6a18658312d920ada7da12a42c2adf9d
  export async function parseMarkdown(markdown, {
    underline = false,
    latexMath = true,
+diff --git a/lib/module/web/renderers/InlineRenderers.js b/lib/module/web/renderers/InlineRenderers.js
+index c8311d4c7f0f698c4b965d347f78c5b27d67c742..3d891256f8a30bd4d547fc89436fb3fdc557afae 100644
+--- a/lib/module/web/renderers/InlineRenderers.js
++++ b/lib/module/web/renderers/InlineRenderers.js	
+@@ -132,7 +132,11 @@ function LinkRenderer({
+     rel: "noopener noreferrer",
+     onClick: handleClick,
+     onContextMenu: handleContextMenu,
+-    children: renderChildren(node)
++    // What the app draws in the link, given its URL and its own text, such as an icon before it.
++    children: callbacks.renderLinkContent ? callbacks.renderLinkContent({
++      url,
++      children: renderChildren(node)
++    }) : renderChildren(node)
+   });
+ }
+ function LatexMathInlineRenderer({
 diff --git a/lib/module/web/renderers/ListRenderers.js b/lib/module/web/renderers/ListRenderers.js
 index 418612bb64a10be4b1278974fc5c9e25319c4002..ea6cff211ec8171998fd6570a3f0b410eeba044c 100644
 --- a/lib/module/web/renderers/ListRenderers.js
-+++ b/lib/module/web/renderers/ListRenderers.js
++++ b/lib/module/web/renderers/ListRenderers.js	
 @@ -11,7 +11,8 @@ function ListRenderer({
    parentType,
    capabilities,

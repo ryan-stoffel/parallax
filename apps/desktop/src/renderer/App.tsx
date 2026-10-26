@@ -92,7 +92,7 @@ import {
   Sidebar,
   ThreadList,
 } from "./Sidebar";
-import { newThreadPrefs } from "./prefs";
+import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
 import { useAppearanceEffects } from "./appearance";
@@ -1428,7 +1428,7 @@ export function App() {
                             // Clicking or tabbing into a side focuses it.
                             onPointerDownCapture={() => !focused && openThreadId(threadId)}
                             // A link to a pull request the thread links opens its view, not GitHub,
-                            // unless a modifier key asks for the browser.
+                            // unless a modifier key asks for the browser; the setting swaps the two.
                             onClickCapture={(e) => {
                               const href = (e.target as Element)
                                 .closest?.("a[href]")
@@ -1437,8 +1437,12 @@ export function App() {
                                 linksPrs &&
                                 href &&
                                 linkedPr(href, threads.state.runs[threadId]?.pullRequests ?? []);
-                              if (!pr || e.metaKey || e.ctrlKey || e.shiftKey) return;
+                              const modified = e.metaKey || e.ctrlKey || e.shiftKey;
+                              const inApp = behaviorPrefs.get().prLinkClick === "parallax";
+                              if (!pr || modified === inApp) return;
+                              // Never reaching the link's own handler, which opens the browser.
                               e.preventDefault();
+                              e.stopPropagation();
                               openPr(pr);
                             }}
                             // Not focus the window or the app gives with nothing focused before, such as a

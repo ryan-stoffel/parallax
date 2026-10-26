@@ -4,6 +4,10 @@
 /** A pull request's number, from its URL. */
 export const numberOf = (url: string) => /\/pull\/(\d+)/.exec(url)?.[1] ?? "?";
 
+/** A GitHub pull request link's number, on any of its tabs, or undefined for any other link. */
+export const prNumber = (url: string) =>
+  /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)(?:[/?#]|$)/i.exec(url)?.[1];
+
 /** Whether `src` is on GitHub's image hosts, the only remote images the app's CSP loads. */
 export const onGithub = (src: unknown): src is string =>
   typeof src === "string" && /^https:\/\/(github\.com|[\w-]+\.githubusercontent\.com)\//.test(src);
