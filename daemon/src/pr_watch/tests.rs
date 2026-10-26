@@ -1,9 +1,11 @@
+use std::cell::Cell;
 use std::time::{Duration, Instant};
 
 use jiff::{SignedDuration, Timestamp};
 
 use super::{
-    Change, Check, CheckState, Detail, Remark, Watch, Watches, evaluate, message, parse, verdict,
+    Change, Check, CheckState, Detail, Remark, Watch, Watches, evaluate, judged, message, parse,
+    verdict,
 };
 use parallax_protocol::{PrStatusCheck, PrStatusFile, PrStatusThread};
 
@@ -339,8 +341,86 @@ fn a_read_serves_every_read_of_its_pull_request_for_thirty_seconds() {
     watches.compared(url, "pushed", 5);
     assert_eq!(watches.shared(url, later).unwrap().behind_by, Some(2));
 
+    // A read that started earlier but finished later doesn't replace a newer one.
+    let mut older = open(Vec::new(), Vec::new(), "MERGEABLE");
+    older.head_sha = Some("older".to_owned());
+    let before = at.checked_sub(Duration::from_secs(1)).unwrap();
+    watches.share(url, before, &older);
+    assert_eq!(
+        watches.shared(url, later).unwrap().head_sha.as_deref(),
+        Some("abc1234def")
+    );
+
     // A newer read drops ones too old to share.
     let next = at + Duration::from_secs(31);
     watches.share("https://github.com/me/app/pull/2", next, &Detail::default());
     assert!(!watches.reads().contains_key(url));
+}
+
+#[tokio::test]
+async fn a_shared_read_never_answers_ready() {
+    let url = "https://github.com/me/app/pull/1";
+    let green = open(
+        vec![check("lint", CheckState::Passed, true)],
+        Vec::new(),
+        "MERGEABLE",
+    );
+    // Pushed since the shared read: a new head with no checks yet.
+    let mut pushed = green.clone();
+    pushed.head_sha = Some("pushed".to_owned());
+    pushed.checks.clear();
+    let reads = Cell::new(0);
+    let fetch = |detail: Detail| {
+        let reads = &reads;
+        move || {
+            reads.set(reads.get() + 1);
+            async move { Ok::<_, ()>(detail) }
+        }
+    };
+    let judge = move |detail: Detail| async move { Ok(verdict(url.to_owned(), detail, 0, false)) };
+
+    let result = judged(Some(green.clone()), fetch(pushed.clone()), judge)
+        .await
+        .unwrap();
+    assert!(!result.ready, "judged from the fresh read");
+    assert_eq!(result.head_sha.as_deref(), Some("pushed"));
+    assert_eq!(reads.get(), 1);
+
+    // A shared read that isn't ready answers alone, and no shared read means one read.
+    let result = judged(Some(pushed.clone()), fetch(green.clone()), judge)
+        .await
+        .unwrap();
+    assert!(!result.ready);
+    assert_eq!(reads.get(), 1);
+    let result = judged(None, fetch(green), judge).await.unwrap();
+    assert!(result.ready);
+    assert_eq!(reads.get(), 2);
+}
+
+#[test]
+fn a_field_github_cant_answer_leaves_the_rest_of_the_read() {
+    let partial = ANSWER
+        .replace(
+            r#""checkSuite": {"workflowRun": {"databaseId": 42}}"#,
+            r#""checkSuite": {"workflowRun": {"databaseId": null}}"#,
+        )
+        .replace(
+            r#""files": {"nodes": [{"path": "src/main.rs", "additions": 3, "deletions": 1}]}"#,
+            r#""files": null"#,
+        );
+    let partial = format!(
+        r#"{}, "errors": [{{"message": "Resource not accessible by integration"}}]}}"#,
+        partial.trim_end().strip_suffix('}').unwrap()
+    );
+    let detail = parse(&partial).unwrap();
+    assert_eq!(detail.title, "Add a thing");
+    assert!(detail.files.is_empty());
+    assert_eq!(detail.checks[0].run_id, None);
+
+    let error = parse(
+        r#"{"data": {"viewer": null, "repository": {"pullRequest": null}},
+            "errors": [{"message": "Could not resolve to a PullRequest"}]}"#,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Could not resolve"), "{error}");
 }

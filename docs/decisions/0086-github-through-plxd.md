@@ -12,7 +12,7 @@ Every agent on a host shares one `gh` login, so one 5,000-request REST quota and
 
 Agents reach GitHub through plxd tools, and `gh` refuses what those tools replace.
 
-- **Reads are shared.** A plxd tool reads once per pull request or per head SHA and shares the result across every run that asks, and with the watch sweep. A pull request's read serves every read of it for 30 s.
+- **Reads are shared.** A plxd tool reads once per pull request or per head SHA and shares the result across every run that asks, and with the watch sweep. A pull request's read serves every read of it for 30 s, except that a ready answer always comes from a fresh read.
 - **Writes are paced.** plxd sends pull request writes (comments, review replies, resolving threads, merges) itself, spaced to stay under GitHub's secondary rate limits, instead of each agent calling `gh` on its own.
 - **A `gh` shim refuses the rest.** plxd puts a `gh` shim first on agents' `PATH`. It refuses each `gh` command a plxd tool replaces, naming the tool to use, and passes every other command to the real `gh`. `github_budget` reports the quota left.
 
@@ -30,6 +30,6 @@ The tools:
 ## Consequences
 
 - Several agents on one pull request cost one read per 30 s, and the watch sweep's read serves their status calls.
-- A status can be up to 30 s old. An agent that just pushed sees its new head once the shared read ages out; `watch_pull_request` covers waiting on it.
+- A status that isn't ready can be up to 30 s old, from before a push. A ready answer always comes from a fresh read, at most one extra read per ready answer, so a shared read never sends an agent to merge a head nobody checked.
 - Each replaced `gh` command needs its plxd tool to answer everything agents used it for, or they find another way around the shim. A new field an agent needs goes into the tool, not back into `gh`.
 - The shim only covers agents plxd starts. A user's own `gh` calls, in a terminal or a hook, still spend the shared quota.

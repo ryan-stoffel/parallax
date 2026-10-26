@@ -14,7 +14,8 @@
 //! [`status`], `pr/status` (PLX-837), reads a pull request the same way, plus how far its head is
 //! behind its base, and says whether it is ready to merge, so agents never read it with `gh`
 //! themselves. Every read of a pull request, by any run's status, a watch, or the sweep, is shared
-//! for [`SHARE`] (PLX-1018), so several agents asking about one pull request cost one read.
+//! for [`SHARE`] (PLX-1018), so several agents asking about one pull request cost one read. A
+//! shared read never answers ready: [`judged`] reads again first.
 //!
 //! A watch ends when its pull request merges or closes, when its thread settles or is archived,
 //! after [`WAKE_LIMIT`] comment-only wakes in a row, or after [`READ_FAILURE_LIMIT`] failed reads
@@ -133,10 +134,14 @@ impl Watches {
             .map(|(_, detail)| detail.clone())
     }
 
-    /// Keeps `detail` as `url`'s last read, made at `at`, and drops reads too old to share.
+    /// Keeps `detail` as `url`'s last read, started at `at`, unless a read that started later is
+    /// kept already, and drops reads too old to share.
     fn share(&self, url: &str, at: Instant, detail: &Detail) {
         let mut reads = self.reads();
         reads.retain(|_, (read, _)| at.saturating_duration_since(*read) < SHARE);
+        if reads.get(url).is_some_and(|(read, _)| *read > at) {
+            return;
+        }
         reads.insert(url.to_owned(), (at, detail.clone()));
     }
 
@@ -320,35 +325,62 @@ pub(crate) async fn watch(
     })
 }
 
-/// `pr/status`: reads `url` as a pass does, plus how far its head is behind its base, and judges
-/// it with [`verdict`]. The pull request needn't be linked.
+/// `pr/status`: takes the shared read of `url` or reads it as a pass does, plus how far its head
+/// is behind its base, and judges it with [`verdict`] through [`judged`]. The pull request needn't
+/// be linked.
 pub(crate) async fn status(
     daemon: &Daemon,
     params: PrViewParams,
 ) -> Result<PrStatusResult, ErrorObject> {
     let PrViewParams { run_id, url } = params;
-    let unreadable = |error: PrError| {
-        ErrorObject::invalid_params(format!("could not read the pull request: {error}"))
-    };
-    let detail = read(daemon, &url).await.map_err(unreadable)?;
-    let behind_by = match (detail.state.as_str(), &detail.head_sha, detail.behind_by) {
-        ("OPEN", Some(_), Some(behind_by)) => behind_by,
-        ("OPEN", Some(head), None) => {
-            let behind_by = behind(daemon, &url, &detail.base_branch, head)
-                .await
-                .map_err(unreadable)?;
-            daemon.pr_watches.compared(&url, head, behind_by);
-            behind_by
-        }
-        _ => 0,
-    };
     let id = Uuid::from(run_id);
     let watched = daemon
         .reader
         .run(&CancellationToken::new(), move |db| urls(db, id))
         .await?;
     let watching = watched.contains(&url);
-    Ok(verdict(url, detail, behind_by, watching))
+    let unreadable = |error: PrError| {
+        ErrorObject::invalid_params(format!("could not read the pull request: {error}"))
+    };
+    let shared = daemon.pr_watches.shared(&url, Instant::now());
+    let url = &url;
+    let fresh = move || async move { fetch(daemon, url).await.map_err(unreadable) };
+    let judge = move |detail: Detail| async move {
+        let behind_by = match (detail.state.as_str(), &detail.head_sha, detail.behind_by) {
+            ("OPEN", Some(_), Some(behind_by)) => behind_by,
+            ("OPEN", Some(head), None) => {
+                let behind_by = behind(daemon, url, &detail.base_branch, head)
+                    .await
+                    .map_err(unreadable)?;
+                daemon.pr_watches.compared(url, head, behind_by);
+                behind_by
+            }
+            _ => 0,
+        };
+        Ok(verdict(url.clone(), detail, behind_by, watching))
+    };
+    judged(shared, fresh, judge).await
+}
+
+/// Judges a pull request with `judge`, from `shared`, its shared read, while that isn't ready, and
+/// otherwise from a fresh read by `fetch`. A shared read can predate a push, so ready only ever
+/// comes from a read made for this call: at most one extra read per ready answer.
+async fn judged<E, Fetch, Judge>(
+    shared: Option<Detail>,
+    fetch: impl FnOnce() -> Fetch,
+    judge: impl Fn(Detail) -> Judge,
+) -> Result<PrStatusResult, E>
+where
+    Fetch: Future<Output = Result<Detail, E>>,
+    Judge: Future<Output = Result<PrStatusResult, E>>,
+{
+    if let Some(detail) = shared {
+        let result = judge(detail).await?;
+        if !result.ready {
+            return Ok(result);
+        }
+    }
+    judge(fetch().await?).await
 }
 
 /// Judges a pull request as `pr_status.py` does: ready when it is open, not a draft, doesn't
@@ -1024,9 +1056,15 @@ fn snippet(body: &str) -> String {
 // ponytail: two reads that start together both call GitHub; share the call in flight if that
 // shows up in the rate limit.
 async fn read(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
-    if let Some(detail) = daemon.pr_watches.shared(url, Instant::now()) {
-        return Ok(detail);
+    match daemon.pr_watches.shared(url, Instant::now()) {
+        Some(detail) => Ok(detail),
+        None => fetch(daemon, url).await,
     }
+}
+
+/// Reads pull request `url` from GitHub with one `gh api graphql` call, and shares the read.
+async fn fetch(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
+    let started = Instant::now();
     let (owner, name, number) = parts(url)?;
     let answer = graphql(
         daemon,
@@ -1039,7 +1077,7 @@ async fn read(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
     )
     .await?;
     let detail = parse(&answer)?;
-    daemon.pr_watches.share(url, Instant::now(), &detail);
+    daemon.pr_watches.share(url, started, &detail);
     Ok(detail)
 }
 
@@ -1102,16 +1140,22 @@ fn parts(url: &str) -> Result<(&str, &str, u64), PrError> {
 fn parse(answer: &str) -> Result<Detail, PrError> {
     let answer: Answer = serde_json::from_str(answer)
         .map_err(|error| PrError::Gh(format!("could not read GitHub's answer: {error}")))?;
-    if let Some(error) = answer.errors.first() {
-        return Err(PrError::Gh(error.message.clone()));
+    let error = answer.errors.first().map(|error| error.message.clone());
+    let Some(Data { viewer, repository }) = answer.data else {
+        return Err(PrError::Gh(
+            error.unwrap_or_else(|| "GitHub answered with no data".to_owned()),
+        ));
+    };
+    let Some(pr) = repository.and_then(|repository| repository.pull_request) else {
+        return Err(PrError::Gh(
+            error.unwrap_or_else(|| "GitHub has no such pull request".to_owned()),
+        ));
+    };
+    // A field GitHub can't answer, such as a workflow run for a token without Actions access, is
+    // null with an error, and the rest of the pull request still reads.
+    if let Some(error) = error {
+        warn!(%error, "GitHub left part of a pull request out");
     }
-    let data = answer
-        .data
-        .ok_or_else(|| PrError::Gh("GitHub answered with no data".to_owned()))?;
-    let pr = data
-        .repository
-        .and_then(|repository| repository.pull_request)
-        .ok_or_else(|| PrError::Gh("GitHub has no such pull request".to_owned()))?;
     let checks = pr
         .commits
         .nodes
@@ -1127,7 +1171,7 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
             run_id: context
                 .check_suite
                 .and_then(|suite| suite.workflow_run)
-                .map(|run| run.database_id),
+                .and_then(|run| run.database_id),
         })
         .collect();
     let mut remarks: Vec<Remark> = pr
@@ -1187,7 +1231,7 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
         merge_state: pr.merge_state_status,
         review_decision: pr.review_decision,
         unresolved,
-        viewer: data.viewer.map(|viewer| viewer.login),
+        viewer: viewer.map(|viewer| viewer.login),
         author: pr.author.map(|author| author.login),
         remarks,
     })
@@ -1340,7 +1384,7 @@ struct CheckSuite {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WorkflowRun {
-    database_id: u64,
+    database_id: Option<u64>,
 }
 
 #[derive(Deserialize)]
