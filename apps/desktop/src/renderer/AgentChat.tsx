@@ -1180,7 +1180,16 @@ export function TranscriptView({
   const titles = links?.state.titles;
   const hostId = links?.hostId;
   const fileRun = useMemo(() => (hostId && runId ? { hostId, runId } : undefined), [hostId, runId]);
+  // Whether the list follows new output, which `follows` decides as it scrolls.
   const atBottom = useRef(true);
+  // The way the user last scrolled by wheel or key (PLX-1031).
+  const way = useRef<"up" | "down">(undefined);
+  // The user scrolls the list up or down. Up stops following at once, before the scroll lands, so
+  // an update in between can't pull the list back down.
+  const scrolled = (up: boolean) => {
+    way.current = up ? "up" : "down";
+    if (up) atBottom.current = false;
+  };
   // Whether Scroll to end's smooth scroll is on its way down.
   const ending = useRef(false);
   // Which tool calls and thoughts are expanded, kept here since rows unmount off screen.
@@ -1305,6 +1314,7 @@ export function TranscriptView({
     const el = scrollRef.current;
     if (!el) return;
     ending.current = true;
+    scrolled(false);
     setScrolledUp(false);
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   };
@@ -1342,17 +1352,35 @@ export function TranscriptView({
           aria-label="Transcript"
           onScroll={(e) => {
             const el = e.currentTarget;
-            atBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+            atBottom.current = follows(
+              el.scrollHeight - el.scrollTop - el.clientHeight,
+              way.current,
+            );
             if (atBottom.current) ending.current = false;
             // Scroll to end's smooth scroll passes through the middle, where it stays hidden.
             if (!ending.current) setScrolledUp(!atBottom.current);
             if (onNearTop && el.scrollTop < el.clientHeight) onNearTop();
             follow();
           }}
-          // Scrolling by hand cuts Scroll to end's scroll short.
-          onWheel={() => (ending.current = false)}
+          // Scrolling by hand cuts Scroll to end's scroll short. Only a scroll that moves the list
+          // itself sets the way it was scrolled: not one a box in it takes, a sideways swipe, keys
+          // typed in a field such as the message editor, or a scroll up with nowhere to go.
+          onWheel={(e) => {
+            ending.current = false;
+            const el = e.currentTarget;
+            if (Math.abs(e.deltaY) <= Math.abs(e.deltaX) || takenInside(e.target, el, e.deltaY))
+              return;
+            if (e.deltaY > 0 || el.scrollTop > 0) scrolled(e.deltaY < 0);
+          }}
           onPointerDown={() => (ending.current = false)}
-          onKeyDown={() => (ending.current = false)}
+          onKeyDown={(e) => {
+            ending.current = false;
+            if (editable(e.target)) return;
+            // Space pages down, and up with Shift.
+            const key = e.key === " " ? (e.shiftKey ? "PageUp" : "PageDown") : e.key;
+            if (upKeys.has(key) && e.currentTarget.scrollTop > 0) scrolled(true);
+            else if (downKeys.has(key)) scrolled(false);
+          }}
           className="min-h-0 flex-1 overflow-y-auto select-text"
         >
           <div className="relative w-full" style={{ height: total }}>
@@ -1409,6 +1437,40 @@ export function TranscriptView({
 // Rows of the agent's work, which sit closer to one another and to the messages around them, as
 // T3 Code's work log does (PLX-584, PLX-770).
 const listKinds = new Set(["work", "plan", "todo", "musing", "compaction", "epoch"]);
+
+// The keys that scroll the transcript up, and down.
+const upKeys = new Set(["ArrowUp", "PageUp", "Home"]);
+const downKeys = new Set(["ArrowDown", "PageDown", "End"]);
+
+/**
+ * Whether the transcript follows new output, from its distance to the end (`gap`) and the way the
+ * user last scrolled by wheel or key (PLX-1031). Once they scroll up it doesn't, however near the
+ * end, until they scroll back down near it or reach the end itself. Scrolls the user didn't make,
+ * such as the list keeping rows in place as they're measured, don't change their way.
+ */
+function follows(gap: number, way: "up" | "down" | undefined) {
+  return gap < 1 || (gap < 48 && way !== "up");
+}
+
+/** Whether a box between `target` and `list`, such as a tool's output, scrolls by `deltaY` instead. */
+function takenInside(target: EventTarget, list: HTMLElement, deltaY: number) {
+  for (let el = target as Element | null; el && el !== list; el = el.parentElement) {
+    if (el.scrollHeight <= el.clientHeight + 1) continue;
+    const { overflowY } = getComputedStyle(el);
+    if (overflowY !== "auto" && overflowY !== "scroll") continue;
+    if (deltaY < 0 ? el.scrollTop > 0 : el.scrollTop + el.clientHeight < el.scrollHeight - 1)
+      return true;
+  }
+  return false;
+}
+
+/** Whether keys pressed in `target` edit text rather than scroll. */
+function editable(target: EventTarget) {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || !!target.closest("input, textarea, select"))
+  );
+}
 
 /**
  * The user's prompts among `view`'s rows, for the rail: a follow-up's text from `sent` when the

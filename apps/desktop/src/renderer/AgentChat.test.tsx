@@ -706,6 +706,62 @@ test("in a fork, only a turn that ended past the copied history offers Fork, at 
   await act(async () => keep.click());
   expect(onFork).toHaveBeenCalledWith("turn-2", {});
 });
+test("scrolling up from the end, however little, stops following until it scrolls back down (PLX-1031)", () => {
+  window.parallax = {
+    connectionState: async () => ({ status: "connecting" as const }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const rows: Item[] = [
+    { kind: "user", key: "p", text: "Explain it" },
+    { kind: "assistant", key: "a1", text: "It works like this." },
+  ];
+  const root = render(<TranscriptView rows={rows} sent={new Map()} live={false} />);
+  // happy-dom lays nothing out: the list's heights and position, as a browser would have them.
+  const log = document.querySelector<HTMLElement>('[role="log"]')!;
+  let height = 1000;
+  let top = 0;
+  Object.defineProperties(log, {
+    scrollHeight: { get: () => height },
+    clientHeight: { get: () => 300 },
+    scrollTop: { get: () => top, set: (v: number) => (top = v) },
+  });
+  const scroll = (deltaY: number, to: number) =>
+    act(() => {
+      log.dispatchEvent(new WheelEvent("wheel", { deltaY, bubbles: true }));
+      top = to;
+      log.dispatchEvent(new Event("scroll"));
+    });
+  // An update the list re-renders for, which grows it.
+  const update = () => {
+    height += 100;
+    rows.push({ kind: "assistant", key: `a${rows.length}`, text: "More." });
+    act(() => root.render(<TranscriptView rows={[...rows]} sent={new Map()} live={false} />));
+  };
+
+  scroll(5, 700);
+  // A scroll up that a box in it takes, such as a tool's output, leaves it following.
+  const box = log.appendChild(document.createElement("div"));
+  box.style.overflowY = "auto";
+  Object.defineProperties(box, {
+    scrollHeight: { get: () => 400 },
+    clientHeight: { get: () => 200 },
+    scrollTop: { get: () => 100 },
+  });
+  act(() => {
+    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -5, bubbles: true }));
+  });
+  update();
+  expect(top).toBe(height);
+  scroll(5, height - 300);
+  // 5px up from the end, an update leaves it where the user put it.
+  scroll(-5, 695);
+  update();
+  expect(top).toBe(695);
+  // Back down near the end, it follows again.
+  scroll(5, height - 300 - 10);
+  update();
+  expect(top).toBe(height);
+});
 test("a tool named like an object's own property, or a status from a newer plxd, is read as any other", () => {
   const tool: Item = { kind: "tool", key: "t", callId: "1", name: "constructor", input: {} };
   render(<RowView row={tool} live open={false} onToggle={() => {}} />);
