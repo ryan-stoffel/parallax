@@ -1,35 +1,109 @@
-import { X } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Layers, Plus, X } from "lucide-react";
+import type { ReactNode } from "react";
 
-import type { ProviderInfo } from "../protocol/generated/protocol";
+import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
 import { notify } from "./notifications";
 import { kindOf, logoOf, saveProvider, slug, unique } from "./providers";
-import { field, primaryButton, quietButton, Row, Switch } from "./settings/parts";
+import { field, quietButton, Row, Switch } from "./settings/parts";
 import { instanceStatus } from "./settings/shared";
 import { IconButton } from "./ui";
 
 // Account pools (PLX-1033): a provider instance with `members`, other instances of its kind. plxd
 // starts each thread on a pool on the member with the most usage left, and the thread stays there.
 
+/** The kinds Parallax offers to pool: those whose subscription lives in a home folder of its own. */
+export const poolable = (kind: string) => kind === "claude" || kind === "codex";
+
 /** What a pool's row in Settings > Providers says under its name. */
-export const poolStatus = (members: string[]) => `Pool · ${members.length} accounts`;
+export const poolStatus = (members: string[]) => `Pool of ${members.length} accounts`;
+
+/** What a pool does, for people. */
+const poolBlurb =
+  "Each new thread starts on the account with the most usage left, so you can use every account's limits. A thread stays on the account it started on.";
+
+/** A pool's accounts as the walkthrough edits them: existing instances it holds, and new ones. */
+export interface PoolDraft {
+  name: string;
+  existing: string[];
+  /** The display names of accounts to add. */
+  fresh: string[];
+}
 
 /** The instances a pool of `kind` can hold: those of the kind that aren't pools. */
-const candidates = (list: ProviderInfo[], kind?: string) =>
-  list.filter((p) => !p.instance.members && (kind === undefined || p.instance.kind === kind));
+const accountsOf = (list: ProviderInfo[], kind: string) =>
+  list.filter((p) => !p.instance.members && p.instance.kind === kind);
 
-/** One instance a pool can hold, with a switch that puts it in or takes it out. */
-function MemberRow({
-  info,
-  checked,
-  disabled,
-  onChange,
-}: {
-  info: ProviderInfo;
-  checked: boolean;
-  disabled?: boolean;
-  onChange: (checked: boolean) => void;
-}) {
+/** A display name for another account of `kind` unique among `taken`: "Codex", then "Codex 2". */
+const accountName = (kind: ProviderKind, taken: string[]) => unique(kindOf(kind).name, taken);
+
+/**
+ * A new account of `kind` named `name`, unique among `taken` ids: the kind's own id and home while
+ * the host has none, else a home folder of its own, such as `~/.codex-2`, which plxd makes, so it
+ * signs in apart from the others.
+ */
+function newAccount(kind: ProviderKind, name: string, taken: string[]): ProviderInstance {
+  const id = taken.includes(kind) ? unique(slug(name), taken, "-") : kind;
+  const suffix = id.startsWith(`${kind}-`) ? id.slice(kind.length + 1) : id;
+  return {
+    id,
+    kind,
+    name,
+    enabled: true,
+    ...(id !== kind && { home: `~/.${kind}-${suffix}` }),
+    args: [],
+    env: [],
+    models: [],
+  };
+}
+
+/** The draft the walkthrough opens with for `kind`: every account the host has, and new ones up to two. */
+export function poolDraft(kind: ProviderKind, list: ProviderInfo[]): PoolDraft {
+  const existing = accountsOf(list, kind).map((p) => p.instance.id);
+  const names = list.map((p) => p.instance.name);
+  const fresh: string[] = [];
+  while (existing.length + fresh.length < 2) fresh.push(accountName(kind, [...names, ...fresh]));
+  return { name: unique(`${kindOf(kind).name} pool`, names), existing, fresh };
+}
+
+/** How many accounts `draft` pools. */
+export const poolSize = (draft: PoolDraft) => draft.existing.length + draft.fresh.length;
+
+/**
+ * Saves `draft`'s new accounts of `kind` on the host, then the pool. Resolves to the pool's id, or
+ * to why it couldn't, for people.
+ */
+export async function createPool(
+  hostId: string,
+  kind: ProviderKind,
+  draft: PoolDraft,
+  list: ProviderInfo[],
+): Promise<{ id: string } | { error: string }> {
+  const ids = list.map((p) => p.instance.id);
+  const members = [...draft.existing];
+  for (const name of draft.fresh) {
+    const account = newAccount(kind, name.trim() || kindOf(kind).name, ids);
+    const failed = await saveProvider(hostId, account);
+    if (failed) return { error: `Couldn't add ${account.name}: ${failed}` };
+    ids.push(account.id);
+    members.push(account.id);
+  }
+  const name = draft.name.trim() || `${kindOf(kind).name} pool`;
+  const id = unique(slug(name), ids, "-");
+  const failed = await saveProvider(hostId, {
+    id,
+    kind,
+    name,
+    enabled: true,
+    args: [],
+    env: [],
+    models: [],
+    members,
+  });
+  return failed ? { error: failed } : { id };
+}
+
+/** One account in a pool's list: its logo, name, and state, then `children`. */
+function AccountRow({ info, children }: { info: ProviderInfo; children: ReactNode }) {
   const Logo = logoOf(info.instance);
   return (
     <Row
@@ -41,151 +115,133 @@ function MemberRow({
       }
       description={info.instance.enabled ? instanceStatus(info) : "Off"}
     >
-      <Switch
-        label={`Pool ${info.instance.name}`}
-        checked={checked}
-        disabled={disabled}
-        onChange={onChange}
-      />
+      {children}
     </Row>
   );
 }
 
-/**
- * New pool, a native modal <dialog> open while it's mounted: a name and two or more instances of
- * one kind. The first one picked sets the kind. Create saves the pool on the host and calls
- * `onAdded` with its id; closing calls `onClose`.
- */
-export function NewPoolDialog({
-  hostId,
-  list,
-  onAdded,
-  onClose,
-}: {
-  hostId: string;
-  list: ProviderInfo[];
-  onAdded: (id: string) => void;
-  onClose: () => void;
-}) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const titleId = useId();
-  const [members, setMembers] = useState<string[]>([]);
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string>();
-  const [saving, setSaving] = useState(false);
-  useEffect(() => dialog.current?.showModal(), []);
-
-  const kind = list.find((p) => p.instance.id === members[0])?.instance.kind;
-  const fallback = kind ? `${kindOf(kind).name} pool` : "Pool";
-  const shown = candidates(list);
-  const create = async () => {
-    if (!kind || members.length < 2) return;
-    const display = name.trim() || fallback;
-    const id = unique(
-      slug(display),
-      list.map((p) => p.instance.id),
-      "-",
-    );
-    setSaving(true);
-    const failed = await saveProvider(hostId, {
-      id,
-      kind,
-      name: display,
-      enabled: true,
-      args: [],
-      env: [],
-      models: [],
-      members,
-    });
-    setSaving(false);
-    if (failed) return setError(failed);
-    onAdded(id);
-    dialog.current?.close();
-  };
-
+/** What a pool does, in a callout, with `children` after it. */
+export function PoolExplainer({ children }: { children?: ReactNode }) {
   return (
-    <dialog
-      ref={dialog}
-      aria-labelledby={titleId}
-      onClose={onClose}
-      className="m-auto w-[34rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
-    >
-      <form
-        className="flex max-h-[85vh] flex-col"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void create();
-        }}
-      >
-        <div className="flex items-start gap-3 px-5 pt-4 pb-3">
-          <div className="flex-1">
-            <h2 id={titleId} className="text-reading font-semibold">
-              New pool
-            </h2>
-            <p className="mt-0.5 text-body text-muted-foreground">
-              Pool accounts of one provider. Each new thread starts on the account with the most
-              usage left.
-            </p>
-          </div>
-          <IconButton label="Close" onClick={() => dialog.current?.close()}>
-            <X />
-          </IconButton>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
-          <label className="text-body text-muted-foreground">
-            Display name
-            <input
-              autoFocus
-              maxLength={64}
-              value={name}
-              placeholder={fallback}
-              onChange={(e) => setName(e.target.value)}
-              spellCheck={false}
-              autoComplete="off"
-              className={field}
-            />
-          </label>
-          <p className="mt-4 mb-2 text-body text-muted-foreground">Accounts</p>
-          <div className="rounded-xl border border-border">
-            {shown.map((info) => (
-              <MemberRow
-                key={info.instance.id}
-                info={info}
-                checked={members.includes(info.instance.id)}
-                // Another kind can't join once the first pick sets it.
-                disabled={kind !== undefined && info.instance.kind !== kind}
-                onChange={(on) =>
-                  setMembers(
-                    on
-                      ? [...members, info.instance.id]
-                      : members.filter((m) => m !== info.instance.id),
-                  )
-                }
-              />
-            ))}
-          </div>
-          {error && (
-            <p role="alert" className="mt-3 text-body text-danger">
-              {error}
-            </p>
-          )}
-        </div>
-        <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
-          <button type="button" onClick={() => dialog.current?.close()} className={quietButton}>
-            Cancel
-          </button>
-          <button type="submit" disabled={members.length < 2 || saving} className={primaryButton}>
-            {saving ? "Creating…" : "Create pool"}
-          </button>
-        </div>
-      </form>
-    </dialog>
+    <div className="flex gap-3 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
+      <Layers aria-hidden className="mt-0.5 size-4 shrink-0 text-accent" />
+      <p>
+        {poolBlurb}
+        {children}
+      </p>
+    </div>
   );
 }
 
 /**
- * A pool's pane in Settings > Providers, `hidden` unless its tab is chosen: its display name, and
- * its accounts, which the instances of its kind join or leave. A pool keeps two or more.
+ * The walkthrough's accounts of `kind`: the pool's name, the host's accounts of the kind, each
+ * with a switch to pool it, and new accounts to add, each signed in on its own after.
+ */
+export function PoolAccounts({
+  kind,
+  list,
+  draft,
+  onChange,
+}: {
+  kind: ProviderKind;
+  list: ProviderInfo[];
+  draft: PoolDraft;
+  onChange: (draft: PoolDraft) => void;
+}) {
+  const { Logo } = kindOf(kind);
+  const names = [...list.map((p) => p.instance.name), ...draft.fresh];
+  return (
+    <div className="flex flex-col gap-4">
+      <PoolExplainer> Each new account signs in after it's added.</PoolExplainer>
+      <label className="text-body text-muted-foreground">
+        Pool name
+        <input
+          required
+          maxLength={64}
+          value={draft.name}
+          onChange={(e) => onChange({ ...draft, name: e.target.value })}
+          spellCheck={false}
+          autoComplete="off"
+          className={field}
+        />
+        <span className="mt-1 block text-faint-foreground">
+          How the model picker names it, beside each account.
+        </span>
+      </label>
+      <div>
+        <p className="mb-2 text-body text-muted-foreground">Accounts</p>
+        <div className="rounded-xl border border-border">
+          {accountsOf(list, kind).map((info) => {
+            const id = info.instance.id;
+            return (
+              <AccountRow key={id} info={info}>
+                <Switch
+                  label={`Pool ${info.instance.name}`}
+                  checked={draft.existing.includes(id)}
+                  onChange={(on) =>
+                    onChange({
+                      ...draft,
+                      existing: on
+                        ? [...draft.existing, id]
+                        : draft.existing.filter((e) => e !== id),
+                    })
+                  }
+                />
+              </AccountRow>
+            );
+          })}
+          {draft.fresh.map((name, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-b-0"
+            >
+              <Logo aria-hidden className="size-4 shrink-0" />
+              <input
+                aria-label={`New account ${i + 1} name`}
+                required
+                maxLength={64}
+                value={name}
+                onChange={(e) =>
+                  onChange({
+                    ...draft,
+                    fresh: draft.fresh.map((n, j) => (j === i ? e.target.value : n)),
+                  })
+                }
+                spellCheck={false}
+                autoComplete="off"
+                className={`${field} mt-0 flex-1`}
+              />
+              <span className="shrink-0 text-meta text-faint-foreground">New account</span>
+              <IconButton
+                label={`Remove ${name || `new account ${i + 1}`}`}
+                onClick={() => onChange({ ...draft, fresh: draft.fresh.filter((_, j) => j !== i) })}
+              >
+                <X aria-hidden />
+              </IconButton>
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => onChange({ ...draft, fresh: [...draft.fresh, accountName(kind, names)] })}
+          className={`${quietButton} mt-1.5 -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
+        >
+          <Plus aria-hidden />
+          Add account
+        </button>
+        {poolSize(draft) < 2 && (
+          <p className="mt-1 text-body text-faint-foreground">A pool needs two or more accounts.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A pool's pane in Settings > Providers, `hidden` unless its tab is chosen: what it does, its
+ * display name, and its accounts, which the instances of its kind join or leave. A pooled account
+ * that isn't signed in offers Sign in, which opens its own pane and its sign-in with `onOpen`. Add
+ * account adds a new account of the kind to the pool and opens it the same way. A pool keeps two or more.
  */
 export function PoolPane({
   id,
@@ -195,6 +251,7 @@ export function PoolPane({
   info,
   list,
   nameField,
+  onOpen,
 }: {
   id: string;
   tabId: string;
@@ -204,18 +261,29 @@ export function PoolPane({
   list: ProviderInfo[];
   /** The field that edits its display name, as every instance's pane has. */
   nameField: (save: (name: string) => void) => ReactNode;
+  onOpen: (id: string) => void;
 }) {
   const { instance } = info;
   const members = instance.members ?? [];
   const Logo = logoOf(instance);
-  const save = async (change: { name?: string; members?: string[] }) => {
+  const save = async (change: Partial<ProviderInstance>) => {
     const failed = await saveProvider(hostId, { ...instance, ...change });
-    if (failed)
-      notify({
-        tone: "error",
-        title: `Couldn't save ${instance.name}`,
-        body: failed,
-      });
+    if (failed) notify({ tone: "error", title: `Couldn't save ${instance.name}`, body: failed });
+    return !failed;
+  };
+  const addAccount = async () => {
+    const name = accountName(
+      instance.kind,
+      list.map((p) => p.instance.name),
+    );
+    const account = newAccount(
+      instance.kind,
+      name,
+      list.map((p) => p.instance.id),
+    );
+    const failed = await saveProvider(hostId, account);
+    if (failed) return notify({ tone: "error", title: `Couldn't add ${name}`, body: failed });
+    if ((await save({ members: [...members, account.id] })) && info.installed) onOpen(account.id);
   };
   return (
     <div
@@ -226,46 +294,68 @@ export function PoolPane({
       className="min-w-0 p-5 @3xl:overflow-y-auto"
     >
       <div className="mb-6 flex items-center gap-3 px-1">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface">
+        <span className="relative flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface">
           <Logo className="size-5" />
+          <Layers
+            aria-hidden
+            className="absolute -right-1.5 -bottom-1.5 size-4 rounded-sm border border-border bg-surface p-0.5 text-accent"
+          />
         </span>
         <div className="min-w-0">
           <h2 className="truncate text-reading font-semibold">{instance.name}</h2>
           <p className="truncate text-body text-muted-foreground">
-            {kindOf(instance.kind).name} · {members.length} accounts
+            Pool of {members.length} {kindOf(instance.kind).name} accounts
           </p>
         </div>
       </div>
+      <div className="mb-8">
+        <PoolExplainer />
+      </div>
       <section aria-label="Pool" className="mb-8">
         <div className="rounded-xl border border-border bg-surface">
-          <Row title="Display name" description="How threads and model menus name it.">
+          <Row title="Display name" description="How the model picker names it.">
             {nameField((name) => void save({ name }))}
           </Row>
         </div>
       </section>
       <section aria-label="Accounts" className="mb-8">
-        <div className="mb-2 px-1">
+        <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
           <h2 className="text-reading font-semibold">Accounts</h2>
-          <p className="text-body text-muted-foreground">
-            A new thread starts on the account with the most usage left, and stays on it.
-          </p>
+          <button
+            type="button"
+            onClick={() => void addAccount()}
+            className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
+          >
+            <Plus aria-hidden />
+            Add account
+          </button>
         </div>
         <div className="rounded-xl border border-border bg-surface">
-          {candidates(list, instance.kind).map((member) => {
-            const id = member.instance.id;
-            const inPool = members.includes(id);
+          {accountsOf(list, instance.kind).map((member) => {
+            const memberId = member.instance.id;
+            const inPool = members.includes(memberId);
             return (
-              <MemberRow
-                key={id}
-                info={member}
-                checked={inPool}
-                disabled={inPool && members.length <= 2}
-                onChange={(on) =>
-                  void save({
-                    members: on ? [...members, id] : members.filter((m) => m !== id),
-                  })
-                }
-              />
+              <AccountRow key={memberId} info={member}>
+                {inPool && member.installed && member.signedIn !== true && (
+                  <button
+                    type="button"
+                    onClick={() => onOpen(memberId)}
+                    className={`${quietButton} border border-border`}
+                  >
+                    Sign in
+                  </button>
+                )}
+                <Switch
+                  label={`Pool ${member.instance.name}`}
+                  checked={inPool}
+                  disabled={inPool && members.length <= 2}
+                  onChange={(on) =>
+                    void save({
+                      members: on ? [...members, memberId] : members.filter((m) => m !== memberId),
+                    })
+                  }
+                />
+              </AccountRow>
             );
           })}
         </div>

@@ -518,6 +518,9 @@ impl Providers {
             ));
         }
         check_pool(&instance, &self.stored.lock().await)?;
+        if let Some(home) = &instance.home {
+            instance.home = Some(own_home(home)?);
+        }
         if on_hermes(&instance) && instance.home.is_none() {
             instance.home = Some(self.ollama_cloud_home(&instance.id)?);
         }
@@ -1577,6 +1580,26 @@ fn check(instance: &ProviderInstance) -> Result<(), ErrorObject> {
         ));
     }
     Ok(())
+}
+
+/// An instance's home folder as plxd keeps it: `~` at its start is this host's home folder, and
+/// the folder is made if it's missing, so a second account added as `~/.codex-work` has its own
+/// `CODEX_HOME` to sign in to (PLX-1033).
+fn own_home(home: &str) -> Result<String, ErrorObject> {
+    let rest = home
+        .strip_prefix("~/")
+        .or_else(|| home.strip_prefix("~\\"))
+        .or((home == "~").then_some(""));
+    let path = match rest {
+        Some(rest) => std::env::home_dir()
+            .ok_or_else(|| ErrorObject::internal_error("this host's home folder is unknown"))?
+            .join(rest),
+        None => PathBuf::from(home),
+    };
+    std::fs::create_dir_all(&path).map_err(|error| {
+        ErrorObject::invalid_params(format!("couldn't make {}: {error}", path.display()))
+    })?;
+    Ok(path.display().to_string())
 }
 
 /// The checks `providers/save` makes on a pool, against the host's `stored` instances: two or

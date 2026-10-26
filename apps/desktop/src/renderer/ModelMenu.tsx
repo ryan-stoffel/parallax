@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Search, Star } from "lucide-react";
+import { Check, ChevronDown, Layers, Search, Star } from "lucide-react";
 import { useId, useRef, useState, type ToggleEvent } from "react";
 
 import {
@@ -6,6 +6,7 @@ import {
   toggleFavorite,
   useModelPrefs,
   type Catalog,
+  type Instance,
   type Model,
   type Provider,
 } from "./models";
@@ -15,15 +16,26 @@ import { menuButton, menuPanel, moveFocus } from "./ui";
 // The same model can run on two instances, so a model is known by both.
 const keyOf = (m: Model) => `${m.provider}/${m.id}`;
 
+/**
+ * The rail's group for an instance: its kind, so a provider's accounts and pools share one
+ * button, except an ACP agent, which is its own.
+ */
+const groupOf = (i: Pick<Instance, "id" | "kind">) => (i.kind === "acp" ? i.id : i.kind);
+
+const accountButton =
+  "flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-meta text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground disabled:opacity-40 [&_svg]:size-3.5";
+
 const railButton =
   "grid size-8 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover aria-pressed:bg-selected aria-pressed:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-4";
 
 /**
  * The model picker: a button showing the chosen model that opens a searchable list of the
- * `catalog`'s models, with a rail to filter by favorites or instance. A native popover, so Escape
- * and clicking away close it, and it flips above the button when there's no room below. The models
- * of instances in `unavailable` aren't listed, and the rail shows those instances disabled, saying
- * why on hover. Favorites are kept on this device, per host.
+ * `catalog`'s models, with a rail to filter by favorites or provider. A provider with more than
+ * one account or an account pool (PLX-1033) has one rail button, and a bar of its pools and
+ * accounts over its models picks which one runs the thread. A native popover, so Escape and
+ * clicking away close it, and it flips above the button when there's no room below. The models of
+ * instances in `unavailable` aren't listed, and the rail and the bar show those instances
+ * disabled, saying why on hover. Favorites are kept on this device, per host.
  */
 export function ModelMenu({
   catalog,
@@ -48,8 +60,30 @@ export function ModelMenu({
     return found ? logoOf(found) : kindOf(id).Logo;
   };
   const nameOf = (id: Provider) => instance(id)?.name ?? id;
-  // An instance's id, or null for Favorites.
-  const [tab, setTab] = useState<Provider | null>(chosen.provider);
+  const group = (id: Provider) => {
+    const found = instance(id);
+    return found ? groupOf(found) : id;
+  };
+  // Each group's instances that offer models: its pools first, then its accounts.
+  const listed = [...new Set(all.map((m) => m.provider))];
+  const groups = new Map<string, Provider[]>();
+  for (const p of listed) groups.set(group(p), [...(groups.get(group(p)) ?? []), p]);
+  for (const [key, ids] of groups)
+    groups.set(key, [
+      ...ids.filter((p) => instance(p)?.members),
+      ...ids.filter((p) => !instance(p)?.members),
+    ]);
+  // The instance a group opens on: the chosen model's, else its first pool or account that can
+  // be picked.
+  const opening = (key: string) => {
+    const ids = groups.get(key) ?? [];
+    return ids.includes(chosen.provider)
+      ? chosen.provider
+      : (ids.find((p) => !unavailable[p]) ?? ids[0]!);
+  };
+  // A group, or null for Favorites, and the instance its models are listed for.
+  const [tab, setTab] = useState<string | null>(group(chosen.provider));
+  const [account, setAccount] = useState<Provider>(chosen.provider);
   const [query, setQuery] = useState("");
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -57,9 +91,13 @@ export function ModelMenu({
 
   const q = query.trim().toLowerCase();
   const shown = models.filter((m) =>
-    q ? m.name.toLowerCase().includes(q) : tab === null ? starred(m) : m.provider === tab,
+    q ? m.name.toLowerCase().includes(q) : tab === null ? starred(m) : m.provider === account,
   );
   const Logo = logo(chosen.provider);
+  const accounts = tab === null || q ? [] : (groups.get(tab) ?? []);
+  // The chosen model's account, named on the button when its provider has more than one.
+  const chosenAccount =
+    (groups.get(group(chosen.provider))?.length ?? 0) > 1 ? nameOf(chosen.provider) : undefined;
 
   const pick = (m: Model) => {
     onChange(m);
@@ -77,6 +115,9 @@ export function ModelMenu({
       >
         <Logo />
         {chosen.name.replace(/^Claude /, "")}
+        {chosenAccount && (
+          <span className="max-w-32 truncate text-faint-foreground">{chosenAccount}</span>
+        )}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <div
@@ -101,26 +142,33 @@ export function ModelMenu({
             <Star />
           </button>
           <span aria-hidden className="my-1 h-px w-6 bg-border" />
-          {[...new Set(all.map((m) => m.provider))].map((p) => {
-            const ProviderLogo = logo(p);
-            const why = unavailable[p];
+          {[...groups].map(([key, ids]) => {
+            const first = ids[0]!;
+            const ProviderLogo = logo(first);
+            // A group can't be picked only when none of its instances can.
+            const why = ids.every((p) => unavailable[p]) ? unavailable[first] : undefined;
+            const kind = instance(first)?.kind;
+            const label = ids.length > 1 && kind ? kindOf(kind).name : nameOf(first);
             return (
               // A disabled button gets no pointer events, so its wrapper shows the tooltip.
-              <span key={p} className="group relative flex">
+              <span key={key} className="group relative flex">
                 <button
                   type="button"
-                  aria-label={nameOf(p)}
-                  aria-pressed={!q && tab === p}
+                  aria-label={label}
+                  aria-pressed={!q && tab === key}
                   disabled={!!why}
-                  aria-describedby={why ? `${id}-${p}` : undefined}
-                  onClick={() => setTab(p)}
+                  aria-describedby={why ? `${id}-${key}` : undefined}
+                  onClick={() => {
+                    setTab(key);
+                    setAccount(opening(key));
+                  }}
                   className={railButton}
                 >
                   <ProviderLogo />
                 </button>
                 {why && (
                   <span
-                    id={`${id}-${p}`}
+                    id={`${id}-${key}`}
                     role="tooltip"
                     className="pointer-events-none invisible absolute top-1/2 left-full z-10 ml-2 w-56 -translate-y-1/2 rounded-md border border-border bg-surface px-2.5 py-1.5 text-meta text-foreground shadow-composer group-hover:visible"
                   >
@@ -147,6 +195,35 @@ export function ModelMenu({
               className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
             />
           </label>
+          {accounts.length > 1 && (
+            <div className="border-b border-border px-2 py-1.5">
+              <div role="group" aria-label="Account" className="flex gap-1 overflow-x-auto">
+                {accounts.map((p) => {
+                  const pool = !!instance(p)?.members;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      aria-pressed={account === p}
+                      disabled={!!unavailable[p]}
+                      title={unavailable[p]}
+                      onClick={() => setAccount(p)}
+                      className={accountButton}
+                    >
+                      {pool && <Layers aria-hidden />}
+                      {nameOf(p)}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* What a pool does, where it's picked. */}
+              {instance(account)?.members && (
+                <p className="px-2 pt-1 text-meta text-faint-foreground">
+                  Each thread starts on the account with the most left.
+                </p>
+              )}
+            </div>
+          )}
           <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
             {shown.map((m) => {
               const ProviderLogo = logo(m.provider);

@@ -1205,17 +1205,25 @@ const handlers: { [M in Method]?: Handler<M> } = {
       if (i >= 0) db.providers[i] = pool;
       else db.providers.push(pool);
     } else if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
-    // A new one: OpenCode is on this Mac, the rest aren't.
-    else
-      db.providers.push({
-        instance: p.instance,
-        installed: p.instance.kind === "opencode",
-        ...(p.instance.kind === "opencode" && { version: "1.4.2" }),
-        models: [],
-        permissions: [],
-        efforts: false,
-        coordinator: false,
-      });
+    else {
+      // Another account of an agent on this Mac, such as a second Codex with its own home: the
+      // same CLI, signed out until its sign-in.
+      const same = db.providers.find((x) => x.instance.kind === p.instance.kind && x.installed);
+      // A new one: OpenCode is on this Mac, the rest aren't.
+      db.providers.push(
+        same
+          ? { ...same, instance: p.instance, signedIn: false, account: undefined, models: [] }
+          : {
+              instance: p.instance,
+              installed: p.instance.kind === "opencode",
+              ...(p.instance.kind === "opencode" && { version: "1.4.2" }),
+              models: [],
+              permissions: [],
+              efforts: false,
+              coordinator: false,
+            },
+      );
+    }
     return { providers: db.providers, checkedAt: now() };
   },
   "providers/remove": (p) => {

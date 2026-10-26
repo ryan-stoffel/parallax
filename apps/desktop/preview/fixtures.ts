@@ -1902,29 +1902,6 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       coordinator: true,
       login: ["codex", "login"],
     },
-    // A second ChatGPT subscription, with its own CODEX_HOME (0040), to pool with the first.
-    {
-      instance: {
-        id: "codex-work",
-        kind: "codex",
-        name: "Codex (work)",
-        enabled: true,
-        home: "~/.codex-work",
-        args: [],
-        env: [],
-        models: [],
-      },
-      installed: true,
-      path: "/opt/homebrew/bin/codex",
-      version: "0.159.3",
-      signedIn: true,
-      account: "ChatGPT Plus",
-      models: [],
-      permissions: ["manual", "edit", "auto", "bypass"],
-      efforts: true,
-      coordinator: true,
-      login: ["codex", "login"],
-    },
     {
       instance: {
         id: "cursor",

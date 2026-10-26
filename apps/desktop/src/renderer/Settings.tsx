@@ -1,4 +1,4 @@
-import { ArrowUpRight, Layers, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import {
   lazy,
   Suspense,
@@ -29,7 +29,7 @@ import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
-import { NewPoolDialog, PoolPane, poolStatus } from "./PoolSettings";
+import { PoolPane, poolStatus } from "./PoolSettings";
 import {
   kindOf,
   logoOf,
@@ -627,7 +627,6 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   // The one sign-in terminal: main runs one per window.
   const [signingIn, setSigningIn] = useState<string>();
   const [adding, setAdding] = useState(false);
-  const [pooling, setPooling] = useState(false);
   // The instance Remove is asking about, until it's removed or Cancel.
   const [confirming, setConfirming] = useState<string>();
   const [removing, setRemoving] = useState(false);
@@ -707,9 +706,6 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
             <IconButton label="Add provider" onClick={() => setAdding(true)}>
               <Plus aria-hidden />
             </IconButton>
-            <IconButton label="New pool" onClick={() => setPooling(true)}>
-              <Layers aria-hidden />
-            </IconButton>
             {current && (
               <IconButton
                 label={`Remove ${current.instance.name}`}
@@ -730,17 +726,9 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         <AddProviderDialog
           hostId={host.id}
           hostName={host.name}
-          instances={list.map((p) => p.instance)}
-          onAdded={setSelected}
-          onClose={() => setAdding(false)}
-        />
-      )}
-      {pooling && list && (
-        <NewPoolDialog
-          hostId={host.id}
           list={list}
           onAdded={setSelected}
-          onClose={() => setPooling(false)}
+          onClose={() => setAdding(false)}
         />
       )}
       {!list || !current ? (
@@ -853,6 +841,10 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                       onSave={(name) => onSave(name.trim())}
                     />
                   )}
+                  onOpen={(account) => {
+                    setSelected(account);
+                    setSigningIn(account);
+                  }}
                 />
               ) : (
                 <InstancePane
