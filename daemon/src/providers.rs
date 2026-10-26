@@ -2,9 +2,9 @@
 //!
 //! An instance is a [`ProviderInstance`]: a kind, a name, and the user's settings. A host lists
 //! only the instances its user added from the app's Add provider dialog, and on its first run, the
-//! built-in agents (`claude`, `codex`, `cursor`) whose CLI is installed. Instances live in `providers.json` in plxd's data folder, except secret
-//! variables, which live in the host's keychain under the instance's secret id, one JSON object
-//! per instance.
+//! built-in agents (`claude`, `codex`, `cursor`) whose CLI is installed. Instances live in
+//! `providers.json` in plxd's data folder, except secret variables, which live in the host's
+//! keychain under the instance's secret id, one JSON object per instance.
 //!
 //! Every enabled instance is a backend in the [`BackendRegistry`], under its id, so a thread
 //! starts on one as `AccountChoice::Subscription { backend: <id> }`. A built-in instance with no
@@ -377,7 +377,7 @@ impl Providers {
             .iter()
             .filter_map(|(id, ..)| Some(((*id).to_owned(), registry.by_backend_name(id)?.1)))
             .collect();
-        let providers = Self {
+        let mut providers = Self {
             file,
             keys,
             launcher: launcher.clone(),
@@ -395,7 +395,7 @@ impl Providers {
         for entry in &stored {
             providers.register(entry);
         }
-        providers.stored.try_lock().map(|mut s| *s = stored).ok();
+        *providers.stored.get_mut() = stored;
         providers
     }
 
@@ -526,11 +526,16 @@ impl Providers {
         Ok(())
     }
 
-    /// A home for Ollama Cloud's Hermes Agent, `ollama-cloud/<id>` in plxd's data folder, so it
-    /// shares none of the user's own Hermes config, sessions, or memory, with [`OLLAMA_SOUL`] as its
-    /// `SOUL.md`, which Hermes keeps since it didn't write it.
+    /// Where plxd makes instance `id`'s Ollama Cloud home: `ollama-cloud/<id>` in its data folder.
+    fn own_ollama_home(&self, id: &str) -> PathBuf {
+        self.file.with_file_name("ollama-cloud").join(id)
+    }
+
+    /// A home for Ollama Cloud's Hermes Agent, [`Self::own_ollama_home`], so it shares none of the
+    /// user's own Hermes config, sessions, or memory, with [`OLLAMA_SOUL`] as its `SOUL.md`, which
+    /// Hermes keeps since it didn't write it.
     fn ollama_cloud_home(&self, id: &str) -> Result<String, ErrorObject> {
-        let dir = self.file.with_file_name("ollama-cloud").join(id);
+        let dir = self.own_ollama_home(id);
         let soul = dir.join("SOUL.md");
         std::fs::create_dir_all(&dir)
             .and_then(|()| {
@@ -577,10 +582,7 @@ impl Providers {
             .collect();
         let wanted = names(&instance.env);
         let blocking = tokio::task::spawn_blocking(move || {
-            let mut secrets: HashMap<String, String> = old_id
-                .and_then(|id| keys.get(id).ok().flatten())
-                .and_then(|text| serde_json::from_str(text.as_str()).ok())
-                .unwrap_or_default();
+            let mut secrets = read_secrets(keys.as_ref(), old_id);
             secrets.retain(|name, _| wanted.contains(name));
             secrets.extend(new);
             if secrets.is_empty() {
@@ -617,7 +619,7 @@ impl Providers {
         drop(stored);
         // Ollama Cloud's Hermes home goes with it, so one added again under its id starts clean.
         // A home the user set is theirs, and stays.
-        let own = self.file.with_file_name("ollama-cloud").join(id);
+        let own = self.own_ollama_home(id);
         if on_hermes(&entry.instance) && entry.instance.home.as_deref() == own.to_str() {
             let _ = std::fs::remove_dir_all(own);
         }
@@ -709,7 +711,6 @@ impl Providers {
         (recent && *settings == probed(entry)).then(|| found.clone())
     }
 
-    #[expect(clippy::too_many_lines, reason = "one probe, with each kind's steps")]
     async fn probe(&self, detector: &CliDetector, entry: &Stored, refresh: bool) -> Found {
         let instance = &entry.instance;
         if instance.kind == ProviderKind::Cursor {
@@ -744,58 +745,7 @@ impl Providers {
                 ..Found::default()
             }
         } else {
-            let program = program_of(instance, &preset);
-            let Some(path) = detect::resolve(&self.launcher, &program) else {
-                let note = if on_hermes(instance) {
-                    "Ollama Cloud runs through Hermes Agent, which isn't installed on this host"
-                        .into()
-                } else {
-                    format!("{program} isn't installed on this host")
-                };
-                return Found {
-                    note: Some(note),
-                    ..Found::default()
-                };
-            };
-            // Pi runs through `npx pi-acp`, so its version is the `pi` the adapter runs.
-            let versioned = match instance.kind {
-                ProviderKind::Pi => pi_command(instance),
-                _ => program.clone(),
-            };
-            // `npx` alone can't run Pi: the adapter needs the `pi` it runs.
-            if instance.kind == ProviderKind::Pi
-                && detect::resolve(&self.launcher, &versioned).is_none()
-            {
-                return Found {
-                    path: Some(path.display().to_string()),
-                    note: Some(format!("{versioned} isn't installed on this host")),
-                    ..Found::default()
-                };
-            }
-            // Antigravity's server prints its build, not a version, and `npx` or `uvx` would print
-            // their own: the agent's `initialize` says it instead.
-            let launcher_program = ["npx", "uvx"].iter().any(|launcher| {
-                Path::new(&program)
-                    .file_stem()
-                    .is_some_and(|stem| stem == *launcher)
-            });
-            // Ollama Cloud's Hermes Agent stays out of sight.
-            let version = match instance.kind {
-                ProviderKind::Antigravity => None,
-                ProviderKind::OllamaCloud if on_hermes(instance) => None,
-                ProviderKind::Acp if launcher_program => None,
-                _ => detect::run(&self.launcher, &versioned, &["--version"], PROBE_TIMEOUT)
-                    .await
-                    .ok()
-                    .filter(|ran| ran.exit_code == Some(0))
-                    .and_then(|ran| version_of(&ran.stdout)),
-            };
-            Found {
-                installed: true,
-                path: Some(path.display().to_string()),
-                version,
-                ..Found::default()
-            }
+            self.locate(instance, &preset).await
         };
         if !found.installed {
             return found;
@@ -842,6 +792,62 @@ impl Providers {
         }
         found
     }
+
+    /// Where `instance`'s program is on this host, and its version. Not installed, with a note,
+    /// when it isn't there.
+    async fn locate(&self, instance: &ProviderInstance, preset: &Preset) -> Found {
+        let program = program_of(instance, preset);
+        let Some(path) = detect::resolve(&self.launcher, &program) else {
+            let note = if on_hermes(instance) {
+                "Ollama Cloud runs through Hermes Agent, which isn't installed on this host".into()
+            } else {
+                format!("{program} isn't installed on this host")
+            };
+            return Found {
+                note: Some(note),
+                ..Found::default()
+            };
+        };
+        // Pi runs through `npx pi-acp`, so its version is the `pi` the adapter runs.
+        let versioned = match instance.kind {
+            ProviderKind::Pi => pi_command(instance),
+            _ => program.clone(),
+        };
+        // `npx` alone can't run Pi: the adapter needs the `pi` it runs.
+        if instance.kind == ProviderKind::Pi
+            && detect::resolve(&self.launcher, &versioned).is_none()
+        {
+            return Found {
+                path: Some(path.display().to_string()),
+                note: Some(format!("{versioned} isn't installed on this host")),
+                ..Found::default()
+            };
+        }
+        // Antigravity's server prints its build, not a version, and `npx` or `uvx` would print
+        // their own: the agent's `initialize` says it instead.
+        let launcher_program = ["npx", "uvx"].iter().any(|launcher| {
+            Path::new(&program)
+                .file_stem()
+                .is_some_and(|stem| stem == *launcher)
+        });
+        // Ollama Cloud's Hermes Agent stays out of sight.
+        let version = match instance.kind {
+            ProviderKind::Antigravity => None,
+            ProviderKind::OllamaCloud if on_hermes(instance) => None,
+            ProviderKind::Acp if launcher_program => None,
+            _ => detect::run(&self.launcher, &versioned, &["--version"], PROBE_TIMEOUT)
+                .await
+                .ok()
+                .filter(|ran| ran.exit_code == Some(0))
+                .and_then(|ran| version_of(&ran.stdout)),
+        };
+        Found {
+            installed: true,
+            path: Some(path.display().to_string()),
+            version,
+            ..Found::default()
+        }
+    }
 }
 
 /// A model service's models, listed from `url` or from `/v1/models` at the instance's own
@@ -871,11 +877,7 @@ async fn probe_service(
         .find(|(name, _)| name == key_name)
         .map(|(_, value)| value.to_string_lossy().into_owned())
         .filter(|key| !key.is_empty());
-    let has_secret = entry.secrets.is_some()
-        && instance
-            .env
-            .iter()
-            .any(|var| var.secret && var.name == key_name);
+    let has_secret = entry.secrets.is_some() && has_secret(instance, key_name);
     match models_from(launcher, &url, key.as_deref()).await {
         Ok(models) => found.models = models,
         Err(error) => found.note = Some(error),
@@ -940,10 +942,7 @@ fn opencode_at_url(instance: &ProviderInstance) -> bool {
 async fn probe_opencode(launcher: &Launcher, entry: &Stored, preset: &Preset, found: &mut Found) {
     let instance = &entry.instance;
     let opencode = opencode_for(instance, preset, overrides(entry, plain_env(entry)));
-    let secret = instance
-        .env
-        .iter()
-        .any(|var| var.secret && var.name == opencode::PASSWORD_VAR);
+    let secret = has_secret(instance, opencode::PASSWORD_VAR);
     let inspected = opencode::inspect(launcher, &opencode, secret).await;
     found.version = inspected.version.or(found.version.take());
     found.models = inspected.models;
@@ -962,11 +961,7 @@ async fn probe_cursor(launcher: &Launcher, entry: &Stored) -> Found {
         .into_iter()
         .filter(|(name, _)| name == api_key)
         .collect();
-    let secret_key = env.is_empty()
-        && instance
-            .env
-            .iter()
-            .any(|var| var.secret && var.name == api_key);
+    let secret_key = env.is_empty() && has_secret(instance, api_key);
     let report = if secret_key {
         // A key means the user chose Cursor: an SDK not installed yet installs in the background.
         crate::backend::cursor_sdk::unready(launcher, true).unwrap_or_else(|| {
@@ -1004,14 +999,25 @@ fn plain_env(entry: &Stored) -> Vec<(OsString, OsString)> {
         .collect()
 }
 
+/// The secret values kept in `keys` under `id`, by name. None when they can't be read.
+fn read_secrets(keys: &dyn KeyStore, id: Option<AccountId>) -> HashMap<String, String> {
+    id.and_then(|id| keys.get(id).ok().flatten())
+        .and_then(|text| serde_json::from_str(text.as_str()).ok())
+        .unwrap_or_default()
+}
+
+/// Whether `instance` keeps the variable `name` as a secret.
+fn has_secret(instance: &ProviderInstance, name: &str) -> bool {
+    instance
+        .env
+        .iter()
+        .any(|var| var.secret && var.name == name)
+}
+
 /// Every variable `entry` sets, its secrets read from `keys`. A secret that can't be read is
 /// left out, and the agent then fails as signed out.
 fn full_env(keys: &dyn KeyStore, entry: &Stored) -> Vec<(OsString, OsString)> {
-    let secrets: HashMap<String, String> = entry
-        .secrets
-        .and_then(|id| keys.get(id).ok().flatten())
-        .and_then(|text| serde_json::from_str(text.as_str()).ok())
-        .unwrap_or_default();
+    let secrets = read_secrets(keys, entry.secrets);
     entry
         .instance
         .env
@@ -1247,9 +1253,7 @@ fn acp_for(
         _ => agent.args.extend(overrides.args),
     }
     agent.env.extend(overrides.env);
-    if let (Some(name), Some(home)) = (preset.home_env, &instance.home) {
-        agent.env.push((name.into(), home.into()));
-    }
+    agent.env.extend(home_var(instance, preset));
     // Antigravity's server finds its harness beside it.
     if instance.kind == ProviderKind::Antigravity
         && let Some(dir) = Path::new(&agent.program)
@@ -1264,12 +1268,15 @@ fn acp_for(
     agent
 }
 
+/// The variable that sets `instance`'s home folder, when its kind has one and it sets a home.
+fn home_var(instance: &ProviderInstance, preset: &Preset) -> Option<(OsString, OsString)> {
+    Some((preset.home_env?.into(), instance.home.as_ref()?.into()))
+}
+
 /// `instance`'s `OpenCode`, with the variables in `overrides` and its home folder.
 fn opencode_for(instance: &ProviderInstance, preset: &Preset, overrides: Overrides) -> Opencode {
     let mut env = overrides.env;
-    if let (Some(name), Some(home)) = (preset.home_env, &instance.home) {
-        env.push((name.into(), home.into()));
-    }
+    env.extend(home_var(instance, preset));
     let program = program_of(instance, preset);
     Opencode::new(&instance.id, "OpenCode", program, overrides.args, env)
 }
@@ -1361,16 +1368,9 @@ async fn acp_probe(launcher: &Launcher, agent: &AcpAgent, found: &mut Found) {
         }
     };
     let mut stdin = process.take_stdin();
-    let input = [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": acp::initialize_params()}),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": home, "mcpServers": []}}),
-    ]
-    .iter()
-    .fold(String::new(), |mut input, message| {
-        input.push_str(&message.to_string());
-        input.push('\n');
-        input
-    });
+    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": acp::initialize_params()});
+    let session = json!({"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": home, "mcpServers": []}});
+    let input = format!("{initialize}\n{session}\n");
     let read = async {
         if let Some(pipe) = &mut stdin {
             use tokio::io::AsyncWriteExt;
@@ -1675,15 +1675,24 @@ mod tests {
         (providers, registry)
     }
 
-    fn ollama() -> ProviderInstance {
+    /// An enabled instance with no settings.
+    fn instance(id: &str, kind: ProviderKind, name: &str) -> ProviderInstance {
         ProviderInstance {
-            id: "ollama".into(),
-            kind: ProviderKind::OllamaCloud,
-            name: "Ollama Cloud".into(),
+            id: id.into(),
+            kind,
+            name: name.into(),
             enabled: true,
             program: None,
             home: None,
             args: Vec::new(),
+            env: Vec::new(),
+            models: Vec::new(),
+            reserve: None,
+        }
+    }
+
+    fn ollama() -> ProviderInstance {
+        ProviderInstance {
             env: vec![
                 ProviderEnvVar {
                     name: "ANTHROPIC_BASE_URL".into(),
@@ -1696,9 +1705,16 @@ mod tests {
                     secret: true,
                 },
             ],
-            models: Vec::new(),
-            reserve: None,
+            ..instance("ollama", ProviderKind::OllamaCloud, "Ollama Cloud")
         }
+    }
+
+    /// Writes an executable shell script `body` to `path`.
+    #[cfg(unix)]
+    fn executable(path: &std::path::Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     /// 0070: Ollama Cloud runs Hermes Agent in a home of its own with Ollama's persona, and one
@@ -1901,13 +1917,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_first_run_lists_the_installed_built_ins_and_a_removed_one_stays_removed() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
-        std::fs::write(bin.join("codex"), "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(bin.join("codex"), std::fs::Permissions::from_mode(0o755))
-            .unwrap();
+        executable(&bin.join("codex"), "");
         let launcher = || {
             let env: Environment = [("PATH", bin.display().to_string())].into_iter().collect();
             Launcher::new(DataDir::new(dir.path().join("data")).unwrap(), env)
@@ -1955,18 +1968,15 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn lists_at_once_share_a_probe_and_turning_on_keeps_it() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
         let runs = dir.path().join("runs");
         // Each run, `--version` or the ACP probe, adds a line and takes a moment.
-        std::fs::write(
-            bin.join("grok"),
-            format!("#!/bin/sh\necho >> '{}'\nsleep 0.3\n", runs.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(bin.join("grok"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        executable(
+            &bin.join("grok"),
+            &format!("echo >> '{}'\nsleep 0.3\n", runs.display()),
+        );
         let env: Environment = [("PATH", bin.display().to_string())].into_iter().collect();
         let launcher = Launcher::new(DataDir::new(dir.path().join("data")).unwrap(), env);
         let providers = Providers::load(
@@ -1976,16 +1986,8 @@ mod tests {
             &BackendRegistry::new(),
         );
         let grok = ProviderInstance {
-            id: "grok-build".into(),
-            kind: ProviderKind::GrokBuild,
-            name: "Grok Build".into(),
             enabled: false,
-            program: None,
-            home: None,
-            args: Vec::new(),
-            env: Vec::new(),
-            models: Vec::new(),
-            reserve: None,
+            ..instance("grok-build", ProviderKind::GrokBuild, "Grok Build")
         };
         providers.save(grok.clone()).await.unwrap();
         let detector = crate::detect::CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT);
@@ -2052,12 +2054,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn pi_is_installed_only_when_its_pi_is_too() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let bin = dir.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
-        std::fs::write(bin.join("npx"), "#!/bin/sh\n").unwrap();
-        std::fs::set_permissions(bin.join("npx"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        executable(&bin.join("npx"), "");
         let env: Environment = [("PATH", bin.display().to_string())].into_iter().collect();
         let launcher = Launcher::new(DataDir::new(dir.path().join("data")).unwrap(), env);
         let providers = Providers::load(
@@ -2067,18 +2067,7 @@ mod tests {
             &BackendRegistry::new(),
         );
         let entry = Stored {
-            instance: ProviderInstance {
-                id: "pi".into(),
-                kind: ProviderKind::Pi,
-                name: "Pi".into(),
-                enabled: true,
-                program: None,
-                home: None,
-                args: Vec::new(),
-                env: Vec::new(),
-                models: Vec::new(),
-                reserve: None,
-            },
+            instance: instance("pi", ProviderKind::Pi, "Pi"),
             secrets: None,
         };
         let detector = crate::detect::CliDetector::new(launcher, crate::detect::PROBE_TIMEOUT);
@@ -2091,14 +2080,9 @@ mod tests {
 
         // With its `pi`, an adapter that wants a sign-in is Pi with no models, which logs in in
         // that `pi`, where plxd found it.
-        let script = |name: &str, body: &str| {
-            std::fs::write(bin.join(name), format!("#!/bin/sh\n{body}")).unwrap();
-            std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755))
-                .unwrap();
-        };
-        script("pi", "echo 1.0.3\n");
-        script(
-            "npx",
+        executable(&bin.join("pi"), "echo 1.0.3\n");
+        executable(
+            &bin.join("npx"),
             r#"read a; echo '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
 read b; echo '{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"Authentication required"}}'
 "#,

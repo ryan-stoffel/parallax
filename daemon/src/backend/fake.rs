@@ -814,32 +814,33 @@ enum Piece<'a> {
     Word(&'a str),
 }
 
+/// `printf` for an [`Event::Text`] of `word`'s value: a JSON string already when `quoted`, or text
+/// that goes in the JSON unescaped.
 fn print_text(out: &mut String, word: &str, quoted: bool) {
-    if quoted {
-        print_json(
-            out,
-            &[
-                Piece::Literal(r#"{"kind":"text","text":"#),
-                Piece::Word(word),
-                Piece::Literal("}"),
-            ],
-        );
+    let (open, close) = if quoted {
+        (r#"{"kind":"text","text":"#, "}")
     } else {
-        print_json(
-            out,
-            &[
-                Piece::Literal(r#"{"kind":"text","text":""#),
-                Piece::Word(word),
-                Piece::Literal(r#""}"#),
-            ],
-        );
-    }
+        (r#"{"kind":"text","text":""#, r#""}"#)
+    };
+    print_json(
+        out,
+        &[
+            Piece::Literal(open),
+            Piece::Word(word),
+            Piece::Literal(close),
+        ],
+    );
+}
+
+/// `printf` for `line` as it is.
+fn print_line(out: &mut String, line: &str) {
+    writeln!(out, "printf '%s\\n' {}", quote(line)).expect("infallible");
 }
 
 /// `printf` for one event's line of JSON.
 fn print_event(out: &mut String, event: &Event) -> Result<(), String> {
     let json = serde_json::to_string(event).map_err(|e| e.to_string())?;
-    writeln!(out, "printf '%s\\n' {}", quote(&json)).expect("infallible");
+    print_line(out, &json);
     Ok(())
 }
 
@@ -873,11 +874,9 @@ fn compile(script: &Script) -> Result<String, String> {
             Step::UsageTotal(total) => {
                 let mut json = serde_json::to_value(total).map_err(|e| e.to_string())?;
                 json["kind"] = "usageTotal".into();
-                writeln!(out, "printf '%s\\n' {}", quote(&json.to_string())).expect("infallible");
+                print_line(&mut out, &json.to_string());
             }
-            Step::Raw(line) => {
-                writeln!(out, "printf '%s\\n' {}", quote(line)).expect("infallible");
-            }
+            Step::Raw(line) => print_line(&mut out, line),
             Step::Oversized(bytes) => {
                 writeln!(out, "head -c {bytes} /dev/zero | tr '\\0' x; echo").expect("infallible");
             }

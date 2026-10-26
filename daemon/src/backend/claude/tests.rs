@@ -496,8 +496,10 @@ fn worker_sandbox(cwd: &Path) -> WorkerSandbox {
 }
 
 /// A worker's policy, sandbox, model, effort, and second account reached the CLI.
-// The settings are spelled out whole, so a changed one shows in the diff.
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the settings are spelled out whole, so a changed one shows in the diff"
+)]
 fn assert_worker_invocation(fake: &Fake) {
     let argv = fake.argv();
     let cwd = fake.root().display().to_string();

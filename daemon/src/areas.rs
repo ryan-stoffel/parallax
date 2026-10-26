@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     Area, AreaCreateParams, AreaDeleteParams, AreaDeleteResult, AreaId, AreaResult,
-    AreaUpdateParams, ErrorKind, MAX_AREA_NAME_CHARS, ParallaxEvent, ProjectId, RepoId, RunId,
+    AreaUpdateParams, ErrorKind, MAX_AREA_NAME_CHARS, ParallaxEvent,
 };
 use parallax_store::Store;
 use uuid::Uuid;
@@ -54,30 +54,22 @@ fn corrupt(id: Uuid) -> ErrorObject {
     ErrorObject::internal_error(format!("the stored area {id} has an invalid id"))
 }
 
+/// The stored member ids of area `area` as typed ids.
+fn members<T: TryFrom<Uuid>>(area: Uuid, ids: Vec<Uuid>) -> Result<Vec<T>, ErrorObject> {
+    ids.into_iter()
+        .map(|member| T::try_from(member).map_err(|_| corrupt(area)))
+        .collect()
+}
+
 fn entry(row: parallax_store::Area) -> Result<Area, ErrorObject> {
     let id = row.id;
     Ok(Area {
         id: AreaId::try_from(id).map_err(|_| corrupt(id))?,
         name: row.fields.name,
         color: row.fields.color,
-        threads: row
-            .fields
-            .threads
-            .into_iter()
-            .map(|run| RunId::try_from(run).map_err(|_| corrupt(id)))
-            .collect::<Result<_, _>>()?,
-        projects: row
-            .fields
-            .projects
-            .into_iter()
-            .map(|project| ProjectId::try_from(project).map_err(|_| corrupt(id)))
-            .collect::<Result<_, _>>()?,
-        repos: row
-            .fields
-            .repos
-            .into_iter()
-            .map(|repo| RepoId::try_from(repo).map_err(|_| corrupt(id)))
-            .collect::<Result<_, _>>()?,
+        threads: members(id, row.fields.threads)?,
+        projects: members(id, row.fields.projects)?,
+        repos: members(id, row.fields.repos)?,
     })
 }
 

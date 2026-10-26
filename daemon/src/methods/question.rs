@@ -15,14 +15,15 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentSendParams, ErrorKind, InboxKind, ProjectAutonomy, ProjectId, Question,
-    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionId,
-    QuestionListParams, QuestionListResult, QuestionResult, QuestionStatus, RunId, TurnId,
+    ErrorKind, InboxKind, ProjectAutonomy, ProjectId, Question, QuestionAnswerParams,
+    QuestionAskParams, QuestionEscalateParams, QuestionId, QuestionListParams, QuestionListResult,
+    QuestionResult, QuestionStatus, RunId, TurnId,
 };
 use parallax_store::Store;
 use tracing::info;
 use uuid::Uuid;
 
+use super::agent::plain_message;
 use super::{Context, inbox};
 use crate::agents::convert::NO_WRITE;
 use crate::agents::coordinator::coordinator_of;
@@ -297,26 +298,9 @@ async fn tell(
     };
     let run_id = RunId::try_from(row.run_id)
         .map_err(|_| ErrorObject::internal_error("a stored question has an invalid run id"))?;
-    let params = AgentSendParams {
-        run_id,
-        turn_id: TurnId::generate(),
-        text: message,
-        model: None,
-        effort: None,
-        permission: None,
-        context_window: None,
-        fast: None,
-        account: None,
-        images: Vec::new(),
-        threads: Vec::new(),
-        from,
-        delivery: None,
-    };
-    let daemon = Arc::clone(&context.daemon);
+    let params = plain_message(run_id, TurnId::generate(), message, from);
     context
-        .daemon
-        .agents
-        .detached(agents::send_from_parallax(daemon, params))
+        .detached(|daemon| agents::send_from_parallax(daemon, params))
         .await
         .map_err(|error| {
             ErrorObject::internal_error(format!(

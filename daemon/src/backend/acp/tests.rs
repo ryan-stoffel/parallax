@@ -13,9 +13,9 @@ use tempfile::TempDir;
 use super::{AcpAgent, AcpBackend, BUILD_PLAN, arguments};
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::{
-    AccountRef, AgentPermission, Answer, ApiKey, Backend, Credential, Decision, Event, EventStream,
-    FailureKind, FollowUp, Outcome, Resume, RunId, RunRequest, StartError, ToolPolicy, ToolStatus,
-    TurnId,
+    AccountRef, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential, Decision,
+    Event, EventStream, FailureKind, FollowUp, Outcome, Resume, RunId, RunRequest, StartError,
+    ToolPolicy, ToolStatus, TurnId,
 };
 use crate::paths::DataDir;
 
@@ -142,6 +142,39 @@ async fn next(events: &mut EventStream) -> Event {
         .await
         .expect("no event within 10 s")
         .expect("the stream ended")
+}
+
+/// Every event up to and including the terminal one.
+async fn rest(events: &mut EventStream) -> Vec<Event> {
+    let mut rest = Vec::new();
+    while !rest.last().is_some_and(Event::is_terminal) {
+        rest.push(next(events).await);
+    }
+    rest
+}
+
+/// The run's outcome, which must come within 10 s: only plxd stopping a lingering fake ends it
+/// that soon.
+async fn stopped(events: &mut EventStream) -> Outcome {
+    let finished = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let Event::Finished { outcome, .. } = next(events).await {
+                break outcome;
+            }
+        }
+    });
+    finished.await.expect("plxd stops the agent")
+}
+
+/// The first permission request among `events`.
+fn asked(events: &[Event]) -> &ApprovalRequest {
+    events
+        .iter()
+        .find_map(|event| match event {
+            Event::ApprovalRequested(request) => Some(request),
+            _ => None,
+        })
+        .unwrap()
 }
 
 /// Every event until `Finished`, answering each permission request with `answer`, and sending
@@ -293,13 +326,7 @@ async fn the_stream_becomes_events_the_app_draws() {
             api_key_source: None,
         }
     );
-    let asked = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(request) => Some(request),
-            _ => None,
-        })
-        .unwrap();
+    let asked = asked(&events);
     assert_eq!(asked.tool_name, "Bash");
     assert_eq!(asked.input, json!({"command": "git status --short"}));
     assert_eq!(
@@ -426,13 +453,7 @@ async fn an_approved_plan_is_built_in_the_same_turn() {
         json!([{"type": "text", "text": BUILD_PLAN}])
     );
 
-    let asked = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(request) => Some(request),
-            _ => None,
-        })
-        .unwrap();
+    let asked = asked(&events);
     assert_eq!(asked.tool_name, "ExitPlanMode");
     assert!(asked.interactive);
     assert!(
@@ -519,10 +540,7 @@ async fn an_interrupting_denial_cancels_the_turn_and_withdraws_the_other_request
             decision: deny,
         })
         .unwrap();
-    let mut rest = Vec::new();
-    while !rest.last().is_some_and(Event::is_terminal) {
-        rest.push(next(&mut events).await);
-    }
+    let rest = rest(&mut events).await;
 
     let stdin = fake.stdin();
     assert_eq!(stdin[3]["result"]["outcome"]["optionId"], "reject-once");
@@ -547,11 +565,7 @@ async fn cancel_stops_cursor_mid_turn() {
     let mut events = started.events;
     while !matches!(next(&mut events).await, Event::TextDelta { .. }) {}
     started.run.cancel();
-    let mut rest = Vec::new();
-    while !rest.last().is_some_and(Event::is_terminal) {
-        rest.push(next(&mut events).await);
-    }
-    assert_eq!(outcome(&rest), &Outcome::Cancelled);
+    assert_eq!(outcome(&rest(&mut events).await), &Outcome::Cancelled);
 }
 
 #[tokio::test]
@@ -769,26 +783,10 @@ async fn a_steer_cancels_the_running_turn_and_goes_next() {
             permission: None,
         })
         .unwrap();
-    loop {
-        let event = next(&mut stream).await;
-        let terminal = event.is_terminal();
-        events.push(event);
-        if terminal {
-            break;
-        }
-    }
+    events.extend(rest(&mut stream).await);
     let first = Some(TURN.parse().unwrap());
-    let turns: Vec<&Event> = events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                Event::TurnStarted { .. } | Event::TurnFinished { .. }
-            )
-        })
-        .collect();
     assert_eq!(
-        turns,
+        turns(&events),
         [
             &Event::TurnStarted { turn_id: first },
             &Event::TurnFinished {
@@ -988,14 +986,7 @@ async fn an_agent_that_outlives_its_stdin_is_stopped_after_held_messages_are_rel
     );
     started.run.hold(false);
     // The fake lingers for a minute, so only plxd stopping it ends the run this soon.
-    let finished = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Event::Finished { outcome, .. } = next(&mut events).await {
-                break outcome;
-            }
-        }
-    });
-    let outcome = finished.await.expect("plxd stops the agent");
+    let outcome = stopped(&mut events).await;
     assert!(matches!(outcome, Outcome::Completed { .. }), "{outcome:?}");
 }
 
@@ -1016,14 +1007,7 @@ async fn an_agent_that_outlives_a_failed_turn_is_stopped_and_the_run_fails() {
     fs::write(fake.root().join("fixture.jsonl"), lines.join("\n") + "\n").unwrap();
     let started = fake.backend.start(fake.request()).unwrap();
     let mut events = started.events;
-    let finished = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if let Event::Finished { outcome, .. } = next(&mut events).await {
-                break outcome;
-            }
-        }
-    });
-    let outcome = finished.await.expect("plxd stops the agent");
+    let outcome = stopped(&mut events).await;
     let Outcome::Failed(failure) = outcome else {
         panic!("{outcome:?}");
     };

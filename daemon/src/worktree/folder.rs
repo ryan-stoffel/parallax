@@ -12,8 +12,7 @@ use std::time::Duration;
 use parallax_protocol::{GitStatus, GrepMatch};
 
 use super::{
-    Commit, DEFAULT_TIMEOUT, GitOutput, WorktreeError, WorktreeManager, describe_failure,
-    owned_args,
+    Commit, DEFAULT_TIMEOUT, GitOutput, WorktreeError, WorktreeManager, describe_failure, timed_out,
 };
 use crate::backend::process::{Output, ProcessSpec};
 
@@ -372,11 +371,7 @@ impl WorktreeManager {
         };
         let (matches, exit) = tokio::time::timeout(DEFAULT_TIMEOUT, read)
             .await
-            .map_err(|_| WorktreeError::Timeout {
-                cwd: cwd.to_owned(),
-                args: owned_args(&args),
-                timeout: DEFAULT_TIMEOUT,
-            })?;
+            .map_err(|_| timed_out(cwd, &args, DEFAULT_TIMEOUT))?;
         match exit {
             None => Ok((matches, true)),
             // git grep exits 1 when nothing matches.
@@ -461,12 +456,7 @@ impl WorktreeManager {
         folder: RunFolder<'_>,
         args: &[&str],
     ) -> Result<String, WorktreeError> {
-        match folder {
-            RunFolder::Worktree { path, git_dir } => {
-                self.run_worktree_git_ok(path, git_dir, args).await
-            }
-            RunFolder::Checkout(path) => self.run_git_ok(path, args).await,
-        }
+        self.folder_git(folder, args).await?.ok(folder.path(), args)
     }
 
     /// The process spec for `git args` in `folder`, as [`Self::folder_git`] runs it.

@@ -456,19 +456,20 @@ impl Backend for AcpBackend {
         };
         tokio::spawn(driver.run());
         Ok(Started {
-            run: Arc::new(AcpRun { handle, stop }),
+            run: Arc::new(StopRun { handle, stop }),
             events,
         })
     }
 }
 
-/// The run's handle: [`RunHandle`], plus closing stdin on cancel.
-struct AcpRun {
-    handle: RunHandle,
-    stop: Arc<Notify>,
+/// A run's handle: [`RunHandle`], plus waking its driver on cancel, which closes an ACP agent's
+/// stdin or ends an `OpenCode` run.
+pub(super) struct StopRun {
+    pub handle: RunHandle,
+    pub stop: Arc<Notify>,
 }
 
-impl Run for AcpRun {
+impl Run for StopRun {
     fn id(&self) -> RunId {
         self.handle.id()
     }
@@ -751,36 +752,7 @@ impl Driver {
         };
         let value = match result {
             Ok(value) => value,
-            Err(message) => {
-                if let Request::Mode { required } = request {
-                    self.modes_pending = self.modes_pending.saturating_sub(1);
-                    if !required {
-                        self.emit(Event::Notice { detail: message }).await;
-                        return;
-                    }
-                    let message = format!("{} couldn't switch modes: {message}", self.agent.label);
-                    self.failure = Some(Failure::new(FailureKind::VendorError, message));
-                    self.close();
-                    return;
-                }
-                // The session or a turn failed: the run ends with it. Every prompt's turn has
-                // started by now, an approved plan's build on the plan's turn.
-                if let Request::Prompt(prompt) = &request {
-                    let result = None;
-                    let turn_id = prompt.turn_id;
-                    let failed = true;
-                    self.emit(Event::TurnFinished {
-                        turn_id,
-                        result,
-                        failed,
-                    })
-                    .await;
-                }
-                self.failure = Some(Failure::new(classify(&message), message));
-                self.in_flight = None;
-                self.close();
-                return;
-            }
+            Err(message) => return self.refused(request, message).await,
         };
         match request {
             Request::Initialize => {
@@ -798,42 +770,72 @@ impl Driver {
             }
             Request::Session => self.session_started(&value).await,
             Request::Mode { .. } => self.modes_pending = self.modes_pending.saturating_sub(1),
-            Request::Prompt(prompt) => {
-                self.in_flight = None;
-                if value.get("stopReason").and_then(Value::as_str) == Some("cancelled") {
-                    self.build = None;
-                }
-                if let Some(text) = self.build.take() {
-                    // The approved plan's build goes on as this turn.
-                    self.prompts.push_front(Prompt {
-                        turn_id: prompt.turn_id,
-                        content: vec![json!({"type": "text", "text": text})],
-                        follow_up: false,
-                        started: true,
-                    });
-                    return;
-                }
-                for event in self.translator.unfinished() {
-                    self.emit(event).await;
-                }
-                // The turn's tokens, from agents that report them on the answer (`OpenCode`).
-                if let Some(usage) = turn_usage(&value) {
-                    let model = self.session_model.clone();
-                    self.emit(Event::Usage(ModelUsage { model, usage })).await;
-                }
-                self.results += 1;
-                let result = self.translator.take_text();
-                self.last_result.clone_from(&result);
-                let turn_id = prompt.turn_id;
-                let failed = false;
-                self.emit(Event::TurnFinished {
-                    turn_id,
-                    result,
-                    failed,
-                })
-                .await;
-            }
+            Request::Prompt(prompt) => self.turn_ended(&prompt, &value).await,
         }
+    }
+
+    /// plxd's `request` failed with `message`. A model or mode switch that isn't required is only
+    /// a notice; anything else ends the run.
+    async fn refused(&mut self, request: Request, message: String) {
+        if let Request::Mode { required } = request {
+            self.modes_pending = self.modes_pending.saturating_sub(1);
+            if !required {
+                self.emit(Event::Notice { detail: message }).await;
+                return;
+            }
+            let message = format!("{} couldn't switch modes: {message}", self.agent.label);
+            self.failure = Some(Failure::new(FailureKind::VendorError, message));
+            self.close();
+            return;
+        }
+        // The session or a turn failed: the run ends with it. Every prompt's turn has started by
+        // now, an approved plan's build on the plan's turn.
+        if let Request::Prompt(prompt) = &request {
+            self.emit(Event::TurnFinished {
+                turn_id: prompt.turn_id,
+                result: None,
+                failed: true,
+            })
+            .await;
+        }
+        self.failure = Some(Failure::new(classify(&message), message));
+        self.in_flight = None;
+        self.close();
+    }
+
+    /// `prompt`'s `session/prompt` answered `value`: an approved plan's build goes on as its turn,
+    /// or else the turn ends with its tokens and text.
+    async fn turn_ended(&mut self, prompt: &Prompt, value: &Value) {
+        self.in_flight = None;
+        if value.get("stopReason").and_then(Value::as_str) == Some("cancelled") {
+            self.build = None;
+        }
+        if let Some(text) = self.build.take() {
+            self.prompts.push_front(Prompt {
+                turn_id: prompt.turn_id,
+                content: vec![json!({"type": "text", "text": text})],
+                follow_up: false,
+                started: true,
+            });
+            return;
+        }
+        for event in self.translator.unfinished() {
+            self.emit(event).await;
+        }
+        // The turn's tokens, from agents that report them on the answer (`OpenCode`).
+        if let Some(usage) = turn_usage(value) {
+            let model = self.session_model.clone();
+            self.emit(Event::Usage(ModelUsage { model, usage })).await;
+        }
+        self.results += 1;
+        let result = self.translator.take_text();
+        self.last_result.clone_from(&result);
+        self.emit(Event::TurnFinished {
+            turn_id: prompt.turn_id,
+            result,
+            failed: false,
+        })
+        .await;
     }
 
     /// `session/new` or `session/load` answered: reports the session, then sets its model and
@@ -879,39 +881,35 @@ impl Driver {
     /// Picks `model` for the session: through its model config option when `session`'s answer
     /// lists one, else with `session/set_model`.
     fn set_model(&mut self, session: &str, answer: &Value, model: &str) {
-        self.modes_pending += 1;
-        if let Some(id) = config_option(answer, "model") {
-            let params = json!({"sessionId": session, "configId": id, "value": model});
-            self.request(
+        let (method, params) = match config_option(answer, "model") {
+            Some(id) => (
                 "session/set_config_option",
-                &params,
-                Request::Mode { required: false },
-            );
-        } else {
-            let params = json!({"sessionId": session, "modelId": model});
-            self.request(
+                json!({"sessionId": session, "configId": id, "value": model}),
+            ),
+            None => (
                 "session/set_model",
-                &params,
-                Request::Mode { required: false },
-            );
-        }
+                json!({"sessionId": session, "modelId": model}),
+            ),
+        };
+        self.modes_pending += 1;
+        self.request(method, &params, Request::Mode { required: false });
     }
 
     /// Switches the session to `mode`: through its mode config option when it has one, else
     /// with `session/set_mode`.
     fn set_mode(&mut self, session: &str, mode: &str, required: bool) {
-        self.modes_pending += 1;
-        if let Some(id) = self.mode_option.clone() {
-            let params = json!({"sessionId": session, "configId": id, "value": mode});
-            self.request(
+        let (method, params) = match &self.mode_option {
+            Some(id) => (
                 "session/set_config_option",
-                &params,
-                Request::Mode { required },
-            );
-        } else {
-            let params = json!({"sessionId": session, "modeId": mode});
-            self.request("session/set_mode", &params, Request::Mode { required });
-        }
+                json!({"sessionId": session, "configId": id, "value": mode}),
+            ),
+            None => (
+                "session/set_mode",
+                json!({"sessionId": session, "modeId": mode}),
+            ),
+        };
+        self.modes_pending += 1;
+        self.request(method, &params, Request::Mode { required });
     }
 
     /// Writes `answer` to the CLI, if it still waits on the request. A denial that interrupts

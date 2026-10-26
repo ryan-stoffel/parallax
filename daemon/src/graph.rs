@@ -297,7 +297,7 @@ impl<'a> Fold<'a> {
                     AgentSubagentStatus::Stopped | AgentSubagentStatus::Unknown => "cancelled",
                 };
                 self.db
-                    .set_node_status(self.thread, &format!("{run}/subagent/{call_id}"), status)
+                    .set_node_status(self.thread, &subagent(run, call_id), status)
             }
             _ => Ok(()),
         }
@@ -422,7 +422,7 @@ impl<'a> Fold<'a> {
         let Some(run) = self.current().map(|run| run.id) else {
             return Ok(());
         };
-        let node = format!("{run}/subagent/{call_id}");
+        let node = subagent(run, call_id);
         if self.db.node_status(self.thread, &node)?.is_none() {
             let payload = serde_json::json!({ "callId": call_id });
             self.node(
@@ -453,11 +453,7 @@ impl<'a> Fold<'a> {
         fill: impl FnOnce(&mut ThreadRun),
     ) -> Result<(), StoreError> {
         let existing = match turn_id {
-            Some(id) => self
-                .db
-                .graph_run(self.thread, id.into())?
-                .as_ref()
-                .and_then(parse),
+            Some(id) => stored_run(self.db, self.thread, id)?,
             None => self
                 .open
                 .iter()
@@ -573,6 +569,10 @@ fn tool(run: TurnId, call_id: &str) -> String {
     format!("{run}/tool/{call_id}")
 }
 
+fn subagent(run: TurnId, call_id: &str) -> String {
+    format!("{run}/subagent/{call_id}")
+}
+
 /// A stored run's payload, or `None`, with a warning, if it's corrupt.
 fn parse(row: &GraphRun) -> Option<ThreadRun> {
     match serde_json::from_str(&row.payload) {
@@ -597,7 +597,12 @@ fn put_run(
             .graph_run(thread, run.id.into())?
             .and_then(|row| row.first_seq),
     };
-    db.put_graph_run(&GraphRun {
+    db.put_graph_run(&graph_row(thread, run, first_seq))
+}
+
+/// `run`'s stored row.
+fn graph_row(thread: Uuid, run: &ThreadRun, first_seq: Option<u64>) -> GraphRun {
+    GraphRun {
         id: run.id.into(),
         thread_id: thread,
         ordinal: run.ordinal,
@@ -606,7 +611,7 @@ fn put_run(
         first_seq,
         attempt: run.attempt,
         payload: serde_json::to_string(run).unwrap_or_default(),
-    })
+    }
 }
 
 fn queued_run(thread: Uuid, position: usize, message: &QueuedMessage, held: bool) -> GraphRun {
@@ -628,16 +633,7 @@ fn queued_run(thread: Uuid, position: usize, message: &QueuedMessage, held: bool
         cursor: None,
         session_id: None,
     };
-    GraphRun {
-        id: run.id.into(),
-        thread_id: thread,
-        ordinal: None,
-        status: status_name(run.status).to_owned(),
-        position: run.position,
-        first_seq: None,
-        attempt: None,
-        payload: serde_json::to_string(&run).unwrap_or_default(),
-    }
+    graph_row(thread, &run, None)
 }
 
 /// A run status's stored name, as its JSON spells it.

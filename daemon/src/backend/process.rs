@@ -499,15 +499,26 @@ impl Launcher {
         env
     }
 
+    /// The environment `spec`'s process gets and the program it runs, once its working directory
+    /// checks out.
+    ///
+    /// # Errors
+    ///
+    /// If the working directory is unusable or the program can't be found.
+    pub(crate) fn resolve(&self, spec: &ProcessSpec) -> Result<(Environment, PathBuf), SpawnError> {
+        let env = self.environment(spec);
+        check_working_directory(&spec.cwd)?;
+        let program = find_program(&spec.program, env.get("PATH"))?;
+        Ok((env, program))
+    }
+
     /// Starts `spec`'s process. Must be called inside a tokio runtime.
     ///
     /// # Errors
     ///
     /// If the program or working directory is unusable, or starting the process fails.
     pub fn spawn(&self, spec: &ProcessSpec) -> Result<Process, SpawnError> {
-        let env = self.environment(spec);
-        check_working_directory(&spec.cwd)?;
-        let program = find_program(&spec.program, env.get("PATH"))?;
+        let (env, program) = self.resolve(spec)?;
         let recorder = match spec.record {
             Some(name) => Recorder::open(name)?,
             None => None,
@@ -605,9 +616,7 @@ impl Launcher {
             stdin: StdinMode::Piped,
             ..spec.clone()
         };
-        let env = self.environment(&spec);
-        check_working_directory(&spec.cwd)?;
-        let program = find_program(&spec.program, env.get("PATH"))?;
+        let (env, program) = self.resolve(&spec)?;
         let Started {
             signals,
             exited: _,
@@ -777,7 +786,7 @@ fn start(
     }
 }
 
-pub(crate) fn check_working_directory(cwd: &Path) -> Result<(), SpawnError> {
+fn check_working_directory(cwd: &Path) -> Result<(), SpawnError> {
     let bad = |reason: &str| SpawnError::BadWorkingDirectory {
         cwd: cwd.to_owned(),
         reason: reason.to_owned(),
@@ -1098,12 +1107,7 @@ fn reap_in_background(shared: Arc<Shared>) -> oneshot::Receiver<ExitInfo> {
                             signal: status.terminating_signal(),
                         };
                     }
-                    _ => {
-                        break ExitInfo {
-                            code: None,
-                            signal: None,
-                        };
-                    }
+                    _ => break ExitInfo::default(),
                 }
             };
             *reaped = true;
@@ -1132,10 +1136,6 @@ async fn pump<R: AsyncRead + Unpin>(
     drain: Duration,
     recorder: Option<Recorder>,
 ) {
-    let unknown = ExitInfo {
-        code: None,
-        signal: None,
-    };
     let mut exit = None;
     let mut deadline = None;
     // How much stdout had been read when the exit was seen.
@@ -1171,7 +1171,7 @@ async fn pump<R: AsyncRead + Unpin>(
                 Ok(None) | Err(_) => break,
             },
             info = &mut exited, if exit.is_none() => {
-                exit = Some(info.unwrap_or(unknown));
+                exit = Some(info.unwrap_or_default());
                 deadline = Some(Instant::now() + drain);
                 read_at_exit = lines.read;
             }
@@ -1180,7 +1180,7 @@ async fn pump<R: AsyncRead + Unpin>(
     }
     let info = match exit {
         Some(info) => info,
-        None => (&mut exited).await.unwrap_or(unknown),
+        None => (&mut exited).await.unwrap_or_default(),
     };
     let StderrTail { task, tail } = stderr;
     let _ = timeout(drain, task).await;
@@ -1289,10 +1289,7 @@ impl Tail {
     }
 
     fn text(&self) -> String {
-        let (front, back) = self.bytes.as_slices();
-        let mut all = Vec::with_capacity(self.bytes.len());
-        all.extend_from_slice(front);
-        all.extend_from_slice(back);
+        let all: Vec<u8> = self.bytes.iter().copied().collect();
         String::from_utf8_lossy(&all).trim().to_owned()
     }
 }

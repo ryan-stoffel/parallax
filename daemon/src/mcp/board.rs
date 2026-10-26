@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::thread::Binding;
-use super::{parse, pretty};
+use super::{object, parse, pretty, tool};
 
 /// The tools a coordinator gets from this module.
 pub const TOOLS: &[&str] = &["board_add", "board_update", "board_remove"];
@@ -36,52 +36,45 @@ pub fn definitions(coordinator: bool) -> Vec<Value> {
     let threads = json!({"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Run ids of the threads doing or tracking it."});
     let pull_request = json!({"type": "string", "description": "Its pull request's https:// URL. Only one you know; never make one up. An empty string clears it."});
     let files = json!({"type": "array", "items": {"type": "string"}, "maxItems": 20, "description": "Files it concerns: repository paths or shared context files such as plan.md."});
-    let tool = |name: &str, description: &str, properties: Value, required: &[&str]| {
-        json!({
-            "name": name,
-            "description": description,
-            "inputSchema": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": false,
-            },
-            "annotations": {"readOnlyHint": false, "destructiveHint": false},
-        })
-    };
     vec![
         tool(
             "board_add",
             "Add an item to the Project's status board, which Parallax renders as notes.md. Returns the item with its id.",
-            json!({
-                "text": text,
-                "section": section,
-                "status": status,
-                "threads": threads,
-                "pullRequest": pull_request,
-                "files": files,
-            }),
-            &["text", "section"],
+            object(
+                json!({
+                    "text": text,
+                    "section": section,
+                    "status": status,
+                    "threads": threads,
+                    "pullRequest": pull_request,
+                    "files": files,
+                }),
+                &["text", "section"],
+            ),
+            false,
         ),
         tool(
             "board_update",
             "Change one board item: only the fields you pass. Mark finished work done rather than removing it; Parallax moves done items older than seven days to archived.md. Each link field you pass replaces that field.",
-            json!({
-                "id": id,
-                "text": text,
-                "section": section,
-                "status": status,
-                "threads": threads,
-                "pullRequest": pull_request,
-                "files": files,
-            }),
-            &["id"],
+            object(
+                json!({
+                    "id": id,
+                    "text": text,
+                    "section": section,
+                    "status": status,
+                    "threads": threads,
+                    "pullRequest": pull_request,
+                    "files": files,
+                }),
+                &["id"],
+            ),
+            false,
         ),
         tool(
             "board_remove",
             "Remove one board item that no longer belongs on it, such as a plan dropped or a duplicate.",
-            json!({"id": id}),
-            &["id"],
+            object(json!({"id": id}), &["id"]),
+            false,
         ),
     ]
 }

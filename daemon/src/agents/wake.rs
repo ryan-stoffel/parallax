@@ -657,18 +657,15 @@ fn ended(
         let Some(outcome) = stored_outcome(&run) else {
             continue;
         };
-        ends.push(if delivery == Some(true) {
-            End {
-                line: completion(&run, &outcome),
-                task: Some(row.id),
-                at: row.updated_at,
-            }
+        let (line, task) = if delivery == Some(true) {
+            (completion(&run, &outcome), Some(row.id))
         } else {
-            End {
-                line: summary(&run, &outcome),
-                task: None,
-                at: row.updated_at,
-            }
+            (summary(&run, &outcome), None)
+        };
+        ends.push(End {
+            line,
+            task,
+            at: row.updated_at,
         });
     }
     Ok(ends)

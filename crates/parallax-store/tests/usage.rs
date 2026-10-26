@@ -1,14 +1,13 @@
 //! Per-account usage: deltas, limit snapshots, and session totals, against a real store.
 
-use std::path::PathBuf;
-
 use parallax_store::{LimitSnapshot, SessionModelUsage, Store, UsageDelta, UsageHour};
 use uuid::Uuid;
 
-fn temp_db_path() -> (tempfile::TempDir, PathBuf) {
+/// A store in a temporary directory, which lives as long as the `TempDir`.
+fn open_temp() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().expect("create temp dir");
-    let path = dir.path().join("parallax.sqlite3");
-    (dir, path)
+    let store = Store::open(dir.path().join("parallax.sqlite3")).expect("open");
+    (dir, store)
 }
 
 fn delta(run_id: Uuid, account_id: &str, at: &str, input: u64) -> UsageDelta {
@@ -27,8 +26,7 @@ fn delta(run_id: Uuid, account_id: &str, at: &str, input: u64) -> UsageDelta {
 
 #[test]
 fn deltas_accumulate_over_a_range() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let run = Uuid::now_v7();
     store
         .record_usage_delta(&delta(run, "claude-max", "2026-09-24T10:00:00Z", 100))
@@ -53,8 +51,7 @@ fn deltas_accumulate_over_a_range() {
 /// day, and one exactly at the start of a day belongs to it.
 #[test]
 fn deltas_are_bucketed_correctly_across_a_day_boundary() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let run = Uuid::now_v7();
     store
         .record_usage_delta(&delta(run, "acct", "2026-09-23T23:59:59Z", 1))
@@ -94,8 +91,7 @@ fn deltas_are_bucketed_correctly_across_a_day_boundary() {
 
 #[test]
 fn cost_is_not_reported_when_no_delta_in_range_reported_one() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let run = Uuid::now_v7();
     let mut no_cost = delta(run, "codex", "2026-09-24T10:00:00Z", 100);
     no_cost.cost_usd_micros = None;
@@ -141,8 +137,7 @@ fn summarize(hours: &[UsageHour]) -> Vec<Row<'_>> {
 
 #[test]
 fn usage_hours_sum_per_utc_hour_account_and_model() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let run = Uuid::now_v7();
     let with_model = |account, at, input, model: Option<&str>| UsageDelta {
         model: model.map(str::to_owned),
@@ -204,8 +199,7 @@ fn usage_hours_sum_per_utc_hour_account_and_model() {
 /// the deltas from `since` on.
 #[test]
 fn usage_hours_cover_since_up_to_until() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let run = Uuid::now_v7();
     for (at, input) in [
         ("2026-09-24T10:29:59.999999999Z", 1),
@@ -236,8 +230,7 @@ fn usage_hours_cover_since_up_to_until() {
 
 #[test]
 fn an_hours_cost_is_absent_only_when_no_delta_in_it_reported_one() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let run = Uuid::now_v7();
     let no_cost = |account, at| UsageDelta {
         cost_usd_micros: None,
@@ -263,8 +256,7 @@ fn an_hours_cost_is_absent_only_when_no_delta_in_it_reported_one() {
 
 #[test]
 fn run_counts_are_distinct_runs_per_account_in_range() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let (first, second, other, earlier) = (
         Uuid::now_v7(),
         Uuid::now_v7(),
@@ -295,8 +287,7 @@ fn run_counts_are_distinct_runs_per_account_in_range() {
 
 #[test]
 fn an_unknown_account_reads_back_safe_defaults() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let summary = store
         .usage_summary(
             "nobody",
@@ -319,8 +310,7 @@ fn an_unknown_account_reads_back_safe_defaults() {
 
 #[test]
 fn a_newer_limit_snapshot_replaces_the_old_one_but_an_older_one_does_not() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let snapshot = |used_percent: f64, captured_at: &str| LimitSnapshot {
         account_id: "claude-max".to_owned(),
         window: "five_hour".to_owned(),
@@ -346,8 +336,7 @@ fn a_newer_limit_snapshot_replaces_the_old_one_but_an_older_one_does_not() {
 
 #[test]
 fn each_account_and_window_has_its_own_snapshot() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     store
         .record_limit_snapshot(&LimitSnapshot {
             account_id: "claude-max".to_owned(),
@@ -388,8 +377,7 @@ fn each_account_and_window_has_its_own_snapshot() {
 
 #[test]
 fn resuming_a_session_replaces_its_totals_instead_of_adding_to_them() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let first = SessionModelUsage {
         model: Some("opus".to_owned()),
         input_tokens: 100,
@@ -428,8 +416,7 @@ fn resuming_a_session_replaces_its_totals_instead_of_adding_to_them() {
 
 #[test]
 fn session_totals_with_no_model_use_the_sentinel_and_read_back_as_none() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let unnamed = SessionModelUsage {
         model: None,
         input_tokens: 5,

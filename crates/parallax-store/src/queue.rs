@@ -29,16 +29,15 @@ impl Store {
         let rows = stmt.query_map(params![run_id.to_string()], |row| {
             Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?))
         })?;
-        let mut queue = Vec::new();
-        for row in rows {
+        rows.map(|row| {
             let (turn_id, text, extra) = row?;
-            queue.push(QueuedRow {
+            Ok(QueuedRow {
                 turn_id: Uuid::parse_str(&turn_id)?,
                 text,
                 extra,
-            });
-        }
-        Ok(queue)
+            })
+        })
+        .collect()
     }
 
     /// Replaces `run_id`'s queue with `queue`, in one transaction.

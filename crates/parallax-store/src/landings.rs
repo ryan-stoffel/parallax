@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{OptionalExtension, Row, params};
+use rusqlite::{OptionalExtension, params};
 use uuid::Uuid;
 
 use crate::Store;
@@ -25,17 +25,6 @@ const COLUMNS: &str = "run_id, project_id, status, conflicts, queued_at, failure
 
 type Raw = (String, String, String, u32, String, u32);
 
-fn from_row(row: &Row<'_>) -> rusqlite::Result<Raw> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-    ))
-}
-
 fn into_landing(
     (run, project, status, conflicts, queued, failures): Raw,
 ) -> Result<Landing, StoreError> {
@@ -60,7 +49,7 @@ impl Store {
             .query_row(
                 &format!("SELECT {COLUMNS} FROM landings WHERE run_id = ?1"),
                 params![run_id.to_string()],
-                from_row,
+                |row| Raw::try_from(row),
             )
             .optional()?
             .map(into_landing)
@@ -108,7 +97,7 @@ impl Store {
                      ORDER BY queued_at, run_id LIMIT 1"
                 ),
                 params![project.to_string(), status],
-                from_row,
+                |row| Raw::try_from(row),
             )
             .optional()?
             .map(into_landing)
@@ -125,13 +114,7 @@ impl Store {
         let mut statement = self
             .conn
             .prepare("SELECT DISTINCT project_id FROM landings WHERE status = ?1")?;
-        let ids = statement
-            .query_map(params![status], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(ids
-            .iter()
-            .map(|id| Uuid::parse_str(id))
-            .collect::<Result<_, _>>()?)
+        crate::ids(&mut statement, params![status])
     }
 }
 

@@ -20,8 +20,8 @@ use plxd::routing::BackendRegistry;
 use serde_json::json;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, fake_backend, init, project_params, send_params,
-    start_params, subscribe, until, updated_to,
+    Conn, Host, end_turn, fake, fake_backend, init, send_params, start_params, subscribe, until,
+    updated_to,
 };
 use crate::coordinator::{coordinator_launches, nth_launch, roles, spawn};
 use crate::support::{kind, temp_dir};
@@ -70,9 +70,7 @@ async fn a_child_finishing_adds_done_with_its_diff_stats_and_seen_marks_it() {
             end_turn("Done."),
         ]),
     );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
 
     let run = client
         .call::<AgentStart>(child(project.id, "Rewrite the README.\nKeep it short."))
@@ -124,9 +122,7 @@ async fn a_child_finishing_adds_done_with_its_diff_stats_and_seen_marks_it() {
 #[tokio::test]
 async fn a_child_failing_adds_failed() {
     let host = Host::start(temp_dir(), fake(vec![init("session-1"), Step::Exit(3)]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(child(project.id, "Break it."))
         .await
@@ -162,9 +158,7 @@ async fn a_childs_permission_request_adds_needs_you() {
             Step::AwaitApproval,
         ]),
     );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(AgentStartParams {
             approvals: true,
@@ -227,9 +221,7 @@ async fn a_failed_wake_up_adds_needs_you_and_stop_adds_nothing() {
         }),
     );
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let coordinator = client
         .call::<ProjectStart>(ProjectStartParams {
             project: project.id,
@@ -301,9 +293,7 @@ async fn the_wake_up_after_the_hundredth_in_a_row_pauses_and_adds_needs_you() {
     let done = || vec![init("worker-1"), end_turn("Done.")];
     let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
     let host = Host::start(temp_dir(), roles(done(), vec![turn("Planned.")], &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let coordinator = client
         .call::<ProjectStart>(crate::coordinator::start_params(project.id, "Plan."))
         .await

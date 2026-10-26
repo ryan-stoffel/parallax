@@ -35,15 +35,28 @@ fn members(
     column: &str,
     id: &str,
 ) -> Result<Vec<Uuid>, StoreError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {column} FROM {table} WHERE area_id = ?1 ORDER BY position"
-    ))?;
-    let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
-    let mut ids = Vec::new();
-    for row in rows {
-        ids.push(Uuid::parse_str(&row?)?);
+    crate::ids(
+        &mut conn.prepare(&format!(
+            "SELECT {column} FROM {table} WHERE area_id = ?1 ORDER BY position"
+        ))?,
+        params![id],
+    )
+}
+
+/// Replaces area `key`'s members in one member table: `delete` clears them, and `insert`, given
+/// the area, a member's id, and its position, adds each of `ids` that it accepts.
+fn replace_members(
+    tx: &Connection,
+    delete: &str,
+    insert: &str,
+    key: &str,
+    ids: &[Uuid],
+) -> Result<(), StoreError> {
+    tx.execute(delete, params![key])?;
+    for (position, id) in ids.iter().enumerate() {
+        tx.execute(insert, params![key, id.to_string(), position])?;
     }
-    Ok(ids)
+    Ok(())
 }
 
 fn area(conn: &Connection, row: (String, String, String, String)) -> Result<Area, StoreError> {
@@ -121,35 +134,35 @@ impl Store {
             params![key, name, color, timestamp::now()],
         )?;
         if let Some(threads) = threads {
-            tx.execute("DELETE FROM area_threads WHERE area_id = ?1", params![key])?;
-            for (position, thread) in threads.iter().enumerate() {
-                tx.execute(
-                    "INSERT OR IGNORE INTO area_threads (area_id, thread_id, position)
+            replace_members(
+                &tx,
+                "DELETE FROM area_threads WHERE area_id = ?1",
+                "INSERT OR IGNORE INTO area_threads (area_id, thread_id, position)
                      SELECT ?1, id, ?3 FROM threads WHERE id = ?2
                         AND (SELECT parent FROM runs WHERE runs.id = threads.id) IS NULL",
-                    params![key, thread.to_string(), position],
-                )?;
-            }
+                &key,
+                threads,
+            )?;
         }
         if let Some(projects) = projects {
-            tx.execute("DELETE FROM area_projects WHERE area_id = ?1", params![key])?;
-            for (position, project) in projects.iter().enumerate() {
-                tx.execute(
-                    "INSERT OR IGNORE INTO area_projects (area_id, project_id, position)
+            replace_members(
+                &tx,
+                "DELETE FROM area_projects WHERE area_id = ?1",
+                "INSERT OR IGNORE INTO area_projects (area_id, project_id, position)
                      SELECT ?1, id, ?3 FROM projects WHERE id = ?2",
-                    params![key, project.to_string(), position],
-                )?;
-            }
+                &key,
+                projects,
+            )?;
         }
         if let Some(repos) = repos {
-            tx.execute("DELETE FROM area_repos WHERE area_id = ?1", params![key])?;
-            for (position, repo) in repos.iter().enumerate() {
-                tx.execute(
-                    "INSERT OR IGNORE INTO area_repos (area_id, repo_id, position)
+            replace_members(
+                &tx,
+                "DELETE FROM area_repos WHERE area_id = ?1",
+                "INSERT OR IGNORE INTO area_repos (area_id, repo_id, position)
                      SELECT ?1, id, ?3 FROM repos WHERE id = ?2 AND scratch = 0",
-                    params![key, repo.to_string(), position],
-                )?;
-            }
+                &key,
+                repos,
+            )?;
         }
         tx.commit()?;
         self.get_area(id)?.ok_or(StoreError::NotFound { id })

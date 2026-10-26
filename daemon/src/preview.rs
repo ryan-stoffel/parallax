@@ -40,6 +40,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::backend::process::Launcher;
 use crate::browser::{self, Browser, Event, Page};
+use crate::mcp::{parse, pretty};
 
 /// Why an agent's action on a tab the user controls is refused.
 const HUMAN: &str = "The user controls this tab now. Wait for them to hand it back, or work in another tab with preview_open reuseExistingTab=false.";
@@ -139,8 +140,30 @@ struct Frame {
     height: u32,
 }
 
+impl Live {
+    /// Whether the app is showing the tab: it asked for a frame within [`WATCHED_FOR`].
+    fn visible(&self) -> bool {
+        self.watched.is_some_and(|at| at.elapsed() < WATCHED_FOR)
+    }
+
+    /// Who controls the tab, as `preview_status` names them.
+    fn owner(&self) -> &'static str {
+        if self.human { "human" } else { "agent" }
+    }
+}
+
 fn lock(live: &Mutex<Live>) -> MutexGuard<'_, Live> {
     live.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// `Emulation.setDeviceMetricsOverride`'s params for a viewport of `width` by `height`.
+fn metrics(width: u32, height: u32, mobile: bool) -> Value {
+    json!({"width": width, "height": height, "deviceScaleFactor": 1, "mobile": mobile})
+}
+
+/// `Page.startScreencast`'s params: JPEG frames as large as a viewport gets.
+fn screencast() -> Value {
+    json!({"format": "jpeg", "quality": 70, "maxWidth": MAX_SIDE, "maxHeight": MAX_SIDE})
 }
 
 impl Previews {
@@ -182,7 +205,7 @@ impl Previews {
         state
             .tabs
             .iter()
-            .find(|tab| tab.run == run && tab.id == id)
+            .find(|tab| tab.is(run, id))
             .cloned()
             .ok_or_else(|| format!("This thread has no browser tab {id:?}. See preview_status."))
     }
@@ -385,17 +408,14 @@ impl Previews {
         self.state.lock().await.current.insert(run, tab.id.clone());
         lock(&tab.live).used = Some(Instant::now());
         // Reading never needs control; acting does.
-        if !matches!(tool, "preview_status" | "preview_snapshot") && lock(&tab.live).human {
+        let reads = matches!(tool, "preview_status" | "preview_snapshot");
+        if !reads && lock(&tab.live).human {
             return Err(HUMAN.to_owned());
         }
         let _acting = tab.acting.lock().await;
         let started = Timestamp::now();
         let done = tab.act(daemon, tool, arguments).await;
-        if !matches!(tool, "preview_status" | "preview_snapshot") {
-            let mut live = lock(&tab.live);
-            if live.timeline.len() == MAX_ENTRIES {
-                live.timeline.pop_front();
-            }
+        if !reads {
             let mut event = json!({
                 "id": format!("a{}", started.as_millisecond()),
                 "action": tool.trim_start_matches("preview_"),
@@ -406,7 +426,7 @@ impl Previews {
             if let Err(error) = &done {
                 event["error"] = error.as_str().into();
             }
-            live.timeline.push_back(event);
+            push(&mut lock(&tab.live).timeline, event);
         }
         if tool == "preview_status" {
             let mut status = done?.0;
@@ -420,9 +440,9 @@ impl Previews {
                     let mut listed = json!({
                         "tabId": other.id,
                         "url": live.url,
-                        "owner": if live.human { "human" } else { "agent" },
+                        "owner": live.owner(),
                         "ownedByCaller": true,
-                        "visible": live.watched.is_some_and(|at| at.elapsed() < WATCHED_FOR),
+                        "visible": live.visible(),
                     });
                     if let Some(opener) = &other.opener {
                         listed["openerTabId"] = opener.as_str().into();
@@ -501,13 +521,13 @@ impl Previews {
 
     async fn close(&self, run: RunId, id: &str) -> Result<(), String> {
         let mut state = self.state.lock().await;
-        let Some(tab) = state.tabs.iter().find(|tab| tab.run == run && tab.id == id) else {
+        let Some(tab) = state.tabs.iter().find(|tab| tab.is(run, id)) else {
             return Err(format!("This thread has no browser tab {id:?}."));
         };
         if lock(&tab.live).human {
             return Err(HUMAN.to_owned());
         }
-        remove(&mut state, |tab| tab.run == run && tab.id == id);
+        remove(&mut state, |tab| tab.is(run, id));
         Ok(())
     }
 }
@@ -564,16 +584,12 @@ async fn add_tab(
     .await?;
     page.call(
         "Emulation.setDeviceMetricsOverride",
-        json!({"width": FILL.0, "height": FILL.1, "deviceScaleFactor": 1, "mobile": false}),
+        metrics(FILL.0, FILL.1, false),
     )
     .await?;
     // ponytail: a tab screencasts while it's open, watched or not; stop it while nobody watches
     // or records if CPU shows it.
-    page.call(
-        "Page.startScreencast",
-        json!({"format": "jpeg", "quality": 70, "maxWidth": MAX_SIDE, "maxHeight": MAX_SIDE}),
-    )
-    .await?;
+    page.call("Page.startScreencast", screencast()).await?;
     let live = Arc::new(Mutex::new(Live {
         url: "about:blank".to_owned(),
         setting: json!({"mode": "fill"}),
@@ -619,7 +635,7 @@ async fn close_when_idle(state: Weak<tokio::sync::Mutex<State>>, run: RunId, id:
         tokio::time::sleep(Duration::from_mins(1)).await;
         let Some(state) = state.upgrade() else { return };
         let mut state = state.lock().await;
-        let Some(tab) = state.tabs.iter().find(|tab| tab.run == run && tab.id == id) else {
+        let Some(tab) = state.tabs.iter().find(|tab| tab.is(run, &id)) else {
             return;
         };
         let live = lock(&tab.live);
@@ -627,7 +643,7 @@ async fn close_when_idle(state: Weak<tokio::sync::Mutex<State>>, run: RunId, id:
         let idle = live.recording.is_none() && live.used.is_some_and(|at| at.elapsed() > IDLE);
         drop(live);
         if idle {
-            remove(&mut state, |tab| tab.run == run && tab.id == id);
+            remove(&mut state, |tab| tab.is(run, &id));
             return;
         }
     }
@@ -684,6 +700,11 @@ fn evidence_root(launcher: &Launcher) -> PathBuf {
 }
 
 impl Tab {
+    /// Whether this is thread `run`'s tab `id`.
+    fn is(&self, run: RunId, id: &str) -> bool {
+        self.run == run && self.id == id
+    }
+
     /// A file in the tab's thread's evidence folder, which this makes.
     fn evidence_file(&self, name: &str) -> Result<PathBuf, String> {
         std::fs::create_dir_all(&self.evidence)
@@ -705,7 +726,7 @@ impl Tab {
         self.page
             .call(
                 "Emulation.setDeviceMetricsOverride",
-                json!({"width": width, "height": height, "deviceScaleFactor": 1, "mobile": false}),
+                metrics(width, height, false),
             )
             .await
             .map(|_| ())
@@ -735,7 +756,7 @@ impl Tab {
         self.page
             .call(
                 "Emulation.setDeviceMetricsOverride",
-                json!({"width": width, "height": height, "deviceScaleFactor": 1, "mobile": setting["mode"] == "preset"}),
+                metrics(width, height, setting["mode"] == "preset"),
             )
             .await?;
         let mut live = lock(&self.live);
@@ -763,13 +784,13 @@ impl Tab {
         }
         Ok(json!({
             "available": true,
-            "visible": live.watched.is_some_and(|at| at.elapsed() < WATCHED_FOR),
+            "visible": live.visible(),
             "tabId": self.id,
             "url": live.url,
             "title": live.title,
             "loading": live.loading,
             "control": {
-                "owner": if live.human { "human" } else { "agent" },
+                "owner": live.owner(),
                 "ownedByCaller": true,
                 "generation": live.generation,
             },
@@ -781,14 +802,14 @@ impl Tab {
     }
 
     /// Runs one tool on this tab: its result, and an image for the model when it has one.
-    #[expect(clippy::too_many_lines, reason = "one arm per tool, read side by side")]
     async fn act(
         &self,
         daemon: &Arc<crate::server::Daemon>,
         tool: &str,
         arguments: Value,
     ) -> Result<(Value, Option<String>), String> {
-        let ok = || Ok((json!({}), None));
+        // What a tool that only acts answers.
+        let done = |()| -> (Value, Option<String>) { (json!({}), None) };
         match tool {
             "preview_status" => Ok((self.status().await?, None)),
             "preview_navigate" => {
@@ -805,27 +826,8 @@ impl Tab {
             }
             "preview_resize" => Ok((self.resize(parse(arguments)?).await?, None)),
             "preview_set_appearance" => {
-                let args: AppearanceArgs = parse(arguments)?;
-                let scheme = match args.color_scheme.as_str() {
-                    "light" => "light",
-                    "dark" => "dark",
-                    "system" => "system",
-                    other => {
-                        return Err(format!(
-                            "colorScheme must be light, dark, or system, not {other:?}"
-                        ));
-                    }
-                };
-                let features = if scheme == "system" {
-                    json!([])
-                } else {
-                    json!([{"name": "prefers-color-scheme", "value": scheme}])
-                };
-                self.page
-                    .call("Emulation.setEmulatedMedia", json!({"features": features}))
-                    .await?;
-                lock(&self.live).color_scheme = scheme;
-                Ok((json!({"tabId": self.id, "colorScheme": scheme}), None))
+                let value = self.set_appearance(parse(arguments)?).await?;
+                Ok((value, None))
             }
             "preview_snapshot" => self.snapshot(parse(arguments)?).await,
             "preview_click" => {
@@ -835,105 +837,19 @@ impl Tab {
                 let count = args.click_count.unwrap_or(1).clamp(1, 3);
                 self.mouse("mouseMoved", x, y, "none", 0).await?;
                 self.mouse("mousePressed", x, y, button, count).await?;
-                self.mouse("mouseReleased", x, y, button, count).await?;
-                ok()
+                self.mouse("mouseReleased", x, y, button, count)
+                    .await
+                    .map(done)
             }
             "preview_hover" => {
                 let args: PointerArgs = parse(arguments)?;
                 let (x, y) = self.point(&args).await?;
-                self.mouse("mouseMoved", x, y, "none", 0).await?;
-                ok()
+                self.mouse("mouseMoved", x, y, "none", 0).await.map(done)
             }
-            "preview_drag" => {
-                let args: DragArgs = parse(arguments)?;
-                let (from, to) = (
-                    self.point(&PointerArgs::locator(args.source)).await?,
-                    self.point(&PointerArgs::locator(args.target)).await?,
-                );
-                self.mouse("mouseMoved", from.0, from.1, "none", 0).await?;
-                self.mouse("mousePressed", from.0, from.1, "left", 1)
-                    .await?;
-                for step in 1..=10 {
-                    let t = f64::from(step) / 10.0;
-                    let (x, y) = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
-                    self.mouse("mouseMoved", x, y, "left", 0).await?;
-                }
-                self.mouse("mouseReleased", to.0, to.1, "left", 1).await?;
-                ok()
-            }
-            "preview_type" => {
-                let args: TypeArgs = parse(arguments)?;
-                if args.locator.is_some() || args.selector.is_some() {
-                    let target = PointerArgs {
-                        locator: args.locator,
-                        selector: args.selector,
-                        ..PointerArgs::default()
-                    };
-                    let (x, y) = self.point(&target).await?;
-                    self.mouse("mousePressed", x, y, "left", 1).await?;
-                    self.mouse("mouseReleased", x, y, "left", 1).await?;
-                }
-                if args.clear.unwrap_or(false) {
-                    self.eval("(() => { const el = document.activeElement; if (el && 'select' in el) el.select(); else document.execCommand('selectAll'); })()")
-                        .await?;
-                    self.page
-                        .call("Input.dispatchKeyEvent", json!({"type": "keyDown", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}))
-                        .await?;
-                    self.page
-                        .call("Input.dispatchKeyEvent", json!({"type": "keyUp", "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}))
-                        .await?;
-                }
-                self.page
-                    .call("Input.insertText", json!({"text": args.text}))
-                    .await?;
-                ok()
-            }
-            "preview_press" => {
-                let args: PressArgs = parse(arguments)?;
-                let modifiers: u8 = args.modifiers.iter().fold(0, |bits, modifier| {
-                    bits | match modifier.as_str() {
-                        "Alt" => 1,
-                        "Control" => 2,
-                        "Meta" => 4,
-                        "Shift" => 8,
-                        _ => 0,
-                    }
-                });
-                let (key, code, key_code, text) = key_info(&args.key);
-                // A shortcut types nothing.
-                let text = text.filter(|_| modifiers.trailing_zeros() >= 3);
-                let mut down = json!({"type": if text.is_some() { "keyDown" } else { "rawKeyDown" }, "key": key, "code": code, "windowsVirtualKeyCode": key_code, "modifiers": modifiers});
-                if let Some(text) = text {
-                    down["text"] = text.into();
-                }
-                self.page.call("Input.dispatchKeyEvent", down).await?;
-                self.page
-                    .call(
-                        "Input.dispatchKeyEvent",
-                        json!({"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": key_code, "modifiers": modifiers}),
-                    )
-                    .await?;
-                ok()
-            }
-            "preview_scroll" => {
-                let args: ScrollArgs = parse(arguments)?;
-                if args.delta_x.is_none() && args.delta_y.is_none() {
-                    return Err("Provide deltaX or deltaY.".to_owned());
-                }
-                let (x, y) = if args.target.locator.is_some() || args.target.selector.is_some() {
-                    self.point(&args.target).await?
-                } else {
-                    let (width, height) = lock(&self.live).viewport;
-                    (f64::from(width) / 2.0, f64::from(height) / 2.0)
-                };
-                self.page
-                    .call(
-                        "Input.dispatchMouseEvent",
-                        json!({"type": "mouseWheel", "x": x, "y": y, "deltaX": args.delta_x.unwrap_or(0.0), "deltaY": args.delta_y.unwrap_or(0.0)}),
-                    )
-                    .await?;
-                ok()
-            }
+            "preview_drag" => self.drag(parse(arguments)?).await.map(done),
+            "preview_type" => self.type_text(parse(arguments)?).await.map(done),
+            "preview_press" => self.press(parse(arguments)?).await.map(done),
+            "preview_scroll" => self.scroll(parse(arguments)?).await.map(done),
             "preview_select" => {
                 let args: SelectArgs = parse(arguments)?;
                 let find = find_expression(args.locator.as_deref(), args.selector.as_deref());
@@ -945,36 +861,7 @@ impl Tab {
                     .await?;
                 Ok((json!({"selected": selected}), None))
             }
-            "preview_upload" => {
-                let args: UploadArgs = parse(arguments)?;
-                if args.locator.is_some() || args.selector.is_some() {
-                    let find = find_expression(args.locator.as_deref(), args.selector.as_deref());
-                    let found = self
-                        .page
-                        .call("Runtime.evaluate", json!({"expression": find}))
-                        .await?;
-                    let object = found["result"]["objectId"]
-                        .as_str()
-                        .ok_or("Nothing matches that locator.")?;
-                    self.page
-                        .call(
-                            "DOM.setFileInputFiles",
-                            json!({"files": args.paths, "objectId": object}),
-                        )
-                        .await?;
-                } else {
-                    let Some((node, _)) = lock(&self.live).chooser.take() else {
-                        return Err("No file picker is open. Click the upload control first, or pass a locator for the <input type=file>.".to_owned());
-                    };
-                    self.page
-                        .call(
-                            "DOM.setFileInputFiles",
-                            json!({"files": args.paths, "backendNodeId": node}),
-                        )
-                        .await?;
-                }
-                ok()
-            }
+            "preview_upload" => self.upload(parse(arguments)?).await.map(done),
             "preview_dialog" => {
                 let args: DialogArgs = parse(arguments)?;
                 let mut params = json!({"accept": args.accept});
@@ -988,86 +875,231 @@ impl Tab {
                 Ok((self.status().await?, None))
             }
             "preview_evaluate" => {
-                let args: EvaluateArgs = parse(arguments)?;
-                let evaluated = self
-                    .page
-                    .call(
-                        "Runtime.evaluate",
-                        json!({"expression": args.expression, "awaitPromise": args.await_promise.unwrap_or(true), "returnByValue": args.return_by_value.unwrap_or(true)}),
-                    )
-                    .await?;
-                if let Some(error) = exception(&evaluated) {
-                    return Err(error);
-                }
-                let value = evaluated["result"]["value"].clone();
-                if value.to_string().len() > MAX_EVALUATE_BYTES {
-                    return Err(format!(
-                        "The value is over {} KB; return less.",
-                        MAX_EVALUATE_BYTES / 1024
-                    ));
-                }
+                let value = self.evaluate(parse(arguments)?).await?;
                 Ok((json!({"value": value}), None))
             }
-            "preview_wait_for" => {
-                let args: WaitArgs = parse(arguments)?;
-                let mut checks = Vec::new();
-                if args.locator.is_some() || args.selector.is_some() {
-                    checks.push(format!(
-                        "(() => {{ try {{ {}; return true; }} catch {{ return false; }} }})()",
-                        find_expression(args.locator.as_deref(), args.selector.as_deref())
-                    ));
-                }
-                if let Some(text) = &args.text {
-                    checks.push(format!(
-                        "(document.body?.innerText ?? '').includes({})",
-                        json!(text)
-                    ));
-                }
-                if let Some(url) = &args.url_includes {
-                    checks.push(format!("location.href.includes({})", json!(url)));
-                }
-                if checks.is_empty() {
-                    return Err("Provide at least one wait condition.".to_owned());
-                }
-                let all = checks.join(" && ");
-                self.until(&all, timeout(args.timeout_ms)).await?;
-                ok()
-            }
-            "preview_recording_start" => {
-                if lock(&self.live).recording.is_some() {
-                    return Err("This tab is already recording.".to_owned());
-                }
-                let encoder = self.page.browser.page().await?;
-                let started = encoder
-                    .call(
-                        "Runtime.evaluate",
-                        json!({"expression": RECORDER, "awaitPromise": true}),
-                    )
-                    .await?;
-                if let Some(error) = exception(&started) {
-                    return Err(format!("The recorder could not start: {error}"));
-                }
-                let now = Timestamp::now();
-                lock(&self.live).recording = Some(Recording {
-                    encoder,
-                    started: now,
-                });
-                // A frame now, so a still page records from the start.
-                let _ = self.page.call("Page.stopScreencast", json!({})).await;
-                let _ = self
-                    .page
-                    .call("Page.startScreencast", json!({"format": "jpeg", "quality": 70, "maxWidth": MAX_SIDE, "maxHeight": MAX_SIDE}))
-                    .await;
-                Ok((
-                    json!({"tabId": self.id, "recording": true, "startedAt": now.to_string()}),
-                    None,
-                ))
-            }
+            "preview_wait_for" => self.wait_for(parse(arguments)?).await.map(done),
+            "preview_recording_start" => Ok((self.start_recording().await?, None)),
             "preview_recording_stop" => {
                 self.stop_recording(daemon).await.map(|value| (value, None))
             }
             other => Err(format!("no tool is named {other:?}")),
         }
+    }
+
+    /// `preview_set_appearance`: the color scheme the page sees, or the system's.
+    async fn set_appearance(&self, args: AppearanceArgs) -> Result<Value, String> {
+        let scheme = match args.color_scheme.as_str() {
+            "light" => "light",
+            "dark" => "dark",
+            "system" => "system",
+            other => {
+                return Err(format!(
+                    "colorScheme must be light, dark, or system, not {other:?}"
+                ));
+            }
+        };
+        let features = if scheme == "system" {
+            json!([])
+        } else {
+            json!([{"name": "prefers-color-scheme", "value": scheme}])
+        };
+        self.page
+            .call("Emulation.setEmulatedMedia", json!({"features": features}))
+            .await?;
+        lock(&self.live).color_scheme = scheme;
+        Ok(json!({"tabId": self.id, "colorScheme": scheme}))
+    }
+
+    /// `preview_drag`: presses on one element, moves to another in ten steps, and lets go.
+    async fn drag(&self, args: DragArgs) -> Result<(), String> {
+        let (from, to) = (
+            self.point(&PointerArgs::locator(args.source)).await?,
+            self.point(&PointerArgs::locator(args.target)).await?,
+        );
+        self.mouse("mouseMoved", from.0, from.1, "none", 0).await?;
+        self.mouse("mousePressed", from.0, from.1, "left", 1)
+            .await?;
+        for step in 1..=10 {
+            let t = f64::from(step) / 10.0;
+            let (x, y) = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+            self.mouse("mouseMoved", x, y, "left", 0).await?;
+        }
+        self.mouse("mouseReleased", to.0, to.1, "left", 1).await
+    }
+
+    /// `preview_type`: clicks the target, if any, clears the focused field if asked, and types.
+    async fn type_text(&self, args: TypeArgs) -> Result<(), String> {
+        if args.locator.is_some() || args.selector.is_some() {
+            let target = PointerArgs {
+                locator: args.locator,
+                selector: args.selector,
+                ..PointerArgs::default()
+            };
+            let (x, y) = self.point(&target).await?;
+            self.mouse("mousePressed", x, y, "left", 1).await?;
+            self.mouse("mouseReleased", x, y, "left", 1).await?;
+        }
+        if args.clear.unwrap_or(false) {
+            self.eval("(() => { const el = document.activeElement; if (el && 'select' in el) el.select(); else document.execCommand('selectAll'); })()")
+                .await?;
+            for kind in ["keyDown", "keyUp"] {
+                self.page
+                    .call("Input.dispatchKeyEvent", json!({"type": kind, "key": "Backspace", "code": "Backspace", "windowsVirtualKeyCode": 8}))
+                    .await?;
+            }
+        }
+        self.page
+            .call("Input.insertText", json!({"text": args.text}))
+            .await
+            .map(|_| ())
+    }
+
+    /// `preview_press`: a key, with modifiers, down and up.
+    async fn press(&self, args: PressArgs) -> Result<(), String> {
+        let modifiers: u8 = args.modifiers.iter().fold(0, |bits, modifier| {
+            bits | match modifier.as_str() {
+                "Alt" => 1,
+                "Control" => 2,
+                "Meta" => 4,
+                "Shift" => 8,
+                _ => 0,
+            }
+        });
+        let (key, code, key_code, text) = key_info(&args.key);
+        // A shortcut types nothing.
+        let text = text.filter(|_| modifiers.trailing_zeros() >= 3);
+        let event = |kind: &str| json!({"type": kind, "key": key, "code": code, "windowsVirtualKeyCode": key_code, "modifiers": modifiers});
+        let mut down = event(if text.is_some() {
+            "keyDown"
+        } else {
+            "rawKeyDown"
+        });
+        if let Some(text) = text {
+            down["text"] = text.into();
+        }
+        self.page.call("Input.dispatchKeyEvent", down).await?;
+        self.page
+            .call("Input.dispatchKeyEvent", event("keyUp"))
+            .await
+            .map(|_| ())
+    }
+
+    /// `preview_scroll`: the wheel over the target, or the viewport's middle.
+    async fn scroll(&self, args: ScrollArgs) -> Result<(), String> {
+        if args.delta_x.is_none() && args.delta_y.is_none() {
+            return Err("Provide deltaX or deltaY.".to_owned());
+        }
+        let (x, y) = if args.target.locator.is_some() || args.target.selector.is_some() {
+            self.point(&args.target).await?
+        } else {
+            let (width, height) = lock(&self.live).viewport;
+            (f64::from(width) / 2.0, f64::from(height) / 2.0)
+        };
+        self.page
+            .call(
+                "Input.dispatchMouseEvent",
+                json!({"type": "mouseWheel", "x": x, "y": y, "deltaX": args.delta_x.unwrap_or(0.0), "deltaY": args.delta_y.unwrap_or(0.0)}),
+            )
+            .await
+            .map(|_| ())
+    }
+
+    /// `preview_upload`: files into the target `<input type=file>`, or the open file picker.
+    async fn upload(&self, args: UploadArgs) -> Result<(), String> {
+        let input = if args.locator.is_some() || args.selector.is_some() {
+            let find = find_expression(args.locator.as_deref(), args.selector.as_deref());
+            let found = self
+                .page
+                .call("Runtime.evaluate", json!({"expression": find}))
+                .await?;
+            let object = found["result"]["objectId"]
+                .as_str()
+                .ok_or("Nothing matches that locator.")?;
+            json!({"files": args.paths, "objectId": object})
+        } else {
+            let Some((node, _)) = lock(&self.live).chooser.take() else {
+                return Err("No file picker is open. Click the upload control first, or pass a locator for the <input type=file>.".to_owned());
+            };
+            json!({"files": args.paths, "backendNodeId": node})
+        };
+        self.page
+            .call("DOM.setFileInputFiles", input)
+            .await
+            .map(|_| ())
+    }
+
+    /// `preview_evaluate`: the expression's value, if it isn't too large.
+    async fn evaluate(&self, args: EvaluateArgs) -> Result<Value, String> {
+        let evaluated = self
+            .page
+            .call(
+                "Runtime.evaluate",
+                json!({"expression": args.expression, "awaitPromise": args.await_promise.unwrap_or(true), "returnByValue": args.return_by_value.unwrap_or(true)}),
+            )
+            .await?;
+        if let Some(error) = exception(&evaluated) {
+            return Err(error);
+        }
+        let value = evaluated["result"]["value"].clone();
+        if value.to_string().len() > MAX_EVALUATE_BYTES {
+            return Err(format!(
+                "The value is over {} KB; return less.",
+                MAX_EVALUATE_BYTES / 1024
+            ));
+        }
+        Ok(value)
+    }
+
+    /// `preview_wait_for`: waits until every condition `args` gives holds.
+    async fn wait_for(&self, args: WaitArgs) -> Result<(), String> {
+        let mut checks = Vec::new();
+        if args.locator.is_some() || args.selector.is_some() {
+            checks.push(format!(
+                "(() => {{ try {{ {}; return true; }} catch {{ return false; }} }})()",
+                find_expression(args.locator.as_deref(), args.selector.as_deref())
+            ));
+        }
+        if let Some(text) = &args.text {
+            checks.push(format!(
+                "(document.body?.innerText ?? '').includes({})",
+                json!(text)
+            ));
+        }
+        if let Some(url) = &args.url_includes {
+            checks.push(format!("location.href.includes({})", json!(url)));
+        }
+        if checks.is_empty() {
+            return Err("Provide at least one wait condition.".to_owned());
+        }
+        self.until(&checks.join(" && "), timeout(args.timeout_ms))
+            .await
+    }
+
+    /// `preview_recording_start`: a recorder page that draws the tab's frames.
+    async fn start_recording(&self) -> Result<Value, String> {
+        if lock(&self.live).recording.is_some() {
+            return Err("This tab is already recording.".to_owned());
+        }
+        let encoder = self.page.browser.page().await?;
+        let started = encoder
+            .call(
+                "Runtime.evaluate",
+                json!({"expression": RECORDER, "awaitPromise": true}),
+            )
+            .await?;
+        if let Some(error) = exception(&started) {
+            return Err(format!("The recorder could not start: {error}"));
+        }
+        let now = Timestamp::now();
+        lock(&self.live).recording = Some(Recording {
+            encoder,
+            started: now,
+        });
+        // A frame now, so a still page records from the start.
+        let _ = self.page.call("Page.stopScreencast", json!({})).await;
+        let _ = self.page.call("Page.startScreencast", screencast()).await;
+        Ok(json!({"tabId": self.id, "recording": true, "startedAt": now.to_string()}))
     }
 
     async fn stop_recording(&self, daemon: &Arc<crate::server::Daemon>) -> Result<Value, String> {
@@ -1271,7 +1303,6 @@ impl Tab {
 
 /// Follows a tab's events: its frames (acknowledged, and fed to a recording), where it is, its
 /// dialogs and file pickers, and its console and network.
-#[expect(clippy::too_many_lines, reason = "one arm per event")]
 async fn watch_tab(
     browser: Browser,
     session: String,
@@ -1286,45 +1317,7 @@ async fn watch_tab(
         let now = Timestamp::now().to_string();
         match method.as_str() {
             "Page.screencastFrame" => {
-                browser
-                    .post(
-                        "Page.screencastFrameAck",
-                        json!({"sessionId": params["sessionId"]}),
-                        &session,
-                    )
-                    .await;
-                let data = params["data"].as_str().unwrap_or_default().to_owned();
-                // A page's size in CSS pixels, a whole number DevTools sends as a float.
-                let size = |name: &str| {
-                    params["metadata"][name].as_u64().or_else(|| {
-                        params["metadata"][name]
-                            .as_f64()
-                            .map(|n| n.round().to_string().parse().unwrap_or(0))
-                    })
-                };
-                let size = |name: &str| u32::try_from(size(name).unwrap_or(0)).unwrap_or(0);
-                let (width, height) = (size("deviceWidth"), size("deviceHeight"));
-                let encoder = lock(&live)
-                    .recording
-                    .as_ref()
-                    .map(|r| r.encoder.session.clone());
-                if let Some(encoder) = encoder {
-                    browser
-                        .post(
-                            "Runtime.evaluate",
-                            json!({"expression": format!("window.__plxRecorder.frame({})", json!(data))}),
-                            &encoder,
-                        )
-                        .await;
-                }
-                frames.send_modify(|frame| {
-                    *frame = Frame {
-                        seq: frame.seq + 1,
-                        data: Arc::new(data),
-                        width,
-                        height,
-                    };
-                });
+                on_frame(&browser, &session, &live, &frames, &params).await;
             }
             "Page.frameNavigated" if params["frame"]["parentId"].is_null() => {
                 let mut live = lock(&live);
@@ -1368,31 +1361,7 @@ async fn watch_tab(
                 }
             }
             "Runtime.consoleAPICalled" | "Runtime.exceptionThrown" => {
-                let (level, text) = match method.as_str() {
-                    "Runtime.consoleAPICalled" => (
-                        params["type"].as_str().unwrap_or("log").to_owned(),
-                        params["args"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .map(|arg| {
-                                arg["value"].as_str().map_or_else(
-                                    || arg["description"].as_str().unwrap_or_default().to_owned(),
-                                    ToOwned::to_owned,
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" "),
-                    ),
-                    _ => (
-                        "error".to_owned(),
-                        params["exceptionDetails"]["exception"]["description"]
-                            .as_str()
-                            .or_else(|| params["exceptionDetails"]["text"].as_str())
-                            .unwrap_or_default()
-                            .to_owned(),
-                    ),
-                };
+                let (level, text) = console_entry(&method, &params);
                 let text: String = text.chars().take(500).collect();
                 push(
                     &mut lock(&live).console,
@@ -1436,6 +1405,81 @@ async fn watch_tab(
             _ => {}
         }
     }
+}
+
+/// Acknowledges a screencast frame, feeds it to the tab's recording, if any, and makes it the
+/// tab's newest frame.
+async fn on_frame(
+    browser: &Browser,
+    session: &str,
+    live: &Mutex<Live>,
+    frames: &watch::Sender<Frame>,
+    params: &Value,
+) {
+    browser
+        .post(
+            "Page.screencastFrameAck",
+            json!({"sessionId": params["sessionId"]}),
+            session,
+        )
+        .await;
+    let data = params["data"].as_str().unwrap_or_default().to_owned();
+    // A page's size in CSS pixels, a whole number DevTools sends as a float.
+    let size = |name: &str| {
+        params["metadata"][name].as_u64().or_else(|| {
+            params["metadata"][name]
+                .as_f64()
+                .map(|n| n.round().to_string().parse().unwrap_or(0))
+        })
+    };
+    let size = |name: &str| u32::try_from(size(name).unwrap_or(0)).unwrap_or(0);
+    let (width, height) = (size("deviceWidth"), size("deviceHeight"));
+    let encoder = lock(live)
+        .recording
+        .as_ref()
+        .map(|r| r.encoder.session.clone());
+    if let Some(encoder) = encoder {
+        browser
+            .post(
+                "Runtime.evaluate",
+                json!({"expression": format!("window.__plxRecorder.frame({})", json!(data))}),
+                &encoder,
+            )
+            .await;
+    }
+    frames.send_modify(|frame| {
+        *frame = Frame {
+            seq: frame.seq + 1,
+            data: Arc::new(data),
+            width,
+            height,
+        };
+    });
+}
+
+/// A console call's or an uncaught exception's level and text.
+fn console_entry(method: &str, params: &Value) -> (String, String) {
+    if method == "Runtime.consoleAPICalled" {
+        let text = params["args"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|arg| {
+                arg["value"].as_str().map_or_else(
+                    || arg["description"].as_str().unwrap_or_default().to_owned(),
+                    ToOwned::to_owned,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        return (params["type"].as_str().unwrap_or("log").to_owned(), text);
+    }
+    let details = &params["exceptionDetails"];
+    let text = details["exception"]["description"]
+        .as_str()
+        .or_else(|| details["text"].as_str())
+        .unwrap_or_default();
+    ("error".to_owned(), text.to_owned())
 }
 
 fn push(entries: &mut VecDeque<Value>, entry: Value) {
@@ -1545,16 +1589,8 @@ fn key_info(key: &str) -> (String, String, u32, Option<String>) {
     }
 }
 
-fn parse<T: for<'de> Deserialize<'de>>(arguments: Value) -> Result<T, String> {
-    serde_json::from_value(arguments).map_err(|error| format!("invalid arguments: {error}"))
-}
-
 fn text(value: &Value) -> (String, Option<String>) {
     (pretty(value), None)
-}
-
-fn pretty(value: &Value) -> String {
-    serde_json::to_string_pretty(value).unwrap_or_default()
 }
 
 fn timeout(ms: Option<u64>) -> u64 {

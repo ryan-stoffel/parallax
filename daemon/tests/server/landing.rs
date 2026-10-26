@@ -19,7 +19,7 @@ use plxd::routing::BackendRegistry;
 use tokio::time::{Instant, sleep};
 
 use crate::agents::{Conn, Host, create, end_turn, fake, git, init, project_params, start_params};
-use crate::support::{PATIENCE, kind, temp_dir};
+use crate::support::{PATIENCE, kind, project_update, temp_dir};
 
 /// Every child's script: it writes `notes.txt` and finishes.
 pub(crate) fn notes() -> BackendRegistry {
@@ -120,18 +120,8 @@ pub(crate) fn worktree(run: &AgentRun) -> PathBuf {
 pub(crate) async fn lands_automatically(client: &mut Conn, project: ProjectId) {
     let updated = client
         .call::<ProjectUpdate>(ProjectUpdateParams {
-            project,
-            name: None,
-            icon: None,
-            permission: None,
-            autonomy: None,
-            base_branch: None,
             auto_land: Some(true),
-            max_children: None,
-            allow_api_keys: None,
-            checks: None,
-            proposed_checks: None,
-            computer: None,
+            ..project_update(project)
         })
         .await
         .unwrap()

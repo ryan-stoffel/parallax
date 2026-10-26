@@ -7,7 +7,7 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use parallax_protocol::methods::{AgentList, ContextList, ProjectStart, ThreadStart};
+use parallax_protocol::methods::{AgentList, ContextList, ThreadStart};
 use parallax_protocol::{
     AgentListParams, AgentRun, ContextListParams, Project, ProjectId, ThreadStartParams,
 };
@@ -22,7 +22,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::time::{Instant, sleep, timeout};
 
 use crate::agents::{Conn, Host, create, end_turn, init, project_params, text};
-use crate::coordinator::{roles, start_params as coordinator_params};
+use crate::coordinator::{plan, roles};
 use crate::support::{PATIENCE, temp_dir};
 
 /// A worker that edits the README, says so, waits for one message, echoes it, and finishes.
@@ -38,6 +38,20 @@ fn worker() -> Vec<Step> {
         Step::AwaitFollowUp,
         end_turn("Done."),
     ]
+}
+
+/// The tools every caller gets after its own (PLX-640).
+pub(crate) fn every_callers_tools() -> Vec<&'static str> {
+    [
+        html::TOOLS,
+        files::TOOLS,
+        preview::TOOLS,
+        device::TOOLS,
+        triggers::TOOLS,
+        delegation::TOOLS,
+        plxd::mcp::COMPUTER_TOOLS,
+    ]
+    .concat()
 }
 
 /// `plxd mcp --thread`, initialized.
@@ -171,11 +185,7 @@ async fn runs(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
 /// A project whose coordinator runs until stopped, on `worker` for its children, and its tools.
 async fn coordinator(host: &Host, client: &mut Conn) -> (Project, AgentRun, Mcp) {
     let project = create(client, project_params(host.dir.path())).await;
-    let coordinator = client
-        .call::<ProjectStart>(coordinator_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(client, project.id).await;
     let run = coordinator.id.to_string();
     let mcp = Mcp::spawn(mcp_command(host.dir.path(), &["--thread", &run])).await;
     (project, coordinator, mcp)
@@ -229,13 +239,7 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
             land::TOOLS,
             board::TOOLS,
             &["memory_read", "memory_propose", "memory_write"],
-            html::TOOLS,
-            files::TOOLS,
-            preview::TOOLS,
-            device::TOOLS,
-            triggers::TOOLS,
-            delegation::TOOLS,
-            plxd::mcp::COMPUTER_TOOLS,
+            &every_callers_tools(),
         ]
         .concat()
     );

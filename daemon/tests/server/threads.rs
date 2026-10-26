@@ -7,32 +7,32 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS, Message, Notification, RequestId};
+use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::methods::{
-    AgentAccept, AgentCancel, AgentEvents, AgentList, AgentSend, EventsEvent, EventsSubscribe,
-    HostHealth, NotificationMethod, RepoAdd, RepoClone, RepoRefs, RepoRemote, RepoUpdate,
-    RequestMethod, SpaceCreate, SpaceDelete, ThreadArchive, ThreadDelete, ThreadList, ThreadStart,
-    ThreadUpdate,
+    AgentAccept, AgentCancel, AgentEvents, AgentList, AgentSend, EventsSubscribe, HostHealth,
+    RepoAdd, RepoClone, RepoRefs, RepoRemote, RepoUpdate, SpaceCreate, SpaceDelete, ThreadArchive,
+    ThreadDelete, ThreadList, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentCancelParams, AgentEffort, AgentEventsParams,
     AgentListParams, AgentPermission, AgentSendParams, AgentStatus, ErrorKind, EventsEventParams,
     EventsSubscribeParams, HostHealthParams, ImageMediaType, ParallaxEvent, ProjectIcon, ProjectId,
-    PromptImage, Provider, Repo, RepoAddParams, RepoCloneParams, RepoId, RepoRefsParams,
+    PromptImage, Provider, RepoAddParams, RepoCloneParams, RepoId, RepoRefsParams,
     RepoRemoteParams, RepoUpdateParams, RunId, SpaceCreateParams, SpaceDeleteParams,
     ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams,
     ThreadUpdateParams, TurnId,
 };
-use plxd::backend::fake::{FakeBackend, Script, Step};
-use plxd::backend::process::{CancelPolicy, Environment, Launcher};
+use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{Backend, Capabilities, Event, RunRequest, StartError, Started};
-use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
-use rustix::process::Signal;
 use tempfile::TempDir;
 use tokio::time::Instant;
 
-use crate::support::{Client, InProcess, PATIENCE, eventually, kind, temp_dir};
+use crate::agents::{
+    Conn, end_turn, fake, fake_backend, git, init, named_repo, scope, send_params, text, until,
+    updated_to,
+};
+use crate::support::{InProcess, PATIENCE, eventually, kind, png, temp_dir};
 
 mod areas;
 mod checkpoints;
@@ -46,46 +46,8 @@ mod scripts;
 #[cfg(unix)]
 mod sessions;
 
-fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .expect("git runs");
-    assert!(output.status.success(), "git {args:?}: {output:?}");
-    String::from_utf8(output.stdout).unwrap().trim().to_owned()
-}
-
 fn real_repo(dir: &Path, name: &str) -> PathBuf {
-    let repo = dir.join("repos").join(name);
-    std::fs::create_dir_all(&repo).unwrap();
-    git(&repo, &["init", "-q", "--initial-branch=main"]);
-    git(&repo, &["config", "user.name", "Test User"]);
-    git(&repo, &["config", "user.email", "test@example.com"]);
-    std::fs::write(repo.join("README.md"), "hello\n").unwrap();
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "init"]);
-    repo.canonicalize().unwrap()
-}
-
-fn fake_backend(steps: Vec<Step>) -> FakeBackend {
-    let scratch = tempfile::tempdir().unwrap();
-    let launcher = Launcher::new(
-        DataDir::new(scratch.path()).unwrap(),
-        Environment::inherited(),
-    );
-    FakeBackend::new(launcher, Script { steps }).with_cancel_policy(CancelPolicy {
-        signal: Signal::INT,
-        group: false,
-        grace: Duration::from_millis(500),
-    })
-}
-
-fn fake(steps: Vec<Step>) -> BackendRegistry {
-    let mut backends = BackendRegistry::new();
-    backends.register(Provider::Anthropic, Arc::new(fake_backend(steps)));
-    backends
+    named_repo(dir, name).canonicalize().unwrap()
 }
 
 /// A run's model, effort, permission, approvals, and whether it ran as a thread (0034), as its
@@ -151,51 +113,23 @@ fn with_options(steps: Vec<Step>) -> (Host, Arc<Mutex<Vec<Options>>>) {
 
 fn editing() -> Vec<Step> {
     vec![
-        Step::Init {
-            session_id: "thread-1".to_owned(),
-            model: None,
-        },
+        init("thread-1"),
         Step::WriteFile {
             path: "NOTES.md".to_owned(),
             content: "Written in a thread.\n".to_owned(),
         },
-        Step::Emit(Event::Text {
-            message_id: None,
-            text: "Done.".to_owned(),
-        }),
-        Step::EndTurn {
-            result: Some("Done.".to_owned()),
-        },
+        text("Done."),
+        end_turn("Done."),
     ]
 }
 
 fn hang() -> Vec<Step> {
-    vec![
-        Step::Init {
-            session_id: "hang-1".to_owned(),
-            model: None,
-        },
-        Step::Hang,
-    ]
+    vec![init("hang-1"), Step::Hang]
 }
 
 /// `agent/send` params for `text`, changing no run options.
 fn message(run_id: RunId, text: &str) -> AgentSendParams {
-    AgentSendParams {
-        run_id,
-        turn_id: TurnId::generate(),
-        text: text.to_owned(),
-        model: None,
-        effort: None,
-        permission: None,
-        context_window: None,
-        fast: None,
-        account: None,
-        images: Vec::new(),
-        threads: Vec::new(),
-        from: None,
-        delivery: None,
-    }
+    send_params(run_id, TurnId::generate(), text)
 }
 
 /// `thread/update` params that mark `run_id` seen or snooze it (0033), and change nothing else.
@@ -253,9 +187,7 @@ struct Host {
 impl Host {
     fn start(backends: BackendRegistry) -> Self {
         let dir = temp_dir();
-        let mut config = InProcess::config(dir.path());
-        config.backends = Some(backends);
-        let server = InProcess::start(config);
+        let server = serve(&dir, backends);
         Self {
             dir,
             work: temp_dir(),
@@ -264,12 +196,7 @@ impl Host {
     }
 
     async fn client(&self) -> Conn {
-        let mut client = Client::connect(&self.server.socket).await;
-        client.initialize().await.expect("initialize");
-        Conn {
-            client,
-            pending: VecDeque::new(),
-        }
+        Conn::ready(&self.server.socket).await
     }
 
     fn data(&self) -> PathBuf {
@@ -280,49 +207,23 @@ impl Host {
     async fn restart(self, backends: BackendRegistry) -> Self {
         let Self { dir, work, server } = self;
         server.stop().await;
-        let mut config = InProcess::config(dir.path());
-        config.backends = Some(backends);
         Self {
+            server: serve(&dir, backends),
             dir,
             work,
-            server: InProcess::start(config),
         }
     }
 }
 
-struct Conn {
-    client: Client,
-    pending: VecDeque<EventsEventParams>,
+/// An in-process plxd on the data folder `dir`, running `backends`.
+fn serve(dir: &TempDir, backends: BackendRegistry) -> InProcess {
+    let mut config = InProcess::config(dir.path());
+    config.backends = Some(backends);
+    InProcess::start(config)
 }
 
-fn event(notification: Notification) -> EventsEventParams {
-    assert_eq!(
-        notification.method,
-        <EventsEvent as NotificationMethod>::NAME
-    );
-    serde_json::from_value(notification.params.expect("params")).expect("an event")
-}
-
+/// Thread-scoped calls on [`Conn`].
 impl Conn {
-    async fn call<M: RequestMethod>(
-        &mut self,
-        params: M::Params,
-    ) -> Result<M::Result, ErrorObject> {
-        let id = self.client.send::<M>(params).await;
-        loop {
-            match self.client.next().await {
-                Some(Message::Response(response)) => {
-                    assert_eq!(response.id, Some(id));
-                    return response.into_result();
-                }
-                Some(Message::Notification(notification)) => {
-                    self.pending.push_back(event(notification));
-                }
-                other => panic!("expected a response, got {other:?}"),
-            }
-        }
-    }
-
     async fn subscribe(&mut self, after: u64, project: Option<ProjectId>) {
         self.call::<EventsSubscribe>(EventsSubscribeParams {
             after,
@@ -334,60 +235,12 @@ impl Conn {
         .unwrap();
     }
 
+    /// [`until`], as a method.
     async fn until(
         &mut self,
-        mut done: impl FnMut(&EventsEventParams) -> bool,
+        done: impl FnMut(&EventsEventParams) -> bool,
     ) -> Vec<EventsEventParams> {
-        let deadline = Instant::now() + PATIENCE;
-        let mut events = Vec::new();
-        loop {
-            assert!(
-                Instant::now() < deadline,
-                "gave up waiting; got {events:#?}"
-            );
-            let event = match self.pending.pop_front() {
-                Some(event) => event,
-                None => match self.client.next().await {
-                    Some(Message::Notification(notification)) => event(notification),
-                    other => panic!("expected an event, got {other:?}"),
-                },
-            };
-            let stop = done(&event);
-            events.push(event);
-            if stop {
-                return events;
-            }
-        }
-    }
-
-    /// Sends a request without waiting for its response, which [`Conn::responses`] collects.
-    async fn send<M: RequestMethod>(&mut self, params: M::Params) -> RequestId {
-        self.client.send::<M>(params).await
-    }
-
-    /// The responses to `ids`, in that order, keeping the events that arrive meanwhile.
-    async fn responses(
-        &mut self,
-        ids: &[RequestId],
-    ) -> Vec<Result<serde_json::Value, ErrorObject>> {
-        let mut answers: Vec<Option<Result<serde_json::Value, ErrorObject>>> =
-            ids.iter().map(|_| None).collect();
-        while answers.iter().any(Option::is_none) {
-            match self.client.next().await {
-                Some(Message::Response(response)) => {
-                    let at = ids
-                        .iter()
-                        .position(|id| response.id.as_ref() == Some(id))
-                        .expect("a response to one of the requests");
-                    answers[at] = Some(response.into_result());
-                }
-                Some(Message::Notification(notification)) => {
-                    self.pending.push_back(event(notification));
-                }
-                other => panic!("expected a response, got {other:?}"),
-            }
-        }
-        answers.into_iter().map(Option::unwrap).collect()
+        until(self, done).await
     }
 
     async fn running_agents(&mut self) -> u32 {
@@ -406,24 +259,6 @@ impl Conn {
     async fn list(&mut self) -> ThreadListResult {
         self.call::<ThreadList>(ThreadListParams {}).await.unwrap()
     }
-
-    async fn add(&mut self, path: &Path) -> Repo {
-        self.call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: path.to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo
-    }
-}
-
-fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) -> bool {
-    move |event| matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.status == status)
-}
-
-fn scope(repo: RepoId) -> ProjectId {
-    ProjectId::try_from(uuid::Uuid::from(repo)).unwrap()
 }
 
 #[tokio::test]
@@ -1489,18 +1324,10 @@ async fn a_message_changes_a_finished_threads_model_and_effort() {
 #[tokio::test]
 async fn a_message_with_a_new_model_waits_for_a_running_thread_to_finish() {
     let slow = vec![
-        Step::Init {
-            session_id: "slow-1".to_owned(),
-            model: None,
-        },
+        init("slow-1"),
         Step::SleepMs(1000),
-        Step::Emit(Event::Text {
-            message_id: None,
-            text: "Done.".to_owned(),
-        }),
-        Step::EndTurn {
-            result: Some("Done.".to_owned()),
-        },
+        text("Done."),
+        end_turn("Done."),
     ];
     let (host, seen) = with_options(slow);
     let mut client = host.client().await;
@@ -1880,10 +1707,7 @@ async fn a_repo_icon_takes_an_image_and_a_glyph_clears_it() {
         image: None,
     };
     let with_image = ProjectIcon {
-        image: Some(PromptImage {
-            media_type: ImageMediaType::Png,
-            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
-        }),
+        image: Some(png()),
         ..glyph.clone()
     };
     let updated = client

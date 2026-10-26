@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use rusqlite::{Row, params};
+use rusqlite::params;
 use uuid::Uuid;
 
 use crate::Store;
@@ -32,18 +32,6 @@ type Raw = (
     String,
     Option<String>,
 );
-
-fn from_row(row: &Row<'_>) -> rusqlite::Result<Raw> {
-    Ok((
-        row.get(0)?,
-        row.get(1)?,
-        row.get(2)?,
-        row.get(3)?,
-        row.get(4)?,
-        row.get(5)?,
-        row.get(6)?,
-    ))
-}
 
 fn into_item((id, project, run, kind, text, created, seen): Raw) -> Result<InboxItem, StoreError> {
     Ok(InboxItem {
@@ -89,7 +77,7 @@ impl Store {
             "SELECT {COLUMNS} FROM inbox WHERE project_id = ?1 ORDER BY created_at, id"
         ))?;
         let rows = statement
-            .query_map(params![project.to_string()], from_row)?
+            .query_map(params![project.to_string()], |row| Raw::try_from(row))?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter().map(into_item).collect()
     }

@@ -279,6 +279,11 @@ fn fetch_repo(conn: &Connection, sql_where: &str, key: &str) -> Result<Option<Re
     .transpose()
 }
 
+/// Repo entry `id`, or [`StoreError::NotFound`] if there is none.
+fn existing_repo(conn: &Connection, id: Uuid) -> Result<Repo, StoreError> {
+    fetch_repo(conn, "id = ?1", &id.to_string())?.ok_or(StoreError::NotFound { id })
+}
+
 fn fetch_thread(conn: &Connection, id: Uuid) -> Result<Option<Thread>, StoreError> {
     conn.query_row(
         &format!("SELECT {THREAD_COLUMNS} FROM threads WHERE id = ?1"),
@@ -318,8 +323,7 @@ impl Store {
                 timestamp::now()
             ],
         )?;
-        let repo =
-            fetch_repo(&tx, "id = ?1", &id.to_string())?.ok_or(StoreError::NotFound { id })?;
+        let repo = existing_repo(&tx, id)?;
         tx.commit()?;
         Ok(repo)
     }
@@ -362,12 +366,9 @@ impl Store {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {REPO_COLUMNS} FROM repos ORDER BY created_at ASC, id ASC"
         ))?;
-        let rows = stmt.query_map([], repo_from_row)?;
-        let mut repos = Vec::new();
-        for row in rows {
-            repos.push(into_repo(row?)?);
-        }
-        Ok(repos)
+        stmt.query_map([], repo_from_row)?
+            .map(|row| into_repo(row?))
+            .collect()
     }
 
     /// Records a normal thread in repo entry `repo_id`, with its run and the run's worktree, in
@@ -433,12 +434,9 @@ impl Store {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {THREAD_COLUMNS} FROM threads ORDER BY created_at ASC, id ASC"
         ))?;
-        let rows = stmt.query_map([], thread_from_row)?;
-        let mut threads = Vec::new();
-        for row in rows {
-            threads.push(into_thread(row?)?);
-        }
-        Ok(threads)
+        stmt.query_map([], thread_from_row)?
+            .map(|row| into_thread(row?))
+            .collect()
     }
 
     /// The threads whose title contains `query` or whose messages hold every word of it, at most
@@ -461,15 +459,12 @@ impl Store {
              LIMIT ?3"
         ))?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let rows = stmt.query_map(
+        stmt.query_map(
             params![match_query(query), like_pattern(query), limit],
             thread_from_row,
-        )?;
-        let mut threads = Vec::new();
-        for row in rows {
-            threads.push(into_thread(row?)?);
-        }
-        Ok(threads)
+        )?
+        .map(|row| into_thread(row?))
+        .collect()
     }
 
     /// For each of `threads`, one line of its message that best matches `query`, as
@@ -556,8 +551,8 @@ impl Store {
     }
 
     /// Applies `update` to thread `id`: marks it seen now, snoozes it (decision record 0033), or
-    /// sets its title or settled flag (decision record 0041), or pins it (PLX-789). Returns the thread and whether
-    /// anything changed.
+    /// sets its title or settled flag (decision record 0041), or pins it (PLX-789). Returns the
+    /// thread and whether anything changed.
     ///
     /// # Errors
     ///
@@ -618,8 +613,7 @@ impl Store {
     ///
     /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
     pub fn set_repo_icon(&self, id: Uuid, icon: &ProjectIcon) -> Result<(Repo, bool), StoreError> {
-        let key = id.to_string();
-        let before = fetch_repo(&self.conn, "id = ?1", &key)?.ok_or(StoreError::NotFound { id })?;
+        let before = existing_repo(&self.conn, id)?;
         if before.icon.as_ref() == Some(icon) {
             return Ok((before, false));
         }
@@ -627,10 +621,9 @@ impl Store {
         self.conn.execute(
             "UPDATE repos SET icon_name = ?2, icon_color = ?3, icon_image_type = ?4, \
              icon_image_data = ?5 WHERE id = ?1",
-            params![key, name, color, image_type, image_data],
+            params![id.to_string(), name, color, image_type, image_data],
         )?;
-        let repo = fetch_repo(&self.conn, "id = ?1", &key)?.ok_or(StoreError::NotFound { id })?;
-        Ok((repo, true))
+        Ok((existing_repo(&self.conn, id)?, true))
     }
 
     /// Renames repo entry `id`. Returns the entry and whether the name changed.
@@ -639,17 +632,15 @@ impl Store {
     ///
     /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
     pub fn rename_repo(&self, id: Uuid, name: &str) -> Result<(Repo, bool), StoreError> {
-        let key = id.to_string();
-        let before = fetch_repo(&self.conn, "id = ?1", &key)?.ok_or(StoreError::NotFound { id })?;
+        let before = existing_repo(&self.conn, id)?;
         if before.fields.name == name {
             return Ok((before, false));
         }
         self.conn.execute(
             "UPDATE repos SET name = ?2 WHERE id = ?1",
-            params![key, name],
+            params![id.to_string(), name],
         )?;
-        let repo = fetch_repo(&self.conn, "id = ?1", &key)?.ok_or(StoreError::NotFound { id })?;
-        Ok((repo, true))
+        Ok((existing_repo(&self.conn, id)?, true))
     }
 
     /// Deletes repo entry `id`, once its threads are deleted. Returns whether it existed.

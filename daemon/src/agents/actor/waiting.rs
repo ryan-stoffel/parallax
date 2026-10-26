@@ -12,7 +12,6 @@ use tokio::time::Instant;
 use tracing::{info, warn};
 
 use super::Actor;
-use crate::agents::RunOptions;
 use crate::agents::convert::{self, WAITING};
 use crate::agents::resume::{self, KILLED, MESSAGE};
 
@@ -183,16 +182,7 @@ impl Actor {
             return;
         };
         info!(run = %self.id, "an agent run's CLI was killed from outside; resuming its session");
-        let resumed = self
-            .resume(
-                turn,
-                KILLED.to_owned(),
-                Vec::new(),
-                Vec::new(),
-                RunOptions::default(),
-                None,
-            )
-            .await;
+        let resumed = self.resume_text(turn, KILLED.to_owned()).await;
         if let Err(error) = resumed {
             warn!(run = %self.id, error = %error.message, "could not resume a killed agent run");
         }
@@ -202,16 +192,7 @@ impl Actor {
     /// a run that can't be resumed stops waiting, `failed`.
     async fn resume_waiting(&mut self, turn: TurnId) {
         info!(run = %self.id, "resuming a run whose usage limit reset");
-        let resumed = self
-            .resume(
-                turn,
-                MESSAGE.to_owned(),
-                Vec::new(),
-                Vec::new(),
-                RunOptions::default(),
-                None,
-            )
-            .await;
+        let resumed = self.resume_text(turn, MESSAGE.to_owned()).await;
         if let Err(error) = resumed {
             warn!(run = %self.id, error = %error.message, "could not resume a run after its usage limit");
             self.row.state.error = Some(error.message);

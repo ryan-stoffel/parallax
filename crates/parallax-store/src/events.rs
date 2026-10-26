@@ -69,6 +69,28 @@ impl RawEvent {
 
 const COLUMNS: &str = "seq, time, project_id, thread_id, type, payload";
 
+/// Reads `rows` one at a time into a page of at most `limit` events and no more than `max_bytes`
+/// of payload, but always at least one when any exists. The flag says whether a row was left.
+fn page(
+    rows: impl Iterator<Item = rusqlite::Result<RawEvent>>,
+    limit: usize,
+    max_bytes: usize,
+) -> Result<(Vec<StoredEvent>, bool), StoreError> {
+    let mut events = Vec::new();
+    let mut bytes = 0_usize;
+    for row in rows {
+        let event = row?.into_event()?;
+        let full = events.len() >= limit.max(1)
+            || (!events.is_empty() && bytes + event.payload.len() > max_bytes);
+        if full {
+            return Ok((events, true));
+        }
+        bytes += event.payload.len();
+        events.push(event);
+    }
+    Ok((events, false))
+}
+
 /// A finished turn whose last `agent.output` is older than the in-memory window (0052).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactableTurn {
@@ -204,19 +226,7 @@ impl Store {
             "SELECT {COLUMNS} FROM events WHERE thread_id = ?1 AND seq > ?2 ORDER BY seq ASC"
         ))?;
         let rows = stmt.query_map(params![run_id.to_string(), after], RawEvent::from_row)?;
-        let mut events = Vec::new();
-        let mut bytes = 0_usize;
-        for row in rows {
-            let event = row?.into_event()?;
-            let full = events.len() >= limit.max(1)
-                || (!events.is_empty() && bytes + event.payload.len() > max_bytes);
-            if full {
-                return Ok((events, true));
-            }
-            bytes += event.payload.len();
-            events.push(event);
-        }
-        Ok((events, false))
+        page(rows, limit, max_bytes)
     }
 
     /// Run `run_id`'s events before `before`, newest first: at most `limit` of them and about
@@ -241,21 +251,7 @@ impl Store {
             ))?;
             let cursor = i64::try_from(before).unwrap_or(i64::MAX);
             let rows = stmt.query_map(params![run_id.to_string(), cursor], RawEvent::from_row)?;
-            let mut events = Vec::new();
-            let mut bytes = 0_usize;
-            let mut more = false;
-            for row in rows {
-                let event = row?.into_event()?;
-                let full = events.len() >= limit.max(1)
-                    || (!events.is_empty() && bytes + event.payload.len() > max_bytes);
-                if full {
-                    more = true;
-                    break;
-                }
-                bytes += event.payload.len();
-                events.push(event);
-            }
-            (events, more)
+            page(rows, limit, max_bytes)?
         };
         if let Some(compacted) = self.compacted_covering(run_id, before)? {
             events.insert(0, compacted);
@@ -277,8 +273,7 @@ impl Store {
         before: u64,
     ) -> Result<Option<StoredEvent>, StoreError> {
         let before = i64::try_from(before).unwrap_or(i64::MAX);
-        let event = self
-            .conn
+        self.conn
             .query_row(
                 &format!(
                     "SELECT {COLUMNS} FROM events
@@ -294,8 +289,7 @@ impl Store {
             )
             .optional()?
             .map(RawEvent::into_event)
-            .transpose()?;
-        Ok(event)
+            .transpose()
     }
 
     /// The oldest finished turn whose last `agent.output` is after `after`, older than `floor`, and
@@ -328,11 +322,7 @@ impl Store {
                  ORDER BY seq ASC
                  LIMIT 1",
                 params![floor, after],
-                |row| {
-                    let seq: u64 = row.get(0)?;
-                    let run_id: String = row.get(1)?;
-                    Ok((seq, run_id))
-                },
+                |row| Ok((row.get::<_, u64>(0)?, row.get::<_, String>(1)?)),
             )
             .optional()?
         else {
@@ -381,12 +371,9 @@ impl Store {
              WHERE thread_id = ?1 AND type = 'agent.output' AND seq >= ?2 AND seq <= ?3
              ORDER BY seq ASC"
         ))?;
-        let rows = stmt.query_map(params![run_id.to_string(), from, last], RawEvent::from_row)?;
-        let mut events = Vec::new();
-        for row in rows {
-            events.push(row?.into_event()?);
-        }
-        Ok(events)
+        stmt.query_map(params![run_id.to_string(), from, last], RawEvent::from_row)?
+            .map(|row| row?.into_event())
+            .collect()
     }
 
     /// Replaces the payload of the event at `seq`.

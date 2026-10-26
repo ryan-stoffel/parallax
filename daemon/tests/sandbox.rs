@@ -16,7 +16,7 @@ use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
-use common::{run_worker, tool_result, worker_request};
+use common::{Worktree, claude_under_test, run_worker, tool_result, worker_request};
 use plxd::backend::RunRequest;
 use plxd::backend::claude::{commands_temp, worker_temp};
 use plxd::backend::run_temp;
@@ -31,8 +31,7 @@ static TMP_CLAUDE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test]
 async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_sockets() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: PLX_SANDBOX_CLAUDE doesn't name a Claude Code to test");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let _tmp_claude = TMP_CLAUDE.lock().await;
@@ -41,16 +40,12 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
     let data = root.join("data");
-    let worktree = data.join("worktrees/run");
-    let context = data.join("context/p");
-    let git_dir = root.join("repo/.git");
-    for folder in [
-        &home.join(".ssh"),
-        &worktree,
-        &context,
-        &data.join("context/other"),
-        &git_dir,
-    ] {
+    let Worktree {
+        path: worktree,
+        git_dir,
+        context,
+    } = common::worktree(&root, &data);
+    for folder in [&home.join(".ssh"), &data.join("context/other")] {
         fs::create_dir_all(folder).unwrap();
     }
     // A key in the home folder, and another project's context in plxd's data folder.
@@ -60,8 +55,7 @@ async fn a_worker_cannot_read_secrets_write_outside_its_worktree_or_reach_unix_s
         format!("{SECRET}-notes"),
     )
     .unwrap();
-    let git_file = format!("gitdir: {}/worktrees/run\n", git_dir.display());
-    fs::write(worktree.join(".git"), &git_file).unwrap();
+    let git_file = fs::read_to_string(worktree.join(".git")).unwrap();
     let socket = root.join("probe.sock");
     let listener = UnixListener::bind(&socket).unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -179,8 +173,7 @@ fn probe_registry_login(probe: &mut String, request: &mut RunRequest, root: &Pat
 /// and it can't write the paths Claude Code's sandbox would always allow.
 #[tokio::test]
 async fn a_worker_s_temp_is_its_own() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: PLX_SANDBOX_CLAUDE doesn't name a Claude Code to test");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let _tmp_claude = TMP_CLAUDE.lock().await;
@@ -188,20 +181,14 @@ async fn a_worker_s_temp_is_its_own() {
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
     let data = root.join("data");
-    let worktree = data.join("worktrees/run");
-    let context = data.join("context/p");
-    let git_dir = root.join("repo/.git");
-    for folder in [
-        &home.join(".npm/_logs"),
-        &home.join(".claude/debug"),
-        &worktree,
-        &context,
-        &git_dir,
-    ] {
+    let Worktree {
+        path: worktree,
+        git_dir,
+        context,
+    } = common::worktree(&root, &data);
+    for folder in [&home.join(".npm/_logs"), &home.join(".claude/debug")] {
         fs::create_dir_all(folder).unwrap();
     }
-    let git_file = format!("gitdir: {}/worktrees/run\n", git_dir.display());
-    fs::write(worktree.join(".git"), git_file).unwrap();
     let (request, _temp) = worker_request(&home, &data, &worktree, &git_dir, &context);
     let temp = &request.sandbox.as_ref().unwrap().temp;
     // Another run of the same plxd, and what another Claude Code session left in the shared

@@ -24,8 +24,8 @@ use parallax_protocol::{
     AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
     CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
     HostHealthParams, ImageId, ImageMediaType, InitializeResult, ParallaxEvent, Project,
-    ProjectCreateParams, ProjectDeleteParams, ProjectId, PromptImage, Provider, RepoAddParams,
-    RepoId, RunId, TurnId, UsageGetParams,
+    ProjectCreateParams, ProjectDeleteParams, ProjectId, PromptImage, Provider, Repo,
+    RepoAddParams, RepoId, RunId, TurnId, UsageGetParams,
 };
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
@@ -33,10 +33,11 @@ use plxd::backend::{Event, FailureKind, ModelUsage, ToolStatus, Usage};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use rustix::process::Signal;
+use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tokio::time::Instant;
 
-use crate::support::{Client, InProcess, PATIENCE, eventually, kind, temp_dir};
+use crate::support::{Client, InProcess, PATIENCE, eventually, kind, png, temp_dir};
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -51,7 +52,12 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
 
 /// A repository under `dir` with one commit and its own identity, as a user's checkout would be.
 pub(crate) fn real_repo(dir: &Path) -> PathBuf {
-    let repo = dir.join("repos").join("app");
+    named_repo(dir, "app")
+}
+
+/// [`real_repo`] at `dir/repos/<name>`.
+pub(crate) fn named_repo(dir: &Path, name: &str) -> PathBuf {
+    let repo = dir.join("repos").join(name);
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "--initial-branch=main"]);
     git(&repo, &["config", "user.name", "Test User"]);
@@ -186,6 +192,20 @@ impl Host {
     pub(crate) async fn client(&self) -> Conn {
         Conn::ready(&self.server.socket).await
     }
+
+    /// A client on a new Project in a new real repository, subscribed to its events from the
+    /// start.
+    pub(crate) async fn project_client(&self) -> (Conn, Project) {
+        let mut client = self.client().await;
+        let project = create(&mut client, project_params(self.dir.path())).await;
+        subscribe(&mut client, project.id, 0).await;
+        (client, project)
+    }
+}
+
+/// The project id a repo entry's events carry: the entry's own id.
+pub(crate) fn scope(repo: RepoId) -> ProjectId {
+    ProjectId::try_from(uuid::Uuid::from(repo)).unwrap()
 }
 
 /// Params for a project on a new real repository under `dir`.
@@ -221,7 +241,7 @@ pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64)
 /// `pending` for [`until`], so none is lost.
 pub(crate) struct Conn {
     client: Client,
-    pending: VecDeque<EventsEventParams>,
+    pub(crate) pending: VecDeque<EventsEventParams>,
 }
 
 fn event(notification: Notification) -> EventsEventParams {
@@ -240,7 +260,7 @@ impl Conn {
         }
     }
 
-    async fn ready(socket: &Path) -> Self {
+    pub(crate) async fn ready(socket: &Path) -> Self {
         let mut conn = Self::connect(socket).await;
         conn.initialize().await;
         conn
@@ -255,18 +275,7 @@ impl Conn {
         params: M::Params,
     ) -> Result<M::Result, ErrorObject> {
         let id = self.client.send::<M>(params).await;
-        loop {
-            match self.client.next().await {
-                Some(Message::Response(response)) => {
-                    assert_eq!(response.id, Some(id));
-                    return response.into_result();
-                }
-                Some(Message::Notification(notification)) => {
-                    self.pending.push_back(event(notification));
-                }
-                other => panic!("expected a response, got {other:?}"),
-            }
-        }
+        self.response(id).await
     }
 
     /// [`Conn::call`] with `commandId` in its params (0052, 0059).
@@ -288,6 +297,11 @@ impl Conn {
                 params: Some(value),
             })
             .await;
+        self.response(id).await
+    }
+
+    /// The answer to `id`, which must be the next response, keeping the events before it.
+    async fn response<T: DeserializeOwned>(&mut self, id: RequestId) -> Result<T, ErrorObject> {
         loop {
             match self.client.next().await {
                 Some(Message::Response(response)) => {
@@ -300,6 +314,47 @@ impl Conn {
                 other => panic!("expected a response, got {other:?}"),
             }
         }
+    }
+
+    /// Adds the repository at `path` as a repo entry, and returns the entry.
+    pub(crate) async fn add(&mut self, path: &Path) -> Repo {
+        self.call::<RepoAdd>(RepoAddParams {
+            id: RepoId::generate(),
+            path: path.to_str().unwrap().to_owned(),
+        })
+        .await
+        .unwrap()
+        .repo
+    }
+
+    /// Sends a request without waiting for its response, which [`Conn::responses`] collects.
+    pub(crate) async fn send<M: RequestMethod>(&mut self, params: M::Params) -> RequestId {
+        self.client.send::<M>(params).await
+    }
+
+    /// The responses to `ids`, in that order, keeping the events that arrive meanwhile.
+    pub(crate) async fn responses(
+        &mut self,
+        ids: &[RequestId],
+    ) -> Vec<Result<serde_json::Value, ErrorObject>> {
+        let mut answers: Vec<Option<Result<serde_json::Value, ErrorObject>>> =
+            ids.iter().map(|_| None).collect();
+        while answers.iter().any(Option::is_none) {
+            match self.client.next().await {
+                Some(Message::Response(response)) => {
+                    let at = ids
+                        .iter()
+                        .position(|id| response.id.as_ref() == Some(id))
+                        .expect("a response to one of the requests");
+                    answers[at] = Some(response.into_result());
+                }
+                Some(Message::Notification(notification)) => {
+                    self.pending.push_back(event(notification));
+                }
+                other => panic!("expected a response, got {other:?}"),
+            }
+        }
+        answers.into_iter().map(Option::unwrap).collect()
     }
 
     async fn next_event(&mut self) -> EventsEventParams {
@@ -609,9 +664,7 @@ async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session()
             end_turn("Second answer."),
         ]),
     );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Answer twice");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -727,13 +780,8 @@ async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_a
             end_turn("Second answer."),
         ]),
     );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let png = PromptImage {
-        media_type: ImageMediaType::Png,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
-    };
+    let (mut client, project) = host.project_client().await;
+    let png = png();
     let gif = PromptImage {
         media_type: ImageMediaType::Gif,
         data: "R0lGODlhAQABAAAAACw=".to_owned(),
@@ -790,10 +838,7 @@ async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_a
 /// `toolResult`, and served by `agent/image`.
 #[tokio::test]
 async fn a_tools_images_are_listed_on_its_result_and_served() {
-    let png = PromptImage {
-        media_type: ImageMediaType::Png,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
-    };
+    let png = png();
     let dir = temp_dir();
     let host = Host::start(
         dir,
@@ -808,9 +853,7 @@ async fn a_tools_images_are_listed_on_its_result_and_served() {
             end_turn("Done."),
         ]),
     );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Screenshot the simulator");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -837,19 +880,14 @@ async fn a_tools_images_are_listed_on_its_result_and_served() {
 async fn an_image_sent_alone_after_the_cli_exits_resumes_the_run() {
     let dir = temp_dir();
     let host = Host::start(dir, fake(vec![init("images-2"), end_turn("Done.")]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Tidy the README");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
     until(&mut client, updated_to(AgentStatus::Completed)).await;
 
     // The CLI has exited, so this starts a new process on the same session (PLX-202).
-    let png = PromptImage {
-        media_type: ImageMediaType::Png,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_owned(),
-    };
+    let png = png();
     let turn = TurnId::generate();
     let resumed = client
         .call::<AgentSend>(AgentSendParams {
@@ -875,9 +913,7 @@ async fn an_image_sent_alone_after_the_cli_exits_resumes_the_run() {
 async fn cancel_stops_a_running_worker() {
     let dir = temp_dir();
     let host = Host::start(dir, fake(hang()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Work forever");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -962,9 +998,7 @@ async fn a_history_write_that_fails_adds_a_failed_inbox_item() {
 async fn agent_start_is_idempotent_on_its_run_id() {
     let dir = temp_dir();
     let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Do it once");
     let first = client.call::<AgentStart>(params.clone()).await.unwrap().run;
     // A run in a Project is a child, so its end also adds an inbox item (0043) and writes its
@@ -1129,9 +1163,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
 async fn a_sent_turn_stays_idempotent_across_a_restart() {
     let dir = temp_dir();
     let host = Host::start(dir, fake(hang()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let params = start_params(project.id, "Work until cancelled");
     let run_id = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
@@ -1381,24 +1413,14 @@ async fn runs_plxd_cannot_start_are_refused() {
     // A Codex run `agent/start` makes on a repo entry isn't a thread, so it is refused: Codex
     // runs only threads (0035).
     let work = temp_dir();
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: real_repo(work.path()).to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let entry = client.add(&real_repo(work.path())).await;
     let on_entry = client
         .call::<AgentStart>(AgentStartParams {
             account: Some(AccountChoice::Subscription {
                 backend: "codex".to_owned(),
             }),
             coordinator_thread: Some(CoordinatorThreadId::generate()),
-            ..start_params(
-                ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
-                "Fix it",
-            )
+            ..start_params(scope(entry.id), "Fix it")
         })
         .await
         .unwrap_err();

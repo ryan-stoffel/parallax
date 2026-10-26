@@ -132,18 +132,8 @@ impl Devices {
         let mut platforms = Vec::new();
         let mut devices = Vec::new();
         let (ios, android) = tokio::join!(
-            async {
-                match &tools.ios {
-                    Ok(ios) => tools::ios_devices(ios).await,
-                    Err(why) => Err(why.clone()),
-                }
-            },
-            async {
-                match &tools.android {
-                    Ok(android) => tools::android_devices(android).await,
-                    Err(why) => Err(why.clone()),
-                }
-            },
+            tools::devices(&tools, Platform::Ios),
+            tools::devices(&tools, Platform::Android),
         );
         for (platform, listed) in [
             (DevicePlatform::Ios, ios),
@@ -590,17 +580,8 @@ fn info(device: Device) -> DeviceInfo {
 
 /// The device `target` names, as its platform lists it.
 async fn find(tools: &Toolchain, target: &DeviceTarget) -> Result<Device, ErrorObject> {
-    let listed = match target.platform {
-        DevicePlatform::Ios => match &tools.ios {
-            Ok(ios) => tools::ios_devices(ios).await,
-            Err(why) => Err(why.clone()),
-        },
-        DevicePlatform::Android => match &tools.android {
-            Ok(android) => tools::android_devices(android).await,
-            Err(why) => Err(why.clone()),
-        },
-    };
-    listed
+    tools::devices(tools, platform(target.platform))
+        .await
         .map_err(failed)?
         .into_iter()
         .find(|device| device.id == target.device_id)

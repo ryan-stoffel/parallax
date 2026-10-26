@@ -24,14 +24,14 @@ mod tests;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::commands::{self, CommandsProbe};
 use super::event::FailureKind;
 use super::limits::{self, LimitsProbe};
 use super::namer::{self, NameProbe};
-use super::process::Launcher;
+use super::process::{Launcher, Process};
 use super::{
     AgentEffort, AgentPermission, Backend, Capabilities, ImageMediaType, Overrides, PromptImage,
     Rewind, RunRequest, StartError, Started, check_argument,
@@ -91,6 +91,24 @@ impl CodexBackend {
     pub fn with_overrides(mut self, overrides: Overrides) -> Self {
         self.overrides = overrides;
         self
+    }
+
+    /// `codex app-server` in `cwd` on this backend's login, and the input that initializes it and
+    /// then asks `method` as [`commands::LIST_ID`], for a probe.
+    fn app_server_probe(
+        &self,
+        cwd: &Path,
+        method: &str,
+        params: &Value,
+    ) -> Result<(Process, Vec<Value>), StartError> {
+        let home = self.overrides.home.as_deref();
+        let spec = app_server::spec(&self.launcher, &self.overrides, cwd, home);
+        let input = vec![
+            commands::request(1, "initialize", &app_server::initialize_params()),
+            json!({"jsonrpc": "2.0", "method": "initialized"}),
+            commands::request(commands::LIST_ID, method, params),
+        ];
+        Ok((self.launcher.spawn(&spec)?, input))
     }
 }
 
@@ -224,15 +242,11 @@ impl Backend for CodexBackend {
 
     /// `codex app-server` on the default login, asked for `skills/list` ([`commands::codex`]).
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
-        let home = self.overrides.home.as_deref();
-        let spec = app_server::spec(&self.launcher, &self.overrides, cwd, home);
+        let params = json!({"cwds": [cwd]});
+        let (process, input) = self.app_server_probe(cwd, "skills/list", &params)?;
         Ok(Some(CommandsProbe {
-            process: self.launcher.spawn(&spec)?,
-            input: vec![
-                commands::request(1, "initialize", &app_server::initialize_params()),
-                json!({"jsonrpc": "2.0", "method": "initialized"}),
-                commands::request(commands::LIST_ID, "skills/list", &json!({"cwds": [cwd]})),
-            ],
+            process,
+            input,
             parse: commands::codex,
         }))
     }
@@ -240,15 +254,11 @@ impl Backend for CodexBackend {
     /// `codex app-server` on this backend's login, asked for `account/rateLimits/read`
     /// ([`limits::codex`]).
     fn limits(&self, cwd: &Path) -> Result<Option<LimitsProbe>, StartError> {
-        let home = self.overrides.home.as_deref();
-        let spec = app_server::spec(&self.launcher, &self.overrides, cwd, home);
+        let (process, input) =
+            self.app_server_probe(cwd, "account/rateLimits/read", &json!(null))?;
         Ok(Some(LimitsProbe {
-            process: self.launcher.spawn(&spec)?,
-            input: vec![
-                commands::request(1, "initialize", &app_server::initialize_params()),
-                json!({"jsonrpc": "2.0", "method": "initialized"}),
-                commands::request(commands::LIST_ID, "account/rateLimits/read", &json!(null)),
-            ],
+            process,
+            input,
             parse: limits::codex,
         }))
     }

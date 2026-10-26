@@ -258,128 +258,142 @@ pub(crate) fn initialize(
 /// `projectComputer` (0057), only with [`Config::project_computer`](crate::server::Config): the
 /// `computer` a Project's children run on, on `Project` and `project/update`, which a plxd
 /// without it refuses.
-#[expect(clippy::too_many_lines, reason = "one line per capability")]
 fn capabilities_advertised(project_computer: bool) -> Capabilities {
-    let prompt_images = serde_json::Map::from_iter([
-        ("maxImages".to_owned(), images::MAX_IMAGES.into()),
-        ("maxImageBytes".to_owned(), images::MAX_IMAGE_BYTES.into()),
-        ("maxTotalBytes".to_owned(), images::MAX_TOTAL_BYTES.into()),
-    ]);
-    let mut capabilities = Capabilities(BTreeMap::from([
-        ("accounts".to_owned(), serde_json::Map::new()),
-        ("agentClis".to_owned(), serde_json::Map::new()),
-        ("agentReview".to_owned(), serde_json::Map::new()),
-        ("agentWait".to_owned(), serde_json::Map::new()),
-        ("agents".to_owned(), serde_json::Map::new()),
-        ("approvals".to_owned(), serde_json::Map::new()),
-        ("areaRepos".to_owned(), serde_json::Map::new()),
-        ("areas".to_owned(), serde_json::Map::new()),
-        ("autoResume".to_owned(), serde_json::Map::new()),
-        ("board".to_owned(), serde_json::Map::new()),
-        ("chatImport".to_owned(), serde_json::Map::new()),
-        ("checkpoints".to_owned(), serde_json::Map::new()),
-        ("checks".to_owned(), serde_json::Map::new()),
-        ("checkout".to_owned(), serde_json::Map::new()),
-        ("commandIds".to_owned(), serde_json::Map::new()),
-        ("composerMenus".to_owned(), serde_json::Map::new()),
-        ("connect".to_owned(), serde_json::Map::new()),
-        ("contextAndFast".to_owned(), serde_json::Map::new()),
-        ("coordinator".to_owned(), serde_json::Map::new()),
-        ("coordinatorEpochs".to_owned(), serde_json::Map::new()),
-        ("delegation".to_owned(), serde_json::Map::new()),
-        ("eventFilters".to_owned(), serde_json::Map::new()),
-        ("eventsBefore".to_owned(), serde_json::Map::new()),
+    fn options<const N: usize>(
+        pairs: [(&str, serde_json::Value); N],
+    ) -> serde_json::Map<String, serde_json::Value> {
+        pairs
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect()
+    }
+    let mut capabilities: BTreeMap<String, serde_json::Map<String, serde_json::Value>> =
+        PLAIN_CAPABILITIES
+            .iter()
+            .map(|name| ((*name).to_owned(), serde_json::Map::new()))
+            .collect();
+    capabilities.extend([
         (
             "fileChunks".to_owned(),
-            serde_json::Map::from_iter([
-                ("chunkBytes".to_owned(), CHUNK_BYTES.into()),
-                ("maxBytes".to_owned(), MAX_FILE_BYTES.into()),
+            options([
+                ("chunkBytes", CHUNK_BYTES.into()),
+                ("maxBytes", MAX_FILE_BYTES.into()),
             ]),
         ),
-        ("fileEdit".to_owned(), serde_json::Map::new()),
         (
             "fileUploads".to_owned(),
-            serde_json::Map::from_iter([("maxBytes".to_owned(), MAX_UPLOAD_BYTES.into())]),
+            options([("maxBytes", MAX_UPLOAD_BYTES.into())]),
         ),
-        ("devices".to_owned(), serde_json::Map::new()),
-        ("files".to_owned(), serde_json::Map::new()),
-        ("git".to_owned(), serde_json::Map::new()),
-        ("repoGitStatus".to_owned(), serde_json::Map::new()),
-        ("repoGrep".to_owned(), serde_json::Map::new()),
         (
             "iconImages".to_owned(),
-            serde_json::Map::from_iter([("maxBytes".to_owned(), images::MAX_ICON_BYTES.into())]),
+            options([("maxBytes", images::MAX_ICON_BYTES.into())]),
         ),
-        ("githubSetup".to_owned(), serde_json::Map::new()),
-        ("githubStatus".to_owned(), serde_json::Map::new()),
-        ("hostFolders".to_owned(), serde_json::Map::new()),
-        ("hostUpdate".to_owned(), serde_json::Map::new()),
-        ("inbox".to_owned(), serde_json::Map::new()),
-        ("integrationBranch".to_owned(), serde_json::Map::new()),
-        ("landing".to_owned(), serde_json::Map::new()),
-        ("memory".to_owned(), serde_json::Map::new()),
-        ("openPr".to_owned(), serde_json::Map::new()),
-        ("orchestration".to_owned(), serde_json::Map::new()),
-        ("peerGit".to_owned(), serde_json::Map::new()),
-        ("prDiff".to_owned(), serde_json::Map::new()),
-        ("projectArtifacts".to_owned(), serde_json::Map::new()),
-        ("projectAutonomy".to_owned(), serde_json::Map::new()),
-        ("projectDelete".to_owned(), serde_json::Map::new()),
-        ("projectEdit".to_owned(), serde_json::Map::new()),
-        ("projectFromThreads".to_owned(), serde_json::Map::new()),
-        ("projectPermission".to_owned(), serde_json::Map::new()),
-        ("projectPlacement".to_owned(), serde_json::Map::new()),
-        ("projectTasks".to_owned(), serde_json::Map::new()),
-        ("providerUpdates".to_owned(), serde_json::Map::new()),
-        ("providers".to_owned(), serde_json::Map::new()),
-        ("promptImages".to_owned(), prompt_images),
-        ("prWatch".to_owned(), serde_json::Map::new()),
-        ("pullRequests".to_owned(), serde_json::Map::new()),
-        ("queue".to_owned(), serde_json::Map::new()),
-        ("questions".to_owned(), serde_json::Map::new()),
-        ("remote".to_owned(), serde_json::Map::new()),
-        ("remoteWeb".to_owned(), serde_json::Map::new()),
-        ("relay".to_owned(), serde_json::Map::new()),
-        ("repoClone".to_owned(), serde_json::Map::new()),
-        ("repoRefs".to_owned(), serde_json::Map::new()),
-        ("runOptions".to_owned(), serde_json::Map::new()),
-        ("schedules".to_owned(), serde_json::Map::new()),
-        ("secrets".to_owned(), serde_json::Map::new()),
-        ("sendAccount".to_owned(), serde_json::Map::new()),
-        ("sendModel".to_owned(), serde_json::Map::new()),
-        ("sendOptions".to_owned(), serde_json::Map::new()),
-        ("setupScripts".to_owned(), serde_json::Map::new()),
-        ("spaces".to_owned(), serde_json::Map::new()),
-        ("terminals".to_owned(), serde_json::Map::new()),
-        ("threadAttention".to_owned(), serde_json::Map::new()),
         (
-            "threadContext".to_owned(),
-            serde_json::Map::from_iter([
-                ("maxThreads".to_owned(), attached::MAX_THREADS.into()),
-                ("maxSummaryBytes".to_owned(), attached::SUMMARY_BYTES.into()),
+            "promptImages".to_owned(),
+            options([
+                ("maxImages", images::MAX_IMAGES.into()),
+                ("maxImageBytes", images::MAX_IMAGE_BYTES.into()),
+                ("maxTotalBytes", images::MAX_TOTAL_BYTES.into()),
             ]),
         ),
-        ("threadFork".to_owned(), serde_json::Map::new()),
-        ("threadImport".to_owned(), serde_json::Map::new()),
-        ("threadLineage".to_owned(), serde_json::Map::new()),
-        ("threadNaming".to_owned(), serde_json::Map::new()),
-        ("threadTools".to_owned(), serde_json::Map::new()),
-        ("threads".to_owned(), serde_json::Map::new()),
-        ("worktreeCleanup".to_owned(), serde_json::Map::new()),
-        ("youSync".to_owned(), serde_json::Map::new()),
-    ]));
+        (
+            "threadContext".to_owned(),
+            options([
+                ("maxThreads", attached::MAX_THREADS.into()),
+                ("maxSummaryBytes", attached::SUMMARY_BYTES.into()),
+            ]),
+        ),
+    ]);
     if cfg!(target_os = "macos") {
-        capabilities
-            .0
-            .insert("computerUse".to_owned(), serde_json::Map::new());
+        capabilities.insert("computerUse".to_owned(), serde_json::Map::new());
     }
     if project_computer {
-        capabilities
-            .0
-            .insert("projectComputer".to_owned(), serde_json::Map::new());
+        capabilities.insert("projectComputer".to_owned(), serde_json::Map::new());
     }
-    capabilities
+    Capabilities(capabilities)
 }
+
+/// The capabilities [`capabilities_advertised`] always advertises with no options.
+const PLAIN_CAPABILITIES: &[&str] = &[
+    "accounts",
+    "agentClis",
+    "agentReview",
+    "agentWait",
+    "agents",
+    "approvals",
+    "areaRepos",
+    "areas",
+    "autoResume",
+    "board",
+    "chatImport",
+    "checkpoints",
+    "checks",
+    "checkout",
+    "commandIds",
+    "composerMenus",
+    "connect",
+    "contextAndFast",
+    "coordinator",
+    "coordinatorEpochs",
+    "delegation",
+    "devices",
+    "eventFilters",
+    "eventsBefore",
+    "fileEdit",
+    "files",
+    "git",
+    "githubSetup",
+    "githubStatus",
+    "hostFolders",
+    "hostUpdate",
+    "inbox",
+    "integrationBranch",
+    "landing",
+    "memory",
+    "openPr",
+    "orchestration",
+    "peerGit",
+    "prDiff",
+    "prWatch",
+    "projectArtifacts",
+    "projectAutonomy",
+    "projectDelete",
+    "projectEdit",
+    "projectFromThreads",
+    "projectPermission",
+    "projectPlacement",
+    "projectTasks",
+    "providerUpdates",
+    "providers",
+    "pullRequests",
+    "queue",
+    "questions",
+    "relay",
+    "remote",
+    "remoteWeb",
+    "repoClone",
+    "repoGitStatus",
+    "repoGrep",
+    "repoRefs",
+    "runOptions",
+    "schedules",
+    "secrets",
+    "sendAccount",
+    "sendModel",
+    "sendOptions",
+    "setupScripts",
+    "spaces",
+    "terminals",
+    "threadAttention",
+    "threadFork",
+    "threadImport",
+    "threadLineage",
+    "threadNaming",
+    "threadTools",
+    "threads",
+    "worktreeCleanup",
+    "youSync",
+];
 
 /// `host/folders`: the folders in a folder on this host, read on the blocking pool.
 pub(crate) async fn folders(

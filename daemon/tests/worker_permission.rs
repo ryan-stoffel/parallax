@@ -7,7 +7,7 @@ mod common;
 
 use std::fs;
 
-use common::{run_worker, tool_result, worker_request};
+use common::{Worktree, claude_under_test, run_worker, tool_result, worker_request};
 
 const KEY: &str = "sk-ant-parallax-test-key-never-send";
 /// A stand-in for the messaging token, in case Claude Code doesn't set its own.
@@ -15,26 +15,20 @@ const TOKEN: &str = "parallax-test-messaging-token";
 
 #[tokio::test]
 async fn a_worker_can_run_bash_without_exposing_its_key() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
     let home = root.join("home");
     let data = root.join("data");
-    let worktree = data.join("worktrees/run");
-    let context = data.join("context/p");
-    let git_dir = root.join("repo/.git");
-    for folder in [&home.join(".ssh"), &worktree, &context, &git_dir] {
-        fs::create_dir_all(folder).unwrap();
-    }
+    let Worktree {
+        path: worktree,
+        git_dir,
+        context,
+    } = common::worktree(&root, &data);
+    fs::create_dir_all(home.join(".ssh")).unwrap();
     fs::write(home.join(".ssh/id_ed25519"), "private-test-key").unwrap();
-    fs::write(
-        worktree.join(".git"),
-        format!("gitdir: {}/worktrees/run\n", git_dir.display()),
-    )
-    .unwrap();
     fs::write(
         worktree.join("probe.sh"),
         format!(

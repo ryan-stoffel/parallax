@@ -94,9 +94,14 @@ pub(crate) struct InstanceLock {
     path: PathBuf,
 }
 
+/// A failed step of locking the file at `path`, as a [`StartError`].
+fn locking(path: &Path) -> impl Fn(io::Error) -> StartError + Copy + '_ {
+    move |error| StartError::io(format!("locking {}", path.display()), error)
+}
+
 /// Opens and locks the file at `path`, creating it if needed.
 fn lock(path: &Path, data_dir: &Path) -> Result<File, StartError> {
-    let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
+    let io_error = locking(path);
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
     // A symlink here fails the open, or on Windows is opened itself and refused, instead of
@@ -144,7 +149,7 @@ pub(crate) fn lock_holder(path: &Path, data_dir: &Path) -> Option<u32> {
 
 /// Writes this process's pid into the lock file it holds.
 fn write_pid(mut file: File, path: &Path) -> Result<File, StartError> {
-    let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
+    let io_error = locking(path);
     file.set_len(0).map_err(io_error)?;
     writeln!(file, "{}", std::process::id()).map_err(io_error)?;
     Ok(file)
@@ -165,7 +170,7 @@ impl InstanceLock {
     /// Locks the file at `path`, creating it if needed, and writes this process's pid into it.
     #[cfg(unix)]
     pub fn acquire(path: &Path, data_dir: &Path) -> Result<Self, StartError> {
-        let io_error = |error| StartError::io(format!("locking {}", path.display()), error);
+        let io_error = locking(path);
         // A stopping instance removes the file before it lets go of the lock, so the file locked
         // here may no longer be the one at `path`. Locking until it is keeps a second instance
         // from holding a lock on a file nobody else can find.

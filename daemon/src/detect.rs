@@ -195,14 +195,9 @@ fn not_installed(cli: CliKind) -> DetectedCli {
 
 fn installed(cli: CliKind, path: &Path) -> DetectedCli {
     DetectedCli {
-        cli,
         installed: true,
         path: Some(path.display().to_string()),
-        version: None,
-        signed_in: None,
-        auth_kind: None,
-        plan: None,
-        note: None,
+        ..not_installed(cli)
     }
 }
 
@@ -305,13 +300,13 @@ fn apply_json_status(detected: &mut DetectedCli, ran: &Ran) {
         .and_then(Value::as_str)
         .map(str::to_owned);
     if detected.signed_in == Some(true) {
-        detected.auth_kind = ["authType", "authKind", "loginType"]
-            .iter()
-            .find_map(|key| map.get(*key))
-            .and_then(Value::as_str)
-            .map_or(Some(AuthKind::Unknown), |value| {
-                Some(parse_auth_kind(value))
-            });
+        detected.auth_kind = Some(
+            ["authType", "authKind", "loginType"]
+                .iter()
+                .find_map(|key| map.get(*key))
+                .and_then(Value::as_str)
+                .map_or(AuthKind::Unknown, parse_auth_kind),
+        );
         detected.plan = ["subscriptionType", "plan", "tier"]
             .iter()
             .find_map(|key| map.get(*key))

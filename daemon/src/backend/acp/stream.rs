@@ -324,8 +324,7 @@ impl Translator {
             return None;
         }
         call.reported = true;
-        let mut input = call.input.clone();
-        input.remove("_toolName");
+        let mut input = shown_input(call);
         let name = if tool == Some("createPlan") {
             // The plan's Markdown, as `ExitPlanMode`'s input carries it.
             let plan = input.remove("plan").unwrap_or_else(|| Value::from(""));
@@ -432,36 +431,22 @@ impl Translator {
                     .map(str::to_owned)
             })
         };
+        let allow = option(&["allow_once", "allow_always"]);
         let reject = option(&["reject_once", "reject_always"]);
-        if self.thread_tools
-            && call_id
-                .as_deref()
-                .and_then(|id| self.calls.get(id))
-                .is_some_and(|call| {
-                    call.kind == "other"
-                        && call.input.get("providerIdentifier").and_then(Value::as_str)
-                            == Some(crate::mcp::SERVER)
-                        && call
-                            .input
-                            .get("toolName")
-                            .and_then(Value::as_str)
-                            .is_some_and(|name| crate::mcp::thread::TOOLS.contains(&name))
-                })
-        {
-            let allow = option(&["allow_once", "allow_always"]);
+        let known = call_id.as_deref().and_then(|id| self.calls.get(id));
+        if self.thread_tools && known.is_some_and(is_thread_tool) {
             steps.push(Step::Reply(permission_answer(&id, allow.as_deref())));
             return steps;
         }
         let allowed_by_mode = match self.permission {
             Some(AgentPermission::Bypass) => true,
-            Some(AgentPermission::Edit) => call_id
-                .as_deref()
-                .and_then(|id| self.calls.get(id))
-                .is_some_and(|call| matches!(call.kind.as_str(), "edit" | "delete" | "move")),
+            Some(AgentPermission::Edit) => {
+                known.is_some_and(|call| matches!(call.kind.as_str(), "edit" | "delete" | "move"))
+            }
             _ => false,
         };
-        if allowed_by_mode && let Some(allow) = option(&["allow_once", "allow_always"]) {
-            steps.push(Step::Reply(permission_answer(&id, Some(&allow))));
+        if allowed_by_mode && allow.is_some() {
+            steps.push(Step::Reply(permission_answer(&id, allow.as_deref())));
             return steps;
         }
         if !self.asks {
@@ -471,18 +456,11 @@ impl Translator {
             steps.push(Step::Reply(permission_answer(&id, reject.as_deref())));
             return steps;
         }
-        let kind = AskKind::Permission {
-            allow: option(&["allow_once", "allow_always"]),
-            reject,
-        };
-        let (name, input) = match call_id.as_deref().and_then(|id| self.calls.get(id)) {
-            Some(call) => {
-                let mut input = call.input.clone();
-                input.remove("_toolName");
-                (tool_name(call), Value::Object(input))
-            }
+        let (name, input) = match known {
+            Some(call) => (tool_name(call), Value::Object(shown_input(call))),
             None => ("Tool".to_owned(), Value::Object(Map::new())),
         };
+        let kind = AskKind::Permission { allow, reject };
         let reason = call
             .get("content")
             .and_then(Value::as_array)
@@ -523,6 +501,25 @@ fn tool_name(call: &Call) -> String {
         },
     };
     name.to_owned()
+}
+
+/// A call's input as the app shows it, without Cursor's `_toolName`.
+fn shown_input(call: &Call) -> Map<String, Value> {
+    let mut input = call.input.clone();
+    input.remove("_toolName");
+    input
+}
+
+/// Whether `call` is one of the injected `plxd mcp --thread` server's own tools (0041), which run
+/// without asking. A matching title alone never is.
+fn is_thread_tool(call: &Call) -> bool {
+    call.kind == "other"
+        && call.input.get("providerIdentifier").and_then(Value::as_str) == Some(crate::mcp::SERVER)
+        && call
+            .input
+            .get("toolName")
+            .and_then(Value::as_str)
+            .is_some_and(|name| crate::mcp::thread::TOOLS.contains(&name))
 }
 
 /// The answer to a `session/request_permission`: `option`, or `cancelled` when there is none.

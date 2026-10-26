@@ -13,6 +13,7 @@ use plxd::backend::fake::Step;
 
 use super::{Conn, Host, fake, real_repo, scope, start_params};
 use crate::agents::{end_turn, init};
+use crate::orchestration::sent;
 
 fn write(path: &str, content: &str) -> Step {
     Step::WriteFile {
@@ -58,20 +59,12 @@ async fn checkpointed(runs: &mut Conn, run: RunId, ordinal: u32) -> TurnCheckpoi
 
 async fn send(client: &mut Conn, thread_id: RunId, text: &str) {
     client
-        .call::<OrchestrationDispatch>(OrchestrationCommand::MessageDispatch {
+        .call::<OrchestrationDispatch>(sent(
             thread_id,
-            message_id: TurnId::generate(),
-            text: text.to_owned(),
-            images: Vec::new(),
-            threads: Vec::new(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            dispatch_mode: DispatchMode::QueueAfterActive,
-        })
+            TurnId::generate(),
+            text,
+            DispatchMode::QueueAfterActive,
+        ))
         .await
         .unwrap();
 }
@@ -433,57 +426,15 @@ fn counting_backend(
     backends
 }
 
-impl Conn {
-    async fn rollback_command(
-        &mut self,
-        command: OrchestrationCommand,
-        command_id: uuid::Uuid,
-    ) -> Result<parallax_protocol::DispatchResult, parallax_protocol::jsonrpc::ErrorObject> {
-        let mut params = serde_json::to_value(command).unwrap();
-        params.as_object_mut().unwrap().insert(
-            "commandId".to_owned(),
-            serde_json::json!(command_id.to_string()),
-        );
-        let id = parallax_protocol::jsonrpc::RequestId::String(uuid::Uuid::now_v7().to_string());
-        self.client
-            .send_message(&parallax_protocol::jsonrpc::Request {
-                id: id.clone(),
-                method: "orchestration/dispatch".to_owned(),
-                params: Some(params),
-            })
-            .await;
-        loop {
-            match self.client.next().await {
-                Some(parallax_protocol::jsonrpc::Message::Response(response)) => {
-                    assert_eq!(response.id, Some(id));
-                    return response.into_result();
-                }
-                Some(parallax_protocol::jsonrpc::Message::Notification(notification)) => {
-                    self.pending.push_back(super::event(notification));
-                }
-                other => panic!("expected response, got {other:?}"),
-            }
-        }
-    }
-}
-
 async fn assert_pending_actions(client: &mut Conn, thread: RunId) {
     // While local completion is pending, no new provider turn or stale branch action is allowed.
     let pending = client
-        .call::<OrchestrationDispatch>(OrchestrationCommand::MessageDispatch {
-            thread_id: thread,
-            message_id: TurnId::generate(),
-            text: "must wait".to_owned(),
-            images: Vec::new(),
-            threads: Vec::new(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            dispatch_mode: DispatchMode::QueueAfterActive,
-        })
+        .call::<OrchestrationDispatch>(sent(
+            thread,
+            TurnId::generate(),
+            "must wait",
+            DispatchMode::QueueAfterActive,
+        ))
         .await
         .unwrap_err();
     assert_eq!(
@@ -570,7 +521,7 @@ async fn failed_restore(restart: bool) {
     let command_id = uuid::Uuid::now_v7();
     assert!(
         client
-            .rollback_command(command.clone(), command_id)
+            .command::<OrchestrationDispatch>(command.clone(), command_id)
             .await
             .is_err()
     );
@@ -584,10 +535,13 @@ async fn failed_restore(restart: bool) {
     let mut client = if restart { host.client().await } else { client };
     std::fs::remove_file(lock).unwrap();
     let first = client
-        .rollback_command(command.clone(), command_id)
+        .command::<OrchestrationDispatch>(command.clone(), command_id)
         .await
         .unwrap();
-    let again = client.rollback_command(command, command_id).await.unwrap();
+    let again = client
+        .command::<OrchestrationDispatch>(command, command_id)
+        .await
+        .unwrap();
     assert_eq!(first.seq, again.seq);
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(worktree.join("a.txt").exists());
@@ -719,7 +673,7 @@ async fn an_unknown_provider_outcome_is_held_across_retry_and_restart() {
     };
     assert!(
         client
-            .rollback_command(command.clone(), uuid::Uuid::now_v7())
+            .command::<OrchestrationDispatch>(command.clone(), uuid::Uuid::now_v7())
             .await
             .is_err()
     );
@@ -727,7 +681,7 @@ async fn an_unknown_provider_outcome_is_held_across_retry_and_restart() {
     let host = host.restart(counting_backend(&calls, true)).await;
     let mut client = host.client().await;
     let refused = client
-        .rollback_command(command, uuid::Uuid::now_v7())
+        .command::<OrchestrationDispatch>(command, uuid::Uuid::now_v7())
         .await
         .unwrap_err();
     assert!(refused.message.contains("outcome is unknown"));
@@ -780,22 +734,14 @@ async fn refused_steered_boundary(later: bool) {
         )
     )).await;
     client
-        .call::<OrchestrationDispatch>(OrchestrationCommand::MessageDispatch {
-            thread_id: thread,
-            message_id: TurnId::generate(),
-            text: "Steered".to_owned(),
-            images: Vec::new(),
-            threads: Vec::new(),
-            model: None,
-            effort: None,
-            permission: None,
-            context_window: None,
-            fast: None,
-            account: None,
-            dispatch_mode: DispatchMode::SteerActive {
+        .call::<OrchestrationDispatch>(sent(
+            thread,
+            TurnId::generate(),
+            "Steered",
+            DispatchMode::SteerActive {
                 target_run_id: None,
             },
-        })
+        ))
         .await
         .unwrap();
     checkpointed(&mut events, thread, 2).await;

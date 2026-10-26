@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use parallax_protocol::ProjectId;
 use tracing::warn;
 
-use super::{WorktreeError, WorktreeManager, is_real_dir};
+use super::{WorktreeError, WorktreeManager, create_dir_all, is_real_dir};
 
 impl WorktreeManager {
     /// The folder of `project`'s coordinator's worktree.
@@ -67,12 +67,7 @@ impl WorktreeManager {
         if tokio::fs::symlink_metadata(&path).await.is_ok() {
             self.remove_orphan(&path).await?;
         }
-        tokio::fs::create_dir_all(&self.coordinator_root)
-            .await
-            .map_err(|source| WorktreeError::Io {
-                path: self.coordinator_root.clone(),
-                source,
-            })?;
+        create_dir_all(&self.coordinator_root).await?;
         let path_arg = path.to_string_lossy().into_owned();
         // `--force`: a removed folder can still be registered, with a stale `index.lock`.
         self.run_git_ok(

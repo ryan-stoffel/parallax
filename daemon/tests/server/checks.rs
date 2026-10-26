@@ -9,7 +9,7 @@ use parallax_protocol::{InboxKind, LandQueueParams, ProjectId, ProjectUpdatePara
 
 use crate::agents::{Conn, Host, create, git, project_params, start_params};
 use crate::landing::{finished, item, lands_automatically, messages, notes, worktree};
-use crate::support::temp_dir;
+use crate::support::{project_update, temp_dir};
 
 /// Checks that fail, printing so, while `broken.txt` is in the tree.
 const CHECKS: &str = if cfg!(windows) {
@@ -22,18 +22,8 @@ const CHECKS: &str = if cfg!(windows) {
 async fn set_checks(client: &mut Conn, project: ProjectId) {
     let updated = client
         .call::<ProjectUpdate>(ProjectUpdateParams {
-            project,
-            name: None,
-            icon: None,
-            permission: None,
-            autonomy: None,
-            base_branch: None,
-            auto_land: None,
             checks: Some(format!("  {CHECKS}\n")),
-            proposed_checks: None,
-            computer: None,
-            max_children: None,
-            allow_api_keys: None,
+            ..project_update(project)
         })
         .await
         .unwrap()
@@ -156,18 +146,9 @@ async fn the_branch_moves_only_once_the_checks_pass() {
     let command = format!("git rev-parse parallax/app HEAD > {}", seen.display());
     let updated = client
         .call::<ProjectUpdate>(ProjectUpdateParams {
-            project: project.id,
-            name: None,
-            icon: None,
-            permission: None,
-            autonomy: None,
-            base_branch: None,
             auto_land: Some(true),
             checks: Some(command),
-            proposed_checks: None,
-            computer: None,
-            max_children: None,
-            allow_api_keys: None,
+            ..project_update(project.id)
         })
         .await
         .unwrap()

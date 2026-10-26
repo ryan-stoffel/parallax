@@ -31,7 +31,7 @@ use tracing::warn;
 
 use super::{
     ChangeStatus, ChangedFile, DEFAULT_TIMEOUT, DiffStat, NO_DIFF_DRIVERS, WorktreeError,
-    WorktreeManager, changed_file, collect, describe_failure, owned_args,
+    WorktreeManager, changed_file, collect, describe_failure, git_failed, timed_out,
 };
 use crate::backend::process::{Output, StdinMode};
 use crate::json::escaped_len as json_len;
@@ -350,29 +350,17 @@ impl WorktreeManager {
                     }
                     Some(Output::Exited(exit)) => {
                         close(&mut current, &mut sections, &mut total);
-                        return Ok((sections, exit));
+                        return (sections, exit);
                     }
                     None => unreachable!("Output::Exited always comes last"),
                 }
             }
         };
-        let (sections, exit) = match timeout(DEFAULT_TIMEOUT, read).await {
-            Ok(Ok(read)) => read,
-            Ok(Err(error)) => return Err(error),
-            Err(_) => {
-                return Err(WorktreeError::Timeout {
-                    cwd: worktree_path.to_owned(),
-                    args: owned_args(args),
-                    timeout: DEFAULT_TIMEOUT,
-                });
-            }
-        };
+        let (sections, exit) = timeout(DEFAULT_TIMEOUT, read)
+            .await
+            .map_err(|_| timed_out(worktree_path, args, DEFAULT_TIMEOUT))?;
         if !exit.info.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(args),
-                detail: exit.stderr_tail,
-            });
+            return Err(git_failed(worktree_path, args, exit.stderr_tail));
         }
         if sections.len() != expected {
             warn!(
@@ -444,11 +432,7 @@ impl WorktreeManager {
             .exec(&spec, worktree_path, &args, DEFAULT_TIMEOUT)
             .await?;
         if !exit.info.success() {
-            return Err(WorktreeError::GitFailed {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(&args),
-                detail: exit.stderr_tail,
-            });
+            return Err(git_failed(worktree_path, &args, exit.stderr_tail));
         }
         // `collect` ends every line with `\n`, including a last line that had none.
         let size_bytes = usize::try_from(size).unwrap_or(usize::MAX);
@@ -456,11 +440,8 @@ impl WorktreeManager {
             bytes.pop();
         }
         if bytes.len() != size_bytes {
-            return Err(WorktreeError::GitFailed {
-                cwd: worktree_path.to_owned(),
-                args: owned_args(&args),
-                detail: format!("read {} bytes of a {size}-byte file", bytes.len()),
-            });
+            let detail = format!("read {} bytes of a {size}-byte file", bytes.len());
+            return Err(git_failed(worktree_path, &args, detail));
         }
         Ok(Some(Blob {
             size,
@@ -508,21 +489,12 @@ impl WorktreeManager {
             }
             collect(process, work_tree, &args).await
         };
-        let Ok(collected) = timeout(DEFAULT_TIMEOUT, run).await else {
-            return Err(WorktreeError::Timeout {
-                cwd: work_tree.to_owned(),
-                args: owned_args(&args),
-                timeout: DEFAULT_TIMEOUT,
-            });
-        };
-        let (stdout, exit) = collected?;
+        let (stdout, exit) = timeout(DEFAULT_TIMEOUT, run)
+            .await
+            .map_err(|_| timed_out(work_tree, &args, DEFAULT_TIMEOUT))??;
         // 0: some are ignored, 1: none are.
         if !matches!(exit.info.code, Some(0 | 1)) {
-            return Err(WorktreeError::GitFailed {
-                cwd: work_tree.to_owned(),
-                args: owned_args(&args),
-                detail: exit.stderr_tail,
-            });
+            return Err(git_failed(work_tree, &args, exit.stderr_tail));
         }
         // `collect` ends the one NUL-separated line with `\n`.
         let stdout = String::from_utf8_lossy(stdout.strip_suffix(b"\n").unwrap_or(&stdout));
@@ -980,19 +952,12 @@ impl WorktreeManager {
         ancestor: &str,
         descendant: &str,
     ) -> Result<bool, WorktreeError> {
-        let output = self
-            .run_git(
-                repo_root,
-                &["merge-base", "--is-ancestor", ancestor, descendant],
-            )
-            .await?;
+        let args = ["merge-base", "--is-ancestor", ancestor, descendant];
+        let output = self.run_git(repo_root, &args).await?;
         match output.exit.info.code {
             Some(0) => Ok(true),
             Some(1) => Ok(false),
-            _ => Err(output.failure(
-                repo_root,
-                &["merge-base", "--is-ancestor", ancestor, descendant],
-            )),
+            _ => Err(output.failure(repo_root, &args)),
         }
     }
 

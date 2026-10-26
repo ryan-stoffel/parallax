@@ -339,32 +339,27 @@ fn answer(
 
 fn restart_answer(version: &str, running: u32, now: bool) -> HostUpdateResult {
     let agents = if running == 1 { "agent" } else { "agents" };
-    if running == 0 {
-        answer(
-            version,
+    let (restart, message) = if running == 0 {
+        (
             HostUpdateRestart::Now,
-            running,
             format!("Installed plxd {version}. plxd restarts into it now."),
         )
     } else if now {
-        answer(
-            version,
+        (
             HostUpdateRestart::Now,
-            running,
             format!(
                 "Installed plxd {version}. plxd restarts into it now, interrupting its {running} running {agents}."
             ),
         )
     } else {
-        answer(
-            version,
+        (
             HostUpdateRestart::AfterRuns,
-            running,
             format!(
                 "Installed plxd {version}. plxd restarts into it once its {running} running {agents} finish."
             ),
         )
-    }
+    };
+    answer(version, restart, running, message)
 }
 
 /// A release version's numbers: `2610.10912.13045` for `2610.10912.13045-nightly` (0030), and
@@ -509,35 +504,12 @@ pub(crate) async fn install_release(
     )
     .await?;
     let sums = std::fs::read_to_string(dir.join("plxd.sha256")).unwrap_or_default();
-    let expected = sums
-        .lines()
-        .find_map(|line| {
-            let (hash, file) = line.split_once(char::is_whitespace)?;
-            (file.trim().trim_start_matches('*') == name).then(|| hash.to_ascii_lowercase())
-        })
-        .ok_or_else(|| format!("The release's {name}.sha256 doesn't list {name}."))?;
-    let bytes = std::fs::read(&new)
-        .map_err(|error| format!("Couldn't read the downloaded {name}: {error}."))?;
-    if crate::sha256_hex(&bytes) != expected {
-        return Err(format!(
-            "The downloaded {name} doesn't match the release's SHA-256, so plxd didn't install it."
-        ));
-    }
-    drop(bytes);
+    check_sha256(&sums, &name, &new)?;
     make_executable(&new)?;
     let version_file = dir.join(crate::VERSION_FILE);
     std::fs::write(&version_file, format!("{version}\n"))
         .map_err(|error| format!("Couldn't write {}: {error}.", version_file.display()))?;
-    let new_text = new.to_string_lossy();
-    let ran = crate::detect::run(launcher, &new_text, &["--version"], PROBE_TIMEOUT)
-        .await
-        .map_err(|error| format!("plxd {version} doesn't run on this computer: {error}."))?;
-    if ran.exit_code != Some(0) || !ran.stdout.contains(version) {
-        return Err(format!(
-            "plxd {version} doesn't run on this computer: {}",
-            crate::github::last_line(&ran.stderr_tail)
-        ));
-    }
+    probe(launcher, &new, version).await?;
     // The app may have refreshed it during the download.
     if let Some(there) = not_older(&program, version) {
         return Ok((there, program));
@@ -549,6 +521,44 @@ pub(crate) async fn install_release(
     std::fs::rename(&version_file, &version_to)
         .map_err(|error| format!("Couldn't move plxd into {}: {error}.", version_to.display()))?;
     Ok((version.to_owned(), program))
+}
+
+/// Checks the downloaded `name` at `new` against the SHA-256 the release's `sums` list for it.
+fn check_sha256(sums: &str, name: &str, new: &Path) -> Result<(), String> {
+    let expected = sums
+        .lines()
+        .find_map(|line| {
+            let (hash, file) = line.split_once(char::is_whitespace)?;
+            (file.trim().trim_start_matches('*') == name).then(|| hash.to_ascii_lowercase())
+        })
+        .ok_or_else(|| format!("The release's {name}.sha256 doesn't list {name}."))?;
+    let bytes = std::fs::read(new)
+        .map_err(|error| format!("Couldn't read the downloaded {name}: {error}."))?;
+    if crate::sha256_hex(&bytes) != expected {
+        return Err(format!(
+            "The downloaded {name} doesn't match the release's SHA-256, so plxd didn't install it."
+        ));
+    }
+    Ok(())
+}
+
+/// Proves the plxd at `new` runs on this computer: its `--version` names `version`.
+async fn probe(launcher: &Launcher, new: &Path, version: &str) -> Result<(), String> {
+    let ran = crate::detect::run(
+        launcher,
+        &new.to_string_lossy(),
+        &["--version"],
+        PROBE_TIMEOUT,
+    )
+    .await
+    .map_err(|error| format!("plxd {version} doesn't run on this computer: {error}."))?;
+    if ran.exit_code != Some(0) || !ran.stdout.contains(version) {
+        return Err(format!(
+            "plxd {version} doesn't run on this computer: {}",
+            crate::github::last_line(&ran.stderr_tail)
+        ));
+    }
+    Ok(())
 }
 
 /// Moves `new` over the plxd at `program`, setting the old one aside first when `aside`, as on

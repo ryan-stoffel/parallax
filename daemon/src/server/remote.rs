@@ -44,7 +44,7 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt as _, StreamExt as _};
@@ -213,8 +213,8 @@ impl Remote {
         self.lock_pairing().is_some()
     }
 
-    fn lock_pairing(&self) -> std::sync::MutexGuard<'_, Option<Pairing>> {
-        self.pairing.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock_pairing(&self) -> MutexGuard<'_, Option<Pairing>> {
+        lock(&self.pairing)
     }
 
     /// Ends the pairing with `code`, or any pairing without one, and stops advertising.
@@ -303,7 +303,7 @@ impl Remote {
 
     /// Records a proof's `jti` for its key. False when it was seen already.
     fn first_use(&self, proven: &remote::Proven) -> bool {
-        let mut proofs = self.proofs.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut proofs = lock(&self.proofs);
         let now = Instant::now();
         proofs.retain(|_, seen| now.duration_since(*seen) < REPLAY_MEMORY);
         proofs
@@ -313,7 +313,7 @@ impl Remote {
 
     fn new_ticket(&self, session: String) -> String {
         let ticket = remote::random_token(24);
-        let mut tickets = self.tickets.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut tickets = lock(&self.tickets);
         let now = Instant::now();
         tickets.retain(|_, (_, expires)| now < *expires);
         tickets.insert(ticket.clone(), (session, now + TICKET_LIFETIME));
@@ -322,15 +322,14 @@ impl Remote {
 
     /// Uses up `ticket`: the session it opens, unless it's unknown or expired.
     fn take_ticket(&self, ticket: &str) -> Option<String> {
-        let mut tickets = self.tickets.lock().unwrap_or_else(PoisonError::into_inner);
-        let (session, expires) = tickets.remove(ticket)?;
+        let (session, expires) = lock(&self.tickets).remove(ticket)?;
         (Instant::now() < expires).then_some(session)
     }
 
     /// A token that closes one connection of `session`'s, when the listener `closing` closes or
     /// the session is revoked.
     fn watch(&self, session: &str, closing: &CancellationToken) -> CancellationToken {
-        let mut sessions = self.sessions.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut sessions = lock(&self.sessions);
         let token = sessions
             .entry(session.to_owned())
             .or_insert_with(|| closing.child_token());
@@ -343,15 +342,15 @@ impl Remote {
 
     /// Closes every connection of `session`'s.
     pub(crate) fn revoke(&self, session: &str) {
-        let token = self
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(session);
+        let token = lock(&self.sessions).remove(session);
         if let Some(token) = token {
             token.cancel();
         }
     }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Counts a wrong code against the waiting pairing, and ends it at the last allowed one.
@@ -453,10 +452,7 @@ pub(super) async fn run(serving: Serving, stop: CancellationToken) {
                 }
                 (Ok(false), false) => {
                     retry = false;
-                    *remote
-                        .problem
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner) = None;
+                    *lock(&remote.problem) = None;
                 }
                 (Err(error), _) => {
                     warn!(error = %error.message, "could not read the remote setting");
@@ -546,14 +542,8 @@ async fn bind(serving: &Serving) -> Option<Bound> {
     match TcpListener::bind(address).await {
         Ok(listener) => {
             info!(%address, fingerprint = %key.fingerprint, "listening for remote clients");
-            *remote
-                .fingerprint
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(key.fingerprint.clone());
-            *remote
-                .problem
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = None;
+            *lock(&remote.fingerprint) = Some(key.fingerprint.clone());
+            *lock(&remote.problem) = None;
             Some(Bound {
                 listener,
                 key,
@@ -569,10 +559,7 @@ async fn bind(serving: &Serving) -> Option<Bound> {
             } else {
                 format!("Parallax couldn't listen on port {}: {error}", remote.port)
             };
-            *remote
-                .problem
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(why);
+            *lock(&remote.problem) = Some(why);
             None
         }
     }
@@ -612,6 +599,13 @@ impl Request {
     fn url(&self) -> String {
         let path = self.path.split('?').next().unwrap_or_default();
         format!("https://{}{path}", self.header("host").unwrap_or_default())
+    }
+
+    /// Checks this `POST`'s `DPoP` proof, bound to `access_token` when it has one.
+    fn proof(&self, access_token: Option<&str>) -> Result<remote::Proven, &'static str> {
+        let proof = self.header("dpop").unwrap_or_default();
+        let now = remote::now_seconds();
+        remote::verify_proof(proof, "POST", &self.url(), now, access_token)
     }
 }
 
@@ -937,9 +931,7 @@ async fn finish_pairing(
     let (Some(finish), Some(mac)) = (finish, mac) else {
         return (400, json!({ "error": "invalid_request" }));
     };
-    let proof = request.header("dpop").unwrap_or_default();
-    let now = remote::now_seconds();
-    let proven = match remote::verify_proof(proof, "POST", &request.url(), now, None) {
+    let proven = match request.proof(None) {
         Ok(proven) => proven,
         Err(why) => return refused(why),
     };
@@ -1017,9 +1009,7 @@ async fn pair_browser(daemon: &Daemon, request: &Request) -> (u16, serde_json::V
     let Ok(pair) = serde_json::from_slice::<Pair>(&request.body) else {
         return (400, json!({ "error": "invalid_request" }));
     };
-    let proof = request.header("dpop").unwrap_or_default();
-    let now = remote::now_seconds();
-    let proven = match remote::verify_proof(proof, "POST", &request.url(), now, None) {
+    let proven = match request.proof(None) {
         Ok(proven) => proven,
         Err(why) => return refused(why),
     };
@@ -1183,9 +1173,7 @@ async fn ticket(daemon: &Daemon, request: &Request) -> (u16, serde_json::Value) 
     let Some(session) = session_for(daemon, token).await else {
         return refused("invalid_token", "an unknown or revoked session");
     };
-    let proof = request.header("dpop").unwrap_or_default();
-    let now = remote::now_seconds();
-    let proven = match remote::verify_proof(proof, "POST", &request.url(), now, Some(token)) {
+    let proven = match request.proof(Some(token)) {
         Ok(proven) => proven,
         Err(why) => return refused("invalid_dpop_proof", why),
     };
@@ -1419,11 +1407,7 @@ pub(crate) async fn revoke(
 pub(crate) async fn new_pairing(daemon: &Daemon) -> Result<(String, jiff::Timestamp), String> {
     let remote = &daemon.remote;
     if !remote.listening.load(Ordering::Relaxed) {
-        let problem = remote
-            .problem
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
+        let problem = lock(&remote.problem).clone();
         return Err(problem.unwrap_or_else(|| "Turn on pairing first.".to_owned()));
     }
     let name = host_name(daemon).await;
@@ -1490,17 +1474,10 @@ pub(crate) fn listed_with_status(
         sessions,
         listening: remote.listening.load(Ordering::Relaxed),
         pairing: remote.pairing(),
-        fingerprint: remote
-            .fingerprint
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        fingerprint: lock(&remote.fingerprint)
             .clone()
             .filter(|_| remote.listening.load(Ordering::Relaxed)),
-        problem: remote
-            .problem
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone(),
+        problem: lock(&remote.problem).clone(),
         relay: Some(daemon.relay.status()),
     }
 }

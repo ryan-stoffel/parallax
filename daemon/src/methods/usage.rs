@@ -181,17 +181,14 @@ pub(crate) async fn limits(
                 Ok(probe) => commands::list(probe, LIMITS_TIMEOUT).await,
                 Err(error) => Err(error),
             };
-            match answer {
-                Ok(limits) => AccountLimits {
-                    account_id,
-                    limits,
-                    problem: None,
-                },
-                Err(problem) => AccountLimits {
-                    account_id,
-                    limits: Vec::new(),
-                    problem: Some(problem),
-                },
+            let (limits, problem) = match answer {
+                Ok(limits) => (limits, None),
+                Err(problem) => (Vec::new(), Some(problem)),
+            };
+            AccountLimits {
+                account_id,
+                limits,
+                problem,
             }
         });
     // Dropping the reads kills their CLIs.

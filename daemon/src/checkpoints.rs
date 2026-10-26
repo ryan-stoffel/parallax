@@ -359,14 +359,7 @@ pub(crate) async fn turn_diff(
             Ok((folder(db, thread)?, crate::graph::runs(db, thread)?))
         })
         .await?;
-    let ready = runs.iter().any(|run| {
-        run.ordinal == Some(to)
-            && run.status != ThreadRunStatus::RolledBack
-            && run
-                .checkpoint
-                .as_ref()
-                .is_some_and(|checkpoint| checkpoint.status == CheckpointStatus::Ready)
-    });
+    let ready = runs.iter().any(|run| ready_at(run, to));
     let Some(folder) = folder.filter(|_| ready) else {
         return Err(ErrorObject::invalid_params(format!(
             "thread {thread_id} has no ready checkpoint for run {to}"
@@ -536,6 +529,16 @@ fn refused(why: String) -> ErrorObject {
     ErrorObject::parallax(ErrorKind::RevertRefused, why)
 }
 
+/// Whether `run` is run `ordinal`, not undone, with a ready checkpoint.
+fn ready_at(run: &ThreadRun, ordinal: u32) -> bool {
+    run.ordinal == Some(ordinal)
+        && run.status != ThreadRunStatus::RolledBack
+        && run
+            .checkpoint
+            .as_ref()
+            .is_some_and(|checkpoint| checkpoint.status == CheckpointStatus::Ready)
+}
+
 /// What a revert's checks read besides the thread's runs.
 struct Check {
     ordinal: u32,
@@ -570,16 +573,7 @@ impl Check {
         }) {
             return Err("Interrupt the current turn before reverting checkpoints.".to_owned());
         }
-        if ordinal > 0
-            && !started.iter().any(|run| {
-                run.ordinal == Some(ordinal)
-                    && run.status != ThreadRunStatus::RolledBack
-                    && run
-                        .checkpoint
-                        .as_ref()
-                        .is_some_and(|checkpoint| checkpoint.status == CheckpointStatus::Ready)
-            })
-        {
+        if ordinal > 0 && !started.iter().any(|run| ready_at(run, ordinal)) {
             return Err(format!(
                 "Turn {ordinal} has no ready checkpoint to revert to."
             ));
@@ -612,9 +606,7 @@ impl Check {
         }
         Ok((turns, undone))
     }
-}
 
-impl Check {
     /// Refuses a cursor backend's revert with nowhere to resume (T3 Code's
     /// `resolveClaudeRollbackResumeSessionAt`): a target turn from before plxd kept cursors, or
     /// one in an earlier session, before the thread moved between providers, or a fork's start,
@@ -674,14 +666,14 @@ pub(crate) async fn finish_revert(
     revert: Revert,
 ) -> Result<(ProjectId, ParallaxEvent), ErrorObject> {
     let Revert {
-        thread,
+        thread: run_id,
         ordinal,
         restore_files,
         undone,
         folder,
         ..
     } = revert;
-    let thread = Uuid::from(thread);
+    let thread = Uuid::from(run_id);
     let worktrees = daemon.agents.worktrees();
     let failed = |what: &str, error: crate::worktree::WorktreeError| {
         ErrorObject::internal_error(format!("could not {what}: {error}"))
@@ -702,7 +694,6 @@ pub(crate) async fn finish_revert(
             .await
             .map_err(|error| failed("delete a stale checkpoint", error))?;
     }
-    let run_id = RunId::try_from(thread).map_err(|_| ErrorObject::internal_error("bad id"))?;
     info!(%thread, ordinal, restore_files, undone = undone.len(), "reverted a thread");
     let event = ParallaxEvent::ThreadReverted {
         run_id,

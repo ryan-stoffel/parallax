@@ -424,6 +424,14 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     let pair = |code: &str| serde_json::json!({ "code": code, "clientLabel": "Phone" }).to_string();
     let proof =
         |path: &str, token: Option<&str>| key.proof("POST", &format!("{base}{path}"), token);
+    // The status of a pairing with `code`, a fresh proof, and no `Origin`.
+    let pair_status = async |code: &str| {
+        let dpop = proof("/api/pair/browser", None);
+        let headers = [("DPoP", dpop.as_str())];
+        https(port, "POST", "/api/pair/browser", &headers, &pair(code))
+            .await
+            .0
+    };
 
     // Off by default, even with `remote` on: no page, and no pairing with the code alone.
     let settings = client
@@ -481,16 +489,7 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     // No proof, or a wrong code, is refused.
     let (status, ..) = https(port, "POST", "/api/pair/browser", &[], &pair(&code)).await;
     assert_eq!(status, 401);
-    let dpop = proof("/api/pair/browser", None);
-    let (status, ..) = https(
-        port,
-        "POST",
-        "/api/pair/browser",
-        &[("DPoP", &dpop)],
-        &pair(&wrong(&code)),
-    )
-    .await;
-    assert_eq!(status, 401);
+    assert_eq!(pair_status(&wrong(&code)).await, 401);
 
     // A proof seen once is refused before it reaches the code, so a replay can't use it up.
     let seen = proof("/api/pair/browser", None);
@@ -516,16 +515,7 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
     let paired: Value = serde_json::from_slice(&body).unwrap();
     let token = paired["accessToken"].as_str().unwrap().to_owned();
-    let dpop = proof("/api/pair/browser", None);
-    let (status, ..) = https(
-        port,
-        "POST",
-        "/api/pair/browser",
-        &[("DPoP", &dpop)],
-        &pair(&code),
-    )
-    .await;
-    assert_eq!(status, 401, "a code works once");
+    assert_eq!(pair_status(&code).await, 401, "a code works once");
     let sessions = client
         .call::<RemoteSessions>(RemoteSessionsParams {})
         .await
@@ -535,27 +525,9 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     // Too many wrong codes lock it, as for SPAKE2.
     let locked = new_code(&mut client).await;
     for _ in 0..remote::MAX_WRONG_CODES {
-        let dpop = proof("/api/pair/browser", None);
-        let (status, ..) = https(
-            port,
-            "POST",
-            "/api/pair/browser",
-            &[("DPoP", &dpop)],
-            &pair(&wrong(&locked)),
-        )
-        .await;
-        assert_eq!(status, 401);
+        assert_eq!(pair_status(&wrong(&locked)).await, 401);
     }
-    let dpop = proof("/api/pair/browser", None);
-    let (status, ..) = https(
-        port,
-        "POST",
-        "/api/pair/browser",
-        &[("DPoP", &dpop)],
-        &pair(&locked),
-    )
-    .await;
-    assert_eq!(status, 401, "locked");
+    assert_eq!(pair_status(&locked).await, 401, "locked");
 
     // The session opens the WebSocket through a ticket, from this origin only. An unknown token is
     // `invalid_token`, the only refusal that means pairing again.

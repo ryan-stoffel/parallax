@@ -508,8 +508,7 @@ impl Store {
             "SELECT id FROM runs WHERE id NOT IN (SELECT thread_id FROM graph_imports)
              ORDER BY created_at DESC",
         )?;
-        let ids = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        ids.map(|id| Ok(Uuid::parse_str(&id?)?)).collect()
+        crate::ids(&mut stmt, [])
     }
 
     /// Sets the run (turn) that event `seq` belongs to, which an import learns after the event

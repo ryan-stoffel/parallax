@@ -539,13 +539,7 @@ pub const ENV_FILE_ENV: &str = "CLAUDE_ENV_FILE";
 ///
 /// If `dir` can't be created or the file can't be written.
 pub fn write_env_file(dir: &Path, path: &OsStr) -> io::Result<TempPath> {
-    std::fs::create_dir_all(dir)?;
-    let mut file = tempfile::Builder::new()
-        .prefix("claude-env-")
-        .suffix(".sh")
-        .tempfile_in(dir)?;
-    file.write_all(&prepend_path_line(path))?;
-    Ok(file.into_temp_path())
+    write_temp_file(dir, "claude-env-", ".sh", &prepend_path_line(path))
 }
 
 /// What a run adds to Claude Code's system prompt: the math format for a full thread (PLX-730)
@@ -569,12 +563,23 @@ pub fn appended_prompt(request: &RunRequest) -> Option<String> {
 ///
 /// If `dir` can't be created or the file can't be written.
 pub fn write_prompt_file(dir: &Path, text: &str) -> io::Result<TempPath> {
+    write_temp_file(dir, "claude-prompt-", ".md", text.as_bytes())
+}
+
+/// Writes `contents` into a new owner-only file in `dir`, which it makes if missing, with a random
+/// name between `prefix` and `suffix`, and returns its path, which deletes the file when dropped.
+fn write_temp_file(
+    dir: &Path,
+    prefix: &str,
+    suffix: &str,
+    contents: &[u8],
+) -> io::Result<TempPath> {
     std::fs::create_dir_all(dir)?;
     let mut file = tempfile::Builder::new()
-        .prefix("claude-prompt-")
-        .suffix(".md")
+        .prefix(prefix)
+        .suffix(suffix)
         .tempfile_in(dir)?;
-    file.write_all(text.as_bytes())?;
+    file.write_all(contents)?;
     Ok(file.into_temp_path())
 }
 
@@ -665,6 +670,48 @@ impl ClaudeBackend {
         self
     }
 
+    /// Sets the variables `request`'s CLI gets beyond every run's: a worker's [`TEMP_ENV`], a plain
+    /// no-write run's [`SCRUB_ENV`], a 200k context window's [`DISABLE_1M_ENV`], and a worker's
+    /// [`ENV_FILE_ENV`], whose file it returns for the run to keep until it ends.
+    fn run_env(
+        &self,
+        request: &RunRequest,
+        spec: &mut ProcessSpec,
+    ) -> Result<Option<TempPath>, StartError> {
+        if let Some(sandbox) = worker_sandbox(request)? {
+            // Only sandboxed commands can't use the shared folder Claude Code falls back to, so
+            // full Claude Code keeps a longer path, as every one on Windows is (PLX-959).
+            let temp = match worker_temp(&sandbox.temp) {
+                Err(_) if unsandboxed(request) => sandbox.temp.clone(),
+                temp => temp?,
+            };
+            spec.inject.set(TEMP_ENV, temp);
+        }
+        if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
+            spec.inject.set(SCRUB_ENV, "1");
+        }
+        match request.context_window {
+            None | Some(1_000_000) => {}
+            Some(200_000) => {
+                spec.inject.set(DISABLE_1M_ENV, "1");
+            }
+            Some(tokens) => {
+                return Err(StartError::Unsupported(format!(
+                    "Claude Code has no {tokens}-token context window"
+                )));
+            }
+        }
+        match self.launcher.base().get("PATH") {
+            Some(path) if request.policy == ToolPolicy::WorkspaceWrite => {
+                let dir = self.launcher.data_dir().temp_dir();
+                let file = write_env_file(&dir, path).map_err(SpawnError::Io)?;
+                spec.inject.set(ENV_FILE_ENV, file.as_os_str());
+                Ok(Some(file))
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Writes `request`'s [`appended_prompt`], if any, with [`write_prompt_file`] and passes it
     /// to `spec` as `--append-system-prompt-file`. The run keeps the file until it ends.
     fn prompt_file(
@@ -711,6 +758,15 @@ impl ClaudeBackend {
         spec.limits = self.limits;
         spec.record = Some("claude");
         Ok((spec, key_source))
+    }
+
+    /// [`Self::spec`] for one of the CLI's probes on the backend's own login: `args`, then the
+    /// instance's.
+    fn probe_spec(&self, cwd: &Path, args: Vec<OsString>) -> Result<ProcessSpec, StartError> {
+        let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
+        spec.args = args;
+        spec.args.extend(self.overrides.args.iter().cloned());
+        Ok(spec)
     }
 }
 
@@ -761,32 +817,22 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
             args.extend(PROMPT_TOOL_ARGS.iter().map(Into::into));
         }
     }
-    if let Some(tools) = &request.coordinator_tools {
-        let allowed: Vec<&str> = mcp::thread::ALLOWED_TOOLS
-            .iter()
-            .chain(TODO_TOOLS)
-            .copied()
-            .collect();
-        args.extend([
-            "--mcp-config".into(),
-            tools.mcp_config()?.to_string().into(),
-            "--allowedTools".into(),
-            allowed.join(",").into(),
-        ]);
-    } else if unsandboxed {
-        // A thread's host-wide tools join the user's own MCP servers (0041), and the allowlist
-        // lets them run in every mode.
-        let thread_tools: &[&str] = match &request.thread_tools {
-            Some(tools) => {
-                args.extend([
-                    "--mcp-config".into(),
-                    tools.mcp_config()?.to_string().into(),
-                ]);
-                mcp::thread::ALLOWED_TOOLS
-            }
-            None => &[],
-        };
-        let allowed: Vec<&str> = thread_tools.iter().chain(TODO_TOOLS).copied().collect();
+    if coordinator || unsandboxed {
+        // A coordinator's or a thread's host-wide tools join the user's own MCP servers (0041),
+        // and the allowlist lets them run in every mode.
+        let tools = request
+            .coordinator_tools
+            .as_ref()
+            .or(request.thread_tools.as_ref());
+        let mut allowed: Vec<&str> = Vec::new();
+        if let Some(tools) = tools {
+            args.extend([
+                "--mcp-config".into(),
+                tools.mcp_config()?.to_string().into(),
+            ]);
+            allowed.extend(mcp::thread::ALLOWED_TOOLS);
+        }
+        allowed.extend(TODO_TOOLS);
         args.extend(["--allowedTools".into(), allowed.join(",").into()]);
     }
     if let Some(sandbox) = worker_sandbox(request)? {
@@ -1119,9 +1165,7 @@ impl Backend for ClaudeBackend {
     /// `claude -p` in stream-json on the user's login, asked to `initialize`
     /// ([`commands::claude`]).
     fn commands(&self, cwd: &Path) -> Result<Option<CommandsProbe>, StartError> {
-        let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
-        spec.args = BASE_ARGS.iter().map(OsString::from).collect();
-        spec.args.extend(self.overrides.args.iter().cloned());
+        let spec = self.probe_spec(cwd, BASE_ARGS.iter().map(OsString::from).collect())?;
         Ok(Some(CommandsProbe {
             process: self.launcher.spawn(&spec)?,
             input: vec![json!({
@@ -1136,9 +1180,7 @@ impl Backend for ClaudeBackend {
     /// `claude -p` in stream-json on this backend's login, with hooks and MCP servers off,
     /// asked for `get_usage` ([`limits::claude`]).
     fn limits(&self, cwd: &Path) -> Result<Option<LimitsProbe>, StartError> {
-        let (mut spec, _) = self.spec(cwd, &Credential::Subscription { config_home: None })?;
-        spec.args = BASE_ARGS.iter().map(OsString::from).collect();
-        spec.args.extend(self.overrides.args.iter().cloned());
+        let mut spec = self.probe_spec(cwd, BASE_ARGS.iter().map(OsString::from).collect())?;
         spec.args.extend(
             [
                 "--strict-mcp-config",
@@ -1173,9 +1215,7 @@ impl Backend for ClaudeBackend {
         model: &str,
         effort: Option<AgentEffort>,
     ) -> Result<Option<NameProbe>, StartError> {
-        let (mut spec, _) = self.spec(dir, &Credential::Subscription { config_home: None })?;
-        spec.args = namer_arguments(model, effort)?;
-        spec.args.extend(self.overrides.args.iter().cloned());
+        let mut spec = self.probe_spec(dir, namer_arguments(model, effort)?)?;
         self.pin_gateway_model(&mut spec, Some(model));
         Ok(Some(NameProbe {
             process: self.launcher.spawn(&spec)?,
@@ -1205,38 +1245,7 @@ impl Backend for ClaudeBackend {
         let asks = prompts(&request);
         let plan_exit = hands_over_plans(&request);
         let full = full_thread(&request);
-        if let Some(sandbox) = worker_sandbox(&request)? {
-            // Only sandboxed commands can't use the shared folder Claude Code falls back to, so
-            // full Claude Code keeps a longer path, as every one on Windows is (PLX-959).
-            let temp = match worker_temp(&sandbox.temp) {
-                Err(_) if unsandboxed(&request) => sandbox.temp.clone(),
-                temp => temp?,
-            };
-            spec.inject.set(TEMP_ENV, temp);
-        }
-        if request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none() {
-            spec.inject.set(SCRUB_ENV, "1");
-        }
-        match request.context_window {
-            None | Some(1_000_000) => {}
-            Some(200_000) => {
-                spec.inject.set(DISABLE_1M_ENV, "1");
-            }
-            Some(tokens) => {
-                return Err(StartError::Unsupported(format!(
-                    "Claude Code has no {tokens}-token context window"
-                )));
-            }
-        }
-        let env_file = match self.launcher.base().get("PATH") {
-            Some(path) if request.policy == ToolPolicy::WorkspaceWrite => {
-                let dir = self.launcher.data_dir().temp_dir();
-                let file = write_env_file(&dir, path).map_err(SpawnError::Io)?;
-                spec.inject.set(ENV_FILE_ENV, file.as_os_str());
-                Some(file)
-            }
-            _ => None,
-        };
+        let env_file = self.run_env(&request, &mut spec)?;
         let prompt_file = self.prompt_file(&request, &mut spec)?;
 
         let query = Query::open(&self.launcher, &spec, request.run_id)?;
@@ -1512,25 +1521,7 @@ impl Driver {
             tokio::select! {
                 // Deliveries first, so a follow-up's TurnStarted comes before what the CLI answers.
                 biased;
-                Some(delivery) = stdin.results.recv() => {
-                    stdin.pending = stdin.pending.saturating_sub(1);
-                    match delivery {
-                        Delivery::Written(message) => {
-                            if self.unreported.remove(&message.uuid) {
-                                let started = Event::TurnStarted { turn_id: message.turn_id };
-                                self.emit(started).await;
-                            }
-                        }
-                        Delivery::Failed(message) => {
-                            self.unreported.remove(&message.uuid);
-                            self.turns.retain(|(_, uuid)| *uuid != message.uuid);
-                            // stdin is gone, so no later message can arrive either.
-                            stdin.close();
-                            self.control.close();
-                            self.dropped(&message).await;
-                        }
-                    }
-                }
+                Some(delivery) = stdin.results.recv() => self.delivered(delivery, &mut stdin).await,
                 output = self.query.next() => match output {
                     Some(Output::Line(line)) => {
                         if self.violation.is_none() {
@@ -1555,25 +1546,7 @@ impl Driver {
                 },
                 Some(task_id) = self.task_stops.recv() => self.input.stop_task(&task_id),
                 follow_up = self.control.recv(), if control_open => match follow_up {
-                    Some(follow_up) => {
-                        let message = Message::with_priority(
-                            Some(follow_up.turn_id),
-                            &follow_up.text,
-                            &follow_up.images,
-                            true,
-                            follow_up.steer,
-                        );
-                        let (turn_id, uuid) = (message.turn_id, message.uuid.clone());
-                        match stdin.send(message) {
-                            // A turn already: the CLI can answer it before the writer reports
-                            // writing it (PLX-523).
-                            Ok(()) => {
-                                self.turns.push_back((turn_id, uuid.clone()));
-                                self.unreported.insert(uuid);
-                            }
-                            Err(message) => self.dropped(&message).await,
-                        }
-                    }
+                    Some(follow_up) => self.follow_up(follow_up, &mut stdin).await,
                     None => control_open = false,
                 },
                 () = self.switch.cancelled(), if !interrupted => {
@@ -1594,6 +1567,49 @@ impl Driver {
         self.prompt_file = None;
         let outcome = self.outcome(exit);
         let _ = self.sink.finish(outcome).await;
+    }
+
+    /// Takes the writer's report on one message.
+    async fn delivered(&mut self, delivery: Delivery, stdin: &mut Stdin) {
+        stdin.pending = stdin.pending.saturating_sub(1);
+        match delivery {
+            Delivery::Written(message) => {
+                if self.unreported.remove(&message.uuid) {
+                    let started = Event::TurnStarted {
+                        turn_id: message.turn_id,
+                    };
+                    self.emit(started).await;
+                }
+            }
+            Delivery::Failed(message) => {
+                self.unreported.remove(&message.uuid);
+                self.turns.retain(|(_, uuid)| *uuid != message.uuid);
+                // stdin is gone, so no later message can arrive either.
+                stdin.close();
+                self.control.close();
+                self.dropped(&message).await;
+            }
+        }
+    }
+
+    /// Queues a follow-up for the CLI. It is a turn already: the CLI can answer it before the
+    /// writer reports writing it (PLX-523).
+    async fn follow_up(&mut self, follow_up: FollowUp, stdin: &mut Stdin) {
+        let message = Message::with_priority(
+            Some(follow_up.turn_id),
+            &follow_up.text,
+            &follow_up.images,
+            true,
+            follow_up.steer,
+        );
+        let (turn_id, uuid) = (message.turn_id, message.uuid.clone());
+        match stdin.send(message) {
+            Ok(()) => {
+                self.turns.push_back((turn_id, uuid.clone()));
+                self.unreported.insert(uuid);
+            }
+            Err(message) => self.dropped(&message).await,
+        }
     }
 
     /// Cancels the run: the SDK's `interrupt()` ends the CLI's turn as `SIGINT` did (0004 [11]),
@@ -1783,11 +1799,7 @@ impl Driver {
     /// turn as dropped.
     async fn drop_undelivered(&mut self, mut stdin: Stdin) {
         self.control.close();
-        let mut late = Vec::new();
         while let Ok(follow_up) = self.control.try_recv() {
-            late.push(follow_up);
-        }
-        for follow_up in late {
             let message = Message::new(
                 Some(follow_up.turn_id),
                 &follow_up.text,

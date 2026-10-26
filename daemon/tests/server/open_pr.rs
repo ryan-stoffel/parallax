@@ -6,19 +6,17 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::methods::{
-    AgentCancel, AgentList, AgentOpenPr, AgentStart, RepoAdd, ThreadStart,
-};
+use parallax_protocol::methods::{AgentCancel, AgentList, AgentOpenPr, AgentStart, ThreadStart};
 use parallax_protocol::{
-    AccountChoice, AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind,
-    ParallaxEvent, ProjectId, RepoAddParams, RepoId, RunId, ThreadStartParams,
+    AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind, ParallaxEvent,
+    RepoId, RunId, ThreadStartParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, find_program};
 use tempfile::TempDir;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, git, init, project_params, real_repo, start_params,
+    Conn, Host, create, end_turn, fake, git, init, project_params, real_repo, scope, start_params,
     subscribe, text, until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
@@ -151,31 +149,7 @@ pub(crate) fn add_origin(repo: &Path, dir: &Path) -> PathBuf {
 }
 
 pub(crate) fn thread(repo: Option<RepoId>) -> ThreadStartParams {
-    ThreadStartParams {
-        run_id: RunId::generate(),
-        repo,
-        project: None,
-        parent: None,
-        notify: None,
-        title: None,
-        prompt: "Rewrite the README".to_owned(),
-        account: Some(AccountChoice::Subscription {
-            backend: "fake".to_owned(),
-        }),
-        model: None,
-        effort: None,
-        permission: None,
-        context_window: None,
-        fast: None,
-        branch_slug: None,
-        images: Vec::new(),
-        approvals: false,
-        checkout: false,
-        base: None,
-        checkout_ref: None,
-        threads: Vec::new(),
-        naming: None,
-    }
+    crate::threads::start_params(repo, "Rewrite the README")
 }
 
 pub(crate) fn open(run_id: RunId, title: &str, body: Option<&str>) -> AgentOpenPrParams {
@@ -257,20 +231,8 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
     let repo = real_repo(work.path());
     let host = start(temp_dir(), editing(), &tools);
     let mut client = host.client().await;
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: repo.to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
-    subscribe(
-        &mut client,
-        ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
-        0,
-    )
-    .await;
+    let entry = client.add(&repo).await;
+    subscribe(&mut client, scope(entry.id), 0).await;
     let start = thread(Some(entry.id));
     let run_id = start.run_id;
     client.call::<ThreadStart>(start).await.unwrap();
@@ -313,7 +275,7 @@ async fn a_thread_s_pull_request_says_what_is_missing() {
     let start = thread(None);
     let scratch = start.run_id;
     let started = client.call::<ThreadStart>(start).await.unwrap();
-    let scope = ProjectId::try_from(uuid::Uuid::from(started.thread.repo)).unwrap();
+    let scope = scope(started.thread.repo);
     subscribe(&mut client, scope, 0).await;
     // Not the first thread's `agent.updated` for the pull request it linked.
     until(&mut client, |event| {

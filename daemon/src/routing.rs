@@ -527,32 +527,32 @@ async fn drive_with_fallback(
         {
             break failure.clone();
         }
-        restart_on_new_session(&mut sink, &request, &event);
-        if sink.emit(event).await.is_err() {
+        if !forward(&mut sink, &request, event).await {
             return;
         }
     };
 
-    if !matches!(
+    // Only a failure the key account can get past falls back, and only once it starts. Otherwise
+    // the original failure is the answer.
+    let eligible = matches!(
         failure.failure,
         FailureKind::NotSignedIn | FailureKind::RateLimited
-    ) {
-        let _ = sink.emit(finished_failed(failure)).await;
-        return;
-    }
-    let Ok(credential) = key_account::resolve(keys.as_ref(), provider, fallback_id) else {
+    );
+    let fallback = eligible
+        .then(|| key_account::resolve(keys.as_ref(), provider, fallback_id).ok())
+        .flatten()
+        .and_then(|credential| {
+            request.account = AccountRef {
+                id: fallback_id.to_string(),
+                credential,
+            };
+            start_resuming(&backend, request.clone()).ok()
+        });
+    let Some(started) = fallback else {
         let _ = sink.emit(finished_failed(failure)).await;
         return;
     };
     let to_account = fallback_id.to_string();
-    request.account = AccountRef {
-        id: to_account.clone(),
-        credential,
-    };
-    let Ok(started) = start_resuming(&backend, request.clone()) else {
-        let _ = sink.emit(finished_failed(failure)).await;
-        return;
-    };
     run.swap(&started.run);
     sink.reset_usage(usage_baseline(&request));
     if sink
@@ -568,11 +568,16 @@ async fn drive_with_fallback(
     }
     let mut fallback_events = started.events;
     while let Some(event) = fallback_events.next().await {
-        restart_on_new_session(&mut sink, &request, &event);
-        if sink.emit(event).await.is_err() {
+        if !forward(&mut sink, &request, event).await {
             return;
         }
     }
+}
+
+/// Emits `event` to `sink`, after [`restart_on_new_session`]. `false` once nothing reads `sink`.
+async fn forward(sink: &mut EventSink, request: &RunRequest, event: Event) -> bool {
+    restart_on_new_session(sink, request, &event);
+    sink.emit(event).await.is_ok()
 }
 
 /// Starts `request` on `backend`. When it resumes a session with a

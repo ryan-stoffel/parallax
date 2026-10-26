@@ -24,12 +24,7 @@ impl WorktreeManager {
     /// [`WorktreeError::Io`] creating the folder, or [`WorktreeError::GitFailed`],
     /// [`WorktreeError::Timeout`], or [`WorktreeError::Spawn`] from running git.
     pub async fn init_scratch(&self, path: &Path) -> Result<(), WorktreeError> {
-        tokio::fs::create_dir_all(path)
-            .await
-            .map_err(|source| WorktreeError::Io {
-                path: path.to_owned(),
-                source,
-            })?;
+        super::create_dir_all(path).await?;
         if path.join(".git").is_dir()
             && self
                 .run_git(path, &["rev-parse", "--verify", "--quiet", "HEAD"])
@@ -59,8 +54,8 @@ impl WorktreeManager {
                 "Start a parallax scratch folder",
             ],
         )
-        .await?;
-        Ok(())
+        .await
+        .map(drop)
     }
 
     /// Fetches `commit` and what it needs from the repository at `from` into the scratch
@@ -82,8 +77,8 @@ impl WorktreeManager {
             path,
             &["fetch", "--quiet", "--no-tags", "--", &from, commit],
         )
-        .await?;
-        Ok(())
+        .await
+        .map(drop)
     }
 }
 

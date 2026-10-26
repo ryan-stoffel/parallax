@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use common::{ToolCall, fake_api, worker_request};
+use common::{ToolCall, Worktree, claude_under_test, fake_api, worker_request};
 use plxd::backend::claude::ClaudeBackend;
 use plxd::backend::process::{Environment, Launcher};
 use plxd::backend::run_temp::RunTemp;
@@ -244,8 +244,7 @@ fn done() -> Outcome {
 /// CLI offered, so the probe runs, and the same call later runs without asking.
 #[tokio::test]
 async fn a_manual_coordinator_runs_bash_once_plxd_allows_it() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -284,8 +283,7 @@ async fn a_manual_coordinator_runs_bash_once_plxd_allows_it() {
 #[tokio::test]
 async fn a_manual_coordinator_skips_bash_that_plxd_denies() {
     const DENIAL: &str = "Not now: Parallax's test denies this call.";
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -316,8 +314,7 @@ async fn a_manual_coordinator_skips_bash_that_plxd_denies() {
 /// denies its Bash without asking anyone, and the turn goes on.
 #[tokio::test]
 async fn a_manual_coordinator_without_approvals_is_denied_without_asking() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -344,17 +341,11 @@ async fn a_manual_coordinator_without_approvals_is_denied_without_asking() {
 /// [`PROBE`], and a request for a worker there in `permission`, on an API key, whose client
 /// answers permission requests. Keep the [`RunTemp`] until the run is over.
 fn worker(folders: &Folders, permission: AgentPermission) -> (PathBuf, RunRequest, RunTemp) {
-    let worktree = folders.data.join("worktrees/run");
-    let context = folders.data.join("context/p");
-    let git_dir = folders.root.join("repo/.git");
-    for folder in [&worktree, &context, &git_dir] {
-        fs::create_dir_all(folder).unwrap();
-    }
-    fs::write(
-        worktree.join(".git"),
-        format!("gitdir: {}/worktrees/run\n", git_dir.display()),
-    )
-    .unwrap();
+    let Worktree {
+        path: worktree,
+        git_dir,
+        context,
+    } = common::worktree(&folders.root, &folders.data);
     fs::write(worktree.join("probe.sh"), PROBE).unwrap();
     let (mut request, temp) =
         worker_request(&folders.home, &folders.data, &worktree, &git_dir, &context);
@@ -368,8 +359,7 @@ fn worker(folders: &Folders, permission: AgentPermission) -> (PathBuf, RunReques
 /// Bash (0013), and its `Write` asks. plxd allows it, and the file is written.
 #[tokio::test]
 async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -406,8 +396,7 @@ async fn a_manual_worker_asks_before_writing_but_not_before_sandboxed_bash() {
 /// sandboxed worker's commands can't.
 #[tokio::test]
 async fn a_thread_commits_in_its_worktree_once_plxd_allows_it() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -476,8 +465,7 @@ async fn a_thread_commits_in_its_worktree_once_plxd_allows_it() {
 #[tokio::test]
 async fn a_plan_worker_hands_its_plan_to_plxd_and_leaves_plan_mode_on_its_allow() {
     const PLAN: &str = "1. Add a README.\n2. Link it from the docs.\n";
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -535,8 +523,7 @@ async fn a_plan_worker_hands_its_plan_to_plxd_and_leaves_plan_mode_on_its_allow(
 /// the global config, which even `--restricted` reads, names a shared one (PLX-251).
 #[tokio::test]
 async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_read_it() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -618,8 +605,7 @@ async fn a_worker_keeps_its_plan_with_the_task_tools_where_its_commands_cannot_r
 /// turns them on.
 #[tokio::test]
 async fn a_coordinator_keeps_its_plan_with_the_task_tools_on_any_model() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -633,8 +619,7 @@ async fn a_coordinator_keeps_its_plan_with_the_task_tools_on_any_model() {
 /// A worker in Bypass Permissions, which has no `--tools` either, does the same (PLX-249).
 #[tokio::test]
 async fn a_bypass_worker_keeps_its_plan_with_the_task_tools_on_any_model() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();
@@ -795,8 +780,7 @@ fn session_and_cursor(events: &[Event]) -> (String, String) {
 /// follows that turn in the transcript, and a plain resume after that follows the rewound turn.
 #[tokio::test]
 async fn a_session_resumes_forks_and_rewinds_through_the_sdk() {
-    let Some(claude) = std::env::var_os("PLX_SANDBOX_CLAUDE") else {
-        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    let Some(claude) = claude_under_test() else {
         return;
     };
     let folders = Folders::new();

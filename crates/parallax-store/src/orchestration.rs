@@ -213,18 +213,17 @@ impl Store {
                 row.get(4)?,
             ))
         })?;
-        let mut claimed = Vec::new();
-        for row in rows {
+        rows.map(|row| {
             let (id, thread_id, kind, payload, attempts) = row?;
-            claimed.push(ClaimedEffect {
+            Ok(ClaimedEffect {
                 id,
                 thread_id: Uuid::parse_str(&thread_id)?,
                 kind,
                 payload,
                 attempts,
-            });
-        }
-        Ok(claimed)
+            })
+        })
+        .collect()
     }
 
     /// When the next effect that waits on its backoff becomes available, if one does. A thread

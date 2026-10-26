@@ -166,9 +166,7 @@ impl App {
     /// the thread works, by its folder when it has one on this computer.
     /// Each line fits in `width`, so a long title can't wrap under the mark.
     fn header(&self, width: u16) -> Vec<Line<'static>> {
-        let provider = self
-            .provider()
-            .map_or_else(|| "host default".to_owned(), |id| self.provider_name(id));
+        let provider = self.provider_label();
         let title = match &self.open {
             Some(open) => self.title(open.run),
             None => "new thread".to_owned(),
@@ -176,7 +174,7 @@ impl App {
         let place = self
             .folder()
             .map_or_else(|| self.place(), |folder| tilde(&folder));
-        let effort = self.effort.or_else(|| self.open_run()?.effort);
+        let effort = self.current_effort();
         let text = [
             vec![],
             vec![],
@@ -372,10 +370,7 @@ impl App {
             let left = format!("next message: {}", changes.join(" · "));
             frame.render_widget(Paragraph::new(left).fg(BLUE), area);
         }
-        let effort = self
-            .effort
-            .or_else(|| self.open_run()?.effort)
-            .unwrap_or(AgentEffort::Unknown);
+        let effort = self.current_effort().unwrap_or(AgentEffort::Unknown);
         let symbol = match effort {
             AgentEffort::Low => "○",
             AgentEffort::High => "●",
@@ -475,13 +470,10 @@ impl App {
             .map_or(0, |(tokens, window)| tokens * 100 / window.max(1));
         let cost = transcript.map_or(0, |transcript| transcript.cost_micros);
         let dot = || Span::from(" · ").dark_gray();
-        let provider = self
-            .provider()
-            .map_or_else(|| "host default".to_owned(), |id| self.provider_name(id));
         let first = Line::from(vec![
             Span::from(self.model_label()).bold(),
             dot(),
-            Span::from(provider),
+            Span::from(self.provider_label()),
             dot(),
             Span::from(self.place()).fg(Color::Green),
             dot(),

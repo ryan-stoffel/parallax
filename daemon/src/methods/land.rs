@@ -22,15 +22,14 @@ use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentPolicy, AgentSendParams, AgentStatus, ErrorKind, InboxKind, LandApproveParams,
-    LandQueueParams, LandResult, LandSendBackParams, Landing, LandingStatus, ProjectId, RunId,
-    TurnId,
+    AgentPolicy, AgentStatus, ErrorKind, InboxKind, LandApproveParams, LandQueueParams, LandResult,
+    LandSendBackParams, Landing, LandingStatus, ProjectId, RunId, TurnId,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use super::Context;
-use super::agent::check_message;
+use super::agent::{check_message, plain_message};
 use crate::agents;
 use crate::server::Daemon;
 use crate::store::store_error;
@@ -81,56 +80,20 @@ pub(super) async fn queue(
                 .ok_or_else(|| agents::run_not_found(run_id))?;
             let task = task(&run.fields.prompt);
             // Even while a child sent back works, `land` only says where it is.
-            let existing = store.landing(run.id).map_err(|e| store_error(&e))?;
-            if let Some(existing) = existing
-                && [WAITING, QUEUED, SENT_BACK].contains(&existing.status.as_str())
-            {
-                crate::commands::complete(
-                    store,
-                    command_id,
-                    &LandResult {
-                        landing: landing(&existing)?,
-                    },
-                )?;
-                return Ok((existing, task, false));
-            }
-            let worktree = store.get_worktree(run.id).map_err(|e| store_error(&e))?;
-            let snapshot = agents::snapshot(&run, worktree.as_ref())?;
-            let project = store
-                .get_project(run.fields.project_id)
-                .map_err(|e| store_error(&e))?;
-            let Some(project) = project else {
-                return Err(refused(format!("run {run_id} isn't in a Project")));
+            let existing = store
+                .landing(run.id)
+                .map_err(|e| store_error(&e))?
+                .filter(|existing| {
+                    [WAITING, QUEUED, SENT_BACK].contains(&existing.status.as_str())
+                });
+            let fresh = existing.is_none();
+            let row = if let Some(existing) = existing {
+                existing
+            } else {
+                let row = new_landing(store, &run, run_id)?;
+                store.put_landing(&row).map_err(|e| store_error(&e))?;
+                row
             };
-            if snapshot.policy == AgentPolicy::NoWrite {
-                return Err(refused(format!(
-                    "run {run_id} is the Project's coordinator, which never lands"
-                )));
-            }
-            if snapshot.explore {
-                return Err(refused(format!(
-                    "run {run_id} was started with explore, so it never lands"
-                )));
-            }
-            if snapshot.branch.is_none() || snapshot.diff.is_none() {
-                return Err(refused(format!(
-                    "run {run_id} has no branch with a commit to land"
-                )));
-            }
-            if snapshot.status != AgentStatus::Completed {
-                return Err(refused(format!(
-                    "run {run_id} hasn't finished: land it once it has completed"
-                )));
-            }
-            let row = parallax_store::Landing {
-                run_id: run.id,
-                project_id: project.id,
-                status: if project.auto_land { QUEUED } else { WAITING }.to_owned(),
-                conflicts: 0,
-                failures: 0,
-                queued_at: Timestamp::now(),
-            };
-            store.put_landing(&row).map_err(|e| store_error(&e))?;
             crate::commands::complete(
                 store,
                 command_id,
@@ -138,7 +101,7 @@ pub(super) async fn queue(
                     landing: landing(&row)?,
                 },
             )?;
-            Ok((row, task, true))
+            Ok((row, task, fresh))
         })
         .await?;
     let landing = landing(&row)?;
@@ -146,6 +109,50 @@ pub(super) async fn queue(
         queued(&context.daemon, &landing, &task, "ready to land").await;
     }
     Ok(LandResult { landing })
+}
+
+/// `run`'s new place in its Project's queue, or why it can't land.
+fn new_landing(
+    store: &parallax_store::Store,
+    run: &parallax_store::Run,
+    run_id: RunId,
+) -> Result<parallax_store::Landing, ErrorObject> {
+    let worktree = store.get_worktree(run.id).map_err(|e| store_error(&e))?;
+    let snapshot = agents::snapshot(run, worktree.as_ref())?;
+    let project = store
+        .get_project(run.fields.project_id)
+        .map_err(|e| store_error(&e))?;
+    let Some(project) = project else {
+        return Err(refused(format!("run {run_id} isn't in a Project")));
+    };
+    if snapshot.policy == AgentPolicy::NoWrite {
+        return Err(refused(format!(
+            "run {run_id} is the Project's coordinator, which never lands"
+        )));
+    }
+    if snapshot.explore {
+        return Err(refused(format!(
+            "run {run_id} was started with explore, so it never lands"
+        )));
+    }
+    if snapshot.branch.is_none() || snapshot.diff.is_none() {
+        return Err(refused(format!(
+            "run {run_id} has no branch with a commit to land"
+        )));
+    }
+    if snapshot.status != AgentStatus::Completed {
+        return Err(refused(format!(
+            "run {run_id} hasn't finished: land it once it has completed"
+        )));
+    }
+    Ok(parallax_store::Landing {
+        run_id: run.id,
+        project_id: project.id,
+        status: if project.auto_land { QUEUED } else { WAITING }.to_owned(),
+        conflicts: 0,
+        failures: 0,
+        queued_at: Timestamp::now(),
+    })
 }
 
 /// `land/approve`: a waiting child lands in its turn.
@@ -162,25 +169,23 @@ pub(super) async fn approve(
     let result = LandResult {
         landing: landing(&row)?,
     };
-    let stored_row = row.clone();
     let command_id = context.command_id;
     context
         .daemon
         .store
         .run(&context.cancel, move |db| {
-            db.put_landing(&stored_row).map_err(|e| store_error(&e))?;
+            db.put_landing(&row).map_err(|e| store_error(&e))?;
             crate::commands::complete(
                 db,
                 command_id,
                 &LandResult {
-                    landing: landing(&stored_row)?,
+                    landing: landing(&row)?,
                 },
             )
         })
         .await?;
-    let landing = result.landing;
-    drive(&context.daemon, landing.project);
-    Ok(LandResult { landing })
+    drive(&context.daemon, result.landing.project);
+    Ok(result)
 }
 
 /// `land/sendBack`: a waiting child gets the user's message instead, and is queued again when
@@ -796,21 +801,7 @@ pub(crate) async fn working(daemon: &Arc<Daemon>, run_id: RunId) -> Result<bool,
 /// Sends `run_id` a message as the user's, queued behind any turn in progress (PLX-370). One
 /// from Parallax says so in its text.
 async fn send(daemon: &Arc<Daemon>, run_id: RunId, text: String) -> Result<(), ErrorObject> {
-    let params = AgentSendParams {
-        run_id,
-        turn_id: TurnId::generate(),
-        text,
-        model: None,
-        effort: None,
-        permission: None,
-        context_window: None,
-        fast: None,
-        account: None,
-        images: Vec::new(),
-        threads: Vec::new(),
-        from: None,
-        delivery: None,
-    };
+    let params = plain_message(run_id, TurnId::generate(), text, None);
     daemon
         .agents
         .detached(agents::send_from_parallax(Arc::clone(daemon), params))

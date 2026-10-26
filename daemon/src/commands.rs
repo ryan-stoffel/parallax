@@ -133,12 +133,6 @@ impl Commands {
     }
 }
 
-impl Default for Commands {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Whether `method` keeps a receipt, 0052's or the orchestrator's.
 #[must_use]
 pub(crate) fn keeps_receipt(method: &str) -> bool {
@@ -154,12 +148,11 @@ pub(crate) fn take_command_id(request: &mut Request) -> Result<Option<Uuid>, Err
     let Some(value) = map.remove("commandId") else {
         return Ok(None);
     };
-    let Some(text) = value.as_str() else {
-        return Err(ErrorObject::invalid_params("commandId must be a UUID"));
-    };
-    Uuid::parse_str(text)
+    value
+        .as_str()
+        .and_then(|text| Uuid::parse_str(text).ok())
         .map(Some)
-        .map_err(|_| ErrorObject::invalid_params("commandId must be a UUID"))
+        .ok_or_else(|| ErrorObject::invalid_params("commandId must be a UUID"))
 }
 
 /// SHA-256 of `params` serialized again, without `commandId`.
@@ -210,22 +203,15 @@ where
     let ran = std::panic::AssertUnwindSafe(handler(params))
         .catch_unwind()
         .await;
-    match ran {
-        Ok(Ok(result)) => {
-            let outcome = serde_json::to_value(&result).map_err(ErrorObject::internal_error);
-            finish(daemon, &id, outcome.clone()).await?;
-            outcome
-        }
-        Ok(Err(error)) => {
-            finish(daemon, &id, Err(error.clone())).await?;
-            Err(error)
-        }
-        Err(_) => {
-            let error = ErrorObject::internal_error("the request failed unexpectedly");
-            finish(daemon, &id, Err(error.clone())).await?;
-            Err(error)
-        }
-    }
+    let outcome = match ran {
+        Ok(Ok(result)) => serde_json::to_value(&result).map_err(ErrorObject::internal_error),
+        Ok(Err(error)) => Err(error),
+        Err(_) => Err(ErrorObject::internal_error(
+            "the request failed unexpectedly",
+        )),
+    };
+    finish(daemon, &id, outcome.clone()).await?;
+    outcome
 }
 
 /// Adds `commandId` to serialized params for a write `plxd mcp` retries with the same request.
@@ -321,19 +307,21 @@ async fn claim<M: RequestMethod>(
 async fn wait_for(
     waiting: &mut watch::Receiver<Option<CommandOutcome>>,
 ) -> Result<Option<Result<Value, ErrorObject>>, ErrorObject> {
-    match waiting.borrow().clone() {
-        Some(CommandOutcome::Ready(ready)) => return Ok(Some(ready)),
-        Some(CommandOutcome::AppliedError(error)) => return Ok(Some(Err(error))),
-        None => {}
+    let closed = || ErrorObject::internal_error("the command waiter closed");
+    if let Some(outcome) = outcome_of(waiting) {
+        return Ok(Some(outcome));
     }
-    waiting
-        .changed()
-        .await
-        .map_err(|_| ErrorObject::internal_error("the command waiter closed"))?;
-    match waiting.borrow().clone() {
-        Some(CommandOutcome::Ready(ready)) => Ok(Some(ready)),
-        Some(CommandOutcome::AppliedError(error)) => Ok(Some(Err(error))),
-        None => Err(ErrorObject::internal_error("the command waiter closed")),
+    waiting.changed().await.map_err(|_| closed())?;
+    outcome_of(waiting).map(Some).ok_or_else(closed)
+}
+
+/// What the owner of a claim reported to `waiting`, once it has.
+fn outcome_of(
+    waiting: &watch::Receiver<Option<CommandOutcome>>,
+) -> Option<Result<Value, ErrorObject>> {
+    match waiting.borrow().clone()? {
+        CommandOutcome::Ready(ready) => Some(ready),
+        CommandOutcome::AppliedError(error) => Some(Err(error)),
     }
 }
 
@@ -362,17 +350,13 @@ async fn finish(
                     let row = db
                         .command_receipt(&id)
                         .map_err(|e| store_error(&e))?
-                        .ok_or_else(|| {
-                            ErrorObject::internal_error("the command receipt disappeared")
-                        })?;
+                        .ok_or_else(receipt_disappeared)?;
                     if row.result.is_none()
                         && !db
                             .fill_command_receipt(&id, &json)
                             .map_err(|e| store_error(&e))?
                     {
-                        return Err(ErrorObject::internal_error(
-                            "the command receipt disappeared",
-                        ));
+                        return Err(receipt_disappeared());
                     }
                 }
                 (Ok(_), false) => match db.command_receipt(&id).map_err(|e| store_error(&e))? {
@@ -412,12 +396,14 @@ pub(crate) fn complete<T: Serialize>(
             .fill_command_receipt(&id.hyphenated().to_string(), &json)
             .map_err(|e| store_error(&e))?
         {
-            return Err(ErrorObject::internal_error(
-                "the command receipt disappeared",
-            ));
+            return Err(receipt_disappeared());
         }
     }
     Ok(())
+}
+
+fn receipt_disappeared() -> ErrorObject {
+    ErrorObject::internal_error("the command receipt disappeared")
 }
 
 fn decode_stored(json: &str) -> Result<Result<Value, ErrorObject>, ErrorObject> {

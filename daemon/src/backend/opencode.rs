@@ -32,10 +32,10 @@
 //! images as `data:` file parts before its text, the model as `providerID/modelID`, Plan's
 //! `plan` agent, and a coordinator's instructions as `system` (0078); a turn ends when the
 //! session goes idle after it went busy for the prompt, or with a `session.error`, which fails
-//! the run. A follow-up sent during a turn waits for it. A
-//! steer (PLX-370) aborts the turn (`POST /session/<id>/abort`) and then goes as the next
-//! prompt, as ACP agents take one. Once no turn is in flight, nothing waits, and plxd holds no
-//! message for it ([`Run::hold`]), the run ends; a later message resumes the session.
+//! the run. A follow-up sent during a turn waits for it. A steer (PLX-370) aborts the turn
+//! (`POST /session/<id>/abort`) and then goes as the next prompt, as ACP agents take one. Once no
+//! turn is in flight, nothing waits, and plxd holds no message for it
+//! ([`Run::hold`](super::Run::hold)), the run ends; a later message resumes the session.
 //!
 //! Only threads and a Project's coordinator run here (`RunRequest::full_agent`, 0042): `OpenCode`
 //! has no worker sandbox plxd can check. A thread with `approvals` or Bypass gets its
@@ -51,8 +51,9 @@
 //! denied too, since a subagent's session keeps only its parent's denials, and the `question`
 //! tool is always denied, since the app has no card for it. A `permission.asked` is answered by
 //! level as ACP agents' requests are ([`stream::Translator`]), else becomes
-//! [`Event::ApprovalRequested`], and [`Run::answer`] replies `once` or `reject`. A rejection
-//! carries a message, the user's or a default, since `OpenCode` ends the turn on one without;
+//! [`Event::ApprovalRequested`], and [`Run::answer`](super::Run::answer) replies `once` or
+//! `reject`. A rejection carries a message, the user's or a default, since `OpenCode` ends the
+//! turn on one without;
 //! only an interrupt goes without and aborts. Without `approvals`, plxd rejects what its level
 //! doesn't allow. Rejecting one request makes `OpenCode` reject the session's other pending ones
 //! with no message (`permission.replied`), which plxd withdraws; that still ends the turn,
@@ -82,12 +83,13 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
 
 use self::stream::{Ask, Step, Translator};
+use super::acp::StopRun;
 use super::event::{Event, Failure, FailureKind, Outcome, WarningKind};
 use super::process::{CancelPolicy, Launcher, Output, Process, ProcessSpec, StdinMode};
 use super::{
-    AgentPermission, Answer, AnswerError, ApiKey, ApprovalId, Backend, CancelSwitch, Capabilities,
-    Credential, Decision, EVENT_BUFFER, EventSink, FollowUp, Held, PromptImage, Run, RunHandle,
-    RunId, RunRequest, SendError, StartError, Started, TurnId, check_argument,
+    AgentPermission, Answer, ApiKey, ApprovalId, Backend, CancelSwitch, Capabilities, Credential,
+    Decision, EVENT_BUFFER, EventSink, FollowUp, Held, PromptImage, RunHandle, RunRequest,
+    StartError, Started, TurnId, check_argument,
 };
 
 /// The variable that names the server an instance uses.
@@ -742,38 +744,9 @@ impl Backend for OpencodeBackend {
         };
         tokio::spawn(driver.run());
         Ok(Started {
-            run: Arc::new(OpencodeRun { handle, stop }),
+            run: Arc::new(StopRun { handle, stop }),
             events,
         })
-    }
-}
-
-/// The run's handle: [`RunHandle`], plus waking the driver on cancel.
-struct OpencodeRun {
-    handle: RunHandle,
-    stop: Arc<Notify>,
-}
-
-impl Run for OpencodeRun {
-    fn id(&self) -> RunId {
-        self.handle.id()
-    }
-
-    fn send(&self, message: FollowUp) -> Result<(), SendError> {
-        self.handle.send(message)
-    }
-
-    fn cancel(&self) {
-        self.handle.cancel();
-        self.stop.notify_one();
-    }
-
-    fn answer(&self, answer: Answer) -> Result<(), AnswerError> {
-        self.handle.answer(answer)
-    }
-
-    fn hold(&self, held: bool) {
-        self.handle.hold(held);
     }
 }
 
@@ -976,28 +949,18 @@ impl Driver {
                         })
                         .await;
                     }
-                    Some(Output::Exited(exit)) => {
-                        let message = format!(
-                            "lost the OpenCode server's events: {}",
-                            exit.stderr_tail
-                        );
-                        self.failure = Some(Failure::new(FailureKind::Crashed, message));
-                    }
-                    None => {
-                        let message = "lost the OpenCode server's events".to_owned();
-                        self.failure = Some(Failure::new(FailureKind::Crashed, message));
-                    }
+                    Some(Output::Exited(exit)) => self.crashed(format!(
+                        "lost the OpenCode server's events: {}",
+                        exit.stderr_tail
+                    )),
+                    None => self.crashed("lost the OpenCode server's events".to_owned()),
                 },
                 output = next(&mut self.serve) => match output {
                     Some(Output::Line(_) | Output::Oversized { .. }) => {}
                     Some(Output::Exited(exit)) => {
-                        let message = format!("opencode serve exited: {}", exit.stderr_tail);
-                        self.failure = Some(Failure::new(FailureKind::Crashed, message));
+                        self.crashed(format!("opencode serve exited: {}", exit.stderr_tail));
                     }
-                    None => {
-                        let message = "opencode serve exited".to_owned();
-                        self.failure = Some(Failure::new(FailureKind::Crashed, message));
-                    }
+                    None => self.crashed("opencode serve exited".to_owned()),
                 },
                 answer = self.answers.recv(), if answers_open => match answer {
                     Some(answer) => self.answer(answer).await,
@@ -1011,14 +974,16 @@ impl Driver {
                 () = self.sink.closed(), if !self.switch.is_cancelled() => self.switch.cancel(),
                 () = self.held.changed() => {}
             }
-            if let Some(failure) = &self.failure
-                && self.in_flight.is_some()
-            {
+            if self.failure.is_some() && self.in_flight.is_some() {
                 // The turn ends with the run.
-                let message = failure.message.clone();
-                self.finish_turn(Some(message)).await;
+                self.finish_turn(true).await;
             }
         }
+    }
+
+    /// The server or its event stream is gone: the run fails with `message`.
+    fn crashed(&mut self, message: String) {
+        self.failure = Some(Failure::new(FailureKind::Crashed, message));
     }
 
     async fn line(&mut self, line: &[u8]) {
@@ -1061,18 +1026,18 @@ impl Driver {
                         self.emit(Event::ApprovalWithdrawn { approval_id }).await;
                     }
                 }
-                Step::Idle => self.finish_turn(None).await,
+                Step::Idle => self.finish_turn(false).await,
                 Step::Failed(message) if self.in_flight.is_some() => {
-                    self.failure = Some(Failure::new(classify(&message), message.clone()));
-                    self.finish_turn(Some(message)).await;
+                    self.failure = Some(Failure::new(classify(&message), message));
+                    self.finish_turn(true).await;
                 }
                 Step::Failed(detail) => self.emit(Event::Notice { detail }).await,
             }
         }
     }
 
-    /// Ends the turn in flight, failed with `error` or else with its text as its result.
-    async fn finish_turn(&mut self, error: Option<String>) {
+    /// Ends the turn in flight: `failed`, or with its text as its result.
+    async fn finish_turn(&mut self, failed: bool) {
         let Some(InFlight(turn_id)) = self.in_flight.take() else {
             return;
         };
@@ -1080,13 +1045,12 @@ impl Driver {
             self.emit(event).await;
         }
         let text = self.translator.take_text();
-        let failed = error.is_some();
-        let result = if error.is_none() {
+        let result = if failed {
+            None
+        } else {
             self.results += 1;
             self.last_result.clone_from(&text);
             text
-        } else {
-            None
         };
         self.emit(Event::TurnFinished {
             turn_id,
@@ -1122,8 +1086,8 @@ impl Driver {
         .await;
         let path = self.path(&format!("/session/{}/prompt_async", self.session));
         if let Err(message) = self.call("POST", &path, &body).await {
-            self.failure = Some(Failure::new(classify(&message), message.clone()));
-            self.finish_turn(Some(message)).await;
+            self.failure = Some(Failure::new(classify(&message), message));
+            self.finish_turn(true).await;
         }
     }
 

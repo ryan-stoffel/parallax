@@ -65,6 +65,14 @@ const SECTIONS: [(BoardSection, &str); 3] = [
 // ponytail: one lock for every Project's render; per-Project locks if boards change often.
 static RENDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+fn status(done: bool) -> BoardStatus {
+    if done {
+        BoardStatus::Done
+    } else {
+        BoardStatus::Open
+    }
+}
+
 fn status_key(status: BoardStatus) -> &'static str {
     if status == BoardStatus::Done {
         "done"
@@ -86,11 +94,7 @@ fn entry(row: parallax_store::BoardItem) -> Result<BoardItem, ErrorObject> {
     let corrupt = || ErrorObject::internal_error(format!("board item {} is corrupt", row.id));
     Ok(BoardItem {
         id: u64::try_from(row.id).map_err(|_| corrupt())?,
-        status: if row.status == "done" {
-            BoardStatus::Done
-        } else {
-            BoardStatus::Open
-        },
+        status: status(row.status == "done"),
         section: match row.section.as_str() {
             "now" => BoardSection::Now,
             "next" => BoardSection::Next,
@@ -484,6 +488,16 @@ fn write_if_changed(
     if same {
         return Ok(());
     }
+    write_as_plxd(daemon, project, name, content)
+}
+
+/// Writes `content` to `name` in `project`'s context folder, as plxd.
+fn write_as_plxd(
+    daemon: &Daemon,
+    project: ProjectId,
+    name: &str,
+    content: &str,
+) -> Result<(), ErrorObject> {
     write_context_file(
         daemon,
         project,
@@ -563,11 +577,7 @@ async fn migrate_project(daemon: &Arc<Daemon>, project: ProjectId) -> Result<(),
                 let item = BoardItem {
                     id: 0,
                     text: parsed.text,
-                    status: if parsed.done {
-                        BoardStatus::Done
-                    } else {
-                        BoardStatus::Open
-                    },
+                    status: status(parsed.done),
                     section: parsed.section,
                     links: BoardLinks::default(),
                     created_at: now,
@@ -609,14 +619,7 @@ fn keep_originals(
         let (bytes, metadata) = if let Some(kept) = read(legacy)? {
             kept
         } else if let Some((bytes, metadata)) = read(name)? {
-            write_context_file(
-                daemon,
-                project,
-                legacy,
-                &String::from_utf8_lossy(&bytes),
-                Some("plxd".to_owned()),
-                ContextWriteId::generate(),
-            )?;
+            write_as_plxd(daemon, project, legacy, &String::from_utf8_lossy(&bytes))?;
             (bytes, metadata)
         } else {
             continue;

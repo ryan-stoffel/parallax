@@ -296,7 +296,7 @@ async fn create(
         approvals: true,
         explore: false,
         thread: Some(NewThread {
-            scratch,
+            scratch: scratch.clone(),
             branch_slug: None,
             checkout: repo.is_some(),
             git_ref: None,
@@ -313,10 +313,6 @@ async fn create(
             }),
         }),
     };
-    let scratch = new
-        .thread
-        .as_ref()
-        .and_then(|thread| thread.scratch.clone());
     let mut created = match agents::create(Arc::clone(&daemon), new).await {
         Ok(created) => created,
         Err(error) => {
@@ -497,11 +493,21 @@ fn transcript(
     source: ImportSource,
     messages: &[Message],
 ) -> Option<(String, Vec<Vec<AgentOutputItem>>)> {
-    let first = messages
-        .iter()
-        .position(|m| matches!(m, Message::User(_)))?;
-    let Message::User(prompt) = &messages[first] else {
-        return None;
+    let (first, prompt) =
+        messages
+            .iter()
+            .enumerate()
+            .find_map(|(index, message)| match message {
+                Message::User(text) => Some((index, text)),
+                Message::Agent(_) => None,
+            })?;
+    let started = |turn_id, text| AgentOutputItem::TurnStarted {
+        turn_id,
+        text,
+        wake: false,
+        from: None,
+        images: Vec::new(),
+        threads: Vec::new(),
     };
     let mut items = vec![
         AgentOutputItem::Notice {
@@ -512,14 +518,7 @@ fn transcript(
                 _ => format!("Imported from the {} app.", app_name(source)),
             },
         },
-        AgentOutputItem::TurnStarted {
-            turn_id: None,
-            text: None,
-            wake: false,
-            from: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-        },
+        started(None, None),
     ];
     let mut turn = None;
     let finished = |turn_id| AgentOutputItem::TurnFinished {
@@ -538,14 +537,7 @@ fn transcript(
                 items.push(finished(turn));
                 let id = TurnId::generate();
                 turn = Some(id);
-                items.push(AgentOutputItem::TurnStarted {
-                    turn_id: Some(id),
-                    text: Some(truncate(text, MAX_TEXT_ITEM_BYTES)),
-                    wake: false,
-                    from: None,
-                    images: Vec::new(),
-                    threads: Vec::new(),
-                });
+                items.push(started(Some(id), Some(truncate(text, MAX_TEXT_ITEM_BYTES))));
             }
         }
     }
@@ -558,11 +550,7 @@ fn transcript(
 
 /// `text` cut to at most `max` bytes on a character boundary, with no note.
 fn truncate_to(text: &str, max: usize) -> String {
-    let mut end = text.len().min(max);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    text[..end].to_owned()
+    text[..text.floor_char_boundary(max)].to_owned()
 }
 
 /// A title from a session's first message: its first line, cut short.

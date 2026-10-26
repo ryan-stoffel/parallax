@@ -36,6 +36,25 @@ fn add_ignored_and_links(folder: &Path) {
     std::os::unix::fs::symlink("/etc/hosts", folder.join("hosts")).unwrap();
 }
 
+/// A finished thread in a worktree of [`repo_with_ignores`], with [`add_ignored_and_links`]'s
+/// entries: its host, a client subscribed to its events, its repo entry, its run, and its
+/// worktree.
+async fn worktree_thread() -> (Host, Conn, RepoId, RunId, PathBuf) {
+    let host = Host::start(fake(editing()));
+    let path = repo_with_ignores(host.work.path());
+    let mut client = host.client().await;
+    let repo = client.add(&path).await;
+    client.subscribe(0, Some(scope(repo.id))).await;
+    let started = client
+        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
+        .await
+        .unwrap();
+    client.until(updated_to(AgentStatus::Completed)).await;
+    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
+    add_ignored_and_links(&worktree);
+    (host, client, repo.id, started.run.id, worktree)
+}
+
 async fn list(
     client: &mut Conn,
     run_id: RunId,
@@ -104,19 +123,7 @@ async fn text(client: &mut Conn, run_id: RunId, path: &str) -> String {
 
 #[tokio::test]
 async fn a_worktree_threads_files_list_by_folder_without_git_or_ignored_entries() {
-    let host = Host::start(fake(editing()));
-    let path = repo_with_ignores(host.work.path());
-    let mut client = host.client().await;
-    let repo = client.add(&path).await;
-    client.subscribe(0, Some(scope(repo.id))).await;
-    let started = client
-        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
-        .await
-        .unwrap();
-    let run_id = started.run.id;
-    client.until(updated_to(AgentStatus::Completed)).await;
-    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
-    add_ignored_and_links(&worktree);
+    let (_host, mut client, _, run_id, worktree) = worktree_thread().await;
 
     let root = list(&mut client, run_id, None).await.unwrap();
     assert_eq!(
@@ -196,19 +203,7 @@ async fn a_worktree_threads_files_list_by_folder_without_git_or_ignored_entries(
 /// only, by the same path rules as a whole read.
 #[tokio::test]
 async fn a_worktree_threads_files_read_in_slices_by_the_same_rules() {
-    let host = Host::start(fake(editing()));
-    let path = repo_with_ignores(host.work.path());
-    let mut client = host.client().await;
-    let repo = client.add(&path).await;
-    client.subscribe(0, Some(scope(repo.id))).await;
-    let started = client
-        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
-        .await
-        .unwrap();
-    let run_id = started.run.id;
-    client.until(updated_to(AgentStatus::Completed)).await;
-    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
-    add_ignored_and_links(&worktree);
+    let (_host, mut client, _, run_id, worktree) = worktree_thread().await;
     std::fs::write(worktree.join("big.bin"), vec![0; 4 * 1024 * 1024 + 1]).unwrap();
 
     let working = AgentFileSide::Working;
@@ -376,19 +371,7 @@ async fn delete(client: &mut Conn, run_id: RunId, path: &str) -> Result<(), Erro
 
 #[tokio::test]
 async fn files_and_folders_are_created_renamed_and_deleted_inside_the_threads_folder() {
-    let host = Host::start(fake(editing()));
-    let path = repo_with_ignores(host.work.path());
-    let mut client = host.client().await;
-    let repo = client.add(&path).await;
-    client.subscribe(0, Some(scope(repo.id))).await;
-    let started = client
-        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
-        .await
-        .unwrap();
-    let run_id = started.run.id;
-    client.until(updated_to(AgentStatus::Completed)).await;
-    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
-    add_ignored_and_links(&worktree);
+    let (_host, mut client, _, run_id, worktree) = worktree_thread().await;
 
     create(&mut client, run_id, "src/util", true).await.unwrap();
     create(&mut client, run_id, "src/util/mod.rs", false)
@@ -500,19 +483,7 @@ async fn repo_grep_stops_at_its_cap_and_skips_overlong_lines() {
 
 #[tokio::test]
 async fn repo_grep_finds_lines_in_a_threads_folder_ignoring_case_and_ignored_files() {
-    let host = Host::start(fake(editing()));
-    let path = repo_with_ignores(host.work.path());
-    let mut client = host.client().await;
-    let repo = client.add(&path).await;
-    client.subscribe(0, Some(scope(repo.id))).await;
-    let started = client
-        .call::<ThreadStart>(start_params(Some(repo.id), "Write some notes"))
-        .await
-        .unwrap();
-    let run_id = started.run.id;
-    client.until(updated_to(AgentStatus::Completed)).await;
-    let worktree = PathBuf::from(started.run.worktree_path.unwrap());
-    add_ignored_and_links(&worktree);
+    let (_host, mut client, repo, run_id, worktree) = worktree_thread().await;
     std::fs::write(worktree.join("src/new.rs"), "// Written later\nfn h() {}\n").unwrap();
 
     // The thread's own NOTES.md and an untracked file match; ignored debug.log never does.
@@ -544,10 +515,7 @@ async fn repo_grep_finds_lines_in_a_threads_folder_ignoring_case_and_ignored_fil
             .is_empty()
     );
     assert_eq!(
-        grep(&mut client, "fn f(", Some(repo.id), None)
-            .await
-            .unwrap()[0]
-            .path,
+        grep(&mut client, "fn f(", Some(repo), None).await.unwrap()[0].path,
         "src/lib.rs"
     );
     let error = grep(&mut client, "  ", None, Some(run_id))

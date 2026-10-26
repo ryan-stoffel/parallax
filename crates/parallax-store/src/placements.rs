@@ -58,17 +58,16 @@ impl Store {
                 row.get(3)?,
             ))
         })?;
-        let mut placements = Vec::new();
-        for row in rows {
+        rows.map(|row| {
             let (run, project, prompt, extra) = row?;
-            placements.push(Placement {
+            Ok(Placement {
                 run_id: Uuid::parse_str(&run)?,
                 project_id: Uuid::parse_str(&project)?,
                 prompt,
                 extra,
-            });
-        }
-        Ok(placements)
+            })
+        })
+        .collect()
     }
 
     /// Takes run `run_id` out of the placement queue. Returns whether it was there.

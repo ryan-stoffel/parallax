@@ -13,6 +13,7 @@ use plxd::launch_agent::LaunchAgent;
 use plxd::logging::{self, DEFAULT_LOG_LEVEL, LOG_LEVEL_ENV, LogFilter};
 use plxd::paths::{DATA_DIR_ENV, DataDir};
 use plxd::remote;
+use plxd::self_update::Handover;
 use plxd::server::{
     self, Config, EXIT_ALREADY_RUNNING, EXIT_WITH_ENV, Server, Shutdown, StartError,
 };
@@ -270,10 +271,7 @@ fn main() -> ExitCode {
 }
 
 fn sdk_process(args: &SdkProcessArgs) -> ! {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("SDK process runtime");
+    let runtime = current_thread_runtime().expect("SDK process runtime");
     let (program, rest) = args.command.split_first().expect("clap requires a command");
     let result = runtime.block_on(plxd::backend::process::sdk_process(program, rest));
     if let Err(error) = result {
@@ -286,9 +284,7 @@ fn sdk_process(args: &SdkProcessArgs) -> ! {
 
 /// Runs `mcp` and exits with `std::process::exit`, for the same reason as [`attach`].
 fn mcp(args: &McpArgs) -> ! {
-    let report = |message: &dyn std::fmt::Display| {
-        let _ = writeln!(io::stderr(), "plxd mcp: {message}");
-    };
+    let report = reporter("mcp");
     let dir = DataDir::resolve(args.data_dir.as_deref());
     let (socket, data_dir) = match dir.and_then(|dir| Ok((dir.socket_path()?, dir))) {
         Ok((socket, dir)) => (socket.path, dir),
@@ -297,16 +293,10 @@ fn mcp(args: &McpArgs) -> ! {
             std::process::exit(EXIT_UNAVAILABLE.into());
         }
     };
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            report(&format!("could not start the runtime: {error}"));
-            std::process::exit(1);
-        }
-    };
+    let runtime = current_thread_runtime().unwrap_or_else(|error| {
+        report(&format!("could not start the runtime: {error}"));
+        std::process::exit(1)
+    });
     let (stdin, stdout) = (tokio::io::stdin(), tokio::io::stdout());
     let binding = plxd::mcp::thread::Binding {
         plxd: plxd::peer::Plxd::local(socket),
@@ -325,9 +315,7 @@ fn mcp(args: &McpArgs) -> ! {
 /// Runs `tui` and exits with `std::process::exit`, since the thread reading keys never returns.
 /// It starts plxd as `attach` does, then its client opens connections of its own.
 fn tui(args: &TuiArgs) -> ! {
-    let report = |message: &dyn std::fmt::Display| {
-        let _ = writeln!(io::stderr(), "plxd tui: {message}");
-    };
+    let report = reporter("tui");
     let exit = |message: &dyn std::fmt::Display, code: u8| -> ! {
         report(message);
         std::process::exit(code.into())
@@ -355,9 +343,7 @@ fn tui(args: &TuiArgs) -> ! {
         connect_timeout: DEFAULT_CONNECT_TIMEOUT,
         launch_agent: LaunchAgent::installed_for(&data_dir),
     };
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
+    let runtime = current_thread_runtime()
         .unwrap_or_else(|error| exit(&format!("could not start the runtime: {error}"), 1));
     // Windows' pipe client connects inside the runtime, as in `attach`.
     let entered = runtime.enter();
@@ -412,12 +398,9 @@ fn attach(args: &AttachArgs) -> ! {
         connect_timeout: args.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
         launch_agent: LaunchAgent::installed_for(&data_dir),
     };
-    let runtime = || match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => failed(&format!("could not start the runtime: {error}")),
+    let runtime = || {
+        current_thread_runtime()
+            .unwrap_or_else(|error| failed(&format!("could not start the runtime: {error}")))
     };
     // On Unix, starting plxd happens here, before the runtime exists (0023). Windows' pipe
     // client needs the runtime to connect.
@@ -481,19 +464,11 @@ const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Runs `dial` and exits with `std::process::exit`, for the same reason as [`attach`].
 fn dial(args: &DialArgs) -> ! {
-    let report = |message: &dyn std::fmt::Display| {
-        let _ = writeln!(io::stderr(), "plxd dial: {message}");
-    };
-    let runtime = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            report(&format!("could not start the runtime: {error}"));
-            std::process::exit(1);
-        }
-    };
+    let report = reporter("dial");
+    let runtime = current_thread_runtime().unwrap_or_else(|error| {
+        report(&format!("could not start the runtime: {error}"));
+        std::process::exit(1)
+    });
     if args.remote.is_some() || args.pair || args.discover {
         std::process::exit(runtime.block_on(dial_remote(args, &report)));
     }
@@ -551,16 +526,14 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
         _ => EXIT_UNAVAILABLE.into(),
     };
     if args.discover {
-        let found = tokio::task::spawn_blocking(|| remote::discover(DISCOVER_WAIT)).await;
+        let found = tokio::task::spawn_blocking(|| remote::discover(DISCOVER_WAIT))
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|found| found.map_err(|error| error.to_string()));
         return match found {
-            Ok(Ok(found)) => {
-                let json = serde_json::to_string(&found).expect("plain JSON");
-                let _ = writeln!(io::stdout(), "{json}");
+            Ok(found) => {
+                print_json(&found);
                 0
-            }
-            Ok(Err(error)) => {
-                report(&format!("could not look for computers: {error}"));
-                1
             }
             Err(error) => {
                 report(&format!("could not look for computers: {error}"));
@@ -577,8 +550,7 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
         let name = args.name.as_deref().unwrap_or_default();
         return match remote::pair(&args.addresses, code.trim(), name, data_dir.root()).await {
             Ok(paired) => {
-                let json = serde_json::to_string(&paired).expect("plain JSON");
-                let _ = writeln!(io::stdout(), "{json}");
+                print_json(&paired);
                 0
             }
             Err(error) => {
@@ -602,6 +574,12 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             1
         }
     }
+}
+
+/// Prints `value` as one line of JSON on stdout.
+fn print_json(value: &impl serde::Serialize) {
+    let json = serde_json::to_string(value).expect("plain JSON");
+    let _ = writeln!(io::stdout(), "{json}");
 }
 
 /// Stores the `connect` setting in the data folder's store, for an install script (0056).
@@ -689,32 +667,33 @@ fn serve(args: &ServeArgs) -> ExitCode {
             tokio::spawn(plxd::self_update::remove_aside(exe));
         }
         match server.run(shutdown).await {
-            Ok(()) => {
-                // `host/update` shut it down to hand over to the plxd it installed (PLX-700).
-                match plxd::self_update::take_handover() {
-                    Some(plxd::self_update::Handover::Spawn(program)) => {
-                        match plxd::self_update::start_serve(&program, &data_dir) {
-                            Ok(()) => {
-                                info!(program = %program.display(), "started the updated plxd");
-                            }
-                            Err(error) => error!(%error, "could not start the updated plxd"),
-                        }
-                    }
-                    // The service manager restarts it, from the path the update replaced.
-                    Some(plxd::self_update::Handover::Exit) => {
-                        info!("exiting for the service manager to start the updated plxd");
-                        return ExitCode::from(plxd::self_update::EXIT_RESTART);
-                    }
-                    None => {}
-                }
-                ExitCode::SUCCESS
-            }
+            Ok(()) => hand_over(&data_dir),
             Err(error) => {
                 error!(%error, "stopped with an error");
                 fail(&error.to_string())
             }
         }
     })
+}
+
+/// What `serve` exits with once its server stopped cleanly. `host/update` may have shut it down
+/// to hand over to the plxd it installed (PLX-700).
+fn hand_over(data_dir: &DataDir) -> ExitCode {
+    match plxd::self_update::take_handover() {
+        Some(Handover::Spawn(program)) => {
+            match plxd::self_update::start_serve(&program, data_dir) {
+                Ok(()) => info!(program = %program.display(), "started the updated plxd"),
+                Err(error) => error!(%error, "could not start the updated plxd"),
+            }
+            ExitCode::SUCCESS
+        }
+        // The service manager restarts it, from the path the update replaced.
+        Some(Handover::Exit) => {
+            info!("exiting for the service manager to start the updated plxd");
+            ExitCode::from(plxd::self_update::EXIT_RESTART)
+        }
+        None => ExitCode::SUCCESS,
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", windows))]
@@ -898,6 +877,20 @@ fn wait_for_exit(pid: u32) {
 fn fail(message: &str) -> ExitCode {
     eprintln!("plxd: {message}");
     ExitCode::FAILURE
+}
+
+/// A runtime on this thread, for a command that serves one connection.
+fn current_thread_runtime() -> io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+
+/// Writes `plxd <command>: <message>` to stderr, as [`report`] does for `attach`.
+fn reporter(command: &'static str) -> impl Fn(&dyn std::fmt::Display) {
+    move |message| {
+        let _ = writeln!(io::stderr(), "plxd {command}: {message}");
+    }
 }
 
 /// Names the command plxd runs as, for a launcher that can't name the program itself: the

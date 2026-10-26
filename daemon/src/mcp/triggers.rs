@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::thread::{Binding, find_run};
-use super::{MAX_TEXT_BYTES, check_text, parse, pretty};
+use super::{MAX_TEXT_BYTES, check_text, object, parse, pretty, tool};
 use crate::worktree::github_pr_urls;
 
 /// The tools this module serves, in [`definitions`]' order.
@@ -51,22 +51,6 @@ const REGISTER: &str = "Register every pull request you open for this thread, in
     reason = "one schema per tool, read side by side"
 )]
 pub fn definitions() -> Vec<Value> {
-    let object = |properties: Value, required: &[&str]| {
-        json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false,
-        })
-    };
-    let tool = |name: &str, description: &str, schema: Value, read_only: bool| {
-        json!({
-            "name": name,
-            "description": description,
-            "inputSchema": schema,
-            "annotations": {"readOnlyHint": read_only, "destructiveHint": false},
-        })
-    };
     let schedule = json!({
         "type": "object",
         "description": "The trigger, as an object, never JSON text: {type:'interval', everyMs:3600000} is hourly; {type:'fixed_time', timeOfDay:'09:00', weekdays:[1,2,3,4,5]} is weekday mornings in the host's time zone; {type:'webhook'} runs once per request to a generated URL.",
@@ -259,7 +243,6 @@ struct ThreadArgs {
 }
 
 /// Runs tool `name`, one of [`TOOLS`], for the caller bound in `binding`.
-#[expect(clippy::too_many_lines, reason = "one arm per tool")]
 pub(super) async fn call(
     binding: &Binding,
     name: &str,
@@ -267,35 +250,7 @@ pub(super) async fn call(
 ) -> Result<String, String> {
     let plxd = &binding.plxd;
     match name {
-        "schedule_task" => {
-            let ScheduleArgs {
-                prompt,
-                schedule,
-                title,
-                enabled,
-                bind_to_current_thread,
-            } = parse(arguments)?;
-            check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
-            let title = title.unwrap_or_else(|| first_line(&prompt));
-            let mut params = ScheduleSaveParams {
-                id: None,
-                title,
-                prompt,
-                enabled: enabled.unwrap_or(true),
-                schedule,
-                thread: None,
-                project: None,
-                repo: None,
-                account: None,
-                model: None,
-                effort: None,
-                permission: None,
-                from: Some(binding.run),
-            };
-            bind(binding, &mut params, bind_to_current_thread.unwrap_or(true)).await?;
-            let task = plxd.call::<ScheduleSave>(params).await?;
-            Ok(pretty(&shown(&task)))
-        }
+        "schedule_task" => schedule(binding, parse(arguments)?).await,
         "list_scheduled_tasks" => {
             let tasks = plxd
                 .call::<ScheduleList>(ScheduleListParams {})
@@ -305,47 +260,7 @@ pub(super) async fn call(
                 &json!({"tasks": tasks.iter().map(shown).collect::<Vec<_>>()}),
             ))
         }
-        "update_scheduled_task" => {
-            let UpdateArgs {
-                scheduled_task_id,
-                prompt,
-                title,
-                schedule,
-                enabled,
-                bind_to_current_thread,
-            } = parse(arguments)?;
-            let tasks = plxd
-                .call::<ScheduleList>(ScheduleListParams {})
-                .await?
-                .tasks;
-            let task = tasks
-                .into_iter()
-                .find(|task| task.id == scheduled_task_id)
-                .ok_or_else(|| format!("no scheduled task has id {scheduled_task_id}"))?;
-            if let Some(prompt) = &prompt {
-                check_text("prompt", prompt, MAX_TEXT_BYTES)?;
-            }
-            let mut params = ScheduleSaveParams {
-                id: Some(task.id),
-                title: title.unwrap_or(task.title),
-                prompt: prompt.unwrap_or(task.prompt),
-                enabled: enabled.unwrap_or(task.enabled),
-                schedule: schedule.unwrap_or(task.schedule),
-                thread: task.thread,
-                project: task.project,
-                repo: task.repo,
-                account: task.account,
-                model: task.model,
-                effort: task.effort,
-                permission: task.permission,
-                from: Some(binding.run),
-            };
-            if let Some(bound) = bind_to_current_thread {
-                bind(binding, &mut params, bound).await?;
-            }
-            let task = plxd.call::<ScheduleSave>(params).await?;
-            Ok(pretty(&shown(&task)))
-        }
+        "update_scheduled_task" => update(binding, parse(arguments)?).await,
         "delete_scheduled_task" => {
             let TaskArgs { scheduled_task_id } = parse(arguments)?;
             let deleted = plxd
@@ -369,58 +284,141 @@ pub(super) async fn call(
         }
         "list_thread_pull_requests" => {
             let ThreadArgs { thread_id } = parse(arguments)?;
-            let run_id = thread_id.unwrap_or(binding.run);
-            let run = find_run(plxd, run_id).await?;
-            let watched = plxd
-                .call::<PrWatches>(PrWatchesParams { run_id })
-                .await?
-                .urls;
-            let listed: Vec<Value> = run
-                .pull_requests
-                .iter()
-                .map(|url| {
-                    let mut entry = identity(url);
-                    entry["watching"] = json!(watched.contains(url));
-                    entry
-                })
-                .collect();
-            Ok(pretty(&json!({"pullRequests": listed})))
+            pull_requests(binding, thread_id.unwrap_or(binding.run)).await
         }
-        _ => {
-            let target: TargetArgs = parse(arguments)?;
-            let run_id = target.thread_id.unwrap_or(binding.run);
-            let url = target_url(target)?;
-            let params = PrViewParams {
-                run_id,
-                url: url.clone(),
-            };
-            let mut answer = identity(&url);
-            match name {
-                "link_pull_request" | "unlink_pull_request" => {
-                    let before = find_run(plxd, run_id).await?.pull_requests.contains(&url);
-                    if name == "link_pull_request" {
-                        plxd.call::<PrLink>(params).await?;
-                        answer["alreadyLinked"] = json!(before);
-                    } else {
-                        plxd.call::<PrUnlink>(params).await?;
-                        answer["wasLinked"] = json!(before);
-                    }
-                }
-                "pull_request_status" => return Ok(pretty(&plxd.call::<PrStatus>(params).await?)),
-                "watch_pull_request" | "unwatch_pull_request" => {
-                    let result = if name == "watch_pull_request" {
-                        plxd.call::<PrWatch>(params).await?
-                    } else {
-                        plxd.call::<PrUnwatch>(params).await?
-                    };
-                    answer["watching"] = json!(result.watching);
-                    answer["wasWatching"] = json!(result.was_watching);
-                }
-                other => return Err(format!("no tool is named {other:?}")),
-            }
-            Ok(pretty(&answer))
-        }
+        _ => pull_request(binding, name, parse(arguments)?).await,
     }
+}
+
+/// `schedule_task`: a new task, bound to the caller's thread unless asked otherwise.
+async fn schedule(binding: &Binding, args: ScheduleArgs) -> Result<String, String> {
+    let ScheduleArgs {
+        prompt,
+        schedule,
+        title,
+        enabled,
+        bind_to_current_thread,
+    } = args;
+    check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
+    let title = title.unwrap_or_else(|| first_line(&prompt));
+    let mut params = ScheduleSaveParams {
+        id: None,
+        title,
+        prompt,
+        enabled: enabled.unwrap_or(true),
+        schedule,
+        thread: None,
+        project: None,
+        repo: None,
+        account: None,
+        model: None,
+        effort: None,
+        permission: None,
+        from: Some(binding.run),
+    };
+    bind(binding, &mut params, bind_to_current_thread.unwrap_or(true)).await?;
+    let task = binding.plxd.call::<ScheduleSave>(params).await?;
+    Ok(pretty(&shown(&task)))
+}
+
+/// `update_scheduled_task`: the task with the fields `args` passes changed.
+async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
+    let UpdateArgs {
+        scheduled_task_id,
+        prompt,
+        title,
+        schedule,
+        enabled,
+        bind_to_current_thread,
+    } = args;
+    let plxd = &binding.plxd;
+    let tasks = plxd
+        .call::<ScheduleList>(ScheduleListParams {})
+        .await?
+        .tasks;
+    let task = tasks
+        .into_iter()
+        .find(|task| task.id == scheduled_task_id)
+        .ok_or_else(|| format!("no scheduled task has id {scheduled_task_id}"))?;
+    if let Some(prompt) = &prompt {
+        check_text("prompt", prompt, MAX_TEXT_BYTES)?;
+    }
+    let mut params = ScheduleSaveParams {
+        id: Some(task.id),
+        title: title.unwrap_or(task.title),
+        prompt: prompt.unwrap_or(task.prompt),
+        enabled: enabled.unwrap_or(task.enabled),
+        schedule: schedule.unwrap_or(task.schedule),
+        thread: task.thread,
+        project: task.project,
+        repo: task.repo,
+        account: task.account,
+        model: task.model,
+        effort: task.effort,
+        permission: task.permission,
+        from: Some(binding.run),
+    };
+    if let Some(bound) = bind_to_current_thread {
+        bind(binding, &mut params, bound).await?;
+    }
+    let task = plxd.call::<ScheduleSave>(params).await?;
+    Ok(pretty(&shown(&task)))
+}
+
+/// `list_thread_pull_requests`: thread `run_id`'s pull requests, and whether each is watched.
+async fn pull_requests(binding: &Binding, run_id: RunId) -> Result<String, String> {
+    let plxd = &binding.plxd;
+    let run = find_run(plxd, run_id).await?;
+    let watched = plxd
+        .call::<PrWatches>(PrWatchesParams { run_id })
+        .await?
+        .urls;
+    let listed: Vec<Value> = run
+        .pull_requests
+        .iter()
+        .map(|url| {
+            let mut entry = identity(url);
+            entry["watching"] = json!(watched.contains(url));
+            entry
+        })
+        .collect();
+    Ok(pretty(&json!({"pullRequests": listed})))
+}
+
+/// The tools on one pull request: linking, unlinking, watching, unwatching, and its status.
+async fn pull_request(binding: &Binding, name: &str, target: TargetArgs) -> Result<String, String> {
+    let plxd = &binding.plxd;
+    let run_id = target.thread_id.unwrap_or(binding.run);
+    let url = target_url(target)?;
+    let params = PrViewParams {
+        run_id,
+        url: url.clone(),
+    };
+    let mut answer = identity(&url);
+    match name {
+        "link_pull_request" | "unlink_pull_request" => {
+            let before = find_run(plxd, run_id).await?.pull_requests.contains(&url);
+            if name == "link_pull_request" {
+                plxd.call::<PrLink>(params).await?;
+                answer["alreadyLinked"] = json!(before);
+            } else {
+                plxd.call::<PrUnlink>(params).await?;
+                answer["wasLinked"] = json!(before);
+            }
+        }
+        "pull_request_status" => return Ok(pretty(&plxd.call::<PrStatus>(params).await?)),
+        "watch_pull_request" | "unwatch_pull_request" => {
+            let result = if name == "watch_pull_request" {
+                plxd.call::<PrWatch>(params).await?
+            } else {
+                plxd.call::<PrUnwatch>(params).await?
+            };
+            answer["watching"] = json!(result.watching);
+            answer["wasWatching"] = json!(result.was_watching);
+        }
+        other => return Err(format!("no tool is named {other:?}")),
+    }
+    Ok(pretty(&answer))
 }
 
 /// Points a task at the caller's thread, or with `bound` false, at a fresh thread like it: in its

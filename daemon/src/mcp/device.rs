@@ -313,14 +313,8 @@ impl Devices {
     }
 
     async fn list(&self) -> Result<String, String> {
-        let (ios, ios_reason) = match &self.tools.ios {
-            Ok(ios) => split(ios_devices(ios).await),
-            Err(reason) => (Vec::new(), Some(reason.clone())),
-        };
-        let (android, android_reason) = match &self.tools.android {
-            Ok(android) => split(android_devices(android).await),
-            Err(reason) => (Vec::new(), Some(reason.clone())),
-        };
+        let (ios, ios_reason) = split(devices(&self.tools, Platform::Ios).await);
+        let (android, android_reason) = split(devices(&self.tools, Platform::Android).await);
         let platform = |platform: &str, reason: Option<String>| match reason {
             None => json!({"platform": platform, "available": true}),
             Some(reason) => json!({"platform": platform, "available": false, "reason": reason}),
@@ -348,15 +342,16 @@ impl Devices {
     async fn open(&self, args: OpenArgs) -> Result<String, String> {
         check_host(args.host_id.as_deref())?;
         let _lock = self.lock().await?;
-        let mut devices = Vec::new();
-        if let Ok(ios) = &self.tools.ios {
-            devices.extend(ios_devices(ios).await.unwrap_or_default());
-        }
-        if let Ok(android) = &self.tools.android {
-            devices.extend(android_devices(android).await.unwrap_or_default());
-        }
+        let mut listed = devices(&self.tools, Platform::Ios)
+            .await
+            .unwrap_or_default();
+        listed.extend(
+            devices(&self.tools, Platform::Android)
+                .await
+                .unwrap_or_default(),
+        );
         // Phones aren't simulators, so they don't count toward the one.
-        let (mut running, rest): (Vec<_>, Vec<_>) = devices
+        let (mut running, rest): (Vec<_>, Vec<_>) = listed
             .into_iter()
             .partition(|device| device.booted && !device.physical);
         // The one a thread has open stays: this thread's, then another's, then the requested one.
@@ -786,8 +781,16 @@ struct SimctlDevice {
     state: String,
 }
 
+/// The devices of `platform` on this computer, or why it can't run them.
+pub(crate) async fn devices(tools: &Toolchain, platform: Platform) -> Result<Vec<Device>, String> {
+    match platform {
+        Platform::Ios => ios_devices(tools.ios.as_ref()?).await,
+        Platform::Android => android_devices(tools.android.as_ref()?).await,
+    }
+}
+
 /// The available iOS Simulators.
-pub(crate) async fn ios_devices(ios: &Ios) -> Result<Vec<Device>, String> {
+async fn ios_devices(ios: &Ios) -> Result<Vec<Device>, String> {
     let args = ["simctl", "list", "devices", "available", "--json"];
     let listed = run(&ios.xcrun, &args, COMMAND_TIMEOUT).await?;
     let listed: SimctlList = serde_json::from_slice(&listed)
@@ -818,7 +821,7 @@ pub(crate) async fn ios_devices(ios: &Ios) -> Result<Vec<Device>, String> {
 }
 
 /// The running emulators and connected phones, then the AVDs that aren't running.
-pub(crate) async fn android_devices(android: &Android) -> Result<Vec<Device>, String> {
+async fn android_devices(android: &Android) -> Result<Vec<Device>, String> {
     let mut devices = Vec::new();
     for serial in serials(android).await? {
         devices.push(android_device(android, serial).await);
@@ -867,14 +870,7 @@ async fn serials(android: &Android) -> Result<Vec<String>, String> {
 async fn android_device(android: &Android, serial: String) -> Device {
     let emulator = serial.starts_with("emulator-");
     let name = if emulator {
-        first_line(
-            run(
-                &android.adb,
-                &["-s", &serial, "emu", "avd", "name"],
-                COMMAND_TIMEOUT,
-            )
-            .await,
-        )
+        avd_name(android, &serial).await
     } else {
         getprop(android, &serial, "ro.product.model").await
     };
@@ -891,6 +887,12 @@ async fn android_device(android: &Android, serial: String) -> Device {
         booted: true,
         physical: !emulator,
     }
+}
+
+/// The AVD emulator `serial` runs.
+async fn avd_name(android: &Android, serial: &str) -> Option<String> {
+    let args = ["-s", serial, "emu", "avd", "name"];
+    first_line(run(&android.adb, &args, COMMAND_TIMEOUT).await)
 }
 
 async fn getprop(android: &Android, serial: &str, name: &str) -> Option<String> {
@@ -938,10 +940,8 @@ async fn boot_avd(android: &Android, name: &str) -> Result<String, String> {
             ));
         }
         for serial in serials(android).await.unwrap_or_default() {
-            let args = ["-s", &serial, "emu", "avd", "name"];
             if serial.starts_with("emulator-")
-                && first_line(run(&android.adb, &args, COMMAND_TIMEOUT).await).as_deref()
-                    == Some(name)
+                && avd_name(android, &serial).await.as_deref() == Some(name)
                 && getprop(android, &serial, "sys.boot_completed")
                     .await
                     .as_deref()

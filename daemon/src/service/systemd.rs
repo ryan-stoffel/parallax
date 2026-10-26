@@ -150,11 +150,7 @@ pub fn install(
         stop_outside_serve(data_dir)?;
     }
     systemctl(&["restart", &name])?;
-    Ok(if state.loaded() {
-        InstallOutcome::Reinstalled
-    } else {
-        InstallOutcome::Installed
-    })
+    Ok(InstallOutcome::of(state.loaded()))
 }
 
 /// Removes the user unit for `label`: stops and disables it if systemd has it loaded, deletes
@@ -182,11 +178,7 @@ pub fn uninstall(label: &str) -> Result<UninstallOutcome, ServiceError> {
     if removed_file {
         systemctl(&["daemon-reload"])?;
     }
-    Ok(if was_loaded || removed_file {
-        UninstallOutcome::Removed
-    } else {
-        UninstallOutcome::NotInstalled
-    })
+    Ok(UninstallOutcome::of(was_loaded || removed_file))
 }
 
 /// Reports what systemd knows about `label`, and whether `data_dir`'s socket answers right now.

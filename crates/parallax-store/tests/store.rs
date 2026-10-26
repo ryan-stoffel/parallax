@@ -16,6 +16,12 @@ fn temp_db_path() -> (tempfile::TempDir, PathBuf) {
     (dir, path)
 }
 
+/// A store in a temporary directory, which lives as long as the `TempDir`.
+fn open_temp() -> (tempfile::TempDir, Store) {
+    let (dir, path) = temp_db_path();
+    (dir, Store::open(&path).expect("open"))
+}
+
 fn sample_fields() -> ProjectFields {
     ProjectFields {
         name: "parallax".to_string(),
@@ -96,8 +102,7 @@ fn reopening_an_existing_database_keeps_its_data() {
 
 #[test]
 fn creating_with_the_same_id_and_fields_is_idempotent() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
 
     let first = store
@@ -113,8 +118,7 @@ fn creating_with_the_same_id_and_fields_is_idempotent() {
 
 #[test]
 fn creating_with_the_same_id_and_different_fields_conflicts() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let mut other = sample_fields();
     other.name = "different-name".to_string();
@@ -139,8 +143,7 @@ fn creating_with_the_same_id_and_different_fields_conflicts() {
 
 #[test]
 fn a_project_is_created_with_its_icon_and_the_icon_is_part_of_the_retry_check() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let fields = ProjectFields {
         icon: Some(icon("rocket", Some("green"))),
@@ -181,8 +184,7 @@ fn a_project_is_created_with_its_icon_and_the_icon_is_part_of_the_retry_check() 
 
 #[test]
 fn update_renames_and_sets_the_icon_without_touching_the_rest() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let created = store
         .create_project(id, &sample_fields())
@@ -193,16 +195,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
             id,
             &ProjectEdit {
                 name: Some("renamed".to_string()),
-                icon: None,
-                permission: None,
-                autonomy: None,
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
+                ..ProjectEdit::default()
             },
         )
         .expect("a rename");
@@ -220,17 +213,8 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
         .update_project(
             id,
             &ProjectEdit {
-                name: None,
                 icon: Some(icon("rocket", Some("green"))),
-                permission: None,
-                autonomy: None,
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
+                ..ProjectEdit::default()
             },
         )
         .expect("an icon");
@@ -243,17 +227,8 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
         .update_project(
             id,
             &ProjectEdit {
-                name: None,
                 icon: Some(icon("rocket", None)),
-                permission: None,
-                autonomy: None,
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
+                ..ProjectEdit::default()
             },
         )
         .expect("an icon without a color");
@@ -271,8 +246,7 @@ fn update_renames_and_sets_the_icon_without_touching_the_rest() {
 /// back by get and list, and cleared by an icon sent without one.
 #[test]
 fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let with_image = ProjectIcon {
         image: Some(StoredImage {
@@ -297,17 +271,8 @@ fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
         .update_project(
             id,
             &ProjectEdit {
-                name: None,
                 icon: Some(icon("rocket", Some("green"))),
-                permission: None,
-                autonomy: None,
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
+                ..ProjectEdit::default()
             },
         )
         .expect("an icon without an image");
@@ -323,8 +288,7 @@ fn an_icon_image_round_trips_and_an_icon_without_one_clears_it() {
 /// the retry check, and an update changes it alone.
 #[test]
 fn a_projects_permission_mode_is_checked_on_retry_and_changed_by_update() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let fields = ProjectFields {
         permission: "bypass".to_string(),
@@ -364,8 +328,7 @@ fn a_projects_permission_mode_is_checked_on_retry_and_changed_by_update() {
 /// update changes it alone.
 #[test]
 fn a_projects_autonomy_level_is_checked_on_retry_and_changed_by_update() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let fields = ProjectFields {
         autonomy: "ask".to_string(),
@@ -403,8 +366,7 @@ fn a_projects_autonomy_level_is_checked_on_retry_and_changed_by_update() {
 /// keys, and its waiting children are kept oldest first until taken out or the Project is deleted.
 #[test]
 fn a_projects_placement_settings_and_waiting_children_are_stored() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let created = store.create_project(id, &sample_fields()).expect("create");
     assert_eq!((created.max_children, created.allow_api_keys), (10, false));
@@ -453,8 +415,7 @@ fn a_projects_placement_settings_and_waiting_children_are_stored() {
 /// given, and recording the integration branch fills in a base only when there was none.
 #[test]
 fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let created = store.create_project(id, &sample_fields()).expect("create");
     assert_eq!(
@@ -495,7 +456,6 @@ fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
             id,
             &ProjectEdit {
                 base_branch: Some("develop".to_string()),
-                auto_land: None,
                 ..ProjectEdit::default()
             },
         )
@@ -509,8 +469,7 @@ fn a_projects_branches_are_stored_and_a_retry_without_a_base_matches() {
 /// clears the proposal. Empty clears either.
 #[test]
 fn confirming_checks_clears_the_proposal_and_empty_clears_them() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     store.create_project(id, &sample_fields()).expect("create");
     let edit = |checks: Option<&str>, proposed: Option<&str>| ProjectEdit {
@@ -548,8 +507,7 @@ fn confirming_checks_clears_the_proposal_and_empty_clears_them() {
 /// 0057: a Project's computer is stored, read back, and cleared by an empty string.
 #[test]
 fn a_projects_computer_round_trips_and_empty_clears_it() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let created = store.create_project(id, &sample_fields()).expect("create");
     assert_eq!(created.computer, None, "a new Project runs on this plxd");
@@ -577,8 +535,7 @@ fn a_projects_computer_round_trips_and_empty_clears_it() {
 
 #[test]
 fn an_update_that_changes_nothing_reports_no_change() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let fields = ProjectFields {
         icon: Some(icon("rocket", Some("green"))),
@@ -591,15 +548,7 @@ fn an_update_that_changes_nothing_reports_no_change() {
         ProjectEdit {
             name: Some(fields.name.clone()),
             icon: fields.icon.clone(),
-            permission: None,
-            autonomy: None,
-            base_branch: None,
-            auto_land: None,
-            allow_api_keys: None,
-            max_children: None,
-            checks: None,
-            proposed_checks: None,
-            computer: None,
+            ..ProjectEdit::default()
         },
     ] {
         let (project, changed) = store.update_project(id, &edit).expect("update");
@@ -610,8 +559,7 @@ fn an_update_that_changes_nothing_reports_no_change() {
 
 #[test]
 fn update_of_a_missing_project_fails_with_not_found() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
 
     let err = store
@@ -619,16 +567,7 @@ fn update_of_a_missing_project_fails_with_not_found() {
             id,
             &ProjectEdit {
                 name: Some("renamed".to_string()),
-                icon: None,
-                permission: None,
-                autonomy: None,
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
+                ..ProjectEdit::default()
             },
         )
         .expect_err("update of a missing project should fail");
@@ -641,8 +580,7 @@ fn update_of_a_missing_project_fails_with_not_found() {
 
 #[test]
 fn delete_removes_the_project_and_is_idempotent() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     store
         .create_project(id, &sample_fields())
@@ -989,17 +927,8 @@ fn a_version_15_database_gains_project_icons_and_keeps_its_projects() {
         .update_project(
             id,
             &ProjectEdit {
-                name: None,
                 icon: Some(icon("rocket", Some("green"))),
-                permission: None,
-                autonomy: None,
-                base_branch: None,
-                auto_land: None,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
+                ..ProjectEdit::default()
             },
         )
         .expect("set an icon after migrating");
@@ -1092,8 +1021,7 @@ fn a_version_3_database_from_develop_migrates_to_usage_tables_and_keeps_its_acco
 
 #[test]
 fn creating_an_account_with_the_same_id_and_fields_is_idempotent() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
 
     let first = store
@@ -1110,8 +1038,7 @@ fn creating_an_account_with_the_same_id_and_fields_is_idempotent() {
 
 #[test]
 fn creating_an_account_with_the_same_id_and_different_fields_conflicts() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let id = Uuid::now_v7();
     let mut other = sample_account_fields();
     other.label = "Work".to_string();
@@ -1136,8 +1063,7 @@ fn creating_an_account_with_the_same_id_and_different_fields_conflicts() {
 
 #[test]
 fn accounts_list_oldest_first_and_delete_removes_them_idempotently() {
-    let (_dir, path) = temp_db_path();
-    let mut store = Store::open(&path).expect("open");
+    let (_dir, mut store) = open_temp();
     let first_id = Uuid::now_v7();
     store
         .create_account(first_id, &sample_account_fields())
@@ -1232,8 +1158,7 @@ fn stored_event(seq: u64, run_id: Option<Uuid>) -> StoredEvent {
 
 #[test]
 fn pruning_host_events_keeps_the_newest_and_leaves_run_events_alone() {
-    let (_dir, path) = temp_db_path();
-    let store = Store::open(&path).expect("open");
+    let (_dir, store) = open_temp();
     let run = Uuid::now_v7();
     // Interleave host events (no run_id) with run events, so pruning has to pick them out by
     // `run_id IS NULL` rather than by a contiguous range of `seq`.

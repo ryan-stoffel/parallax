@@ -7,19 +7,19 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{
-    AgentList, AgentStart, PrAct, PrDiff, PrView, RepoAdd, ThreadList, ThreadStart,
+    AgentList, AgentStart, PrAct, PrDiff, PrView, ThreadList, ThreadStart,
 };
 use parallax_protocol::{
     AgentListParams, AgentStatus, ErrorKind, ParallaxEvent, PrActParams, PrAction, PrState,
-    PrViewParams, ProjectId, RepoAddParams, RepoId, RunId, ThreadListParams,
+    PrViewParams, RunId, ThreadListParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{Event, ToolStatus};
 use serde_json::json;
 
 use crate::agents::{
-    Conn, create, end_turn, fake, init, project_params, real_repo, start_params, subscribe, until,
-    updated_to,
+    Conn, create, end_turn, fake, init, project_params, real_repo, scope, start_params, subscribe,
+    until, updated_to,
 };
 use crate::open_pr::{Tools, start, thread};
 use crate::support::{kind, temp_dir};
@@ -246,20 +246,8 @@ async fn merging_with_pr_act_archives_the_thread_before_the_next_sweep() {
     let repo = real_repo(work.path());
     let host = start(temp_dir(), opening(), &tools);
     let mut client = host.client().await;
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: repo.to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
-    subscribe(
-        &mut client,
-        ProjectId::try_from(uuid::Uuid::from(entry.id)).unwrap(),
-        0,
-    )
-    .await;
+    let entry = client.add(&repo).await;
+    subscribe(&mut client, scope(entry.id), 0).await;
     let start = thread(Some(entry.id));
     let run_id = start.run_id;
     client.call::<ThreadStart>(start).await.unwrap();

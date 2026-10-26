@@ -3,6 +3,9 @@ use rusqlite::{OptionalExtension, params};
 use crate::Store;
 use crate::error::StoreError;
 
+/// The `host_settings` key prefix for a thread's rollback in progress, before its id.
+const CHECKPOINT_REVERT: &str = "checkpoint_revert:";
+
 /// The `host_settings` key for whether usage limits make runs wait and resume (decision 0049).
 const AUTO_RESUME: &str = "auto_resume";
 
@@ -55,7 +58,7 @@ impl Store {
     /// # Errors
     /// A database error.
     pub fn checkpoint_revert(&self, thread: uuid::Uuid) -> Result<Option<String>, StoreError> {
-        self.text(&format!("checkpoint_revert:{thread}"))
+        self.text(&format!("{CHECKPOINT_REVERT}{thread}"))
     }
 
     /// Stores a rollback before provider mutation, or clears it with its completion receipt.
@@ -67,7 +70,7 @@ impl Store {
         thread: uuid::Uuid,
         pending: Option<&str>,
     ) -> Result<(), StoreError> {
-        self.set_text(&format!("checkpoint_revert:{thread}"), pending)
+        self.set_text(&format!("{CHECKPOINT_REVERT}{thread}"), pending)
     }
 
     /// Threads with an incomplete rollback, to resume their local steps after a restart.
@@ -91,7 +94,7 @@ impl Store {
     ///
     /// A database error.
     pub fn auto_resume(&self) -> Result<bool, StoreError> {
-        Ok(self.text(AUTO_RESUME)?.is_some_and(|value| value == "true"))
+        self.flag_default_off(AUTO_RESUME)
     }
 
     /// Whether a plain thread's turn a restart cut off gets "Continue where you left off." once
@@ -101,9 +104,7 @@ impl Store {
     ///
     /// A database error.
     pub fn continue_after_restart(&self) -> Result<bool, StoreError> {
-        Ok(self
-            .text(CONTINUE_AFTER_RESTART)?
-            .is_some_and(|value| value == "true"))
+        self.flag_default_off(CONTINUE_AFTER_RESTART)
     }
 
     /// Sets the host's continue-after-restart setting.
@@ -131,7 +132,7 @@ impl Store {
     ///
     /// A database error.
     pub fn clean_worktrees(&self) -> Result<bool, StoreError> {
-        self.flag(CLEAN_WORKTREES)
+        self.flag_default_on(CLEAN_WORKTREES)
     }
 
     /// Sets the host's worktree cleanup setting.
@@ -150,7 +151,7 @@ impl Store {
     ///
     /// A database error.
     pub fn connect(&self) -> Result<bool, StoreError> {
-        Ok(self.text(CONNECT)?.is_some_and(|value| value == "true"))
+        self.flag_default_off(CONNECT)
     }
 
     /// Sets the host's Parallax Connect setting.
@@ -204,7 +205,7 @@ impl Store {
     ///
     /// A database error.
     pub fn remote(&self) -> Result<bool, StoreError> {
-        Ok(self.text(REMOTE)?.is_some_and(|value| value == "true"))
+        self.flag_default_off(REMOTE)
     }
 
     /// Sets the host's remote setting.
@@ -223,7 +224,7 @@ impl Store {
     ///
     /// A database error.
     pub fn remote_web(&self) -> Result<bool, StoreError> {
-        Ok(self.text(REMOTE_WEB)?.is_some_and(|value| value == "true"))
+        self.flag_default_off(REMOTE_WEB)
     }
 
     /// Sets the host's web client setting.
@@ -242,7 +243,7 @@ impl Store {
     ///
     /// A database error.
     pub fn relay(&self) -> Result<bool, StoreError> {
-        Ok(self.text(RELAY)?.is_some_and(|value| value == "true"))
+        self.flag_default_off(RELAY)
     }
 
     /// Sets the host's relay setting.
@@ -346,8 +347,13 @@ impl Store {
     }
 
     /// A boolean host setting, on unless stored as `false`.
-    fn flag(&self, key: &str) -> Result<bool, StoreError> {
+    fn flag_default_on(&self, key: &str) -> Result<bool, StoreError> {
         Ok(self.text(key)?.is_none_or(|value| value != "false"))
+    }
+
+    /// A boolean host setting, off unless stored as `true`.
+    fn flag_default_off(&self, key: &str) -> Result<bool, StoreError> {
+        Ok(self.text(key)?.is_some_and(|value| value == "true"))
     }
 
     fn set_flag(&self, key: &str, on: bool) -> Result<(), StoreError> {

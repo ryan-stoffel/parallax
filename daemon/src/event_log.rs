@@ -220,23 +220,49 @@ pub(crate) fn kind_of(payload: &str) -> &str {
         .map_or("", |(kind, _)| kind)
 }
 
-/// Evicts from the front of `events` until it is within both `retention` and `max_bytes`,
-/// keeping `bytes` (the sum of what remains) in sync. Always leaves at least one event, so a
-/// single one over `max_bytes` on its own is never dropped outright. Shared by construction and
-/// by every publish, so the bound holds the same way whichever put the log over it.
-fn evict(
-    events: &mut VecDeque<Arc<Entry>>,
-    bytes: &mut usize,
-    floor: &mut u64,
-    retention: usize,
-    max_bytes: usize,
-) {
-    while events.len() > 1 && (events.len() > retention || *bytes > max_bytes) {
-        if let Some(evicted) = events.pop_front() {
-            *bytes = bytes.saturating_sub(evicted.bytes());
-            *floor = evicted.seq + 1;
+impl Inner {
+    /// Evicts from the front of `events` until it is within both `retention` and `max_bytes`,
+    /// keeping `bytes` (the sum of what remains) in sync. Always leaves at least one event, so a
+    /// single one over `max_bytes` on its own is never dropped outright. Shared by construction
+    /// and by every publish, so the bound holds the same way whichever put the log over it.
+    fn evict(&mut self, retention: usize, max_bytes: usize) {
+        while self.events.len() > 1 && (self.events.len() > retention || self.bytes > max_bytes) {
+            if let Some(evicted) = self.events.pop_front() {
+                self.bytes = self.bytes.saturating_sub(evicted.bytes());
+                self.floor = evicted.seq + 1;
+            }
         }
     }
+}
+
+/// The first of `entries` that fit a page, at most `limit` of them and `max_bytes` of their JSON
+/// but always at least one when any exists, with whether any were left: [`Store::run_events`]'s
+/// paging, for a log with no database.
+fn page<'a>(
+    entries: impl Iterator<Item = &'a Arc<Entry>>,
+    limit: usize,
+    max_bytes: usize,
+) -> (Vec<Arc<Entry>>, bool) {
+    let mut page = Vec::new();
+    let mut bytes = 0;
+    for entry in entries {
+        let size = entry.bytes();
+        if page.len() >= limit.max(1) || (!page.is_empty() && bytes + size > max_bytes) {
+            return (page, true);
+        }
+        bytes += size;
+        page.push(Arc::clone(entry));
+    }
+    (page, false)
+}
+
+/// A page the database read, as entries that keep the events they parsed.
+fn stored_page((stored, more): (Vec<StoredEvent>, bool)) -> (Vec<Arc<Entry>>, bool) {
+    let entries = stored
+        .into_iter()
+        .map(|stored| Arc::new(entry(stored, true)))
+        .collect();
+    (entries, more)
 }
 
 // The index of the first event after `after`. `seq`s increase but may have gaps: a deleted run's
@@ -299,13 +325,11 @@ impl EventLog {
                 Arc::new(entry(stored, false))
             })?
             .into();
-        let reader = match Store::open_read_only(path) {
-            Ok(reader) => Some(reader),
-            Err(error) => {
+        let reader = Store::open_read_only(path)
+            .inspect_err(|error| {
                 warn!(path = %path.display(), %error, "could not open a connection for the event log's reads; agent/events falls back to memory");
-                None
-            }
-        };
+            })
+            .ok();
         info!(log_id = %id, head, "opened the event log");
         Ok(Self::with(
             id,
@@ -323,7 +347,7 @@ impl EventLog {
         retention: usize,
         max_bytes: usize,
         host_retention: usize,
-        mut events: VecDeque<Arc<Entry>>,
+        events: VecDeque<Arc<Entry>>,
         head: u64,
         reader: Option<Store>,
     ) -> Self {
@@ -334,19 +358,18 @@ impl EventLog {
         // the newest `retention` host and project events, so keeping at least that many host
         // events never lets a restart's window skip one (0016).
         let host_retention = host_retention.max(retention);
-        let mut bytes = events.iter().map(|entry| entry.bytes()).sum();
-        let mut floor = events.front().map_or(head + 1, |entry| entry.seq);
-        evict(&mut events, &mut bytes, &mut floor, retention, max_bytes);
+        let mut inner = Inner {
+            bytes: events.iter().map(|entry| entry.bytes()).sum(),
+            floor: events.front().map_or(head + 1, |entry| entry.seq),
+            events,
+            head,
+        };
+        inner.evict(retention, max_bytes);
         Self {
             retention,
             max_bytes,
             host_retention,
-            inner: Mutex::new(Inner {
-                events,
-                bytes,
-                head,
-                floor,
-            }),
+            inner: Mutex::new(inner),
             reader: reader.map(Mutex::new),
             id,
             head_watch: watch::Sender::new(head),
@@ -408,19 +431,18 @@ impl EventLog {
         let Some(last) = entries.last().map(|entry| entry.seq) else {
             return;
         };
-        let mut inner = self.inner();
-        let Inner {
-            events,
-            bytes,
-            head,
-            floor,
-        } = &mut *inner;
+        self.push(&mut self.inner(), entries, last);
+    }
+
+    /// Adds `entries` to the window, moves `head` to `last`, and evicts, all under the lock
+    /// `inner` holds, then wakes watchers.
+    fn push(&self, inner: &mut Inner, entries: impl IntoIterator<Item = Entry>, last: u64) {
         for entry in entries {
-            *bytes += entry.bytes();
-            events.push_back(Arc::new(entry));
+            inner.bytes += entry.bytes();
+            inner.events.push_back(Arc::new(entry));
         }
-        *head = last;
-        evict(events, bytes, floor, self.retention, self.max_bytes);
+        inner.head = last;
+        inner.evict(self.retention, self.max_bytes);
         self.head_watch.send_replace(last);
     }
 
@@ -438,18 +460,7 @@ impl EventLog {
         // One lock for reading `head` and publishing, so two callers can't take the same `seq`.
         let mut inner = self.inner();
         let seq = inner.head + 1;
-        let Inner {
-            events,
-            bytes: total,
-            head,
-            floor,
-        } = &mut *inner;
-        let entry = Entry::new(seq, time, project, &event);
-        *total += entry.bytes();
-        events.push_back(Arc::new(entry));
-        *head = seq;
-        evict(events, total, floor, self.retention, self.max_bytes);
-        self.head_watch.send_replace(seq);
+        self.push(&mut inner, [Entry::new(seq, time, project, &event)], seq);
         seq
     }
 
@@ -467,29 +478,19 @@ impl EventLog {
     ) -> Result<(Vec<Arc<Entry>>, bool), StoreError> {
         if let Some(reader) = &self.reader {
             let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
-            let (stored, more) = db.run_events(run.into(), after, limit, max_bytes)?;
-            let entries = stored
-                .into_iter()
-                .map(|stored| Arc::new(entry(stored, true)))
-                .collect();
-            return Ok((entries, more));
+            return Ok(stored_page(db.run_events(
+                run.into(),
+                after,
+                limit,
+                max_bytes,
+            )?));
         }
         let inner = self.inner();
-        let mut entries = Vec::new();
-        let mut bytes = 0;
-        for entry in inner
+        let run_after = inner
             .events
             .iter()
-            .filter(|entry| entry.seq > after && entry.run == Some(run))
-        {
-            let size = entry.bytes();
-            if entries.len() >= limit.max(1) || (!entries.is_empty() && bytes + size > max_bytes) {
-                return Ok((entries, true));
-            }
-            bytes += size;
-            entries.push(Arc::clone(entry));
-        }
-        Ok((entries, false))
+            .filter(|entry| entry.seq > after && entry.run == Some(run));
+        Ok(page(run_after, limit, max_bytes))
     }
 
     /// `run`'s events before `before`, newest first, paged as [`EventLog::run_events`] pages
@@ -503,31 +504,20 @@ impl EventLog {
     ) -> Result<(Vec<Arc<Entry>>, bool), StoreError> {
         if let Some(reader) = &self.reader {
             let db = reader.lock().unwrap_or_else(PoisonError::into_inner);
-            let (stored, more) = db.run_events_before(run.into(), before, limit, max_bytes)?;
-            let entries = stored
-                .into_iter()
-                .map(|stored| Arc::new(entry(stored, true)))
-                .collect();
-            return Ok((entries, more));
+            return Ok(stored_page(db.run_events_before(
+                run.into(),
+                before,
+                limit,
+                max_bytes,
+            )?));
         }
         let inner = self.inner();
-        let mut entries = Vec::new();
-        let mut bytes = 0;
-        let mut more = false;
-        for event in inner
+        let run_before = inner
             .events
             .iter()
             .rev()
-            .filter(|entry| entry.seq < before && entry.run == Some(run))
-        {
-            let size = event.bytes();
-            if entries.len() >= limit.max(1) || (!entries.is_empty() && bytes + size > max_bytes) {
-                more = true;
-                break;
-            }
-            bytes += size;
-            entries.push(Arc::clone(event));
-        }
+            .filter(|entry| entry.seq < before && entry.run == Some(run));
+        let (mut entries, more) = page(run_before, limit, max_bytes);
         if let Some(compacted) = inner.events.iter().find(|entry| {
             entry.seq >= before
                 && entry.run == Some(run)

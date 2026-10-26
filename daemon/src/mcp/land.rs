@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::thread::Binding;
-use super::{parse, pretty};
+use super::{object, parse, pretty, tool};
 
 /// The tools a coordinator gets from this module.
 pub const TOOLS: &[&str] = &["land", "checks_propose"];
@@ -29,32 +29,28 @@ pub fn definitions(coordinator: bool) -> Vec<Value> {
         return Vec::new();
     }
     vec![
-        json!({
-            "name": "land",
-            "description": "Queue a finished child whose review passed to land on the Project's integration branch, as one squashed commit titled with its task's first line. It waits for the user's approval unless the Project lands automatically. If it conflicts, Parallax sends it back to merge the branch and queues it again, and you hear how it went. Never land an exploration child.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
+        tool(
+            "land",
+            "Queue a finished child whose review passed to land on the Project's integration branch, as one squashed commit titled with its task's first line. It waits for the user's approval unless the Project lands automatically. If it conflicts, Parallax sends it back to merge the branch and queues it again, and you hear how it went. Never land an exploration child.",
+            object(
+                json!({
                     "runId": {"type": "string", "description": "The child's run id, from thread_list or thread_launch."},
-                },
-                "required": ["runId"],
-                "additionalProperties": false,
-            },
-            "annotations": {"readOnlyHint": false, "destructiveHint": false},
-        }),
-        json!({
-            "name": "checks_propose",
-            "description": "Propose the Project's checks: one shell command, run from the repository's root after each landing, that exits 0 when the integration branch is healthy, such as `cargo test --workspace && npm test`. Find it once, from AGENTS.md, CI config, and package scripts. The user confirms or edits it before it ever runs. Red checks take the child's work off the branch and send it the output.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
+                }),
+                &["runId"],
+            ),
+            false,
+        ),
+        tool(
+            "checks_propose",
+            "Propose the Project's checks: one shell command, run from the repository's root after each landing, that exits 0 when the integration branch is healthy, such as `cargo test --workspace && npm test`. Find it once, from AGENTS.md, CI config, and package scripts. The user confirms or edits it before it ever runs. Red checks take the child's work off the branch and send it the output.",
+            object(
+                json!({
                     "command": {"type": "string", "description": "The command, for `sh -c` (`cmd /C` on Windows). At most 4,096 bytes."},
-                },
-                "required": ["command"],
-                "additionalProperties": false,
-            },
-            "annotations": {"readOnlyHint": false, "destructiveHint": false},
-        }),
+                }),
+                &["command"],
+            ),
+            false,
+        ),
     ]
 }
 

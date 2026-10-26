@@ -26,8 +26,8 @@ use zeroize::Zeroize as _;
 use super::super::event::ExitInfo;
 use super::super::node_sdk::NodeSdk;
 use super::super::process::{
-    Exit, Launcher, Output, OutputLimits, ProcessSpec, StdinMode, StdinPipe,
-    check_working_directory, find_program,
+    DEFAULT_MAX_LINE_BYTES, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec, SpawnError,
+    StdinMode, StdinPipe,
 };
 use super::super::record::Recorder;
 use super::super::{RunId, StartError};
@@ -75,7 +75,7 @@ pub const OVERRIDE_ENV: &str = "PLXD_CLAUDE_SDK";
 
 /// The longest line the sidecar writes: a CLI line of plxd's usual limit, which the sidecar checks
 /// itself, with its query id in front, for text that is up to 3 bytes a character.
-const MAX_SIDECAR_LINE: usize = 3 * super::super::process::DEFAULT_MAX_LINE_BYTES + 64;
+const MAX_SIDECAR_LINE: usize = 3 * DEFAULT_MAX_LINE_BYTES + 64;
 
 /// Why the sidecar can't run yet: no Node, or the SDK isn't installed, in which case this starts
 /// installing it, but not again after a failure. `None` once it can.
@@ -122,8 +122,11 @@ struct Host {
     routes: Arc<Routes>,
 }
 
-/// Each live query's output, by id. `None` once the sidecar has exited.
-type Routes = Mutex<Option<HashMap<String, mpsc::UnboundedSender<Output>>>>;
+/// Each live query's output, by id.
+type RouteMap = HashMap<String, mpsc::UnboundedSender<Output>>;
+
+/// [`RouteMap`], or `None` once the sidecar has exited.
+type Routes = Mutex<Option<RouteMap>>;
 
 /// The sidecars, one per data folder, while a query holds one.
 static HOSTS: LazyLock<Mutex<HashMap<PathBuf, Weak<Host>>>> = LazyLock::new(Mutex::default);
@@ -147,9 +150,7 @@ impl Host {
         !self.input.is_closed() && self.routes().is_some()
     }
 
-    fn routes(
-        &self,
-    ) -> std::sync::MutexGuard<'_, Option<HashMap<String, mpsc::UnboundedSender<Output>>>> {
+    fn routes(&self) -> std::sync::MutexGuard<'_, Option<RouteMap>> {
         self.routes.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -236,10 +237,7 @@ fn end_all(routes: &Routes, info: Option<ExitInfo>, why: &str) {
     };
     for route in routes.into_values() {
         let _ = route.send(Output::Exited(Exit {
-            info: info.unwrap_or(ExitInfo {
-                code: None,
-                signal: None,
-            }),
+            info: info.unwrap_or_default(),
             stderr_tail: why.to_owned(),
         }));
     }
@@ -258,7 +256,7 @@ async fn write(mut stdin: StdinPipe, mut lines: mpsc::UnboundedReceiver<String>)
 }
 
 /// Routes the sidecar's lines to their queries, and ends every query when the sidecar exits.
-async fn read(mut process: super::super::process::Process, routes: Arc<Routes>) {
+async fn read(mut process: Process, routes: Arc<Routes>) {
     let deliver = |id: &str, output: Output| {
         let mut routes = routes.lock().unwrap_or_else(PoisonError::into_inner);
         let Some(routes) = routes.as_mut() else {
@@ -388,8 +386,6 @@ impl Input {
 
 /// One session's query in the sidecar: what plxd sends it, and the CLI's lines, as a [`Process`]'s
 /// output, ending with [`Output::Exited`].
-///
-/// [`Process`]: super::super::process::Process
 #[derive(Debug)]
 pub(super) struct Query {
     input: Input,
@@ -404,9 +400,7 @@ impl Query {
     /// reach the next one (PLX-712).
     pub fn open(launcher: &Launcher, spec: &ProcessSpec, run: RunId) -> Result<Self, StartError> {
         static OPENED: AtomicU64 = AtomicU64::new(0);
-        let env = launcher.environment(spec);
-        check_working_directory(&spec.cwd)?;
-        let program = find_program(&spec.program, env.get("PATH"))?;
+        let (env, program) = launcher.resolve(spec)?;
         let id: Arc<str> = format!("{run}.{}", OPENED.fetch_add(1, Ordering::Relaxed)).into();
         let mut frame = Vec::new();
         {
@@ -419,7 +413,7 @@ impl Query {
                 .get("PLXD_CLAUDE_PROCESS")
                 .map(PathBuf::from)
                 .map_or_else(crate::paths::own_exe, Ok)
-                .map_err(super::super::process::SpawnError::Io)?;
+                .map_err(SpawnError::Io)?;
             map.serialize_entry("supervisor", &supervisor.to_string_lossy())
                 .map_err(invalid)?;
             map.serialize_entry("executable", &program.to_string_lossy())
@@ -437,7 +431,7 @@ impl Query {
         }
         frame.push(b'\n');
         let mut frame = String::from_utf8(frame).map_err(|error| invalid(error.utf8_error()))?;
-        let recorder = Recorder::open("claude").map_err(super::super::process::SpawnError::Io)?;
+        let recorder = Recorder::open("claude").map_err(SpawnError::Io)?;
         let (route, output) = mpsc::unbounded_channel();
         // A sidecar that died since the last query is replaced once.
         for _ in 0..2 {
@@ -494,8 +488,6 @@ impl Query {
 
 impl Drop for Query {
     /// Kills a CLI still running, as dropping its [`Process`] did.
-    ///
-    /// [`Process`]: super::super::process::Process
     fn drop(&mut self) {
         if !self.exited {
             self.input.kill();

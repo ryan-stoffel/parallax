@@ -81,6 +81,22 @@ esac"#,
     Ios { xcrun }
 }
 
+/// Both platforms, with [`ios`]'s and [`android`]'s commands.
+fn both(dir: &Path) -> Toolchain {
+    Toolchain {
+        ios: Ok(ios(dir)),
+        android: Ok(android(dir)),
+    }
+}
+
+/// [`ios`]'s commands, and no Android SDK.
+fn ios_only(dir: &Path) -> Toolchain {
+    Toolchain {
+        ios: Ok(ios(dir)),
+        android: Err("Android SDK was not found.".to_owned()),
+    }
+}
+
 /// Shuts down every simulator in `ios`'s list, as though none were running.
 fn shut_all(dir: &Path) {
     let list = SIMCTL_LIST.replace("Booted", "Shutdown");
@@ -108,10 +124,7 @@ fn calls(dir: &TempDir) -> String {
 async fn lists_ios_simulators_android_devices_and_avds_and_what_the_thread_has_open() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("booted"), "").unwrap();
-    let tools = Toolchain {
-        ios: Ok(ios(dir.path())),
-        android: Ok(android(dir.path())),
-    };
+    let tools = both(dir.path());
     let devices = devices(&dir, tools);
     let listed = call(&devices, "device_list", json!({})).await.unwrap();
     let summary = |id: &str, platform: &str, name: &str, version: &str, booted, physical| json!({"hostId": "local", "id": id, "platform": platform, "name": name, "version": version, "booted": booted, "physical": physical});
@@ -187,10 +200,7 @@ async fn without_a_toolchain_each_platform_says_why_and_open_points_at_device_li
 #[tokio::test]
 async fn open_picks_as_t3_does_when_nothing_runs() {
     let dir = TempDir::new().unwrap();
-    let tools = Toolchain {
-        ios: Ok(ios(dir.path())),
-        android: Ok(android(dir.path())),
-    };
+    let tools = both(dir.path());
     shut_all(dir.path());
     let devices = devices(&dir, tools);
     let error = call(&devices, "device_open", json!({})).await.unwrap_err();
@@ -221,10 +231,7 @@ async fn open_picks_as_t3_does_when_nothing_runs() {
 #[tokio::test]
 async fn every_thread_shares_the_running_simulator_and_only_its_last_shuts_it_down() {
     let dir = TempDir::new().unwrap();
-    let tools = || Toolchain {
-        ios: Ok(ios(dir.path())),
-        android: Err("Android SDK was not found.".to_owned()),
-    };
+    let tools = || ios_only(dir.path());
     let (first, second) = (devices(&dir, tools()), devices(&dir, tools()));
     for thread in [&first, &second] {
         let opened = call(thread, "device_open", json!({})).await.unwrap();
@@ -259,10 +266,7 @@ async fn every_thread_shares_the_running_simulator_and_only_its_last_shuts_it_do
 #[tokio::test]
 async fn open_keeps_the_device_another_thread_has_and_shuts_down_one_booted_by_hand() {
     let dir = TempDir::new().unwrap();
-    let tools = || Toolchain {
-        ios: Ok(ios(dir.path())),
-        android: Err("Android SDK was not found.".to_owned()),
-    };
+    let tools = || ios_only(dir.path());
     let (first, second) = (devices(&dir, tools()), devices(&dir, tools()));
     let opened = call(&first, "device_open", json!({})).await.unwrap();
     assert_eq!(opened["device"]["id"], "SIM-ON");
@@ -280,10 +284,7 @@ async fn open_keeps_the_device_another_thread_has_and_shuts_down_one_booted_by_h
 async fn open_shuts_down_every_other_running_simulator_and_emulator() {
     let dir = TempDir::new().unwrap();
     std::fs::write(dir.path().join("booted"), "").unwrap();
-    let tools = Toolchain {
-        ios: Ok(ios(dir.path())),
-        android: Ok(android(dir.path())),
-    };
+    let tools = both(dir.path());
     let list = SIMCTL_LIST.replace("Shutdown", "Booted");
     std::fs::write(dir.path().join("list.json"), list).unwrap();
     let devices = devices(&dir, tools);
@@ -302,10 +303,7 @@ async fn open_shuts_down_every_other_running_simulator_and_emulator() {
 #[tokio::test]
 async fn two_devices_open_in_other_threads_are_reduced_to_one() {
     let dir = TempDir::new().unwrap();
-    let tools = Toolchain {
-        ios: Ok(ios(dir.path())),
-        android: Err("Android SDK was not found.".to_owned()),
-    };
+    let tools = ios_only(dir.path());
     let list = SIMCTL_LIST.replace("Shutdown", "Booted");
     std::fs::write(dir.path().join("list.json"), list).unwrap();
     let folder = dir.path().join("tmp/devices");
@@ -325,10 +323,7 @@ async fn two_devices_open_in_other_threads_are_reduced_to_one() {
 #[tokio::test]
 async fn two_threads_opening_at_once_boot_one_simulator() {
     let dir = TempDir::new().unwrap();
-    let tools = || Toolchain {
-        ios: Ok(ios(dir.path())),
-        android: Err("Android SDK was not found.".to_owned()),
-    };
+    let tools = || ios_only(dir.path());
     let (first, second) = (devices(&dir, tools()), devices(&dir, tools()));
     shut_all(dir.path());
     let args = json!({"platform": "ios"});
@@ -345,10 +340,7 @@ async fn two_threads_opening_at_once_boot_one_simulator() {
 #[tokio::test]
 async fn a_simulator_boots_shows_its_screen_and_shuts_down() {
     let dir = TempDir::new().unwrap();
-    let tools = Toolchain {
-        ios: Ok(ios(dir.path())),
-        android: Err("Android SDK was not found.".to_owned()),
-    };
+    let tools = ios_only(dir.path());
     shut_all(dir.path());
     let devices = devices(&dir, tools);
     let opened = call(&devices, "device_open", json!({"deviceId": "SIM-OFF"}))

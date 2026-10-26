@@ -4,7 +4,7 @@
 //! (0042).
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -12,7 +12,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::methods::{
     AccountsDefaultsSet, AccountsKeysAdd, AccountsKeysRemove, AgentCancel, AgentEvents, AgentList,
     AgentSend, AgentStart, CoordinatorFresh, EventsSubscribe, HostHealth, ProjectDelete,
-    ProjectList, ProjectStart, ProjectUpdate, RepoAdd, ScheduleRun, ScheduleSave,
+    ProjectList, ProjectStart, ProjectUpdate, ScheduleRun, ScheduleSave,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AccountsDefaultsSetParams, AccountsKeysRemoveParams,
@@ -21,8 +21,8 @@ use parallax_protocol::{
     CoordinatorFreshParams, CoordinatorSessionEnd, CoordinatorThreadId, ErrorKind,
     EventsEventParams, EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectCreateParams,
     ProjectDeleteParams, ProjectDeleteResult, ProjectId, ProjectListParams, ProjectPermission,
-    ProjectStartParams, ProjectUpdateParams, Provider, RepoAddParams, RepoId, Role, RunId,
-    Schedule, ScheduleIdParams, ScheduleSaveParams, TurnId,
+    ProjectStartParams, ProjectUpdateParams, Provider, Role, RunId, Schedule, ScheduleIdParams,
+    ScheduleSaveParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::process::{Environment, Launcher};
@@ -36,9 +36,9 @@ use uuid::Uuid;
 
 use crate::agents::{
     Conn, Host, create, end_turn, fake, fake_backend, git, has_item, init, items, project_params,
-    real_repo, send_params, subscribe, text, until, updated_to,
+    real_repo, scope, send_params, subscribe, text, until, updated_to,
 };
-use crate::support::{InProcess, PATIENCE, eventually, kind, temp_dir};
+use crate::support::{InProcess, PATIENCE, eventually, kind, project_update, temp_dir};
 
 /// The fake backend, keeping every request it is asked to start.
 struct Recording {
@@ -296,15 +296,9 @@ async fn a_new_start_replaces_the_coordinator_only_once_it_stops_running() {
         end_turn("Done."),
     ];
     let host = Host::start(temp_dir(), fake(script));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
 
-    let first = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let first = plan(&mut client, project.id).await;
     let refused = client
         .call::<ProjectStart>(start_params(project.id, "Start over."))
         .await
@@ -357,9 +351,7 @@ async fn a_replaced_coordinators_idle_session_ends() {
         end_turn("Done."),
     ];
     let host = Host::start(temp_dir(), fake(script));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     client
         .call::<ProjectStart>(start_params(project.id, "Plan."))
         .await
@@ -391,6 +383,15 @@ async fn a_replaced_coordinators_idle_session_ends() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     host.server.stop().await;
+}
+
+/// Starts `project`'s coordinator on "Plan.".
+pub(crate) async fn plan(client: &mut Conn, project: ProjectId) -> AgentRun {
+    client
+        .call::<ProjectStart>(start_params(project, "Plan."))
+        .await
+        .unwrap()
+        .run
 }
 
 /// Workers on one script, and each coordinator launch on the next of its own, keeping every
@@ -558,18 +559,8 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
 
     let updated = client
         .call::<ProjectUpdate>(ProjectUpdateParams {
-            project: project.id,
-            name: None,
-            icon: None,
             permission: Some(ProjectPermission::Auto),
-            autonomy: None,
-            base_branch: None,
-            auto_land: None,
-            allow_api_keys: None,
-            max_children: None,
-            checks: None,
-            proposed_checks: None,
-            computer: None,
+            ..project_update(project.id)
         })
         .await
         .unwrap()
@@ -634,26 +625,12 @@ async fn a_backend_without_the_projects_mode_is_refused_and_never_moved_up() {
 
     client
         .call::<ProjectUpdate>(ProjectUpdateParams {
-            project: project.id,
-            name: None,
-            icon: None,
             permission: Some(ProjectPermission::Bypass),
-            autonomy: None,
-            base_branch: None,
-            auto_land: None,
-            allow_api_keys: None,
-            max_children: None,
-            checks: None,
-            proposed_checks: None,
-            computer: None,
+            ..project_update(project.id)
         })
         .await
         .unwrap();
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     assert_eq!(coordinator.permission, Some(AgentPermission::Bypass));
     host.server.stop().await;
 }
@@ -674,9 +651,7 @@ async fn approvals_last_through_a_resume_and_every_child_has_them() {
         &seen,
     );
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let answering = client
         .call::<ProjectStart>(ProjectStartParams {
             approvals: true,
@@ -809,14 +784,8 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
         &seen,
     );
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let coordinator = plan(&mut client, project.id).await;
 
     let mut workers = Vec::new();
     for task in ["Add a README.", "Add a license."] {
@@ -892,14 +861,8 @@ async fn a_run_the_user_starts_in_the_project_wakes_the_coordinator() {
     let hang = vec![init("worker-1"), Step::Hang];
     let backends = roles(hang, vec![turn("Planned."), turn("Noted.")], &seen);
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let coordinator = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
 
     let launched = spawn(&mut client, &coordinator, "Its own task.").await;
@@ -932,14 +895,8 @@ async fn a_restart_mid_run_wakes_the_coordinator_once_naming_what_it_interrupted
     let hang = || vec![init("worker-1"), Step::Hang];
     let backends = roles(hang(), vec![vec![init("coordinator-1"), Step::Hang]], &seen);
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let coordinator = plan(&mut client, project.id).await;
     let worker = spawn(&mut client, &coordinator, "Add a README.").await;
     sessions(&mut client, &[coordinator.id, worker]).await;
 
@@ -996,14 +953,8 @@ async fn a_pause_survives_a_restart_and_what_waits_follows_the_users_message() {
     let hang = || vec![init("worker-1"), Step::Hang];
     let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
     let host = Host::start(temp_dir(), roles(hang(), vec![turn("Planned.")], &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let coordinator = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let worker = spawn(&mut client, &coordinator, "Add a README.").await;
     sessions(&mut client, &[worker]).await;
@@ -1105,14 +1056,8 @@ async fn children_of_a_replaced_coordinator_wake_the_one_that_replaced_it() {
         vec![init("coordinator-2"), end_turn("Reviewed.")],
     ];
     let host = Host::start(temp_dir(), roles(worker, coordinators, &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let old = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let old = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let before = spawn(&mut client, &old, "Add a README.").await;
     let after = spawn(&mut client, &old, "Add a license.").await;
@@ -1164,14 +1109,8 @@ async fn a_second_start_over_keeps_a_wake_up_the_replaced_one_held() {
         turn("coordinator-3", "Reviewed."),
     ];
     let host = Host::start(temp_dir(), roles(worker, coordinators, &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let first = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let first = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let child = spawn(&mut client, &first, "Add a README.").await;
     sessions(&mut client, &[child]).await;
@@ -1225,14 +1164,8 @@ async fn a_catch_up_that_never_went_out_passes_to_the_next_coordinator() {
         vec![init("coordinator-3"), end_turn("Reviewed.")],
     ];
     let host = Host::start(temp_dir(), roles(worker, coordinators, &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let first = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let first = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let child = spawn(&mut client, &first, "Add a README.").await;
     sessions(&mut client, &[child]).await;
@@ -1289,14 +1222,8 @@ async fn a_catch_up_the_users_messages_held_up_survives_a_restart() {
         ],
     ];
     let host = Host::start(temp_dir(), roles(worker(), coordinators, &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let first = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let first = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let child = spawn(&mut client, &first, "Add a README.").await;
     sessions(&mut client, &[child]).await;
@@ -1357,14 +1284,8 @@ async fn a_childs_message_leaves_its_parents_wake_ups_paused() {
     let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
     let backends = roles(hang, vec![turn("Planned."), turn("Heard it.")], &seen);
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let coordinator = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     let worker = spawn(&mut client, &coordinator, "Add a README.").await;
     sessions(&mut client, &[worker]).await;
@@ -1451,11 +1372,7 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
         .await
         .unwrap();
     subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let coordinator = plan(&mut client, project.id).await;
     let worker = spawn(&mut client, &coordinator, "Build it.").await;
     let mut running = vec![coordinator.id, worker];
     until(&mut client, |event| {
@@ -1534,27 +1451,13 @@ async fn deleting_an_unknown_project_or_a_repo_entry_fails() {
     let host = Host::start(temp_dir(), fake(Vec::new()));
     let mut client = host.client().await;
     let work = temp_dir();
-    let entry = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: real_repo(work.path()).to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
-    let scope = ProjectId::try_from(Uuid::from(entry.id)).unwrap();
+    let entry = client.add(&real_repo(work.path())).await;
+    let scope = scope(entry.id);
     for project in [ProjectId::generate(), scope] {
         let error = delete(&mut client, project).await.unwrap_err();
         assert_eq!(kind(&error), ErrorKind::ProjectNotFound, "{project}");
     }
-    let listed = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: entry.path.clone(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let listed = client.add(Path::new(&entry.path)).await;
     assert_eq!(listed.id, entry.id, "the repo entry stays");
     host.server.stop().await;
 }
@@ -1632,9 +1535,7 @@ async fn run_of(client: &mut Conn, project: ProjectId, id: RunId) -> AgentRun {
 async fn a_coordinator_whose_session_is_lost_starts_its_next_epoch_from_the_packet() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let host = Host::start(temp_dir(), epochs(true, &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<ProjectStart>(start_params(project.id, "Plan the README."))
         .await
@@ -1681,9 +1582,7 @@ async fn a_coordinator_whose_session_is_lost_starts_its_next_epoch_from_the_pack
 async fn fresh_session_starts_the_next_message_from_the_packet() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let host = Host::start(temp_dir(), epochs(false, &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<ProjectStart>(start_params(project.id, "Plan the README."))
         .await
@@ -1787,9 +1686,7 @@ async fn fresh_session_starts_the_next_message_from_the_packet() {
 async fn a_coordinator_moved_to_another_backend_starts_its_next_epoch_there() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let host = Host::start(temp_dir(), epochs(false, &seen));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<ProjectStart>(start_params(project.id, "Plan the README."))
         .await
@@ -1836,9 +1733,7 @@ async fn a_coordinator_whose_account_is_gone_starts_its_next_epoch_on_the_defaul
     let seen = Arc::new(Mutex::new(Vec::new()));
     let keys = Arc::new(crate::thread_tools::Keys::default());
     let host = Host::start_with_keys(temp_dir(), epochs(false, &seen), keys);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     // Two API keys: the coordinator starts on one, and the other is the role's default.
     let (key, default) = (AccountId::generate(), AccountId::generate());
     for id in [key, default] {

@@ -139,18 +139,15 @@ pub(super) async fn read(
                 Err(error) => tracing::warn!(path, %error, "could not record a memory entry's use"),
             }
         }
-        if has_header(&path) {
+        let (header, body) = if has_header(&path) {
             let (header, body) = memory::parse(&text);
-            let file = memory_file(&path, &metadata, header);
-            return Ok(MemoryReadResult {
-                file,
-                content: body.to_owned(),
-            });
-        }
-        let file = memory_file(&path, &metadata, memory::Header::default());
+            (header, body.to_owned())
+        } else {
+            (memory::Header::default(), text)
+        };
         Ok(MemoryReadResult {
-            file,
-            content: text,
+            file: memory_file(&path, &metadata, header),
+            content: body,
         })
     })
     .await

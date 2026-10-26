@@ -90,6 +90,25 @@ pub(crate) struct Context {
     pub over_connect: bool,
 }
 
+impl Context {
+    /// Runs `task`, given its own handle on the daemon, detached from the request
+    /// (`Agents::detached`), so a dropped connection or a `$/cancelRequest` never leaves its work
+    /// half done.
+    pub(crate) async fn detached<T, F>(
+        &self,
+        task: impl FnOnce(Arc<Daemon>) -> F,
+    ) -> Result<T, ErrorObject>
+    where
+        T: Send + 'static,
+        F: Future<Output = Result<T, ErrorObject>> + Send + 'static,
+    {
+        self.daemon
+            .agents
+            .detached(task(Arc::clone(&self.daemon)))
+            .await
+    }
+}
+
 /// What the connection's writer sends for a request.
 #[derive(Debug)]
 pub(crate) enum Reply {
@@ -125,18 +144,13 @@ pub(crate) async fn dispatch(mut context: Context, mut request: Request) -> Repl
                 Ok(params) => events::subscribe(&context, params).await,
                 Err(error) => Err(error),
             };
-            return match subscribed {
-                Ok(cursor) => Reply::Subscribe {
-                    response: success(
-                        id,
-                        &EventsSubscribeResult {
-                            subscription: cursor.subscription,
-                        },
-                    ),
-                    cursor,
-                },
-                Err(error) => Reply::Response(Response::error(Some(id), error)),
-            };
+            let subscribed = subscribed.map(|cursor| {
+                let result = EventsSubscribeResult {
+                    subscription: cursor.subscription,
+                };
+                (result, cursor)
+            });
+            return subscribed_reply(id, subscribed);
         }
         OrchestrationSubscribeShell::NAME => {
             let subscribed = match request.params() {

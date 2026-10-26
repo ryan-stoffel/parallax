@@ -12,10 +12,7 @@ use parallax_protocol::{
 };
 use plxd::backend::fake::Step;
 
-use crate::agents::{
-    Conn, Host, create, fake, init, project_params, start_params, subscribe, text, until,
-    updated_to,
-};
+use crate::agents::{Conn, Host, fake, init, start_params, text, until, updated_to};
 use crate::support::{Client, kind, temp_dir};
 
 /// How soon a wait that has to end early must answer: far under its own 60 s timeout.
@@ -27,9 +24,7 @@ async fn hanging_runs(count: usize) -> (Host, Conn, Vec<RunId>) {
         temp_dir(),
         fake(vec![init("wait-1"), text("Working"), Step::Hang]),
     );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let mut runs = Vec::new();
     for _ in 0..count {
         let params = start_params(project.id, "Work until cancelled");

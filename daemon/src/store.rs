@@ -517,9 +517,6 @@ impl StoreHandle {
         cancel: &CancellationToken,
         job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
     ) -> Result<T, ErrorObject> {
-        let State::Open { jobs, .. } = &self.state else {
-            return Err(unavailable());
-        };
         let status = Arc::new(AtomicU8::new(QUEUED));
         let (reply, mut result) = oneshot::channel();
         let job_status = Arc::clone(&status);
@@ -538,11 +535,7 @@ impl StoreHandle {
                 let _ = reply.send(tx.write(job));
             }
         });
-        self.counters.sending();
-        if jobs.send(Message::Job(Instant::now(), job)).is_err() {
-            self.counters.unsent();
-            return Err(unavailable());
-        }
+        self.send(job)?;
         let finished = tokio::select! {
             biased;
             finished = &mut result => finished,
@@ -565,9 +558,6 @@ impl StoreHandle {
     /// Runs [`Store::vacuum`] on the store's thread, outside a transaction as `VACUUM` needs, so
     /// writes queue behind it rather than fail on its lock.
     pub async fn vacuum(&self) -> Result<bool, ErrorObject> {
-        let State::Open { jobs, .. } = &self.state else {
-            return Err(unavailable());
-        };
         let (reply, result) = oneshot::channel();
         let job: Job = Box::new(move |tx| {
             #[cfg(test)]
@@ -583,12 +573,21 @@ impl StoreHandle {
             });
             let _ = reply.send(tx.store.vacuum().map_err(|error| failed(&error)));
         });
+        self.send(job)?;
+        result.await.unwrap_or_else(|_| Err(unavailable()))
+    }
+
+    /// Queues `job` on the store's thread, counted, or fails as unavailable.
+    fn send(&self, job: Job) -> Result<(), ErrorObject> {
+        let State::Open { jobs, .. } = &self.state else {
+            return Err(unavailable());
+        };
         self.counters.sending();
         if jobs.send(Message::Job(Instant::now(), job)).is_err() {
             self.counters.unsent();
             return Err(unavailable());
         }
-        result.await.unwrap_or_else(|_| Err(unavailable()))
+        Ok(())
     }
 
     /// Stores and publishes one event in a job of its own, and returns its `seq`. With the store
@@ -642,18 +641,11 @@ impl StoreHandle {
         &self,
         job: impl FnOnce(&mut Tx) -> Result<T, ErrorObject> + Send + 'static,
     ) -> Result<T, ErrorObject> {
-        let State::Open { jobs, .. } = &self.state else {
-            return Err(unavailable());
-        };
         let (reply, result) = oneshot::channel();
         let job: Job = Box::new(move |tx| {
             let _ = reply.send(tx.write(job));
         });
-        self.counters.sending();
-        if jobs.send(Message::Job(Instant::now(), job)).is_err() {
-            self.counters.unsent();
-            return Err(unavailable());
-        }
+        self.send(job)?;
         result
             .blocking_recv()
             .unwrap_or_else(|_| Err(unavailable()))
@@ -760,10 +752,7 @@ pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
             ErrorKind::ProjectNotFound,
             format!("no project has id {id}"),
         ),
-        other => {
-            error!(error = %other, "the project store failed");
-            ErrorObject::internal_error(format!("the project store failed: {other}"))
-        }
+        other => failed(other),
     }
 }
 
@@ -893,10 +882,7 @@ pub(crate) fn account_store_error(error: &StoreError) -> ErrorObject {
             ErrorKind::AccountNotFound,
             format!("no key account has id {id}"),
         ),
-        other => {
-            error!(error = %other, "the project store failed");
-            ErrorObject::internal_error(format!("the project store failed: {other}"))
-        }
+        other => failed(other),
     }
 }
 
@@ -1233,16 +1219,11 @@ mod tests {
                 data: "iVBORw==".to_owned(),
             }),
         };
-        let params = ProjectCreateParams {
+        let (uuid, fields) = fields(ProjectCreateParams {
             id,
-            name: "n".to_owned(),
-            repo_path: "/r".to_owned(),
             icon: Some(icon.clone()),
-            permission: None,
-            autonomy: None,
-            base_branch: None,
-        };
-        let (uuid, fields) = fields(params);
+            ..new_project()
+        });
         assert_eq!(uuid, Uuid::from(id));
         assert_eq!(
             (fields.name.as_str(), fields.repo_path.as_str()),
@@ -1469,15 +1450,7 @@ mod tests {
                 .unwrap();
             let seq = store
                 .run(&cancel, move |db| {
-                    let (id, fields) = fields(ProjectCreateParams {
-                        id: ProjectId::generate(),
-                        name: "n".to_owned(),
-                        repo_path: "/r".to_owned(),
-                        icon: None,
-                        permission: None,
-                        autonomy: None,
-                        base_branch: None,
-                    });
+                    let (id, fields) = fields(new_project());
                     db.create_project(id, &fields)
                         .map_err(|error| store_error(&error))?;
                     Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
@@ -1564,15 +1537,7 @@ mod tests {
         let path = dir.path().join("plxd.sqlite3");
         let store = open(&path);
         let reader = store.open_reader(&path);
-        let (id, fields) = fields(ProjectCreateParams {
-            id: ProjectId::generate(),
-            name: "n".to_owned(),
-            repo_path: "/r".to_owned(),
-            icon: None,
-            permission: None,
-            autonomy: None,
-            base_branch: None,
-        });
+        let (id, fields) = fields(new_project());
         let refused = reader
             .run(&CancellationToken::new(), move |db| {
                 db.create_project(id, &fields)

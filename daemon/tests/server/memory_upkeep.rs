@@ -2,16 +2,15 @@
 //! a queued message to each running child when an entry changes, and stale entries after each
 //! landing.
 
+use std::path::Path;
 use std::time::Duration;
 
 use parallax_protocol::methods::{
     AgentStart, LandQueue, MemoryDelete, MemoryList, MemoryRead, MemoryWrite, ProjectUpdate,
-    RepoAdd,
 };
 use parallax_protocol::{
     AgentOutputItem, LandQueueParams, MemoryDeleteParams, MemoryFile, MemoryListParams,
     MemoryReadParams, MemoryScope, MemoryWriteParams, ParallaxEvent, ProjectUpdateParams,
-    RepoAddParams, RepoId,
 };
 use plxd::backend::fake::Step;
 
@@ -19,7 +18,7 @@ use crate::agents::{
     Conn, Host, create, end_turn, fake, git, has_item, init, project_params, start_params,
     subscribe, text, until,
 };
-use crate::support::temp_dir;
+use crate::support::{project_update, temp_dir};
 
 fn entry(scope: MemoryScope, path: &str, title: &str, content: &str) -> MemoryWriteParams {
     MemoryWriteParams {
@@ -78,28 +77,11 @@ async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_mi
     git(&docs, &["commit", "-q", "-m", "docs"]);
     let project = create(&mut client, params).await;
     let auto_land = ProjectUpdateParams {
-        project: project.id,
-        name: None,
-        icon: None,
-        permission: None,
-        autonomy: None,
-        base_branch: None,
         auto_land: Some(true),
-        max_children: None,
-        allow_api_keys: None,
-        checks: None,
-        proposed_checks: None,
-        computer: None,
+        ..project_update(project.id)
     };
     client.call::<ProjectUpdate>(auto_land).await.unwrap();
-    let repo = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: project.repo_path.clone(),
-        })
-        .await
-        .unwrap()
-        .repo;
+    let repo = client.add(Path::new(&project.repo_path)).await;
     let scope = MemoryScope::Project { id: project.id };
     let repo_scope = MemoryScope::Repo { id: repo.id };
     let gone = "memory/gotcha/old-module.md";

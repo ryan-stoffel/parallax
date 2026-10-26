@@ -56,8 +56,8 @@ use parallax_protocol::{AcceptId, AgentMerge, CliKind};
 use parallax_protocol::{
     AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
     AgentApproveParams, AgentApproveResult, AgentBackgroundTask, AgentFailureKind, AgentOutcome,
-    AgentOutputItem, AgentRun, ApprovalId, CoordinatorSessionEnd, DiffSummary, ErrorKind,
-    GitStatus, ImageId, InboxKind, ParallaxEvent, ProjectId, PromptImage, QueueResult,
+    AgentOutputItem, AgentPermission, AgentRun, ApprovalId, CoordinatorSessionEnd, DiffSummary,
+    ErrorKind, GitStatus, ImageId, InboxKind, ParallaxEvent, ProjectId, PromptImage, QueueResult,
     QueuedMessage, Role, RunId, TurnId,
 };
 use parallax_store::{
@@ -90,7 +90,7 @@ use crate::backend::{
 use crate::routing;
 use crate::server::Daemon;
 use crate::store::Tx;
-use crate::worktree::{RunFolder, github_pr_urls};
+use crate::worktree::{DiffStat, RunFolder, github_pr_urls};
 
 mod epoch;
 mod git;
@@ -282,8 +282,29 @@ pub(super) enum Command {
 }
 
 impl Command {
+    /// Whether the command runs while a checkpoint revert is pending (0062): the revert itself,
+    /// a detach, or a read of the git status or the queue.
+    fn runs_while_reverting(&self) -> bool {
+        matches!(
+            self,
+            Self::Revert { .. }
+                | Self::Detach
+                | Self::Git {
+                    action: GitAction::Status,
+                    ..
+                }
+                | Self::Queue {
+                    op: QueueOp::List,
+                    ..
+                }
+        )
+    }
+
     /// Answers the command with `error` without running it.
     fn refuse(self, error: ErrorObject) {
+        fn fail<T>(reply: Reply<T>, error: ErrorObject) {
+            let _ = reply.send(Err(error));
+        }
         match self {
             Self::Send { reply, .. }
             | Self::Cancel { reply, .. }
@@ -294,32 +315,16 @@ impl Command {
             | Self::Place { reply, .. }
             | Self::Revert { reply, .. }
             | Self::Fresh { reply }
-            | Self::Join { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
-            Self::Accept { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
-            Self::Approve { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
-            Self::ComputerAsk { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
-            Self::Queue { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
-            Self::OpenPr { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
-            Self::Git { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
+            | Self::Join { reply, .. } => fail(reply, error),
+            Self::Accept { reply, .. } => fail(reply, error),
+            Self::Approve { reply, .. } => fail(reply, error),
+            Self::ComputerAsk { reply, .. } => fail(reply, error),
+            Self::Queue { reply, .. } => fail(reply, error),
+            Self::OpenPr { reply, .. } => fail(reply, error),
+            Self::Git { reply, .. } => fail(reply, error),
             Self::Delete { reply, .. }
             | Self::RenameBranch { reply, .. }
-            | Self::StopTask { reply, .. } => {
-                let _ = reply.send(Err(error));
-            }
+            | Self::StopTask { reply, .. } => fail(reply, error),
             Self::Wake(..) | Self::Detach => {}
         }
     }
@@ -812,10 +817,7 @@ impl Actor {
     /// the CLI stays up for the next turn (0060).
     async fn settle(&mut self, result: Option<String>) {
         // A request left from the turn that ended has nothing to answer it.
-        for approval_id in self.approvals.pending() {
-            let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
-            self.resolve_approval(approval_id, gone).await;
-        }
+        self.withdraw_approvals().await;
         let now = Instant::now();
         if let Some(live) = &mut self.live {
             live.settled = Some(now);
@@ -960,20 +962,12 @@ impl Actor {
                     Some(command) => self.on_command(command).await,
                     None => self.stopping = true,
                 },
-                () = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
-                    self.flush().await;
-                }
-                () = sleep_until(wake_at.unwrap_or_else(Instant::now)), if wake_at.is_some() => {
-                    self.wake().await;
-                }
-                () = sleep_until(resume_at.unwrap_or_else(Instant::now)), if resume_at.is_some() => {
-                    self.check_resume().await;
-                }
-                () = sleep_until(release_at.unwrap_or_else(Instant::now)), if release_at.is_some() => {
-                    self.release_idle();
-                }
+                () = at(deadline) => self.flush().await,
+                () = at(wake_at) => self.wake().await,
+                () = at(resume_at) => self.check_resume().await,
+                () = at(release_at) => self.release_idle(),
                 // Stopping frees what the actor holds, its `turns` above all (PLX-459).
-                () = sleep_until(idle_at.unwrap_or_else(Instant::now)), if idle_at.is_some() => {
+                () = at(idle_at) => {
                     if self.daemon.agents.retire(self.id, &commands) {
                         debug!(run = %self.id, "stopped an idle run's actor");
                         return;
@@ -1016,23 +1010,8 @@ impl Actor {
             && self.slot_wait.is_none()
     }
 
-    #[expect(clippy::too_many_lines, reason = "one arm per command")]
     async fn on_command(&mut self, command: Command) {
-        if self.pending_revert.is_some()
-            && !matches!(
-                &command,
-                Command::Revert { .. }
-                    | Command::Detach
-                    | Command::Git {
-                        action: GitAction::Status,
-                        ..
-                    }
-                    | Command::Queue {
-                        op: QueueOp::List,
-                        ..
-                    }
-            )
-        {
+        if self.pending_revert.is_some() && !command.runs_while_reverting() {
             command.refuse(ErrorObject::parallax(ErrorKind::RevertRefused, "A checkpoint revert is pending. Retry that revert before starting a turn or changing this thread."));
             return;
         }
@@ -1042,23 +1021,7 @@ impl Actor {
                 delivery,
                 reply,
             } => {
-                let (turn_id, from) = (message.turn_id, message.from);
-                if let Some(from) = from {
-                    self.senders.insert(turn_id, from);
-                }
-                if message.parallax {
-                    self.parallax_turns.insert(turn_id);
-                }
-                let answer = self.send(message, delivery).await;
-                if answer.is_err() && from.is_some() {
-                    self.senders.remove(&turn_id);
-                }
-                // Only the user's own message resets the count and ends a pause (0025): a child's
-                // `thread_send` (with `from`) leaves them, so a loop still reaches the cap.
-                if answer.is_ok() && from.is_none() && self.wakes.attended() {
-                    self.save_wakes().await;
-                }
-                let _ = reply.send(answer);
+                let _ = reply.send(self.on_send(message, delivery).await);
             }
             Command::Cancel { from, reply } => {
                 self.cancel(from).await;
@@ -1069,8 +1032,7 @@ impl Actor {
                 let _ = reply.send(self.snapshot());
             }
             Command::Approve { params, reply } => {
-                let answer = self.approve(params).await;
-                let _ = reply.send(answer);
+                let _ = reply.send(self.approve(params).await);
             }
             Command::ComputerAsk { app, reply } => {
                 let _ = reply.send(Ok(self.ask_computer(app).await));
@@ -1080,28 +1042,21 @@ impl Actor {
                 command_id,
                 reply,
             } => {
-                let answer = self.queue_op(op, command_id).await;
-                let _ = reply.send(answer);
+                let _ = reply.send(self.queue_op(op, command_id).await);
             }
             Command::Accept {
                 id,
                 reviewed,
                 reply,
             } => {
-                let answer = self.accept(id, reviewed).await;
-                let _ = reply.send(answer);
+                let _ = reply.send(self.accept(id, reviewed).await);
             }
             Command::OpenPr { title, body, reply } => {
                 let effect = self.open_pr(title, body).await;
                 self.start_effect(effect, reply, Finished::OpenPr);
             }
             Command::LinkPr { url, linked, reply } => {
-                if linked {
-                    self.link_pr(url).await;
-                } else {
-                    self.unlink_pr(&url).await;
-                }
-                let _ = reply.send(self.snapshot());
+                let _ = reply.send(self.set_pr_link(url, linked).await);
             }
             Command::Git { action, reply } => self.on_git(action, reply).await,
             Command::Revert {
@@ -1117,36 +1072,13 @@ impl Actor {
                 command_id,
                 reply,
             } => {
-                let answer = self.delete(wait, command_id).await;
-                if answer.is_ok() {
-                    self.deleted = true;
-                    self.stopping = true;
-                }
-                let _ = reply.send(answer);
+                let _ = reply.send(self.delete(wait, command_id).await);
             }
             Command::Wake(summary, questions, task, ended) => {
-                // ponytail: a late end's mark moves back in a store job of its own, after the end
-                // was stored and routed here, so a crash or a `project/start` between them can
-                // miss it (PLX-936); fold the mark into the job that routes the end if that
-                // matters.
-                if self
-                    .wakes
-                    .push(summary, questions, task, ended, Instant::now())
-                {
-                    self.save_wakes().await;
-                }
+                self.on_wake(summary, questions, task, ended).await;
             }
             Command::StopTask { task_id, reply } => {
-                let stopped = match &self.live {
-                    Some(live) => live.run.stop_task(&task_id),
-                    None => Err(AnswerError::Finished),
-                };
-                let _ = reply.send(stopped.map_err(|error| {
-                    ErrorObject::invalid_params(match error {
-                        AnswerError::Unsupported => "this run's provider can't stop a task",
-                        AnswerError::Finished => "the run's CLI has exited, and its tasks with it",
-                    })
-                }));
+                let _ = reply.send(self.stop_task(&task_id));
             }
             Command::ResumeNow { reply } => {
                 let _ = reply.send(self.resume_now().await);
@@ -1178,6 +1110,64 @@ impl Actor {
         }
     }
 
+    /// `agent/send` or `message.dispatch`: [`Self::send`], remembering who sent `message`.
+    async fn on_send(
+        &mut self,
+        message: Queued,
+        delivery: Delivery,
+    ) -> Result<AgentRun, ErrorObject> {
+        let (turn_id, from) = (message.turn_id, message.from);
+        if let Some(from) = from {
+            self.senders.insert(turn_id, from);
+        }
+        if message.parallax {
+            self.parallax_turns.insert(turn_id);
+        }
+        let answer = self.send(message, delivery).await;
+        if answer.is_err() && from.is_some() {
+            self.senders.remove(&turn_id);
+        }
+        // Only the user's own message resets the count and ends a pause (0025): a child's
+        // `thread_send` (with `from`) leaves them, so a loop still reaches the cap.
+        if answer.is_ok() && from.is_none() && self.wakes.attended() {
+            self.save_wakes().await;
+        }
+        answer
+    }
+
+    /// [`Command::Wake`]: keeps the summary for the run's next wake-up.
+    async fn on_wake(
+        &mut self,
+        summary: String,
+        questions: Vec<Uuid>,
+        task: Option<Uuid>,
+        ended: Option<jiff::Timestamp>,
+    ) {
+        // ponytail: a late end's mark moves back in a store job of its own, after the end was
+        // stored and routed here, so a crash or a `project/start` between them can miss it
+        // (PLX-936); fold the mark into the job that routes the end if that matters.
+        if self
+            .wakes
+            .push(summary, questions, task, ended, Instant::now())
+        {
+            self.save_wakes().await;
+        }
+    }
+
+    /// `agent/stopTask` (PLX-777): stops background task `task_id` through the live CLI.
+    fn stop_task(&self, task_id: &str) -> Result<(), ErrorObject> {
+        let stopped = match &self.live {
+            Some(live) => live.run.stop_task(task_id),
+            None => Err(AnswerError::Finished),
+        };
+        stopped.map_err(|error| {
+            ErrorObject::invalid_params(match error {
+                AnswerError::Unsupported => "this run's provider can't stop a task",
+                AnswerError::Finished => "the run's CLI has exited, and its tasks with it",
+            })
+        })
+    }
+
     /// Renames the run's worktree branch for `slug` (0058), in git, its row, and here, and reports
     /// it in `agent.updated`. Nothing changes for a run with no worktree, one whose push or Open
     /// PR is running, or a branch with an upstream ([`WorktreeManager::rename_branch`]).
@@ -1198,7 +1188,7 @@ impl Actor {
             .worktrees
             .rename_branch(&repo, self.id, &old, slug)
             .await
-            .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))?;
+            .map_err(|error| super::worktree_failed(&error))?;
         let Some(branch) = renamed else {
             return Ok(());
         };
@@ -1387,17 +1377,7 @@ impl Actor {
             return;
         };
         info!(run = %self.id, "waking a parent: threads it launched finished");
-        match self
-            .resume(
-                turn_id,
-                text,
-                Vec::new(),
-                Vec::new(),
-                RunOptions::default(),
-                None,
-            )
-            .await
-        {
+        match self.resume_text(turn_id, text).await {
             Ok(_) if self.busy() => {
                 let questions = self.wakes.delivered();
                 self.save_wakes().await;
@@ -1474,7 +1454,8 @@ impl Actor {
 
     /// `thread/delete` and `project/delete`: cancels a running CLI and waits for it to exit and
     /// its changes to be committed, then deletes the run's rows, events, worktree, and a thread's
-    /// scratch folders ([`crate::threads::purge`]), and drops this actor from the map. Running
+    /// scratch folders ([`crate::threads::purge`]), and drops this actor from the map, which then
+    /// stops. Running
     /// here, between commands, it never races a resume or an accept. A push or Open PR, which
     /// works in the run's folder, makes it wait for the effect to finish with `wait`, and
     /// otherwise refuses it (`gitRefused`).
@@ -1490,10 +1471,7 @@ impl Actor {
         if let Some(live) = &self.live {
             info!(run = %self.id, "cancelling an agent run to delete it");
             live.run.cancel();
-            while self.live.is_some() {
-                let event = next_event(&mut self.live).await;
-                self.on_event(event).await;
-            }
+            self.drain().await;
         }
         self.flush().await;
         // The thread's lane (0059) holds off a concurrent create/actor_for retry for this run id
@@ -1509,6 +1487,8 @@ impl Actor {
         .await?;
         self.worktree = None;
         self.daemon.agents.forget(self.id);
+        self.deleted = true;
+        self.stopping = true;
         Ok(())
     }
 
@@ -1552,10 +1532,7 @@ impl Actor {
             )));
         }
         let Some(worktree) = self.worktree.clone() else {
-            return Err(ErrorObject::internal_error(format!(
-                "run {} has no recorded worktree",
-                self.id
-            )));
+            return Err(super::no_worktree(self.id));
         };
         let shared = self.check_shared_workspace(&commit).await?;
         // Its worktree goes, so its idle session ends first (0060).
@@ -1680,10 +1657,7 @@ impl Actor {
                 )));
             }
             let Some(worktree) = &self.worktree else {
-                return Err(ErrorObject::internal_error(format!(
-                    "run {} has no recorded worktree",
-                    self.id
-                )));
+                return Err(super::no_worktree(self.id));
             };
             (PathBuf::from(&worktree.repo_path), worktree.branch.clone())
         };
@@ -1758,6 +1732,16 @@ impl Actor {
                 self.id
             ),
         ))
+    }
+
+    /// `pr/link` with `linked`, or `pr/unlink` (0041), answered with the run as it is after.
+    async fn set_pr_link(&mut self, url: String, linked: bool) -> Result<AgentRun, ErrorObject> {
+        if linked {
+            self.link_pr(url).await;
+        } else {
+            self.unlink_pr(&url).await;
+        }
+        self.snapshot()
     }
 
     /// Links pull request `url` to the run, unless it already is, and reports it as
@@ -1869,21 +1853,7 @@ impl Actor {
             None => Err(AnswerError::Finished),
         };
         if sent.is_ok() {
-            let resolution = if allow {
-                AgentApproveResult {
-                    decision: AgentApprovalDecision::Allowed,
-                    by: AgentApprovalBy::User,
-                    always,
-                    message: None,
-                }
-            } else {
-                AgentApproveResult {
-                    decision: AgentApprovalDecision::Denied,
-                    by: AgentApprovalBy::User,
-                    always: false,
-                    message,
-                }
-            };
+            let resolution = user_resolution(allow, always, message);
             self.resolve_approval(approval_id, resolution.clone()).await;
             self.flush().await;
             return Ok(resolution);
@@ -1921,16 +1891,7 @@ impl Actor {
                 .await
                 .map_err(|error| ErrorObject::internal_error(error.to_string()))??;
         }
-        let resolution = AgentApproveResult {
-            decision: if allow {
-                AgentApprovalDecision::Allowed
-            } else {
-                AgentApprovalDecision::Denied
-            },
-            by: AgentApprovalBy::User,
-            always: allow && always,
-            message: if allow { None } else { message },
-        };
+        let resolution = user_resolution(allow, always, message);
         self.resolve_approval(approval_id, resolution.clone()).await;
         self.flush().await;
         Ok(resolution)
@@ -1999,6 +1960,14 @@ impl Actor {
             }
             let stopped = ended(AgentApprovalDecision::Denied, by);
             self.resolve_approval(approval_id, stopped).await;
+        }
+    }
+
+    /// Ends every waiting permission request as withdrawn by the agent.
+    async fn withdraw_approvals(&mut self) {
+        for approval_id in self.approvals.pending() {
+            let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
+            self.resolve_approval(approval_id, gone).await;
         }
     }
 
@@ -2412,30 +2381,21 @@ impl Actor {
             // At least once (0048): the CLI gets the message before its stored row is deleted,
             // so a crash between the two resends it once after a restart, as `record_turn` does,
             // rather than losing it.
-            let handed = match self.hand_over(&next).await {
-                Ok(handed) => handed,
-                Err(error) => {
-                    self.queued.pop_front();
-                    self.dropped(next.turn_id, &error.message).await;
-                    self.save_queue().await;
-                    continue;
-                }
-            };
-            match handed {
-                Ok(seen) => {
+            let why = match self.hand_over(&next).await {
+                Ok(Ok(seen)) => {
                     self.queued.pop_front();
                     self.handed_over(next, seen).await;
                     self.save_queue().await;
-                }
-                Err(SendError::IdConflict) => {
-                    self.queued.pop_front();
-                    self.dropped(next.turn_id, "its turn id was already used")
-                        .await;
-                    self.save_queue().await;
+                    continue;
                 }
                 // It goes once the CLI has exited.
-                Err(SendError::Unsupported | SendError::Finished) => break,
-            }
+                Ok(Err(SendError::Unsupported | SendError::Finished)) => break,
+                Ok(Err(SendError::IdConflict)) => "its turn id was already used".to_owned(),
+                Err(error) => error.message,
+            };
+            self.queued.pop_front();
+            self.dropped(next.turn_id, &why).await;
+            self.save_queue().await;
         }
     }
 
@@ -2716,7 +2676,6 @@ impl Actor {
     /// another backend's account, or with no session to resume, a new session starts, told the
     /// conversation so far. A fork's first message forks its parent's session instead, when
     /// [`Actor::fork_source`] finds one (0050).
-    #[allow(clippy::too_many_lines)]
     async fn resume(
         &mut self,
         turn_id: TurnId,
@@ -2742,70 +2701,11 @@ impl Actor {
             Some(account) if moving => account,
             _ => session_account(&self.row.state.account_id),
         };
-        let not_resumable = |why: String| {
-            ErrorObject::parallax(
-                ErrorKind::RunNotResumable,
-                format!("run {} can't be resumed: {why}", self.id),
-            )
-        };
-        let role = if self.is_coordinator() {
-            // A replaced coordinator stays stopped: a project has one live coordinator (0024).
-            let project = self.project;
-            let current = store(&self.daemon, move |db| {
-                super::coordinator::coordinator_of(db, project.into())
-            })
+        let (prepared, repo_path, epoch_end) = self
+            .prepare_resume(account, moving, changes.permission)
             .await?;
-            if let Some(current) = current.filter(|current| *current != self.id) {
-                return Err(not_resumable(format!(
-                    "project {project}'s coordinator is now run {current}"
-                )));
-            }
-            Role::Coordinator
-        } else {
-            Role::Worker
-        };
-        let full = super::full_claude_code(&self.row.fields, changes.permission);
-        // Why a coordinator's session ends here, so its next one starts from the packet instead
-        // of failing (0079).
-        let mut epoch_end = None;
-        let (prepared, repo_path) = match prepare(
-            &self.daemon,
-            self.project,
-            self.id,
-            Some(account),
-            role,
-            full,
-        )
-        .await
-        {
-            Ok(prepared) => prepared,
-            Err(error)
-                if !moving
-                    && error
-                        .parallax_data()
-                        .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
-            {
-                if role != Role::Coordinator {
-                    return Err(not_resumable(format!(
-                        "its session's account {} no longer exists",
-                        self.row.state.account_id
-                    )));
-                }
-                // Its session went with its account: the role's default takes over.
-                epoch_end = Some(CoordinatorSessionEnd::NotResumable);
-                prepare(&self.daemon, self.project, self.id, None, role, full).await?
-            }
-            Err(error) => return Err(error),
-        };
         let backend = prepared.resolved.backend().name();
         let from = self.row.fields.backend.clone();
-        if backend != from && role == Role::Coordinator {
-            epoch_end = Some(CoordinatorSessionEnd::BackendChange);
-        } else if backend != from && !moving {
-            return Err(not_resumable(format!(
-                "its session ran on {from}, but its account now runs on {backend}"
-            )));
-        }
         let session_id = session_id.filter(|_| backend == from && epoch_end.is_none());
         let paths = self.checkout_paths(&repo_path).await?;
         let attached = attached::prompt(&self.daemon, self.id, &threads, &text).await?;
@@ -2860,6 +2760,92 @@ impl Actor {
             self.move_back(moved_from).await;
         }
         self.snapshot()
+    }
+
+    /// What [`Self::resume`]'s new CLI starts with on `account`, which `moving` moves the run to,
+    /// and the repository path, with `permission` the one the message changes to. The third
+    /// value is why a coordinator's session ends here, so its next one starts from the packet
+    /// instead of failing (0079). A replaced coordinator stays stopped: a project has one live
+    /// coordinator (0024).
+    async fn prepare_resume(
+        &self,
+        account: AccountChoice,
+        moving: bool,
+        permission: Option<AgentPermission>,
+    ) -> Result<(Prepared, String, Option<CoordinatorSessionEnd>), ErrorObject> {
+        let role = if self.is_coordinator() {
+            let project = self.project;
+            let current = store(&self.daemon, move |db| {
+                super::coordinator::coordinator_of(db, project.into())
+            })
+            .await?;
+            if let Some(current) = current.filter(|current| *current != self.id) {
+                return Err(not_resumable(
+                    self.id,
+                    &format!("project {project}'s coordinator is now run {current}"),
+                ));
+            }
+            Role::Coordinator
+        } else {
+            Role::Worker
+        };
+        let full = super::full_claude_code(&self.row.fields, permission);
+        let mut epoch_end = None;
+        let (prepared, repo_path) = match prepare(
+            &self.daemon,
+            self.project,
+            self.id,
+            Some(account),
+            role,
+            full,
+        )
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error)
+                if !moving
+                    && error
+                        .parallax_data()
+                        .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
+            {
+                if role != Role::Coordinator {
+                    return Err(not_resumable(
+                        self.id,
+                        &format!(
+                            "its session's account {} no longer exists",
+                            self.row.state.account_id
+                        ),
+                    ));
+                }
+                // Its session went with its account: the role's default takes over.
+                epoch_end = Some(CoordinatorSessionEnd::NotResumable);
+                prepare(&self.daemon, self.project, self.id, None, role, full).await?
+            }
+            Err(error) => return Err(error),
+        };
+        let backend = prepared.resolved.backend().name();
+        let from = &self.row.fields.backend;
+        if backend != from && role == Role::Coordinator {
+            epoch_end = Some(CoordinatorSessionEnd::BackendChange);
+        } else if backend != from && !moving {
+            return Err(not_resumable(
+                self.id,
+                &format!("its session ran on {from}, but its account now runs on {backend}"),
+            ));
+        }
+        Ok((prepared, repo_path, epoch_end))
+    }
+
+    /// [`Self::resume`] with plxd's own `text` alone, as a wake-up's or a resume's turn: no images,
+    /// threads, or changes, on the account the run's session is on.
+    pub(super) async fn resume_text(
+        &mut self,
+        turn_id: TurnId,
+        text: String,
+    ) -> Result<AgentRun, ErrorObject> {
+        let changes = RunOptions::default();
+        self.resume(turn_id, text, Vec::new(), Vec::new(), changes, None)
+            .await
     }
 
     /// Hands a message to the idle live session as its next turn (0060), or gives it back once
@@ -3440,17 +3426,12 @@ impl Actor {
         // the shared context folder isn't an allowed directory for it, and stays as unreadable as
         // the rest of plxd's data folder in the sandbox (0044, PLX-468).
         sandbox.writable.clear();
-        let thread_tools = ThreadTools {
-            program: plxd_program()?,
-            data_dir: self.daemon.data_dir.root().to_owned(),
-            run: self.id,
-        };
         Ok(Setup {
             cwd,
             sandbox: Some(sandbox),
             temp: Some(temp),
             tools: None,
-            thread_tools: Some(thread_tools),
+            thread_tools: Some(self.thread_tools()?),
             thread: true,
             instructions: None,
         })
@@ -3479,22 +3460,26 @@ impl Actor {
             .refresh_coordinator(repo, self.project, &branch)
             .await
             .map_err(|error| format!("could not prepare the coordinator's worktree: {error}"))?;
-        let tools = ThreadTools {
-            program: plxd_program()?,
-            data_dir: self.daemon.data_dir.root().to_owned(),
-            run: self.id,
-        };
         Ok(Setup {
             cwd,
             sandbox: None,
             temp: None,
-            tools: Some(tools),
+            tools: Some(self.thread_tools()?),
             thread_tools: None,
             thread: false,
             instructions: Some(super::coordinator::instructions(
                 &repo.to_string_lossy(),
                 autonomy,
             )),
+        })
+    }
+
+    /// A thread's Parallax tools, bound to this run (0041): `plxd mcp` from plxd's own executable.
+    fn thread_tools(&self) -> Result<ThreadTools, String> {
+        Ok(ThreadTools {
+            program: plxd_program()?,
+            data_dir: self.daemon.data_dir.root().to_owned(),
+            run: self.id,
         })
     }
 
@@ -3566,15 +3551,8 @@ impl Actor {
             return Err(super::run_accepted(self.id));
         };
         let cwd = sandbox_path(Path::new(&worktree.path), "the run's worktree")?;
-        let git_dir = self
-            .daemon
-            .agents
-            .worktrees
-            .git_common_dir(Path::new(&worktree.repo_path))
-            .await
-            .map_err(|error| ErrorObject::parallax(ErrorKind::WorktreeFailed, error.to_string()))?;
-        let git_dir = sandbox_path(&git_dir, "the repository's git folder")?;
-        Ok((cwd, git_dir))
+        let repo = Path::new(&worktree.repo_path);
+        Ok((cwd, super::git_common_dir(&self.daemon.agents, repo).await?))
     }
 
     async fn failed_to_start(&mut self, message: String) {
@@ -3789,10 +3767,7 @@ impl Actor {
                 .await;
         }
         // The CLI exited while they waited, so nothing can answer them now.
-        for approval_id in self.approvals.pending() {
-            let gone = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
-            self.resolve_approval(approval_id, gone).await;
-        }
+        self.withdraw_approvals().await;
         if settled {
             info!(run = %self.id, "an agent run's session ended");
             // A message it took as it ended, and lost, had shown it running.
@@ -4076,12 +4051,7 @@ impl Actor {
             .diff_stat(path, git_dir, &worktree.base)
             .await
             .map_err(|error| error.to_string())?;
-        Ok(Some(DiffSummary {
-            commit: sha,
-            files: stat.files,
-            insertions: stat.insertions,
-            deletions: stat.deletions,
-        }))
+        Ok(Some(diff_summary(sha, stat)))
     }
 
     /// Adds `item` to the pending batch. A `TextDelta` right after one for the same message joins
@@ -4228,6 +4198,38 @@ struct ForkSource {
     session_id: Option<String>,
 }
 
+/// How the user's answer ended a permission request: allowed, `always` included, or denied with
+/// `message`.
+fn user_resolution(allow: bool, always: bool, message: Option<String>) -> AgentApproveResult {
+    AgentApproveResult {
+        decision: if allow {
+            AgentApprovalDecision::Allowed
+        } else {
+            AgentApprovalDecision::Denied
+        },
+        by: AgentApprovalBy::User,
+        always: allow && always,
+        message: if allow { None } else { message },
+    }
+}
+
+/// A run's `commit` and how its branch differs from its worktree's base, as `stat` measured it.
+fn diff_summary(commit: String, stat: DiffStat) -> DiffSummary {
+    DiffSummary {
+        commit,
+        files: stat.files,
+        insertions: stat.insertions,
+        deletions: stat.deletions,
+    }
+}
+
+fn not_resumable(run: RunId, why: &str) -> ErrorObject {
+    ErrorObject::parallax(
+        ErrorKind::RunNotResumable,
+        format!("run {run} can't be resumed: {why}"),
+    )
+}
+
 fn id_conflict(turn_id: TurnId) -> ErrorObject {
     ErrorObject::parallax(
         ErrorKind::IdConflict,
@@ -4347,6 +4349,14 @@ pub(super) fn backend_name(backend: &str) -> &str {
     }
 }
 
+/// `when`, once it comes; never when there is none.
+async fn at(when: Option<Instant>) {
+    match when {
+        Some(when) => sleep_until(when).await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn next_event(live: &mut Option<Live>) -> Option<Event> {
     match live {
         Some(live) => live.events.next().await,
@@ -4389,15 +4399,22 @@ fn model_usage(total: SessionModelUsage) -> ModelUsage {
 /// The merge commit's message, when accepting a run needs one: `Merge Parallax run: <the task's first
 /// line>`, cut to 72 characters, then the run and its branch.
 fn merge_message(prompt: &str, run: RunId, branch: &str) -> String {
-    let first = prompt
+    let subject = subject("Merge Parallax run: ", prompt);
+    format!("{subject}\n\nAccepted in parallax: agent run {run}, branch {branch}.\n")
+}
+
+/// `prefix` and `message`'s first line that isn't blank, or `agent run` with none, cut to 72
+/// characters: a commit's subject.
+fn subject(prefix: &str, message: &str) -> String {
+    let first = message
         .lines()
         .find(|line| !line.trim().is_empty())
         .unwrap_or("agent run");
-    let mut subject: String = format!("Merge Parallax run: {}", first.trim());
+    let subject = format!("{prefix}{}", first.trim());
     if subject.chars().count() > 72 {
-        subject = subject.chars().take(69).collect::<String>() + "...";
+        return subject.chars().take(69).collect::<String>() + "...";
     }
-    format!("{subject}\n\nAccepted in parallax: agent run {run}, branch {branch}.\n")
+    subject
 }
 
 fn accept_error(error: &crate::worktree::AcceptError) -> ErrorObject {
@@ -4415,14 +4432,7 @@ fn accept_error(error: &crate::worktree::AcceptError) -> ErrorObject {
 
 /// `parallax: <the message's first line>`, cut to 72 characters, then the run it belongs to.
 fn commit_message(message: &str, run: RunId) -> String {
-    let first = message
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("agent run");
-    let mut subject: String = format!("parallax: {}", first.trim());
-    if subject.chars().count() > 72 {
-        subject = subject.chars().take(69).collect::<String>() + "...";
-    }
+    let subject = subject("parallax: ", message);
     format!("{subject}\n\nCommitted by Parallax for agent run {run}.\n")
 }
 
@@ -4446,6 +4456,7 @@ mod tests {
         handoff_notice, session_account,
     };
     use crate::agents::RunOptions;
+    use crate::agents::tests::{project_fields, run_fields};
     use crate::backend::{
         Answer, AnswerError, ApprovalRequest, Event, EventSink, FollowUp, Run, SendError,
     };
@@ -4517,22 +4528,8 @@ mod tests {
         let row = RunRow {
             id,
             fields: RunFields {
-                project_id: ProjectId::generate().into(),
                 prompt: "flood".to_owned(),
-                requested_account: None,
-                policy: "workspaceWrite".to_owned(),
-                backend: "fake".to_owned(),
-                coordinator_thread: None,
-                parent: None,
-                notify_parent: false,
-                model: None,
-                effort: None,
-                permission: None,
-                context_window: None,
-                fast: None,
-                approvals: false,
-                checkout: false,
-                explore: false,
+                ..run_fields(ProjectId::generate().into())
             },
             state: RunState {
                 status: "running".to_owned(),
@@ -4858,6 +4855,16 @@ mod tests {
         }
     }
 
+    /// Gives `actor` a live [`SessionRun`] that holds its session, as a launch does, and returns
+    /// it with the sink its events would come from.
+    fn hold_session(actor: &mut Actor) -> (Arc<SessionRun>, EventSink) {
+        let run = Arc::new(SessionRun::default());
+        run.hold(true);
+        let (sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live::new(run.clone(), events, None));
+        (run, sink)
+    }
+
     async fn shared_actor(daemon: &Arc<Daemon>) -> Actor {
         use super::{convert, store, store_error};
         let (mut row, worktree) = fake_row_and_worktree();
@@ -5014,10 +5021,7 @@ mod tests {
         // Nothing to commit.
         row.fields.checkout = true;
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
-        let run = Arc::new(SessionRun::default());
-        run.hold(true);
-        let (_sink, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live::new(run.clone(), events, None));
+        let (run, _sink) = hold_session(&mut actor);
         actor.in_flight = 1;
         let finished = |turn_id, failed| {
             Some(Event::TurnFinished {
@@ -5076,10 +5080,7 @@ mod tests {
         // Nothing to commit.
         row.fields.checkout = true;
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
-        let run = Arc::new(SessionRun::default());
-        run.hold(true);
-        let (_sink, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live::new(run.clone(), events, None));
+        let (run, _sink) = hold_session(&mut actor);
         actor.in_flight = 1;
         let tasks = |running: &[&str]| Event::BackgroundTasks {
             tasks: running
@@ -5183,10 +5184,7 @@ mod tests {
         .await
         .unwrap();
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
-        let run = Arc::new(SessionRun::default());
-        run.hold(true);
-        let (_sink, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live::new(run.clone(), events, None));
+        let (run, _sink) = hold_session(&mut actor);
         for (change, sent) in [
             (terra, ("gpt-6-terra", None)),
             (bypass, ("gpt-6-terra", Some("bypass"))),
@@ -5241,15 +5239,7 @@ mod tests {
         row.fields.permission = Some("bypass".to_owned());
         let project = row.fields.project_id;
         super::store(&daemon, move |db| {
-            let fields = parallax_store::ProjectFields {
-                name: "app".to_owned(),
-                repo_path: "/src/app".to_owned(),
-                icon: None,
-                permission: "auto".to_owned(),
-                autonomy: "routine".to_owned(),
-                base_branch: None,
-            };
-            db.create_project(project, &fields)
+            db.create_project(project, &project_fields())
                 .map_err(|e| super::store_error(&e))?;
             Ok(())
         })
@@ -5276,10 +5266,7 @@ mod tests {
         let daemon = Daemon::for_tests(dir.path(), 100_000, Duration::from_secs(90));
         let (row, worktree) = fake_row_and_worktree();
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
-        let run = Arc::new(SessionRun::default());
-        run.hold(true);
-        let (_sink, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live::new(run.clone(), events, None));
+        let (run, _sink) = hold_session(&mut actor);
         actor.in_flight = 1;
         actor
             .on_event(Some(Event::TurnFinished {
@@ -5303,10 +5290,7 @@ mod tests {
         // Nothing to commit.
         row.fields.checkout = true;
         let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
-        let run = Arc::new(SessionRun::default());
-        run.hold(true);
-        let (_sink, events) = EventSink::channel(4, Vec::new());
-        actor.live = Some(Live::new(run.clone(), events, None));
+        let (_run, _sink) = hold_session(&mut actor);
         actor.in_flight = 1;
         let finished = |result: &str| {
             Some(Event::TurnFinished {
@@ -5452,15 +5436,8 @@ mod tests {
         );
 
         crate::agents::store(&daemon, move |db| {
-            let project = parallax_store::ProjectFields {
-                name: "app".to_owned(),
-                repo_path: "/src/app".to_owned(),
-                icon: None,
-                permission: "auto".to_owned(),
-                autonomy: "routine".to_owned(),
-                base_branch: None,
-            };
-            db.create_project(row.fields.project_id, &project).unwrap();
+            db.create_project(row.fields.project_id, &project_fields())
+                .unwrap();
             db.create_run(row.id, &row.fields, &row.state).unwrap();
             Ok(())
         })

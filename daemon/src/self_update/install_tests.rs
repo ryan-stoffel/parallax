@@ -71,6 +71,23 @@ impl Fixture {
         fs::set_permissions(&exe, fs::Permissions::from_mode(0o755)).unwrap();
         exe
     }
+
+    /// Installs [`NEW`] from `releases` over the URL schemes in `protocols`, where `placement`
+    /// says, for the fixture's home.
+    async fn install(
+        &self,
+        releases: &str,
+        protocols: &str,
+        placement: &Placement,
+    ) -> Result<(String, PathBuf), String> {
+        let home = self.path("home");
+        install_release(&self.launcher(), releases, protocols, NEW, placement, &home).await
+    }
+
+    /// The self-update of the plxd at `exe`, which runs `current`, installing from `releases`.
+    fn update(&self, exe: &Path, releases: &str, current: &str) -> SelfUpdate {
+        SelfUpdate::for_tests(self.launcher(), releases, exe, &self.path("home"), current)
+    }
 }
 
 fn leftovers(dir: &Path) -> Vec<String> {
@@ -92,16 +109,10 @@ async fn a_standalone_plxd_is_replaced_in_place_with_its_version_beside_it() {
         return;
     };
     let exe = fixture.old_plxd("local/bin/plxd");
-    let installed = install_release(
-        &fixture.launcher(),
-        &releases,
-        FILE,
-        NEW,
-        &Placement::InPlace(exe.clone()),
-        &fixture.path("home"),
-    )
-    .await
-    .unwrap();
+    let installed = fixture
+        .install(&releases, FILE, &Placement::InPlace(exe.clone()))
+        .await
+        .unwrap();
     assert_eq!(installed, (NEW.to_owned(), exe.clone()));
     assert_eq!(fs::read_to_string(&exe).unwrap(), FAKE_PLXD);
     assert_eq!(
@@ -125,17 +136,11 @@ async fn a_bundled_plxd_installs_to_parallax_plxd_over_an_older_copy() {
     let shared = fixture.path("home/.parallax-plxd");
     fixture.old_plxd("home/.parallax-plxd/plxd");
     fs::write(shared.join("plxd.version"), "0.1.0\n").unwrap();
-    let installed = install_release(
-        &fixture.launcher(),
-        &releases,
-        FILE,
-        NEW,
-        &Placement::Shared(shared.clone()),
-        &fixture.path("home"),
-    )
-    .await
-    .unwrap()
-    .1;
+    let installed = fixture
+        .install(&releases, FILE, &Placement::Shared(shared.clone()))
+        .await
+        .unwrap()
+        .1;
     assert_eq!(installed, shared.join("plxd"));
     assert_eq!(fs::read_to_string(&installed).unwrap(), FAKE_PLXD);
     assert_eq!(
@@ -158,17 +163,11 @@ async fn a_folder_plxd_cant_write_falls_back_to_parallax_plxd() {
     if tempfile::tempdir_in(locked).is_ok() {
         return;
     }
-    let installed = install_release(
-        &fixture.launcher(),
-        &releases,
-        FILE,
-        NEW,
-        &Placement::InPlace(exe.clone()),
-        &fixture.path("home"),
-    )
-    .await
-    .unwrap()
-    .1;
+    let installed = fixture
+        .install(&releases, FILE, &Placement::InPlace(exe.clone()))
+        .await
+        .unwrap()
+        .1;
     fs::set_permissions(locked, fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(installed, fixture.path("home/.parallax-plxd/plxd"));
     assert_eq!(fs::read_to_string(&exe).unwrap(), "old");
@@ -182,8 +181,8 @@ async fn a_checksum_mismatch_or_a_plxd_that_wont_run_replaces_nothing() {
     };
     let exe = fixture.old_plxd("local/bin/plxd");
     let placement = Placement::InPlace(exe.clone());
-    let home = fixture.path("home");
-    let error = install_release(&fixture.launcher(), &releases, FILE, NEW, &placement, &home)
+    let error = fixture
+        .install(&releases, FILE, &placement)
         .await
         .unwrap_err();
     assert!(error.contains("SHA-256"), "{error}");
@@ -191,7 +190,8 @@ async fn a_checksum_mismatch_or_a_plxd_that_wont_run_replaces_nothing() {
     let releases = fixture
         .release("#!/bin/sh\necho broken >&2\nexit 1\n", None)
         .unwrap();
-    let error = install_release(&fixture.launcher(), &releases, FILE, NEW, &placement, &home)
+    let error = fixture
+        .install(&releases, FILE, &placement)
         .await
         .unwrap_err();
     assert!(error.contains("doesn't run"), "{error}");
@@ -199,28 +199,16 @@ async fn a_checksum_mismatch_or_a_plxd_that_wont_run_replaces_nothing() {
 
     // A real host downloads over HTTPS only, so a `file://` release is refused.
     let releases = fixture.release(FAKE_PLXD, None).unwrap();
-    let error = install_release(
-        &fixture.launcher(),
-        &releases,
-        "=https",
-        NEW,
-        &placement,
-        &home,
-    )
-    .await
-    .unwrap_err();
+    let error = fixture
+        .install(&releases, "=https", &placement)
+        .await
+        .unwrap_err();
     assert!(error.starts_with("Couldn't download"), "{error}");
 
-    let error = install_release(
-        &fixture.launcher(),
-        "file:///nonexistent",
-        FILE,
-        NEW,
-        &placement,
-        &home,
-    )
-    .await
-    .unwrap_err();
+    let error = fixture
+        .install("file:///nonexistent", FILE, &placement)
+        .await
+        .unwrap_err();
     assert!(error.starts_with("Couldn't download"), "{error}");
 
     assert_eq!(fs::read_to_string(&exe).unwrap(), "old");
@@ -233,15 +221,7 @@ async fn host_update_never_downgrades_and_answers_when_it_restarts() {
     let fixture = Fixture::new();
     let releases = fixture.release(FAKE_PLXD, None);
     let exe = fixture.old_plxd("local/bin/plxd");
-    let update = |current: &str, releases: &str| {
-        SelfUpdate::for_tests(
-            fixture.launcher(),
-            releases,
-            &exe,
-            &fixture.path("home"),
-            current,
-        )
-    };
+    let update = |current: &str, releases: &str| fixture.update(&exe, releases, current);
     let kind =
         |error: &parallax_protocol::jsonrpc::ErrorObject| error.parallax_data().unwrap().kind;
 
@@ -300,13 +280,7 @@ async fn host_update_never_downgrades_and_answers_when_it_restarts() {
 async fn a_development_build_refuses_to_update() {
     let fixture = Fixture::new();
     let exe = fixture.old_plxd("parallax/target/debug/plxd");
-    let update = SelfUpdate::for_tests(
-        fixture.launcher(),
-        "file:///nonexistent",
-        &exe,
-        &fixture.path("home"),
-        "0.1.0",
-    );
+    let update = fixture.update(&exe, "file:///nonexistent", "0.1.0");
     let error = update.install(NEW, 0, false).await.unwrap_err();
     assert!(
         error.message.contains("development build"),
@@ -356,13 +330,7 @@ fn a_plxd_its_service_runs_exits_for_the_service_to_restart_it() {
 fn the_handover_waits_for_agents_unless_now_and_for_a_download() {
     let fixture = Fixture::new();
     let exe = fixture.old_plxd("local/bin/plxd");
-    let update = SelfUpdate::for_tests(
-        fixture.launcher(),
-        "file:///nonexistent",
-        &exe,
-        &fixture.path("home"),
-        "0.1.0",
-    );
+    let update = fixture.update(&exe, "file:///nonexistent", "0.1.0");
     assert!(!update.waits(0));
     assert!(update.waits(2));
     super::lock(&update.state).now = true;

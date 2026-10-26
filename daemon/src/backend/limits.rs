@@ -14,7 +14,7 @@ use jiff::Timestamp;
 use parallax_protocol::UsageLimitWindow;
 use serde_json::Value;
 
-use super::commands::{LIST_ID, Parsed, Probe};
+use super::commands::{LIST_ID, Parsed, Probe, text};
 
 /// The CLI [`Backend::limits`](super::Backend::limits) started.
 pub type LimitsProbe = Probe<Vec<UsageLimitWindow>>;
@@ -99,12 +99,6 @@ pub fn codex(message: &Value) -> Parsed<Vec<UsageLimitWindow>> {
             })
         })
         .collect()))
-}
-
-fn text(value: &Value) -> String {
-    value
-        .as_str()
-        .map_or_else(|| value.to_string(), str::to_owned)
 }
 
 #[cfg(test)]

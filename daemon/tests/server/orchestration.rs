@@ -37,7 +37,8 @@ fn message(thread_id: RunId, message_id: TurnId, text: &str) -> OrchestrationCom
     sent(thread_id, message_id, text, DispatchMode::QueueAfterActive)
 }
 
-fn sent(
+/// A `messageDispatch` of `text` to `thread_id` in `dispatch_mode`, changing no run options.
+pub(crate) fn sent(
     thread_id: RunId,
     message_id: TurnId,
     text: &str,

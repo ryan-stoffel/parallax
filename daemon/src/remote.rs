@@ -101,7 +101,6 @@ pub fn base64url(bytes: &[u8]) -> String {
 /// `bytes` in lowercase hex.
 #[must_use]
 pub fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
     bytes.iter().fold(String::new(), |mut text, b| {
         let _ = write!(text, "{b:02x}");
         text
@@ -877,8 +876,13 @@ async fn pairing_step(
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, Error> {
     let (status, answer) = request(route, Some(fp), "POST", path, headers, Some(body)).await?;
+    answered(path, status, &answer)
+}
+
+/// The JSON body of a 200 from `path`. A 401 is [`Error::Refused`].
+fn answered(path: &str, status: u16, body: &[u8]) -> Result<serde_json::Value, Error> {
     match status {
-        200 => json(&answer),
+        200 => json(body),
         401 => Err(Error::Refused),
         _ => Err(Error::Protocol(format!("{path} answered {status}"))),
     }
@@ -927,13 +931,10 @@ async fn pair_at(route: &str, code: &str, name: &str, data_dir: &Path) -> Result
     create_once(&file, &serde_json::to_vec(&credential).expect("plain JSON"))?;
     let routes = finished["routes"]
         .as_array()
-        .map(|routes| {
-            routes
-                .iter()
-                .filter_map(|r| r.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.as_str().map(str::to_owned))
+        .collect();
     Ok(Paired {
         fingerprint: fp,
         name: finished["name"].as_str().unwrap_or_default().to_owned(),
@@ -1047,13 +1048,7 @@ async fn dial_at(
         ("DPoP", proof.as_str()),
     ];
     let (status, body) = request(route, Some(fingerprint), "POST", path, &headers, None).await?;
-    if status == 401 {
-        return Err(Error::Refused);
-    }
-    if status != 200 {
-        return Err(Error::Protocol(format!("{path} answered {status}")));
-    }
-    let ticket: serde_json::Value = json(&body)?;
+    let ticket = answered(path, status, &body)?;
     let Some(ticket) = ticket["ticket"].as_str() else {
         return Err(Error::Protocol(format!("{path} answered without a ticket")));
     };

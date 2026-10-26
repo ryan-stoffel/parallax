@@ -121,7 +121,7 @@ pub(crate) fn compact_items(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem>
 fn merge_consecutive_deltas(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem> {
     let mut out = Vec::new();
     for item in items {
-        let item = map_subagent(item, compact_items);
+        let item = compact_subagent(item);
         if let (
             Some(AgentOutputItem::TextDelta {
                 message_id: prev_id,
@@ -178,10 +178,8 @@ fn drop_repeated_deltas(items: Vec<AgentOutputItem>) -> Vec<AgentOutputItem> {
     out
 }
 
-fn map_subagent(
-    item: AgentOutputItem,
-    map: fn(Vec<AgentOutputItem>) -> Vec<AgentOutputItem>,
-) -> AgentOutputItem {
+/// A subagent's item, compacted as the agent's own items are.
+fn compact_subagent(item: AgentOutputItem) -> AgentOutputItem {
     match item {
         AgentOutputItem::Subagent {
             call_id,
@@ -189,7 +187,7 @@ fn map_subagent(
             model,
             item,
         } => {
-            let compacted = map(vec![*item]);
+            let compacted = compact_items(vec![*item]);
             AgentOutputItem::Subagent {
                 call_id,
                 agent_type,

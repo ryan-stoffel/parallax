@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use parallax_protocol::ProjectId;
 use tracing::warn;
 
-use super::{WorktreeError, WorktreeManager, short_hash, valid_branch_slug};
+use super::{WorktreeError, WorktreeManager, create_parent, short_hash, valid_branch_slug};
 
 impl WorktreeManager {
     /// The folder of `project`'s integration worktree.
@@ -81,14 +81,7 @@ impl WorktreeManager {
         // A folder that isn't a worktree on a branch is plxd's own leftover.
         remove_folder(&path).await?;
         self.run_git_ok(&repo_root, &["worktree", "prune"]).await?;
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|source| WorktreeError::Io {
-                    path: parent.to_owned(),
-                    source,
-                })?;
-        }
+        create_parent(&path).await?;
 
         let branch = if let Some(branch) = branch {
             branch.to_owned()

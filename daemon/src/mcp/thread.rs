@@ -44,7 +44,7 @@ use uuid::Uuid;
 
 use super::{
     MAX_CONTEXT_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES, Plxd, Reply, Tools, check_text, clip,
-    last_output, parse, pretty, tail,
+    last_output, object, parse, pretty, tail, tool,
 };
 use super::{board, device, land, question};
 
@@ -164,6 +164,13 @@ pub async fn run(
     super::serve(&server, input, output).await
 }
 
+impl Server {
+    /// The caller's Project, when the caller is its coordinator.
+    fn coordinated(&self) -> Option<ProjectId> {
+        self.project.filter(|_| self.coordinator)
+    }
+}
+
 impl Tools for Server {
     fn names(&self) -> Vec<&'static str> {
         let tools = if self.project.is_some() {
@@ -262,22 +269,6 @@ impl Tools for Server {
 )]
 fn definitions(project: bool) -> Value {
     let run_id = |what: &str| json!({"type": "string", "description": what});
-    let object = |properties: Value, required: &[&str]| {
-        json!({
-            "type": "object",
-            "properties": properties,
-            "required": required,
-            "additionalProperties": false,
-        })
-    };
-    let tool = |name: &str, description: &str, schema: Value, read_only: bool| {
-        json!({
-            "name": name,
-            "description": description,
-            "inputSchema": schema,
-            "annotations": {"readOnlyHint": read_only, "destructiveHint": false},
-        })
-    };
     let target = run_id("The thread's run id, from thread_list or thread_launch.");
     let threads = json!({
         "type": "array",
@@ -702,31 +693,11 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
             context_tool(server, project, name, arguments).await
         }
         "ask" | "answer" | "escalate" => question::call(binding, name, arguments).await,
-        "land" => {
-            land::call(
-                binding,
-                server.project.filter(|_| server.coordinator),
-                arguments,
-            )
-            .await
-        }
+        "land" => land::call(binding, server.coordinated(), arguments).await,
         "board_add" | "board_update" | "board_remove" => {
-            board::call(
-                binding,
-                server.project.filter(|_| server.coordinator),
-                name,
-                arguments,
-            )
-            .await
+            board::call(binding, server.coordinated(), name, arguments).await
         }
-        "checks_propose" => {
-            land::propose(
-                binding,
-                server.project.filter(|_| server.coordinator),
-                arguments,
-            )
-            .await
-        }
+        "checks_propose" => land::propose(binding, server.coordinated(), arguments).await,
         other => Err(format!("no tool is named {other:?}")),
     }
 }
@@ -815,6 +786,17 @@ fn not_yourself(caller: RunId, target: RunId, what: &str) -> Result<(), String> 
 /// Whether `run`'s CLI is starting or working on a turn.
 pub(super) fn running(run: &AgentRun) -> bool {
     matches!(run.status, AgentStatus::Starting | AgentStatus::Running)
+}
+
+/// The repo entry of `run`'s thread, unless it has none or works in a scratch one.
+pub(super) fn own_repo(listed: &ThreadListResult, run: RunId) -> Option<RepoId> {
+    listed
+        .threads
+        .iter()
+        .find(|thread| thread.id == run)
+        .and_then(|thread| listed.repos.iter().find(|repo| repo.id == thread.repo))
+        .filter(|repo| !repo.scratch)
+        .map(|repo| repo.id)
 }
 
 /// Every thread and repo entry, and every run on the host.
@@ -1063,17 +1045,9 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
         .iter()
         .find(|run| run.id == binding.run)
         .ok_or("your thread is no longer on this host")?;
-    // The caller's own repository, unless it has none.
-    let own_repo = listed
-        .threads
-        .iter()
-        .find(|thread| thread.id == binding.run)
-        .and_then(|thread| listed.repos.iter().find(|repo| repo.id == thread.repo))
-        .filter(|repo| !repo.scratch)
-        .map(|repo| repo.id);
     let repo = match repo {
         Some(repo) => Some(resolve_repo(plxd, &listed.repos, &repo).await?),
-        None => own_repo,
+        None => own_repo(&listed, binding.run),
     };
     let workspace = workspace.unwrap_or(if repo.is_some() {
         Workspace::Worktree
@@ -1199,7 +1173,7 @@ async fn fork(binding: &Binding, args: ForkArgs) -> Result<String, String> {
     let (_, runs) = host(plxd).await?;
     let find = |id: RunId| runs.iter().find(|run| run.id == id);
     let caller = find(binding.run).ok_or("your thread is no longer on this host")?;
-    let original = find(run_id).ok_or_else(|| format!("no thread has run id {run_id}"))?;
+    let original = find(run_id).ok_or_else(|| missing(run_id))?;
     crate::delegation::check_mode(caller.permission, original.permission)?;
     let forked = plxd
         .call::<ThreadFork>(ThreadForkParams {

@@ -866,10 +866,7 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
         );",
     )?;
 
-    let applied: BTreeSet<i64> = conn
-        .prepare("SELECT version FROM schema_version")?
-        .query_map([], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
+    let applied = applied_versions(conn)?;
     let current = applied.last().copied().unwrap_or(0);
 
     let supported = MIGRATIONS.last().map_or(0, |m| m.version);
@@ -897,10 +894,7 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
     // the lock, so another connection may have applied some meanwhile: re-read it under the
     // lock, which sees that connection's commit, and apply only what is still missing.
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let applied: BTreeSet<i64> = tx
-        .prepare("SELECT version FROM schema_version")?
-        .query_map([], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
+    let applied = applied_versions(&tx)?;
     // The version the store had, for a migration that depends on it, as 43 does.
     tx.execute(
         "CREATE TEMP TABLE migrating_from AS SELECT ?1 AS version",
@@ -917,6 +911,14 @@ pub(crate) fn run(conn: &mut Connection) -> Result<(), StoreError> {
     tx.commit()?;
 
     Ok(())
+}
+
+/// The versions `schema_version` records.
+fn applied_versions(conn: &Connection) -> Result<BTreeSet<i64>, StoreError> {
+    Ok(conn
+        .prepare("SELECT version FROM schema_version")?
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<_, _>>()?)
 }
 
 /// Writes `<database>.pre-<version>` with `VACUUM INTO`, unless it exists already: a start that
@@ -946,7 +948,28 @@ fn back_up(conn: &Connection, version: i64) -> Result<(), StoreError> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::MIGRATIONS;
+
+    /// Makes the database at `path` as a build whose newest migration was `through` left it.
+    fn migrated_through(path: &Path, through: i64) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);
+            CREATE TEMP TABLE migrating_from AS SELECT 0 AS version;",
+        )
+        .unwrap();
+        for migration in MIGRATIONS.iter().filter(|m| m.version <= through) {
+            conn.execute_batch(migration.sql).unwrap();
+            conn.execute(
+                "INSERT INTO schema_version VALUES (?1, 'then')",
+                [migration.version],
+            )
+            .unwrap();
+        }
+        conn
+    }
 
     /// Versions are exactly `1..=N`: a duplicate would be skipped silently as already applied,
     /// and a gap would let a later release apply a migration beneath a newer schema. Two branches
@@ -965,26 +988,12 @@ mod tests {
     fn an_existing_store_backs_up_before_migration_39() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plxd.sqlite3");
-        {
-            let conn = rusqlite::Connection::open(&path).unwrap();
-            conn.execute_batch(
-                "CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);",
-            )
-            .unwrap();
-            for migration in MIGRATIONS.iter().filter(|m| m.version < 39) {
-                conn.execute_batch(migration.sql).unwrap();
-                conn.execute(
-                    "INSERT INTO schema_version VALUES (?1, 'then')",
-                    [migration.version],
-                )
-                .unwrap();
-            }
-            conn.execute(
+        migrated_through(&path, 38)
+            .execute(
                 "INSERT INTO events (seq, time, run_id, kind, payload) VALUES (1, 't', 'r', 'k', '{}')",
                 [],
             )
             .unwrap();
-        }
         crate::Store::open(&path).unwrap();
 
         let backup = rusqlite::Connection::open(dir.path().join("plxd.sqlite3.pre-39")).unwrap();
@@ -1014,21 +1023,7 @@ mod tests {
         let marked = |from: i64| {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("plxd.sqlite3");
-            {
-                let conn = rusqlite::Connection::open(&path).unwrap();
-                conn.execute_batch(
-                    "CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);",
-                )
-                .unwrap();
-                for migration in MIGRATIONS.iter().filter(|m| m.version <= from) {
-                    conn.execute_batch(migration.sql).unwrap();
-                    conn.execute(
-                        "INSERT INTO schema_version VALUES (?1, 'then')",
-                        [migration.version],
-                    )
-                    .unwrap();
-                }
-            }
+            drop(migrated_through(&path, from));
             crate::Store::open(&path)
                 .unwrap()
                 .wipe_freed_pages()
@@ -1048,30 +1043,16 @@ mod tests {
         let pending = |with_project: bool| {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("plxd.sqlite3");
-            {
-                let conn = rusqlite::Connection::open(&path).unwrap();
-                conn.execute_batch(
-                    "CREATE TABLE schema_version (version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL);
-                    CREATE TEMP TABLE migrating_from AS SELECT 0 AS version;",
+            let conn = migrated_through(&path, 48);
+            if with_project {
+                conn.execute(
+                    "INSERT INTO projects (id, name, repo_path, created_at, updated_at)
+                     VALUES (?1, 'n', '/r', 'then', 'then')",
+                    [project.to_string()],
                 )
                 .unwrap();
-                for migration in MIGRATIONS.iter().filter(|m| m.version <= 48) {
-                    conn.execute_batch(migration.sql).unwrap();
-                    conn.execute(
-                        "INSERT INTO schema_version VALUES (?1, 'then')",
-                        [migration.version],
-                    )
-                    .unwrap();
-                }
-                if with_project {
-                    conn.execute(
-                        "INSERT INTO projects (id, name, repo_path, created_at, updated_at)
-                         VALUES (?1, 'n', '/r', 'then', 'then')",
-                        [project.to_string()],
-                    )
-                    .unwrap();
-                }
             }
+            drop(conn);
             let store = crate::Store::open(&path).unwrap();
             let pending = store.board_migrations_pending().unwrap();
             assert_eq!(

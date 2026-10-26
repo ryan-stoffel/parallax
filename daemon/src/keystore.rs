@@ -146,33 +146,25 @@ impl MemoryKeyStore {
     pub fn new() -> Self {
         Self::default()
     }
+
+    fn keys(&self) -> std::sync::MutexGuard<'_, HashMap<AccountId, String>> {
+        self.keys.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 #[cfg(test)]
 impl KeyStore for MemoryKeyStore {
     fn set(&self, account: AccountId, key: &str) -> Result<(), KeyStoreError> {
-        self.keys
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(account, key.to_owned());
+        self.keys().insert(account, key.to_owned());
         Ok(())
     }
 
     fn get(&self, account: AccountId) -> Result<Option<Zeroizing<String>>, KeyStoreError> {
-        Ok(self
-            .keys
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(&account)
-            .cloned()
-            .map(Zeroizing::new))
+        Ok(self.keys().get(&account).cloned().map(Zeroizing::new))
     }
 
     fn delete(&self, account: AccountId) -> Result<(), KeyStoreError> {
-        self.keys
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&account);
+        self.keys().remove(&account);
         Ok(())
     }
 }

@@ -96,15 +96,7 @@ pub(crate) async fn start(
     };
     // One store job, so two starts with different run ids can't both find no live coordinator.
     let (row, replaced, handed) = store(&daemon, move |db| {
-        let Some(_) = db
-            .get_project(project.into())
-            .map_err(|e| store_error(&e))?
-        else {
-            return Err(ErrorObject::parallax(
-                ErrorKind::ProjectNotFound,
-                format!("no project has id {project}"),
-            ));
-        };
+        require_project(db, project)?;
         let current = newest(db, project.into())?;
         if let Some(current) = &current
             && (current.state.status == STARTING || current.state.status == RUNNING)
@@ -153,16 +145,7 @@ pub(crate) async fn fresh(
     project: ProjectId,
 ) -> Result<AgentRun, ErrorObject> {
     let current = store(daemon, move |db| {
-        if db
-            .get_project(project.into())
-            .map_err(|e| store_error(&e))?
-            .is_none()
-        {
-            return Err(ErrorObject::parallax(
-                ErrorKind::ProjectNotFound,
-                format!("no project has id {project}"),
-            ));
-        }
+        require_project(db, project)?;
         coordinator_of(db, project.into())
     })
     .await?;
@@ -173,6 +156,20 @@ pub(crate) async fn fresh(
         ));
     };
     super::ask(daemon, run, |reply| super::actor::Command::Fresh { reply }).await
+}
+
+/// Fails with `projectNotFound` unless `project` is a Project in the store.
+fn require_project(db: &parallax_store::Store, project: ProjectId) -> Result<(), ErrorObject> {
+    match db
+        .get_project(project.into())
+        .map_err(|e| store_error(&e))?
+    {
+        Some(_) => Ok(()),
+        None => Err(ErrorObject::parallax(
+            ErrorKind::ProjectNotFound,
+            format!("no project has id {project}"),
+        )),
+    }
 }
 
 /// `project`'s coordinator: its newest no-write run. `project/start` with a new run id replaces it

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
 use parallax_protocol::methods::{
-    AgentCancel, AgentList, AgentSend, ProjectList, ProjectStart, ProjectUpdate, ThreadStart,
+    AgentCancel, AgentList, AgentSend, ProjectList, ProjectUpdate, ThreadStart,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AgentCancelParams, AgentDelivery, AgentListParams, AgentSendParams,
@@ -21,9 +21,9 @@ use serde_json::json;
 use crate::agents::{
     Host, create, end_turn, fake, git, init, project_params, send_params, subscribe,
 };
-use crate::coordinator::{nth_launch, roles, sessions, start_params};
+use crate::coordinator::{nth_launch, plan, roles, sessions};
 use crate::inbox::added;
-use crate::support::{PATIENCE, temp_dir};
+use crate::support::{PATIENCE, project_update, temp_dir};
 
 fn task_params(project: ProjectId, task: &str) -> ThreadStartParams {
     ThreadStartParams {
@@ -51,14 +51,8 @@ async fn seven_tasks_start_without_waiting_on_the_coordinator_and_wake_it_once()
         &seen,
     );
     let host = Host::start(temp_dir(), backends);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
-        .await
-        .unwrap()
-        .run;
+    let (mut client, project) = host.project_client().await;
+    let coordinator = plan(&mut client, project.id).await;
     sessions(&mut client, &[coordinator.id]).await;
 
     let mut children = Vec::new();
@@ -164,9 +158,7 @@ async fn a_task_starts_with_no_parent_before_the_project_has_a_coordinator() {
 /// it adds to the Project's inbox (0043).
 async fn task_inbox_item(steps: Vec<Step>, task: &str) -> (RunId, InboxItem) {
     let host = Host::start(temp_dir(), fake(steps));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<ThreadStart>(task_params(project.id, task))
         .await
@@ -211,18 +203,9 @@ fn placement_update(
     allow_api_keys: Option<bool>,
 ) -> ProjectUpdateParams {
     ProjectUpdateParams {
-        project,
-        name: None,
-        icon: None,
-        permission: None,
-        autonomy: None,
-        base_branch: None,
-        auto_land: None,
         max_children,
         allow_api_keys,
-        checks: None,
-        proposed_checks: None,
-        computer: None,
+        ..project_update(project)
     }
 }
 

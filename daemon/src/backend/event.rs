@@ -442,8 +442,8 @@ pub enum FailureKind {
     Other,
 }
 
-/// How a process ended.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// How a process ended. The default says nothing: no code and no signal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExitInfo {
     /// Its exit code, if it exited.
@@ -496,7 +496,7 @@ impl Usage {
     #[must_use]
     pub fn since(&self, earlier: &Self) -> Self {
         fn delta(now: u64, before: u64) -> u64 {
-            if now >= before { now - before } else { now }
+            now.checked_sub(before).unwrap_or(now)
         }
         Self {
             input_tokens: delta(self.input_tokens, earlier.input_tokens),

@@ -96,6 +96,27 @@ async fn rest(events: &mut EventStream) -> Vec<Event> {
     }
 }
 
+/// The turns' starts and ends among `events`.
+fn turns(events: &[Event]) -> Vec<&Event> {
+    events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event,
+                Event::TurnStarted { .. } | Event::TurnFinished { .. }
+            )
+        })
+        .collect()
+}
+
+/// Each written line's method, or `(response)` for a response.
+fn methods(written: &[Value]) -> Vec<&str> {
+    written
+        .iter()
+        .map(|line| line["method"].as_str().unwrap_or("(response)"))
+        .collect()
+}
+
 #[tokio::test]
 async fn an_approval_round_trips_and_a_follow_up_joins_the_live_thread() {
     let (dir, backend) = fake(include_str!("../fixtures/app-server-manual.jsonl"));
@@ -137,17 +158,8 @@ async fn an_approval_round_trips_and_a_follow_up_joins_the_live_thread() {
         .unwrap();
     events.extend(rest(&mut stream).await);
 
-    let turns: Vec<&Event> = events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                Event::TurnStarted { .. } | Event::TurnFinished { .. }
-            )
-        })
-        .collect();
     assert_eq!(
-        turns,
+        turns(&events),
         [
             &Event::TurnStarted { turn_id: first },
             &Event::TurnFinished {
@@ -237,12 +249,8 @@ async fn a_follow_up_changes_the_model_and_mode_on_its_turn_start() {
     rest(&mut stream).await;
 
     let written = written_at_least(&dir, 7).await;
-    let methods: Vec<&str> = written
-        .iter()
-        .map(|line| line["method"].as_str().unwrap_or("(response)"))
-        .collect();
     assert_eq!(
-        methods,
+        methods(&written),
         [
             "initialize",
             "initialized",
@@ -293,12 +301,8 @@ fn turn_settings_carry_the_mode_and_reset_the_reviewer() {
 /// `thread/unsubscribe` as it leaves, can follow the stream's end.
 async fn assert_manual_writes(dir: &TempDir) {
     let written = written_at_least(dir, 7).await;
-    let methods: Vec<&str> = written
-        .iter()
-        .map(|line| line["method"].as_str().unwrap_or("(response)"))
-        .collect();
     assert_eq!(
-        methods,
+        methods(&written),
         [
             "initialize",
             "initialized",
@@ -627,18 +631,9 @@ async fn a_steer_joins_the_running_turn_and_a_held_thread_stays_open() {
     started.run.hold(false);
     events.extend(rest(&mut stream).await);
 
-    let turns: Vec<&Event> = events[..turn_done]
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                Event::TurnStarted { .. } | Event::TurnFinished { .. }
-            )
-        })
-        .collect();
     let banana = Some("BANANA".to_owned());
     assert_eq!(
-        turns,
+        turns(&events[..turn_done]),
         [
             &Event::TurnStarted { turn_id: first },
             &Event::TurnStarted {
@@ -713,23 +708,14 @@ async fn threads_on_one_login_share_an_app_server_and_unsubscribe_when_done() {
     assert_eq!(sessions, ["t-1", "t-2"]);
 
     // Both unsubscribe, then the last one's leaving closes stdin.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let written = loop {
-        let written: Vec<Value> = fs::read_to_string(dir.path().join("stdin"))
-            .unwrap_or_default()
-            .lines()
-            .map(|line| serde_json::from_str(line).unwrap())
-            .collect();
+    let written = written_until(&dir, |written| {
         let unsubscribed = written
             .iter()
             .filter(|line| line["method"] == "thread/unsubscribe")
             .count();
-        if unsubscribed == 2 {
-            break written;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "{written:?}");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    };
+        unsubscribed == 2
+    })
+    .await;
     let initialized = written
         .iter()
         .filter(|line| line["method"] == "initialize")
@@ -737,8 +723,8 @@ async fn threads_on_one_login_share_an_app_server_and_unsubscribe_when_done() {
     assert_eq!(initialized, 1, "one app-server: {written:?}");
 }
 
-/// The lines plxd wrote to the fake once one passes `wanted`, waiting for its writer.
-async fn written_until(dir: &TempDir, wanted: impl Fn(&Value) -> bool) -> Vec<Value> {
+/// The lines plxd wrote to the fake once they pass `wanted`, waiting for its writer.
+async fn written_until(dir: &TempDir, wanted: impl Fn(&[Value]) -> bool) -> Vec<Value> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let written: Vec<Value> = fs::read_to_string(dir.path().join("stdin"))
@@ -746,7 +732,7 @@ async fn written_until(dir: &TempDir, wanted: impl Fn(&Value) -> bool) -> Vec<Va
             .lines()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();
-        if written.iter().any(&wanted) {
+        if wanted(&written) {
             return written;
         }
         assert!(tokio::time::Instant::now() < deadline, "{written:?}");
@@ -775,7 +761,10 @@ async fn a_request_for_an_unknown_thread_gets_an_error() {
             ..
         })
     ));
-    let written = written_until(&dir, |line| line["id"] == "child-ask").await;
+    let written = written_until(&dir, |written| {
+        written.iter().any(|line| line["id"] == "child-ask")
+    })
+    .await;
     let answer = written
         .iter()
         .find(|line| line["id"] == "child-ask")
@@ -807,7 +796,12 @@ async fn stop_interrupts_the_turn_and_the_thread_leaves() {
             ..
         })
     ));
-    let written = written_until(&dir, |line| line["method"] == "thread/unsubscribe").await;
+    let written = written_until(&dir, |written| {
+        written
+            .iter()
+            .any(|line| line["method"] == "thread/unsubscribe")
+    })
+    .await;
     let interrupt = written
         .iter()
         .find(|line| line["method"] == "turn/interrupt")
@@ -831,7 +825,12 @@ async fn stop_clears_the_goal_then_interrupts_its_turn() {
     while !matches!(next(&mut events).await, Event::ToolCall { .. }) {}
     started.run.cancel();
     rest(&mut events).await;
-    let written = written_until(&dir, |line| line["method"] == "thread/unsubscribe").await;
+    let written = written_until(&dir, |written| {
+        written
+            .iter()
+            .any(|line| line["method"] == "thread/unsubscribe")
+    })
+    .await;
     let sent: Vec<(&Value, &Value)> = written
         .iter()
         .filter(|line| {

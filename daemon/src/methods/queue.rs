@@ -2,8 +2,6 @@
 //! decision 0048), behind the `queue` capability. The run's actor keeps the queue
 //! ([`crate::agents`]).
 
-use std::sync::Arc;
-
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams, QueueResult,
@@ -16,11 +14,9 @@ use crate::agents::{self, QueueOp};
 
 /// Runs `op` on `run_id`'s queue, detached from the request, as `agent/send` is.
 async fn queue(context: &Context, run_id: RunId, op: QueueOp) -> Result<QueueResult, ErrorObject> {
-    let daemon = Arc::clone(&context.daemon);
+    let command_id = context.command_id;
     context
-        .daemon
-        .agents
-        .detached(agents::queue(daemon, run_id, op, context.command_id))
+        .detached(|daemon| agents::queue(daemon, run_id, op, command_id))
         .await
 }
 

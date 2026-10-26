@@ -263,6 +263,20 @@ struct Item {
     pick: Pick,
 }
 
+impl Item {
+    /// A row to pick, which is `current` when it's what the next message uses now.
+    fn choice(label: String, detail: String, current: bool, pick: Pick) -> Self {
+        Self {
+            label,
+            detail,
+            heading: false,
+            current,
+            working: false,
+            pick,
+        }
+    }
+}
+
 /// A list to pick from: the sidebar for threads, below the prompt for the rest.
 struct Menu {
     title: &'static str,
@@ -762,40 +776,8 @@ impl App {
         if let Some(pending) = self.pending().cloned() {
             return self.approval_key(key.code, &pending).await;
         }
-        let commands = self.suggestions();
-        if !commands.is_empty() {
-            let last = commands.len() - 1;
-            match key.code {
-                KeyCode::Up => return self.slash = self.slash.saturating_sub(1),
-                KeyCode::Down => return self.slash = (self.slash + 1).min(last),
-                KeyCode::Tab => {
-                    self.input = format!("{} ", commands[self.slash.min(last)].0);
-                    return;
-                }
-                KeyCode::Enter => {
-                    let name = commands[self.slash.min(last)].0;
-                    self.input.clear();
-                    self.slash = 0;
-                    return self.command(name, "").await;
-                }
-                _ => {}
-            }
-        }
-        let mentions = self.mentions();
-        if !mentions.is_empty() {
-            let last = mentions.len() - 1;
-            match key.code {
-                KeyCode::Up => return self.mention = self.mention.saturating_sub(1),
-                KeyCode::Down => return self.mention = (self.mention + 1).min(last),
-                KeyCode::Esc => return self.mentions_closed = true,
-                // Enter sends a message whose `@` is already complete, such as a folder's.
-                KeyCode::Enter
-                    if self.mention_query() == Some(mentions[self.mention.min(last)].as_str()) => {}
-                KeyCode::Tab | KeyCode::Enter => {
-                    return self.complete_mention(&mentions[self.mention.min(last)]);
-                }
-                _ => {}
-            }
+        if self.commands_key(key.code).await || self.mentions_key(key.code) {
+            return;
         }
         match key.code {
             KeyCode::Esc if self.working_since.is_some() => self.stop().await,
@@ -831,6 +813,48 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// While `/` lists commands: ↑↓ move through them, Tab completes one, and Enter runs it.
+    /// Whether the key was the list's.
+    async fn commands_key(&mut self, code: KeyCode) -> bool {
+        let commands = self.suggestions();
+        let Some(last) = commands.len().checked_sub(1) else {
+            return false;
+        };
+        let (name, _) = commands[self.slash.min(last)];
+        match code {
+            KeyCode::Up => self.slash = self.slash.saturating_sub(1),
+            KeyCode::Down => self.slash = (self.slash + 1).min(last),
+            KeyCode::Tab => self.input = format!("{name} "),
+            KeyCode::Enter => {
+                self.input.clear();
+                self.slash = 0;
+                self.command(name, "").await;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// While `@` lists paths: ↑↓ move through them, Esc closes the list, and Tab or Enter
+    /// completes one. Whether the key was the list's.
+    fn mentions_key(&mut self, code: KeyCode) -> bool {
+        let mentions = self.mentions();
+        let Some(last) = mentions.len().checked_sub(1) else {
+            return false;
+        };
+        let highlighted = &mentions[self.mention.min(last)];
+        match code {
+            KeyCode::Up => self.mention = self.mention.saturating_sub(1),
+            KeyCode::Down => self.mention = (self.mention + 1).min(last),
+            KeyCode::Esc => self.mentions_closed = true,
+            // Enter sends a message whose `@` is already complete, such as a folder's.
+            KeyCode::Enter if self.mention_query() == Some(highlighted.as_str()) => return false,
+            KeyCode::Tab | KeyCode::Enter => self.complete_mention(highlighted),
+            _ => return false,
+        }
+        true
     }
 
     /// A click opens or closes a run of tool calls, or picks a row of the sidebar, and a click
@@ -1063,8 +1087,7 @@ impl App {
         match pick {
             Pick::Run(run) => {
                 // What was chosen for one thread doesn't follow to another.
-                (self.provider, self.model, self.effort, self.permission) =
-                    (None, None, None, None);
+                self.clear_choices();
                 match self.open(run).await {
                     Ok(()) => self.cd(),
                     Err(error) => self.error = Some(error),
@@ -1243,8 +1266,7 @@ impl App {
                 self.history.push(text);
                 self.input.clear();
                 self.scroll = 0;
-                (self.provider, self.model, self.effort, self.permission) =
-                    (None, None, None, None);
+                self.clear_choices();
             }
             Err(error) => self.error = Some(error),
         }
@@ -1417,14 +1439,12 @@ impl App {
                     (_, Some(false)) => format!("{} · not signed in", provider.instance.id),
                     (_, None) => format!("{} · sign-in unknown", provider.instance.id),
                 };
-                let item = Item {
-                    label: provider.instance.name.clone(),
+                let item = Item::choice(
+                    provider.instance.name.clone(),
                     detail,
-                    heading: false,
-                    current: now == Some(provider.instance.id.as_str()),
-                    working: false,
-                    pick: Pick::Provider(provider.instance.id.clone()),
-                };
+                    now == Some(provider.instance.id.as_str()),
+                    Pick::Provider(provider.instance.id.clone()),
+                );
                 (signed_in, item)
             })
             .collect();
@@ -1444,20 +1464,14 @@ impl App {
             return Err("choose a provider with /provider first".to_owned());
         };
         let provider = self
-            .providers
-            .iter()
-            .find(|provider| provider.instance.id == id)
+            .provider_info()
             .ok_or_else(|| format!("plxd doesn't list the provider {id}"))?;
         let now = self.model_id();
         let items: Vec<Item> = models(provider)
             .into_iter()
-            .map(|(id, name)| Item {
-                current: now.as_deref() == Some(id.as_str()),
-                label: name,
-                detail: id.clone(),
-                heading: false,
-                working: false,
-                pick: Pick::Model(id),
+            .map(|(id, name)| {
+                let current = now.as_deref() == Some(id.as_str());
+                Item::choice(name, id.clone(), current, Pick::Model(id))
             })
             .collect();
         if items.is_empty() {
@@ -1476,16 +1490,17 @@ impl App {
                 .map_or_else(String::new, |id| self.provider_name(id));
             return Err(format!("{provider} doesn't take an effort"));
         }
-        let now = self.effort.or_else(|| self.open_run()?.effort);
+        let now = self.current_effort();
         let items = EFFORTS
             .iter()
-            .map(|&effort| Item {
-                label: effort_name(effort).to_owned(),
-                detail: String::new(),
-                heading: false,
-                current: now == Some(effort),
-                working: false,
-                pick: Pick::Effort(effort),
+            .map(|&effort| {
+                let label = effort_name(effort).to_owned();
+                Item::choice(
+                    label,
+                    String::new(),
+                    now == Some(effort),
+                    Pick::Effort(effort),
+                )
             })
             .collect();
         Ok(Menu::new("Effort", items))
@@ -1496,13 +1511,9 @@ impl App {
         let items = self
             .modes()
             .into_iter()
-            .map(|mode| Item {
-                label: mode_name(mode).to_owned(),
-                detail: String::new(),
-                heading: false,
-                current: now == mode,
-                working: false,
-                pick: Pick::Mode(mode),
+            .map(|mode| {
+                let label = mode_name(mode).to_owned();
+                Item::choice(label, String::new(), now == mode, Pick::Mode(mode))
             })
             .collect();
         Menu::new("Mode", items)
@@ -1608,6 +1619,22 @@ impl App {
             .as_deref()
             .or_else(|| self.open_run().map(|run| run.backend.as_str()))
             .or(self.default_backend.as_deref())
+    }
+
+    /// The provider the next message runs on, by name, or the host's default.
+    fn provider_label(&self) -> String {
+        self.provider()
+            .map_or_else(|| "host default".to_owned(), |id| self.provider_name(id))
+    }
+
+    /// The effort the next message runs at: an `/effort` change, or the thread's own.
+    fn current_effort(&self) -> Option<AgentEffort> {
+        self.effort.or_else(|| self.open_run()?.effort)
+    }
+
+    /// Forgets the `/provider`, `/model`, `/effort`, and `/mode` changes made for the next message.
+    fn clear_choices(&mut self) {
+        (self.provider, self.model, self.effort, self.permission) = (None, None, None, None);
     }
 
     /// A provider's name, such as Claude Code, or its id when plxd doesn't list it.
@@ -1990,6 +2017,17 @@ mod tests {
         }))
     }
 
+    /// An installed, enabled provider `id` of kind `id`, with no models, that runs `permissions`.
+    fn provider(id: &str, name: &str, permissions: &[&str]) -> ProviderInfo {
+        serde_json::from_value(serde_json::json!({
+            "instance": {"id": id, "kind": id, "name": name, "enabled": true, "args": [],
+                         "env": [], "models": []},
+            "installed": true, "installing": false, "models": [],
+            "permissions": permissions, "efforts": true, "coordinator": false, "loginEnv": [],
+        }))
+        .unwrap()
+    }
+
     async fn press(app: &mut App, codes: &[KeyCode]) {
         for &code in codes {
             app.key(KeyEvent::from(code)).await;
@@ -2021,19 +2059,10 @@ mod tests {
 
     #[test]
     fn a_new_provider_drops_what_it_cant_run() {
-        let provider = |id: &str, permissions: &[&str]| -> ProviderInfo {
-            serde_json::from_value(serde_json::json!({
-                "instance": {"id": id, "kind": id, "name": id, "enabled": true, "args": [],
-                             "env": [], "models": []},
-                "installed": true, "installing": false, "models": [],
-                "permissions": permissions, "efforts": true, "coordinator": false, "loginEnv": [],
-            }))
-            .unwrap()
-        };
         let mut app = app();
         app.providers = vec![
-            provider("claude", &["edit", "plan"]),
-            provider("codex", &["edit", "auto"]),
+            provider("claude", "claude", &["edit", "plan"]),
+            provider("codex", "codex", &["edit", "auto"]),
         ];
         app.default_backend = Some("codex".to_owned());
         app.model = Some("claude-opus-5".to_owned());
@@ -2049,13 +2078,7 @@ mod tests {
 
     #[test]
     fn choices_made_before_providers_arrive_are_fitted_to_them() {
-        let codex: ProviderInfo = serde_json::from_value(serde_json::json!({
-            "instance": {"id": "codex", "kind": "codex", "name": "Codex", "enabled": true,
-                         "args": [], "env": [], "models": []},
-            "installed": true, "installing": false, "models": [],
-            "permissions": ["edit", "auto"], "efforts": true, "coordinator": false, "loginEnv": [],
-        }))
-        .unwrap();
+        let codex = provider("codex", "Codex", &["edit", "auto"]);
         let mut app = app();
         // Shift+Tab to plan mode before the list came, when every mode was offered.
         app.permission = Some(AgentPermission::Plan);
@@ -2068,13 +2091,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_model_picked_before_providers_arrive_stays() {
-        let codex: ProviderInfo = serde_json::from_value(serde_json::json!({
-            "instance": {"id": "codex", "kind": "codex", "name": "Codex", "enabled": true,
-                         "args": [], "env": [], "models": []},
-            "installed": true, "installing": false, "models": [],
-            "permissions": ["edit", "auto"], "efforts": true, "coordinator": false, "loginEnv": [],
-        }))
-        .unwrap();
+        let codex = provider("codex", "Codex", &["edit", "auto"]);
         let mut app = app();
         app.model = Some("gpt-6.1-sol".to_owned());
         app.take(super::Loaded::Providers {

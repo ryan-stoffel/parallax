@@ -80,10 +80,7 @@ impl KeyStore for KeychainStore {
         let account = account.to_string();
         let mut options = PasswordOptions::new_generic_password(self.service, &account);
         options.set_label(ITEM_LABEL);
-        let mut owned = key.to_owned();
-        let result = set_generic_password_options(owned.as_bytes(), options);
-        owned.zeroize();
-        Ok(result?)
+        Ok(set_generic_password_options(key.as_bytes(), options)?)
     }
 
     fn get(&self, account: AccountId) -> Result<Option<Zeroizing<String>>, KeyStoreError> {
@@ -103,9 +100,8 @@ impl KeyStore for KeychainStore {
     fn delete(&self, account: AccountId) -> Result<(), KeyStoreError> {
         let account = account.to_string();
         match delete_generic_password(self.service, &account) {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
-            Err(error) => Err(error.into()),
+            Err(error) if error.code() != ERR_SEC_ITEM_NOT_FOUND => Err(error.into()),
+            _ => Ok(()),
         }
     }
 }

@@ -244,18 +244,15 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         lock(&self.in_flight).insert(request.id.clone(), cancel.clone());
         let listed = crate::commands::keeps_receipt(&request.method);
         // A listed method runs on a task the connection never cancels or aborts (0052).
+        let (cancel, stopped_reading) = if listed {
+            (CancellationToken::new(), CancellationToken::new())
+        } else {
+            (cancel, self.stopped_reading.clone())
+        };
         let context = Context {
             daemon: Arc::clone(&self.daemon),
-            cancel: if listed {
-                CancellationToken::new()
-            } else {
-                cancel
-            },
-            stopped_reading: if listed {
-                CancellationToken::new()
-            } else {
-                self.stopped_reading.clone()
-            },
+            cancel,
+            stopped_reading,
             command_id: None,
             replies: self.replies.clone(),
             over_connect: self.over_connect,
@@ -326,58 +323,55 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         // A terminal's input is written here, so it reaches the terminal in the order it was
         // sent, and a detach lands before a later open.
         let terminals = &self.daemon.terminals;
-        if self.session.is_some() && notification.method == TerminalWrite::NAME {
-            if let Ok(TerminalWriteParams {
-                thread_id,
-                terminal_id,
-                data,
-            }) = notification.params()
-            {
-                terminals.write(thread_id, terminal_id, data);
+        let initialized = self.session.is_some();
+        match notification.method.as_str() {
+            TerminalWrite::NAME if initialized => {
+                if let Ok(TerminalWriteParams {
+                    thread_id,
+                    terminal_id,
+                    data,
+                }) = notification.params()
+                {
+                    terminals.write(thread_id, terminal_id, data);
+                }
             }
-            return;
-        }
-        if self.session.is_some() && notification.method == TerminalResize::NAME {
-            if let Ok(TerminalResizeParams {
-                thread_id,
-                terminal_id,
-                cols,
-                rows,
-            }) = notification.params()
-            {
-                terminals.resize(thread_id, terminal_id, cols, rows);
+            TerminalResize::NAME if initialized => {
+                if let Ok(TerminalResizeParams {
+                    thread_id,
+                    terminal_id,
+                    cols,
+                    rows,
+                }) = notification.params()
+                {
+                    terminals.resize(thread_id, terminal_id, cols, rows);
+                }
             }
-            return;
-        }
-        if self.session.is_some() && notification.method == TerminalDetach::NAME {
-            if let Ok(TerminalKey {
-                thread_id,
-                terminal_id,
-            }) = notification.params()
-            {
-                terminals.detach(thread_id, terminal_id, &self.replies);
+            TerminalDetach::NAME if initialized => {
+                if let Ok(TerminalKey {
+                    thread_id,
+                    terminal_id,
+                }) = notification.params()
+                {
+                    terminals.detach(thread_id, terminal_id, &self.replies);
+                }
             }
-            return;
-        }
-        if self.session.is_some() && notification.method == DeviceSend::NAME {
-            if let Ok(params) = notification.params() {
-                self.daemon.devices.send(&self.replies, params);
+            DeviceSend::NAME if initialized => {
+                if let Ok(params) = notification.params() {
+                    self.daemon.devices.send(&self.replies, params);
+                }
             }
-            return;
-        }
-        if self.session.is_some() && notification.method == DeviceClose::NAME {
-            if let Ok(params) = notification.params() {
-                self.daemon.devices.close(&self.replies, &params);
+            DeviceClose::NAME if initialized => {
+                if let Ok(params) = notification.params() {
+                    self.daemon.devices.close(&self.replies, &params);
+                }
             }
-            return;
+            CancelRequest::NAME => self.cancel(notification),
+            method => debug!(method = ?untrusted(method), "ignored a notification"),
         }
-        if notification.method != CancelRequest::NAME {
-            debug!(
-                method = ?untrusted(&notification.method),
-                "ignored a notification"
-            );
-            return;
-        }
+    }
+
+    /// `$/cancelRequest`: cancels the request in flight with its id.
+    fn cancel(&self, notification: &Notification) {
         match notification.params::<<CancelRequest as NotificationMethod>::Params>() {
             Ok(CancelRequestParams { id }) => {
                 if let Some(cancel) = lock(&self.in_flight).get(&id) {
@@ -661,28 +655,33 @@ mod tests {
         Daemon::for_tests(dir, retention, Duration::from_secs(90))
     }
 
+    /// A new project named `name`, on `repo_path`, with nothing else set.
+    fn project(name: &str, repo_path: &str) -> Project {
+        Project {
+            id: ProjectId::generate(),
+            name: name.to_owned(),
+            icon: None,
+            repo_path: repo_path.to_owned(),
+            branch: None,
+            coordinator: None,
+            permission: None,
+            autonomy: None,
+            created_at: Timestamp::now(),
+            updated_at: Timestamp::now(),
+            base_branch: None,
+            integration_branch: None,
+            auto_land: false,
+            allow_api_keys: None,
+            max_children: None,
+            checks: None,
+            proposed_checks: None,
+            computer: None,
+        }
+    }
+
     async fn append(daemon: &Daemon, count: usize) {
         for _ in 0..count {
-            let project = Project {
-                id: ProjectId::generate(),
-                name: "parallax".to_owned(),
-                icon: None,
-                repo_path: "/src/parallax".to_owned(),
-                branch: None,
-                coordinator: None,
-                permission: None,
-                autonomy: None,
-                created_at: Timestamp::now(),
-                updated_at: Timestamp::now(),
-                base_branch: None,
-                integration_branch: None,
-                auto_land: false,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
-            };
+            let project = project("parallax", "/src/parallax");
             daemon
                 .store
                 .append(
@@ -864,26 +863,7 @@ mod tests {
         let mut sink = FramedWrite::new(tokio::io::sink(), FrameCodec::with_max_frame_bytes(1024));
         let log = crate::event_log::EventLog::new(10);
         let project_created = |name: &str| ParallaxEvent::ProjectCreated {
-            project: Project {
-                id: ProjectId::generate(),
-                name: name.to_owned(),
-                icon: None,
-                repo_path: "/src".to_owned(),
-                branch: None,
-                coordinator: None,
-                permission: None,
-                autonomy: None,
-                created_at: Timestamp::now(),
-                updated_at: Timestamp::now(),
-                base_branch: None,
-                integration_branch: None,
-                auto_land: false,
-                allow_api_keys: None,
-                max_children: None,
-                checks: None,
-                proposed_checks: None,
-                computer: None,
-            },
+            project: project(name, "/src"),
         };
         let event = |name: &str| {
             let seq = log.append_in_memory(Timestamp::now(), None, project_created(name));

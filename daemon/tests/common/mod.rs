@@ -1,9 +1,9 @@
 //! What the real-CLI tests share: a fake Messages API on 127.0.0.1 that asks for tool calls, a way
 //! to run Claude Code as plxd runs a worker against it, and the Bash call's output.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +15,46 @@ use plxd::paths::DataDir;
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+
+/// The Claude Code CLI under test, which `PLX_SANDBOX_CLAUDE` names. A test without one is
+/// skipped, and says so.
+pub fn claude_under_test() -> Option<OsString> {
+    let claude = std::env::var_os("PLX_SANDBOX_CLAUDE");
+    if claude.is_none() {
+        eprintln!("skipped: set PLX_SANDBOX_CLAUDE to test the real Claude Code CLI");
+    }
+    claude
+}
+
+/// A worker's worktree as plxd lays one out.
+pub struct Worktree {
+    /// `data/worktrees/run`, whose `.git` file points into [`Worktree::git_dir`].
+    pub path: PathBuf,
+    /// The repository's git folder, `root/repo/.git`.
+    pub git_dir: PathBuf,
+    /// The Project's context, `data/context/p`.
+    pub context: PathBuf,
+}
+
+/// Makes a [`Worktree`] in plxd's data folder `data`, for a repository under `root`.
+pub fn worktree(root: &Path, data: &Path) -> Worktree {
+    let path = data.join("worktrees/run");
+    let context = data.join("context/p");
+    let git_dir = root.join("repo/.git");
+    for folder in [&path, &context, &git_dir] {
+        std::fs::create_dir_all(folder).unwrap();
+    }
+    std::fs::write(
+        path.join(".git"),
+        format!("gitdir: {}/worktrees/run\n", git_dir.display()),
+    )
+    .unwrap();
+    Worktree {
+        path,
+        git_dir,
+        context,
+    }
+}
 
 /// A worker's request as plxd builds it (0013): a worktree at `worktree` in plxd's data folder
 /// `data`, whose repository's git folder is `git_dir`, with `context` writable, and a temp

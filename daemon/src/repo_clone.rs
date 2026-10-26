@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::Path;
-use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
@@ -33,6 +33,10 @@ const MAX_URL_BYTES: usize = 4096;
 /// git's latest progress line for each clone under way, by the id it was given.
 static PROGRESS: LazyLock<Mutex<HashMap<RepoId, String>>> = LazyLock::new(Mutex::default);
 
+fn progress_lines() -> MutexGuard<'static, HashMap<RepoId, String>> {
+    PROGRESS.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// `repo/clone`: clones `url` into `path`, an SSH URL falling back to HTTPS, then registers it.
 pub(crate) async fn clone(
     daemon: Arc<Daemon>,
@@ -58,15 +62,20 @@ pub(crate) async fn clone(
         )
         .await
     };
-    // A retry after the answer was lost finds its own clone there.
-    if dest.symlink_metadata().is_ok() {
-        return if same_repo(&daemon, &dest, &url).await {
-            register(daemon).await
+    // What is already at the path is registered only when it is a clone of `url`.
+    let check_existing = async |daemon: &Daemon| {
+        if same_repo(daemon, &dest, &url).await {
+            Ok(())
         } else {
             Err(ErrorObject::invalid_params(format!(
                 "{path} already exists"
             )))
-        };
+        }
+    };
+    // A retry after the answer was lost finds its own clone there.
+    if dest.symlink_metadata().is_ok() {
+        check_existing(&daemon).await?;
+        return register(daemon).await;
     }
     let (Some(parent), Some(name)) = (dest.parent(), dest.file_name()) else {
         return Err(ErrorObject::invalid_params(format!(
@@ -100,13 +109,8 @@ pub(crate) async fn clone(
         // may have finished first.
         if dest.symlink_metadata().is_ok() {
             let _ = std::fs::remove_dir_all(&staging);
-            return if same_repo(&daemon, &dest, &url).await {
-                register(daemon).await
-            } else {
-                Err(ErrorObject::invalid_params(format!(
-                    "{path} already exists"
-                )))
-            };
+            check_existing(&daemon).await?;
+            return register(daemon).await;
         }
         if let Err(error) = std::fs::rename(&staging, &dest) {
             let _ = std::fs::remove_dir_all(&staging);
@@ -131,9 +135,7 @@ async fn same_repo(daemon: &Daemon, dest: &Path, url: &str) -> bool {
 pub(crate) async fn progress(
     params: RepoCloneProgressParams,
 ) -> Result<RepoCloneProgressResult, ErrorObject> {
-    let progress = PROGRESS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+    let progress = progress_lines()
         .get(&params.id)
         .filter(|line| !line.is_empty())
         .cloned();
@@ -189,7 +191,7 @@ struct Progress(RepoId);
 impl Progress {
     /// Adds clone `id`, or `None` when one with that id is under way.
     fn start(id: RepoId) -> Option<Self> {
-        let mut all = PROGRESS.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut all = progress_lines();
         if all.contains_key(&id) {
             return None;
         }
@@ -200,10 +202,7 @@ impl Progress {
 
 impl Drop for Progress {
     fn drop(&mut self) {
-        PROGRESS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&self.0);
+        progress_lines().remove(&self.0);
     }
 }
 
@@ -258,11 +257,7 @@ async fn run(daemon: &Daemon, id: RepoId, url: &str, dest: &Path) -> Result<(), 
                 if fatal.is_none() {
                     fatal = failure(&line).map(str::to_owned);
                 }
-                if let Some(entry) = PROGRESS
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .get_mut(&id)
-                {
+                if let Some(entry) = progress_lines().get_mut(&id) {
                     *entry = line;
                 }
             }

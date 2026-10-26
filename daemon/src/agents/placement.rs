@@ -490,7 +490,10 @@ async fn dispatch_one(
         Placed::Picked => session_account(&run.state.account_id),
     };
     info!(run = %id, account = ?account, "placing a waiting child");
-    let pending = pending(&row);
+    let pending = Pending {
+        images: extra.images,
+        threads: extra.threads,
+    };
     ask(daemon, id, |reply| Command::Place {
         account,
         pending,

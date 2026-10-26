@@ -7,14 +7,12 @@ use std::time::Duration;
 
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::methods::{
-    AgentCancel, AgentList, AgentResumeNow, AgentSend, AgentStart, HostSettingsGet, RepoAdd,
-    ThreadStart,
+    AgentCancel, AgentList, AgentResumeNow, AgentSend, AgentStart, HostSettingsGet, ThreadStart,
 };
 use parallax_protocol::{
     AgentBackgroundKind, AgentBackgroundTask, AgentCancelParams, AgentListParams, AgentOutputItem,
     AgentPermission, AgentResumeNowParams, AgentRunState, AgentStatus, ErrorKind,
-    EventsEventParams, HostSettingsGetParams, ParallaxEvent, ProjectId, Provider, RepoAddParams,
-    RepoId, RunId, TurnId,
+    EventsEventParams, HostSettingsGetParams, ParallaxEvent, Provider, RunId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{
@@ -23,8 +21,8 @@ use plxd::backend::{
 use plxd::routing::BackendRegistry;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake_backend, init, items, project_params, real_repo,
-    send_params, start_params, subscribe, until, updated_to,
+    Conn, Host, end_turn, fake_backend, init, items, real_repo, scope, send_params, start_params,
+    subscribe, until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -167,16 +165,15 @@ fn turns(events: &[EventsEventParams]) -> Vec<(String, bool)> {
 }
 
 /// Starts a run on a fresh plxd whose first CLI the limit stops until `reset`, and the scripts
-/// after it, and waits until it is waiting. Returns the host, a subscribed client, and the run.
+/// after it, and waits until it is waiting. Returns the host, a subscribed client, the run, and
+/// the seq of the update that says it waits.
 async fn waiting_run(
     reset: Timestamp,
     seen: &Arc<Mutex<Vec<RunRequest>>>,
 ) -> (Host, Conn, RunId, u64) {
     let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], seen);
     let host = host(temp_dir(), backends, Duration::from_secs(600));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
@@ -195,9 +192,7 @@ async fn a_limited_run_resumes_at_its_reset_after_a_restart() {
     let reset = in_seconds(3);
     let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], &seen);
     let host = host(temp_dir(), backends, Duration::from_secs(600));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
@@ -259,21 +254,11 @@ async fn a_limited_run_resumes_at_its_reset_after_a_restart() {
 async fn cancelling_a_waiting_run_clears_its_timer() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let reset = in_seconds(3);
-    let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], &seen);
-    let host = host(temp_dir(), backends, Duration::from_secs(600));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
-    let run = client
-        .call::<AgentStart>(start_params(project.id, "Build it."))
-        .await
-        .unwrap()
-        .run;
-    until(&mut client, |event| waiting(event).is_some()).await;
+    let (host, mut client, run, _) = waiting_run(reset, &seen).await;
 
     let cancelled = client
         .call::<AgentCancel>(AgentCancelParams {
-            run_id: run.id,
+            run_id: run,
             from: None,
         })
         .await
@@ -283,9 +268,9 @@ async fn cancelling_a_waiting_run_clears_its_timer() {
     assert_eq!(cancelled.resume_at, None);
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(seen.lock().unwrap().len(), 1, "nothing resumed it");
-    assert_eq!(status(&mut client, run.id).await, AgentStatus::Cancelled);
+    assert_eq!(status(&mut client, run).await, AgentStatus::Cancelled);
     let refused = client
-        .call::<AgentResumeNow>(AgentResumeNowParams { run_id: run.id })
+        .call::<AgentResumeNow>(AgentResumeNowParams { run_id: run })
         .await
         .unwrap_err();
     assert_eq!(kind(&refused), ErrorKind::RunNotResumable);
@@ -300,9 +285,7 @@ async fn with_no_reset_time_it_retries_on_a_growing_interval() {
     let backoff = Duration::from_millis(300);
     let backends = sequence(vec![limited("s-1", None)], &seen);
     let host = host(temp_dir(), backends, backoff);
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
@@ -342,15 +325,8 @@ async fn a_plain_thread_waits_only_with_the_host_setting_on() {
     assert!(!settings.auto_resume, "off by default");
 
     let checkout = temp_dir();
-    let repo = client
-        .call::<RepoAdd>(RepoAddParams {
-            id: RepoId::generate(),
-            path: real_repo(checkout.path()).to_str().unwrap().to_owned(),
-        })
-        .await
-        .unwrap()
-        .repo;
-    let scope = ProjectId::try_from(uuid::Uuid::from(repo.id)).unwrap();
+    let repo = client.add(&real_repo(checkout.path())).await;
+    let scope = scope(repo.id);
     subscribe(&mut client, scope, 0).await;
     let start = crate::open_pr::thread(Some(repo.id));
     let run_id = start.run_id;
@@ -459,9 +435,7 @@ async fn started(
         sequence(scripts, seen),
         Duration::from_secs(600),
     );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    subscribe(&mut client, project.id, 0).await;
+    let (mut client, project) = host.project_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
