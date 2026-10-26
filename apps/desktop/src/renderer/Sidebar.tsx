@@ -175,7 +175,9 @@ import {
   forgetPin,
   pinDragType,
   pinIcons,
+  orderOf,
   pinFavorites,
+  pinLayout,
   pinUnread,
   todayGroup,
   todayFolded,
@@ -183,7 +185,7 @@ import {
 } from "./pins";
 import { Favorites, type FavoriteAction } from "./Favorites";
 import { close, Fold, quietFor, shownRows, Tick, TodayDivider } from "./SidebarParts";
-import { PinList, type Pin as PinData } from "./PinList";
+import { DropLine, PinList, type PinDrag } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 import { cancelPrefetch, prefetchThread } from "./threadWatches";
 
@@ -806,6 +808,25 @@ export function ThreadList({
   // background work or a watched pull request stays there too).
   const pinned = pool.filter((i) => i.kind === "thread" && i.thread.pinned);
   const unpinned = pool.filter((i) => !pinned.includes(i));
+  // The pinned threads moved up into the favorites, which leave the pinned rows.
+  const favoriteKeys = pinFavorites.use();
+  const favoriteThreads = favoriteKeys.flatMap((k) => {
+    const i = byKey.get(k);
+    return i?.kind === "thread" &&
+      i.thread.pinned &&
+      !isArchived(i) &&
+      !isSnoozed(i) &&
+      !doomed.has(k) &&
+      matched.has(k)
+      ? [i]
+      : [];
+  });
+  // The other pinned threads, as rows atop Today in the order dragged into (PLX-1043).
+  const pinOrder = pinLayout.use();
+  const pinnedRows = orderOf(
+    pinOrder,
+    pinned.flatMap((i) => (favoriteThreads.some((f) => f === i) ? [] : [i.key])),
+  ).map((k) => byKey.get(k)!);
   const workingTops = workingSection ? unpinned.filter((i) => working(rowAttention(i))) : [];
   const topThreads = unpinned.filter((i) => !workingTops.includes(i));
   const selectedKey =
@@ -858,10 +879,11 @@ export function ThreadList({
           .filter((i) => !isFolded(groupKey(i)))
           .sort((a, b) => groupPlace.get(groupKey(a))! - groupPlace.get(groupKey(b))!);
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // Projects' rows, unless folded away, then Today's threads, then Working's, while it's open.
+  // Projects' and pinned threads' rows, unless folded away, then Today's threads, then Working's,
+  // while it's open.
   const topFolded = topCollapsed.use();
   const listed = [
-    ...(topFolded && !words.length ? [] : projects),
+    ...(topFolded && !words.length ? [] : [...projects, ...pinnedRows]),
     ...todayRows,
     ...(sections.working ? workingTops : []),
   ];
@@ -1167,8 +1189,9 @@ export function ThreadList({
     else if ((key === "Backspace" || key === "Delete") && thread) act(() => askDelete(item));
   };
 
-  // A thread's row. `nested`, under its repo's heading, it needn't name the repo.
-  const row = (item: Item, nested = false) => {
+  // A thread's row. `nested`, under its repo's heading, it needn't name the repo. A pinned one
+  // moves among the pins with `pinDrag`.
+  const row = (item: Item, nested = false, pinDrag?: PinDrag) => {
     if (item.kind !== "thread") return null;
     const n = modHeld ? listed.indexOf(item) : -1;
     const badge = n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined;
@@ -1180,6 +1203,7 @@ export function ThreadList({
         key={item.key}
         look={compact ? "compact" : undefined}
         at={item.at}
+        {...(pinDrag && { pinDrag })}
         rowKey={item.key}
         thread={t}
         hostId={item.host.id}
@@ -1299,8 +1323,7 @@ export function ThreadList({
     else deleteDialog.current?.close();
   };
 
-  // The pinned threads, in the order the user makes (pins.ts), each with the icon
-  // chosen for it, else its repo's, in its color.
+  // Each favorite's icon, chosen for it, else its repo's.
   const pinIconsNow = pinIcons.use();
   const [unpinOver, setUnpinOver] = useState(false);
   // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
@@ -1333,12 +1356,11 @@ export function ThreadList({
       run: () => askDelete(i),
     },
   ];
-  const pinOf = (i: Item & { kind: "thread" }): PinData => {
+  // A favorite's square: its chosen icon, else its repo's, its status, and its thread's actions.
+  const pinOf = (i: Item & { kind: "thread" }) => {
     const chosen = pinIconsNow[i.key];
     const repo = repoOfRow(i);
     return {
-      key: i.key,
-      title: i.title,
       icon: chosen ? (
         <ProjectIcon icon={chosen} className="size-4" />
       ) : repo ? (
@@ -1346,37 +1368,14 @@ export function ThreadList({
       ) : (
         <MessageSquare aria-hidden className="size-4 text-muted-foreground" />
       ),
-      tint: chosen?.color
-        ? `var(--project-${chosen.color})`
-        : repo
-          ? repoColor(repo, repoIconOf(repo, sharedIcons))
-          : "var(--faint-foreground)",
       attention: rowAttention(i),
-      selected: i.key === openKey,
       thread: { hostId: i.host.id, id: i.thread.id },
-      renamable: "threadLineage" in i.view.capabilities,
       actions: threadActions(i),
-      onKeys: (e) => {
+      onKeys: (e: ReactKeyboardEvent<HTMLElement>) => {
         if (/^(e|s|backspace|delete)$/i.test(e.key)) rowKeys(e, i);
       },
     };
   };
-  // The pinned threads moved up into the favorites, which leave the pinned rows.
-  const favoriteKeys = pinFavorites.use();
-  const favoriteThreads = favoriteKeys.flatMap((k) => {
-    const i = byKey.get(k);
-    return i?.kind === "thread" &&
-      i.thread.pinned &&
-      !isArchived(i) &&
-      !isSnoozed(i) &&
-      !doomed.has(k) &&
-      matched.has(k)
-      ? [i]
-      : [];
-  });
-  const pins = pinned.flatMap((i) =>
-    i.kind === "thread" && !favoriteThreads.includes(i) ? [pinOf(i)] : [],
-  );
   // Moves `key` into the favorites, last (pins.ts).
   const favorite = (key: string) =>
     pinFavorites.set([...pinFavorites.get().filter((k) => k !== key), key]);
@@ -1400,26 +1399,17 @@ export function ThreadList({
 
   const pinList = (
     <PinList
-      onFavorite={favorite}
-      onPlaced={unfavorite}
-      onMarkUnread={(key) => {
-        const item = byKey.get(key);
-        if (item) markUnread(item);
-      }}
-      pins={pins}
+      keys={pinnedRows.map((i) => i.key)}
       searching={words.length > 0}
-      onOpen={openKeyed}
+      row={(key, drag) => {
+        const item = byKey.get(key);
+        return item && row(item, false, drag);
+      }}
       onPinThread={(hostId, threadId) => {
         const item = byKey.get(`${hostId}/${threadId}`);
         if (item?.kind === "thread" && !item.thread.pinned && !item.thread.parent) void pin(item);
       }}
-      onUnpin={unpinKey}
-      onRename={(key, title) => {
-        const item = byKey.get(key);
-        if (item) void rename(item, title);
-      }}
-      onRest={restKeyed}
-      onLeave={hideCard}
+      onPlaced={unfavorite}
     />
   );
   // A pinned thread dragged onto the thread list unpins.
@@ -1708,7 +1698,8 @@ export function ThreadList({
   );
   // Folding hides the Projects, favorites, and pins, so Today's threads have the sidebar; it needs
   // something above to fold.
-  const folded = topFolded && (projects.length > 0 || favorites.length > 0 || pins.length > 0);
+  const folded =
+    topFolded && (projects.length > 0 || favorites.length > 0 || pinnedRows.length > 0);
   const list = (
     <>
       <Fold open={!folded || words.length > 0}>
@@ -1744,7 +1735,7 @@ export function ThreadList({
       <TodayDivider
         folded={folded}
         onFold={
-          projects.length > 0 || favorites.length > 0 || pins.length > 0
+          projects.length > 0 || favorites.length > 0 || pinnedRows.length > 0
             ? (next) => topCollapsed.set(next)
             : undefined
         }
@@ -2891,9 +2882,12 @@ function ThreadRow({
   onAutoResume,
   onRest,
   onLeave,
+  pinDrag,
 }: {
   /** Today's one-line look (pins.ts): where it is, its title, and its status. */
   look?: "compact";
+  /** A pinned row's move among the pins (PinList.tsx). */
+  pinDrag?: PinDrag;
   /** When it was last active (`activeAt`), for its age. */
   at: string;
   /** Its key in the list, for keyboard moves and sliding when the list moves. */
@@ -3046,6 +3040,16 @@ function ThreadRow({
     ) : (
       <AttentionBadge attention={attention} since={lastUserPrompt(thread)} />
     ));
+  // A one-line row has no details line for its pin, so the pin leads its status.
+  const shownStatus =
+    look === "compact" && thread.pinned && !badge ? (
+      <span className="flex items-center gap-1.5">
+        <Pin aria-label="Pinned" className="size-3" />
+        {status}
+      </span>
+    ) : (
+      status
+    );
   const titleColor =
     selected || attention !== "settled"
       ? "text-foreground"
@@ -3099,10 +3103,16 @@ function ThreadRow({
     <li
       data-kind="thread"
       data-flip={rowKey}
-      className={`group/row relative rounded-lg transition-colors duration-100 ${rowLook} ${drafted ? draftGap : ""} ${flash ? "row-flash" : ""}`}
+      className={`group/row relative rounded-lg transition-[background-color,opacity] duration-100 ${rowLook} ${drafted ? draftGap : ""} ${flash ? "row-flash" : ""} ${pinDrag?.dragging ? "opacity-40" : ""}`}
       onMouseEnter={(e) => onRest(e.currentTarget)}
       onMouseLeave={onLeave}
+      {...(pinDrag && {
+        onDragOver: pinDrag.onDragOver,
+        onDragLeave: pinDrag.onDragLeave,
+        onDrop: pinDrag.onDrop,
+      })}
     >
+      {pinDrag?.drop && <DropLine edge={pinDrag.drop} />}
       <Main
         {...(!renaming && { type: "button" as const })}
         aria-current={selected ? "page" : undefined}
@@ -3120,14 +3130,16 @@ function ThreadRow({
         onDragStart={(e) => {
           onLeave();
           dragThread(e.dataTransfer, hostId, thread.id);
+          pinDrag?.onDragStart(e);
         }}
+        onDragEnd={pinDrag?.onDragEnd}
         className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${look === "compact" ? "py-[5px]" : "py-2"}`}
       >
         <RowHead
           icon={oneLine && <RepoIcon repo={repo} />}
           title={titleText}
           titleColor={titleColor}
-          status={status}
+          status={shownStatus}
           renaming={!oneLine && renaming}
         />
         {/* Two-line rows: the title, then where it is and its details. One-line rows keep to one

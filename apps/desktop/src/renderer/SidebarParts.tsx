@@ -85,9 +85,10 @@ function Segmented<T extends string | number | boolean | null>({
 }
 
 /**
- * The line between what you keep and today's threads: Fold, which hides the Projects, favorites,
- * and pins above it, Clear, for what's finished, and View, for how today's threads group, how tall
- * their rows are, whether Projects list at all, and when finished ones archive themselves.
+ * The row between what you keep and today's threads, with no line (PLX-1043): Fold, which hides the
+ * Projects, favorites, and pins above it, Clear, for what's finished, and View, for how today's
+ * threads group, how tall their rows are, whether Projects list at all, and when finished ones
+ * archive themselves.
  */
 export function TodayDivider({
   clearable,
@@ -123,13 +124,13 @@ export function TodayDivider({
   const panelId = useId();
   const icon =
     "grid size-5 shrink-0 place-items-center rounded-md text-faint-foreground transition-[background-color,color] hover:bg-hover hover:text-foreground [&_svg]:size-3.5";
-  // Fold and View take no room until the divider is hovered or focused, so the line runs to Clear
-  // or the edge; they slide in, and stay while folded or while View's panel is open.
+  // Fold and View take no room until the row is hovered or focused; they slide in, and stay while
+  // folded or while View's panel is open.
   const [viewing, setViewing] = useState(false);
   return (
     // View's panel hangs from the row's right edge, which holds still while its buttons slide in.
-    <div className="group/divider my-2 flex h-5 items-center px-2 [anchor-name:--today-divider]">
-      <span className="h-px flex-1 bg-border" />
+    <div className="group/divider my-1 flex h-5 items-center px-2 [anchor-name:--today-divider]">
+      <span className="flex-1" />
       {clearable > 0 && (
         <span className="grow-in ml-1 flex">
           <button
