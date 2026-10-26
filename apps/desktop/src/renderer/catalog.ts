@@ -20,6 +20,7 @@ import type { AgentEffort, AgentPermission, ProviderInfo } from "../protocol/gen
 // Codex's catalog gives every model 272K by default and all but GPT-5.5 up to 872K, and every one
 // the Fast service tier.
 // Cursor's backend maps neither, so its models offer none.
+// Release dates are the makers' announcements, except Haiku 5.5's, the day Claude Code took it.
 // Each model's `provider` here is the kind of instance that runs it: on an old plxd, the built-in
 // instance of that id; on one with `providers`, every instance of that kind (`instanceModels`).
 
@@ -32,7 +33,8 @@ export interface Model {
   name: string;
   /** The instance that runs it. */
   provider: Provider;
-  isNew?: boolean;
+  /** The day its maker released it, `YYYY-MM-DD`, for `isNew`. */
+  released?: string;
   /** The context windows it offers, in tokens, its default first. */
   contexts: number[];
   /** Whether it has fast mode. */
@@ -40,6 +42,12 @@ export interface Model {
   /** One the user added to its instance (`ProviderInstance.models`). */
   custom?: boolean;
 }
+
+const week = 7 * 24 * 60 * 60 * 1000;
+
+/** Whether the pickers mark `model` New: less than a week past its release. */
+export const isNew = (model: Model, now = Date.now()) =>
+  !!model.released && now - Date.parse(model.released) < week;
 
 const claude1M = [1_000_000, 200_000];
 const codex872K = [272_000, 872_000];
@@ -50,7 +58,7 @@ export const models: Model[] = [
     id: "claude-opus-5-5",
     name: "Claude Opus 5.5",
     provider: "claude",
-    isNew: true,
+    released: "2026-09-22",
     contexts: claude1M,
     fast: true,
   },
@@ -58,7 +66,7 @@ export const models: Model[] = [
     id: "claude-sonnet-5-5",
     name: "Claude Sonnet 5.5",
     provider: "claude",
-    isNew: true,
+    released: "2026-09-29",
     contexts: claude1M,
   },
   { id: "claude-fable-5-1", name: "Claude Fable 5.1", provider: "claude", contexts: claude1M },
@@ -86,7 +94,7 @@ export const models: Model[] = [
     id: "claude-haiku-5-5",
     name: "Claude Haiku 5.5",
     provider: "claude",
-    isNew: true,
+    released: "2026-10-11",
     contexts: claude1M,
   },
   { id: "claude-haiku-4-5", name: "Claude Haiku 4.5", provider: "claude", contexts: [200_000] },
@@ -94,7 +102,7 @@ export const models: Model[] = [
     id: "gpt-6.1-sol",
     name: "GPT-6.1 Sol",
     provider: "codex",
-    isNew: true,
+    released: "2026-09-29",
     contexts: codex872K,
     fast: true,
   },
@@ -102,7 +110,7 @@ export const models: Model[] = [
     id: "gpt-6-astra",
     name: "GPT-6 Astra",
     provider: "codex",
-    isNew: true,
+    released: "2026-09-03",
     contexts: codex872K,
     fast: true,
   },
@@ -110,7 +118,7 @@ export const models: Model[] = [
     id: "gpt-6-sol",
     name: "GPT-6 Sol",
     provider: "codex",
-    isNew: true,
+    released: "2026-09-22",
     contexts: codex872K,
     fast: true,
   },
@@ -118,7 +126,7 @@ export const models: Model[] = [
     id: "gpt-6-luna",
     name: "GPT-6 Luna",
     provider: "codex",
-    isNew: true,
+    released: "2026-09-22",
     contexts: codex872K,
     fast: true,
   },
@@ -133,7 +141,13 @@ export const models: Model[] = [
   { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "codex", contexts: codex872K, fast: true },
   { id: "gpt-5.5", name: "GPT-5.5", provider: "codex", contexts: [272_000], fast: true },
   { id: "auto", name: "Auto", provider: "cursor", contexts: [] },
-  { id: "composer-2.5", name: "Composer 2.5", provider: "cursor", contexts: [], isNew: true },
+  {
+    id: "composer-2.5",
+    name: "Composer 2.5",
+    provider: "cursor",
+    contexts: [],
+    released: "2026-05-18",
+  },
   { id: "composer-2.5-fast", name: "Composer 2.5 Fast", provider: "cursor", contexts: [] },
   { id: "claude-opus-5-5-medium", name: "Claude Opus 5.5", provider: "cursor", contexts: [] },
   { id: "claude-fable-5-1-high", name: "Claude Fable 5.1", provider: "cursor", contexts: [] },

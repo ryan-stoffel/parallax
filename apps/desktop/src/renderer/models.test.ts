@@ -1,6 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
+import { isNew } from "./catalog";
 import { catalogOf, instanceModels } from "./models";
 import { knownModel } from "./Subagents";
 
@@ -77,4 +78,12 @@ test("a reported model is its exact id before a longer one's prefix (PLX-495)", 
   // A dated id is never taken for a shorter model (PLX-715).
   expect(knownModel("claude-sonnet-5-5-20261001")?.name).toBe("Claude Sonnet 5.5");
   expect(knownModel("claude-haiku-5-5-20261001")?.name).toBe("Claude Haiku 5.5");
+});
+
+test("a model is New for the week after its release", () => {
+  const m = { id: "m", name: "M", provider: "claude", contexts: [], released: "2026-10-20" };
+  expect(isNew(m, Date.parse("2026-10-20"))).toBe(true);
+  expect(isNew(m, Date.parse("2026-10-26T23:59:59Z"))).toBe(true);
+  expect(isNew(m, Date.parse("2026-10-27"))).toBe(false);
+  expect(isNew({ ...m, released: undefined }, Date.parse("2026-10-20"))).toBe(false);
 });

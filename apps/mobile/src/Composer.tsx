@@ -55,6 +55,7 @@ import { encodedImage, withFiles } from "../../desktop/src/renderer/attachments"
 import {
   accessLevels,
   effortLevels,
+  isNew,
   type Model,
 } from "../../desktop/src/renderer/catalog";
 import { imageCaps } from "../../desktop/src/renderer/images";
@@ -139,7 +140,7 @@ function modelLine(m: Model): string | undefined {
   const parts = [
     m.contexts[0] && `${m.contexts[0] >= 1_000_000 ? `${m.contexts[0] / 1_000_000}M` : `${m.contexts[0] / 1000}K`} context`,
     m.fast && "fast mode",
-    m.isNew && "new",
+    isNew(m) && "new",
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : undefined;
 }

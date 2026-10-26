@@ -5,6 +5,7 @@ import type { AgentRun } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { changeMessage } from "./MemoryPanel";
+import { isNew } from "./catalog";
 import { useCatalog, type Instance, type Model } from "./models";
 import { notify } from "./notifications";
 import { kindOf, logoOf } from "./providers";
@@ -227,7 +228,7 @@ function ModelPick({
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-body hover:bg-hover"
               >
                 <span className="min-w-0 flex-1 truncate">{m.name}</span>
-                {m.isNew && <span className="text-caption text-accent">New</span>}
+                {isNew(m) && <span className="text-caption text-accent">New</span>}
                 {on && <Check aria-hidden className="size-3.5 text-accent" />}
               </button>
             );
