@@ -6,11 +6,18 @@
 //! to the repository's [`BRANCH`] branch, created from the default branch on first use, at
 //! `pr-media/<YYYYMMDD-HHMMSS>-<hash>-<name>`. The link is
 //! `raw.githubusercontent.com/<repo>/<commit>/<path>`, pinned to the commit; the script's
-//! `blob/...?raw=true` links render broken.
+//! `blob/...?raw=true` links render broken. Raw links carry no sign-in, so they don't render for a
+//! private repository.
 //!
-//! Uploads wait their turn in [`QUEUE`], one at a time per host, and wait out a rate limit with
-//! [`BACKOFF`]. The index in the data folder's [`INDEX`] maps each repository's uploaded SHA-256s
-//! to their links, so the same bytes again cost no GitHub call, across restarts.
+//! The index in the data folder's [`INDEX`] maps each repository's uploaded SHA-256s to their
+//! links, so the same bytes again cost no GitHub call and never wait, across restarts. A hit isn't
+//! checked against GitHub: if someone deletes the `pr-media` branch, its links break and the index
+//! keeps handing them out until [`INDEX`] is deleted.
+//!
+//! Uploads wait their turn in [`QUEUE`], one at a time per host. plxd drops a connection silent
+//! for 90 s and `plxd mcp` sends nothing while a call waits, so a call ends within [`BUDGET`]: it
+//! waits at most [`QUEUE_WAIT`] for its turn, fails at once on a used-up rate limit, naming when it
+//! resets, and backs off a secondary limit with [`BACKOFF`] only while the budget lasts.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -19,10 +26,11 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{PrMediaFile, PrMediaUploaded, PrUploadMediaParams, PrUploadMediaResult};
+use tokio::time::Instant;
 use tracing::warn;
 
 use crate::server::Daemon;
-use crate::worktree::{WorktreeManager, github_pr_urls};
+use crate::worktree::{PrError, WorktreeManager, github_pr_urls};
 
 /// The branch, and the folder on it, that the files go to, as `upload.sh` uses.
 const BRANCH: &str = "pr-media";
@@ -34,18 +42,22 @@ const MAX_BYTES: u64 = 25 * 1024 * 1024;
 const IMAGES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 const VIDEOS: &[&str] = &["mp4", "mov", "webm"];
 
-/// Waits before each retry of a call GitHub refused for a rate limit, primary or secondary.
-/// GitHub asks for at least a minute after a secondary limit.
-const BACKOFF: [Duration; 3] = [
-    Duration::from_secs(30),
-    Duration::from_secs(60),
-    Duration::from_secs(120),
-];
+/// The longest a call takes, under the 60 s other long tools keep to (`agent/wait`), well inside
+/// plxd's 90 s limit on a silent connection.
+const BUDGET: Duration = Duration::from_secs(55);
+
+/// The longest a call waits for its turn in [`QUEUE`].
+const QUEUE_WAIT: Duration = Duration::from_secs(40);
+
+/// Waits before each retry of a call GitHub refused for a secondary rate limit, each taken only
+/// if it ends inside the call's [`BUDGET`].
+const BACKOFF: [Duration; 2] = [Duration::from_secs(10), Duration::from_secs(20)];
 
 /// The dedupe index's file in the data folder: `{ "<owner>/<repo>": { "<sha256>": "<url>" } }`.
 const INDEX: &str = "pr-media.json";
 
-/// The host's upload queue: held for a whole call, so uploads run one at a time.
+/// The host's upload queue: held from a call's first upload to its end, so uploads run one at a
+/// time.
 static QUEUE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Repository, lowercase, to SHA-256 to link.
@@ -62,11 +74,13 @@ struct Media {
     video: bool,
 }
 
-/// `pr/uploadMedia`: checks every file, then uploads them in order once it is this call's turn.
+/// `pr/uploadMedia`: checks every file, then answers each from the index or uploads it, within
+/// [`BUDGET`].
 pub(crate) async fn upload(
     daemon: &Daemon,
     params: PrUploadMediaParams,
 ) -> Result<PrUploadMediaResult, ErrorObject> {
+    let deadline = Instant::now() + BUDGET;
     let repo = repository(&params.url).ok_or_else(|| {
         ErrorObject::invalid_params(format!("{:?} is not a GitHub pull request URL", params.url))
     })?;
@@ -79,39 +93,73 @@ pub(crate) async fn upload(
         .map(check)
         .collect::<Result<Vec<_>, _>>()
         .map_err(ErrorObject::invalid_params)?;
-    let _turn = QUEUE.lock().await;
     let gh = daemon.agents.worktrees();
     let index = daemon.data_dir.root().join(INDEX);
     let now = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string();
-    let files = upload_all(&index, &repo, files, &now, |path, bytes| {
-        put(gh, &repo, path, bytes)
-    })
-    .await
-    .map_err(|error| ErrorObject::invalid_params(format!("could not upload: {error}")))?;
+    let uploads = upload_all(&index, &repo, files, &now, turn(&QUEUE), |path, bytes| {
+        put(gh, &repo, path, bytes, deadline)
+    });
+    let files = tokio::time::timeout_at(deadline, uploads)
+        .await
+        .unwrap_or_else(|_| {
+            Err(PrError::Gh(format!(
+                "uploading took over {BUDGET:?}; the files that finished are kept, so call again \
+                 for the rest"
+            )))
+        })
+        .map_err(|error| crate::agents::pr_error(&error))?;
     Ok(PrUploadMediaResult { files })
 }
 
-/// Uploads each of `files` to `repo` with `put`, which commits bytes at a path and returns the
-/// commit, unless the index at `index` has the same bytes for `repo`. Records each upload as it
-/// lands, so a failure part way keeps the ones before it.
-async fn upload_all<F: Future<Output = Result<String, String>>>(
+/// This call's turn in `queue`, or after [`QUEUE_WAIT`] an error saying to call again.
+async fn turn(queue: &tokio::sync::Mutex<()>) -> Result<tokio::sync::MutexGuard<'_, ()>, PrError> {
+    tokio::time::timeout(QUEUE_WAIT, queue.lock())
+        .await
+        .map_err(|_| {
+            PrError::Gh(format!(
+                "uploads are busy: others have held the host's upload queue for {QUEUE_WAIT:?}; \
+                 call upload_pr_media again"
+            ))
+        })
+}
+
+/// Answers each of `files` from the index at `index` when it has the same bytes for `repo`, and
+/// otherwise, once `turn` is had, uploads it with `put`, which commits bytes at a path and returns
+/// the commit. A call whose files are all known never waits for `turn`. Each upload is recorded as
+/// soon as `put` returns, so a failure or cancel part way keeps the ones before it.
+async fn upload_all<T, F>(
     index: &Path,
     repo: &str,
     files: Vec<Media>,
     now: &str,
+    turn: impl Future<Output = Result<T, PrError>>,
     mut put: impl FnMut(String, Vec<u8>) -> F,
-) -> Result<Vec<PrMediaUploaded>, String> {
+) -> Result<Vec<PrMediaUploaded>, PrError>
+where
+    F: Future<Output = Result<String, PrError>>,
+{
     let mut known = load(index);
     let key = repo.to_ascii_lowercase();
+    let mut turn = Some(turn);
+    let mut held = None;
     let mut uploaded = Vec::with_capacity(files.len());
     for media in files {
         let bytes = tokio::fs::read(&media.asked)
             .await
-            .map_err(|error| format!("could not read {}: {error}", media.asked))?;
+            .map_err(|error| PrError::Gh(format!("could not read {}: {error}", media.asked)))?;
         let hash = crate::sha256_hex(&bytes);
-        let found = known.get(&key).and_then(|urls| urls.get(&hash)).cloned();
-        let reused = found.is_some();
-        let url = if let Some(url) = found {
+        let found = |known: &Index| known.get(&key).and_then(|urls| urls.get(&hash)).cloned();
+        let mut hit = found(&known);
+        if hit.is_none()
+            && let Some(turn) = turn.take()
+        {
+            held = Some(turn.await?);
+            // Whoever held the queue may have uploaded the same bytes.
+            known = load(index);
+            hit = found(&known);
+        }
+        let reused = hit.is_some();
+        let url = if let Some(url) = hit {
             url
         } else {
             let path = media_path(now, &hash, &media.name);
@@ -133,10 +181,12 @@ async fn upload_all<F: Future<Output = Result<String, String>>>(
             reused,
         });
     }
+    drop(held);
     Ok(uploaded)
 }
 
-/// A file that can be uploaded: an absolute path to an image or video of at most [`MAX_BYTES`].
+/// A file that can be uploaded: an absolute path to an image or video of at most [`MAX_BYTES`],
+/// not a symlink.
 fn check(file: &PrMediaFile) -> Result<Media, String> {
     let path = Path::new(&file.path);
     if !path.is_absolute() {
@@ -156,10 +206,11 @@ fn check(file: &PrMediaFile) -> Result<Media, String> {
             VIDEOS.join(", ")
         ));
     }
-    let size = std::fs::metadata(path)
+    // Not following a symlink, so a link in a worktree can't upload a file it points out to.
+    let size = std::fs::symlink_metadata(path)
         .ok()
         .filter(std::fs::Metadata::is_file)
-        .ok_or_else(|| format!("{} is not a file", file.path))?
+        .ok_or_else(|| format!("{} is not a file (symlinks aren't followed)", file.path))?
         .len();
     if size > MAX_BYTES {
         return Err(format!(
@@ -250,9 +301,12 @@ async fn put(
     repo: &str,
     path: String,
     bytes: Vec<u8>,
-) -> Result<String, String> {
+    deadline: Instant,
+) -> Result<String, PrError> {
+    let failed =
+        |error: std::io::Error| PrError::Gh(format!("could not write the upload: {error}"));
     // The body goes through a file: a 25 MB file's base64 is past any argument limit.
-    let mut body = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+    let mut body = tempfile::NamedTempFile::new().map_err(failed)?;
     serde_json::to_writer(
         &mut body,
         &serde_json::json!({
@@ -261,8 +315,8 @@ async fn put(
             "content": data_encoding::BASE64.encode(&bytes),
         }),
     )
-    .map_err(|error| error.to_string())?;
-    body.flush().map_err(|error| error.to_string())?;
+    .map_err(|error| failed(error.into()))?;
+    body.flush().map_err(failed)?;
     let endpoint = format!("repos/{repo}/contents/{path}");
     let input = body.path().to_string_lossy();
     let args = [
@@ -275,10 +329,10 @@ async fn put(
         "--jq",
         ".commit.sha",
     ];
-    let commit = match call(gh, &args).await {
-        Err(error) if branch_missing(&error) => {
-            create_branch(gh, repo).await?;
-            call(gh, &args).await?
+    let commit = match call(gh, &args, deadline).await {
+        Err(error) if branch_missing(&error.to_string()) => {
+            create_branch(gh, repo, deadline).await?;
+            call(gh, &args, deadline).await?
         }
         answer => answer?,
     };
@@ -286,49 +340,94 @@ async fn put(
 }
 
 /// Creates [`BRANCH`] at the head of `repo`'s default branch. One made meanwhile is fine.
-async fn create_branch(gh: &WorktreeManager, repo: &str) -> Result<(), String> {
-    let head = call(
-        gh,
-        &["api", &format!("repos/{repo}/commits/HEAD"), "--jq", ".sha"],
-    )
-    .await?;
-    let created = call(
-        gh,
-        &[
-            "api",
-            &format!("repos/{repo}/git/refs"),
-            "-f",
-            &format!("ref=refs/heads/{BRANCH}"),
-            "-f",
-            &format!("sha={}", head.trim()),
-        ],
-    )
-    .await;
-    match created {
-        Err(error) if error.contains("already exists") => Ok(()),
+async fn create_branch(gh: &WorktreeManager, repo: &str, deadline: Instant) -> Result<(), PrError> {
+    let commits = format!("repos/{repo}/commits/HEAD");
+    let head = call(gh, &["api", &commits, "--jq", ".sha"], deadline).await?;
+    let refs = format!("repos/{repo}/git/refs");
+    let branch = format!("ref=refs/heads/{BRANCH}");
+    let sha = format!("sha={}", head.trim());
+    match call(gh, &["api", &refs, "-f", &branch, "-f", &sha], deadline).await {
+        Err(error) if error.to_string().contains("already exists") => Ok(()),
         created => created.map(drop),
     }
 }
 
-/// Runs `gh args`, retrying after each of [`BACKOFF`] while GitHub answers with a rate limit.
-async fn call(gh: &WorktreeManager, args: &[&str]) -> Result<String, String> {
+/// Runs `gh args`, backing off a secondary rate limit with [`backoff`], and failing at once on a
+/// used-up primary one, saying when it resets.
+async fn call(gh: &WorktreeManager, args: &[&str], deadline: Instant) -> Result<String, PrError> {
     let temp = std::env::temp_dir();
-    for wait in BACKOFF {
-        match gh.gh(&temp, args).await {
-            Err(error) if limited(&error.to_string()) => {
+    match backoff(deadline, || gh.gh(&temp, args)).await {
+        Err(PrError::Gh(error)) if limit(&error) == Some(Limit::Primary) => {
+            // Reading `rate_limit` doesn't count against it.
+            let reset = gh
+                .gh(
+                    &temp,
+                    &["api", "rate_limit", "--jq", ".resources.core.reset"],
+                )
+                .await
+                .ok()
+                .and_then(|reset| reset.trim().parse().ok())
+                .and_then(|reset| jiff::Timestamp::from_second(reset).ok())
+                .map_or_else(|| "it resets".to_owned(), |reset| reset.to_string());
+            Err(PrError::Gh(format!(
+                "GitHub's API rate limit is used up; call upload_pr_media again after {reset}: \
+                 {error}"
+            )))
+        }
+        answer => answer,
+    }
+}
+
+/// Runs `attempt`, and again after each of [`BACKOFF`] that ends before `deadline` while it fails
+/// for a secondary rate limit. Then fails saying when to call again.
+async fn backoff<F>(deadline: Instant, mut attempt: impl FnMut() -> F) -> Result<String, PrError>
+where
+    F: Future<Output = Result<String, PrError>>,
+{
+    let mut waits = BACKOFF.into_iter();
+    loop {
+        match attempt().await {
+            Err(PrError::Gh(error)) if limit(&error) == Some(Limit::Secondary) => {
+                let Some(wait) = waits
+                    .next()
+                    .filter(|wait| Instant::now() + *wait < deadline)
+                else {
+                    return Err(PrError::Gh(format!(
+                        "GitHub's secondary rate limit is on; call upload_pr_media again in a \
+                         minute or two: {error}"
+                    )));
+                };
                 warn!(%error, ?wait, "GitHub is rate limiting pull request media uploads");
                 tokio::time::sleep(wait).await;
             }
-            answer => return answer.map_err(|error| error.to_string()),
+            answer => return answer,
         }
     }
-    gh.gh(&temp, args).await.map_err(|error| error.to_string())
 }
 
-/// Whether gh's error is a primary or secondary rate limit.
-fn limited(error: &str) -> bool {
+/// Which rate limit a gh error is.
+#[derive(Debug, PartialEq, Eq)]
+enum Limit {
+    /// The hourly quota is used up, until it resets.
+    Primary,
+    /// Too many requests too fast: a secondary limit, its older "abuse detection" wording, or a
+    /// 429.
+    Secondary,
+}
+
+/// The rate limit gh's `error` reports, if any.
+fn limit(error: &str) -> Option<Limit> {
     let error = error.to_ascii_lowercase();
-    error.contains("rate limit") || error.contains("http 429")
+    if error.contains("secondary rate limit")
+        || error.contains("abuse detection")
+        || error.contains("http 429")
+    {
+        Some(Limit::Secondary)
+    } else if error.contains("rate limit") {
+        Some(Limit::Primary)
+    } else {
+        None
+    }
 }
 
 /// Whether gh's error says [`BRANCH`] doesn't exist, as the contents API answers before the first
