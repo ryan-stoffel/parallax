@@ -78,6 +78,7 @@ mod naming;
 mod orchestrator;
 pub mod paths;
 pub mod peer;
+mod pr_media;
 mod pr_watch;
 pub(crate) mod preview;
 pub mod providers;

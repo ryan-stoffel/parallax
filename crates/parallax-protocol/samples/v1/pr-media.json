@@ -1,0 +1,34 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "pr/uploadMedia",
+    "params": {
+      "url": "https://github.com/ryan-stoffel/parallax/pull/670",
+      "files": [
+        { "path": "/Users/ryan/shots/settings.png", "caption": "Settings page after the fix" },
+        { "path": "/Users/ryan/shots/flow.mp4" }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "files": [
+        {
+          "path": "/Users/ryan/shots/settings.png",
+          "url": "https://raw.githubusercontent.com/ryan-stoffel/parallax/17e2526c30dea6dd42eca5c642dc1789f99504c2/pr-media/20261025-120000-d013614d-settings.png",
+          "markdown": "![Settings page after the fix](https://raw.githubusercontent.com/ryan-stoffel/parallax/17e2526c30dea6dd42eca5c642dc1789f99504c2/pr-media/20261025-120000-d013614d-settings.png)",
+          "reused": false
+        },
+        {
+          "path": "/Users/ryan/shots/flow.mp4",
+          "url": "https://raw.githubusercontent.com/ryan-stoffel/parallax/0a1b2c3d4e5f60718293a4b5c6d7e8f901234567/pr-media/20261024-090000-5e6f7a8b-flow.mp4",
+          "markdown": "[flow.mp4](https://raw.githubusercontent.com/ryan-stoffel/parallax/0a1b2c3d4e5f60718293a4b5c6d7e8f901234567/pr-media/20261024-090000-5e6f7a8b-flow.mp4)",
+          "reused": true
+        }
+      ]
+    }
+  }
+]

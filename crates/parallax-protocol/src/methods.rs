@@ -655,6 +655,10 @@ method_table! {
         /// pull request's head, each log read from GitHub once per head and job. Gated on
         /// `prWatch`.
         PrFailureLog = "pr/failureLog": PrFailureLogParams => PrFailureLogResult;
+        /// `pr/uploadMedia` (PLX-1020): commits images and videos to the pull request's
+        /// repository's `pr-media` branch, one upload at a time per host, and returns links pinned
+        /// to the commit. Bytes uploaded to the repository before reuse their link.
+        PrUploadMedia = "pr/uploadMedia": crate::PrUploadMediaParams => crate::PrUploadMediaResult;
         /// `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
         /// declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
         /// `setupScripts` capability, like `repo/saveScripts`.
