@@ -1,5 +1,5 @@
-import { Check, ChevronDown, Layers, Search, Star } from "lucide-react";
-import { useId, useRef, useState, type ToggleEvent } from "react";
+import { Check, ChevronDown, Layers, Search, Star, UserRound } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
 import {
   prefsKey,
@@ -22,9 +22,6 @@ const keyOf = (m: Model) => `${m.provider}/${m.id}`;
  */
 const groupOf = (i: Pick<Instance, "id" | "kind">) => (i.kind === "acp" ? i.id : i.kind);
 
-const accountButton =
-  "flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-meta text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground disabled:opacity-40 [&_svg]:size-3.5";
-
 const railButton =
   "grid size-8 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover aria-pressed:bg-selected aria-pressed:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-4";
 
@@ -32,7 +29,7 @@ const railButton =
  * The model picker: a button showing the chosen model that opens a searchable list of the
  * `catalog`'s models, with a rail to filter by favorites or provider. A provider with more than
  * one account or an account pool (PLX-1033) has one rail button, and a bar of its pools and
- * accounts over its models picks which one runs the thread. A native popover, so Escape and
+ * accounts in a selector over its models picks which one runs the thread. A native popover, so Escape and
  * clicking away close it, and it flips above the button when there's no room below. The models of
  * instances in `unavailable` aren't listed, and the rail and the bar show those instances
  * disabled, saying why on hover. Favorites are kept on this device, per host.
@@ -85,9 +82,25 @@ export function ModelMenu({
   const [tab, setTab] = useState<string | null>(group(chosen.provider));
   const [account, setAccount] = useState<Provider>(chosen.provider);
   const [query, setQuery] = useState("");
+  const [choosingAccount, setChoosingAccount] = useState(false);
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
+  const accountChooser = useRef<HTMLButtonElement>(null);
+  const accountMenu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!choosingAccount) return;
+    const items = accountMenu.current?.querySelectorAll<HTMLButtonElement>(
+      '[role="menuitemradio"]:not(:disabled)',
+    );
+    (
+      [...(items ?? [])].find((item) => item.getAttribute("aria-checked") === "true") ?? items?.[0]
+    )?.focus();
+  }, [choosingAccount]);
+  const closeAccounts = () => {
+    setChoosingAccount(false);
+    accountChooser.current?.focus();
+  };
 
   const q = query.trim().toLowerCase();
   const shown = models.filter((m) =>
@@ -126,17 +139,23 @@ export function ModelMenu({
         popover="auto"
         onToggle={(e: ToggleEvent<HTMLDivElement>) => {
           if (e.newState === "open") search.current?.focus();
-          else setQuery("");
+          else {
+            setQuery("");
+            setChoosingAccount(false);
+          }
         }}
         onKeyDown={moveFocus}
-        className={`${menuPanel()} h-80 w-[26rem] overflow-hidden p-0 [&:popover-open]:flex`}
+        className={`${menuPanel()} h-96 w-[28rem] overflow-hidden p-0 [&:popover-open]:flex`}
       >
         <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border py-2">
           <button
             type="button"
             aria-label="Favorites"
             aria-pressed={!q && tab === null}
-            onClick={() => setTab(null)}
+            onClick={() => {
+              setTab(null);
+              setChoosingAccount(false);
+            }}
             className={railButton}
           >
             <Star />
@@ -161,6 +180,7 @@ export function ModelMenu({
                   onClick={() => {
                     setTab(key);
                     setAccount(opening(key));
+                    setChoosingAccount(false);
                   }}
                   className={railButton}
                 >
@@ -196,30 +216,115 @@ export function ModelMenu({
             />
           </label>
           {accounts.length > 1 && (
-            <div className="border-b border-border px-2 py-1.5">
-              <div role="group" aria-label="Account" className="flex gap-1 overflow-x-auto">
-                {accounts.map((p) => {
-                  const pool = !!instance(p)?.members;
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      aria-pressed={account === p}
-                      disabled={!!unavailable[p]}
-                      title={unavailable[p]}
-                      onClick={() => setAccount(p)}
-                      className={accountButton}
-                    >
-                      {pool && <Layers aria-hidden />}
-                      {nameOf(p)}
-                    </button>
-                  );
-                })}
-              </div>
-              {/* What a pool does, where it's picked. */}
+            <div className="relative border-b border-border bg-surface px-2 py-2">
+              <button
+                type="button"
+                ref={accountChooser}
+                aria-label="Choose account"
+                aria-haspopup="menu"
+                aria-expanded={choosingAccount}
+                onClick={() => setChoosingAccount(!choosingAccount)}
+                onKeyDown={(e) => {
+                  if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setChoosingAccount(true);
+                }}
+                className="flex w-full items-center gap-2.5 rounded-lg border border-border px-2.5 py-2 text-left hover:bg-hover"
+              >
+                <span className="grid size-7 shrink-0 place-items-center rounded-md bg-selected text-muted-foreground">
+                  {instance(account)?.members ? (
+                    <Layers className="size-4" />
+                  ) : (
+                    <UserRound className="size-4" />
+                  )}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2 text-body font-medium">
+                    <span className="truncate">{nameOf(account)}</span>
+                    {instance(account)?.members && (
+                      <span className="rounded bg-selected px-1.5 py-0.5 text-caption text-accent">
+                        Auto
+                      </span>
+                    )}
+                  </span>
+                  <span className="block truncate text-meta text-faint-foreground">
+                    {instance(account)?.members
+                      ? `Best available account · ${instance(account)!.members!.length} accounts`
+                      : instance(account)?.account && instance(account)?.account !== nameOf(account)
+                        ? instance(account)?.account
+                        : "Use this account"}
+                  </span>
+                </span>
+                <ChevronDown
+                  aria-hidden
+                  className={`size-3.5 shrink-0 text-muted-foreground ${choosingAccount ? "rotate-180" : ""}`}
+                />
+              </button>
+              {choosingAccount && (
+                <div
+                  ref={accountMenu}
+                  role="menu"
+                  aria-label="Account"
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    if (e.key === "Escape") {
+                      e.preventDefault();
+                      closeAccounts();
+                    } else moveFocus(e);
+                  }}
+                  className="absolute top-full right-2 left-2 z-10 max-h-48 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-composer"
+                >
+                  {accounts.map((p, index) => {
+                    const pool = instance(p)?.members;
+                    return (
+                      <button
+                        key={p}
+                        type="button"
+                        aria-label={nameOf(p)}
+                        role="menuitemradio"
+                        aria-checked={account === p}
+                        disabled={!!unavailable[p]}
+                        title={unavailable[p]}
+                        onClick={() => {
+                          setAccount(p);
+                          closeAccounts();
+                        }}
+                        className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left enabled:hover:bg-hover aria-checked:bg-selected disabled:opacity-40 ${!pool && index > 0 && instance(accounts[index - 1]!)?.members ? "mt-1 border-t border-border pt-3" : ""}`}
+                      >
+                        {pool ? (
+                          <Layers aria-hidden className="size-4 shrink-0 text-accent" />
+                        ) : (
+                          <UserRound
+                            aria-hidden
+                            className="size-4 shrink-0 text-muted-foreground"
+                          />
+                        )}
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2 text-body font-medium">
+                            <span className="truncate">{nameOf(p)}</span>
+                            {pool && <span className="text-caption text-accent">Auto</span>}
+                          </span>
+                          <span className="block text-meta text-faint-foreground">
+                            {pool
+                              ? `Most usage left · ${pool.length} accounts`
+                              : instance(p)?.account && instance(p)?.account !== nameOf(p)
+                                ? instance(p)?.account
+                                : "Use this account only"}
+                          </span>
+                        </span>
+                        <Check
+                          aria-hidden
+                          className={`size-3.5 shrink-0 text-accent ${account === p ? "" : "invisible"}`}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {instance(account)?.members && (
-                <p className="px-2 pt-1 text-meta text-faint-foreground">
-                  Each thread starts on the account with the most left.
+                <p className="px-1 pt-2 text-meta text-faint-foreground">
+                  New threads use the account with the most usage left, then stay on it.
                 </p>
               )}
             </div>

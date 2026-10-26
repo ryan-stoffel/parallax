@@ -2,7 +2,11 @@ import { Bot, Cpu } from "lucide-react";
 import { useEffect, useSyncExternalStore, type ComponentType, type SVGProps } from "react";
 
 import type { ConnectionState, HostResponse } from "../preload/bridge";
-import type { ProviderInstance, ProvidersListResult } from "../protocol/generated/protocol";
+import type {
+  ProviderInfo,
+  ProviderInstance,
+  ProvidersListResult,
+} from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { notify } from "./notifications";
 import { kindInfo, type KindInfo } from "./providerKinds";
@@ -217,3 +221,10 @@ export function instanceLogo(backend: string): Logo | undefined {
  * is named by its instance, an added one by the name the user gave it.
  */
 export const instanceName = (id: string): string | undefined => listedInstance(id)?.name;
+
+/** A user's label, or the sign-in identity for an account with an automatic provider label. */
+export function accountLabel(info: Pick<ProviderInfo, "instance" | "account">): string {
+  const { instance, account } = info;
+  const automatic = /^(?:Account|Codex|Claude(?: Code)?)(?: \d+)?$/.test(instance.name);
+  return !instance.members && automatic && account?.includes("@") ? account : instance.name;
+}

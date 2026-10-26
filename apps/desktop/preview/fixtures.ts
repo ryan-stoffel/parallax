@@ -1895,7 +1895,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       path: "/opt/homebrew/bin/codex",
       version: "0.159.3",
       signedIn: true,
-      account: "ChatGPT Pro",
+      account: "personal@example.test",
       models: [],
       permissions: ["manual", "edit", "auto", "bypass"],
       efforts: true,
@@ -1921,6 +1921,17 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
       coordinator: true,
     },
   ];
+
+  providers.push({
+    ...providers[1]!,
+    instance: {
+      ...providers[1]!.instance,
+      id: "codex-work",
+      name: "Work",
+      home: "/Users/ryan/.codex-work",
+    },
+    account: "work@example.test",
+  });
   const clis: DetectedCli[] = [
     {
       cli: "claude",

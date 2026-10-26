@@ -835,7 +835,7 @@ async fn a_pool_starts_a_thread_on_a_member_and_keeps_it_there() {
 
     let sent = client
         .call::<AgentSend>(AgentSendParams {
-            account: Some(pool),
+            account: Some(pool.clone()),
             ..message(params.run_id, "Now the tests")
         })
         .await
@@ -850,6 +850,23 @@ async fn a_pool_starts_a_thread_on_a_member_and_keeps_it_there() {
         [false, true],
         "the second message resumed the session"
     );
+    client
+        .call::<ProvidersSave>(ProvidersSaveParams {
+            instance: ProviderInstance {
+                enabled: false,
+                ..instance("pool", Some(vec!["claude".into(), "claude-work".into()]))
+            },
+        })
+        .await
+        .unwrap();
+    let refused = client
+        .call::<ThreadStart>(ThreadStartParams {
+            account: Some(pool),
+            ..start_params(None, "Start on a disabled pool")
+        })
+        .await
+        .unwrap_err();
+    assert!(refused.message.contains("disabled"));
     host.server.stop().await;
 }
 

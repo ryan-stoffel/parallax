@@ -216,7 +216,7 @@ pub(super) async fn pool_member(
     let Some(AccountChoice::Subscription { backend }) = &account else {
         return Ok(account);
     };
-    let Some(members) = daemon.providers.members(backend).await else {
+    let Some(members) = daemon.providers.enabled_members(backend).await? else {
         return Ok(account);
     };
     let instances = instances(daemon, None).await?;

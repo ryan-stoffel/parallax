@@ -6,7 +6,7 @@ import type {
   ThreadStartParams,
 } from "../protocol/generated/protocol";
 import { instanceModels, models, type Model, type Provider } from "./catalog";
-import { useProviders } from "./providers";
+import { accountLabel, useProviders } from "./providers";
 import { merged, stored } from "./stored";
 
 /**
@@ -43,6 +43,8 @@ export const setCliEnabled = (cli: string, on: boolean) =>
 export interface Instance {
   id: string;
   name: string;
+  /** Sign-in identity or plan reported by the provider. */
+  account?: string;
   kind: string;
   enabled: boolean;
   permissions: AgentPermission[];
@@ -151,7 +153,8 @@ export function catalogOf(
     ? listed.map((info) => ({
         instance: {
           id: info.instance.id,
-          name: info.instance.name,
+          name: accountLabel(info),
+          ...(info.account && { account: info.account }),
           kind: info.instance.kind,
           enabled: info.instance.enabled,
           permissions: info.permissions,

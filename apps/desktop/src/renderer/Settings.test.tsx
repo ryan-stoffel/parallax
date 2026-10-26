@@ -306,6 +306,22 @@ describe("on a plxd with providers", () => {
     await settle();
   };
 
+  test.each([false, true])(
+    "pool setup requires accountPools capability (%s)",
+    async (supported) => {
+      if (supported)
+        states["local"] = {
+          ...states["local"]!,
+          capabilities: { providers: {}, accountPools: {} },
+        } as ConnectionState;
+      await renderSettings();
+      await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+      await click(button(dialog(), "CodexOpenAI's agent"));
+      expect(dialog().textContent?.includes("Several accounts")).toBe(supported);
+      expect(dialog().textContent?.includes("Create pool")).toBe(supported);
+    },
+  );
+
   test("adds a model service with its key as a secret", async () => {
     await renderSettings();
     await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);

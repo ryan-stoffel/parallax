@@ -92,6 +92,7 @@ export function AddProviderDialog({
   hostId,
   hostName,
   list,
+  accountPools = false,
   onAdded,
   onClose,
 }: {
@@ -99,6 +100,7 @@ export function AddProviderDialog({
   hostName: string;
   /** The host's instances. */
   list: ProviderInfo[];
+  accountPools?: boolean;
   onAdded: (id: string) => void;
   onClose: () => void;
 }) {
@@ -165,7 +167,10 @@ export function AddProviderDialog({
     setArgs((next.args ?? []).join(" "));
     setEnv(next.env ?? []);
     setError(undefined);
-    const pooled = poolable(next.kind) && instances.some((i) => i.kind === next.kind && !i.members);
+    const pooled =
+      accountPools &&
+      poolable(next.kind) &&
+      instances.some((i) => i.kind === next.kind && !i.members);
     setPool(pooled ? poolDraft(next.kind, list) : undefined);
     setStep(to);
   };
@@ -175,7 +180,14 @@ export function AddProviderDialog({
     setSaving(true);
     const made = await createPool(hostId, draft.kind, pool, list);
     setSaving(false);
-    if ("error" in made) return setError(made.error);
+    if ("error" in made) {
+      setPool({
+        ...pool,
+        existing: [...pool.existing, ...made.created],
+        fresh: pool.fresh.slice(made.created.length),
+      });
+      return setError(made.error);
+    }
     onAdded(made.id);
     dialog.current?.close();
   };
@@ -257,7 +269,7 @@ export function AddProviderDialog({
               onManual={() => choose({ kind: "acp", name: "ACP agent", args: [] }, 2)}
             />
           )}
-          {step === 1 && draft && poolable(draft.kind) && (
+          {step === 1 && draft && accountPools && poolable(draft.kind) && (
             <div className="mb-4 flex items-center justify-between gap-4 text-body text-muted-foreground">
               How many {kindOf(draft.kind).name} accounts?
               <Segmented

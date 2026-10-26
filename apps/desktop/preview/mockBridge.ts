@@ -53,6 +53,7 @@ const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
 const capabilities: Capabilities = Object.fromEntries(
   [
     "accounts",
+    "accountPools",
     "agentClis",
     "agentReview",
     "agentWait",

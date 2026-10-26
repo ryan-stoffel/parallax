@@ -31,6 +31,7 @@ import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
 import { PoolPane, poolStatus } from "./PoolSettings";
 import {
+  accountLabel,
   kindOf,
   logoOf,
   loadProviders,
@@ -620,6 +621,9 @@ const instanceTone = (info: ProviderInfo) =>
  */
 function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const providers = useProviders(host.id);
+  const connection = useConnection(host.id);
+  const accountPools =
+    connection?.status === "connected" && "accountPools" in connection.capabilities;
   const [keys, setKeys] = useState<KeyAccount[]>();
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
@@ -659,7 +663,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     if (failed) notify({ tone: "error", title: `Couldn't save ${instance.name}`, body: failed });
   };
 
-  const list = providers?.providers;
+  const list = providers?.providers.filter((p) => accountPools || !p.instance.members);
   const current = list?.find((p) => p.instance.id === selected) ?? list?.[0];
   const asking = confirming !== undefined && confirming === current?.instance.id;
   const remove = async (id: string) => {
@@ -727,6 +731,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           hostId={host.id}
           hostName={host.name}
           list={list}
+          accountPools={accountPools}
           onAdded={setSelected}
           onClose={() => setAdding(false)}
         />
@@ -788,7 +793,9 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                       <Logo className="mt-0.5 size-4 shrink-0" />
                       <span className="min-w-0">
                         <span className="flex items-baseline gap-2">
-                          <span className="truncate text-body font-medium">{instance.name}</span>
+                          <span className="truncate text-body font-medium">
+                            {accountLabel(info)}
+                          </span>
                           {info.version && (
                             <span className="truncate font-mono text-meta text-faint-foreground">
                               {info.version}
@@ -1064,7 +1071,7 @@ function InstancePane({
   };
 
   let account = instanceStatus(info);
-  // The pane names the email the list leaves out; a plan reads as the list says it.
+  // Show the sign-in identity even when the account has a custom display label.
   if (info.signedIn === true && info.account?.includes("@"))
     account = `Authenticated as ${info.account}`;
   // Such as "Pi isn't installed on this host": for Pi, the `pi` its adapter runs, not npx.
@@ -1083,7 +1090,7 @@ function InstancePane({
           <KindLogo className="size-5" />
         </span>
         <div className="min-w-0">
-          <h2 className="truncate text-reading font-semibold">{instance.name}</h2>
+          <h2 className="truncate text-reading font-semibold">{accountLabel(info)}</h2>
           {/* What it is, unless its name says so, and its version. */}
           <p className="truncate text-body text-muted-foreground">
             {kind.name !== instance.name && kind.name}

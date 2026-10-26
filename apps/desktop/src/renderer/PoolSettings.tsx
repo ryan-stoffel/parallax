@@ -1,9 +1,9 @@
 import { Layers, Plus, X } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
 import { notify } from "./notifications";
-import { kindOf, logoOf, saveProvider, slug, unique } from "./providers";
+import { accountLabel, kindOf, logoOf, saveProvider, slug, unique } from "./providers";
 import { field, quietButton, Row, Switch } from "./settings/parts";
 import { instanceStatus } from "./settings/shared";
 import { IconButton } from "./ui";
@@ -33,23 +33,28 @@ export interface PoolDraft {
 const accountsOf = (list: ProviderInfo[], kind: string) =>
   list.filter((p) => !p.instance.members && p.instance.kind === kind);
 
-/** A display name for another account of `kind` unique among `taken`: "Codex", then "Codex 2". */
-const accountName = (kind: ProviderKind, taken: string[]) => unique(kindOf(kind).name, taken);
+/** A temporary label until the account signs in, or the user gives it a label. */
+const accountName = (taken: string[]) => unique("Account", taken);
 
 /**
- * A new account of `kind` named `name`, unique among `taken` ids: the kind's own id and home while
- * the host has none, else a home folder of its own, such as `~/.codex-2`, which plxd makes, so it
+ * A new account of `kind` named `name`, unique among the host's ids: the kind's own id and home while
+ * the host has none, else a home folder of its own, such as `~/.codex-account`, which plxd makes, so it
  * signs in apart from the others.
  */
-function newAccount(kind: ProviderKind, name: string, taken: string[]): ProviderInstance {
-  const id = taken.includes(kind) ? unique(slug(name), taken, "-") : kind;
-  const suffix = id.startsWith(`${kind}-`) ? id.slice(kind.length + 1) : id;
+export function newAccount(
+  kind: ProviderKind,
+  name: string,
+  list: ProviderInstance[],
+): ProviderInstance {
+  const taken = list.map((p) => p.id);
+  const defaultHome = !list.some((p) => p.kind === kind && !p.members && !p.home);
+  const id = defaultHome && !taken.includes(kind) ? kind : unique(`${kind}-account`, taken, "-");
   return {
     id,
     kind,
     name,
     enabled: true,
-    ...(id !== kind && { home: `~/.${kind}-${suffix}` }),
+    ...(!(defaultHome && id === kind) && { home: `~/.${id}` }),
     args: [],
     env: [],
     models: [],
@@ -61,7 +66,7 @@ export function poolDraft(kind: ProviderKind, list: ProviderInfo[]): PoolDraft {
   const existing = accountsOf(list, kind).map((p) => p.instance.id);
   const names = list.map((p) => p.instance.name);
   const fresh: string[] = [];
-  while (existing.length + fresh.length < 2) fresh.push(accountName(kind, [...names, ...fresh]));
+  while (existing.length + fresh.length < 2) fresh.push("");
   return { name: unique(`${kindOf(kind).name} pool`, names), existing, fresh };
 }
 
@@ -77,18 +82,28 @@ export async function createPool(
   kind: ProviderKind,
   draft: PoolDraft,
   list: ProviderInfo[],
-): Promise<{ id: string } | { error: string }> {
-  const ids = list.map((p) => p.instance.id);
+): Promise<{ id: string } | { error: string; created: string[] }> {
+  const instances = list.map((p) => p.instance);
+  const created: string[] = [];
   const members = [...draft.existing];
   for (const name of draft.fresh) {
-    const account = newAccount(kind, name.trim() || kindOf(kind).name, ids);
+    const account = newAccount(
+      kind,
+      name.trim() || accountName(instances.map((p) => p.name)),
+      instances,
+    );
     const failed = await saveProvider(hostId, account);
-    if (failed) return { error: `Couldn't add ${account.name}: ${failed}` };
-    ids.push(account.id);
+    if (failed) return { error: `Couldn't add ${account.name}: ${failed}`, created };
+    instances.push(account);
+    created.push(account.id);
     members.push(account.id);
   }
   const name = draft.name.trim() || `${kindOf(kind).name} pool`;
-  const id = unique(slug(name), ids, "-");
+  const id = unique(
+    slug(name),
+    instances.map((p) => p.id),
+    "-",
+  );
   const failed = await saveProvider(hostId, {
     id,
     kind,
@@ -99,7 +114,7 @@ export async function createPool(
     models: [],
     members,
   });
-  return failed ? { error: failed } : { id };
+  return failed ? { error: failed, created } : { id };
 }
 
 /** One account in a pool's list: its logo, name, and state, then `children`. */
@@ -110,7 +125,7 @@ function AccountRow({ info, children }: { info: ProviderInfo; children: ReactNod
       title={
         <span className="flex items-center gap-2">
           <Logo aria-hidden className="size-4 shrink-0" />
-          {info.instance.name}
+          {accountLabel(info)}
         </span>
       }
       description={info.instance.enabled ? instanceStatus(info) : "Off"}
@@ -149,7 +164,6 @@ export function PoolAccounts({
   onChange: (draft: PoolDraft) => void;
 }) {
   const { Logo } = kindOf(kind);
-  const names = [...list.map((p) => p.instance.name), ...draft.fresh];
   return (
     <div className="flex flex-col gap-4">
       <PoolExplainer> Each new account signs in after it's added.</PoolExplainer>
@@ -165,18 +179,22 @@ export function PoolAccounts({
           className={field}
         />
         <span className="mt-1 block text-faint-foreground">
-          How the model picker names it, beside each account.
+          Shown when you choose automatic account selection.
         </span>
       </label>
       <div>
         <p className="mb-2 text-body text-muted-foreground">Accounts</p>
+        <p className="mb-3 text-meta text-faint-foreground">
+          Your sign-in email identifies each account when the provider shares it. Add a label like
+          Personal or Work if you prefer.
+        </p>
         <div className="rounded-xl border border-border">
           {accountsOf(list, kind).map((info) => {
             const id = info.instance.id;
             return (
               <AccountRow key={id} info={info}>
                 <Switch
-                  label={`Pool ${info.instance.name}`}
+                  label={`Pool ${accountLabel(info)}`}
                   checked={draft.existing.includes(id)}
                   onChange={(on) =>
                     onChange({
@@ -197,8 +215,10 @@ export function PoolAccounts({
             >
               <Logo aria-hidden className="size-4 shrink-0" />
               <input
-                aria-label={`New account ${i + 1} name`}
-                required
+                aria-label={`New account ${i + 1} label`}
+                placeholder={
+                  i === 0 ? "Label, e.g. Personal (optional)" : "Label, e.g. Work (optional)"
+                }
                 maxLength={64}
                 value={name}
                 onChange={(e) =>
@@ -211,7 +231,7 @@ export function PoolAccounts({
                 autoComplete="off"
                 className={`${field} mt-0 flex-1`}
               />
-              <span className="shrink-0 text-meta text-faint-foreground">New account</span>
+              <span className="shrink-0 text-meta text-faint-foreground">Sign in next</span>
               <IconButton
                 label={`Remove ${name || `new account ${i + 1}`}`}
                 onClick={() => onChange({ ...draft, fresh: draft.fresh.filter((_, j) => j !== i) })}
@@ -223,7 +243,7 @@ export function PoolAccounts({
         </div>
         <button
           type="button"
-          onClick={() => onChange({ ...draft, fresh: [...draft.fresh, accountName(kind, names)] })}
+          onClick={() => onChange({ ...draft, fresh: [...draft.fresh, ""] })}
           className={`${quietButton} mt-1.5 -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
         >
           <Plus aria-hidden />
@@ -266,25 +286,39 @@ export function PoolPane({
   const { instance } = info;
   const members = instance.members ?? [];
   const Logo = logoOf(instance);
+  const [pendingAccount, setPendingAccount] = useState<ProviderInstance>();
+  const [adding, setAdding] = useState(false);
   const save = async (change: Partial<ProviderInstance>) => {
     const failed = await saveProvider(hostId, { ...instance, ...change });
     if (failed) notify({ tone: "error", title: `Couldn't save ${instance.name}`, body: failed });
     return !failed;
   };
   const addAccount = async () => {
-    const name = accountName(
-      instance.kind,
-      list.map((p) => p.instance.name),
-    );
-    const account = newAccount(
-      instance.kind,
-      name,
-      list.map((p) => p.instance.id),
-    );
-    const failed = await saveProvider(hostId, account);
-    if (failed) return notify({ tone: "error", title: `Couldn't add ${name}`, body: failed });
-    if ((await save({ members: [...members, account.id] })) && info.installed) onOpen(account.id);
+    if (adding) return;
+    setAdding(true);
+    try {
+      const account =
+        pendingAccount ??
+        newAccount(
+          instance.kind,
+          accountName(list.map((p) => p.instance.name)),
+          list.map((p) => p.instance),
+        );
+      if (!pendingAccount) {
+        const failed = await saveProvider(hostId, account);
+        if (failed)
+          return notify({ tone: "error", title: `Couldn't add ${account.name}`, body: failed });
+        setPendingAccount(account);
+      }
+      if (await save({ members: [...new Set([...members, account.id])] })) {
+        setPendingAccount(undefined);
+        if (info.installed) onOpen(account.id);
+      }
+    } finally {
+      setAdding(false);
+    }
   };
+
   return (
     <div
       id={id}
@@ -323,11 +357,12 @@ export function PoolPane({
           <h2 className="text-reading font-semibold">Accounts</h2>
           <button
             type="button"
+            disabled={adding}
             onClick={() => void addAccount()}
             className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
           >
             <Plus aria-hidden />
-            Add account
+            {adding ? "Adding…" : pendingAccount ? "Retry adding account" : "Add account"}
           </button>
         </div>
         <div className="rounded-xl border border-border bg-surface">

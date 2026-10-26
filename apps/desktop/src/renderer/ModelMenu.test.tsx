@@ -30,8 +30,8 @@ const catalog: Catalog = {
   hostId: "local",
   instances: [
     { ...codex("claude", "Claude"), kind: "claude" },
-    codex("codex", "Codex"),
-    codex("codex-2", "Codex 2"),
+    codex("codex", "personal@example.test"),
+    { ...codex("codex-2", "Work"), account: "work@example.test" },
     codex("pool", "Codex pool", ["codex", "codex-2"]),
   ],
   models: [
@@ -52,11 +52,11 @@ const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === name) ??
   [...document.querySelectorAll("button")].find((b) => b.textContent === name);
 const listed = () =>
-  [...document.querySelectorAll('[role="menuitemradio"]')].map(
+  [...document.querySelectorAll('ul [role="menuitemradio"]')].map(
     (item) => item.querySelector("span span")?.textContent,
   );
 
-test("a provider's accounts and pool share one rail button, with the pool first in its bar", () => {
+test("a provider's accounts and pool share one rail button, with a pool-first account menu", () => {
   const container = document.body.appendChild(document.createElement("div"));
   root = createRoot(container);
   act(() =>
@@ -69,18 +69,62 @@ test("a provider's accounts and pool share one rail button, with the pool first 
   expect(document.querySelectorAll('button[aria-label="Codex 2"]')).toHaveLength(0);
 
   act(() => button("Codex")!.click());
-  const bar = document.querySelector('[role="group"][aria-label="Account"]')!;
-  expect([...bar.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+  act(() => button("Choose account")!.click());
+  const bar = document.querySelector('[role="menu"][aria-label="Account"]')!;
+  expect([...bar.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual([
     "Codex pool",
-    "Codex",
-    "Codex 2",
+    "personal@example.test",
+    "Work",
   ]);
   // It opens on the pool, and says what a pool does.
   expect(listed()).toEqual(["gpt-pool"]);
   expect(document.body.textContent).toContain(
-    "Each thread starts on the account with the most left.",
+    "New threads use the account with the most usage left, then stay on it.",
   );
 
-  act(() => button("Codex 2")!.click());
+  act(() => button("Work")!.click());
+  expect(document.querySelector('[role="menu"][aria-label="Account"]')).toBeNull();
   expect(listed()).toEqual(["gpt-b"]);
+  expect(document.body.textContent).toContain("work@example.test");
+});
+
+test("account keyboard navigation stays in the selector and returns focus on close", () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  root = createRoot(container);
+  act(() =>
+    root!.render(
+      <ModelMenu
+        catalog={catalog}
+        unavailable={{ codex: "Signed out" }}
+        value={catalog.models[0]!}
+        onChange={() => {}}
+      />,
+    ),
+  );
+  act(() => button("Codex")!.click());
+  const chooser = button("Choose account")!;
+  const press = (key: string) => {
+    act(() => {
+      document.activeElement!.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+    });
+  };
+  chooser.focus();
+  press("ArrowDown");
+  expect(document.activeElement).toBe(button("Codex pool"));
+  press("ArrowDown");
+  expect(document.activeElement).toBe(button("Work"));
+  press("ArrowDown");
+  expect(document.activeElement).toBe(button("Codex pool"));
+  press("ArrowUp");
+  expect(document.activeElement).toBe(button("Work"));
+  act(() => (document.activeElement as HTMLButtonElement).click());
+  expect(document.activeElement).toBe(chooser);
+  expect(listed()).toEqual(["gpt-b"]);
+  press("ArrowUp");
+  expect(document.activeElement).toBe(button("Work"));
+  press("Escape");
+  expect(document.activeElement).toBe(chooser);
+  expect(document.querySelector('[role="menu"][aria-label="Account"]')).toBeNull();
 });

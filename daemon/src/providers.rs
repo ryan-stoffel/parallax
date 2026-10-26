@@ -15,6 +15,8 @@
 //! never a backend. It lists its members' models and state, and `agents::placement::pool_member`
 //! starts its threads on the member with the most headroom.
 
+mod identity;
+
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -492,6 +494,22 @@ impl Providers {
             .and_then(|entry| entry.instance.members.clone())
     }
 
+    /// A pool's members for a new run. Disabled pools cannot start runs, even through RPC.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` when the named pool is disabled.
+    pub async fn enabled_members(&self, id: &str) -> Result<Option<Vec<String>>, ErrorObject> {
+        let stored = self.stored.lock().await;
+        let Some(instance) = stored.iter().find(|entry| entry.instance.id == id) else {
+            return Ok(None);
+        };
+        if instance.instance.members.is_some() && !instance.instance.enabled {
+            return Err(ErrorObject::invalid_params("this account pool is disabled"));
+        }
+        Ok(instance.instance.members.clone())
+    }
+
     /// Adds `instance`, or replaces the one with its id, keeping stored secrets it sends no value
     /// for, and registers its backend.
     ///
@@ -518,7 +536,9 @@ impl Providers {
             ));
         }
         check_pool(&instance, &self.stored.lock().await)?;
-        if let Some(home) = &instance.home {
+        if let Some(home) = &instance.home
+            && old.as_ref().and_then(|entry| entry.instance.home.as_ref()) != Some(home)
+        {
             instance.home = Some(own_home(home)?);
         }
         if on_hermes(&instance) && instance.home.is_none() {
@@ -782,6 +802,18 @@ impl Providers {
             return found;
         }
         let env = plain_env(entry);
+        if matches!(instance.kind, ProviderKind::Claude | ProviderKind::Codex) {
+            let mut account_env = env.clone();
+            account_env.extend(home_var(instance, &preset));
+            identity::probe(
+                &self.launcher,
+                instance,
+                &program_of(instance, &preset),
+                account_env,
+                &mut found,
+            )
+            .await;
+        }
         match (&preset.driver, preset.models_url) {
             // Ollama Cloud's Hermes Agent too: its models are the service's, so it isn't started.
             (_, Some((url, key_name))) => {
@@ -1596,6 +1628,11 @@ fn own_home(home: &str) -> Result<String, ErrorObject> {
             .join(rest),
         None => PathBuf::from(home),
     };
+    if !path.is_absolute() {
+        return Err(ErrorObject::invalid_params(
+            "an account home must be an absolute path or start with ~/",
+        ));
+    }
     std::fs::create_dir_all(&path).map_err(|error| {
         ErrorObject::invalid_params(format!("couldn't make {}: {error}", path.display()))
     })?;
@@ -1664,7 +1701,12 @@ fn with_pools(stored: Vec<Stored>, found: Vec<Found>) -> Vec<ProviderInfo> {
                 .map(|(_, found)| found)
                 .collect();
             let mut models: Vec<ProviderModel> = Vec::new();
-            for model in mine.iter().flat_map(|found| &found.models) {
+            for model in mine.iter().flat_map(|found| &found.models).chain(
+                stored
+                    .iter()
+                    .filter(|other| members.contains(&other.instance.id))
+                    .flat_map(|other| &other.instance.models),
+            ) {
                 if !models.iter().any(|m| m.id == model.id) {
                     models.push(model.clone());
                 }
@@ -1909,6 +1951,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_account_home_is_created_only_when_added_or_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (providers, _) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
+        let home = dir.path().join("account");
+        let mut account = ProviderInstance {
+            home: Some(home.display().to_string()),
+            ..instance("work", ProviderKind::Codex, "Work")
+        };
+        providers.save(account.clone()).await.unwrap();
+        assert!(home.is_dir());
+
+        // An unavailable home must not prevent renaming or disabling the account.
+        std::fs::remove_dir(&home).unwrap();
+        std::fs::write(&home, "unavailable folder").unwrap();
+        account.name = "Personal".into();
+        account.enabled = false;
+        providers.save(account.clone()).await.unwrap();
+        assert!(home.is_file());
+
+        let changed = dir.path().join("changed");
+        account.home = Some(changed.display().to_string());
+        providers.save(account.clone()).await.unwrap();
+        assert!(changed.is_dir());
+
+        account.home = Some("relative-account-home".into());
+        assert!(providers.save(account).await.is_err());
+    }
+
+    #[tokio::test]
     async fn a_pool_holds_two_instances_of_its_kind_and_is_never_a_backend() {
         let dir = tempfile::tempdir().unwrap();
         let (providers, registry) = load(dir.path(), Arc::new(MemoryKeyStore::new()));
@@ -1957,7 +2028,10 @@ mod tests {
             name: id.into(),
         };
         let stored = vec![
-            entry(instance("work", ProviderKind::Codex, "Work")),
+            entry(ProviderInstance {
+                models: vec![model("custom"), model("gpt-5")],
+                ..instance("work", ProviderKind::Codex, "Work")
+            }),
             entry(instance("home", ProviderKind::Codex, "Home")),
             entry(ProviderInstance {
                 members: Some(vec!["work".into(), "home".into()]),
@@ -1984,7 +2058,7 @@ mod tests {
         assert!(pool.installed);
         assert_eq!(pool.signed_in, Some(true));
         let ids: Vec<&str> = pool.models.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(ids, ["gpt-5", "gpt-5-mini"]);
+        assert_eq!(ids, ["gpt-5", "gpt-5-mini", "custom"]);
         assert_eq!(pool.login, None);
         assert_eq!(listed[0].signed_in, Some(false));
     }
