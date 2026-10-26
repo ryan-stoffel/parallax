@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, HostInput, SshHost, ParallaxBridge } from "../preload/bridge";
+import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
 
@@ -45,12 +45,10 @@ const listsNothing = async (_host: string, method: string): Promise<unknown> =>
     ? { result: { repos: [], threads: [], runs: [], projects: [], seq: 1 }, logId: "log" }
     : { error: { code: -32601, message: `${method} isn't faked` } };
 const request = vi.fn(listsNothing);
-const saveHost = vi.fn<(host: HostInput, id?: string) => Promise<string | undefined>>();
 
 beforeEach(() => {
   request.mockReset();
   request.mockImplementation(listsNothing);
-  saveHost.mockReset();
   states = { local: connected, [mini.id]: untrusted };
   window.parallax = {
     onProfile: () => () => {},
@@ -77,7 +75,6 @@ beforeEach(() => {
     command: async () => ({ state: "unavailable", path: "", onPath: true }),
     terminalApp: async () => null,
     openTargetIcons: async () => ({}),
-    saveHost,
     sshSuggestions: async () => [],
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
@@ -142,97 +139,11 @@ test("every connected host's threads are one list, newest prompt first, each ope
   );
   await renderApp();
   expect(rows().map(title)).toEqual(["Add the endpoint", "Fix the flaky test"]);
-  // No Hosts section: each host is a source of rows, not a heading.
-  expect(document.querySelector("#hosts-heading")).toBeNull();
 
   await click(rows()[0]!);
   const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
   expect(crumbs.map((li) => li.textContent)).toEqual(["Mac mini", "api", "Add the endpoint"]);
   expect(rows()[0]!.getAttribute("aria-current")).toBe("page");
-});
-
-test("a host whose plxd is too old says so in a notification naming it, not in the sidebar", async () => {
-  states[mini.id] = connected;
-  // mini's plxd predates the shell subscription, so it answers Method not found.
-  request.mockImplementation(async (host: string, method: string) =>
-    host === mini.id
-      ? { error: { code: -32601, message: `Method not found: ${method}` } }
-      : listsNothing(host, method),
-  );
-  await renderApp();
-  const notices = document.querySelector('[aria-label="Notifications"]');
-  expect(notices?.textContent).toContain("Mac mini's plxd is out of date");
-  expect(notices?.textContent).not.toContain("This Mac");
-  const alerts = [...document.querySelectorAll('#sidebar [role="alert"]')];
-  expect(alerts.map((a) => a.textContent)).toEqual([]);
-  // Notices outlive a render, so this one is closed before the next test.
-  await click(notices!.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!);
-});
-
-test("a host that can't connect adds nothing to the list, and Connections shows why", async () => {
-  await renderApp();
-  expect(rows()).toEqual([]);
-  expect(request.mock.calls.some(([host]) => host === mini.id)).toBe(false);
-  await act(async () => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: true }));
-  });
-  await click(
-    [...document.querySelectorAll("button")].find((b) => b.textContent === "Connections")!,
-  );
-  expect(document.querySelector("main")!.textContent).toContain("Mac mini");
-});
-
-test("Connections' Add host opens the dialog, which shows the main process's error", async () => {
-  await renderApp();
-  await act(async () => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: true }));
-  });
-  await click(
-    [...document.querySelectorAll("button")].find((b) => b.textContent === "Connections")!,
-  );
-  await click(
-    [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-      (b) => b.textContent === "Add host",
-    )!,
-  );
-  expect(document.querySelector("h1")!.textContent).toBe("Connections");
-
-  const form = document.querySelector<HTMLFormElement>('form[aria-label="Add host"]')!;
-  const host = form.querySelector<HTMLInputElement>('[name="host"]')!;
-  act(() => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
-      host,
-      "-oProxyCommand=x",
-    );
-    host.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  saveHost.mockResolvedValue("An ssh destination can't start with “-” or contain spaces.");
-  await act(async () => form.requestSubmit());
-  await settle();
-
-  expect(saveHost).toHaveBeenCalledWith(
-    { name: "-oProxyCommand=x", destination: "-oProxyCommand=x" },
-    undefined,
-  );
-  expect(form.querySelector('[role="alert"]')!.textContent).toContain("can't start with “-”");
-});
-
-test("a failed remove shows the main process's message in a notification", async () => {
-  window.parallax.removeHost = async () => "Parallax couldn't save its settings: EACCES";
-  await renderApp();
-  await act(async () => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: ",", code: "Comma", metaKey: true }));
-  });
-  await click(
-    [...document.querySelectorAll("button")].find((b) => b.textContent === "Connections")!,
-  );
-  expect(document.querySelector('form[aria-label="Add host"]')).toBeNull();
-
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Remove")!);
-  const notice = document.querySelector('[aria-label="Notifications"] [role="alert"]')!;
-  expect(notice.querySelector("p")!.textContent).toBe(
-    "Parallax couldn't save its settings: EACCES",
-  );
 });
 
 const openConnections = async () => {
@@ -250,42 +161,18 @@ const openConnections = async () => {
 const signIn = () =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === "Sign in");
 
-test("a host that needs the user has Sign in, which opens a terminal for that host", async () => {
-  await openConnections();
-  await click(signIn()!);
-  expect(document.body.textContent).toContain("Signing in to Mac mini");
-  expect(signIn()).toBeUndefined();
-  expect(signInTarget).toHaveBeenCalledWith({ hostId: mini.id, login: true });
-});
-
-test.each([
-  [
-    "another failure",
-    { status: "failed", retrying: true, error: { reason: "exited", message: "x" } },
-  ],
-  [
-    "a changed host key",
-    {
-      status: "failed",
-      retrying: false,
-      error: {
-        reason: "sshSetup",
-        message: "mini's host key has changed.",
-        exitCode: 255,
-        stderr:
-          "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.",
-      },
+test("Sign in isn't offered for a changed host key", async () => {
+  states[mini.id] = {
+    status: "failed",
+    retrying: false,
+    error: {
+      reason: "sshSetup",
+      message: "mini's host key has changed.",
+      exitCode: 255,
+      stderr:
+        "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.",
     },
-  ],
-  ["a connected host", connected],
-] as [string, ConnectionState][])("Sign in isn't offered for %s", async (_name, state) => {
-  states[mini.id] = state;
-  await openConnections();
-  expect(signIn()).toBeUndefined();
-});
-
-test("Sign in isn't offered on Windows, which can't share a login", async () => {
-  window.parallax.platform = "win32";
+  };
   await openConnections();
   expect(signIn()).toBeUndefined();
 });

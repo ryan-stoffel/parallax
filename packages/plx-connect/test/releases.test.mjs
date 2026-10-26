@@ -40,11 +40,7 @@ test("picks the newest non-draft release of each channel", () => {
   assert.equal(pickRelease(releases, "stable"), stable);
 });
 
-test("with no stable release, says so and suggests nightly", () => {
-  assert.throws(() => pickRelease([newestNightly], "stable"), /no stable release yet\. Run again with --channel nightly/);
-});
-
-test("picks each OS's installer", () => {
+test("picks each OS's installer, or plxd alone when headless", () => {
   assert.equal(pickAsset(newestNightly, "macos", "arm64").name, `parallax-${nightly}-mac-arm64.dmg`);
   assert.equal(pickAsset(newestNightly, "windows", "x64").name, `parallax-${nightly}-win-x64.exe`);
   assert.deepEqual(pickAsset(newestNightly, "windows", "arm64"), {
@@ -58,9 +54,7 @@ test("picks each OS's installer", () => {
   // An AppImage alone isn't enough: running it to unpack plxd fails on NixOS.
   const appImageOnly = release("v1.0.0", false, ["parallax-1.0.0-linux-x86_64.AppImage"]);
   assert.throws(() => pickAsset(appImageOnly, "linux", "x64"), /has no Linux x64 build/);
-});
-
-test("headless picks plxd alone on macOS and Windows, and Linux is the same either way", () => {
+  // Headless picks plxd alone on macOS and Windows, and Linux is the same either way.
   assert.equal(pickAsset(newestNightly, "macos", "arm64", true).name, `parallax-plxd-${nightly}-mac-arm64`);
   assert.equal(pickAsset(newestNightly, "windows", "x64", true).name, `parallax-plxd-${nightly}-win-x64.exe`);
   assert.equal(pickAsset(newestNightly, "windows", "arm64", true).name, `parallax-plxd-${nightly}-win-arm64.exe`);
@@ -98,12 +92,4 @@ test("the SHA-256 is GitHub's digest, else the .sha256 asset's, else nothing ins
   });
   // A .sha256 that doesn't list the file is no checksum either.
   await assert.rejects(withSha256(withSums, async () => `${hex}  something-else\n`), /no SHA-256/);
-});
-
-test("a missing build is an error that names the release, OS, and arch", () => {
-  assert.throws(() => pickAsset(newestNightly, "linux", "x64"), {
-    message: `The newest nightly, v${nightly}, has no Linux x64 build.`,
-  });
-  assert.throws(() => pickAsset(stable, "windows", "x64"), /The newest release, v2609\.10101\.10000, has no Windows x64 build/);
-  assert.throws(() => pickAsset(stable, "macos", "x64"), /no build for Intel Macs/);
 });

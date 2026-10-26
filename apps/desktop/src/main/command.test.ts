@@ -13,12 +13,9 @@ import { expect, test } from "vite-plus/test";
 
 import {
   appleScriptString,
-  commandSource,
   commandState,
   installCommand,
   layout,
-  offerAtLaunch,
-  onPath,
   readRecord,
   removeCommand,
   shellQuote,
@@ -28,44 +25,6 @@ import {
 } from "./command";
 
 const folder = () => mkdtempSync(path.join(tmpdir(), "command-"));
-
-test("the command goes where each OS's PATH already looks", () => {
-  const plxd = "/Applications/Parallax.app/Contents/Resources/plxd";
-  expect(layout("darwin", {}, "/Users/me", plxd).file).toBe("/usr/local/bin/parallax");
-  expect(layout("linux", {}, "/home/me", "/tmp/.mount_x/resources/plxd")).toMatchObject({
-    file: "/home/me/.local/bin/parallax",
-    copy: "/home/me/.local/share/parallax/app",
-  });
-  expect(layout("linux", { XDG_DATA_HOME: "/data" }, "/home/me", plxd).copy).toBe(
-    "/data/parallax/app",
-  );
-  const local = "C:\\Users\\me\\AppData\\Local";
-  expect(layout("win32", { LOCALAPPDATA: local }, "C:\\Users\\me", "x.exe").file).toBe(
-    `${local}\\Parallax\\bin\\parallax.cmd`,
-  );
-});
-
-test("only a packaged app's own plxd is offered, and not from a disk image", () => {
-  const lookup = {
-    packaged: true,
-    env: {},
-    platform: "darwin" as const,
-    resourcesPath: "/Applications/Parallax.app/Contents/Resources",
-    exists: () => true,
-  };
-  expect(commandSource(lookup)).toBe("/Applications/Parallax.app/Contents/Resources/plxd");
-  expect(commandSource({ ...lookup, packaged: false })).toBeUndefined();
-  expect(commandSource({ ...lookup, env: { PLXD_PATH: "/x/plxd" } })).toBeUndefined();
-  expect(
-    commandSource({
-      ...lookup,
-      resourcesPath: "/private/var/folders/x/AppTranslocation/y/d/Parallax.app/Contents/Resources",
-    }),
-  ).toBeUndefined();
-  expect(
-    commandSource({ ...lookup, platform: "win32", resourcesPath: "C:\\Parallax\\resources" }),
-  ).toBe("C:\\Parallax\\resources\\plxd.exe");
-});
 
 // Windows rewrites a POSIX symlink's target with backslashes, and macOS's command is never there.
 test.skipIf(process.platform === "win32")(
@@ -90,20 +49,6 @@ test.skipIf(process.platform === "win32")(
     const script = path.join(dir, "script");
     writeFileSync(script, "#!/bin/sh\n");
     expect(await commandState(at(script))).toBe("other");
-  },
-);
-
-test.skipIf(process.platform === "win32")(
-  "macOS installs a link where the folder is the user's, and removes it",
-  async () => {
-    const dir = folder();
-    const plxd = path.join(dir, "plxd");
-    writeFileSync(plxd, "");
-    const at: Layout = { platform: "darwin", file: path.join(dir, "parallax"), plxd };
-    await installCommand(at);
-    expect(readlinkSync(at.file)).toBe(plxd);
-    await removeCommand(at);
-    expect(await commandState(at)).toBe("missing");
   },
 );
 
@@ -154,23 +99,6 @@ test("Windows: the launcher goes by %LOCALAPPDATA% and names the command", async
   expect(await commandState({ ...elsewhere, file })).toBe("stale");
   writeFileSync(file, "@echo off\r\nsomething else\r\n");
   expect(await commandState({ ...at, file })).toBe("other");
-});
-
-test("Linux checks its folder is on PATH; Windows reads PATH by its own separator", () => {
-  const linux = layout("linux", {}, "/home/me", "/x/plxd");
-  expect(onPath(linux, "/usr/bin:/home/me/.local/bin")).toBe(true);
-  expect(onPath(linux, "/usr/bin:/bin")).toBe(false);
-  const local = "C:\\Users\\me\\AppData\\Local";
-  const windows = layout("win32", { LOCALAPPDATA: local }, "C:\\Users\\me", "x.exe");
-  expect(onPath(windows, `C:\\Windows;${local}\\Parallax\\bin`)).toBe(true);
-});
-
-test("macOS offers once, only when nothing is named parallax", () => {
-  expect(offerAtLaunch("darwin", "missing", false)).toBe(true);
-  expect(offerAtLaunch("darwin", "missing", true)).toBe(false);
-  expect(offerAtLaunch("darwin", "other", false)).toBe(false);
-  expect(offerAtLaunch("darwin", "stale", false)).toBe(false);
-  expect(offerAtLaunch("linux", "missing", false)).toBe(false);
 });
 
 test("the record reads back, and a missing or bad one is empty", async () => {

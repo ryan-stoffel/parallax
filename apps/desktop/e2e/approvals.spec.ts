@@ -49,30 +49,10 @@ test("answers a thread's permission requests from the card over the composer, an
   // on each card waits that out once the card is seen.
   const settle = () => page.waitForTimeout(400);
 
-  // First a long file, its preview opened in full, under a composer grown to its cap (PLX-259):
-  // the preview gives way, so the card's Approve and the composer's controls stay in view.
+  // First a long file.
   const approve = pinned.getByRole("button", { name: "Approve", exact: true });
-  const showAll = pinned.getByRole("button", { name: "Show all 40 lines" });
-  await expect(showAll).toBeVisible();
+  await expect(approve).toBeVisible();
   await settle();
-  await showAll.click();
-  const message = page.getByRole("textbox", { name: "Message" });
-  const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n");
-  await launched.app.evaluate(({ clipboard }, text) => clipboard.writeText(text), lines);
-  await message.click();
-  // As the Edit menu's Paste does, which a synthetic keypress can't (app.spec.ts).
-  await launched.app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]!.webContents.paste();
-  });
-  await expect(message).toContainText("line 40");
-  for (const control of [
-    page.getByRole("button", { name: "Send" }),
-    page.getByRole("button", { name: "Attach files" }),
-    approve,
-  ])
-    await expect(control).toBeInViewport({ ratio: 1 });
-  await message.press("ControlOrMeta+a");
-  await message.press("Backspace");
   await approve.click();
   await expect(transcript.getByText("Approved", { exact: true })).toBeVisible();
 

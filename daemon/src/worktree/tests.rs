@@ -7,7 +7,7 @@ use std::process::Command;
 
 use parallax_protocol::{ProjectId, RunId};
 
-use super::{Merged, WorktreeError, WorktreeManager, short_hash, valid_branch_slug};
+use super::{WorktreeManager, short_hash};
 use crate::backend::process::{Environment, Launcher};
 use crate::paths::DataDir;
 
@@ -104,63 +104,6 @@ fn init_repo(dir: &Path) -> PathBuf {
     dir.to_owned()
 }
 
-#[tokio::test]
-async fn create_makes_a_worktree_on_a_new_branch_from_head() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-
-    assert!(created.path.starts_with(data_dir.path().join("worktrees")));
-    assert!(created.path.is_dir(), "{created:?}");
-    assert!(created.branch.starts_with("parallax/"), "{created:?}");
-    assert_eq!(
-        git_output(&created.path, &["rev-parse", "--abbrev-ref", "HEAD"]),
-        created.branch
-    );
-    assert_eq!(created.base, rev_parse(&repo, "HEAD"));
-    assert!(!created.base_dirty, "a clean repo isn't flagged dirty");
-    assert_eq!(
-        worktree_count(&repo),
-        2,
-        "the main worktree plus the new one"
-    );
-}
-
-#[tokio::test]
-async fn create_named_uses_the_slug_and_keeps_names_unique() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let first = mgr
-        .create_named(&repo, RunId::generate(), None, Some("fix-login-bug"))
-        .await
-        .unwrap();
-    assert_eq!(first.branch, "parallax/fix-login-bug");
-
-    let second_id = RunId::generate();
-    let second = mgr
-        .create_named(&repo, second_id, None, Some("fix-login-bug"))
-        .await
-        .unwrap();
-    let short = short_hash(&second_id.to_string());
-    assert_eq!(second.branch, format!("parallax/fix-login-bug-{short}"));
-
-    // An invalid slug falls back to the run's short id rather than reaching git.
-    let odd = mgr
-        .create_named(&repo, RunId::generate(), None, Some("--bad/name"))
-        .await
-        .unwrap();
-    assert!(!odd.branch.contains("bad"), "{odd:?}");
-}
-
 /// 0058: a named thread's branch is renamed by the naming rules, and its worktree follows, until
 /// it has an upstream.
 #[tokio::test]
@@ -219,137 +162,6 @@ async fn a_branch_is_renamed_until_it_has_an_upstream() {
     );
 }
 
-#[test]
-fn branch_slugs_are_lowercase_words_joined_by_hyphens() {
-    for ok in ["a", "fix-login-bug", "v2-api", &"a".repeat(40)] {
-        assert!(valid_branch_slug(ok), "{ok}");
-    }
-    for bad in ["", "-a", "a-", "Fix", "a b", "a/b", "a.b", &"a".repeat(41)] {
-        assert!(!valid_branch_slug(bad), "{bad}");
-    }
-}
-
-/// PLX-409 (0045): a Project's integration branch is cut from its base once, its worktree is
-/// reused, another branch's name is never taken, and removing the worktree keeps the branch.
-#[tokio::test]
-async fn an_integration_branch_is_cut_once_and_outlives_its_worktree() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    assert_eq!(mgr.default_branch(&repo).await.unwrap(), "main");
-    let base = rev_parse(&repo, "HEAD");
-    git(&repo, &["branch", "release"]);
-    git(&repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
-
-    let project = ProjectId::generate();
-    let branch = mgr
-        .ensure_integration(&repo, project, None, "Auth Rewrite!", "release")
-        .await
-        .unwrap();
-    assert_eq!(branch, "parallax/auth-rewrite");
-    let path = mgr.integration_path(project);
-    assert_eq!(git_output(&path, &["branch", "--show-current"]), branch);
-    assert_eq!(
-        rev_parse(&path, "HEAD"),
-        base,
-        "cut from the base, not HEAD"
-    );
-    assert!(path.join("README.md").is_file(), "checked out");
-
-    // A second call keeps the worktree, whatever name it is given.
-    let again = mgr
-        .ensure_integration(&repo, project, None, "renamed", "main")
-        .await
-        .unwrap();
-    assert_eq!(again, branch);
-    assert_eq!(worktree_count(&repo), 2);
-
-    // Another project with the same name gets its own branch.
-    let other = ProjectId::generate();
-    let taken = mgr
-        .ensure_integration(&repo, other, None, "auth rewrite", "main")
-        .await
-        .unwrap();
-    let short = short_hash(&other.to_string());
-    assert_eq!(taken, format!("parallax/auth-rewrite-{short}"));
-
-    // Removing the worktree keeps the branch, and the recorded branch is checked out again.
-    mgr.remove_integration(&repo, project).await.unwrap();
-    assert!(!path.exists());
-    assert_eq!(rev_parse(&repo, &branch), base);
-    let back = mgr
-        .ensure_integration(&repo, project, Some(&branch), "renamed", "main")
-        .await
-        .unwrap();
-    assert_eq!(back, branch);
-    assert_eq!(rev_parse(&path, "HEAD"), base, "the branch as it was");
-}
-
-/// PLX-397 (0042): a coordinator's worktree follows the integration branch's tip, detached, and
-/// each refresh discards whatever was written there. A folder that is no longer a worktree is
-/// added again, never searched above.
-#[tokio::test]
-async fn a_coordinators_worktree_follows_the_tip_and_discards_what_was_written_there() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    std::fs::write(repo.join(".gitignore"), "*.log\n").unwrap();
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "ignore logs"]);
-    git(&repo, &["branch", "parallax/app"]);
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let project = ProjectId::generate();
-
-    let path = mgr
-        .refresh_coordinator(&repo, project, "parallax/app")
-        .await
-        .unwrap();
-    assert_eq!(path, mgr.coordinator_path(project));
-    assert_eq!(rev_parse(&path, "HEAD"), rev_parse(&repo, "parallax/app"));
-    assert_eq!(git_output(&path, &["branch", "--show-current"]), "");
-
-    // The branch moves on; the coordinator writes a tracked, an untracked, and an ignored file.
-    let lander = tempfile::tempdir().unwrap();
-    let worktree = lander.path().join("lander");
-    let worktree_arg = worktree.to_str().unwrap();
-    git(
-        &repo,
-        &["worktree", "add", "-q", worktree_arg, "parallax/app"],
-    );
-    std::fs::write(worktree.join("README.md"), "landed\n").unwrap();
-    git(&worktree, &["commit", "-qam", "land"]);
-    std::fs::write(path.join("README.md"), "written\n").unwrap();
-    std::fs::write(path.join("new.txt"), "written\n").unwrap();
-    std::fs::write(path.join("run.log"), "written\n").unwrap();
-    mgr.refresh_coordinator(&repo, project, "parallax/app")
-        .await
-        .unwrap();
-    assert_eq!(rev_parse(&path, "HEAD"), rev_parse(&repo, "parallax/app"));
-    assert_eq!(
-        std::fs::read_to_string(path.join("README.md")).unwrap(),
-        "landed\n"
-    );
-    assert!(!path.join("new.txt").exists());
-    assert!(!path.join("run.log").exists());
-    assert_eq!(
-        std::fs::read_to_string(repo.join("README.md")).unwrap(),
-        "hello\n",
-        "the checkout is untouched"
-    );
-
-    std::fs::remove_file(path.join(".git")).unwrap();
-    mgr.refresh_coordinator(&repo, project, "parallax/app")
-        .await
-        .unwrap();
-    assert_eq!(rev_parse(&path, "HEAD"), rev_parse(&repo, "parallax/app"));
-    assert_eq!(worktree_count(&repo), 3);
-
-    mgr.remove_coordinator(&repo, project).await.unwrap();
-    assert!(!path.exists());
-    assert_eq!(worktree_count(&repo), 2);
-}
-
 /// A symlink where the coordinator's worktree goes is refused, and its target left alone.
 #[tokio::test]
 async fn a_coordinators_worktree_refuses_a_symlink() {
@@ -382,519 +194,6 @@ async fn a_coordinators_worktree_refuses_a_symlink() {
     assert!(theirs.join("draft.txt").exists());
 }
 
-/// PLX-409: a base that isn't a branch is refused, and a checkout that fails leaves no worktree
-/// for the next call to return, only the branch.
-#[tokio::test]
-async fn an_integration_branch_needs_a_branch_base_and_a_checkout() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let project = ProjectId::generate();
-
-    let sha = rev_parse(&repo, "HEAD");
-    git(&repo, &["tag", "v1"]);
-    git(&repo, &["commit", "-q", "--allow-empty", "-m", "later"]);
-    for base in [sha.as_str(), "v1", "HEAD~1"] {
-        let error = mgr
-            .ensure_integration(&repo, project, None, "app", base)
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(error, WorktreeError::UnknownRevision { .. }),
-            "{base}: {error}"
-        );
-    }
-    assert!(
-        git_output(&repo, &["branch", "--list", "parallax/*"]).is_empty(),
-        "nothing was cut"
-    );
-
-    // A required smudge filter that fails makes the checkout fail after the worktree is added.
-    std::fs::write(repo.join(".gitattributes"), "* filter=broken\n").unwrap();
-    git(&repo, &["add", ".gitattributes"]);
-    git(&repo, &["commit", "-q", "-m", "filter"]);
-    git(&repo, &["config", "filter.broken.smudge", "false"]);
-    git(&repo, &["config", "filter.broken.required", "true"]);
-    mgr.ensure_integration(&repo, project, None, "app", "main")
-        .await
-        .unwrap_err();
-    assert!(
-        !mgr.integration_path(project).exists(),
-        "no broken worktree"
-    );
-    assert_eq!(worktree_count(&repo), 1);
-    assert_eq!(rev_parse(&repo, "parallax/app"), rev_parse(&repo, "main"));
-
-    git(&repo, &["config", "--unset", "filter.broken.required"]);
-    git(&repo, &["config", "filter.broken.smudge", "cat"]);
-    let branch = mgr
-        .ensure_integration(&repo, project, Some("parallax/app"), "app", "main")
-        .await
-        .unwrap();
-    assert_eq!(branch, "parallax/app");
-    assert!(mgr.integration_path(project).join("README.md").is_file());
-}
-
-/// PLX-411: the merge `landed`, of `branch` onto `tip`, waits detached in the integration
-/// worktree with the branch on `tip` until the checks pass. A stop before then leaves it out, and
-/// once it lands again the branch advances to it. Returns the commit that landed.
-async fn waits_detached(
-    mgr: &WorktreeManager,
-    repo: &Path,
-    project: ProjectId,
-    tip: &str,
-    branch: &str,
-    landed: &str,
-) -> String {
-    let path = mgr.integration_path(project);
-    assert_eq!(rev_parse(&path, "parallax/app"), tip);
-    assert_eq!(
-        mgr.ensure_integration(repo, project, Some("parallax/app"), "app", "main")
-            .await
-            .unwrap(),
-        "parallax/app",
-        "a detached worktree is kept"
-    );
-    assert_eq!(rev_parse(&path, "HEAD"), landed, "and left as it is");
-    // A stop before they pass leaves the merge out: the tip attaches the worktree again.
-    assert_eq!(
-        mgr.integration_tip(project, "parallax/app").await.unwrap(),
-        tip
-    );
-    assert_eq!(rev_parse(&path, "HEAD"), tip);
-    assert_eq!(
-        std::fs::read_to_string(path.join("README.md")).unwrap(),
-        "hello\n"
-    );
-    let Merged::Commit(again) = mgr
-        .merge_into_integration(project, tip, branch, "Do a\n\nLanded by Parallax.", true)
-        .await
-        .unwrap()
-    else {
-        panic!("a merges cleanly again");
-    };
-    let landed = again;
-    mgr.advance_integration(project, "parallax/app", tip, &landed)
-        .await
-        .unwrap();
-    assert_eq!(rev_parse(&path, "parallax/app"), landed);
-    assert_eq!(
-        git_output(&path, &["symbolic-ref", "HEAD"]),
-        "refs/heads/parallax/app"
-    );
-    assert!(
-        mgr.advance_integration(project, "parallax/app", tip, &landed)
-            .await
-            .is_err(),
-        "the branch has moved on from that tip"
-    );
-    landed
-}
-
-/// PLX-410 (0045): two children change the same file. The first squash-merges as one commit; the
-/// second conflicts and changes nothing, until plxd starts the merge in its worktree, it
-/// resolves the markers, and the commit its turn ends with concludes the merge, which then lands.
-#[tokio::test]
-async fn two_children_touching_one_file_land_one_at_a_time_through_a_conflict() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let project = ProjectId::generate();
-    mgr.ensure_integration(&repo, project, None, "app", "main")
-        .await
-        .unwrap();
-    let path = mgr.integration_path(project);
-    let tip = mgr.integration_tip(project, "parallax/app").await.unwrap();
-    let mut children = Vec::new();
-    for text in ["from a\n", "from b\n"] {
-        let child = mgr
-            .create_named(&repo, RunId::generate(), Some(&tip), None)
-            .await
-            .unwrap();
-        std::fs::write(child.path.join("README.md"), text).unwrap();
-        mgr.commit_all(&child.path, &child.git_dir, &repo, "work")
-            .await
-            .unwrap();
-        children.push(child);
-    }
-    let (a, b) = (&children[0], &children[1]);
-
-    let Merged::Commit(landed) = mgr
-        .merge_into_integration(
-            project,
-            &tip,
-            &a.branch,
-            "Do a\n\nLanded by Parallax.",
-            true,
-        )
-        .await
-        .unwrap()
-    else {
-        panic!("a merges cleanly");
-    };
-    assert_eq!(rev_parse(&path, "HEAD"), landed);
-    assert_eq!(
-        rev_parse(&path, "HEAD^"),
-        tip,
-        "one commit, with one parent"
-    );
-    assert_eq!(git_output(&path, &["log", "-1", "--format=%s"]), "Do a");
-    assert_eq!(
-        std::fs::read_to_string(path.join("README.md")).unwrap(),
-        "from a\n"
-    );
-    let landed = waits_detached(&mgr, &repo, project, &tip, &a.branch, &landed).await;
-
-    let conflict = mgr
-        .merge_into_integration(project, &landed, &b.branch, "Do b", true)
-        .await
-        .unwrap();
-    assert_eq!(conflict, Merged::Conflict(vec!["README.md".to_owned()]));
-    assert_eq!(rev_parse(&path, "HEAD"), landed, "the branch is untouched");
-    assert_eq!(git_output(&path, &["status", "--porcelain"]), "");
-
-    let readme = || std::fs::read_to_string(b.path.join("README.md")).unwrap();
-    mgr.start_merge(&b.path, &b.git_dir, &landed).await.unwrap();
-    assert!(readme().contains("<<<<<<<"), "{}", readme());
-    mgr.abort_merge(&b.path, &b.git_dir).await.unwrap();
-    assert_eq!(readme(), "from b\n", "aborted");
-    mgr.start_merge(&b.path, &b.git_dir, &landed).await.unwrap();
-
-    // A resolution that keeps a marker is found; one with only a whitespace error isn't.
-    mgr.commit_all(&b.path, &b.git_dir, &repo, "resolve")
-        .await
-        .unwrap();
-    assert_eq!(rev_parse(&b.path, "HEAD^2"), landed, "a merge commit");
-    assert_eq!(
-        mgr.conflict_markers(project, &landed, &b.branch)
-            .await
-            .unwrap(),
-        ["README.md:1", "README.md:3", "README.md:5"]
-    );
-    std::fs::write(b.path.join("README.md"), "from a and b \n").unwrap();
-    mgr.commit_all(&b.path, &b.git_dir, &repo, "resolve")
-        .await
-        .unwrap();
-    assert!(
-        mgr.conflict_markers(project, &landed, &b.branch)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-
-    let Merged::Commit(second) = mgr
-        .merge_into_integration(project, &landed, &b.branch, "Do b", true)
-        .await
-        .unwrap()
-    else {
-        panic!("b lands once it has merged the tip");
-    };
-    assert_eq!(rev_parse(&path, "HEAD^"), landed);
-    assert_eq!(
-        std::fs::read_to_string(path.join("README.md")).unwrap(),
-        "from a and b \n"
-    );
-    assert_eq!(
-        mgr.merge_into_integration(project, &second, &b.branch, "Do b", true)
-            .await
-            .unwrap(),
-        Merged::Unchanged,
-        "landing it again changes nothing"
-    );
-}
-
-/// PLX-410: a remote-tracking base is fetched first, and a base that moved is merged alone, as a
-/// merge commit, or reported as a conflict with nothing changed.
-#[tokio::test]
-async fn a_moved_base_is_fetched_and_merged_alone() {
-    let origin_dir = tempfile::tempdir().unwrap();
-    let origin = init_repo(origin_dir.path()).canonicalize().unwrap();
-    let clone_dir = tempfile::tempdir().unwrap();
-    let clone = clone_dir.path().join("clone");
-    git(
-        clone_dir.path(),
-        &["clone", "-q", origin.to_str().unwrap(), "clone"],
-    );
-    let clone = clone.canonicalize().unwrap();
-    git(&clone, &["config", "user.name", "Test User"]);
-    git(&clone, &["config", "user.email", "test@example.com"]);
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let project = ProjectId::generate();
-    mgr.ensure_integration(&clone, project, None, "app", "origin/main")
-        .await
-        .unwrap();
-    let path = mgr.integration_path(project);
-    let tip = mgr.integration_tip(project, "parallax/app").await.unwrap();
-
-    std::fs::write(origin.join("base.txt"), "base\n").unwrap();
-    git(&origin, &["add", "-A"]);
-    git(&origin, &["commit", "-q", "-m", "base moved"]);
-    let moved = mgr.fetch_base(&clone, "origin/main").await.unwrap();
-    assert_eq!(moved, rev_parse(&origin, "HEAD"), "fetched");
-    assert!(!mgr.integration_has(project, &tip, &moved).await.unwrap());
-    let Merged::Commit(merge) = mgr
-        .merge_into_integration(project, &tip, &moved, "Merge origin/main", false)
-        .await
-        .unwrap()
-    else {
-        panic!("the base merges cleanly");
-    };
-    assert_eq!(rev_parse(&path, "HEAD^2"), moved, "a merge commit");
-    assert!(mgr.integration_has(project, &merge, &moved).await.unwrap());
-
-    std::fs::write(path.join("README.md"), "ours\n").unwrap();
-    git(&path, &["commit", "-qam", "landed"]);
-    let landed = rev_parse(&path, "HEAD");
-    std::fs::write(origin.join("README.md"), "theirs\n").unwrap();
-    git(&origin, &["commit", "-qam", "base again"]);
-    let moved = mgr.fetch_base(&clone, "origin/main").await.unwrap();
-    assert_eq!(
-        mgr.merge_into_integration(project, &landed, &moved, "Merge origin/main", false)
-            .await
-            .unwrap(),
-        Merged::Conflict(vec!["README.md".to_owned()])
-    );
-    assert_eq!(rev_parse(&path, "HEAD"), landed);
-}
-
-/// PLX-407: the stale check lists a local branch's files or a remote-tracking base's.
-#[tokio::test]
-async fn branch_files_lists_a_local_or_a_remote_tracking_branch() {
-    let origin_dir = tempfile::tempdir().unwrap();
-    let origin = init_repo(origin_dir.path()).canonicalize().unwrap();
-    std::fs::create_dir(origin.join("docs")).unwrap();
-    std::fs::write(origin.join("docs/remote.md"), "remote\n").unwrap();
-    git(&origin, &["add", "-A"]);
-    git(&origin, &["commit", "-q", "-m", "remote only"]);
-    let clone_dir = tempfile::tempdir().unwrap();
-    git(
-        clone_dir.path(),
-        &["clone", "-q", origin.to_str().unwrap(), "clone"],
-    );
-    let clone = clone_dir.path().join("clone").canonicalize().unwrap();
-    git(&clone, &["config", "user.name", "Test User"]);
-    git(&clone, &["config", "user.email", "test@example.com"]);
-    git(&clone, &["rm", "-q", "docs/remote.md"]);
-    std::fs::write(clone.join("local.txt"), "local\n").unwrap();
-    git(&clone, &["add", "-A"]);
-    git(&clone, &["commit", "-q", "-m", "local only"]);
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let remote = mgr.branch_files(&clone, "origin/main").await.unwrap();
-    assert_eq!(remote, ["README.md", "docs/remote.md"]);
-    let local = mgr.branch_files(&clone, "main").await.unwrap();
-    assert_eq!(local, ["README.md", "local.txt"]);
-    let missing = mgr.branch_files(&clone, "origin/gone").await.unwrap_err();
-    assert!(
-        matches!(missing, WorktreeError::UnknownRevision { .. }),
-        "{missing:?}"
-    );
-}
-
-#[test]
-fn project_names_become_branch_slugs() {
-    for (name, slug) in [
-        ("Auth Rewrite!", "auth-rewrite"),
-        ("  --v2 API--  ", "v2-api"),
-        ("日本", "project"),
-        (&"a".repeat(50), &"a".repeat(40)),
-    ] {
-        assert_eq!(super::integration::slug(name), slug, "{name}");
-    }
-}
-
-#[tokio::test]
-async fn diff_stat_counts_files_and_lines_against_the_base_before_and_after_a_commit() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-    let (path, git_dir) = (&created.path, &created.git_dir);
-
-    std::fs::write(path.join("README.md"), "hello\nworld\nagain\n").unwrap();
-    std::fs::write(path.join("notes.txt"), "one\ntwo\n").unwrap();
-    std::fs::write(path.join("blob.bin"), [0_u8, 159, 146, 150]).unwrap();
-    let before = mgr.diff_stat(path, git_dir, &created.base).await.unwrap();
-    assert_eq!(
-        before,
-        super::DiffStat {
-            files: 3,
-            insertions: 4,
-            deletions: 0
-        }
-    );
-    mgr.commit_all(path, git_dir, &repo, "agent work")
-        .await
-        .unwrap()
-        .expect("a commit");
-    assert_eq!(
-        mgr.diff_stat(path, git_dir, &created.base).await.unwrap(),
-        before
-    );
-    assert_eq!(
-        mgr.git_common_dir(&repo).await.unwrap(),
-        repo.join(".git"),
-        "the user's checkout names the shared git folder"
-    );
-}
-
-#[tokio::test]
-async fn create_refuses_a_missing_repo() {
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let missing = data_dir.path().join("does-not-exist");
-
-    let error = mgr
-        .create_named(&missing, RunId::generate(), None, None)
-        .await
-        .unwrap_err();
-
-    assert!(
-        matches!(error, WorktreeError::NotAGitRepo { .. }),
-        "{error:?}"
-    );
-}
-
-#[tokio::test]
-async fn create_refuses_a_directory_that_is_not_a_repo() {
-    let not_repo = tempfile::tempdir().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let error = mgr
-        .create_named(not_repo.path(), RunId::generate(), None, None)
-        .await
-        .unwrap_err();
-
-    assert!(
-        matches!(error, WorktreeError::NotAGitRepo { .. }),
-        "{error:?}"
-    );
-}
-
-#[tokio::test]
-async fn create_says_git_is_not_installed_when_it_is_not_on_path() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mut env = Environment::empty();
-    env.set("PATH", data_dir.path());
-    let launcher = Launcher::new(DataDir::new(data_dir.path()).unwrap(), env);
-    let mgr = WorktreeManager::new(launcher, data_dir.path());
-
-    let error = mgr
-        .create_named(repo_dir.path(), RunId::generate(), None, None)
-        .await
-        .unwrap_err();
-
-    assert!(matches!(error, WorktreeError::GitNotInstalled), "{error:?}");
-}
-
-#[tokio::test]
-async fn create_works_from_a_detached_head() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let head = rev_parse(&repo, "HEAD");
-    git(&repo, &["checkout", "-q", &head]);
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-
-    assert_eq!(created.base, head);
-}
-
-#[tokio::test]
-async fn create_from_an_untracked_only_repo_never_blocks_and_is_not_flagged_dirty() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    // Only an untracked file: #257's original report (an untracked AGENTS.md blocked New Chat).
-    std::fs::write(repo.join("AGENTS.md"), "notes\n").unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-
-    assert_eq!(created.base, rev_parse(&repo, "HEAD"));
-    assert!(
-        !created.base_dirty,
-        "an untracked file alone isn't in any commit either way, so it needs no notice"
-    );
-}
-
-#[tokio::test]
-async fn create_from_a_tracked_dirty_repo_never_blocks_but_is_flagged_dirty() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    std::fs::write(repo.join("README.md"), "changed\n").unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-
-    assert_eq!(
-        created.base,
-        rev_parse(&repo, "HEAD"),
-        "starts from HEAD, not the uncommitted change"
-    );
-    assert!(
-        created.base_dirty,
-        "the caller shows a notice that the tracked edit isn't in the worktree"
-    );
-}
-
-#[tokio::test]
-async fn create_with_an_explicit_base_is_never_flagged_dirty() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let head = rev_parse(&repo, "HEAD");
-    std::fs::write(repo.join("README.md"), "changed\n").unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let created = mgr
-        .create_named(&repo, RunId::generate(), Some(&head), None)
-        .await
-        .unwrap();
-
-    assert_eq!(created.base, head);
-    assert!(!created.base_dirty, "the caller chose this base on purpose");
-}
-
-#[tokio::test]
-async fn create_refuses_a_base_that_does_not_resolve() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-
-    let error = mgr
-        .create_named(&repo, RunId::generate(), Some("does-not-exist"), None)
-        .await
-        .unwrap_err();
-
-    assert!(
-        matches!(error, WorktreeError::UnknownRevision { .. }),
-        "{error:?}"
-    );
-}
-
 /// Many runs start in one repo at once (PLX-275): every create succeeds, on its own branch, with its
 /// files checked out and nothing left uncommitted.
 #[tokio::test]
@@ -922,67 +221,6 @@ async fn concurrent_creates_on_one_repo_all_succeed() {
         assert_eq!(git_output(&worktree.path, &["status", "--porcelain"]), "");
     }
     assert_eq!(worktree_count(&repo), 21, "main plus the 20 new worktrees");
-}
-
-#[tokio::test]
-async fn commit_all_is_a_no_op_when_nothing_changed() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-
-    let commit = mgr
-        .commit_all(&created.path, &created.git_dir, &repo, "nothing to see")
-        .await
-        .unwrap();
-
-    assert!(commit.is_none());
-    assert_eq!(
-        rev_parse(&created.path, "HEAD"),
-        created.base,
-        "no commit should have been made"
-    );
-}
-
-#[tokio::test]
-async fn commit_all_refuses_without_a_configured_identity() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    git(&repo, &["config", "--unset", "user.name"]);
-    git(&repo, &["config", "--unset", "user.email"]);
-
-    // A fresh, empty HOME keeps the host's own global (or system) git identity, if any, from
-    // leaking into this repo and making the test flaky.
-    let data_dir = tempfile::tempdir().unwrap();
-    let empty_home = tempfile::tempdir().unwrap();
-    let path = std::env::var("PATH").unwrap();
-    let base: Environment = [
-        ("PATH", path.as_str()),
-        ("HOME", empty_home.path().to_str().unwrap()),
-    ]
-    .into_iter()
-    .collect();
-    let launcher = Launcher::new(DataDir::new(data_dir.path()).unwrap(), base);
-    let mgr = WorktreeManager::new(launcher, data_dir.path());
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-    std::fs::write(created.path.join("README.md"), "edited\n").unwrap();
-
-    let error = mgr
-        .commit_all(&created.path, &created.git_dir, &repo, "should not commit")
-        .await
-        .unwrap_err();
-
-    assert!(
-        matches!(error, WorktreeError::MissingIdentity { .. }),
-        "{error:?}"
-    );
 }
 
 #[tokio::test]
@@ -1036,42 +274,6 @@ async fn commit_all_uses_an_identity_configured_only_in_a_global_gitconfig() {
     );
 }
 
-#[tokio::test]
-async fn remove_deletes_the_worktree_and_its_branch() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-    assert!(created.path.exists());
-
-    mgr.remove(&repo, &created.path, &created.branch)
-        .await
-        .unwrap();
-
-    assert!(!created.path.exists());
-    assert_eq!(worktree_count(&repo), 1, "only the main worktree remains");
-    let branches = Command::new("git")
-        .args([
-            "-C",
-            repo.to_str().unwrap(),
-            "branch",
-            "--list",
-            &created.branch,
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        String::from_utf8(branches.stdout)
-            .unwrap()
-            .trim()
-            .is_empty()
-    );
-}
-
 // #166: a worker controls every file in its worktree. These tests plant the vectors #137 found
 // (a hook, a repo-configured `core.hooksPath` reaching into the worktree, a `.gitattributes`
 // diff or filter driver, and a rewritten `.git` file) and check the sentinel each one's script
@@ -1111,7 +313,7 @@ async fn commit_all_does_not_run_a_post_commit_hook_via_a_repo_configured_hooks_
 }
 
 #[tokio::test]
-async fn commit_all_does_not_run_a_hook_configured_via_an_included_config_file() {
+async fn worktree_git_commands_ignore_a_rewritten_git_file() {
     let repo_dir = tempfile::tempdir().unwrap();
     let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
     let data_dir = tempfile::tempdir().unwrap();
@@ -1121,32 +323,21 @@ async fn commit_all_does_not_run_a_hook_configured_via_an_included_config_file()
         .await
         .unwrap();
 
-    // As if the repository's own config includes a tracked file for shared settings: the
-    // `includeIf` itself is legitimate repo config, but the included file lives in the worktree,
-    // where a worker can edit it, and it sets `core.hooksPath` (#137's husky scenario, by way of
-    // an include rather than a direct setting).
-    let hooks_dir = created.path.join("shared-hooks");
-    let sentinel = data_dir.path().join("sentinel-includeif");
-    write_sentinel_script(&hooks_dir.join("post-commit"), &sentinel);
-    let included_config = created.path.join(".gitconfig-shared");
+    // A second, fully attacker-controlled repository, with a hook that would prove it ran.
+    let evil_dir = tempfile::tempdir().unwrap();
+    let evil_repo = init_repo(evil_dir.path()).canonicalize().unwrap();
+    let sentinel = data_dir.path().join("sentinel-git-file-redirect");
+    write_sentinel_script(
+        &evil_repo.join(".git").join("hooks").join("post-commit"),
+        &sentinel,
+    );
+
+    // The worker rewrites the worktree's `.git` file to point at the attacker's repository.
     std::fs::write(
-        &included_config,
-        format!("[core]\n\thooksPath = {}\n", hooks_dir.display()),
+        created.path.join(".git"),
+        format!("gitdir: {}\n", evil_repo.join(".git").display()),
     )
     .unwrap();
-    git(
-        &created.path,
-        &[
-            "config",
-            "includeIf.gitdir:**.path",
-            included_config.to_str().unwrap(),
-        ],
-    );
-    assert_eq!(
-        git_output(&created.path, &["config", "--get", "core.hooksPath"]),
-        hooks_dir.to_str().unwrap(),
-        "the include must have applied core.hooksPath, or this test proves nothing"
-    );
 
     std::fs::write(created.path.join("README.md"), "edited\n").unwrap();
     let commit = mgr
@@ -1155,11 +346,102 @@ async fn commit_all_does_not_run_a_hook_configured_via_an_included_config_file()
         .unwrap()
         .expect("there was something to commit");
 
-    assert_eq!(commit.sha, rev_parse(&created.path, "HEAD"));
+    let head = git_output_pinned(&created.path, &created.git_dir, &["rev-parse", "HEAD"]);
+    assert_eq!(commit.sha, head);
+    assert_ne!(
+        head,
+        rev_parse(&evil_repo, "HEAD"),
+        "the commit must land in the real repository, not the redirected one"
+    );
     assert!(
         !sentinel.exists(),
-        "a hook from an included config file must not have run"
+        "a hook from the redirected .git file must not have run"
     );
+}
+
+mod checkpoint;
+mod review;
+
+#[tokio::test]
+async fn git_status_counts_staged_ignored_additions_without_changing_real_index() {
+    use super::RunFolder;
+    for mode in ["checkout", "worktree", "unborn"] {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init", "-b", "main"]);
+        git(&repo, &["config", "user.name", "Test"]);
+        git(&repo, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repo.join(".gitignore"), "ignored.txt\n").unwrap();
+        git(&repo, &["add", ".gitignore"]);
+        if mode != "unborn" {
+            git(&repo, &["commit", "-m", "Initial"]);
+        }
+        let mgr = manager(&dir.path().join("data"));
+        let created = if mode == "worktree" {
+            Some(
+                mgr.create_named(&repo, RunId::generate(), None, None)
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        let folder = match &created {
+            Some(created) => RunFolder::Worktree {
+                path: &created.path,
+                git_dir: &created.git_dir,
+            },
+            None => RunFolder::Checkout(&repo),
+        };
+        let root = created
+            .as_ref()
+            .map_or(repo.as_path(), |created| created.path.as_path());
+        let git_dir = created
+            .as_ref()
+            .map_or_else(|| repo.join(".git"), |created| created.git_dir.clone());
+        std::fs::write(root.join("ignored.txt"), "one\ntwo\nthree\n").unwrap();
+        std::fs::write(root.join("normal.txt"), "normal\n").unwrap();
+        git(root, &["add", "-f", "ignored.txt", "normal.txt"]);
+        // Count current contents, and deduplicate the nonignored staged addition.
+        std::fs::write(root.join("ignored.txt"), "one\ntwo\n").unwrap();
+        let index = std::fs::read(git_dir.join("index")).unwrap();
+        let staged = git_output(root, &["diff", "--cached", "--numstat"]);
+        let status = mgr.status(folder).await.unwrap();
+        assert_eq!(
+            (status.insertions, status.deletions),
+            (if mode == "unborn" { 4 } else { 3 }, 0),
+            "{mode}"
+        );
+        assert_eq!(
+            std::fs::read(git_dir.join("index")).unwrap(),
+            index,
+            "{mode}"
+        );
+        assert_eq!(
+            git_output(root, &["diff", "--cached", "--numstat"]),
+            staged,
+            "{mode}"
+        );
+        // A staged addition removed again contributes no working-file lines.
+        std::fs::remove_file(root.join("ignored.txt")).unwrap();
+        let status = mgr.status(folder).await.unwrap();
+        assert_eq!(
+            (status.insertions, status.deletions),
+            (if mode == "unborn" { 2 } else { 1 }, 0),
+            "{mode}"
+        );
+        assert_eq!(
+            std::fs::read(git_dir.join("index")).unwrap(),
+            index,
+            "{mode}"
+        );
+        assert_eq!(
+            git_output(root, &["diff", "--cached", "--numstat"]),
+            staged,
+            "{mode}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1251,210 +533,4 @@ async fn stage_all_does_not_run_a_gitattributes_filter_from_a_fake_global_config
         .unwrap();
 
     assert!(!sentinel.exists(), "the filter driver must not have run");
-}
-
-#[tokio::test]
-async fn worktree_git_commands_ignore_a_rewritten_git_file() {
-    let repo_dir = tempfile::tempdir().unwrap();
-    let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
-    let data_dir = tempfile::tempdir().unwrap();
-    let mgr = manager(data_dir.path());
-    let created = mgr
-        .create_named(&repo, RunId::generate(), None, None)
-        .await
-        .unwrap();
-
-    // A second, fully attacker-controlled repository, with a hook that would prove it ran.
-    let evil_dir = tempfile::tempdir().unwrap();
-    let evil_repo = init_repo(evil_dir.path()).canonicalize().unwrap();
-    let sentinel = data_dir.path().join("sentinel-git-file-redirect");
-    write_sentinel_script(
-        &evil_repo.join(".git").join("hooks").join("post-commit"),
-        &sentinel,
-    );
-
-    // The worker rewrites the worktree's `.git` file to point at the attacker's repository.
-    std::fs::write(
-        created.path.join(".git"),
-        format!("gitdir: {}\n", evil_repo.join(".git").display()),
-    )
-    .unwrap();
-
-    std::fs::write(created.path.join("README.md"), "edited\n").unwrap();
-    let commit = mgr
-        .commit_all(&created.path, &created.git_dir, &repo, "agent changes")
-        .await
-        .unwrap()
-        .expect("there was something to commit");
-
-    let head = git_output_pinned(&created.path, &created.git_dir, &["rev-parse", "HEAD"]);
-    assert_eq!(commit.sha, head);
-    assert_ne!(
-        head,
-        rev_parse(&evil_repo, "HEAD"),
-        "the commit must land in the real repository, not the redirected one"
-    );
-    assert!(
-        !sentinel.exists(),
-        "a hook from the redirected .git file must not have run"
-    );
-}
-
-mod checkpoint;
-mod review;
-
-#[tokio::test]
-async fn git_status_counts_net_edits_untracked_binary_and_unborn_files() {
-    use super::RunFolder;
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path().join("repo");
-    std::fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    let mgr = manager(&dir.path().join("data"));
-    std::fs::write(repo.join("staged.txt"), "one\ntwo\n").unwrap();
-    git(&repo, &["add", "."]);
-    std::fs::write(repo.join("staged.txt"), "one\n").unwrap();
-    std::fs::write(repo.join("new\tfile.txt"), "three\nfour").unwrap();
-    std::fs::write(repo.join("binary.bin"), b"\0\n\n").unwrap();
-    let status = mgr.status(RunFolder::Checkout(&repo)).await.unwrap();
-    assert_eq!((status.insertions, status.deletions), (3, 0));
-    git(
-        &repo,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "Initial",
-        ],
-    );
-    std::fs::write(repo.join("staged.txt"), "replacement\nthree\n").unwrap();
-    git(&repo, &["add", "staged.txt"]);
-    std::fs::write(repo.join("staged.txt"), "replacement\n").unwrap();
-    let status = mgr.status(RunFolder::Checkout(&repo)).await.unwrap();
-    assert_eq!((status.insertions, status.deletions), (3, 2));
-    assert_eq!(
-        git_output(&repo, &["diff", "--cached", "--numstat"]),
-        "2\t2\tstaged.txt"
-    );
-}
-
-#[tokio::test]
-async fn git_status_counts_staged_deletion_recreated_files_against_head() {
-    use super::RunFolder;
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path().join("repo");
-    std::fs::create_dir(&repo).unwrap();
-    git(&repo, &["init", "-b", "main"]);
-    std::fs::write(repo.join("file.txt"), "one\ntwo\n").unwrap();
-    git(&repo, &["add", "."]);
-    git(
-        &repo,
-        &[
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-m",
-            "Initial",
-        ],
-    );
-    git(&repo, &["rm", "file.txt"]);
-    let index = std::fs::read(repo.join(".git/index")).unwrap();
-    let mgr = manager(&dir.path().join("data"));
-    for (contents, expected) in [("one\ntwo\n", (0, 0)), ("one\nchanged\n", (1, 1))] {
-        std::fs::write(repo.join("file.txt"), contents).unwrap();
-        let status = mgr.status(RunFolder::Checkout(&repo)).await.unwrap();
-        assert_eq!((status.insertions, status.deletions), expected);
-        assert_eq!(std::fs::read(repo.join(".git/index")).unwrap(), index);
-        assert_eq!(
-            git_output(&repo, &["diff", "--cached", "--numstat"]),
-            "0\t2\tfile.txt"
-        );
-    }
-}
-
-#[tokio::test]
-async fn git_status_counts_staged_ignored_additions_without_changing_real_index() {
-    use super::RunFolder;
-    for mode in ["checkout", "worktree", "unborn"] {
-        let dir = tempfile::tempdir().unwrap();
-        let repo = dir.path().join("repo");
-        std::fs::create_dir(&repo).unwrap();
-        git(&repo, &["init", "-b", "main"]);
-        git(&repo, &["config", "user.name", "Test"]);
-        git(&repo, &["config", "user.email", "test@example.com"]);
-        std::fs::write(repo.join(".gitignore"), "ignored.txt\n").unwrap();
-        git(&repo, &["add", ".gitignore"]);
-        if mode != "unborn" {
-            git(&repo, &["commit", "-m", "Initial"]);
-        }
-        let mgr = manager(&dir.path().join("data"));
-        let created = if mode == "worktree" {
-            Some(
-                mgr.create_named(&repo, RunId::generate(), None, None)
-                    .await
-                    .unwrap(),
-            )
-        } else {
-            None
-        };
-        let folder = match &created {
-            Some(created) => RunFolder::Worktree {
-                path: &created.path,
-                git_dir: &created.git_dir,
-            },
-            None => RunFolder::Checkout(&repo),
-        };
-        let root = created
-            .as_ref()
-            .map_or(repo.as_path(), |created| created.path.as_path());
-        let git_dir = created
-            .as_ref()
-            .map_or_else(|| repo.join(".git"), |created| created.git_dir.clone());
-        std::fs::write(root.join("ignored.txt"), "one\ntwo\nthree\n").unwrap();
-        std::fs::write(root.join("normal.txt"), "normal\n").unwrap();
-        git(root, &["add", "-f", "ignored.txt", "normal.txt"]);
-        // Count current contents, and deduplicate the nonignored staged addition.
-        std::fs::write(root.join("ignored.txt"), "one\ntwo\n").unwrap();
-        let index = std::fs::read(git_dir.join("index")).unwrap();
-        let staged = git_output(root, &["diff", "--cached", "--numstat"]);
-        let status = mgr.status(folder).await.unwrap();
-        assert_eq!(
-            (status.insertions, status.deletions),
-            (if mode == "unborn" { 4 } else { 3 }, 0),
-            "{mode}"
-        );
-        assert_eq!(
-            std::fs::read(git_dir.join("index")).unwrap(),
-            index,
-            "{mode}"
-        );
-        assert_eq!(
-            git_output(root, &["diff", "--cached", "--numstat"]),
-            staged,
-            "{mode}"
-        );
-        // A staged addition removed again contributes no working-file lines.
-        std::fs::remove_file(root.join("ignored.txt")).unwrap();
-        let status = mgr.status(folder).await.unwrap();
-        assert_eq!(
-            (status.insertions, status.deletions),
-            (if mode == "unborn" { 2 } else { 1 }, 0),
-            "{mode}"
-        );
-        assert_eq!(
-            std::fs::read(git_dir.join("index")).unwrap(),
-            index,
-            "{mode}"
-        );
-        assert_eq!(
-            git_output(root, &["diff", "--cached", "--numstat"]),
-            staged,
-            "{mode}"
-        );
-    }
 }

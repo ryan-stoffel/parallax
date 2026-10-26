@@ -102,62 +102,6 @@ impl Drop for StopServe {
     }
 }
 
-/// A `plxd serve` that the test started itself.
-pub struct Serve {
-    child: std::process::Child,
-}
-
-impl Serve {
-    /// Starts `serve` and waits until it has logged that it listens.
-    pub async fn start(data_dir: &Path) -> Self {
-        let child = {
-            let _lock = spawn_lock();
-            std::process::Command::new(PLXD)
-                .arg("serve")
-                .env("PLXD_DATA_DIR", data_dir)
-                .env_remove("PLXD_LOG")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .expect("spawn plxd serve")
-        };
-        let mut serve = Self { child };
-        let deadline = Instant::now() + PATIENCE;
-        while !log(data_dir).contains("listening") {
-            if let Some(status) = serve.child.try_wait().expect("check on plxd") {
-                panic!("plxd serve exited while starting: {status}");
-            }
-            assert!(Instant::now() < deadline, "plxd serve did not start");
-            sleep(Duration::from_millis(10)).await;
-        }
-        serve
-    }
-
-    pub fn pid(&self) -> Pid {
-        Pid::from_raw(self.child.id().try_into().unwrap()).unwrap()
-    }
-
-    pub fn is_running(&mut self) -> bool {
-        self.child.try_wait().expect("check on plxd").is_none()
-    }
-}
-
-impl Drop for Serve {
-    fn drop(&mut self) {
-        let _ = rustix::process::kill_process(self.pid(), Signal::TERM);
-        let deadline = std::time::Instant::now() + PATIENCE;
-        while std::time::Instant::now() < deadline {
-            if !matches!(self.child.try_wait(), Ok(None)) {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 /// A running `plxd attach`, with its stdio piped to the test.
 pub struct Attach {
     child: Child,

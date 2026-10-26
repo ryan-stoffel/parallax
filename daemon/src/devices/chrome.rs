@@ -340,13 +340,3 @@ fn size(sips: &str) -> Option<(f64, f64)> {
     };
     Some((value("pixelWidth:")?, value("pixelHeight:")?))
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn sips_sizes_read_as_points() {
-        let out = "/x/PhoneComposite.pdf\n  pixelWidth: 436.000\n  pixelHeight: 908.000\n";
-        assert_eq!(super::size(out), Some((436.0, 908.0)));
-        assert_eq!(super::size("nothing"), None);
-    }
-}

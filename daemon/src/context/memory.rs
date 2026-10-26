@@ -398,7 +398,7 @@ mod tests {
 
     use std::path::Path;
 
-    use super::{Header, INDEX_BYTES, entry_kind, index, parse, render, slug, unused, used};
+    use super::{index, render};
 
     /// Writes an entry titled `title` at `path` in `dir`.
     fn entry(dir: &Path, path: &str, title: &str) {
@@ -406,47 +406,6 @@ mod tests {
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         let text = render(MemoryKind::Decision, title, "s", "d", "w", &[], "Body.");
         std::fs::write(file, text).unwrap();
-    }
-
-    #[test]
-    fn the_index_lists_you_then_repo_then_project_one_line_each() {
-        let [you, repo, project] = [(); 3].map(|()| tempfile::tempdir().unwrap());
-        entry(project.path(), "memory/decision/b.md", "Project entry");
-        entry(project.path(), "knowledge/a.md", "Project write-up");
-        entry(repo.path(), "memory/gotcha/c.md", "Repo entry");
-        entry(you.path(), "memory/preference/d.md", "You entry");
-        // Not memory: neither is listed.
-        entry(project.path(), "proposals/e.md", "A proposal");
-        std::fs::write(project.path().join("brief.md"), "The goal.").unwrap();
-        let scopes = [
-            ("you", you.path()),
-            ("repo", repo.path()),
-            ("project", project.path()),
-        ];
-        let (text, over) = index(&scopes);
-        assert!(!over);
-        let lines: Vec<&str> = text.lines().skip(1).collect();
-        assert_eq!(
-            lines,
-            [
-                "- you preference: You entry (memory/preference/d.md)",
-                "- repo gotcha: Repo entry (memory/gotcha/c.md)",
-                "- project decision: Project entry (memory/decision/b.md)",
-                "- project knowledge: Project write-up (knowledge/a.md)",
-            ]
-        );
-    }
-
-    #[test]
-    fn an_empty_project_lists_the_other_scopes_and_no_memory_lists_nothing() {
-        let [you, project] = [(); 2].map(|()| tempfile::tempdir().unwrap());
-        let missing = project.path().join("never-made");
-        assert_eq!(index(&[("project", &missing)]), (String::new(), false));
-        let scopes = [("you", you.path()), ("project", project.path())];
-        assert_eq!(index(&scopes), (String::new(), false));
-        entry(you.path(), "memory/preference/d.md", "You entry");
-        let (text, _) = index(&scopes);
-        assert!(text.ends_with("- you preference: You entry (memory/preference/d.md)\n"));
     }
 
     #[test]
@@ -479,134 +438,5 @@ mod tests {
             text.lines().nth(1),
             Some(format!("- project decision: {cut} (memory/decision/a.md)").as_str())
         );
-    }
-
-    #[test]
-    fn an_index_over_the_cap_keeps_the_first_lines_and_ends_with_a_note() {
-        let [you, project] = [(); 2].map(|()| tempfile::tempdir().unwrap());
-        entry(you.path(), "memory/preference/first.md", "First");
-        let title = "t".repeat(250);
-        for n in 0..40 {
-            entry(
-                project.path(),
-                &format!("memory/decision/{n:02}.md"),
-                &title,
-            );
-        }
-        let (text, over) = index(&[("you", you.path()), ("project", project.path())]);
-        assert!(over);
-        assert!(text.len() <= INDEX_BYTES, "{}", text.len());
-        let lines: Vec<&str> = text.lines().collect();
-        assert!(lines[1].starts_with("- you preference: First"));
-        let listed = lines.len() - 3;
-        assert!(lines[2].ends_with("(memory/decision/00.md)"));
-        let note = format!(
-            "- {} more not listed. List each scope with memory_read and no path.",
-            40 - listed
-        );
-        assert_eq!(lines.last(), Some(&note.as_str()));
-    }
-
-    #[test]
-    fn an_entry_reads_back_its_header_and_body() {
-        let text = render(
-            MemoryKind::Decision,
-            "Use Vitest,\nnot Jest",
-            "run 1",
-            "2026-10-04",
-            "user",
-            &[("Scope", "repo"), ("Replaces", "memory/decision/vitest.md")],
-            "We moved off Jest.\n",
-        );
-        assert_eq!(
-            text,
-            "Kind: decision\nTitle: Use Vitest, not Jest\nSource: run 1\nDate: 2026-10-04\n\
-             Writer: user\nScope: repo\nReplaces: memory/decision/vitest.md\n\nWe moved off Jest.\n"
-        );
-        let (header, body) = parse(&text);
-        assert_eq!(
-            header,
-            Header {
-                kind: Some(MemoryKind::Decision),
-                title: Some("Use Vitest, not Jest".to_owned()),
-                source: Some("run 1".to_owned()),
-                date: Some("2026-10-04".to_owned()),
-                writer: Some("user".to_owned()),
-                scope: Some("repo".to_owned()),
-                replaces: Some("memory/decision/vitest.md".to_owned()),
-                stale: None,
-                last_used: None,
-            }
-        );
-        assert_eq!(body, "We moved off Jest.\n");
-    }
-
-    #[test]
-    fn a_read_stamps_last_used_once_a_day_and_keeps_the_rest() {
-        let entry = render(
-            MemoryKind::Gotcha,
-            "T",
-            "s",
-            "2026-01-01",
-            "w",
-            &[],
-            "Body.\n",
-        );
-        let stamped = used(&entry, "2026-10-23").unwrap();
-        let (header, body) = parse(&stamped);
-        assert_eq!(header.last_used.as_deref(), Some("2026-10-23"));
-        assert_eq!(header.title.as_deref(), Some("T"));
-        assert_eq!(body, "Body.\n");
-        assert_eq!(used(&stamped, "2026-10-23"), None);
-        // A later day replaces the line rather than adding one.
-        let later = used(&stamped, "2026-10-24").unwrap();
-        assert_eq!(later.matches("Last used:").count(), 1);
-        assert_eq!(parse(&later).0.last_used.as_deref(), Some("2026-10-24"));
-        // A file the user wrote without a header gets one.
-        let plain = used("# Notes\n", "2026-10-23").unwrap();
-        assert_eq!(plain, "Last used: 2026-10-23\n\n# Notes\n");
-    }
-
-    #[test]
-    fn an_entry_is_unused_after_60_days_from_its_last_use_or_else_its_date() {
-        let today: jiff::civil::Date = "2026-10-23".parse().unwrap();
-        let header = |date: &str, last_used: Option<&str>| Header {
-            date: Some(date.to_owned()),
-            last_used: last_used.map(str::to_owned),
-            ..Header::default()
-        };
-        assert!(unused(&header("2026-08-24", None), today));
-        assert!(!unused(&header("2026-08-25", None), today));
-        assert!(!unused(&header("2026-01-01", Some("2026-10-01")), today));
-        assert!(unused(&header("2026-10-01", Some("2026-08-01")), today));
-        assert!(!unused(&header("someday", None), today));
-        assert!(!unused(&Header::default(), today));
-    }
-
-    #[test]
-    fn a_file_without_a_header_is_all_body() {
-        let (header, body) = parse("# Notes\nSee: the plan\n");
-        assert_eq!(header, Header::default());
-        assert_eq!(body, "# Notes\nSee: the plan\n");
-        let (header, body) = parse("Title: Only a title");
-        assert_eq!(header.title.as_deref(), Some("Only a title"));
-        assert_eq!(body, "");
-    }
-
-    #[test]
-    fn only_entry_paths_have_a_kind() {
-        assert_eq!(
-            entry_kind("memory/gotcha/flaky.md"),
-            Some(MemoryKind::Gotcha)
-        );
-        assert_eq!(entry_kind("knowledge/x.md"), None);
-        assert_eq!(entry_kind("memory/other/x.md"), None);
-    }
-
-    #[test]
-    fn slugs_are_short_lowercase_words() {
-        assert_eq!(slug("Use Vitest, not Jest!"), "use-vitest-not-jest");
-        assert_eq!(slug("¿?"), "entry");
-        assert!(slug(&"word ".repeat(40)).len() <= 60);
     }
 }

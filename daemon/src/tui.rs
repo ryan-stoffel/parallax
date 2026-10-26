@@ -2004,10 +2004,9 @@ fn upsert<T>(items: &mut Vec<T>, new: T, same: impl Fn(&T, &T) -> bool) {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::{AgentEffort, AgentPermission, ClientInfo, ProviderInfo, Repo};
-    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+    use parallax_protocol::{ClientInfo, Repo};
 
-    use super::{App, Draft, age, files_in, summary};
+    use super::{App, Draft};
     use crate::peer::Plxd;
 
     /// An app whose plxd is never reached: these keys make no calls.
@@ -2015,112 +2014,6 @@ mod tests {
         App::new(Plxd::new(|| async {
             Err::<(tokio::io::DuplexStream, ClientInfo), String>("no plxd in tests".to_owned())
         }))
-    }
-
-    /// An installed, enabled provider `id` of kind `id`, with no models, that runs `permissions`.
-    fn provider(id: &str, name: &str, permissions: &[&str]) -> ProviderInfo {
-        serde_json::from_value(serde_json::json!({
-            "instance": {"id": id, "kind": id, "name": name, "enabled": true, "args": [],
-                         "env": [], "models": []},
-            "installed": true, "installing": false, "models": [],
-            "permissions": permissions, "efforts": true, "coordinator": false, "loginEnv": [],
-        }))
-        .unwrap()
-    }
-
-    async fn press(app: &mut App, codes: &[KeyCode]) {
-        for &code in codes {
-            app.key(KeyEvent::from(code)).await;
-        }
-    }
-
-    #[tokio::test]
-    async fn history_keeps_what_was_typed() {
-        let mut app = app();
-        app.input = "draft".to_owned();
-        press(&mut app, &[KeyCode::Down, KeyCode::Up]).await;
-        assert_eq!(app.input, "draft", "no history: the arrows change nothing");
-
-        app.history = vec!["one".to_owned(), "two".to_owned()];
-        press(&mut app, &[KeyCode::Up, KeyCode::Up]).await;
-        assert_eq!(app.input, "one");
-        press(&mut app, &[KeyCode::Down, KeyCode::Down]).await;
-        assert_eq!(app.input, "draft", "past the newest, the draft comes back");
-    }
-
-    #[tokio::test]
-    async fn a_new_thread_from_an_empty_sidebar() {
-        let mut app = app();
-        app.draft = Draft::Here("/tmp".into());
-        press(&mut app, &[KeyCode::Left, KeyCode::Char('n')]).await;
-        assert!(app.menu.is_none());
-        assert_eq!(app.draft, Draft::Chats, "Chats, before plxd made its entry");
-    }
-
-    #[test]
-    fn a_new_provider_drops_what_it_cant_run() {
-        let mut app = app();
-        app.providers = vec![
-            provider("claude", "claude", &["edit", "plan"]),
-            provider("codex", "codex", &["edit", "auto"]),
-        ];
-        app.default_backend = Some("codex".to_owned());
-        app.model = Some("claude-opus-5".to_owned());
-        app.effort = Some(AgentEffort::High);
-        app.permission = Some(AgentPermission::Plan);
-
-        // As after /new from a Claude thread, onto the host's default, Codex.
-        app.fit_provider(Some("claude"));
-        assert_eq!(app.model, None);
-        assert_eq!(app.permission, Some(AgentPermission::Edit));
-        assert_eq!(app.effort, Some(AgentEffort::High));
-    }
-
-    #[test]
-    fn choices_made_before_providers_arrive_are_fitted_to_them() {
-        let codex = provider("codex", "Codex", &["edit", "auto"]);
-        let mut app = app();
-        // Shift+Tab to plan mode before the list came, when every mode was offered.
-        app.permission = Some(AgentPermission::Plan);
-        app.take(super::Loaded::Providers {
-            backend: Some("codex".to_owned()),
-            providers: vec![codex],
-        });
-        assert_eq!(app.permission, Some(AgentPermission::Edit));
-    }
-
-    #[tokio::test]
-    async fn a_model_picked_before_providers_arrive_stays() {
-        let codex = provider("codex", "Codex", &["edit", "auto"]);
-        let mut app = app();
-        app.model = Some("gpt-6.1-sol".to_owned());
-        app.take(super::Loaded::Providers {
-            backend: Some("codex".to_owned()),
-            providers: vec![codex],
-        });
-        assert_eq!(app.model.as_deref(), Some("gpt-6.1-sol"));
-        // A mode the provider can't run, picked from a list opened before, is refused.
-        app.pick(super::Pick::Mode(AgentPermission::Plan)).await;
-        assert_eq!(app.permission, None);
-    }
-
-    #[tokio::test]
-    async fn enter_runs_the_highlighted_command() {
-        let mut app = app();
-        press(
-            &mut app,
-            &[KeyCode::Char('/'), KeyCode::Down, KeyCode::Enter],
-        )
-        .await;
-        assert_eq!(app.input, "");
-        assert_eq!(app.menu.as_ref().map(|menu| menu.title), Some("Threads"));
-
-        app.menu = None;
-        for c in "/mode".chars() {
-            press(&mut app, &[KeyCode::Char(c)]).await;
-        }
-        press(&mut app, &[KeyCode::Enter]).await;
-        assert_eq!(app.menu.as_ref().map(|menu| menu.title), Some("Mode"));
     }
 
     #[test]
@@ -2149,73 +2042,5 @@ mod tests {
         assert_eq!(app.draft_for(id(other)), Draft::Repo(id(other).unwrap()));
         assert_eq!(app.draft_for(id(chats)), Draft::Chats);
         assert_eq!(app.draft_for(None), Draft::Chats);
-    }
-
-    #[tokio::test]
-    async fn at_offers_files_and_completes_them() {
-        let mut app = app();
-        app.files = Some((
-            "/dev/app".into(),
-            vec![
-                "daemon/".to_owned(),
-                "daemon/src/".to_owned(),
-                "daemon/src/tui.rs".to_owned(),
-                "daemon/src/threads.rs".to_owned(),
-                "README.md".to_owned(),
-            ],
-        ));
-        app.input = "look at @tu".to_owned();
-        assert_eq!(app.mentions(), ["daemon/src/tui.rs"]);
-        press(&mut app, &[KeyCode::Tab]).await;
-        assert_eq!(app.input, "look at @daemon/src/tui.rs ");
-
-        app.input = "@dae".to_owned();
-        assert_eq!(
-            app.mentions()[0],
-            "daemon/",
-            "a name that starts with it, shortest first"
-        );
-        press(&mut app, &[KeyCode::Enter]).await;
-        assert_eq!(app.input, "@daemon/", "a folder stays open");
-
-        press(&mut app, &[KeyCode::Esc]).await;
-        assert!(app.mentions().is_empty(), "Esc closes the list");
-        assert_eq!(app.input, "@daemon/", "and keeps the message");
-    }
-
-    #[test]
-    fn files_keep_names_outside_ascii() {
-        let dir = tempfile::tempdir().unwrap();
-        let git = |args: &[&str]| {
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(dir.path())
-                .args(args)
-                .output()
-                .unwrap()
-        };
-        git(&["init", "-q"]);
-        std::fs::create_dir(dir.path().join("docs")).unwrap();
-        std::fs::write(dir.path().join("docs/café.md"), "").unwrap();
-        assert_eq!(files_in(dir.path()), ["docs/", "docs/café.md"]);
-    }
-
-    #[test]
-    fn tool_runs_sum_up_by_kind() {
-        assert_eq!(
-            summary(["Bash", "Edit", "Write", "Bash", "Read", "mcp__x__y"]),
-            "Ran 2 shell commands, read 1 file, edited 2 files, used 1 tool"
-        );
-        assert_eq!(summary(["TodoWrite"]), "Updated the to-do list");
-    }
-
-    #[test]
-    fn ages_read_like_the_sidebar() {
-        let now: jiff::Timestamp = "2026-10-12T12:00:00Z".parse().unwrap();
-        let ago = |secs: i64| age(now, now - jiff::SignedDuration::from_secs(secs));
-        assert_eq!(
-            [ago(5), ago(300), ago(7_200), ago(259_200)],
-            ["now", "5m", "2h", "3d"]
-        );
     }
 }

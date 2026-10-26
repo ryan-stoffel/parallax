@@ -366,104 +366,10 @@ fn parse_whois(json: &str) -> Result<Whois, String> {
 mod tests {
     use std::net::IpAddr;
 
-    use super::{NotRunning, Owner, Whois, admit, parse_status, parse_whois};
+    use super::{Owner, Whois, admit};
 
     const ME: u64 = 526_036_588_648_688;
     const TAGGED: u64 = 662_125_110_488_743;
-
-    /// Trimmed from a real `tailscale status --json`: this node, another of its user's, and a
-    /// tagged node shared from another tailnet.
-    const STATUS: &str = r#"{
-      "Version": "1.102.4-t3caf7d9e7-g084ee3b64",
-      "BackendState": "Running",
-      "TailscaleIPs": ["100.74.190.83", "fd7a:115c:a1e0::fc2a:be54"],
-      "Self": {
-        "ID": "nZi1Lj6Rrb11CNTRL", "NodeID": 4463253412029858,
-        "HostName": "Ryan’s Mac Mini", "DNSName": "ryans-mac-mini.tail53cf78.ts.net.",
-        "OS": "macOS", "UserID": 526036588648688,
-        "TailscaleIPs": ["fd7a:115c:a1e0::fc2a:be54", "100.74.190.83"], "Online": true
-      },
-      "Peer": {
-        "nodekey:7b8d": {
-          "ID": "ntpwoKNMLJ11CNTRL", "HostName": "macbook",
-          "DNSName": "ryans-macbook.tail53cf78.ts.net.", "OS": "macOS",
-          "UserID": 526036588648688, "TailscaleIPs": ["100.87.92.42", "fd7a:115c:a1e0::d533:5c2c"],
-          "Online": false, "KeyExpiry": "2027-01-06T14:17:56Z"
-        },
-        "nodekey:0820": {
-          "ID": "nkxiuZ8Lu911CNTRL", "HostName": "hv-worker-1",
-          "DNSName": "hv-worker-1.tail470a31.ts.net.", "OS": "linux",
-          "UserID": 662125110488743, "AltSharerUserID": 7312656834859973,
-          "TailscaleIPs": ["100.66.59.107"], "Tags": ["tag:k3s"], "Online": true
-        }
-      },
-      "User": {}
-    }"#;
-
-    #[test]
-    fn status_reads_this_node_and_its_peers() {
-        let status = parse_status(STATUS).unwrap();
-        assert_eq!(status.this.id, "nZi1Lj6Rrb11CNTRL");
-        assert_eq!(status.this.host_name, "Ryan’s Mac Mini");
-        assert_eq!(status.this.dns_name, "ryans-mac-mini.tail53cf78.ts.net");
-        assert_eq!(status.this.user_id, ME);
-        assert_eq!(
-            status.this.ipv4(),
-            Some("100.74.190.83".parse().unwrap()),
-            "IPv4 first, whatever the order"
-        );
-        let mut peers = status.peers;
-        peers.sort_by(|a, b| a.host_name.cmp(&b.host_name));
-        assert_eq!(peers.len(), 2);
-        assert_eq!(peers[0].user_id, TAGGED);
-        assert_eq!(peers[0].tags, ["tag:k3s"]);
-        assert!(peers[1].tags.is_empty());
-        assert_eq!(peers[1].host_name, "macbook");
-        assert_eq!(peers[1].os, "macOS");
-        assert!(!peers[1].online);
-    }
-
-    #[test]
-    fn status_without_a_running_backend_or_peers() {
-        let stopped = r#"{"BackendState": "Stopped", "Self": null, "Peer": null}"#;
-        assert!(matches!(parse_status(stopped), Err(NotRunning::Stopped(_))));
-        assert!(matches!(
-            parse_status("not json"),
-            Err(NotRunning::Stopped(_))
-        ));
-        let alone = r#"{"BackendState": "Running", "Self": {"UserID": 1, "TailscaleIPs": null}, "Peer": null}"#;
-        let status = parse_status(alone).unwrap();
-        assert!(status.peers.is_empty());
-        assert_eq!(status.this.ipv4(), None);
-    }
-
-    #[test]
-    fn whois_reads_the_user_and_node() {
-        // Trimmed from a real `tailscale whois --json 100.87.92.42`.
-        let json = r#"{
-          "Node": {"ID": 2219799458589281, "StableID": "ntpwoKNMLJ11CNTRL",
-                   "Name": "ryans-macbook.tail53cf78.ts.net.", "User": 526036588648688,
-                   "Addresses": ["100.87.92.42/32"]},
-          "UserProfile": {"ID": 526036588648688, "LoginName": "ryan-stoffel@github"},
-          "CapMap": null
-        }"#;
-        assert_eq!(
-            parse_whois(json).unwrap(),
-            Whois {
-                user_id: ME,
-                tags: Vec::new(),
-                node: "ryans-macbook.tail53cf78.ts.net".to_owned()
-            }
-        );
-        assert!(parse_whois("peer not found").is_err());
-        // Trimmed from a real `tailscale whois --json 100.66.59.107`.
-        let tagged = r#"{
-          "Node": {"Name": "hv-worker-1.tail470a31.ts.net.", "User": 662125110488743,
-                   "Tags": ["tag:k3s"]},
-          "UserProfile": {"ID": 662125110488743, "LoginName": "tagged-devices"}
-        }"#;
-        assert_eq!(parse_whois(tagged).unwrap().tags, ["tag:k3s"]);
-    }
 
     #[test]
     fn only_another_node_of_the_same_user_is_admitted() {

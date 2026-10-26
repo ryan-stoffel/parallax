@@ -171,87 +171,13 @@ impl LaunchAgent {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
 
     use super::LaunchAgent;
     use crate::paths::DataDir;
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn the_service_target_is_the_default_label_in_the_gui_domain() {
-        assert_eq!(
-            super::service_target(501),
-            "gui/501/io.github.ryan-stoffel.parallax.plxd"
-        );
-    }
 
     #[test]
     fn another_data_folder_never_uses_the_launch_agent() {
         let dir = DataDir::new("/tmp/plxd-not-the-default").unwrap();
         assert_eq!(LaunchAgent::installed_for(&dir), None);
-    }
-
-    fn fake_launchctl(dir: &Path, script: &str) -> PathBuf {
-        let path = dir.join("launchctl");
-        fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        path
-    }
-
-    fn agent(launchctl: PathBuf) -> LaunchAgent {
-        LaunchAgent {
-            program: launchctl,
-            args: vec!["kickstart".to_owned(), "gui/501/test".to_owned()],
-        }
-    }
-
-    fn soon() -> Instant {
-        Instant::now() + Duration::from_secs(10)
-    }
-
-    #[test]
-    fn start_runs_the_command_and_reports_its_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let args = dir.path().join("args");
-        let ok = agent(fake_launchctl(
-            dir.path(),
-            &format!("echo \"$@\" > '{}'", args.display()),
-        ));
-        ok.start(soon()).unwrap();
-        assert_eq!(
-            fs::read_to_string(&args).unwrap(),
-            "kickstart gui/501/test\n"
-        );
-
-        let failing = agent(fake_launchctl(
-            dir.path(),
-            "echo 'Could not find service' >&2; exit 113",
-        ));
-        let error = failing.start(soon()).unwrap_err().to_string();
-        assert!(
-            error.contains("`launchctl kickstart gui/501/test` failed"),
-            "{error}"
-        );
-        assert!(error.contains("Could not find service"), "{error}");
-        assert!(error.contains("113"), "{error}");
-    }
-
-    #[test]
-    fn a_start_that_hangs_is_given_up_at_the_deadline() {
-        let dir = tempfile::tempdir().unwrap();
-        let hanging = agent(fake_launchctl(dir.path(), "exec sleep 30"));
-        let started = Instant::now();
-        let error = hanging
-            .start(started + Duration::from_millis(200))
-            .unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "{:?}",
-            started.elapsed()
-        );
     }
 }

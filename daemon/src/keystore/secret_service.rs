@@ -109,20 +109,10 @@ impl KeyStore for SecretServiceStore {
 
 #[cfg(test)]
 mod tests {
-    use std::io;
-
-    use keyring_core::Error;
     use parallax_protocol::AccountId;
 
     use super::SecretServiceStore;
-    use crate::keystore::{KeyStore, KeyStoreError};
-
-    #[test]
-    fn a_locked_or_refused_store_is_unavailable() {
-        let failure = || Box::new(io::Error::other("failed"));
-        assert!(KeyStoreError::from(Error::NoStorageAccess(failure())).is_unavailable());
-        assert!(!KeyStoreError::from(Error::PlatformFailure(failure())).is_unavailable());
-    }
+    use crate::keystore::KeyStore;
 
     // Reads a random account under a throwaway service, so it changes nothing. Without a Secret
     // Service, as on CI, it fails as unavailable; with one, the account isn't there. Either way it

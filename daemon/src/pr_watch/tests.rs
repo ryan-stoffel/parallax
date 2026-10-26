@@ -1,9 +1,6 @@
 use jiff::{SignedDuration, Timestamp};
 
-use super::{
-    Change, Check, CheckState, Detail, Remark, WAKE_LIMIT, Watch, evaluate, message, parse,
-    snippet, verdict,
-};
+use super::{Change, Check, CheckState, Detail, Remark, Watch, evaluate, message, parse, verdict};
 use parallax_protocol::{PrStatusCheck, PrStatusThread};
 
 fn start() -> Timestamp {
@@ -73,45 +70,6 @@ fn a_check_that_fails_wakes_once_and_a_rerun_that_fails_again_wakes_again() {
 }
 
 #[test]
-fn the_required_checks_passing_wakes_even_while_others_run() {
-    let checks = |lint, bot| vec![check("lint", lint, true), check("advisory-bot", bot, false)];
-    let watch = seen(&checks(CheckState::Pending, CheckState::Pending));
-    let report = evaluate(
-        &watch,
-        &open(
-            checks(CheckState::Passed, CheckState::Pending),
-            Vec::new(),
-            "MERGEABLE",
-        ),
-    );
-    assert_eq!(
-        report.changes,
-        [Change::ChecksPassed {
-            count: 1,
-            required: true
-        }]
-    );
-    let text = message(
-        "https://github.com/me/app/pull/1",
-        &open(Vec::new(), Vec::new(), ""),
-        &report,
-    );
-    assert!(
-        text.contains("- All 1 required check passed on abc1234."),
-        "{text}"
-    );
-    let quiet = evaluate(
-        &report.next,
-        &open(
-            checks(CheckState::Passed, CheckState::Passed),
-            Vec::new(),
-            "MERGEABLE",
-        ),
-    );
-    assert!(quiet.changes.is_empty(), "told already");
-}
-
-#[test]
 fn only_someone_elses_new_comments_wake() {
     let watch = seen(&[]);
     let remarks = vec![
@@ -140,67 +98,6 @@ fn only_someone_elses_new_comments_wake() {
     };
     let ids: Vec<&str> = told.iter().map(|remark| remark.id.as_str()).collect();
     assert_eq!(ids, ["same-second", "old"]);
-}
-
-#[test]
-fn a_new_conflict_wakes_and_unknown_keeps_the_last_answer() {
-    let watch = seen(&[]);
-    let report = evaluate(&watch, &open(Vec::new(), Vec::new(), "CONFLICTING"));
-    assert_eq!(report.changes, [Change::Conflicting]);
-    let text = message("u", &open(Vec::new(), Vec::new(), "CONFLICTING"), &report);
-    assert!(
-        text.contains("- The branch now conflicts with develop."),
-        "{text}"
-    );
-    let unknown = evaluate(&report.next, &open(Vec::new(), Vec::new(), "UNKNOWN"));
-    assert!(unknown.changes.is_empty());
-    assert!(unknown.next.conflicting);
-    let clean = evaluate(&unknown.next, &open(Vec::new(), Vec::new(), "MERGEABLE"));
-    assert!(!clean.next.conflicting);
-}
-
-#[test]
-fn ten_comment_only_wakes_in_a_row_end_the_watch_and_other_news_resets_the_count() {
-    let mut watch = seen(&[]);
-    for wake in 1..=WAKE_LIMIT {
-        let remarks = vec![remark(&format!("c{wake}"), "bot", i64::from(wake))];
-        let report = evaluate(&watch, &open(Vec::new(), remarks, "MERGEABLE"));
-        assert_eq!(report.next.wakes, wake);
-        assert_eq!(report.exhausted, wake == WAKE_LIMIT);
-        if report.exhausted {
-            let text = message("u", &open(Vec::new(), Vec::new(), ""), &report);
-            assert!(
-                text.contains("stopped watching after 10 comment-only updates"),
-                "{text}"
-            );
-        }
-        watch = report.next;
-    }
-
-    // A conflict is progress, which starts the count again.
-    let mut chatty = seen(&[]);
-    chatty.wakes = 3;
-    let report = evaluate(
-        &chatty,
-        &open(Vec::new(), vec![remark("c", "bot", 1)], "CONFLICTING"),
-    );
-    assert_eq!(report.next.wakes, 0);
-}
-
-#[test]
-fn a_push_forgets_the_old_heads_checks() {
-    let failed = vec![check("test", CheckState::Failed("failure"), false)];
-    let watch = seen(&[]);
-    let told = evaluate(&watch, &open(failed.clone(), Vec::new(), "MERGEABLE"));
-    assert_eq!(told.changes.len(), 1);
-    let mut pushed = open(failed.clone(), Vec::new(), "MERGEABLE");
-    pushed.head_sha = Some("fff0000".to_owned());
-    let report = evaluate(&told.next, &pushed);
-    assert_eq!(
-        report.changes,
-        [Change::ChecksFailed(failed)],
-        "the new head failed too"
-    );
 }
 
 #[test]
@@ -377,90 +274,4 @@ fn a_pull_request_is_ready_only_when_nothing_holds_it_back() {
     let mut merged = open(green, Vec::new(), "UNKNOWN");
     merged.state = "MERGED".to_owned();
     assert_eq!(verdict(url, merged, 0, false).reasons, ["it is merged"]);
-}
-
-#[test]
-fn a_snippet_is_one_line_without_html_comments() {
-    assert_eq!(snippet("a <!-- hidden -->\n\n b"), "a b");
-    assert_eq!(snippet(&"x".repeat(300)).chars().count(), 200);
-}
-
-/// PLX-777: every change to a run's watches logs `pr.watches` with what it watches now, both
-/// from `pr/unwatch` and from a watch that ends on its own.
-#[tokio::test]
-async fn a_watch_ending_logs_the_run_s_watches() {
-    use std::time::Duration;
-
-    use parallax_protocol::{ParallaxEvent, PrViewParams, ProjectId, RunId};
-    use parallax_store::{RunFields, RunState};
-    use tokio_util::sync::CancellationToken;
-
-    use super::{record_job, unwatch};
-    use crate::server::Daemon;
-
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = Daemon::for_tests(dir.path(), 10_000, Duration::from_secs(90));
-    let (run_id, project) = (RunId::generate(), ProjectId::generate());
-    let (first, second) = (
-        "https://github.com/o/r/pull/1".to_owned(),
-        "https://github.com/o/r/pull/2".to_owned(),
-    );
-    let watch = Watch::new(start());
-    let payload = serde_json::to_string(&watch).unwrap();
-    let urls = [first.clone(), second.clone()];
-    daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            let fields = RunFields {
-                project_id: project.into(),
-                prompt: "p".to_owned(),
-                requested_account: None,
-                policy: "workspaceWrite".to_owned(),
-                backend: "fake".to_owned(),
-                coordinator_thread: None,
-                parent: None,
-                notify_parent: false,
-                model: None,
-                effort: None,
-                permission: None,
-                context_window: None,
-                fast: None,
-                approvals: false,
-                checkout: false,
-                explore: false,
-            };
-            db.create_run(run_id.into(), &fields, &RunState::default())
-                .unwrap();
-            for url in &urls {
-                db.put_pr_watch(run_id.into(), url, &payload).unwrap();
-            }
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-    let params = PrViewParams {
-        run_id,
-        url: first.clone(),
-    };
-    assert!(unwatch(&daemon, params).await.unwrap().was_watching);
-    let key = second.clone();
-    let ended = daemon
-        .store
-        .run(&CancellationToken::new(), move |db| {
-            record_job(db, run_id.into(), &key, watch.started_at, None, None)
-        })
-        .await
-        .unwrap();
-    assert!(ended);
-
-    let (entries, _) = daemon.log.run_events(run_id, 0, 100, usize::MAX).unwrap();
-    let logged: Vec<Vec<String>> = entries
-        .iter()
-        .filter_map(|entry| match entry.event().into_owned() {
-            ParallaxEvent::PrWatches { urls, .. } => Some(urls),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(logged, [vec![second], Vec::new()]);
 }

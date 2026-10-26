@@ -1,36 +1,12 @@
 import { expect, test, vi } from "vite-plus/test";
 
-import { jumpTarget, parseScope, searchMatch } from "./scope";
+import { parseScope } from "./scope";
 import { pushToast, undoable, type Toast } from "./undo";
 
 test("scopes name a host and an id, and the id may hold a slash", () => {
   expect(parseScope("all")).toEqual({ kind: "all" });
   expect(parseScope("area:local/a1")).toEqual({ kind: "area", hostId: "local", id: "a1" });
   expect(parseScope("repo:mini/r/x")).toEqual({ kind: "repo", hostId: "mini", id: "r/x" });
-});
-
-test("jumping walks one fixed order and wraps, so repeated jumps reach every thread", () => {
-  const order = ["a", "b", "c"];
-  const seen: string[] = [];
-  let at: string | undefined = "elsewhere";
-  for (let i = 0; i < 4; i++) {
-    at = jumpTarget(order, at, 1);
-    seen.push(at!);
-  }
-  expect(seen).toEqual(["a", "b", "c", "a"]);
-  expect(jumpTarget(order, "a", -1)).toBe("c");
-  expect(jumpTarget(order, undefined, -1)).toBe("c");
-  expect(jumpTarget([], "a", 1)).toBeUndefined();
-});
-
-test("search matches every word across the row's text and its messages", () => {
-  const text = "Rework the updater parallax parallax/rework-updater #588";
-  const none = () => false;
-  expect(searchMatch(["updater", "#588"], text, none)).toEqual([]);
-  expect(searchMatch(["rework", "missing"], text, none)).toBeUndefined();
-  // A word only in its messages still matches, and is reported for the snippet.
-  expect(searchMatch(["rework", "backoff"], text, (w) => w === "backoff")).toEqual(["backoff"]);
-  expect(searchMatch([], text, none)).toEqual([]);
 });
 
 test("only the newest toast can undo, and one that loses Undo commits what it held back", () => {

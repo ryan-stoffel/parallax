@@ -31,7 +31,7 @@ export const browserUserAgent = (userAgent: string) =>
  * What the store shows for an extension: added, too old for Chrome to install (Manifest V2, as
  * Chrome now treats it), or installable. `manifest` is the store's JSON for it, if any.
  */
-export function storeStatus(installed: boolean, manifest: unknown) {
+function storeStatus(installed: boolean, manifest: unknown) {
   if (installed) return "enabled";
   try {
     const version = (JSON.parse(String(manifest)) as { manifest_version?: unknown })

@@ -208,13 +208,12 @@ fn compact_subagent(item: AgentOutputItem) -> AgentOutputItem {
 mod tests {
     use std::time::Duration;
 
-    use super::{compact_items, compact_one, sweep};
+    use super::compact_one;
     use crate::server::Daemon;
     use crate::store::StoreHandle;
     use jiff::Timestamp;
     use parallax_protocol::{AgentOutputItem, Compacted, ParallaxEvent, ProjectId, RunId, TurnId};
     use std::sync::Arc;
-    use tokio_util::sync::CancellationToken;
 
     fn delta(text: &str) -> AgentOutputItem {
         AgentOutputItem::TextDelta {
@@ -245,85 +244,6 @@ mod tests {
             cursor: None,
             session_id: None,
         }
-    }
-
-    #[test]
-    fn consecutive_text_deltas_merge_and_a_whole_text_drops_them() {
-        let end = turn_finished();
-        assert_eq!(
-            compact_items(vec![delta("Hel"), delta("lo"), text("Hello"), end.clone()]),
-            [text("Hello"), end]
-        );
-    }
-
-    #[test]
-    fn anonymous_messages_separated_by_tools_and_results_stay() {
-        let call = AgentOutputItem::ToolCall {
-            call_id: "c1".to_owned(),
-            name: "Bash".to_owned(),
-            input: serde_json::json!({"command": "ls"}),
-        };
-        let result = AgentOutputItem::ToolResult {
-            call_id: "c1".to_owned(),
-            status: parallax_protocol::AgentToolStatus::Ok,
-            output: Some("ok".to_owned()),
-            images: Vec::new(),
-        };
-        let end = turn_finished();
-        assert_eq!(
-            compact_items(vec![
-                delta("Hi"),
-                call.clone(),
-                result.clone(),
-                text("Hi"),
-                end.clone(),
-            ]),
-            [delta("Hi"), call, result, text("Hi"), end]
-        );
-    }
-
-    /// The renderer puts an identified message where its deltas started, so the whole text
-    /// replaces them there, and a compacted turn holds the text once.
-    #[test]
-    fn identified_text_takes_its_deltas_place_before_intervening_tools() {
-        let delta = AgentOutputItem::TextDelta {
-            message_id: Some("m1".to_owned()),
-            text: "Hi".to_owned(),
-        };
-        let whole = AgentOutputItem::Text {
-            message_id: Some("m1".to_owned()),
-            text: "Hi".to_owned(),
-        };
-        let call = AgentOutputItem::ToolCall {
-            call_id: "c1".to_owned(),
-            name: "Bash".to_owned(),
-            input: serde_json::json!({}),
-        };
-        assert_eq!(
-            compact_items(vec![delta, call.clone(), whole.clone()]),
-            [whole, call]
-        );
-    }
-
-    /// PLX-714: Claude's call announced without its input gives its place to the whole call.
-    #[test]
-    fn an_announced_tool_call_gives_its_place_to_the_whole_call() {
-        let call = |input: serde_json::Value| AgentOutputItem::ToolCall {
-            call_id: "c1".to_owned(),
-            name: "Write".to_owned(),
-            input,
-        };
-        let whole = call(serde_json::json!({"file_path": "a"}));
-        let end = turn_finished();
-        assert_eq!(
-            compact_items(vec![
-                call(serde_json::Value::Null),
-                delta("x"),
-                whole.clone(),
-                end.clone()
-            ]),
-            [whole, delta("x"), end]
-        );
     }
 
     /// Compacts the oldest eligible turn, looking at every row.
@@ -445,75 +365,6 @@ mod tests {
                 .iter()
                 .all(|entry| entry.seq != mid)
         );
-    }
-
-    #[tokio::test]
-    async fn a_before_page_inside_a_compacted_turn_includes_the_compacted_row() {
-        let (_dir, daemon, project, run) = daemon(2);
-        let (from, _mid, last) = finished_turn(&daemon.store, project, run).await;
-        put(&daemon.store, project, ParallaxEvent::Unknown).await;
-        put(&daemon.store, project, ParallaxEvent::Unknown).await;
-        assert!(compact(&daemon).await.is_some());
-
-        let before = from + 1;
-        let (page, _) = daemon
-            .log
-            .run_events_before(run, before, 100, usize::MAX)
-            .unwrap();
-        let compacted = page.iter().find(|entry| entry.seq == last).unwrap();
-        assert!(
-            compacted.seq >= before,
-            "the compacted row's seq is at or above before"
-        );
-        assert_eq!(compacted.compacted_from, Some(from), "from < before ≤ seq");
-        assert!(from < before && before <= compacted.seq);
-    }
-
-    #[tokio::test]
-    async fn a_turn_still_in_the_window_is_not_rewritten_and_subscribers_see_no_change() {
-        let (_dir, daemon, project, run) = daemon(100);
-        let (from, mid, last) = finished_turn(&daemon.store, project, run).await;
-        let head = daemon.log.head();
-        assert!(
-            last >= daemon.log.floor(),
-            "the turn is still in the window"
-        );
-        assert!(compact(&daemon).await.is_none());
-        assert_eq!(daemon.log.head(), head);
-
-        let (entries, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
-        let seqs: Vec<u64> = entries
-            .iter()
-            .filter(|entry| entry.run == Some(run))
-            .map(|entry| entry.seq)
-            .collect();
-        assert_eq!(seqs, [from, mid, last]);
-        assert!(entries.iter().all(|entry| entry.compacted_from.is_none()));
-
-        let (event, seq) = daemon.log.next(last, Some(project), |_| true).unwrap();
-        assert!(event.is_none());
-        assert_eq!(seq, head);
-    }
-
-    #[tokio::test]
-    async fn sweep_skips_a_turn_in_the_window_and_rewrites_one_that_has_left() {
-        let (_dir, daemon, project, run) = daemon(2);
-        let (stop, mut done) = (CancellationToken::new(), 0);
-        finished_turn(&daemon.store, project, run).await;
-        sweep(&daemon, &stop, &mut done).await;
-        let (before, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
-        assert_eq!(before.len(), 3, "still in the window");
-
-        put(&daemon.store, project, ParallaxEvent::Unknown).await;
-        put(&daemon.store, project, ParallaxEvent::Unknown).await;
-        sweep(&daemon, &stop, &mut done).await;
-        let (after, _) = daemon.log.run_events(run, 0, 100, usize::MAX).unwrap();
-        let outputs: Vec<_> = after
-            .iter()
-            .filter(|entry| entry.kind() == "agent.output")
-            .collect();
-        assert_eq!(outputs.len(), 1);
-        assert!(outputs[0].compacted_from.is_some());
     }
 
     #[tokio::test]

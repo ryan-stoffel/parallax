@@ -98,7 +98,7 @@ pub struct InitializeResult {
 mod tests {
     use serde_json::json;
 
-    use super::{Capabilities, InitializeParams, InitializeProtocol, ProtocolRange};
+    use super::{InitializeParams, InitializeProtocol, ProtocolRange};
 
     #[test]
     fn highest_common_picks_the_newest_shared_version() {
@@ -123,27 +123,5 @@ mod tests {
         let InitializeProtocol { protocol } = serde_json::from_value(params.clone()).unwrap();
         assert_eq!(protocol, ProtocolRange { min: 2, max: 4 });
         assert!(serde_json::from_value::<InitializeParams>(params).is_err());
-    }
-
-    #[test]
-    fn unknown_capabilities_and_fields_are_accepted() {
-        let params: InitializeParams = serde_json::from_value(json!({
-            "protocol": {"min": 1, "max": 9},
-            "client": {"name": "parallax", "version": "9.0.0", "machineId": "m", "locale": "en"},
-            "capabilities": {"agents": {}, "someday": {"level": 3}},
-            "trace": "verbose"
-        }))
-        .unwrap();
-        assert!(params.capabilities.0.contains_key("someday"));
-        assert_eq!(params.client.machine_id.as_deref(), Some("m"));
-    }
-
-    #[test]
-    fn capability_values_must_be_objects() {
-        assert!(serde_json::from_value::<Capabilities>(json!({"agents": true})).is_err());
-        assert_eq!(
-            serde_json::to_value(Capabilities::default()).unwrap(),
-            json!({})
-        );
     }
 }

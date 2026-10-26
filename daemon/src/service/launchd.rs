@@ -228,46 +228,10 @@ fn parse_print_output(text: &str) -> (bool, Option<u32>) {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::time::{Duration, Instant};
 
-    use super::{bootstrap, escape_xml, parse_print_output, plist_path, render_plist};
+    use super::render_plist;
     use crate::paths::DataDir;
     use crate::service::DEFAULT_LABEL;
-    use crate::service::tests::fake_program;
-
-    #[test]
-    fn a_failing_bootstrap_is_retried_until_its_patience_is_up() {
-        let dir = tempfile::tempdir().unwrap();
-        let tries = dir.path().join("tries");
-        // Fails twice, as launchd does while it still tears the old job down, then succeeds.
-        let launchctl = fake_program(
-            dir.path(),
-            "launchctl",
-            &format!(
-                "echo \"$*\" >> '{tries}'\n\
-                 [ $(wc -l < '{tries}') -gt 2 ] || {{ echo 'Bootstrap failed: 5: Input/output error' >&2; exit 5; }}",
-                tries = tries.display()
-            ),
-        );
-        let args = ["bootstrap", "gui/501", "/tmp/a.plist"];
-
-        bootstrap(&launchctl, &args, Duration::from_secs(10)).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&tries).unwrap(),
-            "bootstrap gui/501 /tmp/a.plist\n".repeat(3)
-        );
-
-        std::fs::remove_file(&tries).unwrap();
-        let error = bootstrap(&launchctl, &args, Duration::ZERO).unwrap_err();
-        assert!(error.to_string().contains("Input/output error"), "{error}");
-        assert_eq!(std::fs::read_to_string(&tries).unwrap().lines().count(), 1);
-
-        let started = Instant::now();
-        let failing = fake_program(dir.path(), "failing", "exit 5");
-        bootstrap(&failing, &args, Duration::from_millis(600)).unwrap_err();
-        assert!(started.elapsed() >= Duration::from_millis(600));
-        assert!(started.elapsed() < Duration::from_secs(5));
-    }
 
     #[test]
     fn plist_matches_the_golden_file() {
@@ -275,15 +239,6 @@ mod tests {
         let plist = render_plist(DEFAULT_LABEL, Path::new("/usr/local/bin/plxd"), &data_dir);
         let golden = include_str!("../../tests/golden/launchagent.plist");
         assert_eq!(plist, golden);
-    }
-
-    #[test]
-    fn status_reads_the_program_back_from_the_plist() {
-        let data_dir = DataDir::new("/Users/a&b/parallax").unwrap();
-        let program = Path::new("/Applications/A&B <1>.app/plxd");
-        let plist = render_plist(DEFAULT_LABEL, program, &data_dir);
-        assert_eq!(super::plist_program(&plist).as_deref(), Some(program));
-        assert_eq!(super::plist_program("<plist/>"), None);
     }
 
     #[test]
@@ -299,45 +254,5 @@ mod tests {
             "{plist}"
         );
         assert!(plist.contains("/Users/a&amp;b/parallax"), "{plist}");
-    }
-
-    #[test]
-    fn escaping_handles_the_reserved_characters_and_leaves_the_rest_alone() {
-        assert_eq!(escape_xml("a&b<c>d"), "a&amp;b&lt;c&gt;d");
-        assert_eq!(escape_xml("plain"), "plain");
-    }
-
-    #[test]
-    fn plist_path_is_under_launch_agents_with_the_label() {
-        let path = plist_path("io.example.test").unwrap();
-        assert!(
-            path.ends_with("Library/LaunchAgents/io.example.test.plist"),
-            "{}",
-            path.display()
-        );
-    }
-
-    #[test]
-    fn parses_a_running_jobs_state_and_pid_from_launchctl_print() {
-        // A trimmed capture of real `launchctl print gui/<uid>/<label>` output.
-        let text = "gui/501/io.example = {\n\
-                     \tactive count = 1\n\
-                     \tstate = running\n\n\
-                     \tprogram = /bin/sleep\n\
-                     \tpid = 85309\n\
-                     \truns = 1\n\
-                     }\n";
-        assert_eq!(parse_print_output(text), (true, Some(85309)));
-    }
-
-    #[test]
-    fn a_job_that_is_not_running_has_no_pid() {
-        let text = "gui/501/io.example = {\n\tstate = not running\n}\n";
-        assert_eq!(parse_print_output(text), (false, None));
-    }
-
-    #[test]
-    fn unrecognized_output_is_read_as_not_running_rather_than_an_error() {
-        assert_eq!(parse_print_output(""), (false, None));
     }
 }

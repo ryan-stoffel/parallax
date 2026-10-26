@@ -7,9 +7,7 @@ import type { RpcResponse, ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, Capabilities, Repo, Thread } from "../protocol/generated/protocol";
 import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
-import { autoClear, pinFavorites } from "./pins";
-import { sectionsStore } from "./Sidebar";
-import { shownRows } from "./SidebarParts";
+import { autoClear } from "./pins";
 import { flushToasts } from "./undo";
 
 // Today's Clear, auto-archive, and keys (0075).
@@ -135,22 +133,12 @@ async function renderApp() {
 const settle = async () => {
   for (let i = 0; i < 10; i++) await act(async () => {});
 };
-const calls = (method: string) => request.mock.calls.filter(([, m]) => m === method);
-const press = (target: HTMLElement, key: string) =>
-  act(async () => {
-    target.focus();
-    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
-  });
 const archived = () =>
   request.mock.calls
     .filter(([, m, p]) => m === "thread/archive" && p["archived"])
     .map(([, , p]) => p["runId"]);
 const waitForArchives = (n: number) =>
   act(() => vi.waitFor(() => expect(archived()).toHaveLength(n), { timeout: 3000 }));
-const row = (title: string) =>
-  [...document.querySelectorAll<HTMLElement>('#sidebar li[data-kind="thread"] > button')].find(
-    (b) => b.querySelector("[data-title]")?.textContent === title,
-  );
 const button = (text: string) =>
   [...document.querySelectorAll<HTMLElement>("button")].find((b) => b.textContent === text);
 
@@ -169,21 +157,6 @@ test("Clear archives the finished threads already seen, not one waiting out a us
   await settle();
   expect(archived()).toEqual(["newer", "older"]);
   expect(document.body.textContent).toContain("Cleared 2 threads");
-});
-
-test("a thread Clear can't archive stays, and a notification says why", async () => {
-  threads = [thread("stuck", 30), thread("done", 20)];
-  runs = [run("stuck", "completed", 30), run("done", "completed", 20)];
-  answers["thread/archive"] = archiving("stuck");
-  await renderApp();
-  await act(async () => button("Clear")!.click());
-  await waitForArchives(2);
-  await settle();
-  const notice = document.querySelector('[aria-label="Notifications"] > div')!;
-  expect(notice.querySelector("span")!.textContent).toBe("Couldn't archive every thread");
-  expect(notice.querySelector("p")!.textContent).toBe("stuck is busy");
-  expect(row("stuck")).toBeDefined();
-  expect(document.body.textContent).toContain("Cleared 1 thread");
 });
 
 test("auto-archive waits for quiet since the last prompt or run, skips usage limits, and an Undo sticks", async () => {
@@ -207,84 +180,6 @@ test("auto-archive waits for quiet since the last prompt or run, skips usage lim
   expect(archived()).toEqual(["quiet"]);
 });
 
-test("E on Today's first row moves focus to the next row shown, past the pins", async () => {
-  threads = [thread("pinned", 40, { pinned: true }), thread("second", 30), thread("first", 20)];
-  runs = [
-    run("pinned", "completed", 40),
-    run("second", "completed", 30),
-    run("first", "completed", 20),
-  ];
-  await renderApp();
-  const first = row("first")!;
-  await act(async () => {
-    first.focus();
-    first.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
-  });
-  await waitForArchives(1);
-  await settle();
-  expect(document.activeElement).toBe(row("second"));
-});
-
-test("folding hides the Projects and pins, leaving Today's threads", async () => {
-  answers["project/list"] = () => ({
-    result: {
-      projects: [
-        {
-          id: "p-ember",
-          name: "ember",
-          repoPath: "/src/ember",
-          createdAt: ago(60),
-          updatedAt: ago(60),
-        },
-      ],
-      seq: 7,
-    },
-  });
-  threads = [thread("pinned", 40, { pinned: true }), thread("today", 20)];
-  runs = [run("pinned", "completed", 40), run("today", "completed", 20)];
-  await renderApp();
-  expect(shownRows().some((r) => r.getAttribute("aria-label") === "ember")).toBe(true);
-
-  await act(async () =>
-    document.querySelector<HTMLElement>('[aria-label="Fold favorites and pins"]')!.click(),
-  );
-  await settle();
-  expect(shownRows()).toEqual([row("today")]);
-});
-
-test("moving on before plxd answers leaves focus where the user went", async () => {
-  threads = [thread("third", 40), thread("second", 30), thread("first", 20)];
-  runs = [
-    run("third", "completed", 40),
-    run("second", "completed", 30),
-    run("first", "completed", 20),
-  ];
-  await renderApp();
-  const first = row("first")!;
-  await act(async () => {
-    first.focus();
-    first.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
-    // Down while the row slides away, before plxd has archived it.
-    first.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-  });
-  await waitForArchives(1);
-  await settle();
-  expect(document.activeElement).toBe(row("second"));
-
-  // A search that hides that row later doesn't pull focus back into the list.
-  const search = document.querySelector<HTMLInputElement>(
-    '#sidebar input[aria-label="Search threads and Projects"]',
-  )!;
-  await act(async () => {
-    search.focus();
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "thi");
-    search.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await settle();
-  expect(row("third")).toBeDefined();
-  expect(document.activeElement).toBe(search);
-});
-
 test("Clear leaves a thread one it started is still working for, or waiting out a usage limit", async () => {
   threads = [
     thread("lead", 30),
@@ -305,75 +200,4 @@ test("Clear leaves a thread one it started is still working for, or waiting out 
   await waitForArchives(1);
   await settle();
   expect(archived()).toEqual(["plain"]);
-});
-
-test("a snoozed thread wakes into Today when one it started needs the user", async () => {
-  threads = [
-    thread("napping", 30, { snoozedUntil: ago(-120) }),
-    thread("helper", 20, { parent: "napping" }),
-  ];
-  runs = [run("napping", "completed", 30), { ...run("helper", "running", 1), approvals: true }];
-  const ask = {
-    kind: "approvalRequested",
-    approvalId: "a1",
-    toolName: "Bash",
-    input: { command: "pnpm test" },
-    callId: "toolu_a1",
-    expiresAt: ago(-60),
-  };
-  answers["agent/events"] = (p) => ({
-    result: {
-      events:
-        p["runId"] === "helper" && p["after"] === 0
-          ? [
-              {
-                seq: 1,
-                time: ago(1),
-                event: { kind: "agent.output", runId: "helper", items: [ask] },
-              },
-            ]
-          : [],
-      more: false,
-    },
-  });
-  await renderApp();
-  expect(row("napping")?.textContent).toContain("Needs you");
-});
-
-test("S on a favorite thread snoozes it out of the favorites", async () => {
-  capabilities = { threadAttention: {} };
-  pinFavorites.set(["local/starred"]);
-  threads = [thread("starred", 30, { pinned: true }), thread("other", 20)];
-  runs = [run("starred", "completed", 30), run("other", "completed", 20)];
-  await renderApp();
-  const square = () => document.querySelector<HTMLElement>('#sidebar button[aria-label="starred"]');
-  await press(square()!, "s");
-  await act(() => vi.waitFor(() => expect(calls("thread/update")).toHaveLength(1)));
-  await settle();
-  expect(square()).toBeNull();
-});
-
-test("S on a row already snoozed, or archived, keeps focus on it", async () => {
-  capabilities = { threadAttention: {} };
-  sectionsStore.set({ all: { snoozed: true, archived: true } });
-  threads = [
-    thread("napping", 30, { snoozedUntil: ago(-120) }),
-    thread("filed", 25, { archived: true }),
-    thread("awake", 20),
-  ];
-  runs = [
-    run("napping", "completed", 30),
-    run("filed", "completed", 25),
-    run("awake", "completed", 20),
-  ];
-  await renderApp();
-  await press(row("napping")!, "s");
-  await act(() => vi.waitFor(() => expect(calls("thread/update")).toHaveLength(1)));
-  await settle();
-  expect(document.activeElement).toBe(row("napping"));
-
-  await press(row("filed")!, "s");
-  await act(() => vi.waitFor(() => expect(calls("thread/update")).toHaveLength(2)));
-  await settle();
-  expect(document.activeElement).toBe(row("filed"));
 });

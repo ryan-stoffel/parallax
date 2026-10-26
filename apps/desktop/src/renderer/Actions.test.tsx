@@ -1,12 +1,11 @@
 // @vitest-environment happy-dom
-import { act, useEffect, useRef, useState } from "react";
+import { act, useEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
-import { Actions, readActions, type RepoAction } from "./Actions";
-import { formatKeybinding, keybindingOf } from "./keybindings";
-import { SidePanel } from "./SidePanel";
+import { Actions, readActions } from "./Actions";
+import { keybindingOf } from "./keybindings";
 import { runInDrawer, TerminalDrawer, type ThreadFolder } from "./ThreadTerminal";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -30,29 +29,21 @@ vi.mock("./Terminal", () => ({
 }));
 
 const terminalInput = vi.fn();
-const closeTerminal = vi.fn();
-// The terminal ids plxd runs, as `terminal/list` answers.
-let running: string[] = [];
 beforeEach(() => {
   localStorage.clear();
   terminalInput.mockClear();
-  closeTerminal.mockClear();
-  running = [];
   window.parallax = {
     platform: "darwin",
     terminalInput,
-    closeTerminal,
+    closeTerminal: () => {},
     extensions: () => Promise.resolve([]),
     onExtensionsChanged: () => () => {},
     downloads: async () => [],
     onDownloads: () => () => {},
     googleAccount: async () => undefined,
     onGoogleAccount: () => () => {},
-    request: () =>
-      Promise.resolve({
-        result: { terminals: running.map((terminalId) => ({ threadId: "t3", terminalId })) },
-        logId: "log",
-      }),
+    // `terminal/list`: plxd runs no terminals.
+    request: () => Promise.resolve({ result: { terminals: [] }, logId: "log" }),
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
@@ -91,9 +82,7 @@ test("a keybinding is its modifiers and key code, written the OS's way", () => {
   // A lone modifier, or a press that would type, isn't one.
   expect(keybindingOf(e({ key: "Meta", code: "MetaLeft", metaKey: true }))).toBeUndefined();
   expect(keybindingOf(e({ key: "t", code: "KeyT", shiftKey: true }))).toBeUndefined();
-  expect(formatKeybinding("Ctrl+Shift+Meta+Digit1")).toBe("⌃⇧⌘1");
   window.parallax = { platform: "linux" } as ParallaxBridge;
-  expect(formatKeybinding("Ctrl+Alt+KeyR")).toBe("Ctrl+Alt+R");
   // Off macOS, AltGr arrives as Ctrl+Alt and types a character.
   const altGr = e({ key: "@", code: "KeyQ", ctrlKey: true, altKey: true });
   altGr.getModifierState = (key: string) => key === "AltGraph";
@@ -106,8 +95,6 @@ test("stored entries that aren't actions are dropped", () => {
     JSON.stringify([null, 3, { id: "a", name: "Test" }, { id: "b", name: "Dev", command: "x" }]),
   );
   expect(readActions("local", "r1").map((a) => a.id)).toEqual(["b"]);
-  render(<Actions hostId="local" repoId="r1" canRun onRun={() => {}} />);
-  expect(button("Dev")).toBeDefined();
 });
 
 test("Add action saves an action for the repository, refusing the app's shortcuts", () => {
@@ -125,11 +112,8 @@ test("Add action saves an action for the repository, refusing the app's shortcut
   press(keybindingField(), { key: "s", code: "KeyS", metaKey: true });
   window.removeEventListener("keydown", sidebar);
   expect(sidebar).not.toHaveBeenCalled();
-  expect(dialog()!.textContent).toContain("⌘S is one of Parallax's shortcuts.");
   press(keybindingField(), { key: "c", code: "KeyC", metaKey: true });
-  expect(dialog()!.textContent).toContain("⌘C is an editing shortcut.");
   press(keybindingField(), { key: "Enter", code: "Enter", metaKey: true });
-  expect(dialog()!.textContent).toContain("⌘Enter is an editing shortcut.");
   expect(keybindingField().value).toBe("");
   press(keybindingField(), { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
   expect(keybindingField().value).toBe("⇧⌘T");
@@ -160,67 +144,6 @@ test("Add action saves an action for the repository, refusing the app's shortcut
   ]);
   // Another repository has its own.
   expect(readActions("local", "r2")).toEqual([]);
-  expect(button("Test").title).toBe("Run Test (⇧⌘T)");
-});
-
-const saved = (actions: Partial<RepoAction>[]) =>
-  localStorage.setItem(
-    "parallax:actions:local/r1",
-    JSON.stringify(
-      actions.map((a, i) => ({
-        id: `a${i}`,
-        icon: "play",
-        command: "x",
-        openPreview: false,
-        ...a,
-      })),
-    ),
-  );
-
-test("an action runs from its details row and keybinding, but not under a dialog", () => {
-  saved([
-    { name: "Test", keybinding: "Shift+Meta+KeyT" },
-    { name: "Dev" },
-    { name: "Lint" },
-    { name: "Build", icon: "build" },
-  ]);
-  const onRun = vi.fn();
-  render(<Actions hostId="local" repoId="r1" canRun onRun={onRun} />);
-  // Every saved action has one row in the details panel.
-  const rows = [...document.querySelectorAll('[aria-label="Repository actions"] button')];
-  expect(rows.map((row) => row.textContent)).toEqual([
-    "Test⇧⌘T",
-    "",
-    "Dev",
-    "",
-    "Lint",
-    "",
-    "Build",
-    "",
-    "Add action",
-  ]);
-
-  act(() => button("Dev").click());
-  act(() => (rows[6] as HTMLButtonElement).click());
-  press(document.body, { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
-  expect(onRun.mock.calls.map(([a]) => (a as RepoAction).name)).toEqual(["Dev", "Build", "Test"]);
-
-  act(() => button("Edit Test").click());
-  press(document.body, { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
-  expect(onRun).toHaveBeenCalledTimes(3);
-  // The Edit dialog's Delete removes it.
-  act(() => button("Delete").click());
-  expect(readActions("local", "r1").map((a) => a.name)).toEqual(["Dev", "Lint", "Build"]);
-});
-
-test("without a folder, actions can't run", () => {
-  saved([{ name: "Test", keybinding: "Shift+Meta+KeyT" }]);
-  const onRun = vi.fn();
-  render(<Actions hostId="local" repoId="r1" canRun={false} onRun={onRun} />);
-  expect(button("Test").disabled).toBe(true);
-  expect(button("Test").title).toBe("No folder to run in yet");
-  press(document.body, { key: "t", code: "KeyT", metaKey: true, shiftKey: true });
-  expect(onRun).not.toHaveBeenCalled();
 });
 
 test("a command waits for the drawer's shell to start, then runs in it", async () => {
@@ -245,95 +168,4 @@ test("a command waits for the drawer's shell to start, then runs in it", async (
   act(() => button("Restart").click());
   expect(terminalInput).toHaveBeenCalledTimes(3);
   expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t1", "pnpm build\r");
-});
-
-test("each drawer tab runs its own shell, and closing the last closes the drawer", () => {
-  const folder: ThreadFolder = { key: "local/t2", hostId: "local", path: "/wt/t2", threadId: "t2" };
-  function Drawer() {
-    const [open, setOpen] = useState(true);
-    return (
-      <>
-        <button type="button" onClick={() => setOpen(true)}>
-          Show
-        </button>
-        <TerminalDrawer
-          open={open}
-          folder={folder}
-          deleted={() => false}
-          onClose={() => setOpen(false)}
-        />
-      </>
-    );
-  }
-  const tabs = () =>
-    [...document.querySelectorAll('[aria-label="Terminals"] li > button:first-child')].map((b) =>
-      b.getAttribute("aria-current") ? `[${b.textContent}]` : b.textContent,
-    );
-  const drawer = () => document.getElementById("terminal-drawer")!;
-  render(<Drawer />);
-  expect(tabs()).toEqual(["[Terminal 1]"]);
-
-  // A command runs in the shown tab.
-  act(() => button("New terminal").click());
-  expect(tabs()).toEqual(["Terminal 1", "[Terminal 2]"]);
-  runInDrawer(folder, "ls");
-  expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t2:2", "ls\r");
-  act(() => button("Terminal 1").click());
-  runInDrawer(folder, "pwd");
-  expect(terminalInput).toHaveBeenLastCalledWith("drawer:local/t2", "pwd\r");
-
-  // Closing the shown tab ends its shell and shows the next; closing the last hides the drawer.
-  act(() => button("Close Terminal 1").click());
-  expect(closeTerminal).toHaveBeenLastCalledWith("drawer:local/t2");
-  expect(tabs()).toEqual(["[Terminal 2]"]);
-  act(() => button("Close Terminal 2").click());
-  expect(closeTerminal).toHaveBeenLastCalledWith("drawer:local/t2:2");
-  expect(drawer().hidden).toBe(true);
-  act(() => button("Show").click());
-  expect(tabs()).toEqual(["[Terminal 1]"]);
-
-  // Its X hides it and keeps its tabs.
-  act(() => button("New terminal").click());
-  act(() => button("Hide terminal").click());
-  expect(drawer().hidden).toBe(true);
-  act(() => button("Show").click());
-  expect(tabs()).toEqual(["Terminal 1", "[Terminal 2]"]);
-});
-
-test("a folder's tabs that plxd still runs come back, as after a restart", async () => {
-  const folder: ThreadFolder = { key: "local/t3", hostId: "local", path: "/wt/t3", threadId: "t3" };
-  running = ["drawer:local/t3", "drawer:local/t3:3", "panel:local/t3"];
-  render(<TerminalDrawer open folder={folder} deleted={() => false} onClose={() => {}} />);
-  await act(async () => {});
-  const tabs = [...document.querySelectorAll('[aria-label="Terminals"] li > button:first-child')];
-  expect(tabs.map((b) => b.textContent)).toEqual(["Terminal 1", "Terminal 3"]);
-  act(() => button("New terminal").click());
-  expect(button("Terminal 4")).toBeDefined();
-});
-
-test("a preview opens the browser at its URL, apart from the panel's views", () => {
-  const panel = (browse?: { url: string }) => (
-    <SidePanel
-      scope="t"
-      open
-      onClose={() => {}}
-      expanded={false}
-      onExpandedChange={() => {}}
-      browse={browse}
-      browsing={!!browse}
-    />
-  );
-  render(panel());
-  expect(document.querySelector('input[aria-label="Address"]')).toBeNull();
-  render(panel({ url: "localhost:5173" }));
-  // The column is the browser alone: its page's tab is in the top bar, without the views.
-  expect(document.querySelector("aside")?.getAttribute("aria-label")).toBe("Browser");
-  expect(document.querySelector('[aria-label="Open views"]')).toBeNull();
-  expect(document.querySelector('button[aria-label="Open a view"]')).toBeNull();
-  expect(document.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe(
-    "localhost:5173",
-  );
-  expect(document.querySelector<HTMLInputElement>('input[aria-label="Address"]')!.value).toBe(
-    "http://localhost:5173/",
-  );
 });

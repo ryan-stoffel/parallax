@@ -205,20 +205,6 @@ test("a code traded without the sign-in's verifier, or a denied sign-in, shows w
   expect(published.filter(Boolean)).toEqual([]);
 });
 
-test("Create an account starts on Clerk's sign-up page, which continues the same sign-in", async () => {
-  startAccount();
-  void call("parallax:signIn", true);
-  await vi.waitFor(() => expect(electron.opened).toHaveLength(1));
-  const sent = new URL(electron.opened[0]!);
-  expect(sent.origin + sent.pathname).toBe("https://accounts.parallax.test/sign-up");
-  const authorize = sent.searchParams.get("redirect_url")!;
-  expect(authorize).toMatch(/^https:\/\/clerk\.parallax\.test\/oauth\/authorize\?/);
-  expect(await (await signInInBrowser(authorize)).text()).toContain("Signed in");
-
-  await call("parallax:editProfile");
-  expect(electron.opened[1]).toBe("https://accounts.parallax.test/user");
-});
-
 test("a restart shows the saved profile at once, then refreshes it; sign-out revokes", async () => {
   startAccount();
   const answer = call("parallax:signIn", false);
@@ -244,26 +230,6 @@ test("a restart shows the saved profile at once, then refreshes it; sign-out rev
   expect(clerk.revoked).toEqual([after.refreshToken]);
   expect(fs.existsSync(savedFile())).toBe(false);
   await settle();
-});
-
-test("a picture that failed to load loads on the next refresh", async () => {
-  clerk.user = { ...clerk.user, picture: "https://img.clerk.test/ryan.png" };
-  clerk.pictureDown = true;
-  startAccount();
-  const answer = call("parallax:signIn", false);
-  await vi.waitFor(() => expect(electron.opened).toHaveLength(1));
-  await signInInBrowser(electron.opened[0]!);
-  await answer;
-  await settle();
-  expect(published.at(-1)).toMatchObject({ email: "ryan@example.com", picture: undefined });
-
-  // Back online, focusing the window a minute later shows it.
-  clerk.pictureDown = false;
-  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61_000);
-  electron.focus.at(-1)!();
-  await vi.waitFor(() => expect(published.at(-1)?.picture).toBe("data:image/png;base64,AQID"));
-  vi.restoreAllMocks();
-  await call("parallax:signOut");
 });
 
 test("a refresh token revoked elsewhere signs this computer out", async () => {

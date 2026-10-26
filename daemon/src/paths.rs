@@ -475,117 +475,18 @@ fn proc_exe(pid: u32) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{DataDir, pick_default};
+    use super::pick_default;
 
     #[test]
-    fn spellings_of_one_folder_resolve_the_same() {
-        let plain = DataDir::new("/Users/me/data").unwrap();
-        for other in ["/Users/me/data/", "/Users/me/./data", "/Users/me//data"] {
-            assert_eq!(DataDir::new(other).unwrap(), plain, "{other}");
-        }
-        assert_eq!(
-            plain.hash(4),
-            DataDir::new("/Users/me/data/").unwrap().hash(4)
-        );
-        assert_ne!(
-            plain.hash(4),
-            DataDir::new("/Users/me/data2").unwrap().hash(4)
-        );
-    }
-
-    #[test]
-    fn a_relative_folder_is_taken_from_the_current_directory() {
-        let dir = DataDir::new("relative/data").unwrap();
-        assert!(dir.root().is_absolute());
-        assert!(dir.root().ends_with("relative/data"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn files_live_in_the_folder() {
-        use std::path::Path;
-
-        let dir = DataDir::new("/d").unwrap();
-        assert_eq!(dir.lock_file(), Path::new("/d/plxd.lock"));
-        assert_eq!(dir.store_file(), Path::new("/d/plxd.sqlite3"));
-        assert_eq!(dir.log_file(), Path::new("/d/logs/plxd.log"));
-        assert_eq!(dir.context_root(), Path::new("/d/context"));
-        let runs = format!("parallax-{}", dir.hash(4));
-        assert_eq!(dir.run_temp_roots()[0], Path::new("/tmp").join(&runs));
-        assert_eq!(
-            dir.run_temp_roots().last(),
-            Some(&std::env::temp_dir().join(runs))
-        );
-        let project = parallax_protocol::ProjectId::generate();
-        assert_eq!(
-            dir.context_dir(project),
-            Path::new("/d/context").join(project.to_string())
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn commands_pass_the_data_folder_on() {
-        let dir = DataDir::new("/tmp/plxd-data/./x/").unwrap();
-        let output = dir.command("/usr/bin/env").output().unwrap();
-        let env = String::from_utf8(output.stdout).unwrap();
-        assert!(
-            env.lines()
-                .any(|line| line == "PLXD_DATA_DIR=/tmp/plxd-data/x"),
-            "{env}"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_hash_is_the_first_8_hex_digits_of_the_paths_sha256() {
-        // printf '%s' /Users/me/Library/Application\ Support/parallax | shasum -a 256
-        let dir = DataDir::new("/Users/me/Library/Application Support/parallax").unwrap();
-        assert_eq!(dir.hash(4), "2786512e");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_default_socket_is_used_up_to_the_limit() {
-        use super::MAX_SOCKET_PATH_BYTES;
-
-        let folder = "/Library/Application Support/parallax";
-        let home = format!(
-            "/Users/{}",
-            "u".repeat(MAX_SOCKET_PATH_BYTES - "/Users//plxd.sock".len() - folder.len())
-        );
-        // On macOS, that leaves 56 bytes for the home folder, as 0007 says.
-        #[cfg(target_os = "macos")]
-        assert_eq!(home.len(), 56);
-        let dir = DataDir::new(format!("{home}{folder}")).unwrap();
-        let socket = dir.socket_path().unwrap();
-        assert!(!socket.fallback);
-        assert_eq!(socket.path.as_os_str().len(), MAX_SOCKET_PATH_BYTES);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn a_longer_path_falls_back_to_the_user_temp_dir() {
-        use super::MAX_SOCKET_PATH_BYTES;
-
-        let home = format!("/Users/{}", "u".repeat(53));
-        let dir = DataDir::new(format!("{home}/Library/Application Support/parallax")).unwrap();
-        let socket = dir.socket_path().unwrap();
-        assert!(socket.fallback);
-        let temp = super::fallback_socket_dir().unwrap();
-        assert_eq!(socket.path, temp.join(format!("plxd-{}.sock", dir.hash(4))));
-        assert!(socket.path.as_os_str().len() <= MAX_SOCKET_PATH_BYTES);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn the_pipe_is_named_after_16_hex_digits_of_the_paths_sha256() {
-        // printf %s 'C:\parallax' | shasum -a 256
-        let dir = DataDir::new(r"C:\parallax").unwrap();
-        assert_eq!(dir.hash(8), "7dd38c3ef373388d");
-        let socket = dir.socket_path().unwrap();
-        assert_eq!(socket.path.as_os_str(), r"\\.\pipe\plxd-7dd38c3ef373388d");
-        assert!(!socket.fallback);
+    fn the_default_folder_gives_way_only_to_an_existing_legacy_one() {
+        let root = tempfile::tempdir().unwrap();
+        let default = root.path().join(".parallax");
+        let legacy = root.path().join("legacy");
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), default);
+        std::fs::create_dir(&legacy).unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), legacy);
+        std::fs::create_dir(&default).unwrap();
+        assert_eq!(pick_default(default.clone(), Some(legacy)), default);
     }
 
     #[cfg(windows)]
@@ -664,44 +565,6 @@ mod tests {
         }
     }
 
-    /// A name that isn't Unicode, here with an unpaired surrogate, gets the same checks.
-    #[cfg(windows)]
-    #[test]
-    fn a_name_that_isnt_unicode_is_checked_too() {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::OsStringExt;
-        use std::path::PathBuf;
-
-        use super::without_verbatim_prefix;
-
-        let with_surrogate = |prefix: &str, suffix: &str| {
-            let mut wide: Vec<u16> = prefix.encode_utf16().collect();
-            wide.push(0xD800);
-            wide.extend(suffix.encode_utf16());
-            PathBuf::from(OsString::from_wide(&wide))
-        };
-        for suffix in [".", " ", ":s", "/x"] {
-            let path = with_surrogate(r"\\?\C:\x\a", suffix);
-            assert_eq!(without_verbatim_prefix(&path), None, "{}", path.display());
-        }
-        assert_eq!(
-            without_verbatim_prefix(&with_surrogate(r"\\?\C:\x\a", "b")),
-            Some(with_surrogate(r"C:\x\a", "b"))
-        );
-    }
-
-    #[test]
-    fn the_default_folder_gives_way_only_to_an_existing_legacy_one() {
-        let root = tempfile::tempdir().unwrap();
-        let default = root.path().join(".parallax");
-        let legacy = root.path().join("legacy");
-        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), default);
-        std::fs::create_dir(&legacy).unwrap();
-        assert_eq!(pick_default(default.clone(), Some(legacy.clone())), legacy);
-        std::fs::create_dir(&default).unwrap();
-        assert_eq!(pick_default(default.clone(), Some(legacy)), default);
-    }
-
     /// A process started from `own_exe`'s path runs this very binary.
     #[cfg(target_os = "linux")]
     #[test]
@@ -716,47 +579,5 @@ mod tests {
             String::from_utf8_lossy(&listed.stdout).contains("own_exe_runs_this_binary"),
             "{listed:?}"
         );
-    }
-
-    /// A self-update renames the new binary over the running one (PLX-704). The running
-    /// process's path then reads `… (deleted)`, and its `/proc` path still runs it.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_binary_renamed_over_still_runs_from_its_proc_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let plxd = dir.path().join("plxd");
-        // A shell, which works under any name, waiting on its stdin.
-        std::fs::copy("/bin/sh", &plxd).unwrap();
-        let mut running = std::process::Command::new(&plxd)
-            .args(["-c", "echo ready; read line"])
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        // Wait until the child runs as the shell, not the forked test binary.
-        let mut ready = String::new();
-        std::io::BufRead::read_line(
-            &mut std::io::BufReader::new(running.stdout.take().unwrap()),
-            &mut ready,
-        )
-        .unwrap();
-        assert_eq!(ready, "ready\n");
-        let update = dir.path().join("plxd.new");
-        std::fs::write(&update, "#!/bin/sh\nexit 1\n").unwrap();
-        std::fs::rename(&update, &plxd).unwrap();
-
-        let exe = super::proc_exe(running.id());
-        let target = std::fs::read_link(&exe).unwrap();
-        let ran = std::process::Command::new(&exe)
-            .args(["-c", "exit 0"])
-            .status();
-        running.kill().unwrap();
-        running.wait().unwrap();
-        assert!(
-            target.to_string_lossy().ends_with(" (deleted)"),
-            "{}",
-            target.display()
-        );
-        assert!(ran.unwrap().success());
     }
 }

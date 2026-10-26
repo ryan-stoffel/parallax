@@ -9,7 +9,7 @@ import { isFolderName, type FolderListing } from "../preload/bridge";
 const run = promisify(execFile);
 
 /** `~` or a path under it, made absolute against `home`. Anything else resolves as it is. */
-export function expandHome(input: string, home = homedir()): string {
+function expandHome(input: string, home = homedir()): string {
   if (input === "~") return home;
   if (input.startsWith("~/") || input.startsWith("~\\")) return path.join(home, input.slice(2));
   return path.resolve(input);

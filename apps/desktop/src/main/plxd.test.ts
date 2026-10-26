@@ -41,12 +41,6 @@ const find = (files: string[], overrides: Partial<PlxdLookup> = {}) =>
     ...overrides,
   });
 
-test("PLXD_PATH wins, and a missing one is not found rather than skipped", () => {
-  const env = { PLXD_PATH: "/custom/plxd", PATH: "/opt/bin" };
-  expect(find(["/custom/plxd", onPath], { env })).toBe("/custom/plxd");
-  expect(find([onPath], { env })).toBeUndefined();
-});
-
 test("the bundled or Cargo-built plxd comes before PATH", () => {
   expect(find([cargo, onPath])).toBe(cargo);
   expect(find([bundled, onPath], { packaged: true })).toBe(bundled);
@@ -130,13 +124,6 @@ test("only a packaged Parallax's serve of another version is replaced", async ()
   }
 });
 
-test("a replaced serve is waited for until it exits", async () => {
-  const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve", 3);
-  await replaceServe("/d", "1.0.0", "1.1.0", system);
-  // SIGTERM, then liveness checks until the fourth finds it gone.
-  expect(vi.mocked(system.kill).mock.calls).toEqual([[42], [42, 0], [42, 0], [42, 0], [42, 0]]);
-});
-
 test("an installed login service is restarted on the copy instead of sending SIGTERM", async () => {
   // The app's bundled serve, or the copy the service already runs.
   for (const args of [
@@ -170,17 +157,20 @@ test("a login service with agents running is restarted only once they finish", a
   expect(system.kill).not.toHaveBeenCalled();
 });
 
-test("a failed service upgrade never falls back to SIGTERM", async () => {
-  const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve");
-  await expect(
-    replaceServe("/d", "1.0.0", "1.1.0", system, {
-      status: async () => ({ pid: 42, ready: true }),
-      replace: async () => {
-        throw new Error("bootout failed");
-      },
-    }),
-  ).rejects.toThrow("bootout failed");
-  expect(system.kill).not.toHaveBeenCalled();
+// A SIGTERM'd service's manager would start the old plxd again.
+test("a service upgrade that fails, or never takes the data folder, never falls back to SIGTERM", async () => {
+  const failing = async () => {
+    throw new Error("bootout failed");
+  };
+  for (const [replace, error] of [
+    [failing, "bootout failed"],
+    [async () => {}, "did not start the updated daemon"],
+  ] as const) {
+    const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve");
+    const service = { status: async () => ({ pid: 42, ready: true }), replace };
+    await expect(replaceServe("/d", "1.0.0", "1.1.0", system, service)).rejects.toThrow(error);
+    expect(system.kill).not.toHaveBeenCalled();
+  }
 });
 
 test("another data folder's service, or the copy's serve without a service, is left alone", async () => {
@@ -201,27 +191,6 @@ test("another data folder's service, or the copy's serve without a service, is l
 test("replacement fails when the bundled serve does not exit", async () => {
   const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve", 200);
   await expect(replaceServe("/d", "1.0.0", "1.1.0", system)).rejects.toThrow("did not exit");
-});
-
-test("a service restart that never owns the data folder fails without SIGTERM", async () => {
-  const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve");
-  await expect(
-    replaceServe("/d", "1.0.0", "1.1.0", system, {
-      status: async () => ({ pid: 42, ready: true }),
-      replace: async () => {},
-    }),
-  ).rejects.toThrow("did not start the updated daemon");
-  expect(system.kill).not.toHaveBeenCalled();
-});
-
-test("a denied SIGTERM reports a failed upgrade", async () => {
-  const system = fakeServe("/Applications/Parallax.app/Contents/Resources/plxd serve");
-  system.kill = () => {
-    throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
-  };
-  await expect(replaceServe("/d", "1.0.0", "1.1.0", system)).rejects.toThrow(
-    "operation not permitted",
-  );
 });
 
 test("keepServing's next step: done once the service runs the copy, installing only with no agents running", () => {

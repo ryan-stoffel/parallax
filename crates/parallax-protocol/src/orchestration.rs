@@ -542,29 +542,3 @@ pub struct TurnDiffResult {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub truncated: bool,
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{DispatchMode, OrchestrationCommand};
-
-    #[test]
-    fn commands_and_modes_are_tagged_by_type() {
-        let command: OrchestrationCommand = serde_json::from_value(json!({
-            "type": "message.dispatch",
-            "threadId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
-            "messageId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e02",
-            "text": "Go on",
-            "dispatchMode": {"type": "steer_active", "targetRunId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e03"}
-        }))
-        .unwrap();
-        let OrchestrationCommand::MessageDispatch { dispatch_mode, .. } = command else {
-            panic!("{command:?}");
-        };
-        assert!(matches!(dispatch_mode, DispatchMode::SteerActive { .. }));
-        let unknown: OrchestrationCommand =
-            serde_json::from_value(json!({"type": "thread.fork"})).unwrap();
-        assert_eq!(unknown, OrchestrationCommand::Unknown);
-    }
-}

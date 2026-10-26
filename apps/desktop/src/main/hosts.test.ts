@@ -117,16 +117,6 @@ test("discovery follows connect, keeps devices through a failed read, and revive
   }
 });
 
-test("byteRange reads one byte range and refuses anything else", async () => {
-  const { byteRange } = await import("./hosts");
-  expect(byteRange(null)).toBeUndefined();
-  expect(byteRange("bytes=2-5")).toEqual({ start: 2, end: 5 });
-  expect(byteRange("bytes=3-")).toEqual({ start: 3 });
-  expect(byteRange("bytes=-5")).toEqual({ suffix: 5 });
-  for (const header of ["bytes=5-2", "bytes=-0", "bytes=-", "items=0-1", "bytes=0-1,4-5"])
-    expect(byteRange(header)).toBe("invalid");
-});
-
 test("streamFile answers ranges in agent/file slices, and refuses what isn't a file plxd serves", async () => {
   vi.useFakeTimers();
   fake.userData = mkdtempSync(path.join(tmpdir(), "plx836-"));

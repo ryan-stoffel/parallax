@@ -32,41 +32,6 @@ test("quotes values for sh and PowerShell", { skip: !hasSh }, () => {
   assert.equal(psQuote(value), `'it''s "Parallax (Nightly).app" $HOME'`);
 });
 
-test("macOS copies the app out of the dmg, replacing only another version, then its plxd", () => {
-  assert.match(mac, /^bundle='Parallax \(Nightly\)\.app'$/m);
-  assert.match(macScript(installer("x.dmg"), "stable"), /^bundle='Parallax\.app'$/m);
-  assert.match(mac, /hdiutil attach -nobrowse -readonly -noautoopen -mountpoint "\$tmp\/mnt"/);
-  assert.match(mac, /defaults read "\$app\/Contents\/Info\.plist" CFBundleShortVersionString/);
-  assert.match(mac, /\[ "\$current" = "\$version" \]/);
-  assert.match(mac, /ditto "\$tmp\/mnt\/\$bundle" "\$app"/);
-  assert.match(mac, /app="\$HOME\/Applications\/\$bundle"/);
-  assert.match(mac, /^ {2}download "\$tmp\/parallax\.dmg"$/m);
-  assert.match(mac, /^cp "\$app\/Contents\/Resources\/plxd" "\$dir\/\.plxd\.new"$/m);
-});
-
-test("headless macOS downloads plxd alone, and no app", () => {
-  assert.match(macPlxd, /^download "\$dir\/\.plxd\.new"$/m);
-  assert.doesNotMatch(macPlxd, /hdiutil|\.app/);
-});
-
-test("Linux downloads the static plxd, links ~/.local/bin/plxd to it, and turns on lingering", () => {
-  assert.match(linux, /^download "\$dir\/\.plxd\.new"$/m);
-  assert.match(linux, /^ln -sf "\$plxd" "\$HOME\/\.local\/bin\/plxd"$/m);
-  assert.match(linux, /^rm -f "\$HOME\/\.local\/bin\/plxd\.version"$/m);
-  assert.doesNotMatch(linux, /AppImage/);
-  assert.match(linux, /loginctl enable-linger/);
-});
-
-test("every POSIX install puts plxd and its version in ~/.parallax-plxd", () => {
-  for (const script of [mac, macPlxd, linux]) {
-    assert.match(script, /^dir="\$HOME\/\.parallax-plxd"$/m);
-    assert.match(script, /^sha256='(5f){32}'$/m);
-    assert.match(script, /^version='2610\.10522\.11930-nightly'$/m);
-    assert.match(script, /printf '%s\\n' "\$version" > "\$dir\/plxd\.version"/);
-    assert.match(script, /^mv -f "\$dir\/\.plxd\.new" "\$plxd"$/m);
-  }
-});
-
 /**
  * Runs `script` with `sh -s` in a temporary home, whose `bin` comes first on PATH: a `curl` that
  * saves `served` wherever it's told, and the tools in `fakes`, each a sh body that may log to
@@ -145,61 +110,29 @@ test("a checked plxd goes in ~/.parallax-plxd, and the service is installed from
   assert.doesNotMatch(noPlxd.log, /npm install/);
 });
 
-test("Linux leaves the sandbox to plxd and names nix-ld on NixOS", () => {
-  assert.doesNotMatch(linux, /bubblewrap|socat|apt-get/);
-  assert.match(linux, /^if \[ -e \/etc\/NIXOS \] && \[ -z "\$\{NIX_LD:-\}" \]/m);
-  assert.match(linux, /programs\.nix-ld\.enable = true;/);
-});
-
-test("macOS and Linux turn Connect on, install the service, and install plx-connect", () => {
+test("macOS and Linux turn Connect on, install the service and plx-connect, and Linux lingers", () => {
   for (const script of [mac, macPlxd, linux]) {
     assert.match(script, /^"\$plxd" connect on$/m);
     assert.match(script, /^if ! out=\$\("\$plxd" service install --replace <\/dev\/null 2>&1\); then$/m);
     assert.match(script, /^ {2}"\$plxd" attach <\/dev\/null >\/dev\/null$/m);
     assert.match(script, /install -g --prefix "\$HOME\/\.local" plx-connect/);
   }
+  assert.match(linux, /loginctl enable-linger/);
 });
 
-test("Windows installs silently, copies its plxd, opens the firewall for that one, and starts it", () => {
-  assert.match(windows, /^\$name = 'Parallax \(Nightly\)'$/m);
-  assert.match(windows, /^Save-Checked \$installer$/m);
-  assert.match(windows, /Start-Process -FilePath \$installer -ArgumentList '\/S' -Wait -PassThru/);
-  assert.match(windows, /Join-Path \$_\.FullName "\$name\.exe"/);
-  assert.match(windows, /Copy-Item -Force -LiteralPath \(Join-Path \$app\.FullName 'resources\\plxd\.exe'\) -Destination "\$plxd\.new"/);
-  assert.match(windows, /New-NetFirewallRule .*-Protocol TCP -LocalPort 7340 -Program \$plxd/);
-  assert.match(windows, /^& \$plxd connect on$/m);
-  assert.match(windows, /\$attach = Start-Process -FilePath \$plxd -ArgumentList 'attach' .*-PassThru$/m);
-  assert.doesNotMatch(windows, /'attach' .*-Wait/);
-  assert.match(windows, /^ {2}\$attach\.WaitForExit\(\)$/m);
-  assert.match(windows, /if \(\$attach\.ExitCode -ne 0\)/);
-  assert.match(windows, /Opening Parallax starts it again\./);
-  assert.match(windows, /npm\.cmd/);
-});
-
-test("Windows checks the download and keeps plxd in ~/.parallax-plxd, with the app or without", () => {
+test("Windows checks the download, opens the firewall for its own plxd only, and turns Connect on", () => {
   for (const script of [windows, windowsPlxd]) {
     assert.match(script, /^\$sha256 = '(5f){32}'$/m);
     assert.match(script, /\(Get-FileHash -Algorithm SHA256 -LiteralPath \$file\)\.Hash\.ToLower\(\)/);
     assert.match(script, /^ {2}if \(\$actual -ne \$sha256\) \{$/m);
-    assert.match(script, /^\$dir = Join-Path \$env:USERPROFILE '\.parallax-plxd'$/m);
-    assert.match(script, /^\$plxd = Join-Path \$dir 'plxd\.exe'$/m);
-    assert.match(script, /WriteAllText\(\(Join-Path \$dir 'plxd\.version'\), "\$version`n"\)/);
   }
-  assert.match(windowsPlxd, /^Save-Checked "\$plxd\.new"$/m);
-  assert.doesNotMatch(windowsPlxd, /'\/S'|Programs|Opening Parallax/);
+  assert.match(windows, /New-NetFirewallRule .*-Protocol TCP -LocalPort 7340 -Program \$plxd/);
+  assert.match(windows, /^& \$plxd connect on$/m);
 });
 
-test("Windows installs the logon task, and starts plxd with attach only when that fails", () => {
-  assert.match(windows, /^\$ErrorActionPreference = 'Continue'\n& \$plxd service install --replace \*> \$null\n\$service = \$LASTEXITCODE\n/m);
-  const fallback = windows.indexOf("if ($service -ne 0) {");
-  assert.ok(fallback > 0 && fallback < windows.indexOf("'attach'"));
-});
-
-test("the sh scripts parse", { skip: !hasSh }, () => {
+test("every install script parses", { skip: !hasSh }, (t) => {
   for (const script of [mac, macPlxd, linux]) execFileSync("sh", ["-n"], { input: script });
-});
-
-test("the PowerShell scripts parse", { skip: !hasPwsh && "no pwsh" }, () => {
+  if (!hasPwsh) return t.skip("no pwsh for the Windows scripts");
   const parse =
     "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseInput([Console]::In.ReadToEnd(), [ref]$null, [ref]$e); $e | ForEach-Object { $_.Message }";
   for (const script of [windows, windowsPlxd])

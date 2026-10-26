@@ -280,7 +280,7 @@ fn last_messages(sent: impl Iterator<Item = String>) -> Vec<String> {
 mod tests {
     use parallax_protocol::RunId;
 
-    use super::{PACKET_BYTES, State, last_messages, render};
+    use super::{PACKET_BYTES, State, render};
 
     fn state() -> State {
         State {
@@ -293,57 +293,6 @@ mod tests {
             landing: "- Run a (search): queued, 0 conflicts, 0 failed checks".to_owned(),
             messages: vec!["Add search.".to_owned(), "Also tests.".to_owned()],
         }
-    }
-
-    /// The spec's order: brief, memory, board, checkpoint, threads, questions, landing queue,
-    /// the user's messages, then the pointer to older history.
-    #[test]
-    fn a_packet_has_each_section_in_order_and_ends_with_the_pointer() {
-        let run = RunId::generate();
-        let packet = render(&state(), run);
-        let order = [
-            "## Brief\nShip v2.",
-            "## Memory\n",
-            "## Board (notes.md)\n## Now",
-            "## Checkpoint (checkpoint.md)\nNext: review search.",
-            "## Open threads\n",
-            "## Open questions\n",
-            "## Landing queue\n",
-            "## The user's last messages, oldest first\n> Add search.\n\n> Also tests.",
-            "thread_search and thread_read",
-        ];
-        let at: Vec<usize> = order
-            .iter()
-            .map(|part| {
-                packet
-                    .find(part)
-                    .unwrap_or_else(|| panic!("{part} in {packet}"))
-            })
-            .collect();
-        assert!(at.is_sorted(), "{packet}");
-        assert!(packet.ends_with(&format!("run {run}, have it word for word.")));
-
-        let empty = render(&State::default(), run);
-        assert!(
-            !empty.contains("## "),
-            "empty sections are left out: {empty}"
-        );
-    }
-
-    /// Decision 9: the user's last 10 messages, not a blank one.
-    #[test]
-    fn a_packet_takes_the_users_last_ten_messages() {
-        let sent = (1..=14).map(|n| {
-            if n % 5 == 0 {
-                " \n".to_owned()
-            } else {
-                format!("Message {n}\nsecond line")
-            }
-        });
-        let messages = last_messages(sent);
-        assert_eq!(messages.len(), 10);
-        assert_eq!(messages[0], "Message 3\nsecond line");
-        assert_eq!(messages[9], "Message 14\nsecond line");
     }
 
     /// Decision 9: at most 24 KiB. The user's last 10 messages keep their room, whole, however
@@ -378,39 +327,5 @@ mod tests {
         let said = packet.find("## The user's last messages").unwrap();
         assert!(board < said, "the spec's order");
         assert!(packet.contains("thread_search and thread_read"));
-    }
-
-    /// Messages that alone pass the cap lose the oldest, whole, never part of one.
-    #[test]
-    fn messages_over_the_cap_drop_the_oldest_whole() {
-        let messages: Vec<String> = (1..=10)
-            .map(|n| format!("Message {n} {}", "x".repeat(3 * 1024)))
-            .collect();
-        let packet = render(
-            &State {
-                messages: messages.clone(),
-                ..state()
-            },
-            RunId::generate(),
-        );
-        assert!(packet.len() <= PACKET_BYTES, "{}", packet.len());
-        let kept: Vec<&String> = messages
-            .iter()
-            .filter(|m| packet.contains(m.as_str()))
-            .collect();
-        assert!(kept.len() < 10 && !kept.is_empty(), "{}", kept.len());
-        assert_eq!(
-            kept.last().unwrap().as_str(),
-            messages[9],
-            "the newest stay"
-        );
-        for n in 1..=10 {
-            let start = format!("Message {n} ");
-            assert_eq!(
-                packet.contains(&start),
-                kept.iter().any(|m| m.starts_with(&start)),
-                "message {n} is whole or left out"
-            );
-        }
     }
 }

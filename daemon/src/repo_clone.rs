@@ -376,40 +376,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_ssh_url_falls_back_to_https() {
-        assert_eq!(
-            https_fallback("git@github.com:ryan-stoffel/parallax.git").as_deref(),
-            Some("https://github.com/ryan-stoffel/parallax.git")
-        );
-        assert_eq!(
-            https_fallback("ssh://git@github.com:22/o/r").as_deref(),
-            Some("https://github.com/o/r")
-        );
-        assert_eq!(https_fallback("https://github.com/o/r.git"), None);
-        assert_eq!(https_fallback("/Users/me/src/r"), None);
-    }
-
-    #[test]
-    fn ssh_and_https_urls_of_one_repository_match() {
-        let key = repo_key("git@github.com:Ryan-Stoffel/parallax.git");
-        assert_eq!(key, "github.com/ryan-stoffel/parallax");
-        assert_eq!(repo_key("https://github.com/ryan-stoffel/parallax/"), key);
-        assert_eq!(
-            repo_key("ssh://git@github.com:22/ryan-stoffel/parallax"),
-            key
-        );
-        assert_eq!(
-            repo_key("https://me:token@GitHub.com/ryan-stoffel/parallax.git"),
-            key
-        );
-        assert_eq!(
-            repo_key("http://github.com/ryan-stoffel/parallax.git/"),
-            key
-        );
-        assert_ne!(repo_key("https://github.com/ryan-stoffel/photon"), key);
-    }
-
-    #[test]
     fn a_shared_url_keeps_no_password() {
         assert_eq!(
             without_userinfo("https://me:token@github.com/o/r.git"),

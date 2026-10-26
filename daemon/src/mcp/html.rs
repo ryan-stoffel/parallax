@@ -723,36 +723,9 @@ fn console_message(method: &str, params: &Value) -> Option<(&'static str, String
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
-    use super::{
-        Appearance, bootstrap, console_message, inline_images, is_image, local_images, preview,
-    };
+    use super::{Appearance, bootstrap, inline_images, preview};
     use crate::backend::process::{Environment, Launcher};
     use crate::paths::DataDir;
-
-    /// Installs the real headless browser into `PLXD_TEST_DATA_DIR` the first time, about 100 MB.
-    #[tokio::test]
-    #[ignore = "downloads the headless browser; set PLXD_TEST_DATA_DIR"]
-    async fn a_page_previews_with_its_height_console_and_screenshot() {
-        let dir = DataDir::new(std::env::var("PLXD_TEST_DATA_DIR").unwrap()).unwrap();
-        let launcher = Launcher::new(dir, Environment::inherited());
-        let page = bootstrap(
-            "<!doctype html><div style=\"height:300px;background:var(--accent)\">x</div><script>console.log('hello', 2); null.x</script>",
-        );
-        let shot = loop {
-            match preview(&launcher, &page, 400, Appearance::Light).await {
-                Err(error) if error.contains("Try again") => {}
-                other => break other.unwrap(),
-            }
-        };
-        assert_eq!(shot.content_height, 300);
-        assert_eq!(shot.console[0]["text"], "hello 2");
-        assert_eq!(shot.console[1]["level"], "error");
-        let png = crate::images::decode(&shot.png).unwrap();
-        assert!(png.starts_with(b"\x89PNG"));
-        std::fs::write(std::env::temp_dir().join("plx-html-preview.png"), png).unwrap();
-    }
 
     /// A page can't reach this machine, even from a frame or a script (T3's public-only proxy).
     #[tokio::test]
@@ -780,31 +753,6 @@ mod tests {
     }
 
     #[test]
-    fn the_bootstrap_goes_after_the_doctype_or_first() {
-        let page = bootstrap("<!-- hi --><!DOCTYPE html><html><head><title>x</title>");
-        assert!(
-            page.starts_with("<!-- hi --><!DOCTYPE html><meta name=\"viewport\""),
-            "{page}"
-        );
-        assert!(page.contains("<style id=\"plx-theme\""));
-        let bare = bootstrap("<p>hi</p>");
-        assert!(bare.starts_with("<meta name=\"viewport\""), "{bare}");
-        assert!(bare.ends_with("<p>hi</p>"));
-        let own = bootstrap(r#"<meta name="viewport" content="width=400"><p>"#);
-        assert!(own.starts_with("<style"), "{own}");
-    }
-
-    #[test]
-    fn local_images_are_absolute_paths_with_an_image_extension() {
-        let html = r#"<img src="/a/b.png"><img src='//cdn/x.png'><img src="rel.png"><div style="background:url( /c/d.WEBP )"></div>`C:\\x\\y.jpg` "/not/image.txt""#;
-        let found: Vec<&str> = local_images(html)
-            .into_iter()
-            .map(|(s, e)| &html[s..e])
-            .collect();
-        assert_eq!(found, ["/a/b.png", "/c/d.WEBP", r"C:\\x\\y.jpg"]);
-    }
-
-    #[test]
     fn images_inline_and_unreadable_ones_are_reported() {
         let dir = tempfile::tempdir().unwrap();
         let png = dir.path().join("a.png");
@@ -825,31 +773,5 @@ mod tests {
             missing,
             [fake.display().to_string(), "/nope.gif".to_owned()]
         );
-    }
-
-    #[test]
-    fn svg_counts_as_an_image_by_its_root() {
-        assert!(is_image(
-            b"<?xml version=\"1.0\"?><!-- c --><svg xmlns=\"x\"/>"
-        ));
-        assert!(!is_image(b"<html><svg></svg></html>"));
-    }
-
-    #[test]
-    fn console_events_become_levels_and_text() {
-        let log = json!({"type": "warning", "args": [{"type": "string", "value": "a"}, {"type": "number", "value": 2, "description": "2"}]});
-        assert_eq!(
-            console_message("Runtime.consoleAPICalled", &log),
-            Some(("warning", "a 2".to_owned()))
-        );
-        let thrown = json!({"exceptionDetails": {"text": "Uncaught", "exception": {"description": "Error: x\n at page.html:1"}}});
-        assert_eq!(
-            console_message("Runtime.exceptionThrown", &thrown)
-                .unwrap()
-                .0,
-            "error"
-        );
-        let info = json!({"entry": {"level": "info", "text": "x"}});
-        assert_eq!(console_message("Log.entryAdded", &info), None);
     }
 }

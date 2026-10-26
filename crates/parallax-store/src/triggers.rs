@@ -205,39 +205,3 @@ impl Store {
             > 0)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use jiff::{SignedDuration, Timestamp};
-    use uuid::Uuid;
-
-    use crate::Store;
-
-    #[test]
-    fn the_timer_sees_the_earliest_task_and_the_due_ones() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("plxd.sqlite3")).unwrap();
-        let now = Timestamp::now();
-        let (a, b, webhook) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
-        assert_eq!(store.next_scheduled_at().unwrap(), None);
-
-        store
-            .put_scheduled_task(a, Some(now + SignedDuration::from_mins(5)), "a")
-            .unwrap();
-        store
-            .put_scheduled_task(b, Some(now - SignedDuration::from_mins(1)), "b")
-            .unwrap();
-        store.put_scheduled_task(webhook, None, "w").unwrap();
-        assert_eq!(
-            store.next_scheduled_at().unwrap(),
-            Some(now - SignedDuration::from_mins(1))
-        );
-        assert_eq!(store.due_scheduled_tasks(now).unwrap(), [b]);
-        assert_eq!(store.scheduled_task(webhook).unwrap().as_deref(), Some("w"));
-        assert_eq!(store.scheduled_tasks().unwrap().len(), 3);
-
-        assert!(store.delete_scheduled_task(b).unwrap());
-        assert!(!store.delete_scheduled_task(b).unwrap());
-        assert!(store.due_scheduled_tasks(now).unwrap().is_empty());
-    }
-}

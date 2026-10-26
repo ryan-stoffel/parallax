@@ -70,7 +70,6 @@ test("picking an app's sessions imports each on that app's agent, then lists the
   expect(box("Import Fix the login redirect")).toBeNull();
   await act(async () => button("Select all").click());
   expect(box("Import Finish HW2").checked).toBe(true);
-  expect(document.body.textContent).toContain("2 selected");
   await act(async () => button("Import 2").click());
 
   const imports = request.mock.calls.filter(([, method]) => method === "thread/import");

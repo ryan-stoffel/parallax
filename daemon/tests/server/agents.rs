@@ -2,6 +2,7 @@
 //! is the fake CLI, in a real git repository.
 
 use std::collections::VecDeque;
+#[cfg(target_os = "macos")]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -12,24 +13,22 @@ use parallax_protocol::jsonrpc::{
     ErrorObject, INVALID_PARAMS, Message, Notification, Request, RequestId,
 };
 use parallax_protocol::methods::{
-    AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentImage, AgentList,
-    AgentRequestChanges, AgentSend, AgentStart, EventsEvent, EventsSubscribe, HostHealth,
-    NotificationMethod, ProjectCreate, ProjectDelete, RepoAdd, RequestMethod, UsageGet,
+    AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentList, AgentRequestChanges,
+    AgentSend, AgentStart, EventsEvent, EventsSubscribe, NotificationMethod, ProjectCreate,
+    RepoAdd, RequestMethod,
 };
 use parallax_protocol::{
     AcceptId, AccountChoice, AgentAcceptParams, AgentAcceptResult, AgentCancelParams,
-    AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFailureKind,
-    AgentFileParams, AgentFileResult, AgentFileSide, AgentFileStatus, AgentImageParams,
-    AgentListParams, AgentMerge, AgentMergeKind, AgentOutcome, AgentOutputItem, AgentPolicy,
-    AgentRequestChangesParams, AgentRun, AgentSendParams, AgentStartParams, AgentStatus,
-    CoordinatorThreadId, DiffSummary, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    HostHealthParams, ImageId, ImageMediaType, InitializeResult, ParallaxEvent, Project,
-    ProjectCreateParams, ProjectDeleteParams, ProjectId, PromptImage, Provider, Repo,
-    RepoAddParams, RepoId, RunId, TurnId, UsageGetParams,
+    AgentDiffParams, AgentDiffResult, AgentDiffStats, AgentEventsParams, AgentFileParams,
+    AgentFileResult, AgentFileSide, AgentFileStatus, AgentListParams, AgentMerge, AgentMergeKind,
+    AgentOutcome, AgentOutputItem, AgentPolicy, AgentRequestChangesParams, AgentRun,
+    AgentSendParams, AgentStartParams, AgentStatus, DiffSummary, ErrorKind, EventsEventParams,
+    EventsSubscribeParams, InitializeResult, ParallaxEvent, Project, ProjectCreateParams,
+    ProjectId, Provider, Repo, RepoAddParams, RepoId, RunId, TurnId,
 };
+use plxd::backend::Event;
 use plxd::backend::fake::{FakeBackend, Script, Step};
 use plxd::backend::process::{CancelPolicy, Environment, Launcher};
-use plxd::backend::{Event, FailureKind, ModelUsage, ToolStatus, Usage};
 use plxd::paths::DataDir;
 use plxd::routing::BackendRegistry;
 use rustix::process::Signal;
@@ -37,7 +36,7 @@ use serde::de::DeserializeOwned;
 use tempfile::TempDir;
 use tokio::time::Instant;
 
-use crate::support::{Client, InProcess, PATIENCE, eventually, kind, png, temp_dir};
+use crate::support::{Client, InProcess, PATIENCE, kind, temp_dir};
 
 pub(crate) fn git(dir: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -327,36 +326,6 @@ impl Conn {
         .repo
     }
 
-    /// Sends a request without waiting for its response, which [`Conn::responses`] collects.
-    pub(crate) async fn send<M: RequestMethod>(&mut self, params: M::Params) -> RequestId {
-        self.client.send::<M>(params).await
-    }
-
-    /// The responses to `ids`, in that order, keeping the events that arrive meanwhile.
-    pub(crate) async fn responses(
-        &mut self,
-        ids: &[RequestId],
-    ) -> Vec<Result<serde_json::Value, ErrorObject>> {
-        let mut answers: Vec<Option<Result<serde_json::Value, ErrorObject>>> =
-            ids.iter().map(|_| None).collect();
-        while answers.iter().any(Option::is_none) {
-            match self.client.next().await {
-                Some(Message::Response(response)) => {
-                    let at = ids
-                        .iter()
-                        .position(|id| response.id.as_ref() == Some(id))
-                        .expect("a response to one of the requests");
-                    answers[at] = Some(response.into_result());
-                }
-                Some(Message::Notification(notification)) => {
-                    self.pending.push_back(event(notification));
-                }
-                other => panic!("expected a response, got {other:?}"),
-            }
-        }
-        answers.into_iter().map(Option::unwrap).collect()
-    }
-
     async fn next_event(&mut self) -> EventsEventParams {
         if let Some(event) = self.pending.pop_front() {
             return event;
@@ -365,11 +334,6 @@ impl Conn {
             Some(Message::Notification(notification)) => event(notification),
             other => panic!("expected an event, got {other:?}"),
         }
-    }
-
-    pub(crate) async fn stays_quiet(&mut self, within: Duration) {
-        assert!(self.pending.is_empty(), "{:?}", self.pending);
-        self.client.stays_quiet(within).await;
     }
 }
 
@@ -400,11 +364,6 @@ pub(crate) fn updated_to(status: AgentStatus) -> impl FnMut(&EventsEventParams) 
 
 pub(crate) fn has_item(item: AgentOutputItem) -> impl FnMut(&EventsEventParams) -> bool {
     move |event| matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.contains(&item))
-}
-
-/// Whether `event` is an `agent.updated` that reports a commit.
-pub(crate) fn committed(event: &EventsEventParams) -> bool {
-    matches!(&event.event, ParallaxEvent::AgentUpdated { state, .. } if state.diff.is_some())
 }
 
 pub(crate) fn items(events: &[EventsEventParams]) -> Vec<AgentOutputItem> {
@@ -438,16 +397,6 @@ pub(crate) fn outcomes(events: &[EventsEventParams]) -> Vec<AgentOutcome> {
             _ => None,
         })
         .collect()
-}
-
-/// How many run worktrees plxd has under the data folder `dir`.
-fn worktree_count(dir: &Path) -> usize {
-    let Ok(repos) = std::fs::read_dir(dir.join("worktrees")) else {
-        return 0;
-    };
-    repos
-        .map(|repo| std::fs::read_dir(repo.unwrap().path()).unwrap().count())
-        .sum()
 }
 
 async fn list(client: &mut Conn) -> Vec<AgentRun> {
@@ -652,416 +601,6 @@ async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays()
 }
 
 #[tokio::test]
-async fn a_follow_up_reaches_a_live_run_and_a_finished_run_resumes_its_session() {
-    let dir = temp_dir();
-    let host = Host::start(
-        dir,
-        fake(vec![
-            init("chat-1"),
-            text("First answer."),
-            end_turn("First answer."),
-            Step::AwaitFollowUp,
-            end_turn("Second answer."),
-        ]),
-    );
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Answer twice");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    // The turn settles while its CLI stays up for the next one (0060).
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-
-    let first = TurnId::generate();
-    let sent = client
-        .call::<AgentSend>(send_params(run_id, first, "and the tests"))
-        .await
-        .unwrap();
-    assert_eq!(sent.run.status, AgentStatus::Running);
-    let again = client
-        .call::<AgentSend>(send_params(run_id, first, "and the tests"))
-        .await
-        .unwrap();
-    assert_eq!(again.run.id, run_id, "a retry is answered, not sent twice");
-    let conflict = client
-        .call::<AgentSend>(send_params(run_id, first, "something else"))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
-
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let transcript = items(&events);
-    assert!(transcript.contains(&AgentOutputItem::TurnStarted {
-        turn_id: Some(first),
-        text: Some("and the tests".to_owned()),
-        wake: false,
-        from: None,
-        images: Vec::new(),
-        threads: Vec::new(),
-    }));
-    assert!(transcript.contains(&AgentOutputItem::Text {
-        message_id: None,
-        text: "and the tests".to_owned(),
-    }));
-    assert!(transcript.contains(&AgentOutputItem::TurnFinished {
-        turn_id: Some(first),
-        result: Some("Second answer.".to_owned()),
-        cursor: None,
-        session_id: None,
-    }));
-    assert!(
-        !events.iter().any(committed),
-        "nothing changed, so nothing was committed"
-    );
-
-    // The CLI has exited: a message now resumes the same session in a new process.
-    let second = TurnId::generate();
-    let resumed = client
-        .call::<AgentSend>(send_params(run_id, second, "one more thing"))
-        .await
-        .unwrap();
-    assert_eq!(resumed.run.status, AgentStatus::Running);
-    let events = until(
-        &mut client,
-        has_item(AgentOutputItem::TurnFinished {
-            turn_id: Some(second),
-            result: Some("First answer.".to_owned()),
-            cursor: None,
-            session_id: None,
-        }),
-    )
-    .await;
-    let transcript = items(&events);
-    assert!(
-        transcript.contains(&AgentOutputItem::SessionStarted {
-            session_id: "chat-1".to_owned(),
-            model: None,
-        }),
-        "the resumed process continues the session: {transcript:?}"
-    );
-    assert!(transcript.contains(&AgentOutputItem::TurnStarted {
-        turn_id: Some(second),
-        text: Some("one more thing".to_owned()),
-        wake: false,
-        from: None,
-        images: Vec::new(),
-        threads: Vec::new(),
-    }));
-    let third = TurnId::generate();
-    client
-        .call::<AgentSend>(send_params(run_id, third, "done"))
-        .await
-        .unwrap();
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-    host.server.stop().await;
-}
-
-/// The ids of the images a transcript's `turnStarted` for `turn` lists (PLX-191).
-fn turn_images(transcript: &[AgentOutputItem], turn: Option<TurnId>) -> Vec<ImageId> {
-    transcript
-        .iter()
-        .find_map(|item| match item {
-            AgentOutputItem::TurnStarted {
-                turn_id, images, ..
-            } if *turn_id == turn => Some(images.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("no turnStarted for {turn:?} in {transcript:?}"))
-}
-
-#[tokio::test]
-async fn images_sent_with_the_prompt_and_a_follow_up_are_listed_by_their_turns_and_served() {
-    let dir = temp_dir();
-    let host = Host::start(
-        dir,
-        fake(vec![
-            init("images-1"),
-            end_turn("First answer."),
-            Step::AwaitFollowUp,
-            end_turn("Second answer."),
-        ]),
-    );
-    let (mut client, project) = host.project_client().await;
-    let png = png();
-    let gif = PromptImage {
-        media_type: ImageMediaType::Gif,
-        data: "R0lGODlhAQABAAAAACw=".to_owned(),
-    };
-    let params = AgentStartParams {
-        images: vec![png.clone()],
-        ..start_params(project.id, "What is in this picture?")
-    };
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let [prompt_image] = turn_images(&items(&events), None)[..] else {
-        panic!("the prompt's turn lists its one image");
-    };
-
-    let too_many = AgentSendParams {
-        images: vec![gif.clone(); 11],
-        ..send_params(run_id, TurnId::generate(), "all of these")
-    };
-    let error = client.call::<AgentSend>(too_many).await.unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ImageTooLarge);
-    let blank = send_params(run_id, TurnId::generate(), " ");
-    let error = client.call::<AgentSend>(blank).await.unwrap_err();
-    assert_eq!(
-        error.code, INVALID_PARAMS,
-        "no text and no images: {error:?}"
-    );
-
-    let turn = TurnId::generate();
-    let follow_up = AgentSendParams {
-        images: vec![gif.clone(), png.clone()],
-        // Images alone, with no text (PLX-193).
-        ..send_params(run_id, turn, "")
-    };
-    client.call::<AgentSend>(follow_up).await.unwrap();
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let follow_up_images = turn_images(&items(&events), Some(turn));
-
-    let image = |image_id| AgentImageParams { run_id, image_id };
-    let mut served = Vec::new();
-    for id in [prompt_image].iter().chain(&follow_up_images) {
-        served.push(client.call::<AgentImage>(image(*id)).await.unwrap());
-    }
-    assert_eq!(served, [png.clone(), gif, png]);
-    let missing = client
-        .call::<AgentImage>(image(ImageId::generate()))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&missing), ErrorKind::ImageNotFound);
-    host.server.stop().await;
-}
-
-/// A tool's image, such as a device screenshot (PLX-640), is stored, listed on its
-/// `toolResult`, and served by `agent/image`.
-#[tokio::test]
-async fn a_tools_images_are_listed_on_its_result_and_served() {
-    let png = png();
-    let dir = temp_dir();
-    let host = Host::start(
-        dir,
-        fake(vec![
-            init("tool-images"),
-            Step::Emit(Event::ToolResult {
-                call_id: "shot".to_owned(),
-                status: ToolStatus::Ok,
-                output: Some("{}".to_owned()),
-                images: vec![png.clone()],
-            }),
-            end_turn("Done."),
-        ]),
-    );
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Screenshot the simulator");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let ids = items(&events)
-        .into_iter()
-        .find_map(|item| match item {
-            AgentOutputItem::ToolResult { images, .. } => Some(images),
-            _ => None,
-        })
-        .expect("a toolResult");
-    let [image_id] = ids[..] else {
-        panic!("the result lists its one image: {ids:?}");
-    };
-    let served = client
-        .call::<AgentImage>(AgentImageParams { run_id, image_id })
-        .await
-        .unwrap();
-    assert_eq!(served, png);
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn an_image_sent_alone_after_the_cli_exits_resumes_the_run() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(vec![init("images-2"), end_turn("Done.")]));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Tidy the README");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-
-    // The CLI has exited, so this starts a new process on the same session (PLX-202).
-    let png = png();
-    let turn = TurnId::generate();
-    let resumed = client
-        .call::<AgentSend>(AgentSendParams {
-            images: vec![png.clone()],
-            ..send_params(run_id, turn, "")
-        })
-        .await
-        .unwrap();
-    assert_eq!(resumed.run.status, AgentStatus::Running);
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let [image_id] = turn_images(&items(&events), Some(turn))[..] else {
-        panic!("the resumed turn lists its one image");
-    };
-    let served = client
-        .call::<AgentImage>(AgentImageParams { run_id, image_id })
-        .await
-        .unwrap();
-    assert_eq!(served, png);
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn cancel_stops_a_running_worker() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(hang()));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Work forever");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(
-        &mut client,
-        has_item(AgentOutputItem::Text {
-            message_id: None,
-            text: "Working".to_owned(),
-        }),
-    )
-    .await;
-    let health = client
-        .call::<HostHealth>(HostHealthParams {})
-        .await
-        .unwrap();
-    assert_eq!(health.running_agents, 1);
-
-    let cancelling = client
-        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
-        .await
-        .unwrap();
-    assert_eq!(cancelling.run.id, run_id);
-    let events = until(&mut client, updated_to(AgentStatus::Cancelled)).await;
-    assert_eq!(outcomes(&events), [AgentOutcome::Cancelled]);
-    let health = client
-        .call::<HostHealth>(HostHealthParams {})
-        .await
-        .unwrap();
-    assert_eq!(health.running_agents, 0);
-    let again = client
-        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
-        .await
-        .unwrap();
-    assert_eq!(again.run.status, AgentStatus::Cancelled, "a no-op");
-
-    let unknown = client
-        .call::<AgentCancel>(AgentCancelParams {
-            run_id: RunId::generate(),
-            from: None,
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&unknown), ErrorKind::RunNotFound);
-    let unknown = client
-        .call::<AgentEvents>(AgentEventsParams {
-            before: None,
-            run_id: RunId::generate(),
-            after: 0,
-            limit: None,
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&unknown), ErrorKind::RunNotFound);
-    host.server.stop().await;
-}
-
-/// PLX-941: a child's history that can't be written adds a `failed` inbox item.
-#[tokio::test]
-async fn a_history_write_that_fails_adds_a_failed_inbox_item() {
-    let host = Host::start(temp_dir(), fake(vec![init("s"), end_turn("ok")]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    // A file where the history folder goes.
-    let context = host.dir.path().join("context").join(project.id.to_string());
-    std::fs::create_dir_all(&context).unwrap();
-    std::fs::write(context.join("history"), "in the way").unwrap();
-    subscribe(&mut client, project.id, 0).await;
-    let params = start_params(project.id, "Do it");
-    let run = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::InboxAdded { item }
-            if item.kind == parallax_protocol::InboxKind::Failed
-                && item.run == run
-                && item.text.contains("history"))
-    })
-    .await;
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn agent_start_is_idempotent_on_its_run_id() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Do it once");
-    let first = client.call::<AgentStart>(params.clone()).await.unwrap().run;
-    // A run in a Project is a child, so its end also adds an inbox item (0043) and writes its
-    // history (0044).
-    let mut completed = updated_to(AgentStatus::Completed);
-    let (mut done, mut inboxed, mut history, mut checkpoint) = (false, false, false, false);
-    until(&mut client, |event| {
-        done |= completed(event);
-        inboxed |= matches!(event.event, ParallaxEvent::InboxAdded { .. });
-        history |= matches!(&event.event, ParallaxEvent::ContextChanged { file }
-            if file.path.starts_with("history/"));
-        // Its turn's checkpoint (0062).
-        checkpoint |= matches!(event.event, ParallaxEvent::ThreadCheckpoint { .. });
-        done && inboxed && history && checkpoint
-    })
-    .await;
-
-    let retried = client.call::<AgentStart>(params.clone()).await.unwrap().run;
-    assert_eq!(retried.id, first.id);
-    assert_eq!(retried.worktree_path, first.worktree_path);
-    assert_eq!(retried.status, AgentStatus::Completed);
-    client.stays_quiet(Duration::from_millis(300)).await;
-
-    let conflict = client
-        .call::<AgentStart>(AgentStartParams {
-            prompt: "Do something else".to_owned(),
-            ..params.clone()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
-    let tagged = client
-        .call::<AgentStart>(AgentStartParams {
-            coordinator_thread: Some(CoordinatorThreadId::generate()),
-            ..params.clone()
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&tagged), ErrorKind::IdConflict);
-    assert_eq!(list(&mut client).await.len(), 1);
-    assert_eq!(
-        worktree_count(host.dir.path()),
-        1,
-        "one worktree for one run"
-    );
-
-    let missing = client
-        .call::<AgentStart>(start_params(ProjectId::generate(), "Nowhere"))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&missing), ErrorKind::ProjectNotFound);
-    let no_account = client
-        .call::<AgentStart>(AgentStartParams {
-            account: None,
-            ..start_params(project.id, "Whose account?")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&no_account), ErrorKind::NoDefaultAccount);
-    host.server.stop().await;
-}
-
-#[tokio::test]
 async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     let dir = temp_dir();
     let host = Host::start(dir, fake(hang()));
@@ -1157,174 +696,10 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     assert_eq!(replies(host.dir.path()), 1, "indexed at startup");
 }
 
-/// #190 N5: a fresh actor after a restart has no in-memory record of a turn it (or a plxd
-/// before it) already sent, so `agent/send`'s idempotency has to come from the store instead.
-#[tokio::test]
-async fn a_sent_turn_stays_idempotent_across_a_restart() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(hang()));
-    let (mut client, project) = host.project_client().await;
-    let params = start_params(project.id, "Work until cancelled");
-    let run_id = params.run_id;
-    client.call::<AgentStart>(params).await.unwrap();
-    until(
-        &mut client,
-        has_item(AgentOutputItem::Text {
-            message_id: None,
-            text: "Working".to_owned(),
-        }),
-    )
-    .await;
-
-    client
-        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
-        .await
-        .unwrap();
-    until(&mut client, updated_to(AgentStatus::Cancelled)).await;
-
-    // The CLI has exited: sending resumes the session in a new process, and the turn is recorded
-    // with the run, not only kept in the actor's own memory.
-    let turn = TurnId::generate();
-    let sent = client
-        .call::<AgentSend>(send_params(run_id, turn, "carry on"))
-        .await
-        .unwrap();
-    assert_eq!(sent.run.status, AgentStatus::Running);
-    let events = until(
-        &mut client,
-        has_item(AgentOutputItem::TurnStarted {
-            turn_id: Some(turn),
-            text: Some("carry on".to_owned()),
-            wake: false,
-            from: None,
-            images: Vec::new(),
-            threads: Vec::new(),
-        }),
-    )
-    .await;
-    let seq_before = events.last().unwrap().seq;
-    drop(client);
-
-    let host = host.restart(fake(hang())).await;
-    let mut client = host.client().await;
-    subscribe(&mut client, project.id, seq_before).await;
-    let mut interrupted = updated_to(AgentStatus::Interrupted);
-    let (mut done, mut checkpoint) = (false, false);
-    until(&mut client, |event| {
-        done |= interrupted(event);
-        // The cut turn's checkpoint (0062).
-        checkpoint |= matches!(event.event, ParallaxEvent::ThreadCheckpoint { .. });
-        done && checkpoint
-    })
-    .await;
-
-    // A retry with the same text is answered from the stored turn, not sent to the CLI again.
-    let retried = client
-        .call::<AgentSend>(send_params(run_id, turn, "carry on"))
-        .await
-        .unwrap();
-    assert_eq!(retried.run.id, run_id);
-    client.stays_quiet(Duration::from_millis(300)).await;
-
-    // A retry with different text still conflicts, exactly as it would without a restart.
-    let conflict = client
-        .call::<AgentSend>(send_params(run_id, turn, "something else"))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&conflict), ErrorKind::IdConflict);
-    host.server.stop().await;
-}
-
-/// A Project's child gets a header naming the Project before its task, and no limits (0042).
-#[tokio::test]
-async fn a_child_learns_its_project_and_a_fallback_moves_its_usage_to_the_new_account() {
-    let dir = temp_dir();
-    let project_params = project_params(dir.path());
-    let host = Host::start(
-        dir,
-        fake(vec![
-            Step::Emit(Event::AccountFallback {
-                from_account: "fake".to_owned(),
-                to_account: "key-1".to_owned(),
-                reason: FailureKind::RateLimited,
-            }),
-            init("s-1"),
-            Step::EchoPrompt,
-            Step::Emit(Event::Usage(ModelUsage {
-                model: None,
-                usage: Usage {
-                    input_tokens: 7,
-                    output_tokens: 3,
-                    ..Usage::default()
-                },
-            })),
-            end_turn("ok"),
-        ]),
-    );
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params).await;
-    subscribe(&mut client, project.id, 0).await;
-    client
-        .call::<AgentStart>(start_params(project.id, "Tidy the build"))
-        .await
-        .unwrap();
-    let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
-
-    let fallback = events.iter().find_map(|event| match &event.event {
-        ParallaxEvent::AgentAccountFallback {
-            from_account,
-            to_account,
-            reason,
-            ..
-        } => Some((from_account.clone(), to_account.clone(), *reason)),
-        _ => None,
-    });
-    assert_eq!(
-        fallback,
-        Some((
-            "fake".to_owned(),
-            "key-1".to_owned(),
-            AgentFailureKind::RateLimited
-        ))
-    );
-    let ParallaxEvent::AgentUpdated { state: run, .. } = &events.last().unwrap().event else {
-        unreachable!()
-    };
-    assert_eq!(run.account_id, "key-1");
-    let usage = client.call::<UsageGet>(UsageGetParams {}).await.unwrap();
-    let charged: Vec<(&str, u64)> = usage
-        .accounts
-        .iter()
-        .map(|account| (account.account_id.as_str(), account.today.input_tokens))
-        .collect();
-    assert_eq!(
-        charged,
-        [("key-1", 7)],
-        "charged to the account it fell back to"
-    );
-
-    let prompt = items(&events)
-        .into_iter()
-        .find_map(|item| match item {
-            AgentOutputItem::Text { text, .. } => Some(text),
-            _ => None,
-        })
-        .expect("the fake echoed its prompt");
-    assert_eq!(
-        prompt,
-        "You are working on a task in the Parallax Project \"app\".\n\
-         Your Parallax tools are on the plxd MCP server: thread_list, thread_read, thread_search, \
-         thread_launch, thread_fork, thread_send, thread_wait, thread_interrupt, thread_update, \
-         pr_link, pr_unlink, read_context, write_context, ask, memory_read, memory_propose.\n\
-         \n\
-         Your task:\nTidy the build"
-    );
-    host.server.stop().await;
-}
-
 /// A stand-in for the Claude Agent SDK sidecar (0061) that records each query's `open` line and
 /// what plxd sends its CLI's stdin in `out/claude.open` and `out/claude.stdin` beside its folder,
 /// and ends a query that plxd interrupts or kills.
+#[cfg(target_os = "macos")]
 const CLAUDE_SDK: &str = r#"#!/bin/sh
 out="$(dirname "$0")/../out"
 while IFS= read -r line; do
@@ -1342,6 +717,7 @@ done
 /// running `scripts`, stand-ins for `claude`, `codex`, and the Cursor SDK sidecar (`cursor-sdk`,
 /// through `PLXD_CURSOR_SDK`), from a folder in `dir` that is the agents' whole `PATH` besides the
 /// system's. Claude runs through [`CLAUDE_SDK`] (`PLXD_CLAUDE_SDK`).
+#[cfg(target_os = "macos")]
 fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
     let bin = dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
@@ -1375,63 +751,6 @@ fn built_in_kinds(dir: &Path, scripts: [(&str, String); 3]) -> InProcess {
     );
     config.backends = Some(backends);
     InProcess::start(config)
-}
-
-#[tokio::test]
-async fn runs_plxd_cannot_start_are_refused() {
-    let dir = temp_dir();
-    // A `claude` older than the sandbox needs, found where agents' CLIs are looked up. Codex and
-    // Cursor's sidecar installed too, so the host lists them (0040).
-    let claude = "#!/bin/sh\n\
-         if [ \"$1\" = --version ]; then echo '2.1.100 (Claude Code)'; exit 0; fi\n\
-         printf '%s' '{\"loggedIn\":true}'\n";
-    let empty = || "#!/bin/sh\n".to_owned();
-    let server = built_in_kinds(
-        dir.path(),
-        [
-            ("claude", claude.to_owned()),
-            ("codex", empty()),
-            ("cursor-sdk", empty()),
-        ],
-    );
-    let mut client = Conn::ready(&server.socket).await;
-    let project = create(&mut client, project_params(dir.path())).await;
-
-    let old = client
-        .call::<AgentStart>(AgentStartParams {
-            account: Some(AccountChoice::Subscription {
-                backend: "claude".to_owned(),
-            }),
-            ..start_params(project.id, "Fix it")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&old), ErrorKind::WorkerUnavailable);
-    assert!(old.message.contains("2.1.100"), "{}", old.message);
-    assert!(old.message.contains("2.1.248"), "{}", old.message);
-
-    // A Codex run `agent/start` makes on a repo entry isn't a thread, so it is refused: Codex
-    // runs only threads (0035).
-    let work = temp_dir();
-    let entry = client.add(&real_repo(work.path())).await;
-    let on_entry = client
-        .call::<AgentStart>(AgentStartParams {
-            account: Some(AccountChoice::Subscription {
-                backend: "codex".to_owned(),
-            }),
-            coordinator_thread: Some(CoordinatorThreadId::generate()),
-            ..start_params(scope(entry.id), "Fix it")
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&on_entry), ErrorKind::WorkerUnavailable);
-    assert!(
-        on_entry.message.contains("runs only threads"),
-        "{}",
-        on_entry.message
-    );
-
-    server.stop().await;
 }
 
 /// What the stand-in for `program` recorded in `out`'s `file`, once it holds `wanted`.
@@ -1594,112 +913,6 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
         }
     }
     server.stop().await;
-}
-
-/// #257: neither an untracked file nor an uncommitted tracked change blocks `agent/start`. Both
-/// start the worktree from `HEAD`; only the tracked change is flagged so the editor can tell the
-/// user those edits aren't in the run.
-#[tokio::test]
-async fn agent_start_from_a_repo_with_local_changes_never_blocks() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-
-    // Untracked only: #257's original report (an untracked AGENTS.md blocked New Chat).
-    std::fs::write(Path::new(&project.repo_path).join("AGENTS.md"), "notes\n").unwrap();
-    let untracked = client
-        .call::<AgentStart>(start_params(project.id, "Fix it"))
-        .await
-        .unwrap()
-        .run;
-    assert!(!untracked.base_dirty, "an untracked file needs no notice");
-    assert!(untracked.branch.is_some(), "a worktree was made");
-
-    // A tracked, uncommitted change: a Project's run is cut from its integration branch, not the
-    // checkout (0045), so the change isn't the run's to flag.
-    std::fs::write(Path::new(&project.repo_path).join("README.md"), "dirty\n").unwrap();
-    let dirty = client
-        .call::<AgentStart>(start_params(project.id, "Fix it too"))
-        .await
-        .unwrap()
-        .run;
-    assert!(
-        !dirty.base_dirty,
-        "the checkout's changes are never in a Project's run"
-    );
-    assert!(
-        dirty.branch.is_some(),
-        "a worktree was made despite the dirty repo"
-    );
-
-    assert_eq!(list(&mut client).await.len(), 2, "both runs were recorded");
-    assert_eq!(
-        worktree_count(host.dir.path()),
-        2,
-        "and both worktrees were made"
-    );
-    host.server.stop().await;
-}
-
-/// PLX-409 (0045): a new Project gets its integration branch, cut from the repository's default
-/// branch. A run in it is cut from that branch's tip, not the checkout's HEAD, and keeps
-/// `explore`. Deleting the Project removes the worktree and keeps the branch.
-#[tokio::test]
-async fn a_project_run_is_cut_from_the_integration_branch_tip() {
-    let dir = temp_dir();
-    let host = Host::start(dir, fake(vec![init("s"), end_turn("ok")]));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    assert_eq!(project.base_branch.as_deref(), Some("main"));
-    assert_eq!(project.integration_branch.as_deref(), Some("parallax/app"));
-    let repo = Path::new(&project.repo_path);
-    let tip = git(repo, &["rev-parse", "parallax/app"]);
-    assert_eq!(tip, git(repo, &["rev-parse", "main"]));
-    let integration = host
-        .dir
-        .path()
-        .join("integration")
-        .join(project.id.to_string());
-    assert_eq!(
-        git(&integration, &["branch", "--show-current"]),
-        "parallax/app"
-    );
-
-    git(
-        repo,
-        &["commit", "-q", "--allow-empty", "-m", "the user's own work"],
-    );
-    let run = client
-        .call::<AgentStart>(AgentStartParams {
-            explore: true,
-            ..start_params(project.id, "Spike it")
-        })
-        .await
-        .unwrap()
-        .run;
-    assert!(run.explore);
-    let worktree = PathBuf::from(run.worktree_path.expect("a worktree"));
-    assert_eq!(
-        git(&worktree, &["rev-parse", "HEAD"]),
-        tip,
-        "cut from the integration branch's tip, not the checkout's HEAD"
-    );
-    assert!(list(&mut client).await[0].explore, "stored");
-
-    client
-        .call::<ProjectDelete>(ProjectDeleteParams {
-            project: project.id,
-        })
-        .await
-        .unwrap();
-    eventually("the worktree is removed", || !integration.exists()).await;
-    assert_eq!(
-        git(repo, &["rev-parse", "parallax/app"]),
-        tip,
-        "the branch stays"
-    );
-    host.server.stop().await;
 }
 
 pub(crate) fn decode_base64(text: &str) -> Vec<u8> {

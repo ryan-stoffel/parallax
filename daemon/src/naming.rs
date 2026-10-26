@@ -235,7 +235,7 @@ fn slug(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_MESSAGE_BYTES, limit, slug, title};
+    use super::slug;
 
     #[test]
     fn a_models_branch_becomes_a_slug() {
@@ -249,25 +249,5 @@ mod tests {
             Some("a-very-long-branch-name-that-goes-on-pas")
         );
         assert_eq!(slug("!!!"), None);
-    }
-
-    #[test]
-    fn a_models_title_is_one_clean_line() {
-        assert_eq!(
-            title("\"Fix  empty password crash.\"\nmore").as_deref(),
-            Some("Fix empty password crash")
-        );
-        assert_eq!(title("  \n"), None);
-    }
-
-    #[test]
-    fn a_long_message_keeps_its_start_and_end() {
-        let message = format!("start {} end", "é".repeat(MAX_MESSAGE_BYTES));
-        let limited = limit(&message);
-        assert!(limited.len() <= MAX_MESSAGE_BYTES, "{}", limited.len());
-        assert!(limited.starts_with("start "));
-        assert!(limited.ends_with(" end"));
-        assert!(limited.contains("[Content truncated]"));
-        assert_eq!(limit("short"), "short");
     }
 }

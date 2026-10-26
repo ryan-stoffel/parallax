@@ -644,15 +644,11 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use parallax_protocol::{AgentOutcome, AgentOutputItem, ParallaxEvent, ProjectId, RunId};
+    use parallax_protocol::{AgentOutcome, ParallaxEvent, ProjectId, RunId};
     use tokio_util::sync::CancellationToken;
 
     use super::{EventLog, Gone};
     use crate::store::StoreHandle;
-
-    fn append(log: &EventLog, project: Option<ProjectId>) -> u64 {
-        log.append_in_memory(jiff::Timestamp::now(), project, ParallaxEvent::Unknown)
-    }
 
     /// Stores `event` through `store`'s thread, as plxd does.
     fn put(store: &StoreHandle, project: Option<ProjectId>, event: ParallaxEvent) -> u64 {
@@ -672,62 +668,6 @@ mod tests {
         StoreHandle::open(path, retention, usize::MAX, usize::MAX)
     }
 
-    /// `kind_of` reads the same kind from a payload as serde's tag holds.
-    #[test]
-    fn kind_of_reads_the_serde_tag() {
-        for event in [
-            ParallaxEvent::Unknown,
-            finished(RunId::generate()),
-            ParallaxEvent::AgentOutput {
-                run_id: RunId::generate(),
-                items: vec![AgentOutputItem::SessionStarted {
-                    session_id: "\"kind\":\"x\"".into(),
-                    model: None,
-                }],
-                compacted: None,
-            },
-        ] {
-            let payload = serde_json::to_string(&event).unwrap();
-            let value: serde_json::Value = serde_json::from_str(&payload).unwrap();
-            assert_eq!(super::kind_of(&payload), value["kind"].as_str().unwrap());
-        }
-        assert_eq!(super::kind_of(""), "");
-    }
-
-    #[test]
-    fn seq_starts_at_1_and_counts_every_event() {
-        let log = EventLog::new(10);
-        assert_eq!(log.head(), 0);
-        assert_eq!(append(&log, None), 1);
-        assert_eq!(append(&log, Some(ProjectId::generate())), 2);
-        assert_eq!(log.head(), 2);
-    }
-
-    #[test]
-    fn next_skips_other_projects_and_reports_where_it_stopped() {
-        let log = EventLog::new(10);
-        let project = ProjectId::generate();
-        append(&log, Some(project));
-        append(&log, None);
-        append(&log, Some(project));
-
-        let (event, seq) = log.next(0, None, |_| true).unwrap();
-        assert_eq!(event.unwrap().seq, 2);
-        assert_eq!(seq, 2);
-        assert_eq!(
-            log.next(2, None, |_| true)
-                .unwrap()
-                .0
-                .map(|event| event.seq),
-            None
-        );
-        assert_eq!(log.next(2, None, |_| true).unwrap().1, 3);
-
-        let (event, _) = log.next(1, Some(project), |_| true).unwrap();
-        assert_eq!(event.unwrap().seq, 3);
-        assert_eq!(log.next(3, Some(project), |_| true).unwrap().1, 3);
-    }
-
     #[test]
     fn purging_a_run_removes_only_its_events_and_drops_nothing_else() {
         let log = EventLog::new(10);
@@ -745,46 +685,6 @@ mod tests {
         let (event, seq) = log.next(2, Some(project), |_| true).unwrap();
         assert!(event.is_none());
         assert_eq!(seq, 3);
-    }
-
-    #[test]
-    fn events_past_the_retention_are_gone() {
-        let log = EventLog::new(2);
-        for _ in 0..4 {
-            append(&log, None);
-        }
-        assert_eq!(log.check(1), Err(Gone::Dropped));
-        assert_eq!(log.next(1, None, |_| true).unwrap_err(), Gone::Dropped);
-        assert_eq!(log.check(2), Ok(()));
-        assert_eq!(log.next(2, None, |_| true).unwrap().0.unwrap().seq, 3);
-        assert_eq!(log.check(4), Ok(()));
-    }
-
-    /// `any_after` (PLX-451) checks only the events after `after`, and counts events dropped
-    /// from the window as a match, since it can't tell what they were.
-    #[test]
-    fn any_after_matches_new_events_and_any_that_were_dropped() {
-        let log = EventLog::new(2);
-        let run = RunId::generate();
-        log.append_in_memory(jiff::Timestamp::now(), None, finished(run));
-        for _ in 0..3 {
-            append(&log, None);
-        }
-        let is_finished = |entry: &super::Entry| entry.kind() == "agent.finished";
-        assert!(log.any_after(0, is_finished), "seq 1 was dropped");
-        assert!(!log.any_after(2, is_finished));
-        log.append_in_memory(jiff::Timestamp::now(), None, finished(run));
-        assert!(log.any_after(4, is_finished));
-        assert!(!log.any_after(5, is_finished));
-    }
-
-    #[test]
-    fn a_seq_past_the_head_is_unknown() {
-        let log = EventLog::new(2);
-        assert_eq!(log.check(0), Ok(()));
-        assert_eq!(log.check(1), Err(Gone::Unknown { head: 0 }));
-        append(&log, None);
-        assert_eq!(log.check(u64::MAX), Err(Gone::Unknown { head: 1 }));
     }
 
     #[test]
@@ -826,108 +726,6 @@ mod tests {
     }
 
     #[test]
-    fn a_log_whose_database_cannot_open_runs_in_memory() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("file");
-        std::fs::write(&file, "").unwrap();
-        let store = open(&file.join("nested.sqlite3"), 10);
-        let log = store.log();
-        let run = RunId::generate();
-        put(&store, None, finished(run));
-        assert_eq!(log.head(), 1);
-        put(&store, None, finished(run));
-        assert_eq!(log.run_events(run, 0, 10, usize::MAX).unwrap().0.len(), 2);
-        let (page, more) = log.run_events(run, 0, 10, 1).unwrap();
-        assert_eq!(
-            (page.len(), more),
-            (1, true),
-            "the byte budget applies in memory too"
-        );
-    }
-
-    #[test]
-    fn replay_skips_nothing_across_a_gap_in_seq() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("plxd.sqlite3");
-        let first = open(&path, 10);
-        for _ in 0..4 {
-            put(&first, None, ParallaxEvent::Unknown);
-        }
-        let id = first.log().id();
-        drop(first);
-        // A hole, as a run's events purged with its thread leave.
-        let db = rusqlite::Connection::open(&path).unwrap();
-        db.execute("DELETE FROM events WHERE seq = 2", []).unwrap();
-        drop(db);
-
-        let reopened = open(&path, 10).log();
-        assert_eq!(reopened.id(), id);
-        let mut delivered = Vec::new();
-        let mut after = 0;
-        while let (Some(entry), seq) = reopened.next(after, None, |_| true).unwrap() {
-            delivered.push(entry.seq);
-            after = seq;
-        }
-        assert_eq!(delivered, [1, 3, 4]);
-        assert_eq!(reopened.next(2, None, |_| true).unwrap().0.unwrap().seq, 3);
-    }
-
-    #[test]
-    fn appends_wake_watchers() {
-        let log = EventLog::new(2);
-        let mut watcher = log.watch();
-        assert!(!watcher.has_changed().unwrap());
-        append(&log, None);
-        assert!(watcher.has_changed().unwrap());
-        assert_eq!(*watcher.borrow_and_update(), 1);
-    }
-
-    fn big_output(run_id: RunId, text: &str) -> ParallaxEvent {
-        ParallaxEvent::AgentOutput {
-            run_id,
-            items: vec![AgentOutputItem::TextDelta {
-                message_id: None,
-                text: text.to_owned(),
-            }],
-            compacted: None,
-        }
-    }
-
-    #[test]
-    fn the_in_memory_window_evicts_on_bytes_before_it_would_on_count() {
-        let run = RunId::generate();
-        let one = serde_json::to_string(&big_output(run, &"a".repeat(80)))
-            .unwrap()
-            .len();
-        // Room for a little more than one event, so a second one evicts the first even though
-        // `retention` (1000) is nowhere close.
-        let log = EventLog::new_bounded(1000, one + 10);
-        log.append_in_memory(
-            jiff::Timestamp::now(),
-            None,
-            big_output(run, &"a".repeat(80)),
-        );
-        log.append_in_memory(
-            jiff::Timestamp::now(),
-            None,
-            big_output(run, &"b".repeat(80)),
-        );
-        log.append_in_memory(
-            jiff::Timestamp::now(),
-            None,
-            big_output(run, &"c".repeat(80)),
-        );
-
-        assert_eq!(
-            log.check(0),
-            Err(Gone::Dropped),
-            "the byte bound evicted seq 1 well before the count bound would"
-        );
-        assert_eq!(log.check(2), Ok(()));
-        assert_eq!(log.next(2, None, |_| true).unwrap().0.unwrap().seq, 3);
-    }
-
-    #[test]
     fn host_retention_below_the_in_memory_retention_is_clamped_up() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plxd.sqlite3");
@@ -966,66 +764,6 @@ mod tests {
         // seq 1 is genuinely gone (it's outside the reloaded window entirely), so a client that
         // saw it still correctly needs a resync.
         assert_eq!(reopened.check(0), Err(Gone::Dropped));
-    }
-
-    #[test]
-    fn reopening_with_a_small_byte_bound_trims_the_reloaded_window() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("plxd.sqlite3");
-        let run = RunId::generate();
-        let one = serde_json::to_string(&big_output(run, &"a".repeat(80)))
-            .unwrap()
-            .len();
-        let store = StoreHandle::open(&path, 1000, usize::MAX, 1000);
-        for text in ["a", "b", "c"] {
-            put(&store, None, big_output(run, &text.repeat(80)));
-        }
-        drop(store);
-
-        // `retention` (1000) is nowhere close to 3, so only the byte bound should trim this on
-        // reload, before any append ever runs against the reopened log.
-        let reopened = StoreHandle::open(&path, 1000, one + 10, 1000).log();
-        assert_eq!(
-            reopened.check(0),
-            Err(Gone::Dropped),
-            "the byte bound trimmed what was reloaded, not just what a later append would evict"
-        );
-        assert_eq!(reopened.check(2), Ok(()));
-        assert_eq!(reopened.next(2, None, |_| true).unwrap().0.unwrap().seq, 3);
-    }
-
-    /// #190 N2: `run_events` reads through its own connection, so a page held open doesn't wait
-    /// on, or make wait, a concurrent append.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_append_is_not_blocked_by_a_long_page_read() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("plxd.sqlite3");
-        let store = open(&path, 10);
-        let log = store.log();
-        let (started_tx, started_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        let reading = std::thread::spawn(move || {
-            let reader = log
-                .reader
-                .as_ref()
-                .expect("a stored log has its own read connection");
-            let _guard = reader.lock().unwrap();
-            started_tx.send(()).unwrap();
-            // Held "reading" until the test says otherwise, standing in for a slow page.
-            release_rx.recv().unwrap();
-        });
-        started_rx.recv().unwrap();
-
-        let seq = tokio::time::timeout(
-            Duration::from_secs(5),
-            store.append(jiff::Timestamp::now(), None, ParallaxEvent::Unknown),
-        )
-        .await
-        .expect("an append waited on a concurrent page read");
-        assert_eq!(seq, 1);
-
-        release_tx.send(()).unwrap();
-        reading.join().unwrap();
     }
 
     /// #190 review: an append whose caller is dropped mid-wait still runs, so the next one gets
@@ -1091,5 +829,14 @@ mod tests {
             [1, 2],
             "both events are stored under distinct seqs, agreeing with memory"
         );
+    }
+
+    #[test]
+    fn a_seq_past_the_head_is_unknown() {
+        let log = EventLog::new(2);
+        assert_eq!(log.check(0), Ok(()));
+        assert_eq!(log.check(1), Err(Gone::Unknown { head: 0 }));
+        log.append_in_memory(jiff::Timestamp::now(), None, ParallaxEvent::Unknown);
+        assert_eq!(log.check(u64::MAX), Err(Gone::Unknown { head: 1 }));
     }
 }

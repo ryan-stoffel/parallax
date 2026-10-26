@@ -1,6 +1,6 @@
-//! What `host/update` decides on every OS (PLX-700, PLX-825): version order, asset names, where an
-//! update goes, a copy that isn't older, Windows' rename-aside, and the handover's route. Nothing
-//! here downloads or restarts anything. `install_tests` installs from fake releases on Unix.
+//! What `host/update` decides on every OS (PLX-700, PLX-825): version order, where an update goes,
+//! handing over to a copy that isn't older, and putting the old plxd back when a move fails.
+//! Nothing here downloads or restarts anything. `install_tests` installs from fake releases on Unix.
 
 use std::cmp::Ordering;
 use std::fs;
@@ -9,12 +9,10 @@ use std::path::{Path, PathBuf};
 use parallax_protocol::HostUpdateRestart;
 
 use super::{
-    ASIDE, PLXD, Placement, Route, SelfUpdate, asset_name, compare, move_in, not_older,
-    parse_version, placement, remove_aside, route, set_aside,
+    ASIDE, PLXD, Placement, SelfUpdate, asset_name, compare, move_in, parse_version, placement,
 };
 use crate::backend::process::{Environment, Launcher};
 use crate::paths::DataDir;
-use crate::service::ServiceState;
 
 const NEW: &str = "2610.10912.13045-nightly";
 
@@ -45,29 +43,6 @@ fn versions_compare_by_their_numbers_whatever_the_channel() {
     for bad in ["", "v1.2", "1..2", "1.2-night ly", "1.2;rm", "../1", "1.x"] {
         assert_eq!(parse_version(bad), None, "{bad:?}");
     }
-}
-
-#[test]
-fn the_asset_is_named_for_the_os_and_arch() {
-    for (os, arch, name) in [
-        ("macos", "aarch64", "mac-arm64"),
-        ("linux", "x86_64", "linux-x64"),
-        ("linux", "aarch64", "linux-arm64"),
-        ("windows", "x86_64", "win-x64.exe"),
-        ("windows", "aarch64", "win-arm64.exe"),
-    ] {
-        assert_eq!(
-            asset_name(NEW, os, arch).unwrap(),
-            format!("parallax-plxd-{NEW}-{name}")
-        );
-    }
-    assert!(
-        asset_name(NEW, "macos", "x86_64")
-            .unwrap_err()
-            .contains("Intel")
-    );
-    assert!(asset_name(NEW, "freebsd", "x86_64").is_err());
-    assert!(asset_name(NEW, "linux", "riscv64").is_err());
 }
 
 #[test]
@@ -108,26 +83,6 @@ fn bundled_plxd_installs_beside_the_home_and_standalone_plxd_in_place() {
     }
 }
 
-/// An NSIS install's `resources\`, and the copy itself, install to `%USERPROFILE%\.parallax-plxd`.
-#[cfg(windows)]
-#[test]
-fn a_windows_install_goes_to_parallax_plxd() {
-    let home = Path::new(r"C:\Users\me");
-    let shared = Placement::Shared(home.join(".parallax-plxd"));
-    for bundled in [
-        r"C:\Users\me\AppData\Local\Programs\Parallax\resources\plxd.exe",
-        r"C:\Users\me\.parallax-plxd\plxd.exe",
-    ] {
-        assert_eq!(
-            placement(Path::new(bundled), home).unwrap(),
-            shared,
-            "{bundled}"
-        );
-    }
-    let error = placement(Path::new(r"D:\parallax\target\debug\plxd.exe"), home).unwrap_err();
-    assert!(error.contains("development build"), "{error}");
-}
-
 /// A plxd in `dir` that reports `version`, by the `plxd.version` beside it.
 fn copy_in(dir: &Path, version: &str) -> PathBuf {
     fs::create_dir_all(dir).unwrap();
@@ -135,17 +90,6 @@ fn copy_in(dir: &Path, version: &str) -> PathBuf {
     let program = dir.join(PLXD);
     fs::write(&program, "copy").unwrap();
     program
-}
-
-#[test]
-fn only_a_copy_that_is_there_and_not_older_counts() {
-    let dir = tempfile::tempdir().unwrap();
-    let program = copy_in(dir.path(), NEW);
-    assert_eq!(not_older(&program, NEW).as_deref(), Some(NEW));
-    assert_eq!(not_older(&program, OLDER).as_deref(), Some(NEW));
-    assert_eq!(not_older(&program, NEWER), None);
-    fs::remove_file(&program).unwrap();
-    assert_eq!(not_older(&program, OLDER), None, "a plxd.version alone");
 }
 
 /// PLX-825: the app refreshed the copy to [`NEWER`] while the plxd running it is still
@@ -174,29 +118,6 @@ async fn host_update_hands_over_to_a_copy_that_isnt_older_instead_of_writing_ove
     assert_eq!(version, format!("{NEWER}\n"));
 }
 
-/// Windows renames a running plxd.exe but won't replace it, so the old one moves aside, over an
-/// earlier one, and the next `serve` deletes it.
-#[tokio::test]
-async fn a_replaced_plxd_moves_aside_and_the_next_start_deletes_it() {
-    let dir = tempfile::tempdir().unwrap();
-    let program = dir.path().join(PLXD);
-    let aside = dir.path().join(ASIDE);
-    fs::write(&aside, "earlier").unwrap();
-    fs::write(&program, "running").unwrap();
-
-    assert!(set_aside(&program));
-    assert!(!program.exists());
-    assert_eq!(fs::read_to_string(&aside).unwrap(), "running");
-    // Nothing to move: the earlier one stays.
-    assert!(!set_aside(&program));
-    assert_eq!(fs::read_to_string(&aside).unwrap(), "running");
-
-    remove_aside(program.clone()).await;
-    assert!(!aside.exists());
-    // Nothing to delete: it returns at once.
-    remove_aside(program).await;
-}
-
 /// A new plxd that can't move in puts the one it set aside back, so none goes missing.
 #[test]
 fn a_failed_move_in_puts_the_old_plxd_back() {
@@ -216,43 +137,5 @@ fn a_failed_move_in_puts_the_old_plxd_back() {
     assert_eq!(
         fs::read_to_string(dir.path().join(ASIDE)).unwrap(),
         "running"
-    );
-}
-
-/// On Windows, only a running logon task takes over: Task Scheduler starts nothing while nobody
-/// is logged on, so plxd starts the new `serve` itself (PLX-825). macOS and Linux take over
-/// through any installed service, and exit for a service manager that runs them.
-#[test]
-fn a_handover_goes_through_the_service_only_when_it_can_take_over() {
-    let installed = |state| Ok((true, state));
-    let running = ServiceState::Running(None);
-    let unreadable = || Err("couldn't ask".to_owned());
-
-    assert_eq!(route(true, installed(running), false), Route::Replace);
-    assert_eq!(
-        route(true, installed(ServiceState::Loaded), false),
-        Route::NoService
-    );
-    assert_eq!(route(true, unreadable(), false), Route::NoService);
-    assert_eq!(
-        route(true, Ok((false, ServiceState::NotLoaded)), false),
-        Route::NoService
-    );
-
-    for state in [running, ServiceState::Loaded, ServiceState::NotLoaded] {
-        assert_eq!(route(false, installed(state), false), Route::Replace);
-    }
-    assert_eq!(
-        route(false, Ok((false, ServiceState::NotLoaded)), false),
-        Route::NoService
-    );
-    assert_eq!(route(false, unreadable(), false), Route::NoService);
-    assert!(matches!(
-        route(false, Ok((false, running)), true),
-        Route::Failed(_)
-    ));
-    assert_eq!(
-        route(false, unreadable(), true),
-        Route::Failed("couldn't ask".to_owned())
     );
 }

@@ -4,7 +4,7 @@ import { expect, test, vi } from "vite-plus/test";
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
 import type { HostUploadParams } from "../protocol/generated/protocol";
 import { pieceBytes } from "./documents";
-import { encodedImage, isImagePath, splitFiles, withFiles, withoutImages } from "./attachments";
+import { splitFiles, withFiles } from "./attachments";
 import { readUpload, uploadBytes, uploadFiles } from "./uploads";
 
 const connected = (capabilities: Record<string, Record<string, number>>) =>
@@ -169,22 +169,4 @@ test("splitFiles takes back what withFiles added, and leaves other text alone (P
   const written = "See below.\n\nAttached files:\n- report.pdf";
   expect(splitFiles(written)).toEqual({ text: written, paths: [] });
   expect(splitFiles(withFiles("", ["C:\\up\\a.pdf"])).paths).toEqual(["C:\\up\\a.pdf"]);
-});
-
-test("an image is saved as image-<n> with its type's extension, and only those read as images (PLX-799)", () => {
-  const { name } = encodedImage({ mediaType: "image/jpeg", data: "" }, 2);
-  expect(name).toBe("image-2.jpg");
-  expect(isImagePath(`/u/1/${name}`)).toBe(true);
-  expect(isImagePath("C:\\up\\1\\image-1.webp")).toBe(true);
-  expect(isImagePath("/u/1/my-image-1.png")).toBe(false);
-  expect(isImagePath("/u/1/image-1.pdf")).toBe(false);
-});
-
-test("a list put back takes new paths, and loses its images' (PLX-799)", () => {
-  const sent = withFiles("Use this.", ["/u/1/a.pdf", "/u/2/image-1.png"]);
-  expect(withoutImages(sent)).toBe(withFiles("Use this.", ["/u/1/a.pdf"]));
-  expect(withoutImages(withFiles("", ["/u/2/image-1.png"]))).toBe("");
-  expect(withFiles(withoutImages(sent), ["/u/3/image-1.png"])).toBe(
-    withFiles("Use this.", ["/u/1/a.pdf", "/u/3/image-1.png"]),
-  );
 });

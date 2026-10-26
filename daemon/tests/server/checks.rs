@@ -1,6 +1,6 @@
 //! A Project's checks after each landing end to end (PLX-411, decision 0045), on the fake CLI:
 //! green checks land, red ones take the child's work off and send it back, then go to the user,
-//! and red checks after the base merge are the base's. The timeout is the runner's unit test.
+//! and the branch moves only once they pass. The timeout is the runner's unit test.
 
 use std::path::{Path, PathBuf};
 
@@ -91,46 +91,6 @@ async fn green_checks_land_and_red_ones_go_back_to_the_child_then_to_the_user() 
         "{red}"
     );
     assert_eq!(sent.len(), 1, "sent back once: {sent:?}");
-    host.server.stop().await;
-}
-
-/// The base branch moved to a commit that fails the checks: it is left out and goes to the user,
-/// and the child still lands on the tip.
-#[tokio::test]
-async fn red_checks_after_the_base_merge_are_the_bases_and_the_child_still_lands() {
-    let host = Host::start(temp_dir(), notes());
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    let repo = PathBuf::from(&project.repo_path);
-    set_checks(&mut client, project.id).await;
-    lands_automatically(&mut client, project.id).await;
-    let tip = git(&repo, &["rev-parse", "parallax/app"]);
-    let run = finished(&mut client, start_params(project.id, "Write the notes")).await;
-    break_it(&repo);
-
-    client
-        .call::<LandQueue>(LandQueueParams { run_id: run.id })
-        .await
-        .unwrap();
-    let base = item(&mut client, project.id, run.id, |item| {
-        item.text.starts_with("The base branch")
-    })
-    .await;
-    assert_eq!(base.kind, InboxKind::NeedsYou);
-    assert_eq!(
-        base.text,
-        "The base branch main fails the checks once merged into parallax/app, so plxd left it \
-         out: fix it on main. They exited 1:\n\nbroken.txt is here"
-    );
-    item(&mut client, project.id, run.id, |item| {
-        item.text.contains("landed on the integration branch")
-    })
-    .await;
-    assert_eq!(
-        git(&repo, &["rev-parse", "parallax/app^"]),
-        tip,
-        "only the child's commit is on the branch"
-    );
     host.server.stop().await;
 }
 

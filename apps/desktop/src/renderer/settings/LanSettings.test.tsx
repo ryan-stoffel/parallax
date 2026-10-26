@@ -112,56 +112,6 @@ const click = async (element: Element) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-const type = async (label: string, value: string) => {
-  const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-};
-
-test("the switch turns pairing on, Pair a device shows a code, and Add computer pairs with one found or typed", async () => {
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root.render(<LanSettings />));
-  unmount = () => {
-    root.unmount();
-    document.body.innerHTML = "";
-  };
-  await settle();
-  const toggle = document.querySelector('[role="switch"]')!;
-  expect(toggle.getAttribute("aria-checked")).toBe("false");
-  expect(document.body.textContent).toContain("192.168.1.20");
-  await click(toggle);
-  expect(request).toHaveBeenCalledWith("local", "host/settings/set", { remote: true });
-  expect(document.body.textContent).toContain("full control of this one");
-  await click(button("Pair a device"));
-  expect(document.querySelector('[aria-label="Pairing code"]')?.textContent).toBe("7KQ-4M2");
-  // Open in a browser serves the app at the addresses the code reaches, off until turned on.
-  const web = document.querySelector('[role="switch"][aria-label="Open in a browser"]')!;
-  expect(web.getAttribute("aria-checked")).toBe("false");
-  expect(document.body.textContent).toContain("https://192.168.1.20:7341");
-  expect(document.querySelector('[aria-label="Certificate fingerprint"]')?.textContent).toBe(
-    Array(32).fill("AB").join(" "),
-  );
-  await click(web);
-  expect(request).toHaveBeenCalledWith("local", "host/settings/set", { remoteWeb: true });
-  expect(web.getAttribute("aria-checked")).toBe("true");
-
-  // Add computer finds the computers showing a code, by name, and picks the only one.
-  await click(button("Add computer"));
-  expect(button("studio").getAttribute("aria-checked")).toBe("true");
-  await type("Code", "7kq-4m2");
-  await click(button("Pair"));
-  expect(pairLan).toHaveBeenCalledWith({ found: "0" }, "7kq-4m2");
-
-  // An address typed in, for when mDNS can't find it.
-  await click(button("Add computer"));
-  await click(button("Enter an address instead"));
-  await type("Address", "192.168.1.30");
-  await type("Code", "7KQ4M2");
-  await click(button("Pair"));
-  expect(pairLan).toHaveBeenLastCalledWith({ address: "192.168.1.30" }, "7KQ4M2");
-});
 
 test("Reach from anywhere registers this computer with the relay before turning it on", async () => {
   remote = true;

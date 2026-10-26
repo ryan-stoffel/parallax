@@ -607,7 +607,7 @@ export async function renderPage(url: string): Promise<Response> {
  * given, its last, and `bytes=-n` as the last `suffix` bytes. Undefined without a header, and
  * "invalid" for anything else, more than one range included.
  */
-export function byteRange(
+function byteRange(
   header: string | null,
 ): { start: number; end?: number } | { suffix: number } | "invalid" | undefined {
   if (header === null) return undefined;

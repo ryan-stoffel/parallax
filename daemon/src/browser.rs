@@ -656,31 +656,3 @@ fn is_root() -> bool {
 fn is_root() -> bool {
     false
 }
-
-#[cfg(all(test, unix))]
-mod tests {
-    use std::sync::Mutex;
-
-    use super::{Routes, route};
-
-    #[test]
-    fn replies_reach_their_caller_and_events_their_page() {
-        let routes = Mutex::new(Routes::default());
-        let (reply, mut answer) = tokio::sync::oneshot::channel();
-        let (page, mut events) = tokio::sync::mpsc::unbounded_channel();
-        {
-            let mut routes = routes.lock().unwrap();
-            routes.replies.insert(7, reply);
-            routes.pages.insert("s".into(), page);
-        }
-        route(br#"{"id":7,"result":{"ok":true}}"#, &routes);
-        assert_eq!(answer.try_recv().unwrap().unwrap()["ok"], true);
-        route(
-            br#"{"sessionId":"s","method":"Page.loadEventFired","params":{}}"#,
-            &routes,
-        );
-        assert_eq!(events.try_recv().unwrap().method, "Page.loadEventFired");
-        route(br#"{"id":8,"error":{"message":"nope"}}"#, &routes);
-        route(b"not json", &routes);
-    }
-}

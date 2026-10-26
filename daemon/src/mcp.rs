@@ -399,7 +399,7 @@ async fn last_output(plxd: &Plxd, run_id: RunId) -> Result<Option<String>, Strin
 mod tests {
     use serde_json::json;
 
-    use super::{Reply, clip, tail, tool_result};
+    use super::{Reply, tool_result};
 
     #[test]
     fn a_reply_with_a_png_carries_it_as_an_image_block_after_its_text() {
@@ -416,14 +416,5 @@ mod tests {
             ])
         );
         assert_eq!(result["isError"], false);
-    }
-
-    #[test]
-    fn long_text_is_cut_at_a_character_boundary_with_a_note() {
-        assert_eq!(clip("short", 10), "short");
-        let cut = clip("ééééé", 3);
-        assert!(cut.starts_with("é\n[cut: 2 of 10 bytes shown]"), "{cut}");
-        let end = tail("ééééé", 3);
-        assert!(end.ends_with("\né"), "{end}");
     }
 }

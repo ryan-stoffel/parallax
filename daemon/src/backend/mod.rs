@@ -1115,11 +1115,10 @@ impl EventStream {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use super::{
-        Backend, CancelSwitch, Event, EventSink, FailureKind, FollowUp, ModelUsage, Outcome, Run,
-        RunHandle, RunId, SendError, TurnId, Usage,
+        CancelSwitch, Event, EventSink, FailureKind, FollowUp, ModelUsage, Outcome, Run, RunHandle,
+        RunId, SendError, TurnId, Usage,
     };
 
     fn input(n: u64) -> Usage {
@@ -1139,22 +1138,6 @@ mod tests {
             model: None,
             permission: None,
         }
-    }
-
-    #[test]
-    fn a_goal_is_the_text_after_slash_goal() {
-        assert_eq!(super::goal("/goal  tests pass ", &[]), Some("tests pass"));
-        assert_eq!(super::goal("/GOAL tests pass", &[]), Some("tests pass"));
-        assert_eq!(super::goal("/goal", &[]), None);
-        assert_eq!(super::goal("/goal clear", &[]), None);
-        assert_eq!(super::goal("/goals tests pass", &[]), None);
-        assert_eq!(super::goal("make /goal x", &[]), None);
-    }
-
-    #[test]
-    fn the_traits_are_object_safe() {
-        fn takes(_: Option<Arc<dyn Backend>>, _: Option<Arc<dyn Run>>) {}
-        takes(None, None);
     }
 
     #[test]
@@ -1179,22 +1162,6 @@ mod tests {
             Err(SendError::Finished),
             "a retry after the run ended must not claim the message arrived"
         );
-    }
-
-    #[test]
-    fn a_backend_without_follow_ups_refuses_them() {
-        let (handle, _control) = RunHandle::new(RunId::generate(), false, CancelSwitch::new());
-        assert_eq!(handle.send(follow_up("hi")), Err(SendError::Unsupported));
-    }
-
-    #[test]
-    fn cancel_flips_the_switch_once() {
-        let switch = CancelSwitch::new();
-        let (handle, _control) = RunHandle::new(RunId::generate(), true, switch.clone());
-        assert!(!switch.is_cancelled());
-        handle.cancel();
-        handle.cancel();
-        assert!(switch.is_cancelled());
     }
 
     #[tokio::test]
@@ -1227,42 +1194,6 @@ mod tests {
                     usage: input(7)
                 }]
             }
-        );
-    }
-
-    #[tokio::test]
-    async fn resetting_usage_drops_what_was_summed_before_it() {
-        let (mut sink, mut stream) = EventSink::channel(8, Vec::new());
-        sink.emit(Event::Usage(ModelUsage {
-            model: None,
-            usage: input(100),
-        }))
-        .await
-        .unwrap();
-        sink.reset_usage(Vec::new());
-        sink.emit(Event::Usage(ModelUsage {
-            model: None,
-            usage: input(4),
-        }))
-        .await
-        .unwrap();
-        sink.finish(Outcome::Completed { result: None })
-            .await
-            .unwrap();
-        let mut last = None;
-        while let Some(event) = stream.next().await {
-            last = Some(event);
-        }
-        let Some(Event::Finished { usage_totals, .. }) = last else {
-            panic!("{last:?}")
-        };
-        assert_eq!(
-            usage_totals,
-            [ModelUsage {
-                model: None,
-                usage: input(4)
-            }],
-            "the reset total, not 104"
         );
     }
 

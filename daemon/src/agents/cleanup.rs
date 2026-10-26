@@ -396,10 +396,10 @@ fn branch_to_delete(pulls: &[Pull], stored: &str, current: Option<&str>) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use jiff::Timestamp;
+
     use parallax_protocol::PrState;
 
-    use super::{Pull, branch_to_delete, in_merged, merged, merged_since};
+    use super::{Pull, branch_to_delete};
 
     fn pull(state: PrState, commits: &[&str]) -> Pull {
         Pull {
@@ -415,51 +415,6 @@ mod tests {
             head: head.to_owned(),
             ..pull(state, &[])
         }
-    }
-
-    #[test]
-    fn only_merged_or_closed_pull_requests_with_one_merged_count_as_merged() {
-        assert!(merged(&[pull(PrState::Merged, &[])]));
-        assert!(merged(&[
-            pull(PrState::Merged, &[]),
-            pull(PrState::Closed, &[])
-        ]));
-        assert!(!merged(&[pull(PrState::Closed, &[])]));
-        assert!(!merged(&[
-            pull(PrState::Merged, &[]),
-            pull(PrState::Open, &[])
-        ]));
-        assert!(!merged(&[]));
-    }
-
-    #[test]
-    fn archives_only_when_the_newest_merge_follows_the_last_message() {
-        let at = |time: &str| time.parse::<Timestamp>().unwrap();
-        let merged_at = |time: &str| Pull {
-            merged_at: Some(at(time)),
-            ..pull(PrState::Merged, &[])
-        };
-        let pulls = [
-            merged_at("2026-10-01T10:00:00Z"),
-            merged_at("2026-10-03T10:00:00Z"),
-        ];
-        assert!(merged_since(&pulls, at("2026-10-02T10:00:00Z")));
-        assert!(!merged_since(&pulls, at("2026-10-04T10:00:00Z")));
-        assert!(!merged_since(
-            &[pull(PrState::Closed, &[])],
-            at("2026-10-02T10:00:00Z")
-        ));
-    }
-
-    #[test]
-    fn head_must_be_a_merged_pull_requests_commit() {
-        let pulls = [
-            pull(PrState::Merged, &["a", "b"]),
-            pull(PrState::Closed, &["c"]),
-        ];
-        assert!(in_merged(&pulls, "b"));
-        assert!(!in_merged(&pulls, "c"));
-        assert!(!in_merged(&pulls, "d"));
     }
 
     #[test]

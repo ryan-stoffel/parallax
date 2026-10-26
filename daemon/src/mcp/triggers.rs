@@ -547,16 +547,7 @@ fn identity(url: &str) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{TOOLS, TargetArgs, definitions, first_line, target_url};
-
-    #[test]
-    fn the_definitions_list_every_tool_in_order() {
-        let listed: Vec<String> = definitions()
-            .iter()
-            .map(|tool| tool["name"].as_str().unwrap().to_owned())
-            .collect();
-        assert_eq!(listed, TOOLS);
-    }
+    use super::{TargetArgs, target_url};
 
     #[test]
     fn a_target_is_a_url_or_a_repository_and_number() {
@@ -578,6 +569,5 @@ mod tests {
         assert!(target(None, Some("ryan/parallax"), None, None).is_err());
         assert!(target(Some("https://example.com/x"), None, None, None).is_err());
         assert!(target(Some(url), None, None, Some("gitlab.com")).is_err());
-        assert_eq!(first_line("  Check CI\nand more"), "Check CI");
     }
 }

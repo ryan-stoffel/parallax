@@ -1,15 +1,13 @@
-//! `agent/files` and `agent/file`'s `working` side (PLX-296): browsing a thread's folder on disk,
-//! for a thread in a worktree and one in the user's own checkout; and `agent/fileCreate`,
-//! `agent/fileRename`, and `agent/fileDelete` (PLX-590) changing it; and `repo/grep` (PLX-993)
-//! searching it.
+//! `agent/files` and `agent/file`'s `working` side (PLX-296): browsing a worktree thread's folder
+//! on disk; and `agent/fileCreate`, `agent/fileRename`, and `agent/fileDelete` (PLX-590)
+//! changing it.
 
 use parallax_protocol::methods::{
-    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles, RepoGrep,
+    AgentFile, AgentFileCreate, AgentFileDelete, AgentFileRename, AgentFiles,
 };
 use parallax_protocol::{
     AgentEntry, AgentEntryKind, AgentFileCreateParams, AgentFileDeleteParams, AgentFileParams,
-    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams, GrepMatch,
-    RepoGrepParams,
+    AgentFileRenameParams, AgentFileResult, AgentFileSide, AgentFilesParams,
 };
 
 use super::*;
@@ -88,26 +86,6 @@ async fn read(
             size_only: size_only.then_some(true),
             offset: None,
             length: None,
-        })
-        .await
-}
-
-/// The slice of `path` at `offset` and `length` (0074), on `side`.
-async fn slice(
-    client: &mut Conn,
-    run_id: RunId,
-    path: &str,
-    side: AgentFileSide,
-    (offset, length): (Option<u64>, Option<u64>),
-) -> Result<AgentFileResult, ErrorObject> {
-    client
-        .call::<AgentFile>(AgentFileParams {
-            run_id,
-            path: path.to_owned(),
-            side,
-            size_only: None,
-            offset,
-            length,
         })
         .await
 }
@@ -197,145 +175,6 @@ async fn a_worktree_threads_files_list_by_folder_without_git_or_ignored_entries(
         .await
         .unwrap_err();
     assert_eq!(kind(&unknown), ErrorKind::RunNotFound);
-}
-
-/// A slice (0074) reads a file of any size, a symlink's target included, on the working side
-/// only, by the same path rules as a whole read.
-#[tokio::test]
-async fn a_worktree_threads_files_read_in_slices_by_the_same_rules() {
-    let (_host, mut client, _, run_id, worktree) = worktree_thread().await;
-    std::fs::write(worktree.join("big.bin"), vec![0; 4 * 1024 * 1024 + 1]).unwrap();
-
-    let working = AgentFileSide::Working;
-    let mut sliced = async |path: &str, side, range| {
-        slice(&mut client, run_id, path, side, range)
-            .await
-            .map(|file| {
-                (
-                    file.size,
-                    file.too_large,
-                    decode_base64(&file.content.unwrap()),
-                )
-            })
-    };
-    assert_eq!(
-        sliced("big.bin", working, (Some(4 * 1024 * 1024), None))
-            .await
-            .unwrap(),
-        (Some(4 * 1024 * 1024 + 1), false, vec![0])
-    );
-    assert_eq!(
-        sliced("src/lib.rs", working, (None, Some(6)))
-            .await
-            .unwrap(),
-        (Some(14), false, b"pub fn".to_vec())
-    );
-    for offset in [100, 1 << 63, u64::MAX] {
-        assert_eq!(
-            sliced("src/lib.rs", working, (Some(offset), None))
-                .await
-                .unwrap(),
-            (Some(14), false, Vec::new()),
-            "{offset}"
-        );
-    }
-    assert_eq!(
-        sliced("hosts", working, (Some(5), Some(100)))
-            .await
-            .unwrap(),
-        (Some(10), false, b"hosts".to_vec())
-    );
-    for (side, range) in [
-        (working, (None, Some(1024 * 1024 + 1))),
-        (AgentFileSide::Head, (Some(0), None)),
-    ] {
-        let error = sliced("src/lib.rs", side, range).await.unwrap_err();
-        assert_eq!(error.code, INVALID_PARAMS, "{side:?} {range:?}: {error:?}");
-    }
-    for escape in ["../README.md", ".git/config", "etc/hosts", "src", ""] {
-        let error = sliced(escape, working, (Some(0), None)).await.unwrap_err();
-        assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
-    }
-}
-
-#[tokio::test]
-async fn a_checkout_threads_files_are_its_repositorys_checkout() {
-    let host = Host::start(fake(editing()));
-    let path = repo_with_ignores(host.work.path());
-    // A checked-out submodule, with a folder of its own.
-    let lib = real_repo(host.work.path(), "lib");
-    std::fs::create_dir(lib.join("docs")).unwrap();
-    std::fs::write(lib.join("docs/a.md"), "A\n").unwrap();
-    git(&lib, &["add", "-A"]);
-    git(&lib, &["commit", "-q", "-m", "docs"]);
-    let lib = lib.to_str().unwrap();
-    git(
-        &path,
-        &[
-            "-c",
-            "protocol.file.allow=always",
-            "submodule",
-            "add",
-            "-q",
-            lib,
-            "vendor/lib",
-        ],
-    );
-    git(&path, &["commit", "-q", "-m", "lib"]);
-    std::fs::write(path.join("README.md"), "edited by the user\n").unwrap();
-    add_ignored_and_links(&path);
-    let mut client = host.client().await;
-    let repo = client.add(&path).await;
-    client.subscribe(0, Some(scope(repo.id))).await;
-    let params = ThreadStartParams {
-        checkout: true,
-        ..start_params(Some(repo.id), "Write some notes")
-    };
-    let run_id = client.call::<ThreadStart>(params).await.unwrap().run.id;
-    client.until(updated_to(AgentStatus::Completed)).await;
-
-    let root = list(&mut client, run_id, None).await.unwrap();
-    assert_eq!(
-        names(&root),
-        [
-            (".gitignore", AgentEntryKind::File),
-            (".gitmodules", AgentEntryKind::File),
-            (":!x", AgentEntryKind::File),
-            ("NOTES.md", AgentEntryKind::File),
-            ("README.md", AgentEntryKind::File),
-            ("etc", AgentEntryKind::Symlink),
-            ("hosts", AgentEntryKind::Symlink),
-            ("src", AgentEntryKind::Dir),
-            ("vendor", AgentEntryKind::Dir),
-        ]
-    );
-    // Inside the submodule, git's ignore rules are its own, so its folders list unfiltered.
-    let sub = list(&mut client, run_id, Some("vendor/lib")).await.unwrap();
-    assert_eq!(
-        names(&sub),
-        [
-            ("README.md", AgentEntryKind::File),
-            ("docs", AgentEntryKind::Dir)
-        ]
-    );
-    let docs = list(&mut client, run_id, Some("vendor/lib/docs"))
-        .await
-        .unwrap();
-    assert_eq!(names(&docs), [("a.md", AgentEntryKind::File)]);
-    assert_eq!(
-        text(&mut client, run_id, "vendor/lib/docs/a.md").await,
-        "A\n"
-    );
-    assert_eq!(
-        text(&mut client, run_id, "README.md").await,
-        "edited by the user\n"
-    );
-    assert_eq!(
-        text(&mut client, run_id, "NOTES.md").await,
-        "Written in a thread.\n"
-    );
-    let error = list(&mut client, run_id, Some("etc")).await.unwrap_err();
-    assert_eq!(error.code, INVALID_PARAMS);
 }
 
 async fn create(
@@ -440,86 +279,4 @@ async fn files_and_folders_are_created_renamed_and_deleted_inside_the_threads_fo
         assert_eq!(error.code, INVALID_PARAMS, "{escape:?}: {error:?}");
     }
     assert!(worktree.join(".git").exists());
-}
-
-async fn grep(
-    client: &mut Conn,
-    query: &str,
-    repo: Option<RepoId>,
-    run_id: Option<RunId>,
-) -> Result<Vec<GrepMatch>, ErrorObject> {
-    let params = RepoGrepParams {
-        query: query.to_owned(),
-        repo,
-        run_id,
-    };
-    let found = client.call::<RepoGrep>(params).await?;
-    assert!(!found.truncated);
-    Ok(found.matches)
-}
-
-#[tokio::test]
-async fn repo_grep_stops_at_its_cap_and_skips_overlong_lines() {
-    let host = Host::start(fake(editing()));
-    let path = repo_with_ignores(host.work.path());
-    // A minified line longer than plxd reads, then more matches than one answer lists.
-    let long = format!("{}needle\n", "x".repeat(100 * 1024));
-    let many = "needle\n".repeat(600);
-    std::fs::write(path.join("a.min.js"), long).unwrap();
-    std::fs::write(path.join("b.txt"), many).unwrap();
-    let mut client = host.client().await;
-    let repo = client.add(&path).await;
-    let params = RepoGrepParams {
-        query: "needle".to_owned(),
-        repo: Some(repo.id),
-        run_id: None,
-    };
-    let found = client.call::<RepoGrep>(params).await.unwrap();
-    assert!(found.truncated);
-    assert_eq!(found.matches.len(), 500);
-    assert!(found.matches.iter().all(|m| m.path == "b.txt"));
-    assert_eq!(found.matches[499].line, 500);
-}
-
-#[tokio::test]
-async fn repo_grep_finds_lines_in_a_threads_folder_ignoring_case_and_ignored_files() {
-    let (_host, mut client, repo, run_id, worktree) = worktree_thread().await;
-    std::fs::write(worktree.join("src/new.rs"), "// Written later\nfn h() {}\n").unwrap();
-
-    // The thread's own NOTES.md and an untracked file match; ignored debug.log never does.
-    let found = grep(&mut client, "WRITTEN", None, Some(run_id))
-        .await
-        .unwrap();
-    let lines: Vec<_> = found
-        .iter()
-        .map(|m| (m.path.as_str(), m.line, m.text.as_str()))
-        .collect();
-    assert_eq!(
-        lines,
-        [
-            ("NOTES.md", 1, "Written in a thread."),
-            ("src/new.rs", 1, "// Written later"),
-        ]
-    );
-    assert!(
-        grep(&mut client, "noise", None, Some(run_id))
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    // The query is plain text, not a pattern or an option.
-    assert!(
-        grep(&mut client, "-v", None, Some(run_id))
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        grep(&mut client, "fn f(", Some(repo), None).await.unwrap()[0].path,
-        "src/lib.rs"
-    );
-    let error = grep(&mut client, "  ", None, Some(run_id))
-        .await
-        .unwrap_err();
-    assert_eq!(error.code, INVALID_PARAMS);
 }

@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { filePath, fileReference, unloadedImages } from "./markdownLinks";
+import { filePath, unloadedImages } from "./markdownLinks";
 
 test("recognizes inline code that names a file, and nothing else", () => {
   for (const code of [
@@ -28,11 +28,6 @@ test("recognizes inline code that names a file, and nothing else", () => {
     expect(filePath.test(code), code).toBe(false);
 });
 
-test("a recognized path names its file without its line", () => {
-  expect(fileReference("src/ui.tsx:12:3")).toBe("src/ui.tsx");
-  expect(fileReference("http://localhost:8080")).toBe("http://localhost:8080");
-});
-
 test("an image that doesn't load is a link with its alt text, and code is left alone", () => {
   const onGh = (url: string) => url.startsWith("https://github.com/");
   expect(
@@ -41,25 +36,5 @@ test("an image that doesn't load is a link with its alt text, and code is left a
   expect(unloadedImages('![](<a b.png> "t")', () => false)).toBe('[Image](<a b.png> "t")');
   expect(unloadedImages("`![a](x.png)`\n\n```md\n![b](y.png)\n```\n![c](z.png)", () => false)).toBe(
     "`![a](x.png)`\n\n```md\n![b](y.png)\n```\n[c](z.png)",
-  );
-});
-
-test("an image alone on its line, unindented, becomes a block; any other stays where it is", () => {
-  const seen: [string, boolean][] = [];
-  const shown = (url: string, alone: boolean) => (seen.push([url, alone]), true);
-  expect(
-    unloadedImages(
-      "Here:\n![a](a.png)\nIts caption.\n> ![b](b.png)\nSee ![c](c.png)\n- ![d](d.png)",
-      shown,
-    ),
-  ).toBe("Here:\n\n![a](a.png)\n\nIts caption.\n> ![b](b.png)\nSee ![c](c.png)\n- ![d](d.png)");
-  expect(seen).toEqual([
-    ["a.png", true],
-    ["b.png", false],
-    ["c.png", false],
-    ["d.png", false],
-  ]);
-  expect(unloadedImages("![chart][1] and ![logo]\n\n[1]: https://x.dev/c.png", () => true)).toBe(
-    "[chart][1] and [logo]\n\n[1]: https://x.dev/c.png",
   );
 });

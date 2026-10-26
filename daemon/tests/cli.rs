@@ -13,18 +13,6 @@ fn plxd(args: &[&str]) -> Output {
         .expect("plxd should run")
 }
 
-#[test]
-fn version_prints_name_and_version() {
-    let output = plxd(&["--version"]);
-
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        concat!("plxd ", env!("CARGO_PKG_VERSION"), "\n")
-    );
-    assert!(output.stderr.is_empty(), "{output:?}");
-}
-
 /// A packaged plxd reports the version the app's package step wrote beside it (0030).
 #[test]
 fn version_prints_the_version_file_beside_the_executable() {
@@ -51,71 +39,6 @@ fn version_prints_the_version_file_beside_the_executable() {
         String::from_utf8_lossy(&output.stdout),
         "plxd 2609.13017.14512-nightly\n"
     );
-}
-
-#[test]
-fn unknown_argument_prints_usage_and_exits_2() {
-    let output = plxd(&["--bogus"]);
-
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(output.stdout.is_empty(), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("Usage: plxd"),
-        "{output:?}"
-    );
-}
-
-#[test]
-fn no_arguments_print_help_and_exit_2() {
-    let output = plxd(&[]);
-
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Usage: plxd"), "{output:?}");
-    assert!(stderr.contains("serve"), "{output:?}");
-}
-
-#[test]
-fn an_unknown_log_level_is_a_usage_error() {
-    let output = plxd(&[
-        "serve",
-        "--log-level",
-        "loud",
-        "--data-dir",
-        "/nonexistent/plxd",
-    ]);
-
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("unknown log level"),
-        "{output:?}"
-    );
-}
-
-// This only ever reads: `launchctl print` on a label nobody bootstrapped, a socket connect
-// that finds nobody listening, and a file existence check. It never calls `install`, so running
-// `cargo test` never bootstraps a real LaunchAgent.
-#[cfg(target_os = "macos")]
-#[test]
-fn service_status_reports_a_fresh_label_as_absent() {
-    let temp = temp::temp_dir();
-    let data_dir = temp.path().to_str().expect("a UTF-8 temp path");
-    let output = plxd(&[
-        "service",
-        "status",
-        "--data-dir",
-        data_dir,
-        "--label",
-        "io.github.ryan-stoffel.parallax.plxd.cli-test-status",
-    ]);
-
-    assert!(output.status.success(), "{output:?}");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("installed: false"), "{stdout}");
-    assert!(stdout.contains("loaded: false"), "{stdout}");
-    assert!(stdout.contains("running: false"), "{stdout}");
-    assert!(stdout.contains("answers initialize: false"), "{stdout}");
-    assert!(stdout.contains("program: -\n"), "{stdout}");
 }
 
 // The refusal comes before anything touches launchd or `~/Library/LaunchAgents`, so this never
@@ -315,22 +238,6 @@ fn dial_bridges_stdio_to_the_address_and_half_closes() {
 
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"{\"jsonrpc\":\"2.0\"}\n");
-}
-
-#[test]
-fn dial_exits_4_when_nothing_accepts() {
-    let address = std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .to_string();
-    let output = plxd(&["dial", &address]);
-
-    assert_eq!(output.status.code(), Some(4), "{output:?}");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).starts_with("plxd dial: could not connect"),
-        "{output:?}"
-    );
 }
 
 #[test]

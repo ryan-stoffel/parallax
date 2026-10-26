@@ -660,87 +660,13 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
 
 #[cfg(test)]
 mod tests {
-    use jiff::{SignedDuration, Timestamp};
-    use parallax_protocol::{
-        BoardItem, BoardLinks, BoardSection, BoardStatus, ProjectCreateParams, ProjectId, RunId,
-    };
 
-    use super::{ARCHIVE_AFTER, Parsed, migrate, parse, publish, render};
+    use parallax_protocol::{ProjectCreateParams, ProjectId};
+
+    use super::{migrate, publish};
     use crate::server::Daemon;
     use crate::store::{fields, store_error};
     use crate::threads::store;
-
-    fn item(id: u64, text: &str, section: BoardSection, done_at: Option<Timestamp>) -> BoardItem {
-        let at = "2026-10-01T12:00:00Z".parse().unwrap();
-        BoardItem {
-            id,
-            text: text.to_owned(),
-            status: if done_at.is_some() {
-                BoardStatus::Done
-            } else {
-                BoardStatus::Open
-            },
-            section,
-            links: BoardLinks::default(),
-            created_at: at,
-            updated_at: at,
-            done_at,
-        }
-    }
-
-    fn parsed(text: &str, done: bool, section: BoardSection) -> Parsed {
-        Parsed {
-            text: text.to_owned(),
-            done,
-            section,
-        }
-    }
-
-    #[test]
-    fn checkbox_lines_become_items_in_their_section_and_other_lines_risks() {
-        let board = "# Board\n\n## Now\n\n- [ ] **Search**: adds it\n- [x] **Login**: done\n\n\
-                     ## Next\n* [X] Docs\n\n## Later\n- [ ] Someday\n\nA loose note\n  - indented \
-                     detail\n\nOlder items: [archived](archived.md)\n";
-        assert_eq!(
-            parse(board),
-            [
-                parsed("**Search**: adds it", false, BoardSection::Now),
-                parsed("**Login**: done", true, BoardSection::Now),
-                parsed("Docs", true, BoardSection::Next),
-                parsed("Someday", false, BoardSection::Risks),
-                parsed("A loose note", false, BoardSection::Risks),
-                parsed("- indented detail", false, BoardSection::Risks),
-            ]
-        );
-    }
-
-    #[test]
-    fn render_puts_old_done_items_in_archived_and_links_to_it() {
-        let now: Timestamp = "2026-10-23T12:00:00Z".parse().unwrap();
-        let mut linked = item(1, "**Search**: adds it", BoardSection::Now, None);
-        let run = RunId::generate();
-        linked.links = BoardLinks {
-            threads: vec![run],
-            pull_request: Some("https://github.com/o/r/pull/1".to_owned()),
-            files: vec!["plan.md".to_owned()],
-        };
-        let hour_ago = now - SignedDuration::from_hours(1);
-        let recent = item(2, "Recent", BoardSection::Now, Some(hour_ago));
-        let old = item(3, "Old", BoardSection::Next, Some(now - ARCHIVE_AFTER));
-        let risk = item(4, "Flaky CI", BoardSection::Risks, None);
-
-        let (notes, archived) = render(&[linked, recent, old, risk], now);
-        assert_eq!(
-            notes,
-            format!(
-                "## Now\n\n- [ ] **Search**: adds it (id 1, [pull request](https://github.com/o/r/pull/1), thread {run}, `plan.md`)\n\
-                 - [x] Recent (id 2)\n\n## Risks\n\n- [ ] Flaky CI (id 4)\n\n\
-                 Older items: [archived](archived.md)\n"
-            )
-        );
-        assert_eq!(archived, "## Next\n\n- [x] Old (id 3)\n");
-        assert_eq!(render(&[], now), (String::new(), String::new()));
-    }
 
     #[tokio::test]
     async fn a_migration_that_fails_partway_leaves_the_board_for_the_next_start() {

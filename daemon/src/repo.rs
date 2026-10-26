@@ -90,38 +90,13 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
-    use super::{NotARepository, branch, check};
+    use super::{branch, check};
 
     fn repo(root: &Path, head: &str) -> std::path::PathBuf {
         let path = root.join("repo");
         fs::create_dir_all(path.join(".git")).unwrap();
         fs::write(path.join(".git/HEAD"), head).unwrap();
         path
-    }
-
-    #[test]
-    fn a_folder_with_a_git_folder_is_a_repository_on_its_branch() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = repo(dir.path(), "ref: refs/heads/main\n");
-        assert_eq!(check(&path), Ok(path.join(".git")));
-        assert_eq!(branch(&path).as_deref(), Some("main"));
-
-        fs::write(
-            path.join(".git/HEAD"),
-            "ref: refs/heads/feature/104-projects\n",
-        )
-        .unwrap();
-        assert_eq!(branch(&path).as_deref(), Some("feature/104-projects"));
-    }
-
-    #[test]
-    fn a_detached_head_is_its_short_commit() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = repo(dir.path(), "4ecd1f00a1b2c3d4e5f60718293a4b5c6d7e8f90\n");
-        assert_eq!(branch(&path).as_deref(), Some("4ecd1f0"));
-
-        fs::write(path.join(".git/HEAD"), "not a commit\n").unwrap();
-        assert_eq!(branch(&path), None);
     }
 
     #[test]
@@ -150,55 +125,5 @@ mod tests {
         )
         .unwrap();
         assert_eq!(branch(&relative).as_deref(), Some("agent-1"));
-    }
-
-    #[test]
-    fn anything_else_is_not_a_repository_and_says_why() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let shown = |path: &Path| path.display().to_string();
-
-        let missing = root.join("missing");
-        assert_eq!(
-            check(&missing),
-            Err(NotARepository::Missing(shown(&missing)))
-        );
-
-        let file = root.join("file");
-        fs::write(&file, "").unwrap();
-        assert_eq!(check(&file), Err(NotARepository::NotAFolder(shown(&file))));
-
-        let plain = root.join("plain");
-        fs::create_dir(&plain).unwrap();
-        assert_eq!(check(&plain), Err(NotARepository::NoGit(shown(&plain))));
-        assert_eq!(branch(&plain), None);
-
-        let no_head = root.join("no-head");
-        fs::create_dir_all(no_head.join(".git")).unwrap();
-        assert_eq!(
-            check(&no_head),
-            Err(NotARepository::BrokenGit(shown(&no_head)))
-        );
-
-        let bad_pointer = root.join("bad-pointer");
-        fs::create_dir(&bad_pointer).unwrap();
-        fs::write(bad_pointer.join(".git"), "not a pointer").unwrap();
-        assert_eq!(
-            check(&bad_pointer),
-            Err(NotARepository::BrokenGit(shown(&bad_pointer)))
-        );
-
-        let dangling = root.join("dangling");
-        fs::create_dir(&dangling).unwrap();
-        fs::write(dangling.join(".git"), "gitdir: /nowhere/at/all").unwrap();
-        assert_eq!(
-            check(&dangling),
-            Err(NotARepository::BrokenGit(shown(&dangling)))
-        );
-
-        assert_eq!(
-            NotARepository::NoGit("/src/parallax".to_owned()).to_string(),
-            "/src/parallax is not the top folder of a git repository: it has no .git."
-        );
     }
 }

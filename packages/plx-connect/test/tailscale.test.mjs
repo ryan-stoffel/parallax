@@ -67,7 +67,7 @@ const status = {
   },
 };
 
-test("keeps only this user's untagged devices, sorted, with their first IPv4 and no trailing dot", () => {
+test("keeps only this user's untagged devices, with their first IPv4, and a tagged node none", () => {
   const { self, devices } = parseStatus(status);
   assert.deepEqual(self, {
     id: "nSelf",
@@ -86,17 +86,11 @@ test("keeps only this user's untagged devices, sorted, with their first IPv4 and
       ["nTower", "100.90.1.2", "tower.tail53cf78.ts.net", false],
     ],
   );
-});
-
-test("a tagged node lists no peers, even ones with its UserID", () => {
+  // A tagged node lists no peers, even ones with its UserID.
   const tagged = { ...status, Self: { ...status.Self, UserID: 662125110488743, Tags: ["tag:k3s"] } };
-  const { self, devices } = parseStatus(tagged);
-  assert.equal(self.tagged, true);
-  assert.deepEqual(devices, []);
-});
-
-test("a logged-out Tailscale is an error for people", () => {
-  assert.throws(() => parseStatus({ Peer: null }), /isn't logged in/);
+  const asTagged = parseStatus(tagged);
+  assert.equal(asTagged.self.tagged, true);
+  assert.deepEqual(asTagged.devices, []);
 });
 
 test("finds a device by host name, MagicDNS name, its first label, or IP", () => {

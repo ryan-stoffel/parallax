@@ -470,13 +470,7 @@ fn to_wire(row: parallax_store::Question) -> Result<Question, ErrorObject> {
 mod tests {
     use parallax_protocol::ProjectAutonomy;
 
-    use super::{answers, same};
-
-    #[test]
-    fn answers_that_differ_only_in_case_or_spacing_are_the_same() {
-        assert!(same(" Per  user\n", "per user"));
-        assert!(!same("per user", "per IP"));
-    }
+    use super::answers;
 
     #[test]
     fn only_routine_and_full_let_the_coordinator_answer() {

@@ -15,8 +15,8 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::methods::{Initialize, NotificationMethod, RequestMethod};
 use parallax_protocol::{
-    Capabilities, ClientInfo, ErrorKind, ImageMediaType, InitializeParams, InitializeResult,
-    ProjectCreateParams, ProjectId, ProjectUpdateParams, PromptImage, ProtocolRange,
+    Capabilities, ClientInfo, ErrorKind, InitializeParams, InitializeResult, ProjectCreateParams,
+    ProjectId, ProjectUpdateParams, ProtocolRange,
 };
 use plxd::paths::DataDir;
 use plxd::server::{Config, Server, Shutdown};
@@ -33,17 +33,6 @@ pub use temp::temp_dir;
 
 /// How long a test waits for anything before it fails.
 pub const PATIENCE: Duration = Duration::from_secs(10);
-
-/// A 1x1 PNG in base64.
-pub const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-
-/// [`PNG`] as a prompt's or an icon's image.
-pub fn png() -> PromptImage {
-    PromptImage {
-        media_type: ImageMediaType::Png,
-        data: PNG.to_owned(),
-    }
-}
 
 /// Waits until `condition` holds, failing after [`PATIENCE`]: for what plxd does after it
 /// answers, such as an effect's cleanup (0059).
@@ -107,10 +96,6 @@ impl Plxd {
         }
     }
 
-    pub fn pid(&self) -> u32 {
-        self.child.id()
-    }
-
     pub fn signal(&self, signal: Signal) {
         let pid = Pid::from_raw(i32::try_from(self.child.id()).unwrap()).unwrap();
         kill_process(pid, signal).expect("signal plxd");
@@ -165,13 +150,6 @@ pub fn initialize_params(protocol: ProtocolRange) -> InitializeParams {
         },
         capabilities: Capabilities::default(),
     }
-}
-
-/// Runs `plxd serve` for `data_dir` to completion, for a start that is expected to fail.
-pub async fn run_to_exit(data_dir: &Path, args: &[&str]) -> (ExitStatus, String) {
-    let mut child = spawn(data_dir, args, &[]);
-    let status = wait(&mut child).await;
-    (status, stderr(&mut child))
 }
 
 fn spawn(data_dir: &Path, args: &[&str], env: &[(&str, &str)]) -> Child {

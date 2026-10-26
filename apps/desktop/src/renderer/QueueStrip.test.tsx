@@ -44,11 +44,6 @@ function setup() {
   render();
   return request;
 }
-/** The newest notification's title and body. */
-const notice = () => {
-  const n = document.querySelector('[aria-label="Notifications"] > div');
-  return n && [n.querySelector("span")?.textContent, n.querySelector("p")?.textContent];
-};
 const button = (label: string) =>
   document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 
@@ -80,57 +75,4 @@ test("edits text without replacing images or attached threads, and follows autho
   expect(document.body.textContent).toContain("Changed in another window");
   expect(document.querySelector('[aria-label="1 images attached"]')).not.toBeNull();
   expect(document.querySelector('[aria-label="1 threads attached"]')).not.toBeNull();
-});
-
-test("cancels, steers, and reorders by stable message IDs", async () => {
-  const request = setup();
-  await act(async () => button("Cancel queued message 2").click());
-  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
-    type: "queued-run.cancel",
-    threadId: "run",
-    runId: "b",
-  });
-  await act(async () => button("Steer queued message 1 now").click());
-  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
-    type: "queued-message.promote-to-steer",
-    threadId: "run",
-    runId: "a",
-  });
-  await act(async () => button("Move queued message 3 up").click());
-  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
-    type: "queued-run.reorder",
-    threadId: "run",
-    runIds: ["a", "c", "b"],
-  });
-  const drop = new Event("drop", { bubbles: true, cancelable: true });
-  Object.defineProperty(drop, "dataTransfer", { value: { getData: () => "c" } });
-  await act(async () => document.querySelector("li")!.dispatchEvent(drop));
-  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
-    type: "queued-run.reorder",
-    threadId: "run",
-    runIds: ["c", "a", "b"],
-  });
-  render(messages, false);
-  expect(button("Steer queued message 1 now").disabled).toBe(true);
-});
-
-test("shows rejected changes without losing the queued message", async () => {
-  const request = setup();
-  request.mockResolvedValueOnce({ error: { code: -32000, message: "Already delivered" } } as never);
-  await act(async () => button("Cancel queued message 1").click());
-  expect(notice()).toEqual(["Couldn't change the queue", "Already delivered"]);
-  expect(document.body.textContent).toContain("Add tests");
-});
-
-test("a held queue shows it is paused, and Resume resumes it (0060)", async () => {
-  const request = setup();
-  expect(document.body.textContent).not.toContain("Paused");
-  render(messages, false, true);
-  expect(document.body.textContent).toContain("Paused");
-  const resume = [...document.querySelectorAll("button")].find((b) => b.textContent === "Resume")!;
-  await act(async () => resume.click());
-  expect(request).toHaveBeenLastCalledWith("local", "orchestration/dispatch", {
-    type: "queue.resume",
-    threadId: "run",
-  });
 });

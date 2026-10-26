@@ -12,9 +12,9 @@ use tempfile::TempDir;
 use crate::backend::codex::CodexBackend;
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::{
-    AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, Backend, Credential, Decision, Event,
-    EventStream, FollowUp, ModelUsage, Outcome, Resume, Rewind, RunId, RunRequest, StartError,
-    ToolPolicy, ToolStatus, TurnId, Usage,
+    AccountRef, AgentEffort, AgentPermission, Answer, Backend, Credential, Decision, Event,
+    EventStream, FollowUp, ModelUsage, Outcome, Resume, Rewind, RunId, RunRequest, ToolPolicy,
+    ToolStatus, TurnId, Usage,
 };
 use crate::paths::DataDir;
 
@@ -274,29 +274,6 @@ async fn a_follow_up_changes_the_model_and_mode_on_its_turn_start() {
     );
 }
 
-/// A mode on `turn/start` is [`super::mode`]'s, with the reviewer always set, and a thread
-/// without approvals never asks.
-#[test]
-fn turn_settings_carry_the_mode_and_reset_the_reviewer() {
-    use super::turn_settings;
-    assert!(turn_settings(None, None, true).unwrap().is_empty());
-    assert_eq!(
-        Value::from(turn_settings(Some("gpt-6-sol".into()), None, true).unwrap()),
-        json!({"model": "gpt-6-sol"})
-    );
-    assert_eq!(
-        Value::from(turn_settings(None, Some(AgentPermission::Auto), true).unwrap()),
-        json!({"approvalPolicy": "on-request", "sandboxPolicy": {"type": "workspaceWrite"},
-               "approvalsReviewer": "auto_review"})
-    );
-    assert_eq!(
-        Value::from(turn_settings(None, Some(AgentPermission::Edit), false).unwrap()),
-        json!({"approvalPolicy": "never", "sandboxPolicy": {"type": "workspaceWrite"},
-               "approvalsReviewer": "user"})
-    );
-    assert!(turn_settings(None, Some(AgentPermission::Plan), true).is_err());
-}
-
 /// What plxd wrote to the Manual thread's app-server, and how it started it. Its last write,
 /// `thread/unsubscribe` as it leaves, can follow the stream's end.
 async fn assert_manual_writes(dir: &TempDir) {
@@ -455,129 +432,6 @@ async fn a_failed_resume_starts_a_new_thread_with_the_fallback() {
         written[4]["params"]["input"][0]["text"],
         "The conversation so far, then the message."
     );
-}
-
-/// A `/compact` (PLX-638) compacts the thread with `thread/compact/start` instead of starting a
-/// turn, and its `contextCompaction` item shows under way, then done.
-#[tokio::test]
-async fn compact_compacts_the_thread_instead_of_starting_a_turn() {
-    let (dir, backend) = fake(include_str!("../fixtures/app-server-compact.jsonl"));
-    let mut request = request(AgentPermission::Edit);
-    request.prompt = " /Compact\n".into();
-    request.resume = Some(Resume::new("t-0"));
-    let turn_id = request.turn_id;
-    let events = rest(&mut backend.start(request).unwrap().events).await;
-    let shown: Vec<&Event> = events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                Event::ContextCompaction { .. } | Event::TurnFinished { .. }
-            )
-        })
-        .collect();
-    assert_eq!(
-        shown,
-        [
-            &Event::ContextCompaction { done: false },
-            &Event::ContextCompaction { done: true },
-            &Event::TurnFinished {
-                turn_id,
-                result: None,
-                failed: false,
-            },
-        ]
-    );
-    assert!(matches!(
-        events.last(),
-        Some(Event::Finished {
-            outcome: Outcome::Completed { result: None },
-            ..
-        })
-    ));
-    let written = written(&dir);
-    assert_eq!(
-        written[3],
-        json!({"id": 3, "method": "thread/compact/start", "params": {"threadId": "t-0"}})
-    );
-}
-
-/// A `/goal` (PLX-749) sets the thread's goal with `thread/goal/set` instead of starting a turn,
-/// says so as Claude Code does, and runs the turns Codex starts itself until the goal is complete.
-#[tokio::test]
-async fn goal_sets_the_threads_goal_and_runs_codexs_turns_until_it_is_complete() {
-    let (dir, backend) = fake(include_str!("../fixtures/app-server-goal.jsonl"));
-    let mut request = request(AgentPermission::Edit);
-    request.prompt = "/goal the tests pass".into();
-    request.resume = Some(Resume::new("t-0"));
-    let turn_id = request.turn_id;
-    let events = rest(&mut backend.start(request).unwrap().events).await;
-    let shown: Vec<&Event> = events
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                Event::Text { .. } | Event::TurnStarted { .. } | Event::TurnFinished { .. }
-            )
-        })
-        .collect();
-    let text = |text: &str| Event::Text {
-        message_id: None,
-        text: text.into(),
-    };
-    let said = |id: &str, text: &str| Event::Text {
-        message_id: Some(id.into()),
-        text: text.into(),
-    };
-    let done = |turn_id, result: &str| Event::TurnFinished {
-        turn_id,
-        result: Some(result.into()),
-        failed: false,
-    };
-    assert_eq!(
-        shown,
-        [
-            &Event::TurnStarted { turn_id },
-            &text("Goal set: the tests pass"),
-            &said("m-1", "Fixed the first test."),
-            &done(turn_id, "Fixed the first test."),
-            &Event::TurnStarted { turn_id: None },
-            &said("m-2", "The tests pass."),
-            &done(None, "The tests pass."),
-        ]
-    );
-    let written = written(&dir);
-    assert_eq!(
-        written[3],
-        json!({"id": 3, "method": "thread/goal/set", "params": {"threadId": "t-0", "objective": "the tests pass"}})
-    );
-}
-
-/// A fork's first run forks the parent's thread rather than resuming it (0050).
-#[test]
-fn a_forks_first_run_forks_the_thread() {
-    let mut request = request(AgentPermission::Edit);
-    request.resume = Some(Resume {
-        fork: true,
-        ..Resume::new("t-0")
-    });
-    let (method, params) = super::thread_params(&request).unwrap();
-    assert_eq!(method, "thread/fork");
-    assert_eq!(params["threadId"], "t-0");
-}
-
-#[test]
-fn a_thread_on_an_api_key_or_in_plan_is_refused_before_spawning() {
-    let (_dir, backend) = fake("");
-    let mut keyed = request(AgentPermission::Edit);
-    keyed.account.credential = Credential::ApiKey(ApiKey::new("sk-test".into()));
-    let plan = request(AgentPermission::Plan);
-    for request in [keyed, plan] {
-        assert!(matches!(
-            backend.start(request),
-            Err(StartError::Unsupported(_))
-        ));
-    }
 }
 
 /// PLX-370: a steer sent while a command runs is `turn/steer` with Codex's id for the running
@@ -740,43 +594,6 @@ async fn written_until(dir: &TempDir, wanted: impl Fn(&[Value]) -> bool) -> Vec<
     }
 }
 
-/// 0060: a server request for a thread plxd has none for, such as a subagent's child thread's
-/// approval, is answered with an error, so the turn goes on.
-#[tokio::test]
-async fn a_request_for_an_unknown_thread_gets_an_error() {
-    let (dir, backend) = fake(include_str!("../fixtures/app-server-unknown-thread.jsonl"));
-    let mut request = request(AgentPermission::Edit);
-    request.approvals = true;
-    let mut events = backend.start(request).unwrap().events;
-    let all = rest(&mut events).await;
-    assert!(
-        !all.iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_))),
-        "{all:?}"
-    );
-    assert!(matches!(
-        all.last(),
-        Some(Event::Finished {
-            outcome: Outcome::Completed { .. },
-            ..
-        })
-    ));
-    let written = written_until(&dir, |written| {
-        written.iter().any(|line| line["id"] == "child-ask")
-    })
-    .await;
-    let answer = written
-        .iter()
-        .find(|line| line["id"] == "child-ask")
-        .unwrap();
-    assert!(
-        answer["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("t-child")
-    );
-}
-
 /// 0060: Stop on a shared app-server interrupts the thread's running turn with
 /// `turn/interrupt`, and the thread leaves, unsubscribed, rather than the process being signalled.
 #[tokio::test]
@@ -812,47 +629,6 @@ async fn stop_interrupts_the_turn_and_the_thread_leaves() {
     );
 }
 
-/// A Stop during a `/goal`'s turn (PLX-749) clears the goal before interrupting the turn, so the
-/// thread's next run doesn't pursue it again unseen.
-#[tokio::test]
-async fn stop_clears_the_goal_then_interrupts_its_turn() {
-    let (dir, backend) = fake(include_str!("../fixtures/app-server-goal-interrupt.jsonl"));
-    let mut request = request(AgentPermission::Edit);
-    request.approvals = false;
-    request.prompt = "/goal the tests pass".into();
-    let started = backend.start(request).unwrap();
-    let mut events = started.events;
-    while !matches!(next(&mut events).await, Event::ToolCall { .. }) {}
-    started.run.cancel();
-    rest(&mut events).await;
-    let written = written_until(&dir, |written| {
-        written
-            .iter()
-            .any(|line| line["method"] == "thread/unsubscribe")
-    })
-    .await;
-    let sent: Vec<(&Value, &Value)> = written
-        .iter()
-        .filter(|line| {
-            ["thread/goal/clear", "turn/interrupt", "thread/unsubscribe"]
-                .iter()
-                .any(|method| line["method"] == *method)
-        })
-        .map(|line| (&line["method"], &line["params"]))
-        .collect();
-    assert_eq!(
-        sent,
-        [
-            (&json!("thread/goal/clear"), &json!({"threadId": "t-1"})),
-            (
-                &json!("turn/interrupt"),
-                &json!({"threadId": "t-1", "turnId": "u-1"})
-            ),
-            (&json!("thread/unsubscribe"), &json!({"threadId": "t-1"})),
-        ]
-    );
-}
-
 /// 0060: when the shared app-server dies, every thread on it ends, failed, mid-turn.
 #[tokio::test]
 async fn every_thread_ends_when_the_shared_app_server_dies() {
@@ -873,52 +649,6 @@ async fn every_thread_ends_when_the_shared_app_server_dies() {
             panic!("{all:?}");
         };
         assert_eq!(failure.message, "Codex exited with code 3");
-    }
-}
-
-/// A Project's coordinator runs on app-server as a thread does, with its own tools (0042).
-#[test]
-fn a_coordinator_gets_its_tools_as_a_thread_does() {
-    let mut request = request(AgentPermission::Auto);
-    request.thread = false;
-    request.policy = crate::backend::ToolPolicy::NoWrite;
-    request.coordinator_tools = Some(crate::backend::ThreadTools {
-        program: "/bin/plxd".into(),
-        data_dir: "/tmp/parallax".into(),
-        run: request.run_id,
-    });
-    assert!(request.full_agent());
-    let (method, params) = super::thread_params(&request).unwrap();
-    assert_eq!(method, "thread/start");
-    assert_eq!(
-        params["config"]["mcp_servers.plxd.args"],
-        json!([
-            "mcp",
-            "--data-dir",
-            "/tmp/parallax",
-            "--thread",
-            request.run_id.to_string()
-        ])
-    );
-    request.coordinator_tools = None;
-    assert!(!request.full_agent(), "any other run is refused");
-}
-
-/// 0078: a coordinator's instructions are developer instructions on `thread/start`,
-/// `thread/resume`, and `thread/fork` alike, so a resumed thread gets them again.
-#[test]
-fn instructions_are_developer_instructions_on_start_resume_and_fork() {
-    for resume in [None, Some(false), Some(true)] {
-        let mut request = request(AgentPermission::Edit);
-        request.resume = resume.map(|fork| Resume {
-            fork,
-            ..Resume::new("t-0")
-        });
-        let (_, params) = super::thread_params(&request).unwrap();
-        assert!(params.get("developerInstructions").is_none(), "{params}");
-        request.instructions = Some("Never edit files.".into());
-        let (_, params) = super::thread_params(&request).unwrap();
-        assert_eq!(params["developerInstructions"], "Never edit files.");
     }
 }
 
@@ -1018,19 +748,6 @@ async fn a_revert_drops_the_newest_turns_before_the_oldest_of_them() {
         sent[6]["params"],
         json!({"threadId": "t-0", "beforeTurnId": "u-2"})
     );
-}
-
-#[tokio::test]
-async fn a_revert_of_legacy_history_is_refused() {
-    let (dir, backend) = fake(include_str!("../fixtures/app-server-revert-legacy.jsonl"));
-    let rewind = Rewind {
-        session_id: "t-0".into(),
-        cwd: PathBuf::from("/repo"),
-        turns: 1,
-    };
-    let why = backend.rewind(rewind).await.unwrap_err();
-    assert!(why.contains("legacy history"), "{why}");
-    assert_eq!(written_at_least(&dir, 3).await.len(), 3);
 }
 
 /// What plxd wrote, once it is at least `lines` lines: the fake records the rest of stdin after

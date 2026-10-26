@@ -663,13 +663,6 @@ impl ClaudeBackend {
         self
     }
 
-    /// Reads output with `limits` instead of the defaults.
-    #[must_use]
-    pub fn with_limits(mut self, limits: OutputLimits) -> Self {
-        self.limits = limits;
-        self
-    }
-
     /// Sets the variables `request`'s CLI gets beyond every run's: a worker's [`TEMP_ENV`], a plain
     /// no-write run's [`SCRUB_ENV`], a 200k context window's [`DISABLE_1M_ENV`], and a worker's
     /// [`ENV_FILE_ENV`], whose file it returns for the run to keep until it ends.

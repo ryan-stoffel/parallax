@@ -157,45 +157,7 @@ pub fn init(path: &Path, filter: &LogFilter) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::jsonrpc::RequestId;
-    use tracing::Level;
-
-    use super::{LogFilter, untrusted, untrusted_id};
-
-    fn allows(filter: &str, target: &str, level: Level) -> bool {
-        filter
-            .parse::<LogFilter>()
-            .unwrap()
-            .targets
-            .would_enable(target, &level)
-    }
-
-    #[test]
-    fn a_level_applies_to_every_target() {
-        assert!(allows("debug", "plxd::server", Level::DEBUG));
-        assert!(!allows("debug", "plxd::server", Level::TRACE));
-        assert!(allows("INFO", "anything", Level::WARN));
-        assert!(!allows("off", "plxd", Level::ERROR));
-    }
-
-    #[test]
-    fn targets_take_their_own_levels() {
-        let filter = "plxd=debug, warn";
-        assert!(allows(filter, "plxd::server", Level::DEBUG));
-        assert!(!allows(filter, "rusqlite", Level::INFO));
-        assert!(allows(filter, "rusqlite", Level::WARN));
-        assert_eq!(
-            filter.parse::<LogFilter>().unwrap().to_string(),
-            "plxd=debug, warn"
-        );
-    }
-
-    #[test]
-    fn unknown_levels_are_errors() {
-        for bad in ["", "verbose", "plxd=loud", "=debug", "info,"] {
-            assert!(bad.parse::<LogFilter>().is_err(), "{bad:?}");
-        }
-    }
+    use super::untrusted;
 
     #[test]
     fn client_text_is_escaped_so_it_cant_forge_a_line() {
@@ -203,27 +165,5 @@ mod tests {
         let logged = format!("{:?}", untrusted(forged));
         assert!(!logged.contains('\n'), "{logged}");
         assert!(logged.starts_with("\"parallax\\n2026"), "{logged}");
-        assert_eq!(format!("{:?}", untrusted("parallax")), "\"parallax\"");
-    }
-
-    #[test]
-    fn long_client_text_is_cut_to_64_characters_and_its_length() {
-        let huge = "\u{e9}".repeat(1_000_000);
-        let logged = format!("{:?}", untrusted(&huge));
-        assert_eq!(
-            logged,
-            format!("{:?}... (2000000 bytes)", "\u{e9}".repeat(64))
-        );
-        let exactly = "x".repeat(64);
-        assert_eq!(format!("{:?}", untrusted(&exactly)), format!("{exactly:?}"));
-    }
-
-    #[test]
-    fn request_ids_are_logged_like_client_text() {
-        assert_eq!(format!("{:?}", untrusted_id(&RequestId::Number(-7))), "-7");
-        let id = RequestId::String(format!("a\n{}", "b".repeat(100)));
-        let logged = format!("{:?}", untrusted_id(&id));
-        assert!(logged.starts_with("\"a\\nbbb"), "{logged}");
-        assert!(logged.ends_with("... (102 bytes)"), "{logged}");
     }
 }

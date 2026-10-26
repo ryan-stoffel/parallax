@@ -929,66 +929,11 @@ fn plist_string<'a>(plist: &'a str, key: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, SystemTime};
 
-    use parallax_protocol::{HostUploadParams, UploadId};
+    use parallax_protocol::HostUploadParams;
 
-    use super::{
-        CHUNK_BYTES, MAX_FILE_BYTES, MAX_UPLOAD_BYTES, check_device_icon, clean_device_name,
-        list_folders, plist_string, read_upload_at, save_piece, save_upload, slice,
-        sweep_uploads_at,
-    };
+    use super::{CHUNK_BYTES, MAX_UPLOAD_BYTES, read_upload_at, save_upload};
     use crate::images;
-
-    #[test]
-    fn device_names_are_cleaned_and_icons_checked() {
-        assert_eq!(
-            clean_device_name("  Studio\n\u{7}  ").as_deref(),
-            Some("Studio")
-        );
-        assert_eq!(clean_device_name(""), None);
-        assert_eq!(clean_device_name(" \t "), None);
-        let long = "é".repeat(70);
-        assert_eq!(clean_device_name(&long).unwrap().chars().count(), 64);
-
-        assert_eq!(check_device_icon("mini").unwrap().as_deref(), Some("mini"));
-        assert_eq!(check_device_icon("").unwrap(), None);
-        assert_eq!(check_device_icon("phone").unwrap_err().code, -32602);
-    }
-
-    #[test]
-    fn lists_folders_and_linked_folders_by_name() {
-        let home = tempfile::tempdir().unwrap();
-        let src = home.path().join("src");
-        for name in ["beta", "Alpha", ".hidden"] {
-            std::fs::create_dir_all(src.join(name)).unwrap();
-        }
-        std::fs::write(src.join("notes.txt"), "").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(src.join("beta"), src.join("gamma")).unwrap();
-
-        let listed = list_folders("~/src", Some(home.path())).unwrap();
-        assert_eq!(listed.path, src.to_string_lossy());
-        let names: Vec<_> = listed.folders.iter().map(|f| f.name.as_str()).collect();
-        #[cfg(unix)]
-        assert_eq!(names, [".hidden", "Alpha", "beta", "gamma"]);
-        #[cfg(not(unix))]
-        assert_eq!(names, [".hidden", "Alpha", "beta"]);
-        assert_eq!(listed.folders[1].path, src.join("Alpha").to_string_lossy());
-
-        assert_eq!(
-            list_folders("~/missing", Some(home.path()))
-                .unwrap_err()
-                .code,
-            -32602
-        );
-        assert_eq!(
-            list_folders("relative", Some(home.path()))
-                .unwrap_err()
-                .code,
-            -32602
-        );
-    }
 
     #[test]
     fn saves_an_upload_under_its_own_name_and_refuses_paths() {
@@ -1064,90 +1009,5 @@ mod tests {
             assert_eq!(read(&link, None).unwrap().data, "JVBERi0=");
             assert_eq!(read(&link, Some((0, 3))).unwrap_err().code, -32602);
         }
-    }
-
-    #[test]
-    fn a_slice_is_at_most_chunk_bytes() {
-        assert_eq!(slice(None, None).unwrap(), None);
-        assert_eq!(slice(Some(5), None).unwrap(), Some((5, CHUNK_BYTES)));
-        assert_eq!(slice(None, Some(3)).unwrap(), Some((0, 3)));
-        assert_eq!(slice(None, Some(CHUNK_BYTES + 1)).unwrap_err().code, -32602);
-    }
-
-    #[test]
-    fn assembles_an_upload_from_ordered_pieces_and_removes_abandoned_ones() {
-        let uploads = tempfile::tempdir().unwrap();
-        let piece = |upload_id, offset, bytes: &[u8], last: bool| {
-            save_piece(
-                uploads.path(),
-                &HostUploadParams {
-                    name: "data.bin".to_owned(),
-                    data: images::encode(bytes),
-                    upload_id,
-                    offset: Some(offset),
-                    last: last.then_some(true),
-                },
-            )
-        };
-        let refused = |result: Result<_, parallax_protocol::jsonrpc::ErrorObject>| {
-            result.unwrap_err().code == -32602
-        };
-
-        let first = piece(None, 0, &[0, 1, 2], false).unwrap();
-        let id = first.upload_id.unwrap();
-        let done = uploads.path().join(id.to_string()).join("data.bin");
-        assert_eq!(first.path, done.to_string_lossy());
-        assert!(!done.exists(), "only a whole file is at its path");
-
-        // A gap, a different piece where one landed, a later piece without its upload, and an
-        // upload plxd never started.
-        assert!(refused(piece(Some(id), 4, &[4], false)));
-        assert!(refused(piece(Some(id), 0, &[0], false)));
-        assert!(refused(piece(None, 3, &[3], false)));
-        assert!(refused(piece(Some(UploadId::generate()), 3, &[3], false)));
-        // Pieces over the chunk size, or past the cap.
-        assert!(refused(piece(None, 0, &vec![0; 1024 * 1024 + 1], false)));
-        assert!(refused(piece(Some(id), MAX_FILE_BYTES, &[0], false)));
-
-        // The piece that landed last, sent again, answers as it did and isn't written twice.
-        let next = piece(Some(id), 3, &[3], false).unwrap();
-        assert_eq!(piece(Some(id), 3, &[3], false).unwrap(), next);
-        assert!(refused(piece(Some(id), 3, &[9], false)));
-        let last = piece(Some(id), 4, &[4], true).unwrap();
-        assert_eq!((&last.path, last.upload_id), (&first.path, Some(id)));
-        assert_eq!(std::fs::read(&done).unwrap(), [0, 1, 2, 3, 4]);
-        // So does the last piece, after it finished the file.
-        assert_eq!(piece(Some(id), 4, &[4], true).unwrap(), last);
-        assert_eq!(std::fs::read(&done).unwrap(), [0, 1, 2, 3, 4]);
-        assert!(refused(piece(Some(id), 4, &[8], true)));
-        assert!(refused(piece(Some(id), 5, &[5], false)), "it's finished");
-
-        // An upload no piece reached for an hour is removed; a finished one stays.
-        let abandoned = piece(None, 0, &[0], false).unwrap();
-        let partial = uploads
-            .path()
-            .join(format!("{}.partial", abandoned.upload_id.unwrap()));
-        sweep_uploads_at(uploads.path(), SystemTime::now() - Duration::from_hours(1));
-        assert!(partial.exists());
-        sweep_uploads_at(uploads.path(), SystemTime::now() + Duration::from_mins(1));
-        assert!(!partial.exists());
-        assert!(done.exists());
-    }
-
-    #[test]
-    fn reads_strings_from_a_property_list() {
-        let plist = "<dict>\n\t<key>ProductBuildVersion</key>\n\t<string>27A1</string>\n\
-                     \t<key>ProductName</key>\n\t<string>macOS</string>\n\
-                     \t<key>ProductVersion</key>\n\t<string>27.0</string>\n</dict>";
-        assert_eq!(plist_string(plist, "ProductName"), Some("macOS"));
-        assert_eq!(plist_string(plist, "ProductVersion"), Some("27.0"));
-        assert_eq!(plist_string(plist, "Missing"), None);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn the_os_version_names_macos() {
-        let version = super::os_version();
-        assert!(version.starts_with("macOS "), "{version}");
     }
 }

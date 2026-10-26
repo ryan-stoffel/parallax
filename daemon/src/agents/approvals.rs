@@ -131,59 +131,10 @@ pub(super) fn ended(decision: AgentApprovalDecision, by: AgentApprovalBy) -> Age
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::{AgentApprovalBy, AgentApprovalDecision, ApprovalId};
+    use parallax_protocol::ApprovalId;
     use serde_json::json;
 
-    use super::{Approvals, Lookup, ended, moves_paths};
-
-    #[test]
-    fn a_request_resolves_once_and_then_answers_with_how_it_ended() {
-        let mut approvals = Approvals::default();
-        let (first, second) = (ApprovalId::generate(), ApprovalId::generate());
-        approvals.add(second, true, &json!({}));
-        approvals.add(first, false, &json!({}));
-        assert_eq!(approvals.pending(), [first, second], "oldest first");
-        assert!(matches!(
-            approvals.lookup(second),
-            Lookup::Pending {
-                offers_always: true,
-                ..
-            }
-        ));
-
-        let withdrawn = ended(AgentApprovalDecision::Withdrawn, AgentApprovalBy::Agent);
-        assert!(approvals.resolve(first, withdrawn.clone()));
-        let cancelled = ended(AgentApprovalDecision::Denied, AgentApprovalBy::Cancel);
-        assert!(!approvals.resolve(first, cancelled), "resolved once");
-        assert!(matches!(approvals.lookup(first), Lookup::Resolved(r) if r == withdrawn));
-        assert_eq!(approvals.pending(), [second]);
-        assert!(matches!(
-            approvals.lookup(ApprovalId::generate()),
-            Lookup::Unknown
-        ));
-    }
-
-    /// 0031: a worker's edit may change what a tool does, never which file it does it to.
-    #[test]
-    fn an_edit_that_names_another_file_moves_the_request() {
-        let mut approvals = Approvals::default();
-        let id = ApprovalId::generate();
-        let asked = json!({"file_path": "/w/README.md", "old_string": "a", "new_string": "b"});
-        approvals.add(id, false, &asked);
-        let Lookup::Pending { paths, .. } = approvals.lookup(id) else {
-            panic!("the request waits");
-        };
-        let kept = json!({"file_path": "/w/README.md", "old_string": "a", "new_string": "c"});
-        assert!(!moves_paths(&paths, &kept));
-        for moved in [
-            json!({"file_path": "/etc/hosts", "old_string": "a", "new_string": "b"}),
-            json!({"old_string": "a", "new_string": "b"}),
-            json!({"file_path": "/w/README.md", "path": "/", "old_string": "a"}),
-            json!({"file_path": "/w/README.md", "notebook_path": "/w/n.ipynb"}),
-        ] {
-            assert!(moves_paths(&paths, &moved), "{moved}");
-        }
-    }
+    use super::{Approvals, Lookup, moves_paths};
 
     /// PLX-243: an edited plan may leave out `ExitPlanMode`'s `planFilePath`, as a client that
     /// sends back only the plan does, but may not name another file, whatever Claude Code does

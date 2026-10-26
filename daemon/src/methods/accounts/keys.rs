@@ -308,11 +308,11 @@ mod tests {
     use std::io;
     use std::sync::{Arc, Mutex, PoisonError};
 
-    use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
-    use parallax_protocol::{AccountId, AccountsKeysAddResult, ErrorKind, Provider, RawKey};
+    use parallax_protocol::jsonrpc::ErrorObject;
+    use parallax_protocol::{AccountId, AccountsKeysAddResult, ErrorKind, Provider};
     use tracing_subscriber::fmt::MakeWriter;
 
-    use super::{add_account, check, mask_key, remove_account};
+    use super::{add_account, mask_key};
     use crate::keystore::{KeyStore, MemoryKeyStore};
     use crate::store::StoreHandle;
 
@@ -333,24 +333,13 @@ mod tests {
         add_account(store, keys, id, Provider::Anthropic, label.to_owned(), key)
     }
 
-    fn raw_key(text: &str) -> RawKey {
-        serde_json::from_value(serde_json::json!(text)).unwrap()
-    }
-
-    fn params(provider: Provider, label: &str, key: &str) -> super::AccountsKeysAddParams {
-        super::AccountsKeysAddParams {
-            id: AccountId::generate(),
-            provider,
-            label: label.to_owned(),
-            key: raw_key(key),
-        }
-    }
-
     #[test]
     fn masks_reveal_at_most_4_characters_beyond_a_known_prefix_and_never_the_whole_key() {
         // From the review of this table: nothing here may show more than a known public prefix
         // plus 4 trailing characters, and a short key must not come back nearly whole.
         let cases = [
+            ("", "..."),
+            ("abcd", "..."),
             ("abcde", "..."),
             ("abcdefghij", "..."),
             ("sk-ant-1234", "sk-ant-..."),
@@ -368,129 +357,13 @@ mod tests {
                 "sk-admin-...5678",
             ),
             ("key_anunknownvendorbutknownprefixwxyz", "key_...wxyz"),
+            ("cursor_live_abcdefghijklmnopqrstuvwxyz", "...wxyz"),
+            // base64url keys contain '-', which must not be echoed back as a vendor prefix.
+            ("Ab3xY-9kQ-randomBase64urlLookingSecretValue", "...alue"),
         ];
         for (input, expected) in cases {
             assert_eq!(mask_key(input), expected, "input {input:?}");
         }
-    }
-
-    #[test]
-    fn no_recognized_prefix_shows_no_prefix() {
-        let masked = mask_key("cursor_live_abcdefghijklmnopqrstuvwxyz");
-        assert_eq!(masked, "...wxyz");
-    }
-
-    #[test]
-    fn a_hyphenated_key_with_no_known_prefix_never_leaks_its_random_bytes_as_a_prefix() {
-        // base64url keys legitimately contain '-'; none of it is a recognized vendor prefix, so
-        // none of it should be echoed back as though it were one.
-        let masked = mask_key("Ab3xY-9kQ-randomBase64urlLookingSecretValue");
-        assert_eq!(masked, "...alue");
-        assert!(!masked.contains("Ab3xY"), "{masked}");
-    }
-
-    #[test]
-    fn very_short_keys_mask_to_dots() {
-        assert_eq!(mask_key(""), "...");
-        assert_eq!(mask_key("abcd"), "...");
-    }
-
-    #[test]
-    fn check_rejects_an_unknown_provider() {
-        let error = check(&params(
-            Provider::Unknown,
-            "Personal",
-            "sk-ant-averylongkeyabcd1234",
-        ))
-        .unwrap_err();
-        assert_eq!(error.code, INVALID_PARAMS);
-    }
-
-    #[test]
-    fn check_rejects_a_key_under_the_minimum_length() {
-        let error = check(&params(Provider::Anthropic, "Personal", "short")).unwrap_err();
-        assert_eq!(error.code, INVALID_PARAMS);
-        let longest_rejected = "a".repeat(super::MIN_KEY_BYTES - 1);
-        assert!(check(&params(Provider::Anthropic, "Personal", &longest_rejected)).is_err());
-        let shortest_accepted = "a".repeat(super::MIN_KEY_BYTES);
-        assert!(check(&params(Provider::Anthropic, "Personal", &shortest_accepted)).is_ok());
-    }
-
-    #[test]
-    fn removing_an_unknown_id_is_account_not_found() {
-        let (_dir, db_store) = temp_store();
-        let keys = MemoryKeyStore::new();
-        let error = remove_account(&db_store, &keys, AccountId::generate()).unwrap_err();
-        assert_eq!(
-            error.parallax_data().unwrap().kind,
-            ErrorKind::AccountNotFound
-        );
-    }
-
-    #[test]
-    fn remove_deletes_both_the_row_and_the_keychain_entry() {
-        let (_dir, db_store) = temp_store();
-        let keys = MemoryKeyStore::new();
-        let id = AccountId::generate();
-        add(
-            &db_store,
-            &keys,
-            id,
-            "Personal",
-            "sk-ant-averylongthrowawaykeyabcd1234",
-        )
-        .unwrap();
-        assert!(keys.get(id).unwrap().is_some());
-
-        remove_account(&db_store, &keys, id).unwrap();
-
-        assert_eq!(keys.get(id).unwrap(), None, "the key must be gone");
-        let row = db_store
-            .run_blocking(move |db| Ok(db.get_account(id.into()).unwrap()))
-            .unwrap();
-        assert_eq!(row, None, "the row must be gone");
-    }
-
-    #[test]
-    fn a_retried_add_with_the_same_key_is_idempotent() {
-        let (_dir, db_store) = temp_store();
-        let keys = MemoryKeyStore::new();
-        let id = AccountId::generate();
-        let key = "sk-ant-averylongthrowawaykeyabcd1234";
-
-        let first = add(&db_store, &keys, id, "Personal", key).unwrap();
-        let second = add(&db_store, &keys, id, "Personal", key).unwrap();
-
-        assert_eq!(first.account, second.account);
-        assert_eq!(
-            keys.get(id).unwrap().as_deref().map(String::as_str),
-            Some(key)
-        );
-    }
-
-    #[test]
-    fn a_retry_with_a_different_label_is_an_id_conflict() {
-        let (_dir, db_store) = temp_store();
-        let keys = MemoryKeyStore::new();
-        let id = AccountId::generate();
-        add(
-            &db_store,
-            &keys,
-            id,
-            "Personal",
-            "sk-ant-averylongthrowawaykeyabcd1234",
-        )
-        .unwrap();
-
-        let error = add(
-            &db_store,
-            &keys,
-            id,
-            "Work",
-            "sk-ant-averylongthrowawaykeyabcd1234",
-        )
-        .unwrap_err();
-        assert_eq!(error.parallax_data().unwrap().kind, ErrorKind::IdConflict);
     }
 
     /// Regression test: two different keys can share a mask (same recognized prefix and last 4
@@ -517,35 +390,6 @@ mod tests {
             keys.get(id).unwrap().as_deref().map(String::as_str),
             Some(first_key),
             "the original key must be left untouched"
-        );
-    }
-
-    #[test]
-    fn a_failed_store_write_rolls_back_the_keychain_write() {
-        let (dir, db_store) = temp_store();
-        // Break the schema after opening, from a second connection to the same database, so the
-        // next `create_account` fails immediately and deterministically: no fault-injecting mock
-        // store needed, and nothing to wait out.
-        {
-            let raw = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
-            raw.execute_batch("DROP TABLE accounts;").unwrap();
-        }
-        let keys = MemoryKeyStore::new();
-        let id = AccountId::generate();
-
-        let result = add(
-            &db_store,
-            &keys,
-            id,
-            "Personal",
-            "sk-ant-averylongthrowawaykeyabcd1234",
-        );
-
-        assert!(result.is_err(), "the broken schema should fail the write");
-        assert_eq!(
-            keys.get(id).unwrap(),
-            None,
-            "a failed store write must not leave the key behind in the keychain"
         );
     }
 

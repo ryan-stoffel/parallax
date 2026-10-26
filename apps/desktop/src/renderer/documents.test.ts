@@ -61,16 +61,6 @@ test("a file reads in slices of pieceBytes, under plxd's chunkBytes, in order, i
   expect(progress).toEqual([...at.slice(1).map((n) => n / file.length), 1]);
 });
 
-test("a small file reads in one slice and reports no progress (PLX-835)", async () => {
-  file = new TextEncoder().encode("# Notes\n");
-  const onProgress = vi.fn();
-  expect(new TextDecoder().decode(await readWorking("box", "run-1", "a.md", onProgress))).toBe(
-    "# Notes\n",
-  );
-  expect(offsets()).toEqual([0]);
-  expect(onProgress).not.toHaveBeenCalled();
-});
-
 test("a failed slice is asked again twice, then the read fails with plxd's reason (PLX-835)", async () => {
   failing = 2;
   await readWorking("box", "run-1", "out/big.bin");

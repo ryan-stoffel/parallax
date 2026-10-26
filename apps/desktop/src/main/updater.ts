@@ -27,7 +27,7 @@ const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"'
  * them from GitHub's releases feed as HTML. The "Full Changelog" line is left out: the update's
  * popover links the release instead.
  */
-export function notesText(notes: UpdateInfo["releaseNotes"]): string {
+function notesText(notes: UpdateInfo["releaseNotes"]): string {
   const html = typeof notes === "string" ? notes : (notes ?? []).map((n) => n.note).join("\n");
   return html
     .replace(/<li>/g, "• ")
@@ -51,7 +51,7 @@ const noUpdateFile = ["ERR_UPDATER_CHANNEL_FILE_NOT_FOUND", "ERR_UPDATER_ZIP_FIL
 const noRelease = ["ERR_UPDATER_NO_PUBLISHED_VERSIONS", "ERR_UPDATER_LATEST_VERSION_NOT_FOUND"];
 
 /** One short line for people about an error from electron-updater or Squirrel.Mac. */
-export function updateError(error: Error & { code?: string; statusCode?: number }): string {
+function updateError(error: Error & { code?: string; statusCode?: number }): string {
   // electron-updater wraps the request's error in its own, so the message is checked first.
   const { message, code = "", statusCode } = error;
   if (offline.test(message)) return "Can't reach GitHub to check for updates.";

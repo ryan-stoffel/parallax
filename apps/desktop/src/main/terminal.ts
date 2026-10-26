@@ -240,7 +240,7 @@ function overSsh(ssh: SshTarget, remote: string, options: string[]): Command {
  * starts the app. In the C locale, zsh counts each byte of a character like a prompt's
  * U+E0A0 as a column, so its line editor draws in the wrong place.
  */
-export function terminalEnv(env = process.env): NodeJS.ProcessEnv {
+function terminalEnv(env = process.env): NodeJS.ProcessEnv {
   return env["LC_ALL"] || env["LC_CTYPE"] || env["LANG"] ? env : { ...env, LANG: "en_US.UTF-8" };
 }
 

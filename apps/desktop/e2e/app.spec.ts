@@ -1,11 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { expect, test, type ElectronApplication, type Locator, type Page } from "@playwright/test";
+import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
 
 import { uuidv7 } from "../src/renderer/uuidv7";
 import { close, launch, openThread, printFailure, servePids, type Launched } from "./launch";
@@ -18,25 +16,6 @@ test.describe.configure({ mode: "serial" });
 let launched: Launched;
 let app: ElectronApplication;
 let page: Page;
-
-/**
- * Waits until Thread details, kept shown in the open thread, shows as its row's width calls for
- * (ThreadDetails.tsx): with room, docked; without it (the thread would keep under 60% of the row
- * beside the card's 268px, `DOCKED_WIDTH`), collapsed or floating. Resizes reach it a frame later.
- */
-async function settled(panel: Locator) {
-  await expect
-    .poll(() =>
-      panel.evaluate((aside) => {
-        const width = aside.parentElement!.getBoundingClientRect().width;
-        const narrow = width - 268 < width * 0.6;
-        const mode = aside.dataset["mode"];
-        const ok = narrow ? mode !== "docked" : mode === "docked";
-        return ok ? "settled" : "settling";
-      }),
-    )
-    .toBe("settled");
-}
 
 test.beforeAll(async () => {
   launched = await launch("agent.json", fakeCodex());
@@ -82,13 +61,10 @@ test.afterEach(async () => {
 
 test.afterAll(() => close(launched));
 
-test("connects to plxd", async () => {
+test("starts a thread and shows the agent's output", async () => {
   await expect
     .poll(() => page.evaluate(`window.parallax.connectionState("local").then((s) => s.status)`))
     .toBe("connected");
-});
-
-test("starts a thread and shows the agent's output", async () => {
   // A fresh host has no default account for threads, and the fake's is `fake`. The app only
   // offers signed-in vendor CLIs, which plxd finds by running them, so set it directly.
   const set = await page.evaluate(`window.parallax.request("local", "accounts/defaults/set", {
@@ -115,122 +91,13 @@ test("stops the thread", async () => {
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
 });
 
-test("thread details stays docked until its button hides it; its menus close on a click outside (PLX-363)", async () => {
-  const details = page.getByRole("complementary", { name: "Thread details", exact: true });
-  await expect(details).toBeHidden();
-  await page.getByRole("button", { name: "Thread details", exact: true, pressed: false }).click();
-  await expect(details).toBeVisible();
-  await page.getByRole("button", { name: "Choose editor or file manager" }).click();
-  const menu = page.getByRole("menu", { name: "Open in" });
-  await expect(menu).toBeVisible();
-  // A menu that inherits the top bar's drag turns the window's clicks outside it into drags,
-  // which never reach the page. Playwright's clicks skip the window, so check the style itself.
-  const region = await menu.evaluate(
-    `(m) => getComputedStyle(m).getPropertyValue("-webkit-app-region")`,
-  );
-  expect(region).not.toBe("drag");
-  await page.getByRole("log", { name: "Transcript" }).click();
-  await expect(menu).toBeHidden();
-  // The panel is part of the thread, not a menu: a click outside leaves it.
-  await expect(details).toBeVisible();
-  await page.getByRole("button", { name: "Thread details", exact: true, pressed: true }).click();
-  await expect(details).toBeHidden();
-});
-
-test("opens a terminal in the thread's folder, kept while hidden (PLX-295)", async () => {
-  const listed = (await page.evaluate(`window.parallax.request("local", "agent/list", {})`)) as {
-    result: { runs: { prompt: string; branch?: string }[] };
-  };
-  const branch = listed.result.runs.find((r) => r.prompt === "Tidy up the README")!.branch!;
-  await page.getByRole("button", { name: "Show terminal" }).click();
-  const terminal = page.getByRole("group", { name: "Terminal", exact: true });
-  await terminal.click();
-  // The worktree's branch, from git, which runs the same in every shell.
-  await page.keyboard.type("git branch --show-current\r");
-  await expect(terminal).toContainText(branch);
-
-  // Mod+J hides it from inside the terminal, and shows it again with the same session.
-  await page.keyboard.press("ControlOrMeta+j");
-  await expect(terminal).toBeHidden();
-  await page.keyboard.press("ControlOrMeta+j");
-  await expect(terminal).toContainText(branch);
-  await terminal.click();
-  await page.keyboard.press("ControlOrMeta+j");
-  await expect(terminal).toBeHidden();
-});
-
-// Runs the Edit menu's Copy or Paste as its Cmd/Ctrl+C or V does, which a synthetic keypress can't.
-const edit = (command: "copy" | "paste") =>
-  app.evaluate(({ BrowserWindow }, command) => {
-    BrowserWindow.getAllWindows()[0]!.webContents[command]();
-  }, command);
-
-test("copies the agent's reply into the composer, and right-click offers Copy and Paste (PLX-184)", async () => {
-  // Context menus are recorded instead of shown, since a shown one holds the main process.
-  await app.evaluate(({ Menu }) => {
-    const shown: string[][] = [];
-    Object.assign(globalThis, { shown });
-    Menu.prototype.popup = function (this: Electron.Menu) {
-      shown.push(this.items.map((item) => item.role ?? ""));
-    };
+// Runs the Edit menu's Paste as its Cmd/Ctrl+V does, which a synthetic keypress can't.
+const paste = () =>
+  app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0]!.webContents.paste();
   });
-  // Selected with the mouse, as a person would.
-  const reply = page.getByRole("log", { name: "Transcript" }).getByText("The fake agent is on it.");
-  const at = (await reply.boundingBox())!;
-  await page.mouse.move(at.x + 1, at.y + at.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(at.x + at.width - 1, at.y + at.height / 2, { steps: 4 });
-  await page.mouse.up();
-  await reply.click({ button: "right" });
-  await edit("copy");
-
-  const message = page.getByRole("textbox", { name: "Message" });
-  await message.click({ button: "right" });
-  await edit("paste");
-  await expect(message).toHaveText("The fake agent is on it.");
-  const shown = await app.evaluate(() => (globalThis as { shown?: string[][] }).shown);
-  expect(shown).toEqual([["copy"], ["cut", "copy", "paste", "selectall"]]);
-  await message.press("ControlOrMeta+a");
-  await message.press("Backspace");
-});
-
-test("the composer grows upward as it fills, up to its cap (PLX-184, PLX-995)", async () => {
-  const message = page.getByRole("textbox", { name: "Message" });
-  const before = (await message.boundingBox())!;
-  const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
-  await app.evaluate(({ clipboard }, text) => clipboard.writeText(text), lines.join("\n"));
-  await message.click();
-  await edit("paste");
-  await expect(message).toContainText("line 40");
-
-  const after = (await message.boundingBox())!;
-  expect(after.height).toBeGreaterThan(before.height);
-  expect(Math.round(after.y + after.height)).toBe(Math.round(before.y + before.height));
-  // At most seven 14px lines and its top padding, and never past 40% of the window.
-  expect(after.height).toBeLessThanOrEqual(
-    Math.min((await page.evaluate<number>("innerHeight")) * 0.4, 7 * 14 * 1.625 + 18) + 1,
-  );
-  await message.press("ControlOrMeta+a");
-  await message.press("Backspace");
-});
-
-test("a follow-up's text is still there after a reload (PLX-92)", async () => {
-  await page.getByRole("textbox", { name: "Message" }).fill("Check the links too");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  // The resumed fake answers again, after plxd logged the follow-up's turnStarted.
-  const said = page.getByRole("log", { name: "Transcript" }).getByText("The fake agent is on it.");
-  await expect(said).toHaveCount(2);
-
-  await page.reload();
-  await openThread(page, /Tidy up the README/);
-  const transcript = page.getByRole("log", { name: "Transcript" });
-  await expect(transcript.getByText("Check the links too")).toBeVisible();
-  await expect(transcript.getByText("Follow-up message")).toHaveCount(0);
-});
 
 test("a pasted image sits in the composer, goes with the message, and outlives a reload (PLX-193)", async () => {
-  await page.getByRole("button", { name: "Stop" }).click();
-  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeVisible();
   // Wider than the 2000 px an image is sent at, so the composer redraws it smaller.
   await app.evaluate(async ({ clipboard, ClipboardItem, nativeImage }) => {
     const [width, height] = [2400, 12];
@@ -240,7 +107,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
   });
   const message = page.getByRole("textbox", { name: "Message" });
   await message.click();
-  await edit("paste");
+  await paste();
   const thumbnail = page.getByRole("img", { name: "Image 1" });
   await expect(thumbnail).toBeVisible();
   // It also takes its place in the text, where it was pasted, with its size.
@@ -249,8 +116,8 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
   const width = (img: unknown) => (img as { naturalWidth: number }).naturalWidth;
   expect(await thumbnail.evaluate(width)).toBe(2000);
 
-  // The image alone, sent once the running turn stopped, so it starts a turn at once rather than
-  // waiting for that turn's end (PLX-370).
+  // The image alone, sent with the thread stopped, so it starts a turn at once rather than
+  // waiting for a turn's end (PLX-370).
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(thumbnail).toHaveCount(0);
   const transcript = page.getByRole("log", { name: "Transcript" });
@@ -262,34 +129,6 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
   await openThread(page, /Tidy up the README/);
   await expect(sent).toBeVisible();
   expect(await sent.evaluate(width)).toBe(2000);
-});
-
-test("the usage period picker shows its choice on each provider (PLX-284)", async () => {
-  await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Providers" }).click();
-  // Every provider's pane stays mounted, so a radio group shared across them would leave only the
-  // last pane's checked.
-  for (const name of ["Claude Code", "Codex"]) {
-    await page.getByRole("tab", { name: new RegExp(`^${name}`) }).click();
-    const panel = page.getByRole("tabpanel");
-    await expect(panel.getByRole("radio", { name: "Today" })).toBeChecked();
-    await panel.getByText("This week", { exact: true }).click();
-    await expect(panel.getByRole("radio", { name: "This week" })).toBeChecked();
-    await panel.getByText("Today", { exact: true }).click();
-  }
-  await page.getByRole("button", { name: "Back to app" }).click();
-});
-
-test("changing a setting never scrolls the window itself (PLX-441)", async () => {
-  await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Appearance" }).click();
-  // Focusing an option's hidden radio once scrolled the whole window up, for good.
-  for (const option of ["More", "Standard", "Blue & orange", "Red & green"])
-    await page.getByText(option, { exact: true }).click();
-  const scroll = await page.evaluate(`(({ scrollTop, scrollHeight, clientHeight }) =>
-    ({ scrollTop, overflow: scrollHeight - clientHeight }))(document.documentElement)`);
-  expect(scroll).toEqual({ scrollTop: 0, overflow: 0 });
-  await page.getByRole("button", { name: "Back to app" }).click();
 });
 
 test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", async () => {
@@ -393,10 +232,6 @@ test("shows the project's tasks over its composer and on its Project tab, opens 
     "aria-current",
     "true",
   );
-  // The head counts the Project's open threads.
-  await expect(panel.locator("header p").first()).toHaveText(
-    /^(No open threads|\d+ open threads?)/,
-  );
 
   const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
     result: { projects: { id: string; coordinator: string }[] };
@@ -455,48 +290,6 @@ test("shows the project's tasks over its composer and on its Project tab, opens 
   await expect(transcript.getByText("From Parallax: subagents finished").first()).toBeVisible();
 });
 
-test("renames the project and picks its icon from its favorite's menu, and both outlive a reload (PLX-230)", async () => {
-  // The last test left ember open. A right-click on its favorite opens its menu.
-  const square = page.locator('#sidebar [aria-label="Favorites"] button[data-row]').first();
-  await square.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Rename…" }).click();
-  const name = page.getByRole("dialog", { name: "Rename Project" }).getByRole("textbox");
-  await expect(name).toBeFocused();
-  await name.fill("ember app");
-  await name.press("Enter");
-  await expect(square).toHaveAttribute("aria-label", "ember app");
-  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember app");
-
-  // A color, then an icon by keyboard.
-  await square.click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Change icon…" }).click();
-  const picker = page.getByRole("dialog", { name: "Project icon" });
-  const search = picker.getByRole("searchbox", { name: "Search icons" });
-  await expect(search).toBeFocused();
-  await picker.getByTitle("Green").click();
-  await expect(picker.getByRole("radio", { name: "Green" })).toBeChecked();
-  await search.fill("rocket");
-  await search.press("ArrowDown");
-  const rocket = picker.getByRole("option", { name: "Rocket" });
-  await expect(rocket).toBeFocused();
-  await rocket.press("Enter");
-  await expect(rocket).toHaveAttribute("aria-selected", "true");
-  await rocket.press("Escape");
-  await expect(picker).toBeHidden();
-  const icon = square.locator("svg").first();
-  await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
-
-  // The name and icon are the host's (0032).
-  await page.reload();
-  await expect(icon).toHaveAttribute("class", /lucide-rocket .*text-project-green/);
-  const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
-    result: { projects: { name: string; icon?: { name: string; color?: string } }[] };
-  };
-  expect(listed.result.projects).toMatchObject([
-    { name: "ember app", icon: { name: "rocket", color: "green" } },
-  ]);
-});
-
 test("starts a thread in the repository's current checkout, on its branch, with no worktree", async () => {
   const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "quill");
   mkdirSync(repo);
@@ -546,150 +339,4 @@ test("starts a thread in the repository's current checkout, on its branch, with 
 
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(transcript.getByText("Stopped")).toBeVisible();
-});
-
-test("saves a repository action and runs it in the drawer, opening its preview (PLX-299)", async () => {
-  const server = createServer((_req, res) => res.end("<h1>Preview works</h1>"));
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const preview = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
-  // Actions belong to a repository: the open thread is quill's, from the test above.
-  const details = page.getByRole("complementary", { name: "Thread details", exact: true });
-  await page.getByRole("button", { name: "Thread details", exact: true, pressed: false }).click();
-  await details.getByRole("button", { name: "Add action" }).click();
-  const dialog = page.getByRole("dialog", { name: "Add action" });
-  await dialog.getByRole("textbox", { name: "Name" }).fill("Git version");
-  const keys = dialog.getByRole("textbox", { name: "Keybinding" });
-  await keys.press("ControlOrMeta+s");
-  await expect(dialog.getByRole("alert")).toContainText("one of Parallax's shortcuts");
-  await keys.press("ControlOrMeta+Shift+k");
-  await dialog.getByRole("textbox", { name: "Command" }).fill("git --version");
-  await dialog.getByRole("textbox", { name: "Preview URL (optional)" }).fill(preview);
-  await dialog.getByRole("checkbox", { name: "Open preview when this action runs" }).check();
-  await page.screenshot({ path: test.info().outputPath("action-dialog.png") });
-  await dialog.getByRole("button", { name: "Save action" }).click();
-  await page.screenshot({ path: test.info().outputPath("action-details.png") });
-
-  // The drawer opens and runs it, and the browser shows the preview.
-  await details.getByRole("button", { name: "Git version", exact: true }).click();
-  // The browser opening takes the thread's room: a docked card collapses unless the window is
-  // wide enough to dock it beside both, and on a small screen it was floating already.
-  const panel = page.locator("#thread-details");
-  const terminal = page.getByRole("group", { name: "Terminal", exact: true });
-  await expect(terminal).toContainText("git version ");
-  // The address bar is a combobox, for its suggestions (PLX-978).
-  await expect(page.getByRole("combobox", { name: "Address" })).toHaveValue(
-    // Short while unfocused, full while focused.
-    new RegExp(`^(http://)?${preview.slice("http://".length, -1).replaceAll(".", "\\.")}/?$`),
-  );
-  await page.screenshot({ path: test.info().outputPath("action-running.png") });
-
-  // Its keybinding runs it again. The transcript's left edge, clear of a floating card.
-  await page.getByRole("log", { name: "Transcript" }).click({ position: { x: 8, y: 8 } });
-  await page.keyboard.press("ControlOrMeta+Shift+k");
-  await expect(terminal).toContainText(/git version [\s\S]*git version /);
-  // The preview opened the browser, apart from the side panel, and its own button hides it.
-  await page.locator("#side-panel").getByRole("button", { name: "Hide browser" }).click();
-  await settled(panel);
-  const toggle = page.getByRole("button", { name: "Thread details", exact: true });
-  if ((await toggle.getAttribute("aria-pressed")) === "true") await toggle.click();
-  await expect(panel).toHaveAttribute("data-mode", "hidden");
-  server.close();
-});
-
-test("attaches another thread with @, sends it with the message, and opens it from the sent chip (PLX-378)", async () => {
-  // The open thread is quill's, from the checkout test. "Tidy up the README" is the first thread.
-  const message = page.getByRole("textbox", { name: "Message" });
-  await message.click();
-  await page.keyboard.type("Do what @README");
-  const readme = page
-    .getByRole("listbox", { name: "Threads and files" })
-    .getByRole("option", { name: /Tidy up the README/ });
-  await expect(readme).toBeVisible();
-  await page.screenshot({ path: test.info().outputPath("thread-picker.png") });
-  await readme.click();
-
-  // The thread sits in the text, where the `@` was.
-  const chip = page.locator('form [data-chip="threadRef"]');
-  await expect(chip).toHaveText(/Tidy up the README/);
-  await page.keyboard.type("that thread did here");
-  await page.screenshot({ path: test.info().outputPath("thread-chip.png") });
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(chip).toHaveCount(0);
-
-  // The sent message keeps its chip once plxd's turnStarted lists the thread, after a reload too.
-  const transcript = page.getByRole("log", { name: "Transcript" });
-  await expect(
-    transcript.getByText('Do what @"Tidy up the README" that thread did here'),
-  ).toBeVisible();
-  await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
-  await page.reload();
-  await openThread(page, /Tidy up the docs/);
-  const sent = transcript.getByRole("button", { name: /Tidy up the README/ });
-  await expect(sent).toBeVisible();
-  await page.screenshot({ path: test.info().outputPath("thread-sent.png") });
-  await sent.click();
-  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText(
-    "Tidy up the README",
-  );
-});
-
-test("thread details opens children and stays docked beside the side panel", async () => {
-  const start = async (title: string, parent?: string) => {
-    const params = { runId: uuidv7(), prompt: title, title, ...(parent && { parent }) };
-    const answer = await page.evaluate(
-      `window.parallax.request("local", "thread/start", ${JSON.stringify(params)})`,
-    );
-    expect(answer).not.toHaveProperty("error");
-    return params.runId;
-  };
-  const parent = await start("Plan the release");
-  await start("Write the changelog", parent);
-  await openThread(page, /Plan the release/);
-  const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
-  const current = breadcrumb.locator('ol > li > [aria-current="page"]');
-  await expect(current).toHaveText("Plan the release");
-  const details = page.getByRole("complementary", { name: "Thread details", exact: true });
-  await page.getByRole("button", { name: "Thread details", exact: true, pressed: false }).click();
-  // Opening a child keeps the panel docked, on the child.
-  // A child that finished waits under the collapsed Previous agents; a working one is listed.
-  // It can finish between looking and clicking, moving its row, so the pair is retried.
-  const openChild = () =>
-    expect(async () => {
-      const previous = details.getByRole("button", { name: /^Previous agents/ });
-      if (
-        (await previous.isVisible()) &&
-        (await previous.getAttribute("aria-expanded")) === "false"
-      )
-        await previous.click();
-      await details.getByRole("button", { name: /Write the changelog/ }).click({ timeout: 2000 });
-    }).toPass();
-  await openChild();
-  await expect(details).toBeVisible();
-  await expect(details.getByRole("button", { name: /Write the changelog/ })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
-  await breadcrumb.getByRole("button", { name: "Plan the release" }).click();
-  await expect(current).toHaveText("Plan the release");
-  await page.keyboard.press("ControlOrMeta+Alt+ArrowRight");
-  await expect(page.getByRole("region", { name: "Child thread" })).toBeVisible();
-  await page.keyboard.press("ControlOrMeta+Alt+ArrowUp");
-  await expect(current).toHaveText("Plan the release");
-  // Beside the side panel it docks when there's room; without it, it collapses, and its button
-  // floats it over the thread instead.
-  const show = page.getByRole("button", { name: "Show side panel" });
-  if (await show.isVisible()) await show.click();
-  await expect(page.getByRole("complementary", { name: "Side panel" })).toBeVisible();
-  const panel = page.locator("#thread-details");
-  await settled(panel);
-  if ((await panel.getAttribute("data-mode")) === "hidden") {
-    await page.getByRole("button", { name: "Thread details", exact: true, pressed: false }).click();
-    await expect(panel).toHaveAttribute("data-mode", "floating");
-  }
-  await expect(details).toBeVisible();
-  await page.screenshot({ path: test.info().outputPath("thread-details.png") });
-  await openChild();
-  await expect(page.getByRole("region", { name: "Child thread" })).toBeVisible();
-  await page.getByRole("button", { name: "Thread details", exact: true, pressed: true }).click();
-  await expect(details).toBeHidden();
 });

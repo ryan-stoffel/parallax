@@ -77,7 +77,7 @@ type Pending = {
 };
 
 /** What to tell a user whose plxd can't update itself, on a host the app can't reach by ssh. */
-export function unsupportedMessage(plxd: string, os: string | undefined, channel: string): string {
+function unsupportedMessage(plxd: string, os: string | undefined, channel: string): string {
   const old = `plxd ${plxd} there is too old to update itself.`;
   if (/^(macos|windows)/i.test(os ?? "")) return `${old} Update Parallax on that computer.`;
   return `${old} On that computer, run: npx plx-connect setup --channel ${channel}`;

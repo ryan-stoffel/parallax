@@ -8,7 +8,7 @@ import path from "node:path";
 const uncommented = (line: string) => line.replace(/\s#.*$/, "");
 
 /** The `Host` names in one ssh config file's text, without wildcard or negated patterns. */
-export function configHosts(text: string): string[] {
+function configHosts(text: string): string[] {
   const hosts: string[] = [];
   for (const raw of text.split(/\r?\n/)) {
     const line = uncommented(raw);
@@ -38,7 +38,7 @@ function configIncludes(text: string): string[] {
  * `[host]:port` unwrapped. Hashed lines (`|1|…`), markers (`@cert-authority`), and comments are
  * skipped, since they name no host anyone can read.
  */
-export function knownHosts(text: string): string[] {
+function knownHosts(text: string): string[] {
   const hosts: string[] = [];
   for (const line of text.split(/\r?\n/)) {
     const first = line.trim().split(/\s+/)[0];

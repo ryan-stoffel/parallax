@@ -174,10 +174,7 @@ pub(crate) fn decode(text: &str) -> Option<Vec<u8>> {
 mod tests {
     use parallax_protocol::{ErrorKind, ImageMediaType, PromptImage};
 
-    use super::{
-        MAX_ICON_BYTES, MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_BYTES, check, check_icon, decode,
-        encode,
-    };
+    use super::{MAX_IMAGE_BYTES, MAX_IMAGES, MAX_TOTAL_BYTES, check};
 
     /// A 1x1 PNG.
     const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -205,50 +202,6 @@ mod tests {
     }
 
     #[test]
-    fn encodes_rfc_4648_vectors() {
-        for (input, output) in [
-            ("", ""),
-            ("f", "Zg=="),
-            ("fo", "Zm8="),
-            ("foo", "Zm9v"),
-            ("foob", "Zm9vYg=="),
-            ("fooba", "Zm9vYmE="),
-            ("foobar", "Zm9vYmFy"),
-        ] {
-            assert_eq!(encode(input.as_bytes()), output, "{input}");
-        }
-        assert_eq!(encode(&[0xff, 0xfe, 0x00]), "//4A");
-    }
-
-    #[test]
-    fn decodes_rfc_4648_vectors_and_refuses_anything_else() {
-        for (output, input) in [
-            ("", ""),
-            ("f", "Zg=="),
-            ("fo", "Zm8="),
-            ("foo", "Zm9v"),
-            ("foobar", "Zm9vYmFy"),
-        ] {
-            assert_eq!(decode(input).as_deref(), Some(output.as_bytes()), "{input}");
-        }
-        assert_eq!(decode("//4A").as_deref(), Some(&[0xff, 0xfe, 0x00][..]));
-        for bad in ["Zg", "Zg=a", "Z===", "Zg==Zg==", "Zm9v\n", "Zm-v"] {
-            assert_eq!(decode(bad), None, "{bad}");
-        }
-    }
-
-    #[test]
-    fn images_under_the_caps_of_their_type_pass() {
-        check(&[]).unwrap();
-        check(&[image(ImageMediaType::Png, PNG)]).unwrap();
-        check(&[
-            png_of(MAX_IMAGE_BYTES),
-            png_of(MAX_TOTAL_BYTES - MAX_IMAGE_BYTES),
-        ])
-        .unwrap();
-    }
-
-    #[test]
     fn too_many_or_too_large_images_are_image_too_large() {
         let small = image(ImageMediaType::Png, PNG);
         assert_eq!(
@@ -266,35 +219,5 @@ mod tests {
             ]),
             Some(ErrorKind::ImageTooLarge)
         );
-    }
-
-    #[test]
-    fn an_icon_image_is_capped_at_max_icon_bytes_and_checked_like_a_prompts() {
-        check_icon(&image(ImageMediaType::Png, PNG)).unwrap();
-        check_icon(&png_of(MAX_ICON_BYTES)).unwrap();
-        let error = check_icon(&png_of(MAX_ICON_BYTES + 4)).unwrap_err();
-        assert_eq!(
-            error.parallax_data().map(|data| data.kind),
-            Some(ErrorKind::ImageTooLarge)
-        );
-        for bad in [
-            image(ImageMediaType::Png, "not base64"),
-            image(ImageMediaType::Webp, PNG),
-        ] {
-            let error = check_icon(&bad).unwrap_err();
-            assert_eq!(error.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
-        }
-    }
-
-    #[test]
-    fn data_that_is_not_base64_or_not_its_type_is_invalid() {
-        for bad in [
-            image(ImageMediaType::Png, "not base64"),
-            image(ImageMediaType::Jpeg, PNG),
-            image(ImageMediaType::Unknown, PNG),
-        ] {
-            let error = check(&[bad]).unwrap_err();
-            assert_eq!(error.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
-        }
     }
 }

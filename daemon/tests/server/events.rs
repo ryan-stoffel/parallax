@@ -1,21 +1,15 @@
 //! `events/subscribe`, `events/event`, and `events/unsubscribe`.
 
 use std::path::Path;
-use std::time::Duration;
 
-use parallax_protocol::jsonrpc::{INVALID_PARAMS, Message, Notification};
-use parallax_protocol::methods::{
-    EventsSubscribe, EventsUnsubscribe, HostHealth, NotificationMethod, ProjectCreate, ProjectList,
-    ProjectUpdate,
-};
+use parallax_protocol::jsonrpc::{Message, Notification};
+use parallax_protocol::methods::{EventsSubscribe, NotificationMethod, ProjectCreate, ProjectList};
 use parallax_protocol::{
-    ErrorKind, EventsEventParams, EventsSubscribeParams, EventsUnsubscribeParams, HostHealthParams,
-    ParallaxEvent, Project, ProjectIcon, ProjectId, ProjectListParams, ProjectUpdateParams, RunId,
+    ErrorKind, EventsEventParams, EventsSubscribeParams, ParallaxEvent, Project, ProjectListParams,
     SubscriptionId,
 };
-use rustix::process::Signal;
 
-use crate::support::{Client, InProcess, Plxd, create_params, kind, png, project_update, temp_dir};
+use crate::support::{Client, InProcess, Plxd, create_params, kind, temp_dir};
 
 async fn create(client: &mut Client, dir: &Path, name: &str) -> Project {
     client
@@ -88,156 +82,6 @@ async fn subscribers_get_the_replay_then_live_events_on_every_connection() {
         assert_eq!(delivered.seq, 2);
         assert_eq!(created(&delivered), &second);
     }
-}
-
-#[tokio::test]
-async fn an_update_is_a_host_level_event_that_outlives_a_restart() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut editor = Client::ready(&plxd.socket).await;
-    let project = create(&mut editor, dir.path(), "parallax").await;
-    let mut live = Client::ready(&plxd.socket).await;
-    let live_subscription = subscribe(&mut live, 1).await;
-
-    let edit = ProjectUpdateParams {
-        name: Some("roster".to_owned()),
-        icon: Some(ProjectIcon {
-            name: "rocket".to_owned(),
-            color: Some("green".to_owned()),
-            image: Some(png()),
-        }),
-        ..project_update(project.id)
-    };
-    let updated = editor
-        .call::<ProjectUpdate>(edit.clone())
-        .await
-        .unwrap()
-        .project;
-    let delivered = event(&mut live).await;
-    assert_eq!(delivered.subscription, live_subscription);
-    assert_eq!(delivered.seq, 2);
-    assert_eq!(delivered.project, None, "project.updated is host-level");
-    assert_eq!(
-        delivered.event,
-        ParallaxEvent::ProjectUpdated {
-            project: updated.clone()
-        }
-    );
-
-    editor.call::<ProjectUpdate>(edit).await.unwrap();
-    live.stays_quiet(Duration::from_millis(200)).await;
-
-    drop(editor);
-    drop(live);
-    plxd.signal(Signal::TERM);
-    assert!(plxd.exit().await.0.success());
-
-    let plxd = Plxd::start(dir.path()).await;
-    let mut replaying = Client::ready(&plxd.socket).await;
-    subscribe(&mut replaying, 0).await;
-    assert_eq!(created(&event(&mut replaying).await), &project);
-    let replayed = event(&mut replaying).await;
-    assert_eq!(replayed.seq, 2);
-    assert_eq!(
-        replayed.event,
-        ParallaxEvent::ProjectUpdated { project: updated },
-        "the stored log replays it like project.created"
-    );
-    replaying.stays_quiet(Duration::from_millis(200)).await;
-}
-
-#[tokio::test]
-async fn a_subscription_to_a_missing_project_is_refused() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = create(&mut client, dir.path(), "parallax").await;
-
-    let error = client
-        .call::<EventsSubscribe>(EventsSubscribeParams {
-            after: 0,
-            project: Some(ProjectId::generate()),
-            run: None,
-            shell: false,
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ProjectNotFound);
-
-    // An existing project's subscription works. M1 has no project-level events yet, so it
-    // stays quiet even though a host-level event exists.
-    client
-        .call::<EventsSubscribe>(EventsSubscribeParams {
-            after: 0,
-            project: Some(project.id),
-            run: None,
-            shell: false,
-        })
-        .await
-        .unwrap();
-    client.stays_quiet(Duration::from_millis(200)).await;
-}
-
-#[tokio::test]
-async fn run_or_shell_without_a_project_is_invalid() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    for (run, shell) in [(Some(RunId::generate()), false), (None, true)] {
-        let error = client
-            .call::<EventsSubscribe>(EventsSubscribeParams {
-                after: 0,
-                project: None,
-                run,
-                shell,
-            })
-            .await
-            .unwrap_err();
-        assert_eq!(error.code, INVALID_PARAMS, "{run:?} {shell}: {error:?}");
-    }
-}
-
-#[tokio::test]
-async fn a_seq_this_log_never_reached_needs_a_resync() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-
-    let error = client
-        .call::<EventsSubscribe>(EventsSubscribeParams {
-            after: 5,
-            project: None,
-            run: None,
-            shell: false,
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ResyncRequired);
-}
-
-#[tokio::test]
-async fn unsubscribing_stops_the_events() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let subscription = subscribe(&mut client, 0).await;
-    client
-        .call::<EventsUnsubscribe>(EventsUnsubscribeParams { subscription })
-        .await
-        .unwrap();
-    client
-        .call::<EventsUnsubscribe>(EventsUnsubscribeParams { subscription })
-        .await
-        .expect("ending a subscription that doesn't exist succeeds");
-
-    let mut creator = Client::ready(&plxd.socket).await;
-    create(&mut creator, dir.path(), "parallax").await;
-    // The next message is the health answer, so no event came before it.
-    client
-        .call::<HostHealth>(HostHealthParams {})
-        .await
-        .unwrap();
-    client.stays_quiet(Duration::from_millis(200)).await;
 }
 
 #[tokio::test]

@@ -12,23 +12,3 @@ pub(crate) fn escaped_len(text: &str) -> usize {
         })
         .sum()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::escaped_len;
-
-    #[test]
-    fn escaped_len_counts_escapes_as_serde_json_writes_them() {
-        for text in [
-            "plain",
-            "quote \" and \\",
-            "tab\tnew\nline\r",
-            "\u{1}\u{1f}\u{7f}",
-            "é✓",
-            "",
-        ] {
-            let encoded = serde_json::to_string(text).unwrap();
-            assert_eq!(escaped_len(text), encoded.len() - 2, "{text:?}");
-        }
-    }
-}

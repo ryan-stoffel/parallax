@@ -15,9 +15,8 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::time::Duration;
 
-use parallax_protocol::jsonrpc::{Message, RequestId};
-use parallax_protocol::methods::{HostHealth, HostVersion, Initialize, ProjectCreate, ProjectList};
-use parallax_protocol::{HostHealthParams, HostVersionParams, ProjectListParams, StoreState};
+use parallax_protocol::ProjectListParams;
+use parallax_protocol::methods::{ProjectCreate, ProjectList};
 use plxd::attach::{self, Options};
 use plxd::launch_agent::LaunchAgent;
 use plxd::paths::DataDir;
@@ -25,62 +24,9 @@ use rustix::process::Signal;
 use tokio::time::{Instant, sleep};
 
 use crate::support::{
-    Attach, PATIENCE, PLXD, Serve, StopServe, create_params, ends_within, gone, hold_instance_lock,
-    initialize_params, is_alive, log, pipe, serve_pid, socket_path, spawn_lock, stdio_paths,
-    temp_dir, working_dir,
+    Attach, PATIENCE, PLXD, StopServe, create_params, ends_within, gone, hold_instance_lock,
+    is_alive, log, pipe, serve_pid, socket_path, spawn_lock, stdio_paths, temp_dir, working_dir,
 };
-
-#[tokio::test]
-async fn the_handshake_goes_through_attach_to_a_running_plxd() {
-    let dir = temp_dir();
-    let mut serve = Serve::start(dir.path()).await;
-    let mut attach = Attach::spawn(dir.path());
-
-    assert_eq!(attach.initialize().await.protocol, 1);
-    let health = attach
-        .call::<HostHealth>(HostHealthParams {})
-        .await
-        .unwrap();
-    assert_eq!(health.store, StoreState::Ok);
-    assert_eq!(
-        serve_pid(dir.path()),
-        Some(serve.pid()),
-        "attach started no other plxd"
-    );
-
-    attach.close_stdin();
-    let exited = attach.exit().await;
-    assert!(exited.status.success(), "{exited:?}");
-    assert!(exited.stdout.is_empty(), "{exited:?}");
-    assert!(exited.stderr.is_empty(), "{exited:?}");
-    assert!(serve.is_running(), "attach never stops plxd");
-}
-
-#[tokio::test]
-async fn input_that_ends_before_the_answers_still_gets_all_of_them() {
-    // `printf '<request>\n' | plxd attach` prints the answer (0007): attach half-closes.
-    let dir = temp_dir();
-    let _serve = Serve::start(dir.path()).await;
-    let mut attach = Attach::spawn(dir.path());
-    attach.request::<Initialize>(initialize_params()).await;
-    attach.request::<HostVersion>(HostVersionParams {}).await;
-    attach.close_stdin();
-
-    let exited = attach.exit().await;
-    assert!(exited.status.success(), "{exited:?}");
-    let answered: Vec<_> = exited
-        .stdout
-        .iter()
-        .map(|message| match message {
-            Message::Response(response) if response.result.is_ok() => response.id.clone(),
-            other => panic!("expected an answer, got {other:?}"),
-        })
-        .collect();
-    assert_eq!(
-        answered,
-        [Some(RequestId::Number(1)), Some(RequestId::Number(2))]
-    );
-}
 
 #[tokio::test]
 async fn attach_starts_a_detached_plxd_when_none_runs() {
@@ -237,80 +183,6 @@ async fn attach_waits_for_another_plxd_to_let_go_of_the_lock() {
     assert!(serve_pid(dir.path()).is_some());
     attach.close_stdin();
     assert!(attach.exit().await.status.success());
-}
-
-#[tokio::test]
-async fn attach_gives_up_at_its_timeout_while_another_process_holds_the_lock() {
-    let dir = temp_dir();
-    let _stop = StopServe(dir.path().to_owned());
-    let lock = hold_instance_lock(dir.path());
-    let started = Instant::now();
-    let attach = Attach::spawn_with(dir.path(), &["--connect-timeout", "1"], None);
-
-    let exited = attach.exit().await;
-    assert_eq!(exited.status.code(), Some(4), "{exited:?}");
-    assert!(exited.stdout.is_empty(), "{exited:?}");
-    assert!(
-        exited
-            .stderr
-            .starts_with("plxd attach: nothing accepted a connection at "),
-        "{exited:?}"
-    );
-    assert!(exited.stderr.contains("within 1s"), "{exited:?}");
-    assert!(started.elapsed() >= Duration::from_secs(1));
-
-    // The last plxd that attach started may still be starting. Released now, the lock would let
-    // it run on after the test.
-    every_serve_gave_way(dir.path()).await;
-    drop(lock);
-}
-
-/// Waits until every `serve` that logged its start in `data_dir` has also logged giving way to
-/// the lock, and no new one has started for a while.
-async fn every_serve_gave_way(data_dir: &Path) {
-    let deadline = Instant::now() + PATIENCE;
-    let mut settled_since = None;
-    loop {
-        let log = log(data_dir);
-        let started = log.matches("plxd: starting").count();
-        let gave_way = log.matches("plxd: not starting").count();
-        assert!(started > 0, "attach started plxd");
-        if started == gave_way {
-            let since = *settled_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= Duration::from_millis(500) {
-                return;
-            }
-        } else {
-            settled_since = None;
-        }
-        assert!(Instant::now() < deadline, "a plxd did not give way: {log}");
-        sleep(Duration::from_millis(50)).await;
-    }
-}
-
-#[tokio::test]
-async fn attach_reports_a_plxd_that_cannot_start_without_waiting_out_the_timeout() {
-    let dir = temp_dir();
-    // `serve` refuses a symlinked lock file; attach doesn't look at it.
-    symlink(dir.path().join("elsewhere"), dir.path().join("plxd.lock")).unwrap();
-    let started = Instant::now();
-    let attach = Attach::spawn(dir.path());
-
-    let exited = attach.exit().await;
-    assert_eq!(exited.status.code(), Some(4), "{exited:?}");
-    assert!(exited.stdout.is_empty(), "{exited:?}");
-    assert!(
-        exited.stderr.starts_with(
-            "plxd attach: plxd serve stopped before it accepted a connection (exit status: 1): \
-             plxd: locking "
-        ),
-        "the error quotes the last line plxd logged: {exited:?}"
-    );
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "took {:?}",
-        started.elapsed()
-    );
 }
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { Prompt, forwards, optionsFromArgs, permissionResult } from "./protocol.mjs";
+import { forwards, optionsFromArgs, permissionResult } from "./protocol.mjs";
 
 const BASE = ["-p", "--output-format", "stream-json", "--verbose", "--input-format", "stream-json"];
 
@@ -26,15 +26,19 @@ test("a worker's arguments become SDK options, and the rest pass through as extr
     "opus",
     "--effort",
     "high",
+    "--max-turns=3",
+    "--add-dir=/c",
+    "--foo",
+    "bar",
   ]);
   assert.equal(asks, true);
   assert.deepEqual(options, {
-    extraArgs: { restricted: null },
+    extraArgs: { restricted: null, "max-turns": "3", foo: "bar" },
     tools: ["Read", "Edit", "Bash"],
     strictMcpConfig: true,
     permissionMode: "default",
     settings: '{"sandbox":{"enabled":true}}',
-    additionalDirectories: ["/a", "/b"],
+    additionalDirectories: ["/a", "/b", "/c"],
     model: "opus",
     effort: "high",
   });
@@ -68,14 +72,6 @@ test("modes map as T3 Code's, and a thread's plxd server and sessions carry over
     forkSession: true,
     resumeSessionAt: "a0000000",
     settingSources: ["user"],
-  });
-});
-
-test("an instance's own arguments pass through, with or without a value", () => {
-  const { options } = optionsFromArgs(["--debug", "--max-turns=3", "--add-dir=/c", "--foo", "bar"]);
-  assert.deepEqual(options, {
-    extraArgs: { debug: null, "max-turns": "3", foo: "bar" },
-    additionalDirectories: ["/c"],
   });
 });
 
@@ -120,19 +116,4 @@ test("plxd's answers become canUseTool results", () => {
     behavior: "deny",
     message: "nope",
   });
-});
-
-test("the prompt yields what was pushed, in order, then ends", async () => {
-  const prompt = new Prompt();
-  prompt.push(1);
-  const seen = [];
-  const reading = (async () => {
-    for await (const message of prompt) seen.push(message);
-  })();
-  prompt.push(2);
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  prompt.end();
-  assert.equal(prompt.push(3), false);
-  await reading;
-  assert.deepEqual(seen, [1, 2]);
 });

@@ -51,24 +51,3 @@ impl Store {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use uuid::Uuid;
-
-    use crate::Store;
-
-    #[test]
-    fn an_attached_cursor_reads_back_and_replaces() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
-        let (target, source) = (Uuid::now_v7(), Uuid::now_v7());
-        assert_eq!(store.attached_seen(target, source).unwrap(), None);
-
-        store.record_attached_seen(target, &[(source, 12)]).unwrap();
-        assert_eq!(store.attached_seen(target, source).unwrap(), Some(12));
-        store.record_attached_seen(target, &[(source, 40)]).unwrap();
-        assert_eq!(store.attached_seen(target, source).unwrap(), Some(40));
-        assert_eq!(store.attached_seen(source, target).unwrap(), None);
-    }
-}

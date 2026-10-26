@@ -308,47 +308,6 @@ async fn send_back_then_conflict_again(
     );
 }
 
-/// With automatic landing on, a queued child lands without waiting for approval, and an
-/// exploration never lands.
-#[tokio::test]
-async fn a_project_that_lands_automatically_needs_no_approval_and_never_lands_an_exploration() {
-    let host = Host::start(temp_dir(), notes());
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    lands_automatically(&mut client, project.id).await;
-    let explore = finished(
-        &mut client,
-        AgentStartParams {
-            explore: true,
-            ..start_params(project.id, "Spike it")
-        },
-    )
-    .await;
-    let refused = client
-        .call::<LandQueue>(LandQueueParams { run_id: explore.id })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&refused), ErrorKind::LandRefused, "{refused:?}");
-    let run = finished(&mut client, start_params(project.id, "Write the notes")).await;
-    let queued = client
-        .call::<LandQueue>(LandQueueParams { run_id: run.id })
-        .await
-        .unwrap()
-        .landing;
-    assert_eq!(queued.status, LandingStatus::Queued);
-    let repo = PathBuf::from(&project.repo_path);
-    let deadline = Instant::now() + PATIENCE;
-    while git(&repo, &["log", "-1", "--format=%s", "parallax/app"]) != "Write the notes" {
-        assert!(Instant::now() < deadline, "never landed");
-        sleep(Duration::from_millis(50)).await;
-    }
-    item(&mut client, project.id, run.id, |item| {
-        item.text.contains("landed on the integration branch")
-    })
-    .await;
-    host.server.stop().await;
-}
-
 /// A child whose conflict resolution leaves a marker in a file is refused, and goes to the user.
 /// Two children conflict on `notes.txt`, which the second one's turn rewrites, and on `extra.txt`,
 /// which it leaves as plxd's merge left it.

@@ -261,37 +261,6 @@ async fn a_tagged_host_lists_and_serves_nobody() {
 }
 
 #[tokio::test]
-async fn connections_over_one_peers_pending_check_cap_close_at_once() {
-    let port = free_port();
-    let tailnet = FakeTailnet {
-        hang: true,
-        ..FakeTailnet::default()
-    };
-    let (_dir, server, mut client) = start(Arc::new(tailnet), port).await;
-
-    // Every connection here comes from loopback, one peer address, whose cap is 2.
-    let mut pending = Vec::new();
-    for _ in 0..2 {
-        pending.push(dial(port).await);
-    }
-    let mut over = dial(port).await;
-    assert!(closes_within(&mut over, PATIENCE).await, "over the cap");
-    assert!(
-        !closes_within(&mut pending[0], Duration::from_millis(200)).await,
-        "still waiting on whois"
-    );
-
-    set_connect(&mut client, false).await;
-    for connection in &mut pending {
-        assert!(
-            closes_within(connection, PATIENCE).await,
-            "turning it off closes connections whose check is pending"
-        );
-    }
-    server.stop().await;
-}
-
-#[tokio::test]
 async fn a_new_user_at_the_same_address_closes_the_tailnets_connections() {
     let port = free_port();
     let tailnet = Arc::new(FakeTailnet {

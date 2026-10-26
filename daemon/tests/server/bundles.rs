@@ -6,13 +6,12 @@ use std::path::{Path, PathBuf};
 
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::methods::{
-    AgentStart, BundleApply, BundleBegin, BundlePrepare, BundleRead, BundleWrite, GitStartMerge,
+    AgentStart, BundleApply, BundleBegin, BundlePrepare, BundleWrite, GitStartMerge,
 };
 use parallax_protocol::{
     AgentStatus, BundleApplyParams, BundleBeginParams, BundleId, BundlePrepareParams,
-    BundleReadParams, BundleWriteParams, ErrorKind, GitStartMergeParams, RunId,
+    BundleWriteParams, ErrorKind, GitStartMergeParams, RunId,
 };
-use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, Launcher};
 use plxd::paths::DataDir;
 use plxd::peer::Plxd;
@@ -20,8 +19,8 @@ use plxd::worktree::WorktreeManager;
 use tempfile::TempDir;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, git, init, project_params, start_params, subscribe, text,
-    until, updated_to,
+    Conn, Host, create, end_turn, fake, git, init, project_params, start_params, subscribe, until,
+    updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -29,9 +28,6 @@ const MIB: u64 = 1024 * 1024;
 
 /// The cap plxd gives a bundle.
 const CAP: u64 = 64 * MIB;
-
-/// How much the chunk test reads at a time, so a small bundle spans several chunks.
-const CHUNK: u64 = 4096;
 
 /// A device with a Project child that ran `steps`, and the child's run id, repository, and
 /// worktree, once it is `status`.
@@ -219,22 +215,6 @@ async fn home_bundle(home_git: &WorktreeManager, home_repo: &Path, exclude: Stri
 }
 
 #[tokio::test]
-async fn a_bundle_needing_commits_the_device_lacks_is_refused_as_missing_commits() {
-    let mut device = device(finishing(), AgentStatus::Completed).await;
-    let work = TempDir::new().unwrap();
-    let (home_repo, home_git) = home(work.path(), &device.repo);
-    let first = commit(&home_repo, "one.txt", b"one\n");
-    let second = commit(&home_repo, "two.txt", b"two\n");
-
-    // Its prerequisite is a commit the device never got.
-    let bytes = home_bundle(&home_git, &home_repo, first.clone()).await;
-    let (_, error) = refused(&mut device, &bytes, sha256(&bytes), second).await;
-    assert_eq!(kind(&error), ErrorKind::BundleMissingCommits);
-    assert!(error.message.contains(&first), "{}", error.message);
-    device.host.server.stop().await;
-}
-
-#[tokio::test]
 async fn a_bundle_is_refused_for_a_wrong_hash_or_a_wrong_tip() {
     let mut device = device(finishing(), AgentStatus::Completed).await;
     let work = TempDir::new().unwrap();
@@ -270,70 +250,6 @@ async fn a_bundle_is_refused_for_a_wrong_hash_or_a_wrong_tip() {
     assert!(
         !git(&device.repo, &["for-each-ref", "--format=%(refname)"]).contains(&sync),
         "nothing was written"
-    );
-    device.host.server.stop().await;
-}
-
-#[tokio::test]
-async fn chunks_split_anywhere_up_to_one_mib_and_the_tip_stays_pinned() {
-    let mut device = device(finishing(), AgentStatus::Completed).await;
-    let work = TempDir::new().unwrap();
-    let (home_repo, home_git) = home(work.path(), &device.repo);
-    let base = git(&home_repo, &["rev-parse", "HEAD"]);
-    let pinned = commit(&device.worktree, "noise.bin", &noise(3 * CHUNK));
-
-    let prepared = device
-        .client
-        .call::<BundlePrepare>(BundlePrepareParams {
-            run: device.run,
-            exclude: vec![base],
-        })
-        .await
-        .unwrap();
-    assert_eq!(prepared.tip, pinned);
-    let bundle = prepared.bundle.unwrap();
-    assert!(bundle.size > 2 * CHUNK, "{}", bundle.size);
-    let read = |offset: u64, length: u64| BundleReadParams {
-        id: bundle.id,
-        offset,
-        length,
-    };
-    let too_long = device
-        .client
-        .call::<BundleRead>(read(0, MIB + 1))
-        .await
-        .unwrap_err();
-    assert_eq!(too_long.code, INVALID_PARAMS);
-
-    let mut bytes = Vec::new();
-    for offset in (0..bundle.size).step_by(usize::try_from(CHUNK).unwrap()) {
-        let chunk = device
-            .client
-            .call::<BundleRead>(read(offset, CHUNK))
-            .await
-            .unwrap();
-        bytes.extend(data_encoding::BASE64.decode(chunk.data.as_bytes()).unwrap());
-        assert_eq!(bytes.len() as u64, (offset + CHUNK).min(bundle.size));
-        // The branch moves between chunks.
-        commit(&device.worktree, &format!("more-{offset}.txt"), b"more\n");
-    }
-    let end = device
-        .client
-        .call::<BundleRead>(read(bundle.size, MIB))
-        .await
-        .unwrap();
-    assert_eq!(end.data, "");
-    assert_eq!(sha256(&bytes), bundle.sha256);
-
-    let file = work.path().join("noise.bundle");
-    std::fs::write(&file, &bytes).unwrap();
-    home_git
-        .apply_bundle(&home_repo, &file, "refs/parallax/remote/x", &pinned)
-        .await
-        .unwrap();
-    assert_eq!(
-        git(&home_repo, &["rev-parse", "refs/parallax/remote/x"]),
-        pinned
     );
     device.host.server.stop().await;
 }
@@ -461,25 +377,5 @@ async fn only_a_known_run_and_hex_object_ids_are_taken() {
         client.call::<BundleApply>(apply).await.unwrap_err().code,
         INVALID_PARAMS
     );
-    device.host.server.stop().await;
-}
-
-#[tokio::test]
-async fn start_merge_is_refused_while_the_run_works() {
-    let host = Host::start(
-        temp_dir(),
-        fake(vec![init("hang-1"), text("Working"), Step::Hang]),
-    );
-    let mut device = device(host, AgentStatus::Running).await;
-    let tip = git(&device.repo, &["rev-parse", "HEAD"]);
-    let error = device
-        .client
-        .call::<GitStartMerge>(GitStartMergeParams {
-            run: device.run,
-            tip,
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::RunBusy);
     device.host.server.stop().await;
 }

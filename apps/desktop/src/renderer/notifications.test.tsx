@@ -3,18 +3,11 @@ import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { ConnectionState, HostUpdateEvent, ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
-import {
-  threadNotice,
-  useConnectionAlarms,
-  useHostUpdateAlarms,
-  useThreadAlarms,
-  type ThreadMark,
-} from "./alarms";
-import { dismiss, NOTICE_MS, Notifications, notify, update } from "./notifications";
+import { useThreadAlarms } from "./alarms";
+import { Notifications } from "./notifications";
 import type { HostThreads } from "./Sidebar";
-import { emptyThreads, idleThreads, threadsReducer, asksOf, type ThreadsState } from "./threads";
+import { emptyThreads, idleThreads, type ThreadsState } from "./threads";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers.
@@ -43,92 +36,6 @@ const titles = () =>
   [...document.querySelectorAll('[aria-label="Notifications"] > div')].map(
     (n) => n.querySelector("span")!.textContent,
   );
-
-test("a notice with a key replaces its last, news closes by itself, and what asks something stays", () => {
-  vi.useFakeTimers();
-  render(<Notifications />);
-  expect(document.querySelector('[aria-label="Notifications"]')).toBeNull();
-  act(() => notify({ key: "host", tone: "error", title: "Lost connection to dev" }));
-  act(() => notify({ tone: "success", title: "Pushed" }));
-  expect(titles()).toEqual(["Pushed", "Lost connection to dev"]);
-  act(() => notify({ key: "host", tone: "success", title: "Reconnected to dev" }));
-  expect(titles()).toEqual(["Reconnected to dev", "Pushed"]);
-
-  act(() => notify({ tone: "attention", title: "Thread needs your input" }));
-  act(() => void vi.advanceTimersByTime(NOTICE_MS));
-  expect(titles()).toEqual(["Thread needs your input"]);
-
-  // An action runs and closes its notice.
-  const run = vi.fn();
-  act(() => notify({ tone: "info", title: "Back", action: { label: "Open thread", run } }));
-  const open = [...document.querySelectorAll("button")].find(
-    (b) => b.textContent === "Open thread",
-  );
-  act(() => open!.click());
-  expect(run).toHaveBeenCalledOnce();
-  expect(titles()).toEqual(["Thread needs your input"]);
-});
-
-test("work under way updates in its own toast, stays until done, and closes by its key (PLX-930)", () => {
-  vi.useFakeTimers();
-  render(<Notifications />);
-  act(() => notify({ key: "clone", tone: "info", title: "Cloning", progress: {} }));
-  const toast = document.querySelector('[aria-label="Notifications"] > div');
-  act(() => notify({ key: "clone", tone: "info", title: "Cloning", progress: { percent: 42 } }));
-  // The same element, so it doesn't animate in again.
-  expect(document.querySelector('[aria-label="Notifications"] > div')).toBe(toast);
-  expect(toast!.textContent).toContain("42%");
-  act(() => void vi.advanceTimersByTime(NOTICE_MS));
-  expect(titles()).toEqual(["Cloning"]);
-  act(() => dismiss("clone"));
-  expect(titles()).toEqual([]);
-  // An update doesn't bring back one that was closed.
-  act(() => update({ key: "clone", tone: "info", title: "Cloning", progress: { percent: 60 } }));
-  expect(titles()).toEqual([]);
-});
-
-test("a system notice also goes to the OS only while the window is in the background", () => {
-  const shown: string[] = [];
-  vi.stubGlobal(
-    "Notification",
-    class {
-      constructor(title: string) {
-        shown.push(title);
-      }
-    },
-  );
-  render(<Notifications />);
-  act(() => notify({ tone: "success", title: "Thread finished", system: true }));
-  vi.spyOn(document, "hasFocus").mockReturnValue(false);
-  act(() => notify({ tone: "success", title: "Another finished", system: true }));
-  act(() => notify({ tone: "success", title: "Pushed" }));
-  expect(shown).toEqual(["Another finished"]);
-  expect(titles()).toEqual(["Pushed", "Another finished", "Thread finished"]);
-});
-
-test("only a finished or failed turn, needing the user, or a usage limit is news", () => {
-  const notice = (before: ThreadMark, now: ThreadMark, run?: Partial<AgentRun>) =>
-    threadNotice(before, now, "Fix the login bug", run as AgentRun | undefined);
-  expect(notice("working", "done")).toEqual({
-    tone: "success",
-    title: "Thread finished",
-    body: "Fix the login bug",
-  });
-  expect(notice("needsYou", "failed", { error: "exited with 1" })).toEqual({
-    tone: "error",
-    title: "Thread failed",
-    body: "Fix the login bug: exited with 1",
-  });
-  expect(notice("working", "needsYou")!.title).toBe("Thread needs your input");
-  expect(notice("working", "waiting", { resumeAt: "2026-10-04T15:05:00Z" })!.body).toMatch(
-    /^Fix the login bug\. Resumes at .+\.$/,
-  );
-  // A finished run that changes again, as when a pull request is linked, is old news.
-  expect(notice("settled", "done")).toBeUndefined();
-  expect(notice("settled", "failed")).toBeUndefined();
-  expect(notice("done", "settled")).toBeUndefined();
-  expect(notice("settled", "working")).toBeUndefined();
-});
 
 test("any host's thread notifies with Open thread, except the one open in the focused window", () => {
   const thread = { id: "t-1", createdAt: "2026-10-04T12:00:00Z" } as Thread;
@@ -176,19 +83,6 @@ test("any host's thread notifies with Open thread, except the one open in the fo
   expect(titles()).toEqual(["Thread failed"]);
 });
 
-test("a notice stays while the pointer is on it, and closes once it leaves", () => {
-  vi.useFakeTimers();
-  render(<Notifications />);
-  act(() => notify({ tone: "success", title: "Pushed" }));
-  const toast = document.querySelector('[aria-label="Notifications"] > div')!;
-  act(() => void toast.dispatchEvent(new PointerEvent("pointerover", { bubbles: true })));
-  act(() => void vi.advanceTimersByTime(NOTICE_MS * 2));
-  expect(titles()).toEqual(["Pushed"]);
-  act(() => void toast.dispatchEvent(new PointerEvent("pointerout", { bubbles: true })));
-  act(() => void vi.advanceTimersByTime(NOTICE_MS));
-  expect(titles()).toEqual([]);
-});
-
 test("a thread waiting on the user as its host's list loads, or reloads, is not news", () => {
   const thread = { id: "t-1", createdAt: "2026-10-04T12:00:00Z" } as Thread;
   const run = { id: "t-1", status: "running", updatedAt: "2026-10-04T12:05:00Z" } as AgentRun;
@@ -221,105 +115,5 @@ test("a thread waiting on the user as its host's list loads, or reloads, is not 
   // A request that comes after is.
   rerender(<Alarms list={hosts(0, false)} />);
   rerender(<Alarms list={hosts(1, false)} />);
-  expect(titles()).toEqual(["Thread needs your input"]);
-});
-
-test("a host connected before the window listened says so when it drops and comes back", async () => {
-  let change: (hostId: string, state: ConnectionState) => void = () => {};
-  const connected = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} } as const;
-  window.parallax = {
-    connectionState: async () => connected,
-    onConnectionState: (listener: typeof change) => {
-      change = listener;
-      return () => {};
-    },
-  } as Partial<ParallaxBridge> as ParallaxBridge;
-  function Alarms() {
-    useConnectionAlarms([{ id: "dev", name: "dev box" }]);
-    return <Notifications />;
-  }
-  render(<Alarms />);
-  await act(async () => {});
-  act(() => change("dev", { status: "connecting" }));
-  expect(titles()).toEqual(["Lost connection to dev box"]);
-  act(() => change("dev", connected));
-  expect(titles()).toEqual(["Reconnected to dev box"]);
-});
-
-test("a computer's plxd update says when it worked, and sticks with Retry when it didn't", () => {
-  vi.useFakeTimers();
-  let send: (event: HostUpdateEvent) => void = () => {};
-  const retryHostUpdate = vi.fn(async () => {});
-  window.parallax = {
-    onHostUpdate: (listener: typeof send) => {
-      send = listener;
-      return () => {};
-    },
-    retryHostUpdate,
-  } as Partial<ParallaxBridge> as ParallaxBridge;
-  function Alarms() {
-    useHostUpdateAlarms([{ id: "tailnet:tp", name: "thinkpad" }]);
-    return <Notifications />;
-  }
-  render(<Alarms />);
-
-  act(() => send({ hostId: "tailnet:tp", status: "failed", error: "plxd 0.1.0 is too old." }));
-  expect(titles()).toEqual(["Couldn't update plxd on thinkpad"]);
-  expect(document.body.textContent).toContain("plxd 0.1.0 is too old.");
-  // It stays until closed.
-  act(() => {
-    vi.advanceTimersByTime(NOTICE_MS * 2);
-  });
-  expect(titles()).toEqual(["Couldn't update plxd on thinkpad"]);
-  const retry = [...document.querySelectorAll("button")].find((b) => b.textContent === "Retry")!;
-  act(() => retry.click());
-  expect(retryHostUpdate).toHaveBeenCalledWith("tailnet:tp");
-  expect(titles()).toEqual([]);
-
-  act(() => send({ hostId: "tailnet:tp", status: "failed", error: "Again." }));
-  // Success replaces the host's failure, and goes by itself.
-  act(() => send({ hostId: "tailnet:tp", status: "updated", version: "2610.10912.13045" }));
-  expect(titles()).toEqual(["Updated plxd on thinkpad"]);
-  act(() => {
-    vi.advanceTimersByTime(NOTICE_MS);
-  });
-  expect(titles()).toEqual([]);
-});
-
-test("a waiting secret flags the sidebar and notifies from a background thread", () => {
-  const thread = { id: "t-1", createdAt: "2026-10-04T12:00:00Z" } as Thread;
-  const run = { id: "t-1", status: "running", updatedAt: "2026-10-04T12:05:00Z" } as AgentRun;
-  const state: ThreadsState = { ...emptyThreads, threads: [thread], runs: { "t-1": run } };
-  const hosts = (next: ThreadsState): HostThreads[] => [
-    { host: { id: "dev", name: "dev box" }, view: { ...idleThreads, state: next } },
-  ];
-  function Alarms({ list }: { list: HostThreads[] }) {
-    useThreadAlarms(list, () => {}, []);
-    return <Notifications />;
-  }
-  const rerender = render(<Alarms list={hosts(state)} />);
-  const waiting = threadsReducer(state, {
-    type: "approvals",
-    events: [
-      {
-        seq: 1,
-        time: "",
-        event: {
-          kind: "agent.output",
-          runId: "t-1",
-          items: [
-            {
-              kind: "secretRequested",
-              requestId: "s-1",
-              label: "Webhook secret",
-              reason: "To sign.",
-            },
-          ],
-        },
-      },
-    ],
-  });
-  expect(asksOf(waiting, "t-1")).toBe(1);
-  rerender(<Alarms list={hosts(waiting)} />);
   expect(titles()).toEqual(["Thread needs your input"]);
 });

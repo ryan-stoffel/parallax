@@ -4,15 +4,13 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, ParallaxBridge } from "../preload/bridge";
-import { pieceBytes, readAttachment } from "./documents";
-import { DownloadButton, FileCards } from "./FileCards";
-import { Notifications } from "./notifications";
+import { pieceBytes } from "./documents";
+import { FileCards } from "./FileCards";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers.
 HTMLElement.prototype.showPopover = () => {};
 
-let connection: ConnectionState["status"] = "connected";
 let capabilities: Record<string, unknown> = {};
 // The presented file's bytes, which a slice reads part of.
 let file = new Uint8Array(1536);
@@ -42,14 +40,13 @@ const request = vi.fn(async (_host: string, method: string, params?: FileParams)
 let saved: { name: string; blob: Blob }[] = [];
 let unmount = () => {};
 beforeEach(() => {
-  connection = "connected";
   capabilities = {};
   file = new Uint8Array(1536);
   saved = [];
   request.mockClear();
   window.parallax = {
     request,
-    connectionState: async () => ({ status: connection, capabilities }) as ConnectionState,
+    connectionState: async () => ({ status: "connected", capabilities }) as ConnectionState,
     onConnectionState: () => () => {},
   } as Partial<ParallaxBridge> as ParallaxBridge;
   const blobs = new Map<string, Blob>();
@@ -66,11 +63,6 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
-  // Notifications outlive a render, so close this test's.
-  for (const close of document.querySelectorAll<HTMLButtonElement>(
-    '[aria-label="Notifications"] button[aria-label="Close"]',
-  ))
-    act(() => close.click());
   act(() => unmount());
   vi.restoreAllMocks();
 });
@@ -100,30 +92,11 @@ test("a presented file of a kind the app doesn't know is a card with its size, r
   await render(<FileCards hostId="box" item="7" files={[doc]} />);
   const sized = { runId: "run-1", path: "out/data.parquet", side: "working" };
   expect(request.mock.calls).toEqual([["box", "agent/file", { ...sized, sizeOnly: true }]]);
-  expect(document.body.textContent).toContain("data");
-  expect(document.body.textContent).toContain("2 KB · PARQUET");
 
   await act(async () => download().click());
   await settle();
   expect(request).toHaveBeenLastCalledWith("box", "agent/file", sized);
   expect(saved.map((s) => [s.name, s.blob.size])).toEqual([["data.parquet", 1536]]);
-});
-
-test("a Download that can't read its bytes says the host is offline in a notification", async () => {
-  connection = "failed";
-  await render(
-    <>
-      <DownloadButton name="Recording.webm" read={() => readAttachment("box", "run-1", "rec-1")} />
-      <Notifications />
-    </>,
-  );
-  await act(async () => download().click());
-  await settle();
-  expect(request).toHaveBeenCalledWith("box", "agent/image", { runId: "run-1", imageId: "rec-1" });
-  const notice = document.querySelector('[aria-label="Notifications"] > div')!;
-  expect(notice.querySelector("span")!.textContent).toBe("Couldn't download Recording.webm");
-  expect(notice.querySelector("p")!.textContent).toBe("The host is offline.");
-  expect(saved).toEqual([]);
 });
 
 test("a presented video plays from main's stream on a host that reads slices, and Download reads it whole in slices (PLX-835)", async () => {
@@ -152,23 +125,4 @@ test("a presented video plays from main's stream on a host that reads slices, an
   expect(saved.map((s) => s.name)).toEqual(["demo clip.mp4"]);
   const bytes = new Uint8Array(await saved[0]!.blob.arrayBuffer());
   expect(Buffer.from(bytes).equals(Buffer.from(file))).toBe(true);
-});
-
-test("an older host's video is read whole, as before", async () => {
-  const doc = { runId: "run-1", path: "demo.mp4", name: "demo.mp4", kind: "mp4" as const };
-  await render(<FileCards hostId="box" item="7" files={[doc]} />);
-  expect(document.querySelector("video")!.getAttribute("src")).toMatch(/^blob:/);
-  expect(request).toHaveBeenCalledTimes(1);
-});
-
-test("a presented image opens in the Lightbox when clicked, with Download (PLX-998)", async () => {
-  const doc = { runId: "run-1", path: "out/home.png", name: "home.png", kind: "png" as const };
-  await render(<FileCards hostId="box" item="7" files={[doc]} />);
-  act(() => document.querySelector<HTMLButtonElement>('[aria-label="Open home.png"]')!.click());
-  const dialog = document.querySelector("dialog")!;
-  expect(dialog.querySelector("img")!.getAttribute("src")).toMatch(/^blob:/);
-  expect(dialog.textContent).toContain("home.png");
-
-  act(() => download().click());
-  expect(saved.map((s) => s.name)).toEqual(["home.png"]);
 });

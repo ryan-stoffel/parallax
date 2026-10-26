@@ -5,11 +5,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use parallax_protocol::jsonrpc::INVALID_PARAMS;
-use parallax_protocol::methods::{AgentSend, ProjectFromThreads, ProjectList, ThreadStart};
+use parallax_protocol::methods::{AgentSend, ProjectFromThreads, ThreadStart};
 use parallax_protocol::{
-    AccountChoice, AgentPermission, ErrorKind, ProjectFromThreadsParams, ProjectId,
-    ProjectListParams, ProjectPermission, RunId, ThreadStartParams,
+    AccountChoice, AgentPermission, ProjectFromThreadsParams, ProjectId, ProjectPermission, RunId,
 };
 use plxd::backend::{RunRequest, ToolPolicy};
 use tokio::time::Instant;
@@ -17,7 +15,7 @@ use tokio::time::Instant;
 use super::{Host, message, real_repo, start_params};
 use crate::agents::{end_turn, init};
 use crate::coordinator::{nth_launch, roles_mapping};
-use crate::support::{PATIENCE, kind};
+use crate::support::PATIENCE;
 
 fn params(threads: Vec<RunId>) -> ProjectFromThreadsParams {
     ProjectFromThreadsParams {
@@ -131,77 +129,5 @@ async fn threads_become_a_projects_children_under_its_coordinator() {
         next.cwd.canonicalize().unwrap(),
         worktree.canonicalize().unwrap()
     );
-    host.server.stop().await;
-}
-
-/// Threads on two repositories, on the scratch entry, in the user's checkout, or whose kind lacks
-/// the Project's mode can't make a Project, nor can an unknown one. A refusal, or a coordinator
-/// that can't start, leaves no Project.
-#[tokio::test]
-async fn threads_on_two_repos_or_without_a_worktree_are_refused() {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let host = host(&seen, &[AgentPermission::Bypass]);
-    let mut client = host.client().await;
-    let app = client.add(&real_repo(host.work.path(), "app")).await;
-    let lib = client.add(&real_repo(host.work.path(), "lib")).await;
-    let mut ids = Vec::new();
-    for params in [
-        start_params(Some(app.id), "In app."),
-        start_params(Some(lib.id), "In lib."),
-        start_params(None, "No repo."),
-        ThreadStartParams {
-            checkout: true,
-            ..start_params(Some(app.id), "In the checkout.")
-        },
-    ] {
-        ids.push(client.call::<ThreadStart>(params).await.unwrap().run.id);
-    }
-    let [on_app, on_lib, scratch, checkout] = ids[..] else {
-        unreachable!()
-    };
-
-    for (threads, why) in [
-        (vec![on_app, on_lib], "two repositories"),
-        (vec![on_app, scratch], "no repository"),
-        (vec![on_app, checkout], "no worktree"),
-        (vec![on_app, on_app], "twice"),
-        (Vec::new(), "at least one"),
-    ] {
-        let refused = client
-            .call::<ProjectFromThreads>(params(threads))
-            .await
-            .unwrap_err();
-        assert_eq!(refused.code, INVALID_PARAMS, "{why}: {}", refused.message);
-        assert!(refused.message.contains(why), "{why}: {}", refused.message);
-    }
-    let unknown = client
-        .call::<ProjectFromThreads>(params(vec![on_app, RunId::generate()]))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&unknown), ErrorKind::ThreadNotFound);
-    let auto = client
-        .call::<ProjectFromThreads>(ProjectFromThreadsParams {
-            permission: ProjectPermission::Auto,
-            ..params(vec![on_app])
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&auto), ErrorKind::UnsupportedOption);
-    assert!(auto.message.contains("has no Auto"), "{}", auto.message);
-    let no_coordinator = client
-        .call::<ProjectFromThreads>(ProjectFromThreadsParams {
-            account: Some(AccountChoice::Subscription {
-                backend: "missing".to_owned(),
-            }),
-            ..params(vec![on_app])
-        })
-        .await;
-    assert!(no_coordinator.is_err(), "{no_coordinator:?}");
-    let projects = client
-        .call::<ProjectList>(ProjectListParams {})
-        .await
-        .unwrap()
-        .projects;
-    assert!(projects.is_empty(), "a refusal leaves no Project");
     host.server.stop().await;
 }

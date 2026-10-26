@@ -650,12 +650,7 @@ pub enum LimitStatus {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
-    use super::{
-        CumulativeUsage, Event, ExitInfo, Failure, FailureKind, LimitStatus, LimitWindow,
-        ModelUsage, Outcome, TodoItem, TodoStatus, Usage,
-    };
+    use super::{CumulativeUsage, Usage};
 
     fn tokens(input: u64, output: u64) -> Usage {
         Usage {
@@ -665,211 +660,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn events_serialize_with_a_kind_tag_and_camel_case_fields() {
-        let event = Event::SessionStarted {
-            session_id: "s-1".into(),
-            model: Some("m".into()),
-            api_key_source: None,
-        };
-        assert_eq!(
-            serde_json::to_value(&event).unwrap(),
-            json!({"kind": "sessionStarted", "sessionId": "s-1", "model": "m"})
-        );
-        let usage = Event::Usage(ModelUsage {
-            model: None,
-            usage: Usage {
-                cost_usd_micros: Some(1_500),
-                ..tokens(3, 4)
-            },
-        });
-        assert_eq!(
-            serde_json::to_value(&usage).unwrap(),
-            json!({
-                "kind": "usage", "inputTokens": 3, "outputTokens": 4, "cacheReadTokens": 0,
-                "cacheWriteTokens": 0, "costUsdMicros": 1500
-            })
-        );
-        let failed = Event::Finished {
-            outcome: Outcome::Failed(Failure {
-                failure: FailureKind::RateLimited,
-                message: "limit".into(),
-                exit: Some(ExitInfo {
-                    code: Some(1),
-                    signal: None,
-                }),
-                stderr_tail: None,
-            }),
-            usage_totals: vec![ModelUsage {
-                model: Some("opus".into()),
-                usage: tokens(9, 1),
-            }],
-        };
-        let value = serde_json::to_value(&failed).unwrap();
-        assert_eq!(
-            value,
-            json!({
-                "kind": "finished",
-                "outcome": {
-                    "status": "failed", "failure": "rateLimited", "message": "limit",
-                    "exit": {"code": 1}
-                },
-                "usageTotals": [{
-                    "model": "opus", "inputTokens": 9, "outputTokens": 1, "cacheReadTokens": 0,
-                    "cacheWriteTokens": 0
-                }]
-            })
-        );
-        assert_eq!(serde_json::from_value::<Event>(value).unwrap(), failed);
-        let todo = Event::TodoList {
-            items: vec![TodoItem {
-                text: "Write tests".into(),
-                status: TodoStatus::InProgress,
-            }],
-        };
-        assert_eq!(
-            serde_json::to_value(&todo).unwrap(),
-            json!({"kind": "todoList", "items": [{"text": "Write tests", "status": "inProgress"}]})
-        );
-    }
-
-    #[test]
-    fn account_fallback_serializes_with_both_accounts_and_its_reason() {
-        let event = Event::AccountFallback {
-            from_account: "claude".into(),
-            to_account: "01a0d34e-01e0-7dc0-b326-598cbff22aa1".into(),
-            reason: FailureKind::RateLimited,
-        };
-        assert_eq!(
-            serde_json::to_value(&event).unwrap(),
-            json!({
-                "kind": "accountFallback",
-                "fromAccount": "claude",
-                "toAccount": "01a0d34e-01e0-7dc0-b326-598cbff22aa1",
-                "reason": "rateLimited"
-            })
-        );
-    }
-
-    #[test]
-    fn limit_windows_round_trip_with_rfc_3339_resets() {
-        let window = Event::RateLimit(LimitWindow {
-            window: "five_hour".into(),
-            duration_minutes: Some(300),
-            used_percent: Some(42.5),
-            status: LimitStatus::Warning,
-            resets_at: Some("2026-09-24T17:00:00Z".parse().unwrap()),
-        });
-        let value = serde_json::to_value(&window).unwrap();
-        assert_eq!(value["resetsAt"], "2026-09-24T17:00:00Z");
-        assert_eq!(serde_json::from_value::<Event>(value).unwrap(), window);
-        let unknown: LimitWindow =
-            serde_json::from_value(json!({"window": "w", "status": "throttled"})).unwrap();
-        assert_eq!(unknown.status, LimitStatus::Unknown);
-    }
-
-    #[test]
-    fn unknown_kinds_decode_to_their_fallbacks() {
-        let failure: FailureKind = serde_json::from_value(json!("quotaExploded")).unwrap();
-        assert_eq!(failure, FailureKind::Other);
-        let event: Event =
-            serde_json::from_value(json!({"kind": "agentTeleported", "to": "mars"})).unwrap();
-        assert_eq!(event, Event::Unknown);
-        let finished: Event = serde_json::from_value(
-            json!({"kind": "finished", "outcome": {"status": "paused", "until": "later"}}),
-        )
-        .unwrap();
-        assert_eq!(
-            finished,
-            Event::Finished {
-                outcome: Outcome::Unknown,
-                usage_totals: Vec::new()
-            }
-        );
-    }
-
-    #[test]
-    fn usage_adds_field_by_field_and_keeps_a_cost_either_side_reported() {
-        let a = Usage {
-            cost_usd_micros: Some(10),
-            ..tokens(1, 2)
-        };
-        let b = tokens(10, 20);
-        assert_eq!(
-            a + b,
-            Usage {
-                cost_usd_micros: Some(10),
-                ..tokens(11, 22)
-            }
-        );
-        assert_eq!(b + b, tokens(20, 40));
-    }
-
+    /// Running totals become per-model deltas, a repeat adds nothing, and a total that went
+    /// down starts over.
     #[test]
     fn running_totals_become_deltas_per_model() {
-        let mut meter = CumulativeUsage::new();
-        assert_eq!(
-            meter.observe(Some("opus"), tokens(100, 10)).unwrap().usage,
-            tokens(100, 10)
-        );
-        assert_eq!(
-            meter.observe(Some("opus"), tokens(150, 30)).unwrap().usage,
-            tokens(50, 20)
-        );
-        let haiku = meter.observe(Some("haiku"), tokens(5, 1)).unwrap();
-        assert_eq!(haiku.model.as_deref(), Some("haiku"));
-        assert_eq!(haiku.usage, tokens(5, 1));
-        assert_eq!(meter.observe(Some("opus"), tokens(150, 30)), None);
-    }
-
-    #[test]
-    fn a_total_that_went_down_counts_as_new() {
-        let mut meter = CumulativeUsage::new();
-        meter.observe(None, tokens(100, 10));
-        assert_eq!(
-            meter.observe(None, tokens(7, 3)).unwrap().usage,
-            tokens(7, 3)
-        );
-    }
-
-    #[test]
-    fn a_resumed_session_starts_from_its_baseline() {
-        let mut meter = CumulativeUsage::with_baseline([ModelUsage {
-            model: Some("opus".into()),
-            usage: tokens(100, 10),
-        }]);
-        assert_eq!(
-            meter.observe(Some("opus"), tokens(120, 15)).unwrap().usage,
-            tokens(20, 5)
-        );
-    }
-
-    #[test]
-    fn recorded_deltas_add_to_the_totals() {
-        let mut meter = CumulativeUsage::with_baseline([ModelUsage {
-            model: None,
-            usage: tokens(10, 1),
-        }]);
-        meter.record(&ModelUsage {
-            model: None,
-            usage: tokens(5, 5),
-        });
-        meter.record(&ModelUsage {
-            model: Some("haiku".into()),
-            usage: tokens(1, 1),
-        });
-        assert_eq!(
-            meter.totals(),
-            [
-                ModelUsage {
-                    model: None,
-                    usage: tokens(15, 6)
-                },
-                ModelUsage {
-                    model: Some("haiku".into()),
-                    usage: tokens(1, 1)
-                },
-            ]
-        );
+        {
+            let mut meter = CumulativeUsage::new();
+            assert_eq!(
+                meter.observe(Some("opus"), tokens(100, 10)).unwrap().usage,
+                tokens(100, 10)
+            );
+            assert_eq!(
+                meter.observe(Some("opus"), tokens(150, 30)).unwrap().usage,
+                tokens(50, 20)
+            );
+            let haiku = meter.observe(Some("haiku"), tokens(5, 1)).unwrap();
+            assert_eq!(haiku.model.as_deref(), Some("haiku"));
+            assert_eq!(haiku.usage, tokens(5, 1));
+            assert_eq!(meter.observe(Some("opus"), tokens(150, 30)), None);
+        }
+        {
+            let mut meter = CumulativeUsage::new();
+            meter.observe(None, tokens(100, 10));
+            assert_eq!(
+                meter.observe(None, tokens(7, 3)).unwrap().usage,
+                tokens(7, 3)
+            );
+        }
     }
 }

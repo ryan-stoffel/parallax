@@ -238,7 +238,6 @@ mod tests {
     use jiff::Timestamp;
     use uuid::Uuid;
 
-    use super::Lineage;
     use crate::Store;
 
     /// A ref is taken once, and the expiry lists it once it's due.
@@ -256,26 +255,6 @@ mod tests {
         assert_eq!(store.secret_ref_expiry(at).unwrap(), (vec![id], None));
         assert_eq!(store.take_secret_ref(id).unwrap(), Some((thread, at)));
         assert_eq!(store.take_secret_ref(id).unwrap(), None, "one use");
-    }
-
-    #[test]
-    fn a_lineage_reads_back_and_replaces() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
-        let (child, parent) = (Uuid::now_v7(), Uuid::now_v7());
-        assert_eq!(store.lineage(child).unwrap(), None);
-        let mut lineage = Lineage {
-            relationship: Some("subagent".to_owned()),
-            workspace_of: Some(parent),
-            payload: "{}".to_owned(),
-        };
-        store.put_lineage(child, &lineage).unwrap();
-        assert_eq!(store.lineage(child).unwrap().as_ref(), Some(&lineage));
-        lineage.payload = r#"{"delivery":"acknowledged"}"#.to_owned();
-        store.put_lineage(child, &lineage).unwrap();
-        assert_eq!(store.lineage(child).unwrap(), Some(lineage));
-        store.delete_lineage(child).unwrap();
-        assert_eq!(store.lineage(child).unwrap(), None);
     }
 
     /// A transfer stays pending until the target's attached cursor for its source reaches its

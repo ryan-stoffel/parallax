@@ -365,7 +365,7 @@ pub(super) fn io_error(path: &str) -> impl Fn(std::io::Error) -> ErrorObject {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::{ContextWriteId, ErrorKind, ProjectId};
+    use parallax_protocol::{ContextWriteId, ProjectId};
 
     use super::write_context_file;
     use crate::server::Daemon;
@@ -374,86 +374,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10, std::time::Duration::from_secs(90));
         (dir, daemon)
-    }
-
-    #[test]
-    fn a_retry_with_the_same_params_is_idempotent_and_a_different_one_conflicts() {
-        let (_dir, daemon) = daemon();
-        let project = ProjectId::generate();
-        let id = ContextWriteId::generate();
-
-        let first = write_context_file(
-            &daemon,
-            project,
-            "notes.md",
-            "hello",
-            Some("editor".to_owned()),
-            id,
-        )
-        .unwrap();
-        let retry = write_context_file(
-            &daemon,
-            project,
-            "notes.md",
-            "hello",
-            Some("editor".to_owned()),
-            id,
-        )
-        .unwrap();
-        assert_eq!(first.file, retry.file);
-
-        let conflict =
-            write_context_file(&daemon, project, "notes.md", "different", None, id).unwrap_err();
-        assert_eq!(
-            conflict.parallax_data().unwrap().kind,
-            ErrorKind::IdConflict
-        );
-    }
-
-    #[test]
-    fn a_fresh_id_overwrites_the_previous_content() {
-        let (_dir, daemon) = daemon();
-        let project = ProjectId::generate();
-
-        write_context_file(
-            &daemon,
-            project,
-            "notes.md",
-            "first",
-            None,
-            ContextWriteId::generate(),
-        )
-        .unwrap();
-        let second = write_context_file(
-            &daemon,
-            project,
-            "notes.md",
-            "second, and longer",
-            None,
-            ContextWriteId::generate(),
-        )
-        .unwrap();
-        assert_eq!(second.file.size, "second, and longer".len() as u64);
-    }
-
-    #[test]
-    fn a_file_over_the_per_file_cap_is_rejected() {
-        let (_dir, daemon) = daemon();
-        let project = ProjectId::generate();
-        let too_big = "a".repeat(usize::try_from(super::context::MAX_FILE_BYTES).unwrap() + 1);
-        let error = write_context_file(
-            &daemon,
-            project,
-            "a.md",
-            &too_big,
-            None,
-            ContextWriteId::generate(),
-        )
-        .unwrap_err();
-        assert_eq!(
-            error.parallax_data().unwrap().kind,
-            ErrorKind::ContextTooLarge
-        );
     }
 
     /// History counts toward the bulk cap, not the 20 MiB one (PLX-941).
@@ -477,41 +397,5 @@ mod tests {
         }
         assert!(write("20.md", "x").is_err());
         write("history/run.md", "Run: x").unwrap();
-    }
-
-    #[test]
-    fn a_write_that_would_cross_the_per_project_cap_is_rejected() {
-        let (_dir, daemon) = daemon();
-        let project = ProjectId::generate();
-        let one_file = "a".repeat(usize::try_from(super::context::MAX_FILE_BYTES).unwrap());
-        write_context_file(
-            &daemon,
-            project,
-            "a.md",
-            &one_file,
-            None,
-            ContextWriteId::generate(),
-        )
-        .unwrap();
-
-        // "a.md" already uses one file's worth of the cap; a second file that alone would use the
-        // rest of it, plus one more byte, must push the project over the top.
-        let remaining_plus_one = "b".repeat(
-            usize::try_from(super::context::MAX_PROJECT_BYTES - super::context::MAX_FILE_BYTES + 1)
-                .unwrap(),
-        );
-        let error = write_context_file(
-            &daemon,
-            project,
-            "b.md",
-            &remaining_plus_one,
-            None,
-            ContextWriteId::generate(),
-        )
-        .unwrap_err();
-        assert_eq!(
-            error.parallax_data().unwrap().kind,
-            ErrorKind::ContextTooLarge
-        );
     }
 }

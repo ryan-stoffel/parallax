@@ -4,14 +4,13 @@
 //! and resumes.
 
 use parallax_protocol::methods::{
-    AgentList, AgentStart, HostSettingsSet, OrchestrationDispatch, OrchestrationSubscribeShell,
-    OrchestrationSubscribeThread, OrchestrationThreadHistory, ProjectStart, ThreadStart,
+    AgentStart, OrchestrationDispatch, OrchestrationSubscribeShell, OrchestrationSubscribeThread,
+    OrchestrationThreadHistory, ThreadStart,
 };
 use parallax_protocol::{
-    AgentListParams, AgentOutcome, AgentOutputItem, AgentStatus, DispatchMode, ErrorKind,
-    EventsEventParams, HostSettingsSetParams, OrchestrationCommand, ParallaxEvent, RunId,
-    SubscribeShellParams, SubscribeThreadParams, SubscribeThreadResult, ThreadHistoryParams,
-    ThreadRunStatus, ThreadSnapshot, TurnId,
+    AgentOutcome, AgentOutputItem, AgentStatus, DispatchMode, ErrorKind, EventsEventParams,
+    OrchestrationCommand, ParallaxEvent, RunId, SubscribeShellParams, SubscribeThreadParams,
+    SubscribeThreadResult, ThreadHistoryParams, ThreadRunStatus, ThreadSnapshot, TurnId,
 };
 use plxd::backend::fake::Step;
 use uuid::Uuid;
@@ -125,10 +124,6 @@ fn edit(thread_id: RunId, run_id: TurnId, text: &str) -> OrchestrationCommand {
     }
 }
 
-fn cancel(thread_id: RunId, run_id: TurnId) -> OrchestrationCommand {
-    OrchestrationCommand::QueuedRunCancel { thread_id, run_id }
-}
-
 fn stop(thread_id: RunId) -> OrchestrationCommand {
     OrchestrationCommand::RunInterrupt {
         thread_id,
@@ -143,6 +138,190 @@ async fn working_thread(host: &Host, client: &mut Conn) -> RunId {
     let thread = params.run_id;
     client.call::<AgentStart>(params).await.unwrap();
     thread
+}
+
+/// 0060: after a restart a plain thread's queue waits, held, until `queue.resume`, and its cut
+/// turn ends `interrupted` with no "Continue where you left off." while the host setting is off.
+#[tokio::test]
+async fn a_plain_threads_queue_waits_after_a_restart_until_resumed() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let params = crate::threads::start_params(None, "Work for a while");
+    let thread = params.run_id;
+    client.call::<ThreadStart>(params).await.unwrap();
+    subscribe_working(&mut client, thread).await;
+    let next = TurnId::generate();
+    dispatch(&mut client, message(thread, next, "Then this")).await;
+    assert_eq!(queued(&mut client, thread).await, [(next, false)]);
+    drop(client);
+
+    let host = host
+        .restart(fake(vec![init("graph-1"), text("Resumed"), Step::Hang]))
+        .await;
+    let mut client = host.client().await;
+    let seen = snapshot(&mut client, thread).await;
+    let statuses: Vec<_> = seen
+        .runs
+        .iter()
+        .map(|run| (run.status, run.queue_held))
+        .collect();
+    assert_eq!(
+        statuses,
+        [
+            (ThreadRunStatus::Interrupted, false),
+            (ThreadRunStatus::Queued, true),
+        ],
+        "the cut turn ended and the queue waits"
+    );
+    // A message sent now waits behind it, though no session is live.
+    let newer = TurnId::generate();
+    dispatch(&mut client, message(thread, newer, "And this")).await;
+    assert_eq!(
+        queued(&mut client, thread).await,
+        [(next, true), (newer, true)]
+    );
+
+    dispatch(
+        &mut client,
+        OrchestrationCommand::QueueResume { thread_id: thread },
+    )
+    .await;
+    until(
+        &mut client,
+        has_item(AgentOutputItem::Text {
+            message_id: None,
+            text: "Resumed".to_owned(),
+        }),
+    )
+    .await;
+    assert_eq!(queued(&mut client, thread).await, [(newer, false)]);
+}
+
+/// A resume replays a short gap with no snapshot, and answers a long gap, or a `seq` this log
+/// never reached, with a fresh snapshot. A snapshot's history pages back through older events.
+#[tokio::test]
+async fn a_resume_replays_a_short_gap_and_snapshots_a_long_one() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let thread = working_thread(&host, &mut client).await;
+    let start = subscribe_working(&mut client, thread).await.seq;
+    let waiting = TurnId::generate();
+    dispatch(&mut client, message(thread, waiting, "Later")).await;
+    // Each edit is one `queue.updated`: well past what a resume replays.
+    for i in 0..130 {
+        dispatch(
+            &mut client,
+            edit(thread, waiting, &format!("Later, take {i}")),
+        )
+        .await;
+    }
+    let recent = dispatch(&mut client, edit(thread, waiting, "Later, for good")).await;
+    let last = dispatch(&mut client, edit(thread, waiting, "Later, really")).await;
+
+    let mut fresh = host.client().await;
+    let short = subscribe(&mut fresh, thread, Some(recent)).await;
+    assert!(short.snapshot.is_none(), "a short gap replays");
+    let replayed = until(&mut fresh, |event| event.seq == last).await;
+    assert_eq!(replayed.len(), 1);
+    assert!(
+        matches!(&replayed[0].event, ParallaxEvent::QueueUpdated { messages, .. }
+        if messages[0].text == "Later, really")
+    );
+
+    let long = subscribe(&mut fresh, thread, Some(start)).await;
+    let seen = long.snapshot.expect("a long gap gets a snapshot");
+    assert!(seen.seq >= last);
+    let queued: Vec<_> = seen
+        .runs
+        .iter()
+        .filter(|run| run.status == ThreadRunStatus::Queued)
+        .map(|run| run.text.clone())
+        .collect();
+    assert_eq!(queued, [Some("Later, really".to_owned())]);
+    let unknown = subscribe(&mut fresh, thread, Some(last + 1_000)).await;
+    assert!(
+        unknown.snapshot.is_some(),
+        "a seq past the log's head gets a snapshot"
+    );
+
+    // History before the snapshot's first event is the rest of the thread.
+    let first = seen.events.first().map_or(seen.seq + 1, |event| event.seq);
+    let history = fresh
+        .call::<OrchestrationThreadHistory>(ThreadHistoryParams {
+            thread_id: thread,
+            before: first,
+        })
+        .await
+        .unwrap();
+    assert!(history.events.iter().all(|event| event.seq < first));
+    assert!(!history.more);
+}
+
+/// The shell starts from every project, run, and thread, then gets what a sidebar shows: a run's
+/// status, but none of its transcript. A held Stop on a thread stops the threads it started.
+#[tokio::test]
+async fn the_shell_shows_status_and_a_stop_cascades_to_child_threads() {
+    let host = Host::start(temp_dir(), fake(busy()));
+    let mut client = host.client().await;
+    let parent = crate::threads::start_params(None, "Lead");
+    let parent_id = parent.run_id;
+    client.call::<ThreadStart>(parent).await.unwrap();
+    let child = parallax_protocol::ThreadStartParams {
+        parent: Some(parent_id),
+        ..crate::threads::start_params(None, "Help")
+    };
+    let child_id = child.run_id;
+    client.call::<ThreadStart>(child).await.unwrap();
+
+    let shell = client
+        .call::<OrchestrationSubscribeShell>(SubscribeShellParams { after_seq: None })
+        .await
+        .unwrap()
+        .snapshot
+        .expect("a first shell subscription has a snapshot");
+    let ids: Vec<_> = shell.runs.iter().map(|run| run.id).collect();
+    assert!(
+        ids.contains(&parent_id) && ids.contains(&child_id),
+        "{ids:?}"
+    );
+    assert_eq!(shell.threads.len(), 2);
+    // The child may already be running in the snapshot, with no live event to follow.
+    let child_running = shell
+        .runs
+        .iter()
+        .any(|run| run.id == child_id && run.status == AgentStatus::Running);
+    if !child_running {
+        until(&mut client, |event| {
+            matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+                if *run_id == child_id && state.status == AgentStatus::Running)
+        })
+        .await;
+    }
+
+    dispatch(&mut client, stop(parent_id)).await;
+    let events = until(&mut client, |event| {
+        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
+            if *run_id == child_id && state.status == AgentStatus::Cancelled)
+    })
+    .await;
+    assert!(
+        events.iter().all(|event| !matches!(&event.event,
+            ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item| matches!(item, AgentOutputItem::Text { .. })))),
+        "the shell gets no transcript"
+    );
+
+    // A resume from the shell's last seq replays the short gap.
+    let last = events.last().unwrap().seq;
+    let mut fresh = host.client().await;
+    let resumed = fresh
+        .call::<OrchestrationSubscribeShell>(SubscribeShellParams {
+            after_seq: Some(last - 1),
+        })
+        .await
+        .unwrap();
+    assert!(resumed.snapshot.is_none());
+    let replayed = until(&mut fresh, |event| event.seq == last).await;
+    assert_eq!(replayed.len(), 1);
 }
 
 /// A thread's subscription starts from a snapshot with its run, then gets its events. Messages
@@ -256,406 +435,6 @@ async fn queue_commands_change_the_queued_runs_and_a_held_stop_keeps_them() {
     );
 }
 
-/// 0060: after a restart a plain thread's queue waits, held, until `queue.resume`, and its cut
-/// turn ends `interrupted` with no "Continue where you left off." while the host setting is off.
-#[tokio::test]
-async fn a_plain_threads_queue_waits_after_a_restart_until_resumed() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let params = crate::threads::start_params(None, "Work for a while");
-    let thread = params.run_id;
-    client.call::<ThreadStart>(params).await.unwrap();
-    subscribe_working(&mut client, thread).await;
-    let next = TurnId::generate();
-    dispatch(&mut client, message(thread, next, "Then this")).await;
-    assert_eq!(queued(&mut client, thread).await, [(next, false)]);
-    drop(client);
-
-    let host = host
-        .restart(fake(vec![init("graph-1"), text("Resumed"), Step::Hang]))
-        .await;
-    let mut client = host.client().await;
-    let seen = snapshot(&mut client, thread).await;
-    let statuses: Vec<_> = seen
-        .runs
-        .iter()
-        .map(|run| (run.status, run.queue_held))
-        .collect();
-    assert_eq!(
-        statuses,
-        [
-            (ThreadRunStatus::Interrupted, false),
-            (ThreadRunStatus::Queued, true),
-        ],
-        "the cut turn ended and the queue waits"
-    );
-    // A message sent now waits behind it, though no session is live.
-    let newer = TurnId::generate();
-    dispatch(&mut client, message(thread, newer, "And this")).await;
-    assert_eq!(
-        queued(&mut client, thread).await,
-        [(next, true), (newer, true)]
-    );
-
-    dispatch(
-        &mut client,
-        OrchestrationCommand::QueueResume { thread_id: thread },
-    )
-    .await;
-    until(
-        &mut client,
-        has_item(AgentOutputItem::Text {
-            message_id: None,
-            text: "Resumed".to_owned(),
-        }),
-    )
-    .await;
-    assert_eq!(queued(&mut client, thread).await, [(newer, false)]);
-}
-
-/// 0060: once a held Stop's CLI has exited, a message sent waits behind the paused queue rather
-/// than starting a turn ahead of it.
-#[tokio::test]
-async fn a_message_sent_after_a_held_stop_waits_behind_the_queue() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let thread = working_thread(&host, &mut client).await;
-    subscribe_working(&mut client, thread).await;
-    let first = TurnId::generate();
-    dispatch(&mut client, message(thread, first, "First")).await;
-    dispatch(&mut client, stop(thread)).await;
-    until(&mut client, |event| {
-        matches!(
-            &event.event,
-            ParallaxEvent::AgentFinished {
-                outcome: AgentOutcome::Cancelled,
-                ..
-            }
-        )
-    })
-    .await;
-    let later = TurnId::generate();
-    dispatch(&mut client, message(thread, later, "Later")).await;
-    assert_eq!(
-        queued(&mut client, thread).await,
-        [(first, true), (later, true)]
-    );
-}
-
-/// 0060: with `continueAfterRestart` on, a plain thread's turn a restart cut off continues on
-/// its session once plxd is up, ahead of its held queue.
-#[tokio::test]
-async fn a_cut_turn_continues_after_a_restart_with_the_setting_on() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    client
-        .call::<HostSettingsSet>(HostSettingsSetParams {
-            continue_after_restart: Some(true),
-            ..HostSettingsSetParams::default()
-        })
-        .await
-        .unwrap();
-    let params = crate::threads::start_params(None, "Work for a while");
-    let thread = params.run_id;
-    client.call::<ThreadStart>(params).await.unwrap();
-    subscribe_working(&mut client, thread).await;
-    let next = TurnId::generate();
-    dispatch(&mut client, message(thread, next, "Then this")).await;
-    drop(client);
-
-    let host = host.restart(fake(busy())).await;
-    let mut client = host.client().await;
-    subscribe(&mut client, thread, Some(0)).await;
-    until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item| {
-            matches!(item, AgentOutputItem::TurnStarted { text: Some(text), .. }
-                if text == "Continue where you left off.")
-        }))
-    })
-    .await;
-    // It runs ahead of the held queue, which waits for Resume.
-    assert_eq!(queued(&mut client, thread).await, [(next, true)]);
-}
-
-/// A resume replays a short gap with no snapshot, and answers a long gap, or a `seq` this log
-/// never reached, with a fresh snapshot. A snapshot's history pages back through older events.
-#[tokio::test]
-async fn a_resume_replays_a_short_gap_and_snapshots_a_long_one() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let thread = working_thread(&host, &mut client).await;
-    let start = subscribe_working(&mut client, thread).await.seq;
-    let waiting = TurnId::generate();
-    dispatch(&mut client, message(thread, waiting, "Later")).await;
-    // Each edit is one `queue.updated`: well past what a resume replays.
-    for i in 0..130 {
-        dispatch(
-            &mut client,
-            edit(thread, waiting, &format!("Later, take {i}")),
-        )
-        .await;
-    }
-    let recent = dispatch(&mut client, edit(thread, waiting, "Later, for good")).await;
-    let last = dispatch(&mut client, edit(thread, waiting, "Later, really")).await;
-
-    let mut fresh = host.client().await;
-    let short = subscribe(&mut fresh, thread, Some(recent)).await;
-    assert!(short.snapshot.is_none(), "a short gap replays");
-    let replayed = until(&mut fresh, |event| event.seq == last).await;
-    assert_eq!(replayed.len(), 1);
-    assert!(
-        matches!(&replayed[0].event, ParallaxEvent::QueueUpdated { messages, .. }
-        if messages[0].text == "Later, really")
-    );
-
-    let long = subscribe(&mut fresh, thread, Some(start)).await;
-    let seen = long.snapshot.expect("a long gap gets a snapshot");
-    assert!(seen.seq >= last);
-    let queued: Vec<_> = seen
-        .runs
-        .iter()
-        .filter(|run| run.status == ThreadRunStatus::Queued)
-        .map(|run| run.text.clone())
-        .collect();
-    assert_eq!(queued, [Some("Later, really".to_owned())]);
-    let unknown = subscribe(&mut fresh, thread, Some(last + 1_000)).await;
-    assert!(
-        unknown.snapshot.is_some(),
-        "a seq past the log's head gets a snapshot"
-    );
-
-    // History before the snapshot's first event is the rest of the thread.
-    let first = seen.events.first().map_or(seen.seq + 1, |event| event.seq);
-    let history = fresh
-        .call::<OrchestrationThreadHistory>(ThreadHistoryParams {
-            thread_id: thread,
-            before: first,
-        })
-        .await
-        .unwrap();
-    assert!(history.events.iter().all(|event| event.seq < first));
-    assert!(!history.more);
-}
-
-/// A thread's snapshot carries only its newest 128 KiB or so of events, so it opens quickly over
-/// a slow link, and history before them reaches the rest in one page (PLX-1001).
-#[tokio::test]
-async fn a_snapshot_carries_only_the_newest_events_and_history_the_rest() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let thread = working_thread(&host, &mut client).await;
-    let start = subscribe_working(&mut client, thread).await;
-    let waiting = TurnId::generate();
-    dispatch(&mut client, message(thread, waiting, "Later")).await;
-    // Each edit is one `queue.updated` of over 4 KiB: 48 of them are well past the cap.
-    let mut last = 0;
-    for i in 0..48 {
-        let text = format!("{i} {}", "x".repeat(4096));
-        last = dispatch(&mut client, edit(thread, waiting, &text)).await;
-    }
-
-    let seen = snapshot(&mut client, thread).await;
-    let bytes: usize = seen
-        .events
-        .iter()
-        .map(|event| serde_json::to_vec(&event.event).unwrap().len())
-        .sum();
-    assert_eq!(seen.events.last().map(|event| event.seq), Some(last));
-    assert!(seen.more, "older events remain");
-    assert!(bytes <= 128 * 1024, "the snapshot carried {bytes} bytes");
-    let first = seen.events.first().unwrap().seq;
-    let history = client
-        .call::<OrchestrationThreadHistory>(ThreadHistoryParams {
-            thread_id: thread,
-            before: first,
-        })
-        .await
-        .unwrap();
-    assert!(!history.more, "one history page holds the rest");
-    assert_eq!(
-        history.events.first().map(|event| event.seq),
-        start.events.first().map(|event| event.seq)
-    );
-}
-
-/// The shell starts from every project, run, and thread, then gets what a sidebar shows: a run's
-/// status, but none of its transcript. A held Stop on a thread stops the threads it started.
-#[tokio::test]
-async fn the_shell_shows_status_and_a_stop_cascades_to_child_threads() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let parent = crate::threads::start_params(None, "Lead");
-    let parent_id = parent.run_id;
-    client.call::<ThreadStart>(parent).await.unwrap();
-    let child = parallax_protocol::ThreadStartParams {
-        parent: Some(parent_id),
-        ..crate::threads::start_params(None, "Help")
-    };
-    let child_id = child.run_id;
-    client.call::<ThreadStart>(child).await.unwrap();
-
-    let shell = client
-        .call::<OrchestrationSubscribeShell>(SubscribeShellParams { after_seq: None })
-        .await
-        .unwrap()
-        .snapshot
-        .expect("a first shell subscription has a snapshot");
-    let ids: Vec<_> = shell.runs.iter().map(|run| run.id).collect();
-    assert!(
-        ids.contains(&parent_id) && ids.contains(&child_id),
-        "{ids:?}"
-    );
-    assert_eq!(shell.threads.len(), 2);
-    // The child may already be running in the snapshot, with no live event to follow.
-    let child_running = shell
-        .runs
-        .iter()
-        .any(|run| run.id == child_id && run.status == AgentStatus::Running);
-    if !child_running {
-        until(&mut client, |event| {
-            matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
-                if *run_id == child_id && state.status == AgentStatus::Running)
-        })
-        .await;
-    }
-
-    dispatch(&mut client, stop(parent_id)).await;
-    let events = until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
-            if *run_id == child_id && state.status == AgentStatus::Cancelled)
-    })
-    .await;
-    assert!(
-        events.iter().all(|event| !matches!(&event.event,
-            ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item| matches!(item, AgentOutputItem::Text { .. })))),
-        "the shell gets no transcript"
-    );
-
-    // A resume from the shell's last seq replays the short gap.
-    let last = events.last().unwrap().seq;
-    let mut fresh = host.client().await;
-    let resumed = fresh
-        .call::<OrchestrationSubscribeShell>(SubscribeShellParams {
-            after_seq: Some(last - 1),
-        })
-        .await
-        .unwrap();
-    assert!(resumed.snapshot.is_none());
-    let replayed = until(&mut fresh, |event| event.seq == last).await;
-    assert_eq!(replayed.len(), 1);
-}
-
-/// A steer with no target goes to the thread's run under way; with none under way, as after a
-/// Stop, it starts a run of its own.
-#[tokio::test]
-async fn a_steer_with_no_run_under_way_starts_its_own() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let thread = working_thread(&host, &mut client).await;
-    subscribe_working(&mut client, thread).await;
-    dispatch(&mut client, stop(thread)).await;
-    until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::AgentFinished { .. })
-    })
-    .await;
-
-    let steer = TurnId::generate();
-    let mode = DispatchMode::SteerActive {
-        target_run_id: None,
-    };
-    dispatch(&mut client, sent(thread, steer, "Carry on", mode)).await;
-    until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. }
-            if items.iter().any(|item| matches!(item, AgentOutputItem::TurnStarted { turn_id: Some(id), .. } if *id == steer)))
-    })
-    .await;
-    let runs = snapshot(&mut client, thread).await.runs;
-    assert_eq!(
-        runs.iter()
-            .map(|run| (run.status, run.ordinal))
-            .collect::<Vec<_>>(),
-        [
-            (ThreadRunStatus::Cancelled, Some(1)),
-            (ThreadRunStatus::Running, Some(2)),
-        ]
-    );
-}
-
-/// A Project coordinator's Stop ends only its own turn (Ryan, 0059): its queue isn't held, so a
-/// message waiting behind the turn starts once the CLI has exited.
-#[tokio::test]
-async fn a_coordinators_stop_ends_its_turn_and_its_queue_goes_on() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    let params = crate::coordinator::start_params(project.id, "Plan the release");
-    let coordinator = client.call::<ProjectStart>(params).await.unwrap().run.id;
-    subscribe_working(&mut client, coordinator).await;
-    let next = TurnId::generate();
-    dispatch(
-        &mut client,
-        message(coordinator, next, "Then the changelog"),
-    )
-    .await;
-    assert_eq!(queued(&mut client, coordinator).await, [(next, false)]);
-
-    dispatch(&mut client, stop(coordinator)).await;
-    until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::AgentOutput { items, .. }
-            if items.iter().any(|item| matches!(item, AgentOutputItem::TurnStarted { turn_id: Some(id), .. } if *id == next)))
-    })
-    .await;
-    let runs: Vec<_> = snapshot(&mut client, coordinator)
-        .await
-        .runs
-        .iter()
-        .map(|run| (run.status, run.queue_held))
-        .collect();
-    assert_eq!(
-        runs,
-        [
-            (ThreadRunStatus::Cancelled, false),
-            (ThreadRunStatus::Running, false),
-        ]
-    );
-}
-
-/// A Project child's Stop acts as a plain thread's (Ryan, PLX-648): it holds the child's queue and
-/// stops the threads it started. Only the coordinator is exempt.
-#[tokio::test]
-async fn a_project_childs_stop_holds_its_queue_and_stops_its_threads() {
-    let host = Host::start(temp_dir(), fake(busy()));
-    let mut client = host.client().await;
-    let child = working_thread(&host, &mut client).await;
-    subscribe_working(&mut client, child).await;
-    let helper = parallax_protocol::ThreadStartParams {
-        parent: Some(child),
-        ..crate::threads::start_params(None, "Help")
-    };
-    let helper_id = helper.run_id;
-    client.call::<ThreadStart>(helper).await.unwrap();
-    let next = TurnId::generate();
-    dispatch(&mut client, message(child, next, "Then the tests")).await;
-
-    dispatch(&mut client, stop(child)).await;
-    let deadline = tokio::time::Instant::now() + crate::support::PATIENCE;
-    loop {
-        let runs = client
-            .call::<AgentList>(AgentListParams { project: None })
-            .await
-            .unwrap()
-            .runs;
-        if runs
-            .iter()
-            .any(|run| run.id == helper_id && run.status == AgentStatus::Cancelled)
-        {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the helper never stopped"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    assert_eq!(queued(&mut client, child).await, [(next, true)]);
+fn cancel(thread_id: RunId, run_id: TurnId) -> OrchestrationCommand {
+    OrchestrationCommand::QueuedRunCancel { thread_id, run_id }
 }
