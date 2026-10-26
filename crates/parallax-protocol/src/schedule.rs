@@ -305,12 +305,21 @@ pub struct PrWatchesResult {
     pub urls: Vec<String>,
 }
 
-/// Result of `pr/status` (PLX-837): one read of a pull request, and whether it is ready to merge.
+/// Result of `pr/status` (PLX-837, PLX-1018): one read of a pull request, and whether it is ready
+/// to merge. A read under 30 s old, by any run or the watch sweep, is shared.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PrStatusResult {
     /// The pull request's URL.
     pub url: String,
+    /// Its title (PLX-1018).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub title: Option<String>,
+    /// Its description, in full. Absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub body: Option<String>,
     /// `OPEN`, `CLOSED`, or `MERGED`.
     pub state: String,
     /// Whether it is a draft.
@@ -319,8 +328,15 @@ pub struct PrStatusResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub head_sha: Option<String>,
+    /// The branch it merges from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_branch: Option<String>,
     /// The branch it merges into.
     pub base_branch: String,
+    /// The files it changes, at most 100. Absent means none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<PrStatusFile>,
     /// Commits on the base branch the head doesn't have. 0 once it isn't open.
     pub behind_by: u64,
     /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
@@ -338,6 +354,10 @@ pub struct PrStatusResult {
     pub pending: Vec<String>,
     /// The names of its checks that passed.
     pub passed: Vec<String>,
+    /// Every check on the head, by name, with its link and Actions run (PLX-1018). Absent means
+    /// none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<PrStatusCheck>,
     /// Review threads nobody has resolved.
     pub unresolved_threads: Vec<PrStatusThread>,
     /// Whether plxd watches it for the run.
@@ -349,13 +369,26 @@ pub struct PrStatusResult {
     pub reasons: Vec<String>,
 }
 
-/// A failed check in a [`PrStatusResult`].
+/// A file a [`PrStatusResult`]'s pull request changes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrStatusFile {
+    /// Its path in the repository.
+    pub path: String,
+    /// Lines added.
+    pub additions: u64,
+    /// Lines deleted.
+    pub deletions: u64,
+}
+
+/// A check in a [`PrStatusResult`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PrStatusCheck {
     /// The check's name.
     pub name: String,
-    /// How it failed, in lowercase: `failure`, `cancelled`, `timed out`, and so on.
+    /// `pending`, `passed`, or how it failed, in lowercase: `failure`, `cancelled`, `timed out`,
+    /// and so on.
     pub how: String,
     /// Whether branch protection requires it.
     pub required: bool,
@@ -363,12 +396,20 @@ pub struct PrStatusCheck {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,
+    /// Its GitHub Actions workflow run, for `gh run`, when it is an Actions check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub run_id: Option<u64>,
 }
 
 /// An unresolved review thread in a [`PrStatusResult`], by its first comment.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PrStatusThread {
+    /// Its GraphQL node id, to reply to or resolve it (PLX-1018).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub id: Option<String>,
     /// The file it is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

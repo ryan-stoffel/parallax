@@ -13,7 +13,9 @@
 //!
 //! [`status`], `pr/status` (PLX-837), reads a pull request the same way, plus how far its head is
 //! behind its base, and says whether it is ready to merge, so agents never read it with `gh`
-//! themselves.
+//! themselves. Every read of a pull request, by any run's status, a watch, or the sweep, is shared
+//! for [`SHARE`] (PLX-1018), so several agents asking about one pull request cost one read. A
+//! shared read never answers ready: [`judged`] reads again first.
 //!
 //! A watch ends when its pull request merges or closes, when its thread settles or is archived,
 //! after [`WAKE_LIMIT`] comment-only wakes in a row, or after [`READ_FAILURE_LIMIT`] failed reads
@@ -21,13 +23,13 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ParallaxEvent, PrStatusCheck, PrStatusResult, PrStatusThread, PrViewParams, PrWatchResult,
-    PrWatchesParams, PrWatchesResult, ProjectId, RunId, TurnId,
+    ParallaxEvent, PrStatusCheck, PrStatusFile, PrStatusResult, PrStatusThread, PrViewParams,
+    PrWatchResult, PrWatchesParams, PrWatchesResult, ProjectId, RunId, TurnId,
 };
 use parallax_store::Store;
 use serde::{Deserialize, Serialize};
@@ -45,6 +47,9 @@ use crate::worktree::PrError;
 /// rate limit.
 const SWEEP: Duration = Duration::from_mins(2);
 
+/// How long a read of a pull request serves every later read of it.
+const SHARE: Duration = Duration::from_secs(30);
+
 /// Reads in a row that fail, other than for a rate limit, before a watch ends.
 const READ_FAILURE_LIMIT: u32 = 8;
 
@@ -56,31 +61,39 @@ const WAKE_LIMIT: u32 = 10;
 const LISTED: usize = 10;
 const SNIPPET: usize = 200;
 
-/// One `gh api graphql` read: the viewer, and the pull request's state, draft, head, checks with
-/// whether each is required, mergeability, merge state, review decision, and its newest comments,
-/// reviews, and review threads with whether each is resolved.
-// ponytail: reads the newest 50 comments, reviews, and threads (20 comments each) per pass;
-// page them if a pull request ever gets more than that between two passes.
+/// One `gh api graphql` read: the viewer, and the pull request's title, body, state, draft, head
+/// and base, changed files, checks with whether each is required and its Actions run,
+/// mergeability, merge state, review decision, and its newest comments, reviews, and review
+/// threads with whether each is resolved.
+// ponytail: reads the first 100 files and the newest 50 comments, reviews, and threads (20
+// comments each) per read; page them if a pull request ever gets more than that.
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
+      title
+      body
       state
       isDraft
       mergeStateStatus
       reviewDecision
       author { login }
       baseRefName
+      headRefName
       headRefOid
       mergeable
+      files(first: 100) { nodes { path additions deletions } }
       commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
         __typename
-        ... on CheckRun { name status conclusion detailsUrl isRequired(pullRequestNumber: $number) }
+        ... on CheckRun {
+          name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
+          checkSuite { workflowRun { databaseId } }
+        }
         ... on StatusContext { context state targetUrl isRequired(pullRequestNumber: $number) }
       } } } } } }
       comments(last: 50) { nodes { id author { login } body createdAt lastEditedAt url } }
       reviews(last: 50) { nodes { id author { login } body state submittedAt lastEditedAt url } }
-      reviewThreads(last: 50) { nodes { path isResolved comments(last: 20) { nodes {
+      reviewThreads(last: 50) { nodes { id path isResolved comments(last: 20) { nodes {
         id author { login } body createdAt lastEditedAt url
       } } } }
     }
@@ -94,17 +107,52 @@ const BEHIND: &str = "query($owner: String!, $name: String!, $base: String!, $he
   } } }
 }";
 
-/// The sweep's wake-up when the first watch starts, and each pull request's failed reads in a
-/// row. The count is kept in memory: a restart only delays the end.
+/// The sweep's wake-up when the first watch starts, each pull request's failed reads in a row,
+/// and its last read with when it was made. Both are kept in memory: a restart only delays the
+/// end, or costs one read.
 #[derive(Default)]
 pub(crate) struct Watches {
     started: Notify,
     failures: Mutex<HashMap<String, u32>>,
+    reads: Mutex<HashMap<String, (Instant, Detail)>>,
 }
 
 impl Watches {
     fn failures(&self) -> MutexGuard<'_, HashMap<String, u32>> {
         self.failures.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn reads(&self) -> MutexGuard<'_, HashMap<String, (Instant, Detail)>> {
+        self.reads.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `url`'s last read, while it is under [`SHARE`] old at `now`.
+    fn shared(&self, url: &str, now: Instant) -> Option<Detail> {
+        self.reads()
+            .get(url)
+            .filter(|(at, _)| now.saturating_duration_since(*at) < SHARE)
+            .map(|(_, detail)| detail.clone())
+    }
+
+    /// Keeps `detail` as `url`'s last read, started at `at`, unless a read that started later is
+    /// kept already, and drops reads too old to share.
+    fn share(&self, url: &str, at: Instant, detail: &Detail) {
+        let mut reads = self.reads();
+        reads.retain(|_, (read, _)| at.saturating_duration_since(*read) < SHARE);
+        if reads.get(url).is_some_and(|(read, _)| *read > at) {
+            return;
+        }
+        reads.insert(url.to_owned(), (at, detail.clone()));
+    }
+
+    /// Adds `behind_by` to `url`'s last read while it is still of `head`, so a status served from
+    /// it needs no second call.
+    fn compared(&self, url: &str, head: &str, behind_by: u64) {
+        if let Some((_, detail)) = self.reads().get_mut(url)
+            && detail.head_sha.as_deref() == Some(head)
+        {
+            detail.behind_by = Some(behind_by);
+        }
     }
 }
 
@@ -141,12 +189,18 @@ impl Watch {
 }
 
 /// A pull request as one read saw it.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct Detail {
+    title: String,
+    body: String,
     state: String,
     draft: bool,
     head_sha: Option<String>,
+    head_branch: String,
     base_branch: String,
+    /// How far the head is behind the base, once [`status`] has asked.
+    behind_by: Option<u64>,
+    files: Vec<PrStatusFile>,
     checks: Vec<Check>,
     /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
     mergeable: String,
@@ -166,6 +220,8 @@ struct Check {
     state: CheckState,
     required: bool,
     url: Option<String>,
+    /// Its GitHub Actions workflow run.
+    run_id: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -269,30 +325,62 @@ pub(crate) async fn watch(
     })
 }
 
-/// `pr/status`: reads `url` as a pass does, plus how far its head is behind its base, and judges
-/// it with [`verdict`]. The pull request needn't be linked.
+/// `pr/status`: takes the shared read of `url` or reads it as a pass does, plus how far its head
+/// is behind its base, and judges it with [`verdict`] through [`judged`]. The pull request needn't
+/// be linked.
 pub(crate) async fn status(
     daemon: &Daemon,
     params: PrViewParams,
 ) -> Result<PrStatusResult, ErrorObject> {
     let PrViewParams { run_id, url } = params;
-    let unreadable = |error: PrError| {
-        ErrorObject::invalid_params(format!("could not read the pull request: {error}"))
-    };
-    let detail = read(daemon, &url).await.map_err(unreadable)?;
-    let behind_by = match (detail.state.as_str(), &detail.head_sha) {
-        ("OPEN", Some(head)) => behind(daemon, &url, &detail.base_branch, head)
-            .await
-            .map_err(unreadable)?,
-        _ => 0,
-    };
     let id = Uuid::from(run_id);
     let watched = daemon
         .reader
         .run(&CancellationToken::new(), move |db| urls(db, id))
         .await?;
     let watching = watched.contains(&url);
-    Ok(verdict(url, detail, behind_by, watching))
+    let unreadable = |error: PrError| {
+        ErrorObject::invalid_params(format!("could not read the pull request: {error}"))
+    };
+    let shared = daemon.pr_watches.shared(&url, Instant::now());
+    let url = &url;
+    let fresh = move || async move { fetch(daemon, url).await.map_err(unreadable) };
+    let judge = move |detail: Detail| async move {
+        let behind_by = match (detail.state.as_str(), &detail.head_sha, detail.behind_by) {
+            ("OPEN", Some(_), Some(behind_by)) => behind_by,
+            ("OPEN", Some(head), None) => {
+                let behind_by = behind(daemon, url, &detail.base_branch, head)
+                    .await
+                    .map_err(unreadable)?;
+                daemon.pr_watches.compared(url, head, behind_by);
+                behind_by
+            }
+            _ => 0,
+        };
+        Ok(verdict(url.clone(), detail, behind_by, watching))
+    };
+    judged(shared, fresh, judge).await
+}
+
+/// Judges a pull request with `judge`, from `shared`, its shared read, while that isn't ready, and
+/// otherwise from a fresh read by `fetch`. A shared read can predate a push, so ready only ever
+/// comes from a read made for this call: at most one extra read per ready answer.
+async fn judged<E, Fetch, Judge>(
+    shared: Option<Detail>,
+    fetch: impl FnOnce() -> Fetch,
+    judge: impl Fn(Detail) -> Judge,
+) -> Result<PrStatusResult, E>
+where
+    Fetch: Future<Output = Result<Detail, E>>,
+    Judge: Future<Output = Result<PrStatusResult, E>>,
+{
+    if let Some(detail) = shared {
+        let result = judge(detail).await?;
+        if !result.ready {
+            return Ok(result);
+        }
+    }
+    judge(fetch().await?).await
 }
 
 /// Judges a pull request as `pr_status.py` does: ready when it is open, not a draft, doesn't
@@ -302,19 +390,29 @@ fn verdict(url: String, detail: Detail, behind_by: u64, watching: bool) -> PrSta
     let mut failing = Vec::new();
     let mut pending = Vec::new();
     let mut passed = Vec::new();
+    let mut checks = Vec::new();
     for check in detail.checks {
+        let how = match check.state {
+            CheckState::Passed => "passed",
+            CheckState::Pending => "pending",
+            CheckState::Failed(how) => how,
+        };
+        let entry = PrStatusCheck {
+            name: check.name.clone(),
+            how: how.to_owned(),
+            required: check.required,
+            url: check.url,
+            run_id: check.run_id,
+        };
         match check.state {
             CheckState::Passed => passed.push(check.name),
             CheckState::Pending => pending.push(check.name),
-            CheckState::Failed(how) => failing.push(PrStatusCheck {
-                name: check.name,
-                how: how.to_owned(),
-                required: check.required,
-                url: check.url,
-            }),
+            CheckState::Failed(_) => failing.push(entry.clone()),
         }
+        checks.push(entry);
     }
     failing.sort_by(|a, b| a.name.cmp(&b.name));
+    checks.sort_by(|a, b| a.name.cmp(&b.name));
     pending.sort();
     passed.sort();
     let open = detail.state == "OPEN";
@@ -366,10 +464,14 @@ fn verdict(url: String, detail: Detail, behind_by: u64, watching: bool) -> PrSta
     }
     PrStatusResult {
         url,
+        title: Some(detail.title),
+        body: Some(detail.body).filter(|body| !body.is_empty()),
         state: detail.state,
         draft: detail.draft,
         head_sha: detail.head_sha,
+        head_branch: Some(detail.head_branch),
         base_branch: detail.base_branch,
+        files: detail.files,
         behind_by,
         mergeable: detail.mergeable,
         merge_state: detail.merge_state,
@@ -377,6 +479,7 @@ fn verdict(url: String, detail: Detail, behind_by: u64, watching: bool) -> PrSta
         failing,
         pending,
         passed,
+        checks,
         unresolved_threads: detail.unresolved,
         watching,
         ready: reasons.is_empty(),
@@ -948,8 +1051,20 @@ fn snippet(body: &str) -> String {
     format!("{cut}...")
 }
 
-/// Reads pull request `url` with one `gh api graphql` call.
+/// Reads pull request `url` with one `gh api graphql` call, or takes the last read of it while
+/// that is under [`SHARE`] old.
+// ponytail: two reads that start together both call GitHub; share the call in flight if that
+// shows up in the rate limit.
 async fn read(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
+    match daemon.pr_watches.shared(url, Instant::now()) {
+        Some(detail) => Ok(detail),
+        None => fetch(daemon, url).await,
+    }
+}
+
+/// Reads pull request `url` from GitHub with one `gh api graphql` call, and shares the read.
+async fn fetch(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
+    let started = Instant::now();
     let (owner, name, number) = parts(url)?;
     let answer = graphql(
         daemon,
@@ -961,7 +1076,9 @@ async fn read(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
         ],
     )
     .await?;
-    parse(&answer)
+    let detail = parse(&answer)?;
+    daemon.pr_watches.share(url, started, &detail);
+    Ok(detail)
 }
 
 /// How many commits `base` has that `head` doesn't, in `url`'s repository.
@@ -1023,16 +1140,22 @@ fn parts(url: &str) -> Result<(&str, &str, u64), PrError> {
 fn parse(answer: &str) -> Result<Detail, PrError> {
     let answer: Answer = serde_json::from_str(answer)
         .map_err(|error| PrError::Gh(format!("could not read GitHub's answer: {error}")))?;
-    if let Some(error) = answer.errors.first() {
-        return Err(PrError::Gh(error.message.clone()));
+    let error = answer.errors.first().map(|error| error.message.clone());
+    let Some(Data { viewer, repository }) = answer.data else {
+        return Err(PrError::Gh(
+            error.unwrap_or_else(|| "GitHub answered with no data".to_owned()),
+        ));
+    };
+    let Some(pr) = repository.and_then(|repository| repository.pull_request) else {
+        return Err(PrError::Gh(
+            error.unwrap_or_else(|| "GitHub has no such pull request".to_owned()),
+        ));
+    };
+    // A field GitHub can't answer, such as a workflow run for a token without Actions access, is
+    // null with an error, and the rest of the pull request still reads.
+    if let Some(error) = error {
+        warn!(%error, "GitHub left part of a pull request out");
     }
-    let data = answer
-        .data
-        .ok_or_else(|| PrError::Gh("GitHub answered with no data".to_owned()))?;
-    let pr = data
-        .repository
-        .and_then(|repository| repository.pull_request)
-        .ok_or_else(|| PrError::Gh("GitHub has no such pull request".to_owned()))?;
     let checks = pr
         .commits
         .nodes
@@ -1045,6 +1168,10 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
             name: context.name.or(context.context).unwrap_or_default(),
             required: context.is_required,
             url: context.details_url.or(context.target_url),
+            run_id: context
+                .check_suite
+                .and_then(|suite| suite.workflow_run)
+                .and_then(|run| run.database_id),
         })
         .collect();
     let mut remarks: Vec<Remark> = pr
@@ -1069,6 +1196,7 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
             && let Some(first) = thread.comments.nodes.iter().flatten().next()
         {
             unresolved.push(PrStatusThread {
+                id: Some(thread.id.clone()),
                 path: path.clone(),
                 author: first.author.as_ref().map(|author| author.login.clone()),
                 body: snippet(&first.body),
@@ -1086,16 +1214,24 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
     }
     remarks.sort_by_key(|remark| remark.at);
     Ok(Detail {
+        title: pr.title,
+        body: pr.body,
         state: pr.state,
         draft: pr.is_draft,
         head_sha: pr.head_ref_oid,
+        head_branch: pr.head_ref_name,
         base_branch: pr.base_ref_name,
+        behind_by: None,
+        files: pr
+            .files
+            .map(|files| files.nodes.into_iter().flatten().collect())
+            .unwrap_or_default(),
         checks,
         mergeable: pr.mergeable,
         merge_state: pr.merge_state_status,
         review_decision: pr.review_decision,
         unresolved,
-        viewer: data.viewer.map(|viewer| viewer.login),
+        viewer: viewer.map(|viewer| viewer.login),
         author: pr.author.map(|author| author.login),
         remarks,
     })
@@ -1170,6 +1306,10 @@ struct Repository {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PullRequest {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    body: String,
     state: String,
     #[serde(default)]
     is_draft: bool,
@@ -1178,8 +1318,13 @@ struct PullRequest {
     review_decision: Option<String>,
     author: Option<Login>,
     base_ref_name: String,
+    #[serde(default)]
+    head_ref_name: String,
     head_ref_oid: Option<String>,
     mergeable: String,
+    /// Null when GitHub can't list them, such as for a huge diff.
+    #[serde(default)]
+    files: Option<Nodes<PrStatusFile>>,
     commits: Nodes<CommitNode>,
     comments: Nodes<Comment>,
     reviews: Nodes<Comment>,
@@ -1227,6 +1372,19 @@ struct RollupNode {
     target_url: Option<String>,
     #[serde(default)]
     is_required: bool,
+    check_suite: Option<CheckSuite>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckSuite {
+    workflow_run: Option<WorkflowRun>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkflowRun {
+    database_id: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1246,6 +1404,7 @@ struct Comment {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Thread {
+    id: String,
     path: Option<String>,
     #[serde(default)]
     is_resolved: bool,

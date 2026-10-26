@@ -1,7 +1,13 @@
+use std::cell::Cell;
+use std::time::{Duration, Instant};
+
 use jiff::{SignedDuration, Timestamp};
 
-use super::{Change, Check, CheckState, Detail, Remark, Watch, evaluate, message, parse, verdict};
-use parallax_protocol::{PrStatusCheck, PrStatusThread};
+use super::{
+    Change, Check, CheckState, Detail, Remark, Watch, Watches, evaluate, judged, message, parse,
+    verdict,
+};
+use parallax_protocol::{PrStatusCheck, PrStatusFile, PrStatusThread};
 
 fn start() -> Timestamp {
     "2026-10-09T10:00:00Z".parse().unwrap()
@@ -13,6 +19,7 @@ fn check(name: &str, state: CheckState, required: bool) -> Check {
         state,
         required,
         url: None,
+        run_id: None,
     }
 }
 
@@ -100,19 +107,22 @@ fn only_someone_elses_new_comments_wake() {
     assert_eq!(ids, ["same-second", "old"]);
 }
 
-#[test]
-fn githubs_answer_reads_into_a_detail() {
-    let answer = r#"{"data": {
+/// GitHub's answer to `QUERY` for a pull request with a bit of everything.
+const ANSWER: &str = r#"{"data": {
       "viewer": {"login": "agent-bot"},
       "repository": {"pullRequest": {
+        "title": "Add a thing", "body": "Adds it.\n\nLinear: PLX-1",
         "state": "OPEN", "author": {"login": "ryan"}, "baseRefName": "develop",
-        "headRefOid": "abc1234def", "mergeable": "CONFLICTING", "isDraft": false,
+        "headRefName": "feature/PLX-1-thing", "headRefOid": "abc1234def",
+        "mergeable": "CONFLICTING", "isDraft": false,
         "mergeStateStatus": "DIRTY", "reviewDecision": "CHANGES_REQUESTED",
+        "files": {"nodes": [{"path": "src/main.rs", "additions": 3, "deletions": 1}]},
         "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [
           {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE",
-           "detailsUrl": "https://ci/1", "isRequired": true},
+           "detailsUrl": "https://ci/1", "isRequired": true,
+           "checkSuite": {"workflowRun": {"databaseId": 42}}},
           {"__typename": "CheckRun", "name": "test", "status": "IN_PROGRESS", "conclusion": null,
-           "detailsUrl": null, "isRequired": false},
+           "detailsUrl": null, "isRequired": false, "checkSuite": {"workflowRun": null}},
           {"__typename": "StatusContext", "context": "deploy", "state": "SUCCESS",
            "targetUrl": null, "isRequired": false},
           null
@@ -126,19 +136,33 @@ fn githubs_answer_reads_into_a_detail() {
            "submittedAt": "2026-10-09T10:07:00Z", "lastEditedAt": null, "url": null}
         ]},
         "reviewThreads": {"nodes": [
-          {"path": "src/main.rs", "isResolved": false, "comments": {"nodes": [
+          {"id": "th1", "path": "src/main.rs", "isResolved": false, "comments": {"nodes": [
             {"id": "t1", "author": null, "body": "nit", "createdAt": "2026-10-09T10:04:00Z",
              "lastEditedAt": "2026-10-09T10:08:00Z", "url": null}
           ]}},
-          {"path": "src/lib.rs", "isResolved": true, "comments": {"nodes": [
+          {"id": "th2", "path": "src/lib.rs", "isResolved": true, "comments": {"nodes": [
             {"id": "t2", "author": {"login": "reviewer"}, "body": "done", "createdAt":
              "2026-10-09T10:03:00Z", "lastEditedAt": null, "url": null}
           ]}}
         ]}
       }}
     }}"#;
-    let detail = parse(answer).unwrap();
+
+#[test]
+fn githubs_answer_reads_into_a_detail() {
+    let detail = parse(ANSWER).unwrap();
     assert_eq!(detail.state, "OPEN");
+    assert_eq!(detail.title, "Add a thing");
+    assert_eq!(detail.body, "Adds it.\n\nLinear: PLX-1");
+    assert_eq!(detail.head_branch, "feature/PLX-1-thing");
+    assert_eq!(
+        detail.files,
+        [PrStatusFile {
+            path: "src/main.rs".to_owned(),
+            additions: 3,
+            deletions: 1,
+        }]
+    );
     assert_eq!(detail.viewer.as_deref(), Some("agent-bot"));
     assert_eq!(detail.mergeable, "CONFLICTING");
     assert_eq!(
@@ -149,6 +173,7 @@ fn githubs_answer_reads_into_a_detail() {
                 state: CheckState::Failed("failure"),
                 required: true,
                 url: Some("https://ci/1".to_owned()),
+                run_id: Some(42),
             },
             check("test", CheckState::Pending, false),
             check("deploy", CheckState::Passed, false),
@@ -170,6 +195,7 @@ fn githubs_answer_reads_into_a_detail() {
     assert_eq!(
         detail.unresolved,
         [PrStatusThread {
+            id: Some("th1".to_owned()),
             path: Some("src/main.rs".to_owned()),
             author: None,
             body: "nit".to_owned(),
@@ -202,16 +228,31 @@ fn githubs_answer_reads_into_a_detail() {
 #[test]
 fn a_pull_request_is_ready_only_when_nothing_holds_it_back() {
     let url = "https://github.com/me/app/pull/1".to_owned();
-    let green = vec![check("lint", CheckState::Passed, true)];
-    let ready = verdict(
-        url.clone(),
-        open(green.clone(), Vec::new(), "MERGEABLE"),
-        0,
-        true,
-    );
+    let green = vec![Check {
+        url: Some("https://ci/2".to_owned()),
+        run_id: Some(7),
+        ..check("lint", CheckState::Passed, true)
+    }];
+    let mut detail = open(green.clone(), Vec::new(), "MERGEABLE");
+    detail.title = "Add a thing".to_owned();
+    detail.head_branch = "feature/PLX-1-thing".to_owned();
+    let ready = verdict(url.clone(), detail, 0, true);
     assert!(ready.ready, "{:?}", ready.reasons);
     assert!(ready.watching);
+    assert_eq!(ready.title.as_deref(), Some("Add a thing"));
+    assert_eq!(ready.body, None, "an empty body is left out");
+    assert_eq!(ready.head_branch.as_deref(), Some("feature/PLX-1-thing"));
     assert_eq!(ready.passed, ["lint"]);
+    assert_eq!(
+        ready.checks,
+        [PrStatusCheck {
+            name: "lint".to_owned(),
+            how: "passed".to_owned(),
+            required: true,
+            url: Some("https://ci/2".to_owned()),
+            run_id: Some(7),
+        }]
+    );
 
     let mut held = open(
         vec![
@@ -227,6 +268,7 @@ fn a_pull_request_is_ready_only_when_nothing_holds_it_back() {
     held.draft = true;
     held.review_decision = Some("CHANGES_REQUESTED".to_owned());
     held.unresolved = vec![PrStatusThread {
+        id: Some("th1".to_owned()),
         path: None,
         author: None,
         body: "nit".to_owned(),
@@ -253,6 +295,7 @@ fn a_pull_request_is_ready_only_when_nothing_holds_it_back() {
             how: "timed out".to_owned(),
             required: true,
             url: Some("https://ci/1".to_owned()),
+            run_id: None,
         }]
     );
 
@@ -274,4 +317,110 @@ fn a_pull_request_is_ready_only_when_nothing_holds_it_back() {
     let mut merged = open(green, Vec::new(), "UNKNOWN");
     merged.state = "MERGED".to_owned();
     assert_eq!(verdict(url, merged, 0, false).reasons, ["it is merged"]);
+}
+
+#[test]
+fn a_read_serves_every_read_of_its_pull_request_for_thirty_seconds() {
+    let url = "https://github.com/me/app/pull/1";
+    let watches = Watches::default();
+    let at = Instant::now();
+    watches.share(url, at, &open(Vec::new(), Vec::new(), "MERGEABLE"));
+
+    let later = at + Duration::from_secs(29);
+    assert!(watches.shared(url, later).is_some());
+    assert!(
+        watches
+            .shared("https://github.com/me/app/pull/2", later)
+            .is_none()
+    );
+    assert!(watches.shared(url, at + Duration::from_secs(30)).is_none());
+
+    // A status's comparison sticks to the read it compared, and not to a newer head's.
+    watches.compared(url, "abc1234def", 2);
+    assert_eq!(watches.shared(url, later).unwrap().behind_by, Some(2));
+    watches.compared(url, "pushed", 5);
+    assert_eq!(watches.shared(url, later).unwrap().behind_by, Some(2));
+
+    // A read that started earlier but finished later doesn't replace a newer one.
+    let mut older = open(Vec::new(), Vec::new(), "MERGEABLE");
+    older.head_sha = Some("older".to_owned());
+    let before = at.checked_sub(Duration::from_secs(1)).unwrap();
+    watches.share(url, before, &older);
+    assert_eq!(
+        watches.shared(url, later).unwrap().head_sha.as_deref(),
+        Some("abc1234def")
+    );
+
+    // A newer read drops ones too old to share.
+    let next = at + Duration::from_secs(31);
+    watches.share("https://github.com/me/app/pull/2", next, &Detail::default());
+    assert!(!watches.reads().contains_key(url));
+}
+
+#[tokio::test]
+async fn a_shared_read_never_answers_ready() {
+    let url = "https://github.com/me/app/pull/1";
+    let green = open(
+        vec![check("lint", CheckState::Passed, true)],
+        Vec::new(),
+        "MERGEABLE",
+    );
+    // Pushed since the shared read: a new head with no checks yet.
+    let mut pushed = green.clone();
+    pushed.head_sha = Some("pushed".to_owned());
+    pushed.checks.clear();
+    let reads = Cell::new(0);
+    let fetch = |detail: Detail| {
+        let reads = &reads;
+        move || {
+            reads.set(reads.get() + 1);
+            async move { Ok::<_, ()>(detail) }
+        }
+    };
+    let judge = move |detail: Detail| async move { Ok(verdict(url.to_owned(), detail, 0, false)) };
+
+    let result = judged(Some(green.clone()), fetch(pushed.clone()), judge)
+        .await
+        .unwrap();
+    assert!(!result.ready, "judged from the fresh read");
+    assert_eq!(result.head_sha.as_deref(), Some("pushed"));
+    assert_eq!(reads.get(), 1);
+
+    // A shared read that isn't ready answers alone, and no shared read means one read.
+    let result = judged(Some(pushed.clone()), fetch(green.clone()), judge)
+        .await
+        .unwrap();
+    assert!(!result.ready);
+    assert_eq!(reads.get(), 1);
+    let result = judged(None, fetch(green), judge).await.unwrap();
+    assert!(result.ready);
+    assert_eq!(reads.get(), 2);
+}
+
+#[test]
+fn a_field_github_cant_answer_leaves_the_rest_of_the_read() {
+    let partial = ANSWER
+        .replace(
+            r#""checkSuite": {"workflowRun": {"databaseId": 42}}"#,
+            r#""checkSuite": {"workflowRun": {"databaseId": null}}"#,
+        )
+        .replace(
+            r#""files": {"nodes": [{"path": "src/main.rs", "additions": 3, "deletions": 1}]}"#,
+            r#""files": null"#,
+        );
+    let partial = format!(
+        r#"{}, "errors": [{{"message": "Resource not accessible by integration"}}]}}"#,
+        partial.trim_end().strip_suffix('}').unwrap()
+    );
+    let detail = parse(&partial).unwrap();
+    assert_eq!(detail.title, "Add a thing");
+    assert!(detail.files.is_empty());
+    assert_eq!(detail.checks[0].run_id, None);
+
+    let error = parse(
+        r#"{"data": {"viewer": null, "repository": {"pullRequest": null}},
+            "errors": [{"message": "Could not resolve to a PullRequest"}]}"#,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("Could not resolve"), "{error}");
 }
