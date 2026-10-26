@@ -31,7 +31,7 @@ What a row asks of the user, from its run, its waiting permission requests, and 
 | State | When | Shows |
 | --- | --- | --- |
 | Needs you | Any permission request waits | "Needs you" |
-| Working | The run is starting or running | The logo's two circles swapping, and "Working 12s" from `lastPromptAt` |
+| Working | The run is starting or running | The logo's two circles swapping, and "Working 12s" from `lastUserPromptAt`, else `lastPromptAt` (PLX-1012) |
 | Done | The run stopped after `seenAt`, or `seenAt` is unset | A disc and check. The logo's circles meet and become it, once, on the change only |
 | Failed | As Done, for a failed run | "Failed" |
 | Settled | Otherwise | The age |

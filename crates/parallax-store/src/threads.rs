@@ -43,6 +43,9 @@ pub struct Thread {
     pub snoozed_until: Option<Timestamp>,
     /// When its newest message was sent: its newest recorded turn, or its creation.
     pub last_prompt_at: Timestamp,
+    /// When the user last sent it a message: its newest turn the user wrote (PLX-937), or its
+    /// creation. Wake-ups and other threads' messages don't move it (PLX-1012).
+    pub last_user_prompt_at: Timestamp,
     /// The run that launched it: its run's [`RunFields::parent`] (decision record 0041).
     pub parent: Option<Uuid>,
     /// Its fork origin and title.
@@ -90,7 +93,9 @@ const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
     AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
-    forked_from_turn, title, settled, unarchived_at, pinned";
+    forked_from_turn, title, settled, unarchived_at, pinned, \
+    COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id AND from_user \
+        AND substr(text, 1, 22) != 'Parallax, not the user'), created_at) AS last_user_prompt_at";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (
@@ -146,6 +151,7 @@ struct RawThread {
     settled: bool,
     unarchived_at: Option<String>,
     pinned: bool,
+    last_user_prompt_at: String,
 }
 
 fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
@@ -164,6 +170,7 @@ fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
         settled: row.get(11)?,
         unarchived_at: row.get(12)?,
         pinned: row.get(13)?,
+        last_user_prompt_at: row.get(14)?,
     })
 }
 
@@ -185,6 +192,7 @@ fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
             .map(timestamp::parse)
             .transpose()?,
         last_prompt_at: timestamp::parse(&raw.last_prompt_at)?,
+        last_user_prompt_at: timestamp::parse(&raw.last_user_prompt_at)?,
         parent: uuid(raw.parent)?,
         fields: ThreadFields {
             forked_from,

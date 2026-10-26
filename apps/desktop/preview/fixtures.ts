@@ -856,6 +856,7 @@ export function createFixtures(now = Date.now()): Fixtures {
       title: t.title,
       createdAt: ago(t.started),
       lastPromptAt: ago(t.updated + 1),
+      lastUserPromptAt: ago(t.started),
       ...(t.seen !== undefined && { seenAt: ago(t.seen) }),
     });
     return run;
@@ -1272,7 +1273,8 @@ export function createFixtures(now = Date.now()): Fixtures {
     slug: "checkout-redesign",
     prompt: "Redesign the checkout page from the Figma frames: one column, totals pinned.",
     status: "running",
-    started: 4,
+    // Prompted an hour and a half ago, and woken 4 minutes ago by its pull request's watch.
+    started: 95,
     updated: 0,
   });
   log(checkout).out(ago(4), session(), { kind: "turnStarted" });

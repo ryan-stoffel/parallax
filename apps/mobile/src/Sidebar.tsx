@@ -349,7 +349,7 @@ function ThreadRow({ entry, shared }: { entry: Entry; shared: ReadonlyMap<string
         {ago(when(thread))}
       </T>
     ) : (
-      <AttentionBadge attention={attention} since={attention === "working" ? thread.lastPromptAt : undefined} />
+      <AttentionBadge attention={attention} since={attention === "working" ? (thread.lastUserPromptAt ?? thread.lastPromptAt) : undefined} />
     );
 
   return (
