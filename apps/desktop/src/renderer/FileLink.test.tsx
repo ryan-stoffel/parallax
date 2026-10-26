@@ -77,6 +77,7 @@ beforeEach(() => {
   window.parallax = {
     request,
     connectionState: async () => ({ status: "connected", plxd: "", protocol: 1, capabilities: {} }),
+    siteIcon: async () => undefined,
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 afterEach(() => {

@@ -53,6 +53,11 @@ export type BehaviorPrefs = {
   sendKey: "enter" | "modEnter";
   /** Where a pull request's Open on GitHub goes: the system browser, or the side panel's Browser. */
   openPrsIn: "external" | "browser";
+  /**
+   * What a click on a link to a thread's pull request does: open its view in Parallax, or GitHub
+   * in the browser. Cmd+click (Ctrl+click elsewhere) or Shift+click does the other.
+   */
+  prLinkClick: "parallax" | "github";
 };
 
 export const behaviorDefaults: BehaviorPrefs = {
@@ -61,6 +66,7 @@ export const behaviorDefaults: BehaviorPrefs = {
   timeFormat: "system",
   sendKey: "enter",
   openPrsIn: "external",
+  prLinkClick: "parallax",
 };
 
 export const behaviorPrefs = stored("parallax.behavior", behaviorDefaults, merged);

@@ -310,6 +310,23 @@ function Behavior() {
             panelClassName="min-w-48"
           />
         </Row>
+        <Row
+          title="Click a pull request link to"
+          description={`A link to the thread's pull request. ${mac ? "⌘-click" : "Ctrl+click"} does the other.`}
+        >
+          <Picker
+            field
+            label="Click a pull request link to"
+            value={prefs.prLinkClick}
+            onChange={(v) => setBehaviorPrefs({ prLinkClick: v as BehaviorPrefs["prLinkClick"] })}
+            options={[
+              { value: "parallax", label: "Open in Parallax" },
+              { value: "github", label: "Open on GitHub" },
+            ]}
+            className="w-48"
+            panelClassName="min-w-48"
+          />
+        </Row>
       </Section>
     </>
   );

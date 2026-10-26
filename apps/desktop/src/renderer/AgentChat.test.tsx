@@ -29,6 +29,8 @@ import type { Item } from "./transcript";
 import { fakeWatch } from "./fakeWatch";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// A web link asks main for its site's icon, which these tests have none of.
+window.parallax = { siteIcon: async () => undefined } as Partial<ParallaxBridge> as ParallaxBridge;
 // The real split, watched, to see which messages take it.
 vi.mock("./markdownBlocks", async (actual) => {
   const real = await actual<typeof import("./markdownBlocks")>();

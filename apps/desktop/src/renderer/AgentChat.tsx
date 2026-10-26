@@ -109,10 +109,10 @@ import {
   type TraceStatus,
 } from "./Trace";
 import { locale } from "./locale";
-import { ClaudeLogo, ParallaxGlyph } from "./logos";
+import { ClaudeLogo, GitHubLogo, ParallaxGlyph } from "./logos";
 import { codeRuns, markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { mentionsOf, withMentions } from "./Mention";
-import { onGithub } from "./github";
+import { onGithub, prNumber } from "./github";
 import { dollarMath } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
@@ -176,6 +176,7 @@ import { useAgentRun, type SentMessage } from "./useAgentRun";
 import { presentWaiting } from "./waiting";
 import { WaitingBar } from "./WaitingBar";
 import { clockOptions } from "./prefs";
+import { askSiteIcon, linkSite, siteIcons } from "./siteIcons";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
 type Row =
@@ -2521,6 +2522,50 @@ function follow(url: string, openFile?: (path: string) => void) {
   else if (/^https:/i.test(url)) window.open(url, "_blank", "noreferrer");
 }
 
+const linkIcon = "mr-1 inline size-3.5 rounded-[3px] align-[-0.15em]";
+
+/**
+ * What a transcript's link draws: a GitHub pull request as GitHub's mark and its number, any
+ * other https page with its site's icon before its text, and a file's link, or another scheme's,
+ * as its text alone.
+ */
+function linkContent({ url, children }: { url: string; children: ReactNode }) {
+  const number = prNumber(url);
+  if (number)
+    return (
+      <span className="whitespace-nowrap">
+        <GitHubLogo className={`${linkIcon} text-foreground`} />#{number}
+      </span>
+    );
+  const site = linkSite(url);
+  if (!site) return children;
+  return (
+    <>
+      <SiteIcon site={site} />
+      {children}
+    </>
+  );
+}
+
+/**
+ * A site's icon, before a link's text: GitHub's mark in the text's color, which GitHub's own dark
+ * favicon isn't on a dark theme, or the site's favicon once main has fetched it, a globe until
+ * then or when it has none.
+ */
+function SiteIcon({ site }: { site: string }) {
+  const github = site === "https://github.com";
+  const icon = siteIcons.use()[site];
+  useEffect(() => {
+    if (!github) askSiteIcon(site);
+  }, [site, github]);
+  if (github) return <GitHubLogo className={`${linkIcon} text-foreground`} />;
+  return icon ? (
+    <img src={icon} alt="" className={linkIcon} />
+  ) : (
+    <Globe aria-hidden className={`${linkIcon} text-foreground`} />
+  );
+}
+
 /** Markdown between code blocks, drawn by Enriched Markdown's web renderer. */
 const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; images: Images }) {
   const openFile = useOpenFile();
@@ -2543,6 +2588,7 @@ const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; 
       linkRecognition={openFile ? recognition : undefined}
       enableTaskListItemToggle={false}
       onLinkPress={({ url }) => follow(url, openFile)}
+      renderLinkContent={linkContent}
       // An empty source keeps an image unrequested: a URL an agent writes can carry what it read.
       resolveImageSource={({ url }) => (remote(url) ? undefined : { uri: "" })}
       renderers={{

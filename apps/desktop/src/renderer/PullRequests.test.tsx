@@ -46,7 +46,11 @@ beforeEach(() => {
   request.mockClear();
   read = {};
   actions = {};
-  window.parallax = { platform: "darwin", request } as Partial<ParallaxBridge> as ParallaxBridge;
+  window.parallax = {
+    platform: "darwin",
+    request,
+    siteIcon: async () => undefined,
+  } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
 let root: Root | undefined;
