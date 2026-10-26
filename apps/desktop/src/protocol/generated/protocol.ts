@@ -9135,13 +9135,22 @@ export type PrWatchesResult = {
 };
 
 /**
- * Result of `pr/status` (PLX-837): one read of a pull request, and whether it is ready to merge.
+ * Result of `pr/status` (PLX-837, PLX-1018): one read of a pull request, and whether it is ready
+ * to merge. A read under 30 s old, by any run or the watch sweep, is shared.
  */
 export type PrStatusResult = {
 	/**
 	 * The pull request's URL.
 	 */
 	url: string,
+	/**
+	 * Its title (PLX-1018).
+	 */
+	title?: string,
+	/**
+	 * Its description, in full. Absent when it has none.
+	 */
+	body?: string,
 	/**
 	 * `OPEN`, `CLOSED`, or `MERGED`.
 	 */
@@ -9155,9 +9164,17 @@ export type PrStatusResult = {
 	 */
 	headSha?: string,
 	/**
+	 * The branch it merges from.
+	 */
+	headBranch?: string,
+	/**
 	 * The branch it merges into.
 	 */
 	baseBranch: string,
+	/**
+	 * The files it changes, at most 100. Absent means none.
+	 */
+	files?: Array<PrStatusFile>,
 	/**
 	 * Commits on the base branch the head doesn't have. 0 once it isn't open.
 	 */
@@ -9188,6 +9205,11 @@ export type PrStatusResult = {
 	 */
 	passed: Array<string>,
 	/**
+	 * Every check on the head, by name, with its link and Actions run (PLX-1018). Absent means
+	 * none.
+	 */
+	checks?: Array<PrStatusCheck>,
+	/**
 	 * Review threads nobody has resolved.
 	 */
 	unresolvedThreads: Array<PrStatusThread>,
@@ -9207,7 +9229,7 @@ export type PrStatusResult = {
 };
 
 /**
- * A failed check in a [`PrStatusResult`].
+ * A check in a [`PrStatusResult`].
  */
 export type PrStatusCheck = {
 	/**
@@ -9215,7 +9237,8 @@ export type PrStatusCheck = {
 	 */
 	name: string,
 	/**
-	 * How it failed, in lowercase: `failure`, `cancelled`, `timed out`, and so on.
+	 * `pending`, `passed`, or how it failed, in lowercase: `failure`, `cancelled`, `timed out`,
+	 * and so on.
 	 */
 	how: string,
 	/**
@@ -9226,12 +9249,38 @@ export type PrStatusCheck = {
 	 * Its log or details page.
 	 */
 	url?: string,
+	/**
+	 * Its GitHub Actions workflow run, for `gh run`, when it is an Actions check.
+	 */
+	runId?: number,
+};
+
+/**
+ * A file a [`PrStatusResult`]'s pull request changes.
+ */
+export type PrStatusFile = {
+	/**
+	 * Its path in the repository.
+	 */
+	path: string,
+	/**
+	 * Lines added.
+	 */
+	additions: number,
+	/**
+	 * Lines deleted.
+	 */
+	deletions: number,
 };
 
 /**
  * An unresolved review thread in a [`PrStatusResult`], by its first comment.
  */
 export type PrStatusThread = {
+	/**
+	 * Its GraphQL node id, to reply to or resolve it (PLX-1018).
+	 */
+	id?: string,
 	/**
 	 * The file it is on.
 	 */
