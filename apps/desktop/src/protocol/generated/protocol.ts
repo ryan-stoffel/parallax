@@ -835,6 +835,12 @@ export type ParallaxRequests = {
 	 */
 	"pr/uploadMedia": { params: PrUploadMediaParams, result: PrUploadMediaResult },
 	/**
+	 * `pr/sharedDiff` (PLX-1021): a GitHub pull request's unified diff, as `pr/diff` reads
+	 * it, read once per head and shared by every run that asks. It needn't be linked. Gated
+	 * on `prWatch`.
+	 */
+	"pr/sharedDiff": { params: PrViewParams, result: PrDiffResult },
+	/**
 	 * `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
 	 * declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
 	 * `setupScripts` capability, like `repo/saveScripts`.
@@ -1108,6 +1114,7 @@ export const REQUEST_METHODS = [
 	"pr/status",
 	"pr/failureLog",
 	"pr/uploadMedia",
+	"pr/sharedDiff",
 	"repo/scripts",
 	"repo/saveScripts",
 	"task/delegate",

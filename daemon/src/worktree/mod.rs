@@ -106,10 +106,11 @@ pub use checkpoint::{DiffFormat, parse_numstat_z};
 pub use checks::{CHECKS_TIMEOUT, Checked};
 pub use folder::RunFolder;
 pub use landing::Merged;
+pub(crate) use pull_request::agent_diff;
 pub use pull_request::{PrError, github_pr_urls};
 pub use review::{AcceptError, MAX_BLOB_BYTES, MergeHow, validate_repo_path};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -412,7 +413,8 @@ pub struct Commit {
 
 /// Creates, inspects, and removes the worktrees agent runs use.
 ///
-/// Cheap to clone: it shares its [`Launcher`] and its per-repository lock table.
+/// Cheap to clone: it shares its [`Launcher`], its per-repository lock table, and its pull request
+/// diffs.
 #[derive(Clone)]
 pub struct WorktreeManager {
     launcher: Launcher,
@@ -423,6 +425,8 @@ pub struct WorktreeManager {
     max_git_line_bytes: usize,
     merge_timeout: Duration,
     repo_locks: Arc<StdMutex<HashMap<PathBuf, Arc<AsyncMutex<()>>>>>,
+    /// [`WorktreeManager::shared_diff`]'s diffs by pull request URL and head SHA, oldest first.
+    pr_diffs: Arc<StdMutex<VecDeque<(String, parallax_protocol::PrDiffResult)>>>,
 }
 
 impl WorktreeManager {
@@ -439,6 +443,7 @@ impl WorktreeManager {
             max_git_line_bytes: DEFAULT_MAX_GIT_LINE_BYTES,
             merge_timeout: review::MERGE_TIMEOUT,
             repo_locks: Arc::new(StdMutex::new(HashMap::new())),
+            pr_diffs: Arc::default(),
         }
     }
 

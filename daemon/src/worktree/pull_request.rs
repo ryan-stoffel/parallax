@@ -8,9 +8,13 @@
 //! [`WorktreeManager::view_pr`] and [`WorktreeManager::act_pr`] read and change a run's linked pull
 //! request by its URL (PLX-318), and [`WorktreeManager::diff_pr`] reads its diff (PLX-328), in
 //! plxd's temp folder rather than any checkout, and [`github_pr_urls`] finds the pull requests an agent's `gh pr create` printed.
+//! [`WorktreeManager::shared_diff`] reads a diff once per head for every run's `pull_request_diff`
+//! (PLX-1021), and [`agent_diff`] cuts it to the paths the agent asked for.
 
 use std::ffi::OsString;
 use std::path::Path;
+use std::sync::PoisonError;
+use std::time::Duration;
 
 use jiff::Timestamp;
 use parallax_protocol::{
@@ -35,6 +39,13 @@ const VIEW_FIELDS: &str = "--json=number,title,url,state,isDraft,author,updatedA
 
 /// The most of a pull request's diff `pr/diff` returns, so its answer fits one frame.
 const MAX_DIFF_BYTES: usize = 2 * 1024 * 1024;
+
+/// The most diffs [`WorktreeManager::shared_diff`] keeps, so at most 32 MiB.
+const SHARED_DIFFS: usize = 16;
+
+/// The longest [`WorktreeManager::shared_diff`] waits on GitHub, well under the 90 s plxd lets a
+/// connection sit idle.
+const SHARED_DIFF_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Why [`WorktreeManager::open_pr`] failed. Each message says what to do, with the command's
 /// stderr.
@@ -143,6 +154,49 @@ impl WorktreeManager {
             .gh(&std::env::temp_dir(), &["pr", "diff", url, "--color=never"])
             .await?;
         Ok(cap_diff(diff, MAX_DIFF_BYTES))
+    }
+
+    /// Pull request `url`'s diff as [`Self::diff_pr`] reads it, shared by every caller while its
+    /// head stays the same: a call for a head already read costs one `gh pr view` of the head,
+    /// not a second `gh pr diff`.
+    ///
+    /// # Errors
+    ///
+    /// [`PrError`]: `gh` is missing, not signed in, or failed, or GitHub took longer than
+    /// [`SHARED_DIFF_TIMEOUT`].
+    // ponytail: reads the head with its own call; take it from pr_watch's shared read (PLX-1018)
+    // once that lands, so a hit costs nothing.
+    pub async fn shared_diff(&self, url: &str) -> Result<PrDiffResult, PrError> {
+        timeout(SHARED_DIFF_TIMEOUT, async {
+            let head = self
+                .gh(
+                    &std::env::temp_dir(),
+                    &["pr", "view", url, "--json=headRefOid", "--jq=.headRefOid"],
+                )
+                .await?;
+            let key = format!("{url}@{}", head.trim());
+            let diffs = || self.pr_diffs.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some((_, diff)) = diffs().iter().find(|(read, _)| *read == key) {
+                return Ok(diff.clone());
+            }
+            // A push between the head's read and this one keeps the newer head's diff under the
+            // older head. Only a caller that still sees the older head is served it, and the
+            // next read of the newer head misses and reads its own.
+            let diff = self.diff_pr(url).await?;
+            let mut kept = diffs();
+            if kept.len() >= SHARED_DIFFS {
+                kept.pop_front();
+            }
+            kept.push_back((key, diff.clone()));
+            Ok(diff)
+        })
+        .await
+        .unwrap_or_else(|_| {
+            Err(PrError::Gh(format!(
+                "GitHub didn't send the pull request's diff within {}s; try again",
+                SHARED_DIFF_TIMEOUT.as_secs()
+            )))
+        })
     }
 
     /// Does `action` to pull request `url` and returns it as it is after.
@@ -572,6 +626,88 @@ fn cap_diff(mut diff: String, max: usize) -> PrDiffResult {
     }
 }
 
+/// What `pull_request_diff` shows of `read`: only the files at or under `paths` when there are
+/// any, cut at a line's end at `max` bytes, with a note for whatever is missing.
+pub(crate) fn agent_diff(read: PrDiffResult, paths: &[String], max: usize) -> String {
+    let diff = if paths.is_empty() {
+        read.diff
+    } else {
+        of_paths(&read.diff, paths)
+    };
+    let total = diff.len();
+    // Room for the notes.
+    let shown = cap_diff(diff, max.saturating_sub(256));
+    let mut notes = Vec::new();
+    if total == 0 && !paths.is_empty() {
+        notes.push("[No file in the diff matches those paths.]\n".to_owned());
+    }
+    if shown.truncated {
+        notes.push(format!(
+            "[Cut: {} of {total} bytes shown. Pass paths to read the rest.]\n",
+            shown.diff.len()
+        ));
+    }
+    if read.truncated {
+        notes.push(format!(
+            "[GitHub's diff was cut at {} MiB; files after the cut are missing.]\n",
+            MAX_DIFF_BYTES / 1024 / 1024
+        ));
+    }
+    shown.diff + &notes.concat()
+}
+
+/// The `diff --git` sections of `diff` whose old or new path is one of `paths` or under it, by
+/// whole path components.
+fn of_paths(diff: &str, paths: &[String]) -> String {
+    let paths: Vec<&str> = paths
+        .iter()
+        .map(|path| path.trim_start_matches("./").trim_matches('/'))
+        .filter(|path| !path.is_empty())
+        .collect();
+    let wanted = |file: &str| {
+        paths.iter().any(|path| {
+            file.strip_prefix(path)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+        })
+    };
+    let mut sections: Vec<String> = Vec::new();
+    for line in diff.split_inclusive('\n') {
+        match sections.last_mut() {
+            Some(section) if !line.starts_with("diff --git ") => section.push_str(line),
+            _ => sections.push(line.to_owned()),
+        }
+    }
+    sections
+        .into_iter()
+        .filter(|section| files(section).any(wanted))
+        .collect()
+}
+
+/// The paths a `diff --git` section names: both sides of its header when they are the same path,
+/// and its `---`, `+++`, rename, and copy lines before its first hunk.
+fn files(section: &str) -> impl Iterator<Item = &str> {
+    let mut lines = section.lines();
+    // `a/X b/Y` is ambiguous when a path holds " b/", but not when X is Y.
+    let header = lines
+        .next()
+        .and_then(|header| header.strip_prefix("diff --git a/"))
+        .and_then(|sides| {
+            let half = sides.len().checked_sub(3)? / 2;
+            let (old, new) = (sides.get(..half)?, sides.get(half..)?);
+            (new.strip_prefix(" b/")? == old).then_some(old)
+        });
+    let named = lines
+        .take_while(|line| !line.starts_with("@@"))
+        .filter_map(|line| {
+            ["--- a/", "+++ b/", "rename from ", "rename to ", "copy from ", "copy to "]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix))
+                // git ends a path holding a space with a tab on `---` and `+++` lines.
+                .map(|file| file.trim_end_matches('\t'))
+        });
+    header.into_iter().chain(named)
+}
+
 /// `url` without its userinfo (`https://user:token@host/path` becomes `https://host/path`), so a
 /// credential kept in the remote's URL never reaches `gh`'s argv. An scp-like `git@host:path`
 /// stays as it is: it can't hold a password.
@@ -588,10 +724,12 @@ fn without_userinfo(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::{PrCheckState, PrMergeMethod, PrMergeState, PrReviewState, PrState};
+    use parallax_protocol::{
+        PrCheckState, PrDiffResult, PrMergeMethod, PrMergeState, PrReviewState, PrState,
+    };
     use serde_json::json;
 
-    use super::{parse_view, without_userinfo};
+    use super::{agent_diff, parse_view, without_userinfo};
 
     /// An open draft's `gh pr view --json` answer, with every kind of comment and check.
     fn answer() -> serde_json::Value {
@@ -759,6 +897,100 @@ mod tests {
                 ("def456", "docs: mention Node", "Ann")
             ],
             "by login, or by name without a GitHub account"
+        );
+    }
+
+    #[test]
+    fn an_agent_reads_only_the_paths_it_asks_for() {
+        let section = |old: &str, new: &str| {
+            format!("diff --git a/{old} b/{new}\n--- a/{old}\n+++ b/{new}\n@@ -1 +1 @@\n-x\n+y\n")
+        };
+        let (main, docs, renamed) = (
+            section("src/main.rs", "src/main.rs"),
+            section("docs/a b.md", "docs/a b.md"),
+            section("old.rs", "src/new.rs"),
+        );
+        let read = PrDiffResult {
+            diff: format!("{main}{docs}{renamed}"),
+            truncated: false,
+        };
+        let paths = |paths: &[&str]| {
+            paths
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect::<Vec<_>>()
+        };
+        let shown = |asked: &[&str]| agent_diff(read.clone(), &paths(asked), 1024 * 1024);
+        assert_eq!(shown(&[]), read.diff, "no paths is the whole diff");
+        assert_eq!(shown(&["src/main.rs"]), main, "a file");
+        assert_eq!(shown(&["docs/"]), docs, "a folder, a path with a space");
+        assert_eq!(shown(&["old.rs"]), renamed, "a rename by its old path");
+        assert_eq!(
+            shown(&["src"]),
+            format!("{main}{renamed}"),
+            "by its new path"
+        );
+        assert_eq!(
+            shown(&["src/main"]),
+            "[No file in the diff matches those paths.]\n"
+        );
+        assert_eq!(
+            shown(&["docs/a"]),
+            "[No file in the diff matches those paths.]\n",
+            "whole path components only"
+        );
+
+        let cut = agent_diff(read.clone(), &[], 256 + main.len() + 1);
+        assert!(cut.starts_with(&main) && !cut.contains("docs/"), "{cut}");
+        assert!(cut.ends_with("Pass paths to read the rest.]\n"), "{cut}");
+    }
+
+    /// A second read of a head already read runs only `gh pr view`, never a second `gh pr diff`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_head_already_read_shares_its_diff() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::backend::process::{Environment, Launcher};
+        use crate::paths::DataDir;
+        use crate::worktree::WorktreeManager;
+
+        let bin = tempfile::tempdir().unwrap();
+        let log = bin.path().join("calls");
+        let gh = bin.path().join("gh");
+        std::fs::write(
+            &gh,
+            format!(
+                "#!/bin/sh\necho \"$1 $2\" >> '{}'\nif [ \"$2\" = view ]; then cat '{}'; else echo 'diff --git a/x b/x'; fi\n",
+                log.display(),
+                bin.path().join("head").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let head = |sha: &str| std::fs::write(bin.path().join("head"), format!("{sha}\n")).unwrap();
+        let data = tempfile::tempdir().unwrap();
+        let path = format!(
+            "{}:{}",
+            bin.path().display(),
+            std::env::var("PATH").unwrap()
+        );
+        let env: Environment = [("PATH", path.as_str())].into_iter().collect();
+        let manager = WorktreeManager::new(
+            Launcher::new(DataDir::new(data.path()).unwrap(), env),
+            data.path(),
+        );
+        let url = "https://github.com/me/app/pull/42";
+
+        head("abc");
+        let first = manager.shared_diff(url).await.unwrap();
+        assert_eq!(manager.shared_diff(url).await.unwrap(), first);
+        head("def");
+        manager.shared_diff(url).await.unwrap();
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(
+            calls, "pr view\npr diff\npr view\npr view\npr diff\n",
+            "a new head reads its diff again"
         );
     }
 

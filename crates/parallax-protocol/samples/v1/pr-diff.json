@@ -82,5 +82,22 @@
       "diff": "diff --git a/README.md b/README.md\nnew file mode 100644\nindex 0000000..e69de29\n--- /dev/null\n+++ b/README.md\n@@ -0,0 +1,2 @@\n+# App\n+Run `npm start`.\n",
       "truncated": false
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "pr/sharedDiff",
+    "params": {
+      "runId": "01a0d360-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+      "url": "https://github.com/me/app/pull/42"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "diff": "diff --git a/README.md b/README.md\nnew file mode 100644\nindex 0000000..e69de29\n--- /dev/null\n+++ b/README.md\n@@ -0,0 +1,2 @@\n+# App\n+Run `npm start`.\n",
+      "truncated": false
+    }
   }
 ]

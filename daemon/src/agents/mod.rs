@@ -2091,6 +2091,27 @@ pub(crate) async fn diff_pr(
         .map_err(|error| pr_error(&error))
 }
 
+/// `pr/sharedDiff` (PLX-1021): any GitHub pull request's unified diff, read as `pr/diff` reads
+/// one, once per head for every run.
+pub(crate) async fn shared_diff(
+    daemon: Arc<Daemon>,
+    params: PrViewParams,
+) -> Result<PrDiffResult, ErrorObject> {
+    let url = params.url;
+    // Only a pull request URL reaches gh's argv, never a flag.
+    if crate::worktree::github_pr_urls(&url) != [url.as_str()] {
+        return Err(ErrorObject::invalid_params(format!(
+            "{url:?} is not a GitHub pull request URL"
+        )));
+    }
+    daemon
+        .agents
+        .worktrees
+        .shared_diff(&url)
+        .await
+        .map_err(|error| pr_error(&error))
+}
+
 /// `pr/act` (PLX-318): does an action to one of a run's linked pull requests with `gh`, as
 /// `pr/view` reads one.
 pub(crate) async fn act_pr(
