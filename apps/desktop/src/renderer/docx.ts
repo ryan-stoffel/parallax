@@ -113,13 +113,13 @@ function countersAt(docx: Docx, blocks: HTMLElement[], groups: number[][]): stri
 }
 
 /**
- * Opens a .docx's bytes, with docx-preview loaded on first use. Throws when docx-preview can't
- * read it as a Word document.
+ * Opens a .docx's bytes, with docx-preview loaded on first use. Throws when it has no readable
+ * Word document.
  */
 export async function openDocx(bytes: Uint8Array): Promise<Docx> {
   const { parseAsync, renderDocument } = await import("docx-preview");
   const scope = `docx-${++scopes}`;
-  const nodes = await renderDocument(await parseAsync(bytes), {
+  const options = {
     className: scope,
     inWrapper: false,
     // Pages are cut from the body (pagesOf), so headers, footers, and notes aren't drawn.
@@ -127,9 +127,14 @@ export async function openDocx(bytes: Uint8Array): Promise<Docx> {
     renderFooters: false,
     renderFootnotes: false,
     renderEndnotes: false,
-    // data: URLs for images and fonts, which the renderer's CSP allows where blob: fonts aren't.
+    // data: URLs for images and fonts, which the renderer's CSP allows where blob: fonts aren't,
+    // and which nothing has to revoke. Parsing reads this one, so both steps take the options.
     useBase64URL: true,
+  };
+  const parsed = await parseAsync(bytes, options).catch(() => {
+    throw new Error("This file has no Word document in it.");
   });
+  const nodes = await renderDocument(parsed, options);
   const sections = nodes.filter((node): node is HTMLElement => node.nodeName === "SECTION");
   const css = withFallbacks(
     nodes
@@ -168,7 +173,8 @@ export async function openDocx(bytes: Uint8Array): Promise<Docx> {
 /**
  * docx-preview's stylesheet with what a computer without Office's fonts needs: each font a
  * sans-serif fallback, as a missing Calibri would otherwise fall back to the browser's serif, and
- * Symbol fonts' private-use bullets as a plain bullet. `@font-face` rules keep their names.
+ * symbol fonts' private-use characters (Symbol's and Wingdings' bullets, checks, and arrows) as a
+ * plain bullet. `@font-face` rules keep their names.
  */
 function withFallbacks(css: string): string {
   return css

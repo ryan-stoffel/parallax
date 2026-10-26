@@ -92,3 +92,29 @@ test("Symbol bullets show as a plain bullet, and each font falls back to sans-se
   expect(docx.css).toContain('content: "•');
   expect(docx.css).toContain("font-family: Symbol, sans-serif");
 });
+
+test("images are data: URLs, which the CSP allows and nothing has to revoke", async () => {
+  const drawing = `<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="3810000" cy="2857500"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:blipFill><a:blip xmlns:r="${REL}" r:embed="rId2"/></pic:blipFill><pic:spPr><a:xfrm><a:ext cx="3810000" cy="2857500"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
+  const docx = await openDocx(
+    zipSync({
+      "[Content_Types].xml": strToU8(
+        `<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/></Types>`,
+      ),
+      "_rels/.rels": rels("officeDocument", "word/document.xml"),
+      "word/document.xml": strToU8(
+        `<w:document ${NS}><w:body><w:p><w:r>${drawing}</w:r></w:p></w:body></w:document>`,
+      ),
+      "word/_rels/document.xml.rels": strToU8(
+        `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="${REL}/image" Target="media/image1.png"/></Relationships>`,
+      ),
+      "word/media/image1.png": strToU8("png"),
+    }),
+  );
+  expect(docx.render().querySelector("img")!.getAttribute("src")).toMatch(/^data:image\/png;/);
+});
+
+test("a file that isn't a Word document says so", async () => {
+  await expect(openDocx(strToU8("not a zip"))).rejects.toThrow(
+    "This file has no Word document in it.",
+  );
+});
