@@ -45,6 +45,8 @@ export interface Instance {
   name: string;
   /** Sign-in identity or plan reported by the provider. */
   account?: string;
+  /** Subscription plan reported by the provider, such as `pro`. */
+  plan?: string;
   kind: string;
   enabled: boolean;
   permissions: AgentPermission[];
@@ -155,6 +157,7 @@ export function catalogOf(
           id: info.instance.id,
           name: accountLabel(info),
           ...(info.account && { account: info.account }),
+          ...(info.plan && { plan: info.plan }),
           kind: info.instance.kind,
           enabled: info.instance.enabled,
           permissions: info.permissions,

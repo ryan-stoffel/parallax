@@ -153,6 +153,10 @@ pub struct ProviderInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<String>,
+    /// Its subscription plan, such as `pro`, where the agent says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub plan: Option<String>,
     /// Why something above is missing or uncertain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
