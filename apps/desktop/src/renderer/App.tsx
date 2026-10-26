@@ -59,7 +59,7 @@ import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./P
 import { NotificationsPage } from "./NotificationsPage";
 import { PullRequestsPage } from "./PullRequestsPage";
 import type { PrEntry } from "./pullRequestSearch";
-import { Settings } from "./Settings";
+import { SettingsDialog } from "./Settings";
 import { SidePanel } from "./SidePanel";
 import { Browser, BrowserTabBar } from "./Browser";
 import { browserSettingsAsked } from "./browserSettings";
@@ -76,15 +76,7 @@ import {
   useSnoozeAlarms,
   useThreadAlarms,
 } from "./alarms";
-import {
-  ProjectIcon,
-  RepoIcon,
-  SettingsNav,
-  settingsNames,
-  SharedRepoIcons,
-  Sidebar,
-  ThreadList,
-} from "./Sidebar";
+import { ProjectIcon, RepoIcon, SharedRepoIcons, Sidebar, ThreadList } from "./Sidebar";
 import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
@@ -178,8 +170,16 @@ export function App() {
   const [settingsHost, setSettingsHost] = useState<string>();
   // The setting Settings' search picked last, to scroll to; a new object each pick.
   const [settingsFocus, setSettingsFocus] = useState<{ anchor: string }>();
+  // How many times Settings has closed. New thread and a Project's chat read the defaults it sets
+  // when they mount, so they mount again each time it closes.
+  const [settingsClosed, setSettingsClosed] = useState({ open: false, count: 0 });
+  if (settingsClosed.open !== (settings !== null))
+    setSettingsClosed(({ count }) => ({
+      open: settings !== null,
+      count: settings ? count : count + 1,
+    }));
   // The page shown in place of the chat, if any: Pull requests, Notifications (PLX-1015), or the
-  // sidebar's permanent browser (PLX-964). Opening a thread or Settings closes it.
+  // sidebar's permanent browser (PLX-964). Opening a thread closes it.
   const [mainPage, setMainPage] = useState<"pullRequests" | "notifications" | "browser">();
   const browserStyle = useBrowserTheme();
   // The permanent browser mounts the first time it opens and stays, so its pages keep running.
@@ -188,7 +188,6 @@ export function App() {
 
   useEffect(() => setMainPage(undefined), [selection]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
-    setMainPage(undefined);
     setSettings(section);
     setSettingsHost(hostId);
     setSettingsFocus(undefined);
@@ -351,7 +350,6 @@ export function App() {
   if (splitGone) closePane(splitGone);
   // The threads the main pane shows: the split's while one of them is open.
   const paired =
-    !settings &&
     selection.kind === "thread" &&
     split?.hostId === host.id &&
     split.threadIds.includes(selection.threadId);
@@ -960,7 +958,7 @@ export function App() {
 
   // Where the open thread's or New thread's terminals open (folderOf).
   const folder =
-    settings || selection.kind === "project"
+    selection.kind === "project"
       ? undefined
       : folderOf(
           host.id,
@@ -1077,8 +1075,7 @@ export function App() {
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
-  // The side panel is a chat's, so Settings has none.
-  const sidePanelOpen = pane !== undefined && !settings;
+  const sidePanelOpen = pane !== undefined;
   const expanded = sidePanelOpen && panelExpanded;
   const [leftWidth, rightWidth] = panelWidths(
     viewportWidth,
@@ -1157,6 +1154,24 @@ export function App() {
         }
         onPickElsewhere={pickRepoOn}
       />
+      {settings && (
+        <SettingsDialog
+          section={settings}
+          listed={listed}
+          theme={theme}
+          onThemeChange={setTheme}
+          sourceControlHost={settingsHost}
+          focus={settingsFocus}
+          onSection={(section, anchor) => {
+            openSettings(section);
+            setSettingsFocus(anchor ? { anchor } : undefined);
+          }}
+          onClose={() => {
+            setSettings(null);
+            setSettingsFocus(undefined);
+          }}
+        />
+      )}
       <Sidebar
         width={leftWidth}
         onResize={(width) => resizePanel(0, width)}
@@ -1165,64 +1180,35 @@ export function App() {
         onNewThread={() => newThread()}
         onOpenNotifications={() => openMainPage("notifications")}
       >
-        {settings ? (
-          <SettingsNav
-            section={settings}
-            onSection={(section, anchor) => {
-              openSettings(section);
-              setSettingsFocus(anchor ? { anchor } : undefined);
-            }}
-            onBack={() => {
-              setSettings(null);
-              setSettingsFocus(undefined);
-            }}
-          />
-        ) : (
-          <ThreadList
-            hosts={listed}
-            host={host}
-            selection={selection}
-            onSelect={(hostId, next) => {
-              // The open row, picked again, leaves Pull requests or the browser too.
-              setMainPage(undefined);
-              openOnHost(hostId, next);
-              // A Project opens on its coordinator's chat and the Project tab (0083).
-              if (next.kind === "project") setShowHome({});
-            }}
-            onOpenProject={openProject}
-            onOpenSettings={openSettings}
-            onOpenPullRequests={() => openMainPage("pullRequests")}
-            browserOpen={!settings && mainPage === "browser"}
-            onOpenBrowser={() => openMainPage("browser")}
-            onDelete={deleteThread}
-            addDialog={addDialog}
-            onNewThread={() => picker.current?.showModal()}
-            split={split}
-            onOpenBeside={openBeside}
-            onClosePane={closePane}
-          />
-        )}
+        <ThreadList
+          hosts={listed}
+          host={host}
+          selection={selection}
+          onSelect={(hostId, next) => {
+            // The open row, picked again, leaves Pull requests or the browser too.
+            setMainPage(undefined);
+            openOnHost(hostId, next);
+            // A Project opens on its coordinator's chat and the Project tab (0083).
+            if (next.kind === "project") setShowHome({});
+          }}
+          onOpenProject={openProject}
+          onOpenSettings={openSettings}
+          onOpenPullRequests={() => openMainPage("pullRequests")}
+          browserOpen={mainPage === "browser"}
+          onOpenBrowser={() => openMainPage("browser")}
+          onDelete={deleteThread}
+          addDialog={addDialog}
+          onNewThread={() => picker.current?.showModal()}
+          split={split}
+          onOpenBeside={openBeside}
+          onClosePane={closePane}
+        />
       </Sidebar>
 
       {/* An expanded side panel takes the main pane's place. */}
       <OpenDocumentContext value={openDoc}>
         <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
-          {settings ? (
-            <>
-              <TopBar className={topBarInset}>
-                {showSidebar}
-                <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[settings] }]} />
-              </TopBar>
-              <Settings
-                section={settings}
-                listed={listed}
-                theme={theme}
-                onThemeChange={setTheme}
-                sourceControlHost={settingsHost}
-                focus={settingsFocus}
-              />
-            </>
-          ) : mainPage === "browser" ? (
+          {mainPage === "browser" ? (
             // The browser's theme paints its top bar and the browser, not the terminal drawer under
             // them (browserTheme.ts).
             <TopBar style={browserStyle} className={`bg-pane ${topBarInset}`}>
@@ -1464,7 +1450,7 @@ export function App() {
                   ) : selection.kind === "new" ? (
                     <NewThread
                       // Opening a draft opens a new screen, which leaves the one open as a draft.
-                      key={draft}
+                      key={`${draft}/${settingsClosed.count}`}
                       draftId={draft}
                       hostId={host.id}
                       hosts={hosts}
@@ -1530,7 +1516,7 @@ export function App() {
                   ) : (
                     project && (
                       <ProjectChat
-                        key={`${host.id}/${project.id}`}
+                        key={`${host.id}/${project.id}/${settingsClosed.count}`}
                         hostId={host.id}
                         project={project}
                         prompt={
@@ -1614,14 +1600,14 @@ export function App() {
           )}
           {browserPage && (
             <div
-              hidden={!!settings || mainPage !== "browser"}
+              hidden={mainPage !== "browser"}
               style={browserStyle}
               className="flex min-h-0 flex-1 flex-col bg-pane"
             >
               <Browser scope="permanent" onEmpty={() => setMainPage(undefined)} />
             </div>
           )}
-          {/* Outside the views, so the terminals live on behind Settings. */}
+          {/* Outside the views, so the terminals live on behind the other pages. */}
           <TerminalDrawer
             open={drawerOpen}
             folder={folder}

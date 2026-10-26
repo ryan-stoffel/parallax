@@ -2,7 +2,6 @@ import {
   AlarmClock,
   Archive,
   ArchiveRestore,
-  ArrowLeft,
   ArrowUp,
   Bell,
   Bot,
@@ -3849,20 +3848,17 @@ export const settingsNames = Object.fromEntries(
 ) as Record<SettingsSection, string>;
 
 /**
- * The sidebar while Settings is open: a search box, the sections, and Back to app at the bottom.
- * `/` anywhere outside a field focuses the box. Typed words list the matching sections and
- * settings in the sections' place (search.ts); Up and Down choose one, Enter or a click opens it,
- * and Escape clears.
+ * Settings' nav (SettingsDialog): a search box and the sections. `/` anywhere outside a field
+ * focuses the box. Typed words list the matching sections and settings in the sections' place
+ * (search.ts); Up and Down choose one, Enter or a click opens it, and Escape clears.
  */
 export function SettingsNav({
   section,
   onSection,
-  onBack,
 }: {
   section: SettingsSection;
   /** Opens a section, scrolled to the setting with `anchor` as its `data-setting`. */
   onSection: (section: SettingsSection, anchor?: string) => void;
-  onBack: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
@@ -3906,8 +3902,11 @@ export function SettingsNav({
             }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
-                if (query) setQuery("");
-                else e.currentTarget.blur();
+                // Clearing the search leaves Settings open; Escape again closes it.
+                if (query) {
+                  e.preventDefault();
+                  setQuery("");
+                }
               } else if ((e.key === "ArrowDown" || e.key === "ArrowUp") && results.length) {
                 e.preventDefault();
                 const step = e.key === "ArrowDown" ? 1 : -1;
@@ -4001,12 +4000,6 @@ export function SettingsNav({
             })}
           </div>
         )}
-      </div>
-      <div className="border-t border-border p-2">
-        <button type="button" onClick={onBack} className={`${row} text-muted-foreground`}>
-          <ArrowLeft className="size-4" />
-          Back to app
-        </button>
       </div>
     </div>
   );

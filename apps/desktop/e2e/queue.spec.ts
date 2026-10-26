@@ -22,7 +22,7 @@ test("queues, edits, reorders and steers while the current turn keeps running (P
   })`);
   expect(defaults).not.toHaveProperty("error");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   const box = page.getByRole("textbox", { name: "Message", exact: true });
   await box.fill("Build the queue controls");
   await box.press("Enter");
