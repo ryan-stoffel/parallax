@@ -174,10 +174,24 @@ const REDIRECTS: &[Redirect] = &[
         },
         tool: "pull_request_edit",
     },
+    // merge_when_ready merges with a method only, so a merge with more than that runs.
     Redirect {
         command: ["pr", "merge"],
         when: When::Answers {
-            unless: &["--disable-auto"],
+            unless: &[
+                "--disable-auto",
+                "--admin",
+                "--subject",
+                "-t",
+                "--body",
+                "-b",
+                "--body-file",
+                "-F",
+                "--author-email",
+                "-A",
+                "--delete-branch",
+                "-d",
+            ],
             fields: &[],
         },
         tool: "merge_when_ready",
@@ -210,6 +224,8 @@ const VALUE_FLAGS: &[&str] = &[
     "--body",
     "-F",
     "--body-file",
+    "--match-head-commit",
+    "--color",
 ];
 
 /// The indexes of `args`' arguments that aren't flags or a [`VALUE_FLAGS`] flag's value: the

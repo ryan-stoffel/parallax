@@ -77,6 +77,8 @@ fn the_redirect_table_sends_replaced_commands_to_their_tools() {
             "pr merge https://github.com/o/r/pull/12 --squash --match-head-commit abc",
             "merge_when_ready",
         ),
+        ("pr merge --match-head-commit abc 12", "merge_when_ready"),
+        ("pr diff --color always 12", "pull_request_diff"),
     ];
     for (line, expected) in cases {
         assert_eq!(tool(line), Some(expected), "{line}");
@@ -131,6 +133,17 @@ fn commands_no_tool_replaces_run() {
         "pr merge --squash",
         "pr merge feature/x --squash",
         "pr merge 12 --disable-auto",
+        "pr merge 12 --squash --admin",
+        "pr merge 12 --squash --subject x",
+        "pr merge 12 --squash -t x",
+        "pr merge 12 --squash --body x",
+        "pr merge 12 --squash -b x",
+        "pr merge 12 --squash --body-file b.md",
+        "pr merge 12 --squash -F b.md",
+        "pr merge 12 --squash --author-email a@b.c",
+        "pr merge 12 --squash -A a@b.c",
+        "pr merge 12 --squash --delete-branch",
+        "pr merge 12 --squash -d",
         "pr list",
         "api rate_limit",
         "auth status",
