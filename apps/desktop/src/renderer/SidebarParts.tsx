@@ -83,16 +83,13 @@ function Segmented<T extends string | number | boolean | null>({
 
 /**
  * The sidebar's View options, at the foot of the filter menu (PLX-1043): how today's threads
- * group, how tall their rows are, whether Projects list at all, and when finished threads
- * archive themselves.
+ * group, how tall their rows are, and when finished threads archive themselves.
  */
 export function ViewOptions({
   autoHours,
   onAutoHours,
   compact,
   onCompact,
-  projects,
-  onProjects,
   group,
   onGroup,
 }: {
@@ -100,9 +97,6 @@ export function ViewOptions({
   onAutoHours: (hours: number | null) => void;
   compact: boolean;
   onCompact: (compact: boolean) => void;
-  /** Whether Projects list; hidden, they list only while searching. */
-  projects: boolean;
-  onProjects: (show: boolean) => void;
   /** How today's threads are grouped. */
   group: TodayGroup;
   onGroup: (group: TodayGroup) => void;
@@ -131,22 +125,7 @@ export function ViewOptions({
           ]}
           onChange={onCompact}
         />
-        <span className="text-body text-muted-foreground">Projects</span>
-        <Segmented
-          label="Projects"
-          value={projects}
-          options={[
-            [true, "Show"],
-            [false, "Hide"],
-          ]}
-          onChange={onProjects}
-        />
       </div>
-      {!projects && (
-        <p className="text-meta leading-snug text-faint-foreground">
-          Hidden Projects still show while you search.
-        </p>
-      )}
       <p className="text-body text-muted-foreground">Archive finished threads after</p>
       <Segmented
         label="Archive finished threads after"

@@ -20,7 +20,6 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
-import { showProjects } from "./pins";
 import { scopeStore } from "./scope";
 import { sectionsStore } from "./Sidebar";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
@@ -88,8 +87,8 @@ beforeEach(() => {
   request.mockClear();
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
-  showProjects.set(true);
-  sectionsStore.set({});
+  // The Projects drawer open (PLX-1043), so its cards show.
+  sectionsStore.set({ all: { projects: true } });
   scopeStore.set("all");
   popoverSources = [];
   listeners = new Set();
@@ -174,9 +173,14 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-// Each Project's row, by name, in the sidebar's order (PLX-1043).
+// The Projects atop the list, which need the user or match a search, by name (PLX-1043).
+const topProjects = () =>
+  [...document.querySelectorAll('#sidebar ul[aria-label="Projects"] [data-title]')].map(
+    (t) => t.textContent,
+  );
+// Each Project's card, by name, in the sidebar's order: atop the list, then in its drawer (PLX-1043).
 const projectRows = () =>
-  [...document.querySelectorAll('#sidebar [aria-label="Projects"] [data-title]')].map(
+  [...document.querySelectorAll('#sidebar li[data-kind="project"] [data-title]')].map(
     (t) => t.textContent,
   );
 const crumbs = () =>
@@ -245,18 +249,15 @@ test("lists plxd's Projects as rows, most recently active first, and adds one fr
   expect(projectRows()).toEqual(["parallax", "photon", "ember"]);
 });
 
-test("hidden from View, Projects list only while searching, and the open one keeps its row", async () => {
-  showProjects.set(false);
+test("Projects live in a drawer, folded until opened, and a search shows its matches atop the list", async () => {
+  sectionsStore.set({});
   await renderApp();
   expect(projectRows()).toEqual([]);
+  expect(document.querySelector("#sidebar summary")!.textContent).toContain("Projects (2)");
   const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
   typeInto(search, "emb");
   await settle();
-  expect(projectRows()).toEqual(["ember"]);
-  await click(rowButton("ember"));
-  typeInto(search, "");
-  await settle();
-  expect(projectRows()).toEqual(["ember"]);
+  expect(topProjects()).toEqual(["ember"]);
 });
 
 test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
@@ -356,7 +357,7 @@ test("a failed clone says why above the folders, where a long list can't push it
 const rowButton = (name: string) =>
   [
     ...document.querySelectorAll<HTMLButtonElement>(
-      '#sidebar [aria-label="Projects"] button[data-row]',
+      '#sidebar li[data-kind="project"] button[data-row]',
     ),
   ].find((b) => b.querySelector("[data-title]")?.textContent === name)!;
 // A Project row's menu, which a right-click on it opens.
@@ -715,6 +716,8 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
   });
   expect(pinned()!.textContent).toContain("Subagent: Write the docs");
   expect(pinned()!.textContent).toContain("git tag v1.2.0");
+  // Waiting on the user, ember leaves its drawer for the top of the list (PLX-1043).
+  expect(topProjects()).toEqual(["ember"]);
   await openView("Agents");
   expect(agentRow("Write the docs")!.textContent).toContain("Needs approval");
 
@@ -744,6 +747,7 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
     }),
   );
   expect(agentRow("Write the docs")!.textContent).not.toContain("Needs approval");
+  expect(topProjects()).toEqual([]);
 });
 
 // The sidebar's Projects section (PLX-340).

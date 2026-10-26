@@ -170,7 +170,6 @@ import { flushToasts, toast, undo, useToasts } from "./undo";
 import {
   autoClear,
   compactRows,
-  showProjects,
   draggedPin,
   favoriteOrder,
   forgetPin,
@@ -388,8 +387,13 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
 const cardDelay = 450;
 
 /** A scope's drawers, by whether each is open. Working stays tucked away until asked for. */
-type Sections = Record<"working" | "snoozed" | "archived", boolean>;
-const sectionDefaults: Sections = { working: false, snoozed: false, archived: false };
+type Sections = Record<"projects" | "working" | "snoozed" | "archived", boolean>;
+const sectionDefaults: Sections = {
+  projects: false,
+  working: false,
+  snoozed: false,
+  archived: false,
+};
 const record = <T,>(raw: unknown, fallback: Record<string, T>) =>
   raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, T>) : fallback;
 /** Which drawers each scope has open (PLX-789), kept on this computer. */
@@ -774,14 +778,11 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // Projects, most recently active first, as threads are (PLX-1043). Hidden from View, they list
-  // only while searching, and the open one keeps its row.
-  const projectsOn = showProjects.use();
-  const openProject =
-    selection.kind === "project" ? `${host.id}/${selection.projectId}` : undefined;
-  const projects = shown.flatMap((i) =>
-    i.kind === "project" && (projectsOn || words.length > 0 || i.key === openProject) ? [i] : [],
-  );
+  // Projects, most recently active first, as threads are (PLX-1043). They live in their drawer,
+  // except one that needs the user, or matches a search, which shows atop the list.
+  const allProjects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
+  const projects = allProjects.filter((p) => p.attention === "needsYou" || words.length > 0);
+  const drawerProjects = allProjects.filter((p) => !projects.includes(p));
   // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
   const favRank = (key: string) => {
@@ -1641,33 +1642,35 @@ export function ThreadList({
       };
     })
     .sort((a, b) => favRank(a.key) - favRank(b.key));
-  // The Projects, as rows like a thread's (PLX-1043).
+  // A Project's card (PLX-1043).
+  const projectCard = (p: Item & { kind: "project" }) => {
+    const n = modHeld ? listed.indexOf(p) : -1;
+    return (
+      <ProjectRow
+        key={p.key}
+        rowKey={p.key}
+        look={compact ? "compact" : undefined}
+        project={p.project}
+        runs={p.runs}
+        device={many && p.host.icon ? p.host : undefined}
+        at={p.at}
+        attention={p.attention}
+        selected={p.key === openKey}
+        badge={n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined}
+        words={words}
+        actions={projectActions(p)}
+        onOpen={() => {
+          setPicked(new Set());
+          openItem(p);
+        }}
+        onKeys={(e) => rowKeys(e, p)}
+      />
+    );
+  };
+  // The Projects that need the user, or match a search, atop the list.
   const projectList = projects.length > 0 && (
     <ul aria-label="Projects" className={`mb-1 ${cardGap}`}>
-      {projects.map((p) => {
-        const n = modHeld ? listed.indexOf(p) : -1;
-        return (
-          <ProjectRow
-            key={p.key}
-            rowKey={p.key}
-            look={compact ? "compact" : undefined}
-            project={p.project}
-            runs={p.runs}
-            device={many && p.host.icon ? p.host : undefined}
-            at={p.at}
-            attention={p.attention}
-            selected={p.key === openKey}
-            badge={n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined}
-            words={words}
-            actions={projectActions(p)}
-            onOpen={() => {
-              setPicked(new Set());
-              openItem(p);
-            }}
-            onKeys={(e) => rowKeys(e, p)}
-          />
-        );
-      })}
+      {projects.map(projectCard)}
     </ul>
   );
   // No line or Clear between what's kept and Today (PLX-1043); View lives in the filter menu.
@@ -1708,7 +1711,7 @@ export function ThreadList({
   // Why a host's list couldn't load or stopped updating, which is the list's own state.
   const errors = [...new Set(hosts.map((h) => h.view.error).filter(Boolean))];
   const nothingShown =
-    !projects.length &&
+    !allProjects.length &&
     !pool.length &&
     !snoozedItems.length &&
     !archived.length &&
@@ -1759,8 +1762,6 @@ export function ThreadList({
               onAutoHours={(hours) => autoClear.set(hours)}
               compact={compact}
               onCompact={(on) => compactRows.set(on)}
-              projects={projectsOn}
-              onProjects={(on) => showProjects.set(on)}
               group={groupBy}
               onGroup={(next) => todayGroup.set(next)}
             />
@@ -1811,6 +1812,13 @@ export function ThreadList({
           list
         )}
       </div>
+      <Drawer
+        label="Projects"
+        items={drawerProjects}
+        row={(p) => (p.kind === "project" ? projectCard(p) : null)}
+        open={sections.projects}
+        onOpenChange={(o) => toggleSection("projects", o)}
+      />
       <Drawer
         label="Working"
         items={workingTops}
