@@ -70,6 +70,8 @@ export function PromptRail({
             type="button"
             aria-label={`Go to prompt ${at + 1}: ${p.text}`}
             aria-current={at === current ? "true" : undefined}
+            // Its card stands in for the app's tooltip.
+            data-tooltip="off"
             onMouseEnter={(e) => show(at, e.currentTarget)}
             onFocus={(e) => show(at, e.currentTarget)}
             onClick={() => onJump(p)}
