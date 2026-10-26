@@ -1,4 +1,4 @@
-import { ArrowUpRight, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowUpRight, Layers, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import {
   lazy,
   Suspense,
@@ -29,6 +29,7 @@ import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
+import { NewPoolDialog, PoolPane, poolStatus } from "./PoolSettings";
 import {
   kindOf,
   logoOf,
@@ -626,6 +627,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   // The one sign-in terminal: main runs one per window.
   const [signingIn, setSigningIn] = useState<string>();
   const [adding, setAdding] = useState(false);
+  const [pooling, setPooling] = useState(false);
   // The instance Remove is asking about, until it's removed or Cancel.
   const [confirming, setConfirming] = useState<string>();
   const [removing, setRemoving] = useState(false);
@@ -705,6 +707,9 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
             <IconButton label="Add provider" onClick={() => setAdding(true)}>
               <Plus aria-hidden />
             </IconButton>
+            <IconButton label="New pool" onClick={() => setPooling(true)}>
+              <Layers aria-hidden />
+            </IconButton>
             {current && (
               <IconButton
                 label={`Remove ${current.instance.name}`}
@@ -728,6 +733,14 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           instances={list.map((p) => p.instance)}
           onAdded={setSelected}
           onClose={() => setAdding(false)}
+        />
+      )}
+      {pooling && list && (
+        <NewPoolDialog
+          hostId={host.id}
+          list={list}
+          onAdded={setSelected}
+          onClose={() => setPooling(false)}
         />
       )}
       {!list || !current ? (
@@ -800,7 +813,11 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                               <StatusDot tone={tone} />
                             </span>
                           )}
-                          {instance.enabled ? instanceStatus(info) : "Off"}
+                          {!instance.enabled
+                            ? "Off"
+                            : instance.members
+                              ? poolStatus(instance.members)
+                              : instanceStatus(info)}
                         </span>
                       </span>
                     </button>
@@ -817,24 +834,45 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
               })}
             </div>
             {/* Every pane stays mounted, so a sign-in outlives a switch to another tab. */}
-            {list.map((info) => (
-              <InstancePane
-                key={info.instance.id}
-                id={`${tabs}-${info.instance.id}-pane`}
-                tabId={`${tabs}-${info.instance.id}`}
-                hidden={info !== current}
-                signingIn={signingIn === info.instance.id}
-                onSignIn={(open) => setSigningIn(open ? info.instance.id : undefined)}
-                hostId={host.id}
-                info={info}
-                usage={usage}
-                period={period}
-                onPeriod={setPeriod}
-                keys={keys}
-                onKeys={setKeys}
-                onSignedIn={() => void loadProviders(host.id, true)}
-              />
-            ))}
+            {list.map((info) =>
+              info.instance.members ? (
+                <PoolPane
+                  key={info.instance.id}
+                  id={`${tabs}-${info.instance.id}-pane`}
+                  tabId={`${tabs}-${info.instance.id}`}
+                  hidden={info !== current}
+                  hostId={host.id}
+                  info={info}
+                  list={list}
+                  nameField={(onSave) => (
+                    <SavedField
+                      aria-label="Display name"
+                      required
+                      maxLength={64}
+                      value={info.instance.name}
+                      onSave={(name) => onSave(name.trim())}
+                    />
+                  )}
+                />
+              ) : (
+                <InstancePane
+                  key={info.instance.id}
+                  id={`${tabs}-${info.instance.id}-pane`}
+                  tabId={`${tabs}-${info.instance.id}`}
+                  hidden={info !== current}
+                  signingIn={signingIn === info.instance.id}
+                  onSignIn={(open) => setSigningIn(open ? info.instance.id : undefined)}
+                  hostId={host.id}
+                  info={info}
+                  usage={usage}
+                  period={period}
+                  onPeriod={setPeriod}
+                  keys={keys}
+                  onKeys={setKeys}
+                  onSignedIn={() => void loadProviders(host.id, true)}
+                />
+              ),
+            )}
           </div>
         </div>
       )}

@@ -1189,7 +1189,22 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "providers/upgrade": () => ({ version: "0.163.0" }),
   "providers/save": (p) => {
     const i = db.providers.findIndex((x) => x.instance.id === p.instance.id);
-    if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
+    const members = p.instance.members;
+    // An account pool (PLX-1033) reports its members' state, as plxd does.
+    const pooled = members && db.providers.filter((x) => members.includes(x.instance.id));
+    if (pooled) {
+      const pool: ProviderInfo = {
+        instance: p.instance,
+        installed: pooled.some((x) => x.installed),
+        signedIn: pooled.some((x) => x.signedIn === true) || undefined,
+        models: pooled.flatMap((x) => x.models),
+        permissions: pooled[0]?.permissions ?? [],
+        efforts: pooled[0]?.efforts ?? false,
+        coordinator: pooled[0]?.coordinator ?? false,
+      };
+      if (i >= 0) db.providers[i] = pool;
+      else db.providers.push(pool);
+    } else if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
     // A new one: OpenCode is on this Mac, the rest aren't.
     else
       db.providers.push({

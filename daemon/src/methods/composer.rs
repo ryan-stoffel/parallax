@@ -41,6 +41,11 @@ pub(crate) async fn list_commands(
         repo,
         run_id,
     } = params;
+    // A pool lists the commands of its first member, which runs the same agent (PLX-1033).
+    let name = match context.daemon.providers.members(&name).await {
+        Some(members) => members.into_iter().next().unwrap_or(name),
+        None => name,
+    };
     let (_, backend) = context
         .daemon
         .agents
