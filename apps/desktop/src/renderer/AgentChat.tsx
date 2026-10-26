@@ -1423,7 +1423,10 @@ export function TranscriptView({
         {findBar}
         {onCite && <CiteSelection log={scrollRef} onCite={onCite} />}
         {dock && (
-          <div ref={dockRef} className="absolute inset-x-0 bottom-0 flex max-h-full flex-col">
+          <div
+            ref={dockRef}
+            className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-full flex-col"
+          >
             {dock}
           </div>
         )}
