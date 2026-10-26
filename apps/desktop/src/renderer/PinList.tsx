@@ -132,9 +132,9 @@ export function PinList({
         endDrag();
       }}
       // A strip to drop on, even with nothing pinned and the hint hidden.
-      className="flex min-h-1.5 flex-col"
+      className="flex min-h-1 flex-col"
     >
-      <ul aria-label="Pinned" className="flex flex-col gap-1.5 not-empty:mb-1.5">
+      <ul aria-label="Pinned" className="flex flex-col gap-1 not-empty:mb-1">
         {shown.map((key) => row(key, searching ? undefined : drag(key)))}
       </ul>
       {rowOver && (

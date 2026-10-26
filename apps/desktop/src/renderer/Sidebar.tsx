@@ -1643,7 +1643,7 @@ export function ThreadList({
     .sort((a, b) => favRank(a.key) - favRank(b.key));
   // The Projects, as rows like a thread's (PLX-1043).
   const projectList = projects.length > 0 && (
-    <ul aria-label="Projects" className={`mb-1.5 ${cardGap}`}>
+    <ul aria-label="Projects" className={`mb-1 ${cardGap}`}>
       {projects.map((p) => {
         const n = modHeld ? listed.indexOf(p) : -1;
         return (
@@ -2694,10 +2694,8 @@ function BranchName({ branch, words }: { branch: string; words: readonly string[
   );
 }
 
-/** A card's look: outlined, so each card reads as one (PLX-1043). */
-const cardLook = "ring-1 ring-inset";
 /** The space between cards in a list. */
-const cardGap = "flex flex-col gap-1.5";
+const cardGap = "flex flex-col gap-1";
 
 /**
  * The look of a thread's linked pull requests: that of the most common state among those read,
@@ -2810,7 +2808,7 @@ function ProjectRow({
       ref={row}
       data-kind="project"
       data-flip={rowKey}
-      className={`group/row relative rounded-lg transition-colors duration-100 ${cardLook} ${selected ? `${current} ring-foreground/15` : "ring-border group-hover/row:bg-hover"}`}
+      className={`group/row relative rounded-lg transition-colors duration-100 ${selected ? current : "group-hover/row:bg-hover"}`}
     >
       <button
         type="button"
@@ -3150,13 +3148,11 @@ function ThreadRow({
   const oneLine = look === "compact" && !nested;
   // A draft outlines the row in the warning color, as a New Thread draft's row is (PLX-887), and
   // spaces it off its neighbors. An open thread holds its own draft, so neither shows while it's open.
-  const rowLook = `${cardLook} ${
-    picked
-      ? "bg-accent/14 ring-accent/38"
-      : selected
-        ? `${current} ring-foreground/15`
-        : `group-hover/row:bg-hover ${drafted ? "ring-warning" : "ring-border"}`
-  }`;
+  const rowLook = picked
+    ? "bg-accent/14 ring-1 ring-accent/38 ring-inset"
+    : selected
+      ? current
+      : `group-hover/row:bg-hover ${drafted ? "ring-1 ring-warning ring-inset" : ""}`;
   return (
     <li
       data-kind="thread"
