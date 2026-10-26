@@ -459,7 +459,7 @@ svg.lucide[stroke-width="2"] * {
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
-  --radius-prompt: 18px;
+  --radius-prompt: 24px;
 }
 
 @theme inline {

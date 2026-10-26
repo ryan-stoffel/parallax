@@ -1465,7 +1465,7 @@ export function Composer({
         // It grows from three rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
         // Its parent is anchored below it, so it grows upward. Stepped back, it's one row, clear
         // of the buttons at its end.
-        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+1.125rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${back ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(4.875em+1.125rem)] pt-4.5"}`,
+        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${back ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(3.25em+0.875rem)] pt-3.5"}`,
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1752,7 +1752,7 @@ export function Composer({
   );
 
   return (
-    <div className="w-full px-4">
+    <div className="w-full">
       <form
         ref={box}
         onSubmit={(e) => {
@@ -1957,7 +1957,7 @@ export function Composer({
           {!text && (
             <p
               aria-hidden
-              className={`pointer-events-none absolute left-5 truncate text-reading leading-relaxed text-faint-foreground ${back ? "top-3 right-28" : "top-4.5 right-5"}`}
+              className={`pointer-events-none absolute left-5 truncate text-reading leading-relaxed text-faint-foreground ${back ? "top-3 right-28" : "top-3.5 right-5"}`}
             >
               {placeholder}
             </p>
@@ -1968,7 +1968,7 @@ export function Composer({
           <ScrollThumb target={editorDom} />
         </div>
         <div
-          className={`flex items-center gap-0.5 px-3 ${back ? "absolute inset-y-0 right-0" : "pt-1 pb-3"}`}
+          className={`flex items-center gap-0.5 px-3 ${back ? "absolute inset-y-0 right-0" : "pb-2.5"}`}
         >
           {!back && pickers}
           <input
@@ -2025,7 +2025,7 @@ export function Composer({
       ) : (
         tab && (
           // Tucked under the box, so what it shows reads as part of it.
-          <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-prompt border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
+          <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-prompt border border-t-0 border-border bg-surface px-3 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
             {tab}
           </div>
         )

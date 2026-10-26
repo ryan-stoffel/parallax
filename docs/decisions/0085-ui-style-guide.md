@@ -50,7 +50,8 @@ The same kind of text is the same size and weight everywhere:
 | `rounded-sm` | 4px | Marks: keys, inline code, tiles, small bars |
 | `rounded-md` | 6px | Controls: buttons, inputs, chips, menu items |
 | `rounded-lg` | 8px | Rows, cards, menus, popovers |
-| `rounded-xl` | 12px | Surfaces: panels, dialogs, settings groups, the composer |
+| `rounded-xl` | 12px | Surfaces: panels, dialogs, settings groups |
+| `rounded-prompt` | 24px | Prompt boxes (the composer, MiniPrompt) and the bars tucked over and under them |
 | `rounded-full` | | Pills, avatars, dots, round buttons |
 
 `--radius-*: initial` resets Tailwind's own here too.
