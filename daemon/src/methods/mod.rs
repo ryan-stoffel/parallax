@@ -411,6 +411,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         PrStatus => |p| crate::pr_watch::status(daemon, p),
         PrFailureLog => |p| crate::ci_logs::failure_log(daemon, p),
         PrUploadMedia => |p| crate::pr_media::upload(daemon, p),
+        PrSharedDiff => |p| agents::shared_diff(Arc::clone(daemon), p),
         RepoScripts => |p| crate::setup_scripts::scripts(daemon, p),
         TaskDelegate => |p| crate::delegation::delegate(Arc::clone(daemon), p),
         TaskStatus => |p| crate::delegation::status(daemon, p),

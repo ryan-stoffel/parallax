@@ -659,6 +659,10 @@ method_table! {
         /// repository's `pr-media` branch, one upload at a time per host, and returns links pinned
         /// to the commit. Bytes uploaded to the repository before reuse their link.
         PrUploadMedia = "pr/uploadMedia": crate::PrUploadMediaParams => crate::PrUploadMediaResult;
+        /// `pr/sharedDiff` (PLX-1021): a GitHub pull request's unified diff, as `pr/diff` reads
+        /// it, read once per head and shared by every run that asks. It needn't be linked. Gated
+        /// on `prWatch`.
+        PrSharedDiff = "pr/sharedDiff": PrViewParams => PrDiffResult;
         /// `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
         /// declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
         /// `setupScripts` capability, like `repo/saveScripts`.

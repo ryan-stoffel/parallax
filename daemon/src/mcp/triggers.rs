@@ -3,12 +3,13 @@
 //! `run_scheduled_task_now` through `schedule/*`, and `link_pull_request`,
 //! `unlink_pull_request`, `watch_pull_request`, `unwatch_pull_request`, and
 //! `list_thread_pull_requests` through `pr/*`, and Parallax's own `pull_request_status`
-//! (PLX-837), `ci_failure_log` (PLX-1019), and `upload_pr_media` (PLX-1020). Every caller gets
-//! them, and [`INSTRUCTIONS`], which tell the agent to use them instead of `gh`.
+//! (PLX-837), `ci_failure_log` (PLX-1019), `upload_pr_media` (PLX-1020), and `pull_request_diff`
+//! (PLX-1021). Every caller gets them, and [`INSTRUCTIONS`], which tell the agent to use them
+//! instead of `gh`.
 
 use parallax_protocol::methods::{
-    PrFailureLog, PrLink, PrStatus, PrUnlink, PrUnwatch, PrWatch, PrWatches, ScheduleDelete,
-    ScheduleList, ScheduleRun, ScheduleSave, ThreadList,
+    PrFailureLog, PrLink, PrSharedDiff, PrStatus, PrUnlink, PrUnwatch, PrWatch, PrWatches,
+    ScheduleDelete, ScheduleList, ScheduleRun, ScheduleSave, ThreadList,
 };
 use parallax_protocol::{
     AccountChoice, AgentRun, PrFailureLogParams, PrViewParams, PrWatchesParams, RunId, Schedule,
@@ -18,8 +19,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::thread::{Binding, find_run};
-use super::{MAX_TEXT_BYTES, check_text, object, parse, pretty, tool};
-use crate::worktree::github_pr_urls;
+use super::{MAX_RESULT_BYTES, MAX_TEXT_BYTES, check_text, object, parse, pretty, tool};
+use crate::worktree::{agent_diff, github_pr_urls};
 
 /// The tools this module serves, in [`definitions`]' order.
 pub const TOOLS: &[&str] = &[
@@ -36,12 +37,13 @@ pub const TOOLS: &[&str] = &[
     "pull_request_status",
     "ci_failure_log",
     "upload_pr_media",
+    "pull_request_diff",
 ];
 
 /// What every thread's agent is told at startup, through MCP's `instructions`, as T3 Code's
 /// runtime instructions tell it (PLX-837): without it, each agent reads and waits on its pull
 /// requests its own way, with `gh` loops, sleeps, and watchers that spend the shared GitHub quota.
-pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's title, body, branches, head commit, changed files, checks with their links and Actions run ids, reviews, unresolved review threads with their ids, conflicts, and whether it is ready to merge with pull_request_status, never gh pr view or gh pr checks. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Read why a check failed with ci_failure_log, not gh run list, gh run view --log-failed, or gh api: it returns each failed job's error lines and reads each log from GitHub once. Use gh only for what these tools don't do, such as replying to or resolving a review thread, and merging.";
+pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's title, body, branches, head commit, changed files, checks with their links and Actions run ids, reviews, unresolved review threads with their ids, conflicts, and whether it is ready to merge with pull_request_status, never gh pr view or gh pr checks. Read its diff, or only some files' diff, with pull_request_diff, never gh pr diff: one read per head serves every thread. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Read why a check failed with ci_failure_log, not gh run list, gh run view --log-failed, or gh api: it returns each failed job's error lines and reads each log from GitHub once. Use gh only for what these tools don't do, such as replying to or resolving a review thread, and merging.";
 
 /// What `link_pull_request` and `list_thread_pull_requests` remind the agent of, as T3's do.
 const REGISTER: &str = "Register every pull request you open for this thread, including each layer of a stack, right after creating it.";
@@ -223,6 +225,19 @@ pub fn definitions() -> Vec<Value> {
             ),
             false,
         ),
+        tool(
+            "pull_request_diff",
+            "Read a pull request's unified diff, as gh pr diff prints it, or only the files at or under paths. Parallax reads it from GitHub once per head commit and shares it with every thread, so the author and each reviewer cost one read. Use this instead of gh pr diff. It needn't be linked. A diff too long for one answer is cut at a line's end with a note: pass paths to read the rest.",
+            {
+                let mut schema = target();
+                if let Some(properties) = schema["properties"].as_object_mut() {
+                    properties.remove("threadId");
+                }
+                schema["properties"]["paths"] = json!({"type": "array", "items": {"type": "string"}, "description": "Files or folders, relative to the repository's root, such as src/main.rs or docs. Omit for the whole diff."});
+                schema
+            },
+            true,
+        ),
     ]
 }
 
@@ -274,6 +289,22 @@ struct TargetArgs {
     number: Option<u64>,
     #[serde(default)]
     host: Option<String>,
+}
+
+/// `pull_request_diff`'s arguments: a [`TargetArgs`] without a thread, and the paths to read.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct DiffArgs {
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    repository: Option<String>,
+    #[serde(default)]
+    number: Option<u64>,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    paths: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -343,6 +374,28 @@ pub(super) async fn call(
                 .call::<parallax_protocol::methods::PrUploadMedia>(parse(arguments)?)
                 .await?,
         )),
+        "pull_request_diff" => {
+            let DiffArgs {
+                url,
+                repository,
+                number,
+                host,
+                paths,
+            } = parse(arguments)?;
+            let url = target_url(TargetArgs {
+                thread_id: None,
+                url,
+                repository,
+                number,
+                host,
+            })?;
+            let params = PrViewParams {
+                run_id: binding.run,
+                url,
+            };
+            let read = plxd.call::<PrSharedDiff>(params).await?;
+            Ok(agent_diff(read, &paths, MAX_RESULT_BYTES))
+        }
         _ => pull_request(binding, name, parse(arguments)?).await,
     }
 }
