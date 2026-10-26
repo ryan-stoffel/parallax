@@ -72,8 +72,6 @@ pub enum ErrorKind {
     RepoNotFound,
     /// No normal thread has the given run id (#110).
     ThreadNotFound,
-    /// No area has the given id (PLX-789).
-    AreaNotFound,
     /// A run named no account, and its role has no default (0012). Set one with
     /// `accounts/defaults/set`, then retry with the same run id.
     NoDefaultAccount,

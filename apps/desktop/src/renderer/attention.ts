@@ -77,11 +77,39 @@ export const mostUrgent = (attentions: Attention[]): Attention =>
 export const snoozed = (thread: Thread, attention: Attention, now = Date.now()) =>
   !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > now && attention !== "needsYou";
 
-/** When a thread's newest message was sent, for the sidebar's order. */
+/** When a thread's newest message was sent. */
 export const lastPrompt = (thread: Thread) => thread.lastPromptAt ?? thread.createdAt;
+
+/**
+ * When a thread was last active, for the sidebar's order (PLX-1043): its newest message, or when its
+ * run last stopped after that (`stoppedAt`, ThreadsState), so a thread that finishes rises to the
+ * top. A running thread, or one waiting out a usage limit (0049), keeps its message's time, so its
+ * row doesn't move until it finishes.
+ */
+export function activeAt(thread: Thread, run: AgentRun | undefined, stoppedAt?: string): string {
+  const prompt = lastPrompt(thread);
+  if (!run || !stoppedAt || isRunning(run.status) || run.status === "waiting") return prompt;
+  return Date.parse(stoppedAt) > Date.parse(prompt) ? stoppedAt : prompt;
+}
 
 /** When the user last sent a thread a message, for Working's clock: wake-ups don't reset it (PLX-1012). */
 export const lastUserPrompt = (thread: Thread) => thread.lastUserPromptAt ?? lastPrompt(thread);
+
+/**
+ * A branch name cut to about `max` characters in the middle, at word breaks (`-`, `/`, `_`, `.`),
+ * keeping its start and its last word: `feature/PLX-49-…implementation` (PLX-1043).
+ */
+export function shortBranch(branch: string, max = 24): string {
+  if (branch.length <= max) return branch;
+  const parts = branch.split(/(?<=[-/_.])/);
+  let tail = parts.pop()!;
+  let head = "";
+  while (parts.length && head.length + parts[0]!.length + tail.length + 1 <= max)
+    head += parts.shift();
+  while (parts.length && head.length + parts.at(-1)!.length + tail.length + 1 <= max)
+    tail = parts.pop() + tail;
+  return parts.length ? `${head}…${tail}` : head + tail;
+}
 
 /** A repo's default icon: the first letters of its name's first two words, or its first two. */
 export function initials(name: string): string {

@@ -12,7 +12,6 @@ import { flushToasts } from "./undo";
 import { drafts, threadDrafts } from "./drafts";
 import { dragThread } from "./threadDrag";
 import { fakeWatch } from "./fakeWatch";
-import { startIn } from "./pins";
 import { newThreadDefaults, newThreadPrefs } from "./prefs";
 import { sectionsStore } from "./Sidebar";
 
@@ -64,7 +63,6 @@ beforeEach(() => {
   request.mockClear();
   capabilities = {};
   localStorage.clear();
-  startIn.set(null);
   // Working starts folded (0075); these tests read the rows in it.
   sectionsStore.set({ all: { working: true } });
   accessPrefs.set(accessDefaults);
@@ -307,7 +305,7 @@ test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens
   const draft = () => document.querySelector<HTMLElement>('#sidebar li[data-kind="draft"] button');
   const rows = document.querySelectorAll('#sidebar ul[aria-label="Threads"] > li');
   expect(rows[0]!.getAttribute("data-kind")).toBe("draft");
-  expect(draft()!.textContent).toBe('@"Fix the flaky test" Tidy the READMEDraftparallax');
+  expect(draft()!.textContent).toBe('parallaxDraft@"Fix the flaky test" Tidy the README');
 
   await act(async () => draft()!.click());
   await settle();

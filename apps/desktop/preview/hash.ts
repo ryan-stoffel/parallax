@@ -58,10 +58,23 @@ export function openFromHash() {
   if (params.has("usage")) steps.push(() => byLabel("Usage"));
   const project = params.get("project");
   if (project)
-    steps.push(() =>
-      [...document.querySelectorAll<HTMLElement>('ul[aria-label="Favorites"] button')].find(
-        (el) => el.getAttribute("aria-label")?.toLowerCase() === project.toLowerCase(),
-      ),
+    steps.push(
+      // The Projects drawer (PLX-1043), opened unless it is.
+      () => {
+        const drawer = [...document.querySelectorAll("#sidebar details")].find((d) =>
+          d.querySelector("summary")?.textContent?.startsWith("Projects"),
+        );
+        return drawer?.hasAttribute("open") ? true : drawer?.querySelector("summary");
+      },
+      () =>
+        [
+          ...document.querySelectorAll<HTMLElement>(
+            '#sidebar li[data-kind="project"] button[data-row]',
+          ),
+        ].find(
+          (el) =>
+            el.querySelector("[data-title]")?.textContent?.toLowerCase() === project.toLowerCase(),
+        ),
     );
   const thread = params.get("thread");
   if (thread)

@@ -59,8 +59,6 @@ const capabilities: Capabilities = Object.fromEntries(
     "agentWait",
     "agents",
     "approvals",
-    "areaRepos",
-    "areas",
     "autoResume",
     "checkpoints",
     "checks",
@@ -85,6 +83,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "memory",
     "openPr",
     "orchestration",
+    "pins",
     "prDiff",
     "projectAutonomy",
     "projectDelete",
@@ -866,10 +865,6 @@ const handlers: { [M in Method]?: Handler<M> } = {
     const thread = db.threads.find((t) => t.id === p.runId);
     db.threads = db.threads.filter((t) => t.id !== p.runId);
     if (thread) emit({ kind: "thread.deleted", runId: p.runId, repo: thread.repo });
-    if (db.areas.some((a) => a.threads.includes(p.runId))) {
-      for (const a of db.areas) a.threads = a.threads.filter((id) => id !== p.runId);
-      emit({ kind: "areas.changed", areas: db.areas });
-    }
     return {};
   },
   "thread/search": (p) => {
@@ -1881,7 +1876,6 @@ export const mockBridge: ParallaxBridge = {
         projects: hostId === LOCAL ? db.projects : [],
         repos: known ? (deviceOf(hostId)?.repos?.(db.repos) ?? db.repos) : [],
         threads: known ? db.threads.filter((t) => own(t.id)) : [],
-        areas: hostId === LOCAL ? db.areas : [],
         runs,
         requests: waiting(runs.map((r) => r.id)),
         waiting: runs.flatMap((r) =>

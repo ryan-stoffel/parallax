@@ -3,12 +3,11 @@ import { stored } from "./stored";
 
 /**
  * What the sidebar lists: every thread, one repo entry, or the threads with no repo. A repo is
- * named by its host and id. An area (0073) is a scope from when they showed, which lists every
- * thread now (0075).
+ * named by its host and id.
  */
-export type Scope = "all" | "none" | `area:${string}/${string}` | `repo:${string}/${string}`;
+export type Scope = "all" | "none" | `repo:${string}/${string}`;
 
-// Before areas, the Repos filter kept a repo as `host/id`, in its own key, as plain text.
+// Earlier, the Repos filter kept a repo as `host/id`, in its own key, as plain text.
 function legacyScope(): Scope {
   try {
     const old = localStorage.getItem("parallax:repoFilter");
@@ -20,8 +19,9 @@ function legacyScope(): Scope {
   return "all";
 }
 
+// A scope saved while areas showed (0073), `area:…`, reads as every thread.
 const isScope = (raw: unknown): raw is Scope =>
-  raw === "all" || raw === "none" || (typeof raw === "string" && /^(area|repo):[^/]+\/./.test(raw));
+  raw === "all" || raw === "none" || (typeof raw === "string" && /^repo:[^/]+\/./.test(raw));
 
 /** The scope the sidebar shows, kept on this computer. */
 export const scopeStore = stored<Scope>("parallax:scope", legacyScope(), (raw, fallback) =>
@@ -31,9 +31,9 @@ export const scopeStore = stored<Scope>("parallax:scope", legacyScope(), (raw, f
 /** A scope's kind, host, and id. */
 export function parseScope(scope: Scope) {
   if (scope === "all" || scope === "none") return { kind: scope } as const;
-  const [kind, rest] = scope.split(/:(.*)/s) as ["area" | "repo", string];
+  const rest = scope.slice("repo:".length);
   const slash = rest.indexOf("/");
-  return { kind, hostId: rest.slice(0, slash), id: rest.slice(slash + 1) } as const;
+  return { kind: "repo", hostId: rest.slice(0, slash), id: rest.slice(slash + 1) } as const;
 }
 
 /**

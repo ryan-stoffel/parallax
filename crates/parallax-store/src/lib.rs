@@ -11,7 +11,6 @@
 //! in this database (#117).
 
 mod accounts;
-mod areas;
 mod attached;
 mod board;
 mod coordinator_sessions;
@@ -50,7 +49,6 @@ use rusqlite::{Connection, Error as SqliteError, ErrorCode, Params, Statement};
 use uuid::Uuid;
 
 pub use accounts::{Account, AccountFields};
-pub use areas::{Area, AreaFields};
 pub use board::BoardItem;
 pub use coordinator_sessions::NOT_RESUMABLE;
 pub use defaults::RoleDefault;

@@ -766,7 +766,6 @@ fn apply(db: &mut Tx, thread: Uuid, change: Change) -> Result<(), ErrorObject> {
             stage_updated(db, &row)?;
         }
         Change::Delete { repo, children } => {
-            let in_area = db.in_area(thread).map_err(error)?;
             if let Some(repo) = repo {
                 db.delete_thread(thread).map_err(error)?;
                 let run_id = RunId::try_from(thread).map_err(|_| corrupt(thread))?;
@@ -784,12 +783,8 @@ fn apply(db: &mut Tx, thread: Uuid, change: Change) -> Result<(), ErrorObject> {
                     stage_updated(db, &row)?;
                 }
             }
-            if in_area {
-                crate::areas::stage_changed(db)?;
-            }
         }
         Change::DeleteProject => {
-            let in_area = db.in_area(thread).map_err(error)?;
             db.delete_project(thread).map_err(error)?;
             let project = ProjectId::try_from(thread).map_err(|_| corrupt(thread))?;
             db.stage(
@@ -797,9 +792,6 @@ fn apply(db: &mut Tx, thread: Uuid, change: Change) -> Result<(), ErrorObject> {
                 None,
                 ParallaxEvent::ProjectDeleted { project },
             );
-            if in_area {
-                crate::areas::stage_changed(db)?;
-            }
         }
     }
     Ok(())

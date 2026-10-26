@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::{
-    AccountChoice, AgentBackgroundTask, AgentEffort, AgentPermission, AgentRun, Area, LoggedEvent,
+    AccountChoice, AgentBackgroundTask, AgentEffort, AgentPermission, AgentRun, LoggedEvent,
     Project, PromptImage, Repo, RunId, SubscriptionId, Thread, TurnId,
 };
 
@@ -393,10 +393,6 @@ pub struct ShellSnapshot {
     /// `pr.watches` events replace each part. Absent means none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waiting: Vec<RunWaiting>,
-    /// Every area (PLX-789), oldest first. Later `areas.changed` events replace the list. Absent
-    /// from a plxd without `areas`.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub areas: Vec<Area>,
 }
 
 /// What one run's agent waits on (PLX-777): background tasks, pull request watches, or both.

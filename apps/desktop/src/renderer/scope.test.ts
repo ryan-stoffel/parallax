@@ -5,7 +5,6 @@ import { pushToast, undoable, type Toast } from "./undo";
 
 test("scopes name a host and an id, and the id may hold a slash", () => {
   expect(parseScope("all")).toEqual({ kind: "all" });
-  expect(parseScope("area:local/a1")).toEqual({ kind: "area", hostId: "local", id: "a1" });
   expect(parseScope("repo:mini/r/x")).toEqual({ kind: "repo", hostId: "mini", id: "r/x" });
 });
 

@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { AgentRun, Thread } from "../protocol/generated/protocol";
-import { attentionOf, snoozed } from "./attention";
+import { activeAt, attentionOf, shortBranch, snoozed } from "./attention";
 
 const thread = (over: Partial<Thread> = {}): Thread => ({
   id: "t",
@@ -38,4 +38,26 @@ test("a snoozed thread hides until its time, or until it needs the user", () => 
   expect(snoozed(later, "done", now)).toBe(true);
   expect(snoozed(later, "needsYou", now)).toBe(false);
   expect(snoozed(thread({ snoozedUntil: "2026-10-01T11:00:00Z" }), "done", now)).toBe(false);
+});
+
+test("a thread is active as of its last prompt, or when its run stopped after it, so a finished one rises", () => {
+  const prompted = thread({ lastPromptAt: "2026-10-01T10:30:00Z" });
+  const stopped = "2026-10-01T11:00:00Z";
+  expect(activeAt(prompted, run(), stopped)).toBe(stopped);
+  // While it works, or waits out a usage limit, its row stays where its prompt put it.
+  expect(activeAt(prompted, run({ status: "running" }), stopped)).toBe("2026-10-01T10:30:00Z");
+  expect(activeAt(prompted, run({ status: "waiting" }), stopped)).toBe("2026-10-01T10:30:00Z");
+  // A run that stopped before the newest prompt doesn't move it back.
+  expect(activeAt(thread({ lastPromptAt: "2026-10-01T12:00:00Z" }), run(), stopped)).toBe(
+    "2026-10-01T12:00:00Z",
+  );
+  expect(activeAt(thread(), undefined)).toBe("2026-10-01T10:00:00Z");
+});
+
+test("a long branch is cut in the middle at a word break, keeping its start and last word", () => {
+  expect(shortBranch("feature/PLX-49-full-sidebar-implementation", 32)).toBe(
+    "feature/PLX-49-…implementation",
+  );
+  expect(shortBranch("parallax/attach-rate-limit")).toBe("parallax/attach-…limit");
+  expect(shortBranch("bug/PLX-7-short")).toBe("bug/PLX-7-short");
 });

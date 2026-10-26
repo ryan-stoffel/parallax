@@ -55,7 +55,7 @@ export type AddDialogHandle = { open: (start?: "project") => void };
 /**
  * The sidebar's add palette, a native modal <dialog> laid out like a command palette. Its menu
  * offers New repository, Local folder, Clone from GitHub, and New Project, each opening a step of
- * its own in the same dialog, and New folder, which closes it; Back returns to the step before. With more than one computer,
+ * its own in the same dialog; Back returns to the step before. With more than one computer,
  * Local folder first asks which (PLX-769). The first three make or find a repository and
  * register it with its computer's plxd (`repo/add`), then close, or, when Create Project's
  * Workspace menu asked for it, return there with it chosen.
@@ -67,11 +67,8 @@ export function AddDialog({
   hostId,
   repos,
   create,
-  onNewFolder,
   onCreated,
 }: {
-  /** New folder (pins.ts): an empty pinned folder, named in place. */
-  onNewFolder: () => void;
   ref: Ref<AddDialogHandle>;
   hosts: Host[];
   /** Why Local folder can't browse a computer, by id: offline, or a plxd without `hostFolders`. */
@@ -132,13 +129,9 @@ export function AddDialog({
           key={session}
           computers={hosts.length > 1}
           onBack={back}
-          onPick={(kind) => {
-            if (kind === "folder") {
-              dialog.current?.close();
-              return onNewFolder();
-            }
-            push(kind === "browse" && hosts.length > 1 ? { kind: "computer" } : { kind });
-          }}
+          onPick={(kind) =>
+            push(kind === "browse" && hosts.length > 1 ? { kind: "computer" } : { kind })
+          }
         />
       )}
       {step.kind === "create" && <CreateStep {...steps} />}
@@ -243,8 +236,8 @@ export function CloneDialog({
 
 type StepProps = { onBack: () => void; onAdded: (hostId: string, repo: Repo) => void };
 
-/** What the menu step picks: a way to add a repository, New Project, or New folder. */
-type MenuKind = WorkspaceSource | "project" | "folder";
+/** What the menu step picks: a way to add a repository, or New Project. */
+type MenuKind = WorkspaceSource | "project";
 
 const menu: {
   kind: MenuKind;
@@ -275,12 +268,6 @@ const menu: {
     name: "New Project",
     detail: "A focused chat where agents coordinate work",
     icon: <Layers />,
-  },
-  {
-    kind: "folder",
-    name: "New folder",
-    detail: "Keep chats and threads together in the sidebar",
-    icon: <Folder />,
   },
 ];
 

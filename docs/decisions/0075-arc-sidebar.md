@@ -1,6 +1,6 @@
 # 0075: The sidebar is favorites, pinned threads in folders, and Today, as Arc's is
 
-- Status: accepted; supersedes in part [0033](0033-sidebar-attention.md) (one list, most recently prompted first) and the app's use of [0073](0073-areas.md)'s areas
+- Status: accepted; supersedes in part [0033](0033-sidebar-attention.md) (one list, most recently prompted first) and the app's use of [0073](0073-areas.md)'s areas; amended by [0087](0087-sidebar-rows-no-areas-or-folders.md): Projects list as rows, finished threads rise to the top, an empty Today is blank, and folders are gone
 - Date: 2026-10-17
 - Issue: PLX-857
 

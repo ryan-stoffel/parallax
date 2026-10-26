@@ -32,7 +32,6 @@
 mod account;
 mod agent;
 mod approval;
-mod area;
 mod board;
 mod bundle;
 mod cli_account;
@@ -95,10 +94,6 @@ pub use agent::{
 pub use approval::{
     AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision, AgentApproveParams,
     AgentApproveResult, ApprovalId,
-};
-pub use area::{
-    Area, AreaCreateParams, AreaDeleteParams, AreaDeleteResult, AreaId, AreaResult,
-    AreaUpdateParams, MAX_AREA_NAME_CHARS,
 };
 pub use board::{
     BoardAddParams, BoardItem, BoardItemResult, BoardLinks, BoardListParams, BoardListResult,
