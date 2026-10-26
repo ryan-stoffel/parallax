@@ -24,23 +24,35 @@ fn tool(line: &str) -> Option<&'static str> {
 
 #[test]
 fn the_redirect_table_sends_replaced_commands_to_their_tools() {
-    assert_eq!(tool("pr checks 12 --watch"), Some("watch_pull_request"));
-    assert_eq!(
-        tool("pr checks 12 --watch=true"),
-        Some("watch_pull_request")
-    );
-    assert_eq!(tool("pr checks 12 --required"), Some("pull_request_status"));
-    assert_eq!(tool("pr view"), Some("pull_request_status"));
-    assert_eq!(
-        tool("pr view 12 --json state,mergeable,files,body"),
-        Some("pull_request_status")
-    );
-    assert_eq!(tool("run watch 99"), Some("watch_pull_request"));
-    assert_eq!(tool("run view 99 --log-failed"), Some("ci_failure_log"));
-    assert_eq!(tool("run view --job 7 --log"), Some("ci_failure_log"));
-    assert_eq!(tool("run list --branch feature/x"), Some("ci_failure_log"));
-    assert_eq!(tool("run list -b feature/x"), Some("ci_failure_log"));
-    assert_eq!(tool("run list --commit=abc123"), Some("ci_failure_log"));
+    let cases = [
+        ("pr checks 12 --watch", "watch_pull_request"),
+        ("pr checks 12 --watch=true", "watch_pull_request"),
+        ("pr checks 12 --required", "pull_request_status"),
+        ("pr checks", "pull_request_status"),
+        ("pr view 12", "pull_request_status"),
+        (
+            "pr view https://github.com/o/r/pull/12",
+            "pull_request_status",
+        ),
+        ("pr view feature/x", "pull_request_status"),
+        (
+            "pr view 12 --json state,mergeable,files,body",
+            "pull_request_status",
+        ),
+        (
+            "pr view 12 --json=statusCheckRollup --jq .x",
+            "pull_request_status",
+        ),
+        ("run watch 99", "watch_pull_request"),
+        ("run view 99 --log-failed", "ci_failure_log"),
+        // gh takes `-R` between a command and its subcommand.
+        ("pr -R o/r checks 12", "pull_request_status"),
+        ("pr --repo o/r view 12 --json title", "pull_request_status"),
+        ("run -R o/r view 99 --log-failed", "ci_failure_log"),
+    ];
+    for (line, expected) in cases {
+        assert_eq!(tool(line), Some(expected), "{line}");
+    }
 
     let refusal = redirect(&args("pr checks 12")).unwrap();
     assert_eq!(
@@ -52,16 +64,29 @@ fn the_redirect_table_sends_replaced_commands_to_their_tools() {
 #[test]
 fn commands_no_tool_replaces_run() {
     for line in [
+        // pull_request_status needs the pull request, and returns only some of its fields.
+        "pr view",
+        "pr view --json number,url",
+        "pr view -R o/r --json url",
+        "pr view feature/x --json number,url",
+        "pr view 12 --json title,labels",
+        "pr view 12 --json author,commits,reviewRequests,mergedAt",
+        "pr view 12 --json reviews",
         "pr view 12 --comments",
         "pr view 12 -c",
-        "pr view 12 --json title,reviews",
         "pr view 12 --json=comments",
         "pr view 12 --web",
+        // A run's log or list, which ci_failure_log (a pull request's failed checks) doesn't
+        // replace.
+        "run view 99",
+        "run view 99 --log",
+        "run view --job 7 --log",
+        "run list --branch main --workflow release.yml",
+        "run list -c abc123",
+        "pr checks --help",
         "pr create --title x --body y",
         "pr merge 12 --squash",
         "pr list",
-        "run view 99",
-        "run list --workflow ci.yml",
         "api rate_limit",
         "auth status",
         "pr",
@@ -75,11 +100,12 @@ fn commands_no_tool_replaces_run() {
 fn reads_are_told_apart_from_writes_by_the_quota_they_spend() {
     let cases = [
         ("pr list", Some(Api::Graphql)),
+        ("pr -R o/r list", Some(Api::Graphql)),
         ("issue view 3", Some(Api::Graphql)),
         ("repo view", Some(Api::Graphql)),
+        ("pr diff 3", Some(Api::Rest)),
         ("run list --workflow ci.yml", Some(Api::Rest)),
-        ("release download v1", Some(Api::Rest)),
-        ("search prs is:open", Some(Api::Rest)),
+        ("release view v1", Some(Api::Rest)),
         ("api repos/o/r/pulls/1", Some(Api::Rest)),
         (
             "api -H Accept:x repos/o/r/pulls/1 --jq .title",
@@ -87,16 +113,30 @@ fn reads_are_told_apart_from_writes_by_the_quota_they_spend() {
         ),
         ("api -X GET repos/o/r/issues -f state=open", Some(Api::Rest)),
         (
+            "api --method=get repos/o/r/issues -F per_page=5",
+            Some(Api::Rest),
+        ),
+        (
             "api graphql -f query=query{viewer{login}}",
             Some(Api::Graphql),
         ),
-        // Writes, and what doesn't spend a quota.
+        // Writes: a method other than GET, fields with no method, a mutation, or a query from a
+        // file the shim doesn't open.
         ("api graphql -f query=mutation{x}", None),
+        ("api graphql --input q.json", None),
+        ("api graphql -F query=@mutation.graphql", None),
         ("api repos/o/r/issues/1/comments -f body=hi", None),
+        ("api repos/o/r/issues/1/comments -fbody=hi", None),
+        ("api repos/o/r/issues/1/comments --raw-field=body=hi", None),
+        ("api repos/o/r/pulls --input pr.json", None),
         ("api -X POST repos/o/r/merges", None),
         ("api --method=PATCH repos/o/r/pulls/1", None),
         ("api -XDELETE repos/o/r/git/refs/heads/x", None),
+        // What spends no quota, or another one.
         ("api rate_limit", None),
+        ("api /rate_limit", None),
+        ("search prs is:open", None),
+        ("pr list --help", None),
         ("pr create --title x", None),
         ("pr merge 1", None),
         ("auth status", None),
@@ -122,6 +162,7 @@ fn a_read_is_refused_under_200_left_until_the_reset() {
     let budget = Budget {
         rest: Some(quota(4000, 600)),
         graphql: Some(quota(199, 600)),
+        checked_at: None,
     };
     let refusal = low(&budget, Api::Graphql, now).unwrap();
     assert!(

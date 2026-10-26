@@ -3,8 +3,9 @@
 //!
 //! A worker writes its cwd (its worktree), the project's shared context folder (0005), and its
 //! own temp folder (PLX-130). Its commands can't write git metadata or read credential stores,
-//! plxd's data folder except its uploads (0071), or any other run's temp. They do have network
-//! access (Ryan, #137), so the read denylist is what keeps a secret from leaving the machine.
+//! plxd's data folder except its uploads (0071) and the `gh` shim (PLX-1023), or any other run's
+//! temp. They do have network access (Ryan, #137), so the read denylist is what keeps a secret
+//! from leaving the machine.
 //! Each backend turns a [`WorkerSandbox`] into its own vendor's flags; plxd adds no OS sandbox of
 //! its own, because a vendor's sandbox can't start inside one (0013).
 
@@ -228,8 +229,9 @@ pub struct WorkerSandbox {
     pub writable: Vec<PathBuf>,
     /// Paths inside the writable folders that commands may read but not write: the worktree's
     /// `.git` file and the repository's git folder it points into, since plxd commits for every
-    /// backend (0013), the data folder's uploads, the files attached to messages (0071), and on
-    /// Linux plxd's own `bwrap` and `socat`, whose relays run inside the sandbox (PLX-895).
+    /// backend (0013), the data folder's uploads, the files attached to messages (0071), the `gh`
+    /// shim and the GitHub budget it reads (PLX-1023), and on Linux plxd's own `bwrap` and
+    /// `socat`, whose relays run inside the sandbox (PLX-895).
     pub read_only: Vec<PathBuf>,
     /// Paths commands may not read: [`unreadable_in_home`], on Linux the user's runtime folder,
     /// plxd's data folder, the folder that holds every run's temp folder, and Claude Code's
@@ -285,6 +287,7 @@ impl WorkerSandbox {
                 data_dir.join(crate::paths::UPLOADS_DIR),
             ]
             .into_iter()
+            .chain(crate::gh_shim::sandbox_readable(data_dir))
             .chain(bundled_tools(data_dir))
             .collect(),
             unreadable,
@@ -395,6 +398,8 @@ mod tests {
                 ),
                 Path::new("/Users/u/src/app/.git"),
                 Path::new("/Users/u/Library/Application Support/parallax/uploads"),
+                Path::new("/Users/u/Library/Application Support/parallax/tools/gh-shim"),
+                Path::new("/Users/u/Library/Application Support/parallax/github-budget.json"),
             ]
         );
         assert!(sandbox.unreadable.contains(&"/Users/u/.ssh".into()));

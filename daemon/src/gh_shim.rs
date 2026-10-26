@@ -15,9 +15,11 @@
 //!
 //! The quota lives in `<data>/github-budget.json`, which plxd writes on each read that reports it
 //! (the PR watch query's `rateLimit`), and which the shim and `github_budget` refresh with
-//! `gh api rate_limit`, which GitHub doesn't count, when it is over [`FRESH`] old. A file is
-//! simpler than asking plxd over its socket, works while plxd is down, and costs a read of a few
-//! hundred bytes per `gh` call. Anything missing or unreadable lets the command run.
+//! `gh api rate_limit`, which GitHub doesn't count, when it is over [`FRESH`] old, at most once
+//! per [`FRESH`]. A file is simpler than asking plxd over its socket, works while plxd is down,
+//! and costs a read of a few hundred bytes per `gh` call. A worker's sandbox can read it but not
+//! write it, so there the shim keeps its own reads in the temp folder. Anything missing or
+//! unreadable lets the command run.
 //!
 //! [`ProcessSpec::agent`]: crate::backend::process::ProcessSpec::agent
 
@@ -64,13 +66,17 @@ struct Redirect {
     tool: &'static str,
 }
 
-/// When a [`Redirect`] applies, by the arguments' words (see [`words`]).
+/// When a [`Redirect`] applies.
 enum When {
     Always,
-    /// When any of these words is given.
+    /// When any of these flags is given.
     Any(&'static [&'static str]),
-    /// Unless any of these words is given.
-    Unless(&'static [&'static str]),
+    /// When the arguments name a pull request and the tool answers everything they ask: none of
+    /// `unless` is given, and each `--json` field is one of `fields`.
+    Answers {
+        unless: &'static [&'static str],
+        fields: &'static [&'static str],
+    },
 }
 
 /// The commands the shim refuses, first match first. Add one only once its tool is on `develop`.
@@ -85,11 +91,29 @@ const REDIRECTS: &[Redirect] = &[
         when: When::Always,
         tool: "pull_request_status",
     },
-    // `--comments` and `--json comments` or `reviews` read what pull_request_status doesn't
-    // return, and `--web` opens a browser.
+    // pull_request_status needs the pull request, so finding one by branch (`--json number,url`
+    // with no argument) runs, as do `--comments`, `--web`, and fields it doesn't return.
     Redirect {
         command: ["pr", "view"],
-        when: When::Unless(&["--web", "-w", "--comments", "-c", "comments", "reviews"]),
+        when: When::Answers {
+            unless: &["--web", "-w", "--comments", "-c"],
+            fields: &[
+                "title",
+                "body",
+                "state",
+                "isDraft",
+                "headRefName",
+                "baseRefName",
+                "headRefOid",
+                "files",
+                "additions",
+                "deletions",
+                "mergeable",
+                "mergeStateStatus",
+                "reviewDecision",
+                "statusCheckRollup",
+            ],
+        },
         tool: "pull_request_status",
     },
     Redirect {
@@ -99,32 +123,78 @@ const REDIRECTS: &[Redirect] = &[
     },
     Redirect {
         command: ["run", "view"],
-        when: When::Any(&["--log", "--log-failed"]),
-        tool: "ci_failure_log",
-    },
-    // Finding a pull request's runs, by its branch or head commit.
-    Redirect {
-        command: ["run", "list"],
-        when: When::Any(&["--branch", "-b", "--commit", "-c"]),
+        when: When::Any(&["--log-failed"]),
         tool: "ci_failure_log",
     },
 ];
 
-/// The words of `args` that [`When`] looks for: each argument split at `,` and `=`, so
-/// `--branch=x` has `--branch` and `--json=title,reviews` has `reviews`.
-fn words(args: &[String]) -> impl Iterator<Item = &str> {
-    args.iter().flat_map(|arg| arg.split([',', '=']))
+/// Flags that take the next argument as their value, among those [`positionals`] skips: `-R` is
+/// the one gh takes between a command and its subcommand.
+const VALUE_FLAGS: &[&str] = &["-R", "--repo", "--json", "-q", "--jq", "-t", "--template"];
+
+/// The indexes of `args`' arguments that aren't flags or a [`VALUE_FLAGS`] flag's value: the
+/// command, the subcommand, and then the subcommand's own, such as a pull request.
+fn positionals(args: &[String]) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].as_str();
+        if VALUE_FLAGS.contains(&arg) {
+            index += 1;
+        } else if !arg.starts_with('-') {
+            found.push(index);
+        }
+        index += 1;
+    }
+    found
+}
+
+/// Whether `flag` is among `args`, alone or as `flag=value`.
+fn has_flag(args: &[String], flag: &str) -> bool {
+    args.iter().any(|arg| {
+        arg.strip_prefix(flag)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('='))
+    })
+}
+
+/// `args`' `--json` fields.
+fn json_fields(args: &[String]) -> impl Iterator<Item = &str> {
+    args.iter()
+        .enumerate()
+        .filter_map(|(index, arg)| match arg.strip_prefix("--json") {
+            Some("") => args.get(index + 1).map(String::as_str),
+            Some(inline) => inline.strip_prefix('='),
+            None => None,
+        })
+        .flat_map(|fields| fields.split(','))
+}
+
+/// Whether `args` asks for help, which runs without calling GitHub.
+fn help(args: &[String]) -> bool {
+    args.iter().any(|arg| arg == "--help" || arg == "-h")
 }
 
 /// The refusal for `args`, when a plxd tool replaces that command.
 fn redirect(args: &[String]) -> Option<String> {
+    if help(args) {
+        return None;
+    }
+    let positionals = positionals(args);
+    let command: Vec<&str> = positionals
+        .iter()
+        .take(2)
+        .map(|&index| args[index].as_str())
+        .collect();
     let found = REDIRECTS.iter().find(|redirect| {
-        args.len() >= 2
-            && args[..2] == redirect.command
+        command == redirect.command
             && match redirect.when {
                 When::Always => true,
-                When::Any(given) => words(args).any(|word| given.contains(&word)),
-                When::Unless(given) => !words(args).any(|word| given.contains(&word)),
+                When::Any(flags) => flags.iter().any(|flag| has_flag(args, flag)),
+                When::Answers { unless, fields } => {
+                    positionals.len() > 2
+                        && !unless.iter().any(|flag| has_flag(args, flag))
+                        && json_fields(args).all(|field| fields.contains(&field))
+                }
             }
     })?;
     let [group, sub] = found.command;
@@ -139,6 +209,39 @@ fn redirect(args: &[String]) -> Option<String> {
 enum Api {
     Rest,
     Graphql,
+}
+
+/// The quota `args` spends when it is a read, or `None` for a write, or a command that doesn't
+/// call GitHub's API, spends another quota (`search`), or that the shim doesn't know. Writes
+/// always run, so a merge isn't held up by a low quota.
+// ponytail: by command group, as gh mostly calls them (pr, issue, and repo through GraphQL);
+// look at each subcommand if a read gets refused against the wrong quota.
+fn read_api(args: &[String]) -> Option<Api> {
+    if help(args) {
+        return None;
+    }
+    let positionals = positionals(args);
+    let group = args[*positionals.first()?].as_str();
+    if group == "api" {
+        return api_read(&args[positionals[0] + 1..]);
+    }
+    let sub = args[*positionals.get(1)?].as_str();
+    if ![
+        "view", "list", "status", "checks", "diff", "watch", "download",
+    ]
+    .contains(&sub)
+    {
+        return None;
+    }
+    match (group, sub) {
+        (
+            "run" | "workflow" | "release" | "cache" | "gist" | "secret" | "variable" | "ruleset",
+            _,
+        )
+        | ("pr", "diff") => Some(Api::Rest),
+        ("pr" | "issue" | "repo" | "project" | "label", _) => Some(Api::Graphql),
+        _ => None,
+    }
 }
 
 /// `gh api`'s flags that take a value as the next argument.
@@ -162,69 +265,48 @@ const API_VALUE_FLAGS: &[&str] = &[
     "--preview",
 ];
 
-/// The quota `args` spends when it is a read, or `None` for a write, or a command that doesn't
-/// call GitHub's API or that the shim doesn't know. Writes always run, so a merge isn't held up
-/// by a low quota.
-// ponytail: by command group, as gh mostly calls them (pr, issue, and repo through GraphQL);
-// look at each subcommand if a read gets refused against the wrong quota.
-fn read_api(args: &[String]) -> Option<Api> {
-    let (group, rest) = args.split_first()?;
-    if group == "api" {
-        return api_read(rest);
-    }
-    if group == "search" {
-        return Some(Api::Rest);
-    }
-    let sub = rest.first()?.as_str();
-    if ![
-        "view", "list", "status", "checks", "diff", "watch", "download",
-    ]
-    .contains(&sub)
-    {
-        return None;
-    }
-    match group.as_str() {
-        "pr" | "issue" | "repo" | "project" | "label" => Some(Api::Graphql),
-        "run" | "workflow" | "release" | "cache" | "gist" | "secret" | "variable" | "ruleset" => {
-            Some(Api::Rest)
-        }
-        _ => None,
-    }
-}
-
-/// [`read_api`] for `gh api`'s arguments: a GraphQL query, or a REST `GET`. `rate_limit` is free.
+/// [`read_api`] for `gh api`'s arguments. A REST call is a read when its method is `GET`, given
+/// or by default (no fields). A GraphQL call is a read unless it's a mutation, or its query comes
+/// from a file (`--input`, `-F query=@file`) the shim doesn't open. `rate_limit` is free.
 fn api_read(args: &[String]) -> Option<Api> {
     let mut endpoint = None;
     let mut method = None;
     let mut fields = false;
+    let mut from_file = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         if !arg.starts_with('-') {
             endpoint.get_or_insert(arg.as_str());
             continue;
         }
-        let (flag, inline) = match arg.split_once('=') {
+        // `--flag=value`, `--flag value`, `-f value`, or attached, as `-XPOST` or `-fbody=hi`.
+        let (flag, value) = match arg.split_once('=') {
             Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_owned())),
-            _ => (arg.as_str(), None),
+            _ if API_VALUE_FLAGS.contains(&arg.as_str()) => (arg.as_str(), rest.next().cloned()),
+            _ if !arg.starts_with("--") => match (arg.get(..2), arg.get(2..)) {
+                (Some(flag), Some(value)) if !value.is_empty() => (flag, Some(value.to_owned())),
+                _ => continue,
+            },
+            _ => continue,
         };
-        if let Some(attached) = flag.strip_prefix("-X").filter(|m| !m.is_empty()) {
-            method = Some(attached.to_owned());
-            continue;
-        }
-        if !API_VALUE_FLAGS.contains(&flag) {
-            continue;
-        }
-        let value = inline.or_else(|| rest.next().cloned());
         match flag {
             "-X" | "--method" => method = value,
-            "-f" | "--raw-field" | "-F" | "--field" | "--input" => fields = true,
+            "-f" | "--raw-field" | "-F" | "--field" => {
+                fields = true;
+                from_file |= value.is_some_and(|value| value.contains("=@"));
+            }
+            "--input" => {
+                fields = true;
+                from_file = true;
+            }
             _ => {}
         }
     }
-    match endpoint? {
+    match endpoint?.trim_start_matches('/') {
         "rate_limit" => None,
-        // A mutation is a write; anything else sent to graphql is a query.
-        "graphql" => (!args.iter().any(|arg| arg.contains("mutation"))).then_some(Api::Graphql),
+        "graphql" => {
+            (!from_file && !args.iter().any(|arg| arg.contains("mutation"))).then_some(Api::Graphql)
+        }
         _ => {
             let get = match method {
                 Some(method) => method.eq_ignore_ascii_case("GET"),
@@ -266,6 +348,11 @@ pub struct Budget {
     /// The GraphQL API's quota.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub graphql: Option<Quota>,
+    /// When the shim or `github_budget` last ran `gh api rate_limit`, whether or not it answered.
+    /// Neither runs it again within [`FRESH`], so a `gh` that fails or hangs costs one try a
+    /// minute, and meanwhile commands run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<Timestamp>,
 }
 
 impl Budget {
@@ -275,12 +362,38 @@ impl Budget {
             Api::Graphql => self.graphql,
         }
     }
+
+    /// The newer of `self`'s and `other`'s quotas and checks.
+    fn newest(self, other: Self) -> Self {
+        let newer = |a: Option<Quota>, b: Option<Quota>| match (a, b) {
+            (Some(a), Some(b)) => Some(if b.seen_at > a.seen_at { b } else { a }),
+            (a, b) => a.or(b),
+        };
+        Self {
+            rest: newer(self.rest, other.rest),
+            graphql: newer(self.graphql, other.graphql),
+            checked_at: self.checked_at.max(other.checked_at),
+        }
+    }
 }
+
+/// The budget file's name in the data folder.
+const BUDGET_FILE: &str = "github-budget.json";
 
 /// `<data>/tools/gh-shim`, the folder agents get first on `PATH`.
 #[must_use]
 pub fn dir(data_dir: &DataDir) -> PathBuf {
-    data_dir.tools_dir().join("gh-shim")
+    shim_dir(data_dir.root())
+}
+
+fn shim_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("tools").join("gh-shim")
+}
+
+/// What a worker's sandbox lets its commands read in data folder `data_dir`, so they get the
+/// shim: its folder and the budget file.
+pub(crate) fn sandbox_readable(data_dir: &Path) -> [PathBuf; 2] {
+    [shim_dir(data_dir), data_dir.join(BUDGET_FILE)]
 }
 
 /// Whether `dir` is a shim folder, of this data folder or another's, so the shim never runs
@@ -292,7 +405,13 @@ fn is_shim_dir(dir: &Path) -> bool {
 
 /// `<data>/github-budget.json`.
 fn budget_file(data_dir: &DataDir) -> PathBuf {
-    data_dir.root().join("github-budget.json")
+    data_dir.root().join(BUDGET_FILE)
+}
+
+/// Where the shim keeps the budget when it can't write the data folder's, as in a worker's
+/// sandbox, which can read it but not write it: the temp folder.
+fn fallback_file() -> PathBuf {
+    std::env::temp_dir().join(format!("plxd-{BUDGET_FILE}"))
 }
 
 /// Puts the running plxd in [`dir`] as `gh`: a symlink, or on Windows a hard link (a copy when
@@ -309,15 +428,16 @@ pub(crate) fn install(data_dir: &DataDir) -> io::Result<()> {
     }
     let dir = dir(data_dir);
     std::fs::create_dir_all(&dir)?;
-    let shim = dir.join(GH);
-    match std::fs::remove_file(&shim) {
-        Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-        _ => {}
-    }
+    // Made beside it and renamed over it, so a `gh` call never finds it missing.
+    let temp = dir.join(format!("{GH}.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&temp);
     #[cfg(unix)]
-    return std::os::unix::fs::symlink(&exe, &shim);
+    std::os::unix::fs::symlink(&exe, &temp)?;
     #[cfg(windows)]
-    return std::fs::hard_link(&exe, &shim).or_else(|_| std::fs::copy(&exe, &shim).map(drop));
+    std::fs::hard_link(&exe, &temp).or_else(|_| std::fs::copy(&exe, &temp).map(drop))?;
+    std::fs::rename(&temp, dir.join(GH)).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })
 }
 
 /// The real `gh`: the first on `path` outside any shim folder, else plxd's own install.
@@ -334,12 +454,16 @@ fn real_gh(path: Option<&OsStr>, data_dir: Option<&DataDir>) -> Option<PathBuf> 
 /// the loser's quota is read again within [`FRESH`].
 static WRITING: Mutex<()> = Mutex::new(());
 
-/// Reads the budget file; an empty budget when it's missing or unreadable.
+/// Reads the budget from `file` and [`fallback_file`], the newest of each; an empty budget when
+/// both are missing or unreadable.
 fn load(file: &Path) -> Budget {
-    std::fs::read(file)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    let read = |file: &Path| -> Budget {
+        std::fs::read(file)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    };
+    read(file).newest(read(&fallback_file()))
 }
 
 /// Writes `budget` to `file` through a rename, so a reader never sees half of it.
@@ -354,7 +478,7 @@ fn update(file: &Path, change: impl FnOnce(&mut Budget)) {
     let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
     let mut budget = load(file);
     change(&mut budget);
-    if let Err(error) = save(file, &budget) {
+    if let Err(error) = save(file, &budget).or_else(|_| save(&fallback_file(), &budget)) {
         tracing::debug!(%error, "couldn't save the GitHub budget");
     }
 }
@@ -396,12 +520,26 @@ fn parse_rate_limit(answer: &[u8], seen_at: Timestamp) -> Option<Budget> {
     Some(Budget {
         rest: Some(quota("core")?),
         graphql: Some(quota("graphql")?),
+        checked_at: None,
     })
 }
 
-/// Reads both quotas with `gh api rate_limit` and saves them. `None` when `gh` fails or takes
-/// over [`REFRESH_TIMEOUT`].
-fn refresh(gh: &Path, file: &Path) -> Option<Budget> {
+/// Reads both quotas with `gh api rate_limit` and saves them, with when it asked. `None` when
+/// `gh` fails or takes over [`REFRESH_TIMEOUT`], which saves only when it asked.
+fn refresh(gh: &Path, file: &Path, now: Timestamp) -> Option<Budget> {
+    let budget = ask_rate_limit(gh).map(|budget| Budget {
+        checked_at: Some(now),
+        ..budget
+    });
+    update(file, |saved| match budget {
+        Some(budget) => *saved = budget,
+        None => saved.checked_at = Some(now),
+    });
+    budget
+}
+
+/// `gh api rate_limit`'s answer, unless it fails or takes over [`REFRESH_TIMEOUT`].
+fn ask_rate_limit(gh: &Path) -> Option<Budget> {
     let mut child = Command::new(gh)
         .args(["api", "rate_limit"])
         .env(OFF_ENV, "off")
@@ -424,22 +562,22 @@ fn refresh(gh: &Path, file: &Path) -> Option<Budget> {
         }
     }
     let output = child.wait_with_output().ok()?;
-    let budget =
-        parse_rate_limit(&output.stdout, Timestamp::now()).filter(|_| output.status.success())?;
-    update(file, |saved| *saved = budget);
-    Some(budget)
+    parse_rate_limit(&output.stdout, Timestamp::now()).filter(|_| output.status.success())
 }
 
-/// The budget, read again with `gh` when the quota `api` names, or either when `None`, is stale.
+/// The budget, read again with `gh` when the quota `api` names, or either when `None`, is stale,
+/// unless `gh` was asked within [`FRESH`].
 fn current(gh: Option<&Path>, file: &Path, api: Option<Api>, now: Timestamp) -> Budget {
     let budget = load(file);
     let stale = |quota: Option<Quota>| quota.is_none_or(|quota| quota.stale(now));
     let wanted = match api {
         Some(api) => stale(budget.get(api)),
         None => stale(budget.rest) || stale(budget.graphql),
-    };
+    } && budget
+        .checked_at
+        .is_none_or(|at| now.duration_since(at) > FRESH);
     match gh {
-        Some(gh) if wanted => refresh(gh, file).unwrap_or(budget),
+        Some(gh) if wanted => refresh(gh, file, now).unwrap_or(budget),
         _ => budget,
     }
 }
@@ -481,7 +619,8 @@ pub fn budget(data_dir: &DataDir) -> Budget {
 pub fn invoked(argv0: Option<&OsStr>) -> bool {
     argv0
         .and_then(|program| Path::new(program).file_stem())
-        .is_some_and(|name| name == "gh")
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("gh"))
 }
 
 /// What the shim does with `args`, `gh`'s arguments: an exit code and the line to print for a

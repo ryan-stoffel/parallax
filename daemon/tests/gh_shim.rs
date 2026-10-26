@@ -41,6 +41,9 @@ impl Fixture {
             .args(args)
             .env("PATH", path)
             .env("PLXD_DATA_DIR", self.data())
+            // The shim's fallback budget file goes in the temp folder.
+            .env("TMPDIR", self.temp.path())
+            .env("TMP", self.temp.path())
             .env_remove("PARALLAX_GH_SHIM")
             .envs(env.iter().copied())
             .stdin(Stdio::piped())
@@ -74,8 +77,9 @@ fn a_replaced_command_is_refused_with_its_tool() {
     assert!(output.stdout.is_empty());
 }
 
-/// A fake real `gh`: `api rate_limit` answers `$GRAPHQL_LEFT` GraphQL requests left; anything
-/// else prints its arguments and stdin and exits 3.
+/// A fake real `gh`: `api rate_limit` adds a line to `rate_limit.log` beside it and answers
+/// `$GRAPHQL_LEFT` GraphQL requests left, or fails with `$RATE_LIMIT_FAILS`; anything else
+/// prints its arguments and stdin and exits 3.
 #[cfg(unix)]
 fn fake_gh(bin: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt as _;
@@ -84,6 +88,8 @@ fn fake_gh(bin: &std::path::Path) {
         &gh,
         r#"#!/bin/sh
 if [ "$1 $2" = "api rate_limit" ]; then
+  echo asked >> "$(dirname "$0")/rate_limit.log"
+  [ -n "$RATE_LIMIT_FAILS" ] && exit 1
   reset=$(( $(date +%s) + 600 ))
   echo "{\"resources\":{\"core\":{\"remaining\":4000,\"reset\":$reset},\"graphql\":{\"remaining\":${GRAPHQL_LEFT:-5000},\"reset\":$reset}}}"
   exit 0
@@ -142,4 +148,19 @@ fn a_read_is_refused_when_its_quota_is_nearly_spent() {
     assert_eq!(output.status.code(), Some(3), "{output:?}");
     let output = fixture.gh(&["pr", "merge", "12"], "", &low);
     assert_eq!(output.status.code(), Some(3), "{output:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_failed_quota_read_isnt_tried_again_for_a_minute() {
+    let fixture = Fixture::new();
+    fake_gh(&fixture.bin());
+    let fails = [("RATE_LIMIT_FAILS", "1")];
+
+    for _ in 0..2 {
+        let output = fixture.gh(&["pr", "list"], "", &fails);
+        assert_eq!(output.status.code(), Some(3), "{output:?}");
+    }
+    let log = std::fs::read_to_string(fixture.bin().join("rate_limit.log")).unwrap();
+    assert_eq!(log.lines().count(), 1, "{log}");
 }
