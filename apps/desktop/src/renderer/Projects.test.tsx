@@ -20,6 +20,7 @@ import type {
   Thread,
 } from "../protocol/generated/protocol";
 import { App } from "./App";
+import { showProjects } from "./pins";
 import { scopeStore } from "./scope";
 import { sectionsStore } from "./Sidebar";
 import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
@@ -87,6 +88,7 @@ beforeEach(() => {
   request.mockClear();
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
+  showProjects.set(true);
   sectionsStore.set({});
   scopeStore.set("all");
   popoverSources = [];
@@ -241,6 +243,20 @@ test("lists plxd's Projects as rows, most recently active first, and adds one fr
     }),
   );
   expect(projectRows()).toEqual(["parallax", "photon", "ember"]);
+});
+
+test("hidden from View, Projects list only while searching, and the open one keeps its row", async () => {
+  showProjects.set(false);
+  await renderApp();
+  expect(projectRows()).toEqual([]);
+  const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
+  typeInto(search, "emb");
+  await settle();
+  expect(projectRows()).toEqual(["ember"]);
+  await click(rowButton("ember"));
+  typeInto(search, "");
+  await settle();
+  expect(projectRows()).toEqual(["ember"]);
 });
 
 test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {

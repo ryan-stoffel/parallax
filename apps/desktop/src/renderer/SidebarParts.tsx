@@ -85,9 +85,9 @@ function Segmented<T extends string | number | boolean | null>({
 }
 
 /**
- * The line between what you keep and today's threads: Fold, which hides the favorites and pins
- * above it, Clear, for what's finished, and View, for how today's threads group, how tall their
- * rows are, and when finished ones archive themselves.
+ * The line between what you keep and today's threads: Fold, which hides the Projects, favorites,
+ * and pins above it, Clear, for what's finished, and View, for how today's threads group, how tall
+ * their rows are, whether Projects list at all, and when finished ones archive themselves.
  */
 export function TodayDivider({
   clearable,
@@ -96,6 +96,8 @@ export function TodayDivider({
   onAutoHours,
   compact,
   onCompact,
+  projects,
+  onProjects,
   group,
   onGroup,
   folded,
@@ -107,10 +109,13 @@ export function TodayDivider({
   onAutoHours: (hours: number | null) => void;
   compact: boolean;
   onCompact: (compact: boolean) => void;
+  /** Whether Projects list; hidden, they list only while searching (PLX-1043). */
+  projects: boolean;
+  onProjects: (show: boolean) => void;
   /** How today's threads are grouped. */
   group: TodayGroup;
   onGroup: (group: TodayGroup) => void;
-  /** Whether the favorites and pins above are folded. */
+  /** Whether the Projects, favorites, and pins above are folded. */
   folded: boolean;
   /** Absent with nothing above to fold. */
   onFold?: (folded: boolean) => void;
@@ -150,8 +155,8 @@ export function TodayDivider({
               <button
                 type="button"
                 aria-expanded={!folded}
-                aria-label={folded ? "Unfold favorites and pins" : "Fold favorites and pins"}
-                title={folded ? "Unfold favorites and pins" : "Fold favorites and pins"}
+                aria-label={folded ? "Unfold Projects and pins" : "Fold Projects and pins"}
+                title={folded ? "Unfold Projects and pins" : "Fold Projects and pins"}
                 onClick={() => onFold(!folded)}
                 className={icon}
               >
@@ -207,7 +212,22 @@ export function TodayDivider({
             ]}
             onChange={onCompact}
           />
+          <span className="text-body text-muted-foreground">Projects</span>
+          <Segmented
+            label="Projects"
+            value={projects}
+            options={[
+              [true, "Show"],
+              [false, "Hide"],
+            ]}
+            onChange={onProjects}
+          />
         </div>
+        {!projects && (
+          <p className="mt-2 text-meta leading-snug text-faint-foreground">
+            Hidden Projects still show while you search.
+          </p>
+        )}
         <hr className="-mx-3 my-3 border-border" />
         <p className="mb-2 text-body text-muted-foreground">Archive finished threads after</p>
         <Segmented

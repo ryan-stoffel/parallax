@@ -169,6 +169,7 @@ import { flushToasts, toast, undo, useToasts } from "./undo";
 import {
   autoClear,
   compactRows,
+  showProjects,
   draggedPin,
   favoriteOrder,
   forgetPin,
@@ -771,8 +772,14 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // Projects, most recently active first, as threads are (PLX-1043).
-  const projects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
+  // Projects, most recently active first, as threads are (PLX-1043). Hidden from View, they list
+  // only while searching, and the open one keeps its row.
+  const projectsOn = showProjects.use();
+  const openProject =
+    selection.kind === "project" ? `${host.id}/${selection.projectId}` : undefined;
+  const projects = shown.flatMap((i) =>
+    i.kind === "project" && (projectsOn || words.length > 0 || i.key === openProject) ? [i] : [],
+  );
   // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
   const favRank = (key: string) => {
@@ -1747,6 +1754,8 @@ export function ThreadList({
         onAutoHours={(hours) => autoClear.set(hours)}
         compact={compact}
         onCompact={(on) => compactRows.set(on)}
+        projects={projectsOn}
+        onProjects={(on) => showProjects.set(on)}
         group={groupBy}
         onGroup={(next) => todayGroup.set(next)}
       />

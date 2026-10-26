@@ -82,6 +82,12 @@ export const autoClear = stored<number | null>("parallax:autoClear", null, (raw,
 /** Today as one-line rows: icon, title, and status, as T3 Code users ask (#6085). */
 export const compactRows = stored("parallax:compactRows", false, bool);
 
+/**
+ * Whether the sidebar lists Projects (PLX-1043). Hidden, they list only while searching, and the
+ * open one keeps its row.
+ */
+export const showProjects = stored("parallax:showProjects", true, bool);
+
 /** Whether the empty pins' "drag a thread here" hint was closed, so it stays away. */
 export const pinHintHidden = stored("parallax:pinHintHidden", false, bool);
 
