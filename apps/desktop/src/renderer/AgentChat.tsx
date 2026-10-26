@@ -1796,7 +1796,7 @@ export const RowView = memo(function RowView({
           )}
           {/* A message of images or files alone has no bubble. */}
           {((!images?.length && !files.length) || said?.trim() !== "") && (
-            <div className="max-w-[85%] rounded-xl bg-selected px-3.5 py-2 text-reading leading-relaxed whitespace-pre-wrap">
+            <div className="max-w-[85%] rounded-xl bg-selected px-3.5 py-2 text-reading leading-relaxed wrap-break-word whitespace-pre-wrap">
               {/* A follow-up from an older log, which has no text for it. */}
               {said !== undefined ? (
                 withMentions(said, known)
