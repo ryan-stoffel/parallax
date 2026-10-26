@@ -236,6 +236,7 @@ pub(super) fn spec(
     }
     spec.stdin = StdinMode::Piped;
     spec.record = Some("codex");
+    spec.agent = true;
     overrides.apply(&mut spec);
     spec
 }

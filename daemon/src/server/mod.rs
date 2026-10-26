@@ -409,6 +409,9 @@ impl Server {
         prepare_data_dir(data_dir.root())?;
         let lock = InstanceLock::acquire(&data_dir.lock_file(), data_dir.root())?;
         run_temp::sweep(data_dir);
+        if let Err(error) = crate::gh_shim::install(data_dir) {
+            warn!(%error, "couldn't install the gh shim for agents");
+        }
         let socket_path = data_dir
             .socket_path()
             .map_err(|error| StartError::io("finding the socket path", error))?;
