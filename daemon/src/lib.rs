@@ -56,6 +56,7 @@ pub mod backend;
 mod board;
 mod browser;
 mod checkpoints;
+mod ci_logs;
 mod commands;
 mod computer;
 mod context;

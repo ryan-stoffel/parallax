@@ -10,7 +10,8 @@
 //! `pr/watch` has plxd check one of a run's linked pull requests every two minutes and wake the
 //! run with a message when a check fails, the required checks pass, someone else comments, or the
 //! branch starts to conflict. `pr/unwatch` stops it, and `pr/watches` lists a run's watches.
-//! `pr/status` reads one pull request and says whether it is ready to merge.
+//! `pr/status` reads one pull request and says whether it is ready to merge. `pr/failureLog`
+//! returns the error lines of each failed check's log on its head (PLX-1019).
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -382,4 +383,56 @@ pub struct PrStatusThread {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,
+}
+
+/// Params of `pr/failureLog` (PLX-1019).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFailureLogParams {
+    /// The pull request's web URL.
+    pub url: String,
+    /// Only the failed checks whose name contains this, ignoring case.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub check: Option<String>,
+}
+
+/// Result of `pr/failureLog`: the failed checks on a pull request's head, each with its log's
+/// error lines.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFailureLogResult {
+    /// The pull request's URL.
+    pub url: String,
+    /// The head commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub head_sha: Option<String>,
+    /// Its failed checks, by name. Empty when none failed.
+    pub failures: Vec<PrFailureLog>,
+}
+
+/// A failed check in a [`PrFailureLogResult`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrFailureLog {
+    /// The check's name.
+    pub name: String,
+    /// How it failed, in lowercase: `failure`, `cancelled`, `timed out`, and so on.
+    pub how: String,
+    /// Its GitHub Actions workflow run, when it is an Actions job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub workflow_run_id: Option<u64>,
+    /// Its GitHub Actions job, when it is one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub job_id: Option<u64>,
+    /// Its log or details page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub url: Option<String>,
+    /// The log's lines around errors, failures, and panics, at most 8 KiB. Says why instead when
+    /// there is no log, such as for a check that isn't an Actions job.
+    pub log: String,
 }

@@ -25,6 +25,7 @@ use serde::de::DeserializeOwned;
 use ts_rs::TS;
 
 use crate::jsonrpc::CancelRequestParams;
+use crate::schedule::{PrFailureLogParams, PrFailureLogResult};
 use crate::{
     AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
@@ -650,6 +651,10 @@ method_table! {
         /// `pr/status` (PLX-837): reads a GitHub pull request once and says whether it is ready
         /// to merge, and whether the run watches it. It needn't be linked.
         PrStatus = "pr/status": PrViewParams => PrStatusResult;
+        /// `pr/failureLog` (PLX-1019): the error lines of each failed check's log on a GitHub
+        /// pull request's head, each log read from GitHub once per head and job. Gated on
+        /// `prWatch`.
+        PrFailureLog = "pr/failureLog": PrFailureLogParams => PrFailureLogResult;
         /// `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
         /// declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
         /// `setupScripts` capability, like `repo/saveScripts`.

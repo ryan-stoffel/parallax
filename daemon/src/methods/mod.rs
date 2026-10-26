@@ -409,6 +409,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         PrUnwatch => |p| crate::pr_watch::unwatch(daemon, p),
         PrWatches => |p| crate::pr_watch::watches(daemon, p),
         PrStatus => |p| crate::pr_watch::status(daemon, p),
+        PrFailureLog => |p| crate::ci_logs::failure_log(daemon, p),
         RepoScripts => |p| crate::setup_scripts::scripts(daemon, p),
         TaskDelegate => |p| crate::delegation::delegate(Arc::clone(daemon), p),
         TaskStatus => |p| crate::delegation::status(daemon, p),
