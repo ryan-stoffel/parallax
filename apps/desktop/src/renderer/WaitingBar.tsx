@@ -87,7 +87,7 @@ export function WaitingBar({
           </span>
         </button>
       ) : (
-        <div className="flex min-w-0 items-center gap-2.5 py-1 pr-2.5 pl-4">
+        <div className="flex min-w-0 items-center gap-2.5 py-0.5 pr-2.5 pl-4">
           <span
             aria-hidden
             className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground"

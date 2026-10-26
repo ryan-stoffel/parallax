@@ -9,7 +9,7 @@ export function GoalStrip({ objective, compact }: { objective: string; compact?:
     <section
       aria-label="Goal"
       title={objective}
-      className={`plan-strip flex min-w-0 items-center text-body ${compact ? "h-7 gap-1.5 px-1.5 text-muted-foreground" : "gap-2.5 py-1.5 pr-3.5 pl-4"}`}
+      className={`plan-strip flex min-w-0 items-center text-body ${compact ? "h-7 gap-1.5 px-1.5 text-muted-foreground" : "gap-2.5 py-0.5 pr-3.5 pl-4"}`}
     >
       <Target aria-hidden className="size-4 shrink-0 text-muted-foreground" />
       <span className={compact ? "text-body" : "shrink-0 font-medium"}>

@@ -1462,7 +1462,7 @@ export function Composer({
             "aria-controls": menuId,
             "aria-activedescendant": `${menuId}-${highlighted}`,
           }),
-        // It grows from three rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
+        // It grows from two rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
         // Its parent is anchored below it, so it grows upward. Stepped back, it's one row, clear
         // of the buttons at its end.
         class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${back ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(3.25em+0.875rem)] pt-3.5"}`,
