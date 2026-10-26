@@ -739,6 +739,20 @@ test("scrolling up from the end, however little, stops following until it scroll
   };
 
   scroll(5, 700);
+  // A scroll up that a box in it takes, such as a tool's output, leaves it following.
+  const box = log.appendChild(document.createElement("div"));
+  box.style.overflowY = "auto";
+  Object.defineProperties(box, {
+    scrollHeight: { get: () => 400 },
+    clientHeight: { get: () => 200 },
+    scrollTop: { get: () => 100 },
+  });
+  act(() => {
+    box.dispatchEvent(new WheelEvent("wheel", { deltaY: -5, bubbles: true }));
+  });
+  update();
+  expect(top).toBe(height);
+  scroll(5, height - 300);
   // 5px up from the end, an update leaves it where the user put it.
   scroll(-5, 695);
   update();
