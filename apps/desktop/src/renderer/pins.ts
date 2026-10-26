@@ -87,7 +87,7 @@ export const pinHintHidden = stored("parallax:pinHintHidden", false, bool);
 
 /** A pin being dragged, read while dragging, when the drag's data can't be. */
 export const pinDragType = "application/x-parallax-pin";
-let dragging: { key: string; kind: "thread" | "project" } | undefined;
+let dragging: { key: string; kind: "thread" } | undefined;
 export const draggedPin = () => dragging;
 export const setDraggedPin = (pin: typeof dragging) => {
   dragging = pin;

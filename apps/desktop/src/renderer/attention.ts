@@ -82,13 +82,14 @@ export const lastPrompt = (thread: Thread) => thread.lastPromptAt ?? thread.crea
 
 /**
  * When a thread was last active, for the sidebar's order (PLX-1043): its newest message, or when its
- * run last stopped after that, so a thread that finishes rises to the top. A running thread keeps its
- * message's time, so its row doesn't move while it works.
+ * run last stopped after that (`stoppedAt`, ThreadsState), so a thread that finishes rises to the
+ * top. A running thread, or one waiting out a usage limit (0049), keeps its message's time, so its
+ * row doesn't move until it finishes.
  */
-export function activeAt(thread: Thread, run: AgentRun | undefined): string {
+export function activeAt(thread: Thread, run: AgentRun | undefined, stoppedAt?: string): string {
   const prompt = lastPrompt(thread);
-  if (!run || isRunning(run.status)) return prompt;
-  return Date.parse(run.updatedAt) > Date.parse(prompt) ? run.updatedAt : prompt;
+  if (!run || !stoppedAt || isRunning(run.status) || run.status === "waiting") return prompt;
+  return Date.parse(stoppedAt) > Date.parse(prompt) ? stoppedAt : prompt;
 }
 
 /** When the user last sent a thread a message, for Working's clock: wake-ups don't reset it (PLX-1012). */

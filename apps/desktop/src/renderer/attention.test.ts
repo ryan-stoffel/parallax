@@ -42,11 +42,13 @@ test("a snoozed thread hides until its time, or until it needs the user", () => 
 
 test("a thread is active as of its last prompt, or when its run stopped after it, so a finished one rises", () => {
   const prompted = thread({ lastPromptAt: "2026-10-01T10:30:00Z" });
-  expect(activeAt(prompted, run())).toBe("2026-10-01T11:00:00Z");
-  // While it works, its row stays where its prompt put it.
-  expect(activeAt(prompted, run({ status: "running" }))).toBe("2026-10-01T10:30:00Z");
+  const stopped = "2026-10-01T11:00:00Z";
+  expect(activeAt(prompted, run(), stopped)).toBe(stopped);
+  // While it works, or waits out a usage limit, its row stays where its prompt put it.
+  expect(activeAt(prompted, run({ status: "running" }), stopped)).toBe("2026-10-01T10:30:00Z");
+  expect(activeAt(prompted, run({ status: "waiting" }), stopped)).toBe("2026-10-01T10:30:00Z");
   // A run that stopped before the newest prompt doesn't move it back.
-  expect(activeAt(thread({ lastPromptAt: "2026-10-01T12:00:00Z" }), run())).toBe(
+  expect(activeAt(thread({ lastPromptAt: "2026-10-01T12:00:00Z" }), run(), stopped)).toBe(
     "2026-10-01T12:00:00Z",
   );
   expect(activeAt(thread(), undefined)).toBe("2026-10-01T10:00:00Z");

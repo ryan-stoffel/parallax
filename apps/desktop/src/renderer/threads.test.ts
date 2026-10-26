@@ -216,3 +216,36 @@ test("holdQuiet holds the end of a run's background work until the agent has had
   expect(applied.slice(5)).toEqual([stopped, ended]);
   vi.useRealTimers();
 });
+
+test("a run's stop time is when it stopped, and a change after that, as a linked pull request, keeps it", () => {
+  const running = { id: "r-1", prompt: "Go", status: "running", updatedAt: "2026-10-01T10:00:00Z" };
+  let state = threadsReducer(emptyThreads, {
+    type: "snapshot",
+    projects: [],
+    repos: [],
+    threads: [],
+    runs: [running as never],
+  });
+  expect(state.stoppedAt).toEqual({});
+  const updated = (time: string, change: object) => ({
+    seq: 1,
+    time,
+    event: { kind: "agent.updated", runId: "r-1", state: { accountId: "a", ...change } },
+  });
+  state = threadsReducer(state, {
+    type: "scope",
+    events: [updated("2026-10-01T10:05:00Z", { status: "completed" }) as never],
+  });
+  expect(state.stoppedAt).toEqual({ "r-1": "2026-10-01T10:05:00Z" });
+  state = threadsReducer(state, {
+    type: "scope",
+    events: [
+      updated("2026-10-01T11:00:00Z", {
+        status: "completed",
+        pullRequests: ["https://x/1"],
+      }) as never,
+    ],
+  });
+  expect(state.runs["r-1"]!.updatedAt).toBe("2026-10-01T11:00:00Z");
+  expect(state.stoppedAt).toEqual({ "r-1": "2026-10-01T10:05:00Z" });
+});

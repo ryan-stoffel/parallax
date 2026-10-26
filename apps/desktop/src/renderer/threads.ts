@@ -55,6 +55,31 @@ export interface ThreadsState {
    * or on pull requests plxd watches (PLX-777). A run waiting on neither has no entry.
    */
   waiting: Readonly<Record<string, Waiting>>;
+  /**
+   * By run id: when each stopped run last stopped (PLX-1043), for the sidebar's order. Unlike
+   * `updatedAt`, a change after it stops, such as a linked pull request, doesn't move it.
+   */
+  stoppedAt: Readonly<Record<string, string>>;
+}
+
+/**
+ * `stoppedAt` with `runs` applied: a run that stopped since `before`, or is new and stopped, stops
+ * at `time`, or its `updatedAt` for none.
+ */
+function stops(
+  stoppedAt: Readonly<Record<string, string>>,
+  before: Readonly<Record<string, AgentRun>>,
+  runs: readonly AgentRun[],
+  time?: string,
+): Readonly<Record<string, string>> {
+  let next = stoppedAt;
+  for (const run of runs) {
+    if (isRunning(run.status)) continue;
+    const was = before[run.id];
+    if (run.id in next && was && !isRunning(was.status)) continue;
+    next = { ...next, [run.id]: time ?? run.updatedAt };
+  }
+  return next;
 }
 
 /** What a run's agent waits on (PLX-777). */
@@ -134,6 +159,7 @@ export const emptyThreads: ThreadsState = {
   approvals: {},
   checkpoints: {},
   waiting: {},
+  stoppedAt: {},
 };
 
 /** How many permission requests run `runId` waits on. */
@@ -194,12 +220,14 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
             { background: wakes(w.background), watching: !!w.watching?.length },
           ]),
         ),
+        stoppedAt: stops(state.stoppedAt, state.runs, action.runs),
       };
     case "runs":
       return {
         ...state,
         titles: withThreadTitles({ ...state.titles, ...titlesOf(action.runs) }, state.threads),
         runs: { ...state.runs, ...byId(action.runs) },
+        stoppedAt: stops(state.stoppedAt, state.runs, action.runs),
       };
     case "coordinator":
       return {
@@ -210,13 +238,16 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
       };
     case "scope": {
       let runs = state.runs;
+      let stoppedAt = state.stoppedAt;
       for (const { event, time } of action.events) {
         if (!("runId" in event)) continue;
         const before = runs[event.runId];
         const run = updateRun(before, event);
+        if (!run || run === before) continue;
         // `updatedAt` marks when it last changed, so a run that stops after the user looked
         // counts as unseen (0033).
-        if (run && run !== before) runs = { ...runs, [run.id]: { ...run, updatedAt: time } };
+        runs = { ...runs, [run.id]: { ...run, updatedAt: time } };
+        stoppedAt = stops(stoppedAt, before ? { [run.id]: before } : {}, [run], time);
       }
       const started = action.events.flatMap((e) =>
         e.event.kind === "agent.started" && e.event.run ? [e.event.run] : [],
@@ -227,6 +258,7 @@ export function threadsReducer(state: ThreadsState, action: ThreadsAction): Thre
       return {
         ...state,
         runs,
+        stoppedAt,
         titles: started.length
           ? withThreadTitles({ ...state.titles, ...titlesOf(started) }, state.threads)
           : state.titles,

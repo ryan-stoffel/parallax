@@ -624,7 +624,7 @@ export function ThreadList({
             run,
             unread.includes(`${h.id}/${t.id}`),
           ),
-          at: activeAt(t, run),
+          at: activeAt(t, run, state.stoppedAt[t.id]),
           title,
           text: [
             title,
@@ -646,11 +646,12 @@ export function ThreadList({
         repo: state.repos.find((r) => r.path === p.repoPath),
         attention: projectAttention(runs, (id) => asksOf(state, id)),
         // Its last change, or when one of its runs last stopped, so finished work raises it too.
-        at: runs.reduce(
-          (at, r) =>
-            !isRunning(r.status) && Date.parse(r.updatedAt) > Date.parse(at) ? r.updatedAt : at,
-          p.updatedAt,
-        ),
+        at: runs.reduce((at, r) => {
+          const stopped = state.stoppedAt[r.id];
+          return stopped && !isRunning(r.status) && Date.parse(stopped) > Date.parse(at)
+            ? stopped
+            : at;
+        }, p.updatedAt),
         title: p.name,
         text: p.name,
       };
@@ -850,7 +851,7 @@ export function ThreadList({
           .filter((i) => !isFolded(groupKey(i)))
           .sort((a, b) => groupPlace.get(groupKey(a))! - groupPlace.get(groupKey(b))!);
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // favorites' Projects, unless folded away, then Today's threads, then Working's, while it's open.
+  // Projects' rows, unless folded away, then Today's threads, then Working's, while it's open.
   const topFolded = topCollapsed.use();
   const listed = [
     ...(topFolded && !words.length ? [] : projects),
@@ -1171,6 +1172,7 @@ export function ThreadList({
       <ThreadRow
         key={item.key}
         look={compact ? "compact" : undefined}
+        at={item.at}
         rowKey={item.key}
         thread={t}
         hostId={item.host.id}
@@ -2845,6 +2847,7 @@ function ProjectRow({
  */
 function ThreadRow({
   look,
+  at,
   rowKey,
   thread,
   hostId,
@@ -2882,6 +2885,8 @@ function ThreadRow({
 }: {
   /** Today's one-line look (pins.ts): where it is, its title, and its status. */
   look?: "compact";
+  /** When it was last active (`activeAt`), for its age. */
+  at: string;
   /** Its key in the list, for keyboard moves and sliding when the list moves. */
   rowKey: string;
   thread: Thread;
@@ -3027,7 +3032,7 @@ function ThreadRow({
       drafted ? (
         <DraftStatus />
       ) : (
-        age(activeAt(thread, run))
+        age(at)
       )
     ) : (
       <AttentionBadge attention={attention} since={lastUserPrompt(thread)} />
