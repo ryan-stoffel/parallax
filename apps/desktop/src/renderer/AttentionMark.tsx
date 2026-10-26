@@ -80,7 +80,7 @@ export function AttentionBadge({
   count,
 }: {
   attention: Attention;
-  /** When the current turn started, for Working's clock. */
+  /** When the user last sent the thread a message, for Working's clock (PLX-1012). */
   since?: string;
   /** For a Project: how many of its runs work. */
   count?: number;
