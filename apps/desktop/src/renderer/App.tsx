@@ -56,13 +56,7 @@ import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
 import { useProjectContext } from "./ContextPanel";
 import { ProjectChat } from "./ProjectChat";
 import { ProjectHome, waitingCount } from "./ProjectHome";
-import {
-  linkedPr,
-  PullRequestChip,
-  PullRequestList,
-  PullRequestView,
-  usePullRequests,
-} from "./PullRequests";
+import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { NotificationsPage } from "./NotificationsPage";
 import { PullRequestsPage } from "./PullRequestsPage";
 import type { PrEntry } from "./pullRequestSearch";
@@ -1463,24 +1457,12 @@ export function App() {
                             )}
                             <AgentChat
                               hostId={host.id}
-                              host={host}
                               runId={threadId}
-                              title={title}
                               prompt={threads.state.runs[threadId]?.prompt}
                               // The list's status goes stale once the run moves on, so only a start says so.
                               going={focused && selection.started}
                               listed={threads.state.runs[threadId]}
-                              noRepo={repoless({
-                                id: paneThread ? groupOf(threads.state, paneThread) : noRepo,
-                                space: inSpace,
-                              })}
                               space={inSpace}
-                              pullRequests={
-                                focused &&
-                                prs.urls.length > 0 && <PullRequestChip prs={prs} onOpen={openPr} />
-                              }
-                              onPrOpened={linksPrs ? openPr : undefined}
-                              onSetUpGithub={setUpGithub}
                               compose={focused ? compose : undefined}
                               onComposed={composed}
                               threadLinks={threadLinks}
@@ -1564,13 +1546,11 @@ export function App() {
                       key={`${host.id}/${agentId}`}
                       hostId={host.id}
                       runId={agentId}
-                      title={agentTitle}
                       prompt={agent?.prompt}
                       // A Project's subagents are kept current.
                       going={isRunning(agent?.status)}
                       others={othersAsked(agentId)}
                       projectMode={project?.permission}
-                      host={host}
                       threadLinks={threadLinks}
                       strip={
                         project && {
@@ -1635,16 +1615,19 @@ export function App() {
                   }
                   git={
                     selection.kind === "thread" ||
+                    agent ||
                     (selection.kind === "new" && !repoless(group) && !group.space)
                       ? {
                           hostId: host.id,
-                          run: threadRun,
+                          // A Project's child thread has one too, as its composer's tab had.
+                          run: threadRun ?? agent,
                           repo: selection.kind === "new" ? (group.id as RepoId) : undefined,
                           title:
                             selection.kind === "thread"
                               ? threads.state.titles[selection.threadId]
-                              : undefined,
-                          onPrOpened: linksPrs ? openPr : undefined,
+                              : agentTitle,
+                          // The PR view shows a thread's own; a child's opens in the browser.
+                          onPrOpened: linksPrs && threadRun ? openPr : undefined,
                           onSetUpGithub: setUpGithub,
                           onChanges: () => {
                             setPanelOpen(true);

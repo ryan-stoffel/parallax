@@ -836,6 +836,14 @@ export interface ComposerProps {
   initial?: ComposerContents;
   /** Kept up to date with what the box holds, for its screen to save as a draft as it closes. */
   contents?: RefObject<ComposerContents | undefined>;
+  /**
+   * Whether the transcript over it is scrolled up from its end. An empty box no one is typing in
+   * then steps back: one gray line with only Attach and Send or Stop, marked `data-back`, over a
+   * thin tray of the model, effort, and access.
+   */
+  away?: boolean;
+  /** Told whether the box is stepped back, so its screen can shrink what sits with it. */
+  onBack?: (back: boolean) => void;
 }
 
 /**
@@ -890,6 +898,8 @@ export function Composer({
   attach,
   initial,
   contents,
+  away = false,
+  onBack,
 }: ComposerProps) {
   // The box as Markdown, kept on every edit.
   const [text, setText] = useState(initial?.text ?? "");
@@ -902,6 +912,9 @@ export function Composer({
   // The file going in pieces now, the share of it sent, and whether a piece failed.
   const [sending, setSending] = useState<{ file: File; share: number; failed?: boolean }>();
   const [images, setImages] = useState<PromptImage[]>(initial?.images ?? []);
+  const [focused, setFocused] = useState(false);
+  const back = away && !focused && !text && files.length === 0 && images.length === 0;
+  useEffect(() => onBack?.(back), [back, onBack]);
   // The image shown large, kept by identity so images put back ahead of it don't change it.
   const [shown, setShown] = useState<PromptImage>();
   // Attached threads' run ids, as the text's thread chips have them, kept on every edit.
@@ -1450,9 +1463,9 @@ export function Composer({
             "aria-activedescendant": `${menuId}-${highlighted}`,
           }),
         // It grows from three rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
-        // Its parent is anchored below it, so it grows upward.
-        class:
-          "composer-input markdown block max-h-[min(40vh,calc(11.375em+1.125rem))] min-h-[calc(4.875em+1.125rem)] overflow-y-auto px-5 pt-4.5 focus-visible:outline-none",
+        // Its parent is anchored below it, so it grows upward. Stepped back, it's one row, clear
+        // of the buttons at its end.
+        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+1.125rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${back ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(4.875em+1.125rem)] pt-4.5"}`,
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1684,6 +1697,60 @@ export function Composer({
       .run();
   }, [cite, editor]);
 
+  // The run's model, effort, and access: in the box's row, or under it while it's stepped back.
+  const pickers = run && (
+    // A disabled fieldset turns off every control in it, and its title says why.
+    <fieldset
+      ref={controls}
+      disabled={!!optionsDisabled}
+      title={optionsDisabled}
+      className="flex min-w-0 items-center gap-0.5"
+    >
+      {/* Every provider, and an open run can't pick those it can't move to. */}
+      {model && (
+        <ModelMenu
+          key={backend}
+          catalog={catalog}
+          unavailable={blocked}
+          value={model}
+          onChange={setModel}
+        />
+      )}
+      {efforts && (
+        <>
+          {divider}
+          <EffortMenu
+            value={effort}
+            onChange={setEffort}
+            contexts={contexts}
+            context={context}
+            onContext={setContext}
+            fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
+            fast={fast}
+            onFast={setFast}
+          />
+        </>
+      )}
+      {/* One permission is no choice, so there's nothing to show. */}
+      {permissions.length > 1 && (
+        <>
+          {divider}
+          <Picker
+            label="Access"
+            value={permission}
+            onChange={(value) => setPermission(value as AgentPermission)}
+            options={permissions.map((p) =>
+              p === "manual" && manualDenied
+                ? { ...accessOptions[p], description: manualDenials[manualDenied] }
+                : accessOptions[p],
+            )}
+            panelClassName="w-[25rem]"
+          />
+        </>
+      )}
+    </fieldset>
+  );
+
   return (
     <div className="w-full">
       <form
@@ -1723,7 +1790,14 @@ export function Composer({
             addThreads([thread.runId], at === undefined ? undefined : { from: at, to: at });
           }
         }}
-        className={`relative z-10 rounded-xl border bg-surface shadow-composer focus-within:border-ring ${threadOver ? "border-ring" : "border-border"}`}
+        // Only the text's focus brings a stepped-back box back, so Attach and Stop, which a press
+        // focuses, take their click where they are.
+        onFocus={(e) => textArea.current?.contains(e.target) && setFocused(true)}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
+        }}
+        data-back={back || undefined}
+        className={`relative z-10 rounded-xl border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_7%,var(--background))] hover:bg-[color-mix(in_oklab,var(--foreground)_10%,var(--background))]" : "bg-surface shadow-composer"}`}
       >
         {menuOpen && (
           <div
@@ -1883,7 +1957,7 @@ export function Composer({
           {!text && (
             <p
               aria-hidden
-              className="pointer-events-none absolute inset-x-5 top-4.5 truncate text-reading leading-relaxed text-faint-foreground"
+              className={`pointer-events-none absolute left-5 truncate text-reading leading-relaxed text-faint-foreground ${back ? "top-3 right-28" : "top-4.5 right-5"}`}
             >
               {placeholder}
             </p>
@@ -1893,59 +1967,10 @@ export function Composer({
           </RefsContext.Provider>
           <ScrollThumb target={editorDom} />
         </div>
-        <div className="flex items-center gap-0.5 px-3 pt-1 pb-3">
-          {run && (
-            // A disabled fieldset turns off every control in it, and its title says why.
-            <fieldset
-              ref={controls}
-              disabled={!!optionsDisabled}
-              title={optionsDisabled}
-              className="flex min-w-0 items-center gap-0.5"
-            >
-              {/* Every provider, and an open run can't pick those it can't move to. */}
-              {model && (
-                <ModelMenu
-                  key={backend}
-                  catalog={catalog}
-                  unavailable={blocked}
-                  value={model}
-                  onChange={setModel}
-                />
-              )}
-              {efforts && (
-                <>
-                  {divider}
-                  <EffortMenu
-                    value={effort}
-                    onChange={setEffort}
-                    contexts={contexts}
-                    context={context}
-                    onContext={setContext}
-                    fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
-                    fast={fast}
-                    onFast={setFast}
-                  />
-                </>
-              )}
-              {/* One permission is no choice, so there's nothing to show. */}
-              {permissions.length > 1 && (
-                <>
-                  {divider}
-                  <Picker
-                    label="Access"
-                    value={permission}
-                    onChange={(value) => setPermission(value as AgentPermission)}
-                    options={permissions.map((p) =>
-                      p === "manual" && manualDenied
-                        ? { ...accessOptions[p], description: manualDenials[manualDenied] }
-                        : accessOptions[p],
-                    )}
-                    panelClassName="w-[25rem]"
-                  />
-                </>
-              )}
-            </fieldset>
-          )}
+        <div
+          className={`flex items-center gap-0.5 px-3 ${back ? "absolute inset-y-0 right-0" : "pt-1 pb-3"}`}
+        >
+          {!back && pickers}
           <input
             ref={filePicker}
             type="file"
@@ -1956,7 +1981,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {usage?.summary && <UsageRing data={usage} />}
+          {usage?.summary && !back && <UsageRing data={usage} />}
           <button
             type="button"
             aria-label="Attach files"
@@ -1992,11 +2017,18 @@ export function Composer({
           )}
         </div>
       </form>
-      {tab && (
-        // Tucked under the box, so what it shows reads as part of it.
-        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
-          {tab}
+      {back && pickers ? (
+        // A thin tray tucked under the stepped-back line, in place of any tab, as low as it can be.
+        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+          {pickers}
         </div>
+      ) : (
+        tab && (
+          // Tucked under the box, so what it shows reads as part of it.
+          <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
+            {tab}
+          </div>
+        )
       )}
       {footer}
     </div>

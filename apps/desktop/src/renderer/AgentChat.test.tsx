@@ -201,7 +201,7 @@ function sendCalls(request: { mock: { calls: unknown[][] } }) {
  * `agent/list` answers `listSeq`, and a subscribe from before it resyncs, as plxd does
  * when it can't replay that far back. The first `resyncs` subscribes resync anyway.
  * plxd advertises `capabilities`, `message.dispatch` fails when `sent` leaves the run failed,
- * `agent/openPr` answers `prUrl`, or fails with `prError`, and `agent/image` a tiny PNG.
+ * and `agent/image` answers a tiny PNG.
  * `connect` changes the connection's state, and `traffic` moves the scope's log to `listSeq`.
  */
 function fakeBridge(
@@ -212,8 +212,6 @@ function fakeBridge(
     cancelError = "",
     capabilities = {},
     sent = {} as Partial<AgentRun>,
-    prUrl = "",
-    prError = undefined as object | undefined,
   } = {},
 ) {
   let listener: (m: SubscriptionMessage) => void = () => {};
@@ -230,8 +228,6 @@ function fakeBridge(
     if (command === "message.dispatch" && sent.status === "failed")
       return { error: { code: -32603, message: sent.error ?? "The agent couldn't start." } };
     if (method === "orchestration/dispatch") return { result: { seq: 1 }, logId: "log-1" };
-    if (method === "agent/openPr")
-      return prError ? { error: prError } : { result: { url: prUrl }, logId: "log-1" };
     if (method === "agent/image")
       return { result: { mediaType: "image/png", data: "AAAA" }, logId: "log-1" };
     if (method !== "agent/events") return { result: {}, logId: "log-1" };
@@ -284,8 +280,8 @@ const settle = async () => {
   for (let i = 0; i < 20; i++) await act(async () => {});
 };
 
-async function renderChat(noRepo?: boolean, space?: boolean) {
-  render(<AgentChat hostId="local" runId={runId} noRepo={noRepo} space={space} />);
+async function renderChat() {
+  render(<AgentChat hostId="local" runId={runId} />);
   await settle(); // the connection state and the pages
 }
 
@@ -351,7 +347,6 @@ test("opens from the thread's snapshot, appends its events, and a fresh snapshot
   expect(watch).toHaveBeenCalledWith("local", { threadId: runId }, expect.any(Function));
   await snapshot(logged.slice(0, 2));
   expect(transcriptText()).toContain("Add a README");
-  expect(document.querySelector('[aria-label="Worktree"]')).not.toBeNull(); // the footer's tab
 
   await emit(logged[2]!);
   // The agent's messages are never folded into a work dropdown.

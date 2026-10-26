@@ -41,7 +41,6 @@ import type {
 import { MarkdownText } from "./AgentChat";
 import { githubText, numberOf, shotName } from "./github";
 import { diffBand, diffLook } from "./Approval";
-import { tabItem } from "./Composer";
 import { describeError, githubProblem } from "./errors";
 import { dismiss, notify } from "./notifications";
 import { Lightbox } from "./Lightbox";
@@ -209,37 +208,6 @@ export function lookOf(pr?: PullRequest): { Icon: LucideIcon; color: string; lab
 }
 
 const ago = (time: string) => (age(time) === "now" ? "just now" : `${age(time)} ago`);
-
-/**
- * The composer tab's link to a thread's pull requests: the latest one's number, colored by its
- * state, and `+k` for the others. It opens that one's view, or with others, the list.
- */
-export function PullRequestChip({
-  prs,
-  onOpen,
-}: {
-  prs: PullRequests;
-  onOpen: (url?: string) => void;
-}) {
-  const latest = prs.urls.at(-1);
-  if (!latest) return null;
-  const pr = prs.get(latest)?.pr;
-  const { Icon, color } = lookOf(pr);
-  const more = prs.urls.length - 1;
-  return (
-    <button
-      type="button"
-      title={pr ? `#${pr.number} ${pr.title}` : latest}
-      onClick={() => onOpen(more > 0 ? undefined : latest)}
-      className={`${tabItem} shrink-0 rounded-md hover:bg-hover`}
-    >
-      <span className={`flex items-center gap-1 ${color}`}>
-        <Icon aria-hidden />#{numberOf(latest)}
-      </span>
-      {more > 0 && <span>+{more}</span>}
-    </button>
-  );
-}
 
 /**
  * The side panel's Pull requests view: the thread's linked pull requests, newest first, each
