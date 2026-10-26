@@ -18,8 +18,9 @@
 //! `gh api rate_limit`, which GitHub doesn't count, when it is over [`FRESH`] old, at most once
 //! per [`FRESH`]. A file is simpler than asking plxd over its socket, works while plxd is down,
 //! and costs a read of a few hundred bytes per `gh` call. A worker's sandbox can read it but not
-//! write it, so there the shim keeps its own reads in the temp folder. Anything missing or
-//! unreadable lets the command run.
+//! write it, so there the shim keeps its own reads in `$TMPDIR`, when set and its own. A quota
+//! seen in the future or resetting over an hour away is ignored. Anything missing or unreadable
+//! lets the command run.
 //!
 //! [`ProcessSpec::agent`]: crate::backend::process::ProcessSpec::agent
 
@@ -71,8 +72,9 @@ enum When {
     Always,
     /// When any of these flags is given.
     Any(&'static [&'static str]),
-    /// When the arguments name a pull request and the tool answers everything they ask: none of
-    /// `unless` is given, and each `--json` field is one of `fields`.
+    /// When the arguments name a pull request by number or URL, which the tool takes, and it
+    /// answers everything they ask: none of `unless` is given, and each `--json` field is one of
+    /// `fields`.
     Answers {
         unless: &'static [&'static str],
         fields: &'static [&'static str],
@@ -91,8 +93,8 @@ const REDIRECTS: &[Redirect] = &[
         when: When::Always,
         tool: "pull_request_status",
     },
-    // pull_request_status needs the pull request, so finding one by branch (`--json number,url`
-    // with no argument) runs, as do `--comments`, `--web`, and fields it doesn't return.
+    // pull_request_status needs the pull request's number or URL, so finding one, with no
+    // argument or a branch, runs, as do `--comments`, `--web`, and fields it doesn't return.
     Redirect {
         command: ["pr", "view"],
         when: When::Answers {
@@ -169,6 +171,14 @@ fn json_fields(args: &[String]) -> impl Iterator<Item = &str> {
         .flat_map(|fields| fields.split(','))
 }
 
+/// Whether `arg` names a pull request as `pull_request_status` takes one: a number (`12` or
+/// `#12`) or a URL.
+fn names_pull_request(arg: &str) -> bool {
+    arg.trim_start_matches('#').parse::<u64>().is_ok()
+        || arg.starts_with("https://")
+        || arg.starts_with("http://")
+}
+
 /// Whether `args` asks for help, which runs without calling GitHub.
 fn help(args: &[String]) -> bool {
     args.iter().any(|arg| arg == "--help" || arg == "-h")
@@ -191,7 +201,9 @@ fn redirect(args: &[String]) -> Option<String> {
                 When::Always => true,
                 When::Any(flags) => flags.iter().any(|flag| has_flag(args, flag)),
                 When::Answers { unless, fields } => {
-                    positionals.len() > 2
+                    positionals
+                        .get(2)
+                        .is_some_and(|&index| names_pull_request(&args[index]))
                         && !unless.iter().any(|flag| has_flag(args, flag))
                         && json_fields(args).all(|field| fields.contains(&field))
                 }
@@ -375,6 +387,19 @@ impl Budget {
             checked_at: self.checked_at.max(other.checked_at),
         }
     }
+
+    /// `self` without what can't be real at `now`: a quota seen in the future or resetting over
+    /// an hour from now (GitHub's quotas reset hourly), or a check in the future. So a budget
+    /// file someone else wrote can't hold reads back past the next reset.
+    fn sane(self, now: Timestamp) -> Self {
+        let latest_reset = now + SignedDuration::from_hours(1);
+        let real = |quota: &Quota| quota.seen_at <= now && quota.reset_at <= latest_reset;
+        Self {
+            rest: self.rest.filter(real),
+            graphql: self.graphql.filter(real),
+            checked_at: self.checked_at.filter(|at| *at <= now),
+        }
+    }
 }
 
 /// The budget file's name in the data folder.
@@ -409,9 +434,26 @@ fn budget_file(data_dir: &DataDir) -> PathBuf {
 }
 
 /// Where the shim keeps the budget when it can't write the data folder's, as in a worker's
-/// sandbox, which can read it but not write it: the temp folder.
-fn fallback_file() -> PathBuf {
-    std::env::temp_dir().join(format!("plxd-{BUDGET_FILE}"))
+/// sandbox, which can read it but not write it: `$TMPDIR`, the run's own folder in a sandbox and
+/// the user's own on macOS. None without `TMPDIR`, since a shared `/tmp` would let another user
+/// plant one.
+fn fallback_file() -> Option<PathBuf> {
+    let dir = std::env::var_os("TMPDIR").filter(|dir| !dir.is_empty())?;
+    Some(Path::new(&dir).join(format!("plxd-{BUDGET_FILE}")))
+}
+
+/// Whether `file` belongs to this user, so a fallback file someone else made is ignored.
+#[cfg(unix)]
+fn owned_by_me(file: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata(file)
+        .is_ok_and(|metadata| metadata.uid() == rustix::process::getuid().as_raw())
+}
+
+/// Whether `file` belongs to this user; on Windows, every user's temp folder is their own.
+#[cfg(not(unix))]
+fn owned_by_me(_: &Path) -> bool {
+    true
 }
 
 /// Puts the running plxd in [`dir`] as `gh`: a symlink, or on Windows a hard link (a copy when
@@ -454,16 +496,22 @@ fn real_gh(path: Option<&OsStr>, data_dir: Option<&DataDir>) -> Option<PathBuf> 
 /// the loser's quota is read again within [`FRESH`].
 static WRITING: Mutex<()> = Mutex::new(());
 
-/// Reads the budget from `file` and [`fallback_file`], the newest of each; an empty budget when
-/// both are missing or unreadable.
+/// Reads the budget from `file` and this user's [`fallback_file`], the newest of each that is
+/// [`sane`](Budget::sane); an empty budget when both are missing or unreadable.
 fn load(file: &Path) -> Budget {
+    let now = Timestamp::now();
     let read = |file: &Path| -> Budget {
         std::fs::read(file)
             .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .and_then(|bytes| serde_json::from_slice::<Budget>(&bytes).ok())
             .unwrap_or_default()
+            .sane(now)
     };
-    read(file).newest(read(&fallback_file()))
+    let fallback = fallback_file()
+        .filter(|fallback| owned_by_me(fallback))
+        .map(|fallback| read(&fallback))
+        .unwrap_or_default();
+    read(file).newest(fallback)
 }
 
 /// Writes `budget` to `file` through a rename, so a reader never sees half of it.
@@ -478,7 +526,11 @@ fn update(file: &Path, change: impl FnOnce(&mut Budget)) {
     let _writing = WRITING.lock().unwrap_or_else(PoisonError::into_inner);
     let mut budget = load(file);
     change(&mut budget);
-    if let Err(error) = save(file, &budget).or_else(|_| save(&fallback_file(), &budget)) {
+    let saved = save(file, &budget).or_else(|error| match fallback_file() {
+        Some(fallback) => save(&fallback, &budget),
+        None => Err(error),
+    });
+    if let Err(error) = saved {
         tracing::debug!(%error, "couldn't save the GitHub budget");
     }
 }

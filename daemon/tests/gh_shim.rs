@@ -164,3 +164,22 @@ fn a_failed_quota_read_isnt_tried_again_for_a_minute() {
     let log = std::fs::read_to_string(fixture.bin().join("rate_limit.log")).unwrap();
     assert_eq!(log.lines().count(), 1, "{log}");
 }
+
+/// A budget no real read could have written, such as one another user planted with nothing left
+/// until next year, is ignored, and isn't copied into the data folder's.
+#[cfg(unix)]
+#[test]
+fn a_future_dated_budget_holds_nothing_back() {
+    let fixture = Fixture::new();
+    fake_gh(&fixture.bin());
+    let planted = r#"{"graphql":{"remaining":0,"resetAt":"2099-01-01T00:00:00Z","seenAt":"2099-01-01T00:00:00Z"},"checkedAt":"2099-01-01T00:00:00Z"}"#;
+    std::fs::write(fixture.data().join("github-budget.json"), planted).unwrap();
+    // The shim's fallback, in the `TMPDIR` the fixture sets.
+    std::fs::write(fixture.temp.path().join("plxd-github-budget.json"), planted).unwrap();
+
+    let output = fixture.gh(&["pr", "list"], "", &[]);
+    assert_eq!(output.status.code(), Some(3), "{output:?}");
+    let budget = std::fs::read_to_string(fixture.data().join("github-budget.json")).unwrap();
+    assert!(!budget.contains("2099"), "{budget}");
+    assert!(budget.contains("\"remaining\":5000"), "{budget}");
+}

@@ -34,7 +34,7 @@ fn the_redirect_table_sends_replaced_commands_to_their_tools() {
             "pr view https://github.com/o/r/pull/12",
             "pull_request_status",
         ),
-        ("pr view feature/x", "pull_request_status"),
+        ("pr view #12 --json title", "pull_request_status"),
         (
             "pr view 12 --json state,mergeable,files,body",
             "pull_request_status",
@@ -69,6 +69,9 @@ fn commands_no_tool_replaces_run() {
         "pr view --json number,url",
         "pr view -R o/r --json url",
         "pr view feature/x --json number,url",
+        // pull_request_status takes no branch.
+        "pr view feature/x",
+        "pr view feature/x --json state",
         "pr view 12 --json title,labels",
         "pr view 12 --json author,commits,reviewRequests,mergedAt",
         "pr view 12 --json reviews",
@@ -180,6 +183,34 @@ fn a_read_is_refused_under_200_left_until_the_reset() {
     };
     assert_eq!(low(&reset, Api::Graphql, now), None);
     assert_eq!(low(&Budget::default(), Api::Graphql, now), None);
+}
+
+#[test]
+fn a_budget_that_cant_be_real_is_ignored() {
+    let now = Timestamp::now();
+    let hours = |n: i64| now + SignedDuration::from_hours(n);
+    let planted = Budget {
+        // Seen in the future, and resetting in a year.
+        rest: Some(Quota {
+            remaining: 0,
+            reset_at: hours(10),
+            seen_at: hours(-1),
+        }),
+        graphql: Some(Quota {
+            remaining: 0,
+            reset_at: hours(8760),
+            seen_at: hours(8760),
+        }),
+        checked_at: Some(hours(1)),
+    };
+    assert_eq!(planted.sane(now), Budget::default());
+
+    let real = Budget {
+        rest: Some(quota(0, 3000)),
+        graphql: Some(quota(0, 60)),
+        checked_at: Some(now),
+    };
+    assert_eq!(real.sane(Timestamp::now()), real);
 }
 
 #[test]
