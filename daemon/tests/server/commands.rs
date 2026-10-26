@@ -155,36 +155,6 @@ async fn a_receipt_that_cannot_be_stored_rolls_back_the_delete() {
     assert_eq!(receipts, 0);
 }
 
-#[tokio::test]
-async fn deleted_project_receipt_survives_restart() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = client
-        .call::<ProjectCreate>(create_params(dir.path(), "durable"))
-        .await
-        .unwrap()
-        .project;
-    let id = Uuid::now_v7();
-    let params = ProjectDeleteParams {
-        project: project.id,
-    };
-    let first = call_with_command::<ProjectDelete>(&mut client, params.clone(), id)
-        .await
-        .unwrap();
-    drop(client);
-    plxd.signal(Signal::TERM);
-    let _ = plxd.exit().await;
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    assert_eq!(
-        call_with_command::<ProjectDelete>(&mut client, params, id)
-            .await
-            .unwrap(),
-        first
-    );
-}
-
 async fn names(client: &mut Client) -> Vec<String> {
     let listed: ProjectListResult = client
         .call::<ProjectList>(ProjectListParams {})

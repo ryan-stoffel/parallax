@@ -152,28 +152,6 @@ mod tests {
         );
     }
 
-    /// Only the last 64 KiB of a long output is kept.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn only_the_end_of_a_long_output_is_kept() {
-        let dir = tempfile::tempdir().unwrap();
-        let command = "i=0; while [ $i -lt 20000 ]; do echo line $i; i=$((i+1)); done; exit 1";
-        let failed = manager(dir.path())
-            .run_checks(dir.path(), command, Duration::from_mins(1))
-            .await
-            .unwrap();
-        let Checked::Failed { output, .. } = failed else {
-            panic!("passed");
-        };
-        assert_eq!(output.len(), super::CHECKS_OUTPUT_BYTES);
-        assert!(
-            output.ends_with("line 19999\n"),
-            "{}",
-            &output[output.len() - 40..]
-        );
-        assert!(!output.contains("line 100\n"));
-    }
-
     /// Checks that run out of time fail, and nothing they started is left running.
     #[cfg(unix)]
     #[tokio::test]

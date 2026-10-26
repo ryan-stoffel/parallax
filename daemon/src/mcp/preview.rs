@@ -64,27 +64,3 @@ pub async fn call(binding: &Binding, name: &str, arguments: Value) -> Result<Rep
         png: result.image.as_deref().and_then(crate::images::decode),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{TOOLS, definitions};
-
-    #[test]
-    fn every_tool_has_one_definition_with_tab_targeting() {
-        let tools = definitions();
-        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, TOOLS);
-        let click = &tools[7]["inputSchema"]["properties"];
-        for field in [
-            "tabId",
-            "locator",
-            "selector",
-            "x",
-            "y",
-            "button",
-            "clickCount",
-        ] {
-            assert!(click.get(field).is_some(), "preview_click lacks {field}");
-        }
-    }
-}

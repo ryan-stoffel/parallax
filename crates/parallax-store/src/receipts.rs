@@ -146,44 +146,35 @@ mod tests {
         (dir, store)
     }
 
+    /// A command id is claimed once: a repeat gets the stored row, a filled receipt keeps its
+    /// result for replays, and a deleted claim can be claimed again.
     #[test]
-    fn a_claim_inserts_once_and_a_repeat_returns_the_row() {
+    fn a_command_is_claimed_once_and_its_receipt_keeps_the_result() {
         let (_dir, store) = open();
         let (inserted, first) = store
-            .claim_command("cmd-1", "project/delete", "hash-a", None)
+            .claim_command("cmd-1", "thread/delete", "hash-a", Some("run-1"))
             .unwrap();
         assert!(inserted);
-        assert_eq!(first.method, "project/delete");
-        assert_eq!(first.params_hash, "hash-a");
         assert!(first.result.is_none());
-        assert!(first.effect_id.is_none());
-
         let (again_new, again) = store
-            .claim_command("cmd-1", "project/delete", "hash-a", None)
+            .claim_command("cmd-1", "thread/delete", "hash-a", Some("run-1"))
             .unwrap();
         assert!(!again_new);
         assert_eq!(again.created_at, first.created_at);
-        assert_eq!(again.method, first.method);
-    }
+        assert_eq!(again.params_hash, "hash-a");
 
-    #[test]
-    fn filling_a_receipt_stores_the_result_and_delete_removes_it() {
-        let (_dir, store) = open();
-        store
-            .claim_command("cmd-2", "thread/delete", "hash-b", Some("run-1"))
-            .unwrap();
         assert!(
             store
-                .fill_command_receipt("cmd-2", "{\"ok\":true}")
+                .fill_command_receipt("cmd-1", "{\"ok\":true}")
                 .unwrap()
         );
-        let filled = store.command_receipt("cmd-2").unwrap().unwrap();
+        let filled = store.command_receipt("cmd-1").unwrap().unwrap();
         assert_eq!(filled.result.as_deref(), Some("{\"ok\":true}"));
         assert!(filled.finished_at.is_some());
         assert_eq!(filled.run_id.as_deref(), Some("run-1"));
 
-        assert!(store.delete_command_claim("cmd-2").unwrap());
-        assert!(store.command_receipt("cmd-2").unwrap().is_none());
+        assert!(store.delete_command_claim("cmd-1").unwrap());
+        assert!(store.command_receipt("cmd-1").unwrap().is_none());
     }
 
     #[test]

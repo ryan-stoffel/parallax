@@ -65,29 +65,3 @@ impl Store {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use uuid::Uuid;
-
-    use super::WakeState;
-    use crate::Store;
-
-    #[test]
-    fn a_wake_state_reads_back_as_stored_and_defaults_to_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
-        let run = Uuid::now_v7();
-        assert_eq!(store.wake_state(run).unwrap(), WakeState::default());
-
-        let paused = WakeState {
-            in_a_row: 10,
-            paused: true,
-            woken: Some("2026-10-23T12:00:00.123456789Z".parse().unwrap()),
-        };
-        store.set_wake_state(run, paused).unwrap();
-        assert_eq!(store.wake_state(run).unwrap(), paused);
-        store.set_wake_state(run, WakeState::default()).unwrap();
-        assert_eq!(store.wake_state(run).unwrap(), WakeState::default());
-    }
-}

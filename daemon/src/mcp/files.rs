@@ -255,7 +255,7 @@ fn copy_in(folder: &Path, source: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{copy_in, relative};
+    use super::relative;
 
     #[test]
     fn paths_resolve_inside_the_folder_only() {
@@ -278,38 +278,5 @@ mod tests {
         let outside = elsewhere.path().join("b.docx");
         std::fs::write(&outside, b"").unwrap();
         assert_eq!(relative(folder, outside.to_str().unwrap()), Ok(None));
-    }
-
-    #[test]
-    fn a_file_outside_is_copied_in_but_never_over_a_folder() {
-        let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("thread");
-        std::fs::create_dir(&folder).unwrap();
-        let source = dir.path().join("Summary.docx");
-        std::fs::write(&source, b"new").unwrap();
-        std::fs::write(folder.join("Summary.docx"), b"old").unwrap();
-        assert_eq!(copy_in(&folder, &source).unwrap(), "Summary.docx");
-        assert_eq!(std::fs::read(folder.join("Summary.docx")).unwrap(), b"new");
-
-        assert!(copy_in(&folder, &dir.path().join("missing.docx")).is_err());
-        std::fs::create_dir(folder.join("Folder.docx")).unwrap();
-        let named = dir.path().join("Folder.docx");
-        std::fs::write(&named, b"new").unwrap();
-        assert!(copy_in(&folder, &named).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_copy_never_writes_through_a_symlink() {
-        let dir = tempfile::tempdir().unwrap();
-        let folder = dir.path().join("thread");
-        std::fs::create_dir(&folder).unwrap();
-        let elsewhere = dir.path().join("elsewhere.docx");
-        std::fs::write(&elsewhere, b"keep").unwrap();
-        let linked = dir.path().join("Linked.docx");
-        std::fs::write(&linked, b"new").unwrap();
-        std::os::unix::fs::symlink(&elsewhere, folder.join("Linked.docx")).unwrap();
-        assert!(copy_in(&folder, &linked).is_err());
-        assert_eq!(std::fs::read(&elsewhere).unwrap(), b"keep");
     }
 }

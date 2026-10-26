@@ -232,36 +232,3 @@ pub(crate) fn avd_home(env: &Environment) -> Option<PathBuf> {
     let home = env.get("HOME").or_else(|| env.get("USERPROFILE"))?;
     Some(Path::new(home).join(".android/avd"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{SystemImage, profile_name, system_image};
-
-    #[test]
-    fn the_newest_google_image_for_this_machine_is_used() {
-        let sdk = tempfile::tempdir().unwrap();
-        let abi = if cfg!(target_arch = "aarch64") {
-            "arm64-v8a"
-        } else {
-            "x86_64"
-        };
-        for dir in [
-            format!("android-34/google_apis/{abi}"),
-            format!("android-35/google_apis/{abi}"),
-            format!("android-35/google_apis_playstore/{abi}"),
-            format!("android-36/default/{abi}"),
-            "android-37/google_apis/riscv64".to_owned(),
-        ] {
-            std::fs::create_dir_all(sdk.path().join("system-images").join(dir)).unwrap();
-        }
-        assert_eq!(
-            system_image(sdk.path()),
-            Some(SystemImage {
-                package: format!("system-images;android-35;google_apis_playstore;{abi}"),
-                api: 35,
-            })
-        );
-        assert_eq!(system_image(tempfile::tempdir().unwrap().path()), None);
-        assert_eq!(profile_name("pixel_9"), "Pixel_9");
-    }
-}

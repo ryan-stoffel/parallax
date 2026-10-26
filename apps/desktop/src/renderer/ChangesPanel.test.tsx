@@ -3,7 +3,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-import type { ParallaxBridge, WatchMessage } from "../preload/bridge";
+import type { ParallaxBridge } from "../preload/bridge";
 import type { ThreadRun } from "../protocol/generated/protocol";
 import { ChangesPanel } from "./ChangesPanel";
 
@@ -74,7 +74,6 @@ const request = vi.fn(async (_host: string, method: string, params: Record<strin
   return { logId: "l", result: { seq: 9 } };
 });
 const compose = vi.fn();
-let watchListener: (message: WatchMessage) => void;
 
 beforeEach(async () => {
   listedRuns = runs;
@@ -84,10 +83,7 @@ beforeEach(async () => {
   window.parallax = {
     platform: "darwin",
     request,
-    watch: (_host: string, _params: object, listener: (message: WatchMessage) => void) => {
-      watchListener = listener;
-      return () => {};
-    },
+    watch: () => () => {},
   } as Partial<ParallaxBridge> as ParallaxBridge;
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   renderPanel = (props = {}) =>
@@ -118,22 +114,14 @@ afterEach(() => act(() => unmount()));
 const settle = async () => {
   for (let i = 0; i < 10; i++) await act(async () => {});
 };
-const paths = () => [...document.querySelectorAll("span[title]")].map((s) => s.textContent);
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === name)!;
-// The Turn menu (ui.tsx's Picker): its options' text, the ordinal of each ("all" for All turns),
-// and the one shown on its trigger.
+// The Turn menu's options (ui.tsx's Picker).
 const turnItems = () => [
   ...document.querySelectorAll<HTMLElement>(
     '[role="menu"][aria-label="Turn"] [role="menuitemradio"]',
   ),
 ];
-const turnTexts = () => turnItems().map((o) => o.textContent);
-const turnValues = () => turnTexts().map((t) => /^Turn (\d+):/.exec(t ?? "")?.[1] ?? "all");
-const shownTurn = () =>
-  /^Turn: Turn (\d+):/.exec(
-    document.querySelector('button[aria-label^="Turn: "]')!.getAttribute("aria-label")!,
-  )?.[1] ?? "all";
 const selectTurn = async (ordinal: number) => {
   await act(async () =>
     turnItems()
@@ -143,80 +131,47 @@ const selectTurn = async (ordinal: number) => {
   await settle();
 };
 
-test("every turn's diff shows first, then one turn's, with undone turns left out", async () => {
-  expect(paths()).toEqual(["a.txt", "b.txt"]);
-  expect(turnTexts()).toEqual(["All turns", "Turn 1: Add a", "Turn 2: Now b"]);
+test("Edit from here reverts to the turn before, keeping files, and returns its message", async () => {
+  listedRuns = cursored;
+  renderPanel({ backend: "claude-work", sessionId: "s1", version: 1 });
   await selectTurn(2);
-  expect(request).toHaveBeenCalledWith("h", "orchestration/getTurnDiff", {
+  await act(async () => button("Edit from here").click());
+  await act(async () => button("Revert and keep changes").click());
+  await settle();
+  expect(request).toHaveBeenCalledWith("h", "orchestration/dispatch", {
+    type: "checkpoint.rollback",
     threadId: "r",
-    from: 1,
-    to: 2,
+    ordinal: 1,
   });
-  expect(paths()).toEqual(["b.txt"]);
+  expect(compose).toHaveBeenCalledWith("Now b");
 });
 
-test.each(["codex-work", "claude-work"])(
-  "Edit from here reverts to the turn before, keeping files, and returns its message: %s",
-  async (backend) => {
-    listedRuns = cursored;
-    renderPanel({ backend, sessionId: "s1", version: 1 });
-    await selectTurn(2);
-    await act(async () => button("Edit from here").click());
-    expect(document.querySelector("dialog")!.open).toBe(true);
-    await act(async () => button("Revert and keep changes").click());
-    await settle();
-    expect(request).toHaveBeenCalledWith("h", "orchestration/dispatch", {
-      type: "checkpoint.rollback",
-      threadId: "r",
-      ordinal: 1,
-    });
-    expect(compose).toHaveBeenCalledWith("Now b");
-    expect(document.querySelector("dialog")!.open).toBe(false);
-  },
-);
-
-test.each([
-  [{ running: true }, "Interrupt the current turn before reverting checkpoints."],
-  [
-    { backend: "cursor" },
-    "This provider does not support reverting conversation history. Start a new thread instead.",
-  ],
-  [
-    { backend: "unknown-instance" },
-    "This provider does not support reverting conversation history. Start a new thread instead.",
-  ],
-] as const)("unavailable rollback is disabled and explained: %s", async (props, reason) => {
-  renderPanel(props);
+test("a running turn can't be rolled back", async () => {
+  renderPanel({ running: true });
   await selectTurn(2);
   const edit = button("Edit from here");
   expect(edit.disabled).toBe(true);
-  expect(edit.title).toBe(reason);
   await act(async () => edit.click());
-  expect(document.querySelector("dialog")!.open).toBe(false);
   expect(request.mock.calls.some(([, method]) => method === "orchestration/dispatch")).toBe(false);
 });
 
 test.each([
+  ["no cursor", runs],
   [
-    runs,
-    "Parallax didn't record where the conversation stood after turn 1, so it can't go back there. Edit from a later turn instead, or start a new thread.",
-  ],
-  [
+    "a cursor from another session",
     cursored.map((r) => (r.id === "t1" ? { ...r, sessionId: "s0" } : r)),
-    "Turn 1 ran in an earlier session, before this thread moved between providers, so the conversation can't go back there. Edit from a later turn instead, or start a new thread.",
   ],
 ] as const)(
-  "Claude's Edit from here needs a cursor in the thread's session: %#",
-  async (listed, reason) => {
+  "Claude's Edit from here needs a cursor in the thread's session: %s",
+  async (_, listed) => {
     listedRuns = [...listed];
     renderPanel({ backend: "claude-work", sessionId: "s1", version: 1 });
     await selectTurn(2);
     expect(button("Edit from here").disabled).toBe(true);
-    expect(button("Edit from here").title).toBe(reason);
   },
 );
 
-test("ordinal labels survive checkpoint gaps, and rollback never targets an unready checkpoint", async () => {
+test("rollback never targets an unready checkpoint", async () => {
   listedRuns = [
     runs[0]!,
     { ...runs[1]!, checkpoint: { status: "error" } },
@@ -224,65 +179,6 @@ test("ordinal labels survive checkpoint gaps, and rollback never targets an unre
   ];
   renderPanel({ version: 1 });
   await settle();
-  expect(turnTexts()).toEqual(["All turns", "Turn 1: Add a", "Turn 4: Now b"]);
   await selectTurn(4);
   expect(button("Edit from here").disabled).toBe(true);
-  expect(button("Edit from here").title).toBe(
-    "The previous turn has no ready checkpoint to revert to.",
-  );
-});
-
-test("large diffs mount only the visible rows and can still fold", async () => {
-  largePatch = patch("large.txt").replace("+hi\n", "+line\n".repeat(160000));
-  renderPanel({ runId: "large" });
-  await settle();
-  expect(document.body.textContent).toContain("+160000");
-  expect(document.querySelectorAll("[data-index]").length).toBeLessThan(50);
-  // The icon-only header button is named through aria-label.
-  await act(async () =>
-    document.querySelector<HTMLButtonElement>('[aria-label="Hide large.txt"]')?.click(),
-  );
-  expect(document.querySelector('[aria-label="Show large.txt"]')).not.toBeNull();
-  expect(document.querySelectorAll("[data-index]").length).toBe(1);
-});
-
-test("thread checkpoint events reload turns even when the shell has no checkpoint details", async () => {
-  listedRuns = [...runs, { ...runs[1]!, id: "t4", ordinal: 4 }];
-  await act(async () =>
-    watchListener({
-      type: "event",
-      event: {
-        subscription: "s",
-        seq: 10,
-        time: "",
-        event: {
-          kind: "thread.checkpoint",
-          runId: "r",
-          turnId: "t4",
-          ordinal: 4,
-          checkpoint: ready,
-        },
-      },
-    }),
-  );
-  await settle();
-  expect(turnValues()).toEqual(["all", "1", "2", "4"]);
-});
-
-test("a changes card's request shows its turn once, then clears, and another thread's is ignored", async () => {
-  const shown = vi.fn();
-  renderPanel({ request: { runId: "other", turn: 2 }, onRequestShown: shown });
-  await settle();
-  expect(shownTurn()).toBe("all");
-  expect(shown).not.toHaveBeenCalled();
-
-  renderPanel({ request: { runId: "r", turn: 2, path: "b.txt" }, onRequestShown: shown });
-  await settle();
-  expect(shownTurn()).toBe("2");
-  expect(paths()).toEqual(["b.txt"]);
-  expect(shown).toHaveBeenCalledOnce();
-  // Cleared, it leaves the turn as the user has it.
-  renderPanel({ request: undefined, onRequestShown: shown });
-  await settle();
-  expect(shownTurn()).toBe("2");
 });

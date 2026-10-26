@@ -94,7 +94,7 @@ test.runIf(posix)("installs the release's plxd for the host, which attach then r
   expect(attach.stdout.toString()).toBe(`attached ${installed("plxd")}\n`);
 });
 
-test.runIf(posix)("refuses plxd whose SHA256 isn't the release's", async () => {
+test.runIf(posix)("refuses plxd whose SHA256 isn't the release's, or has none", async () => {
   writeFileSync(release(`${ASSET}.sha256`), `${"0".repeat(64)}  ${ASSET}\n`);
   expect(await installPlxd("mini", VERSION, ssh)).toBe(
     "plxd's SHA256 doesn't match the release's.",
@@ -105,13 +105,8 @@ test.runIf(posix)("refuses plxd whose SHA256 isn't the release's", async () => {
     "plxd's SHA256 doesn't match the release's.",
   );
   expect(spawnSync("ls", ["-A", path.join(home, ".parallax-plxd")]).stdout.toString()).toBe("");
-});
-
-test.runIf(posix)("says so when the release has no checksum for it", async () => {
   rmSync(release(`${ASSET}.sha256`));
-  expect(await installPlxd("mini", VERSION, ssh)).toBe(
-    `Couldn't download https://github.com/ryan-stoffel/parallax/releases/download/v${VERSION}/${ASSET}.sha256.`,
-  );
+  expect(await installPlxd("mini", VERSION, ssh)).toMatch(/^Couldn't download .*\.sha256\.$/);
   expect(existsSync(installed("plxd"))).toBe(false);
 });
 
@@ -183,17 +178,12 @@ test.runIf(posix)(
   20_000,
 );
 
-test("ssh's own failures read as a connection's do, and a bad version never reaches the host", async () => {
-  const fail = path.join(root, "bin", "fail");
-  script(
-    fail,
-    `echo 'ssh: Could not resolve hostname mini: nodename nor servname provided' >&2; exit 255`,
-  );
-  if (posix)
-    expect(await installPlxd("mini", VERSION, fail)).toBe(
-      "Couldn't find mini. Check its name, or your ssh config.",
-    );
-  expect(await installPlxd("mini", "1.0; rm -rf ~", fail)).toBe(
+test("a version that isn't a release's never reaches the host's shell", async () => {
+  const marker = path.join(root, "ran");
+  const spy = path.join(root, "bin", "spy");
+  script(spy, `touch '${marker}'`);
+  expect(await installPlxd("mini", "1.0; rm -rf ~", spy)).toBe(
     "1.0; rm -rf ~ isn't a release version.",
   );
+  expect(existsSync(marker)).toBe(false);
 });

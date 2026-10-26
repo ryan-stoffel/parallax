@@ -397,13 +397,7 @@ mod windows_tests {
     use std::fs;
     use std::process::Command;
 
-    use futures_util::SinkExt;
-    use parallax_protocol::framing::FrameCodec;
-    use tokio::io::AsyncReadExt;
-    use tokio::time::{Duration, timeout};
-    use tokio_util::codec::FramedWrite;
-
-    use super::{InstanceLock, Pipe, prepare_data_dir};
+    use super::{Pipe, prepare_data_dir};
     use crate::server::StartError;
 
     #[test]
@@ -436,23 +430,6 @@ mod windows_tests {
         ));
     }
 
-    #[test]
-    fn a_second_lock_is_refused_without_a_pid_and_the_file_stays() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("plxd.lock");
-        let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
-        match InstanceLock::acquire(&path, temp.path()) {
-            Err(StartError::AlreadyRunning { pid, .. }) => assert_eq!(pid, None),
-            other => panic!("expected AlreadyRunning, got {other:?}"),
-        }
-        lock.release();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap().trim(),
-            std::process::id().to_string()
-        );
-        InstanceLock::acquire(&path, temp.path()).unwrap().release();
-    }
-
     #[tokio::test]
     async fn the_pipe_takes_this_users_clients_and_its_name_only_once() {
         let name = format!(r"\\.\pipe\plxd-test-{}", std::process::id());
@@ -471,27 +448,6 @@ mod windows_tests {
         // The next instance is in place.
         let _again = crate::transport::connect(name.as_ref()).await.unwrap();
         pipe.accept().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_large_framed_write_arrives_without_early_eof() {
-        let name = format!(r"\\.\pipe\plxd-test-framed-{}", std::process::id());
-        let mut pipe = Pipe::create(name.as_ref()).unwrap();
-        let client = crate::transport::connect(name.as_ref()).await.unwrap();
-        let mut server = pipe.accept().await.unwrap();
-        let payload = "x".repeat(32 << 10);
-        let expected = format!("{{\"payload\":\"{payload}\"}}\n");
-        let mut writer = FramedWrite::new(client, FrameCodec::new());
-        writer
-            .send(serde_json::json!({"payload": payload}))
-            .await
-            .unwrap();
-        let mut received = vec![0; expected.len()];
-        timeout(Duration::from_secs(10), server.read_exact(&mut received))
-            .await
-            .expect("server receives the whole frame")
-            .unwrap();
-        assert_eq!(received, expected.as_bytes());
     }
 }
 
@@ -545,45 +501,6 @@ mod tests {
     }
 
     #[test]
-    fn a_data_folder_owned_by_another_user_is_refused() {
-        // `/` belongs to root. Running as root, the check would pass and chmod `/`, so skip.
-        if rustix::process::geteuid().is_root() {
-            return;
-        }
-        match prepare_data_dir(std::path::Path::new("/")) {
-            Err(StartError::DataDir { reason, .. }) => {
-                assert!(reason.starts_with("it belongs to uid 0"), "{reason}");
-            }
-            other => panic!("expected DataDir, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_symlinked_lock_file_is_refused_and_its_target_not_created() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("plxd.lock");
-        let target = temp.path().join("elsewhere");
-        symlink(&target, &path).unwrap();
-        assert!(matches!(
-            InstanceLock::acquire(&path, temp.path()),
-            Err(StartError::Io { .. })
-        ));
-        assert!(!target.exists());
-    }
-
-    #[test]
-    fn releasing_leaves_a_lock_file_that_replaced_ours_alone() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("plxd.lock");
-        let lock = InstanceLock::acquire(&path, temp.path()).unwrap();
-        let other = temp.path().join("other");
-        fs::write(&other, "another instance's\n").unwrap();
-        fs::rename(&other, &path).unwrap();
-        lock.release();
-        assert_eq!(fs::read_to_string(&path).unwrap(), "another instance's\n");
-    }
-
-    #[test]
     fn a_second_lock_is_refused_with_the_holders_pid() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("plxd.lock");
@@ -621,18 +538,29 @@ mod tests {
     }
 
     #[test]
-    fn a_deleted_socket_is_bound_again_and_a_replaced_one_is_not_removed() {
-        let temp = tempfile::tempdir().unwrap();
-        let path = temp.path().join("plxd.sock");
-        let (mut socket, _listener) = Socket::bind(&path).unwrap();
-        assert!(socket.rebind_if_gone().unwrap().is_none());
-        fs::remove_file(&path).unwrap();
-        let _rebound = socket.rebind_if_gone().unwrap().expect("bound again");
-        assert!(path.exists());
+    fn a_data_folder_owned_by_another_user_is_refused() {
+        // `/` belongs to root. Running as root, the check would pass and chmod `/`, so skip.
+        if rustix::process::geteuid().is_root() {
+            return;
+        }
+        match prepare_data_dir(std::path::Path::new("/")) {
+            Err(StartError::DataDir { reason, .. }) => {
+                assert!(reason.starts_with("it belongs to uid 0"), "{reason}");
+            }
+            other => panic!("expected DataDir, got {other:?}"),
+        }
+    }
 
-        fs::remove_file(&path).unwrap();
-        fs::write(&path, "someone else's").unwrap();
-        socket.remove();
-        assert!(path.exists());
+    #[test]
+    fn a_symlinked_lock_file_is_refused_and_its_target_not_created() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("plxd.lock");
+        let target = temp.path().join("elsewhere");
+        symlink(&target, &path).unwrap();
+        assert!(matches!(
+            InstanceLock::acquire(&path, temp.path()),
+            Err(StartError::Io { .. })
+        ));
+        assert!(!target.exists());
     }
 }

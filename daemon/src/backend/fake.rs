@@ -235,13 +235,6 @@ impl FakeBackend {
         self
     }
 
-    /// Reads output with `limits` instead of the defaults.
-    #[must_use]
-    pub fn with_limits(mut self, limits: OutputLimits) -> Self {
-        self.limits = limits;
-        self
-    }
-
     /// The fake `plxd serve` runs workers on: `None` when [`SCRIPT_ENV`] is unset, else one
     /// playing the script it names through `launcher`.
     ///

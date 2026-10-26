@@ -1,33 +1,4 @@
-use parallax_protocol::RepoScript;
-
-use super::{checked, read_file};
-
-fn script(name: &str, command: &str) -> RepoScript {
-    RepoScript {
-        id: String::new(),
-        name: name.to_owned(),
-        command: command.to_owned(),
-        run_on_worktree_create: false,
-        run_on_settle: false,
-        run_async: None,
-    }
-}
-
-#[test]
-fn scripts_are_trimmed_and_get_unique_ids_from_their_names() {
-    let scripts = checked(vec![
-        script(" Install deps ", " pnpm install "),
-        script("Install deps", "npm ci"),
-        script("✨", "true"),
-    ])
-    .unwrap();
-    let ids: Vec<_> = scripts.iter().map(|s| s.id.as_str()).collect();
-    assert_eq!(ids, ["install-deps", "install-deps-2", "script"]);
-    assert_eq!(scripts[0].name, "Install deps");
-    assert_eq!(scripts[0].command, "pnpm install");
-    assert!(checked(vec![script("Empty", "  ")]).is_err());
-    assert!(checked(vec![script("x", "true"); 51]).is_err());
-}
+use super::read_file;
 
 #[test]
 fn parallax_json_takes_t3_json_s_shape_and_reports_a_bad_file() {

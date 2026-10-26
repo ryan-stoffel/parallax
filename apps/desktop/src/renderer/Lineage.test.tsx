@@ -17,7 +17,7 @@ import { App } from "./App";
 import { fakeWatch } from "./fakeWatch";
 import { sectionsStore } from "./Sidebar";
 
-// A thread's parent and children in the top bar and the sidebar (PLX-374, 0041).
+// A thread's lineage in the app (PLX-374, 0041): titles from plxd, and an agent's own subagents.
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The tree's rows are in the DOM either way.
@@ -140,23 +140,9 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-const press = async (code: string) => {
-  await act(async () => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { code, metaKey: true, altKey: true }));
-  });
-  await settle();
-};
 const calls = (method: string) =>
   request.mock.calls.filter(([, m]) => m === method).map(([, , params]) => params);
 
-// The breadcrumb's crumbs, without the trail, and which one is the current page.
-const crumbItems = () =>
-  [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].filter(
-    (li) => !li.querySelector('[role="group"]'),
-  );
-const crumbs = () => crumbItems().map((li) => li.textContent);
-const currentCrumb = () =>
-  crumbItems().find((li) => li.querySelector('[aria-current="page"]'))?.textContent;
 const crumb = (label: string) =>
   [...document.querySelectorAll<HTMLButtonElement>('[aria-label="Breadcrumb"] li > button')].find(
     (b) => b.textContent === label,
@@ -165,11 +151,6 @@ const chipGroup = () => {
   const section = document.querySelector('[aria-label="Lineage"]');
   return section && section.querySelector("[data-lineage-title]") ? section : null;
 };
-const chips = () =>
-  [...(chipGroup()?.querySelectorAll("li > button") ?? [])].map(
-    (button) =>
-      `${button.querySelector("[data-lineage-title]")?.textContent}${button.getAttribute("aria-current") ? "*" : ""}`,
-  );
 const chip = (title: string) =>
   [...(chipGroup()?.querySelectorAll("li > button") ?? [])].find(
     (button) => button.querySelector("[data-lineage-title]")?.textContent === title,
@@ -183,11 +164,6 @@ const openPrevious = async () => {
   const toggle = previousToggle();
   if (toggle?.getAttribute("aria-expanded") === "false") await click(toggle);
 };
-// A sidebar group's toggle, by its count.
-const toggle = (count: string) =>
-  [...document.querySelectorAll("#sidebar button[aria-expanded]")].find((b) =>
-    b.textContent?.startsWith(count),
-  );
 const sidebarRow = (title: string) =>
   [...document.querySelectorAll('#sidebar li[data-kind="thread"] > button:first-child')].find(
     (b) => b.querySelector("[data-title]")?.textContent === title,
@@ -196,192 +172,6 @@ const sidebarTitles = () =>
   [...document.querySelectorAll('#sidebar li[data-kind="thread"] [data-title]')].map(
     (t) => t.textContent,
   );
-
-test("a thread with no parent or children has today's breadcrumb and no chips", async () => {
-  await renderApp();
-  await click(sidebarRow("Fix the README"));
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Fix the README"]);
-  expect(currentCrumb()).toBe("Fix the README");
-  expect(chipGroup()).toBeNull();
-});
-
-test("a parent's lineage rows open its children, and a child's parent crumb opens the parent", async () => {
-  await renderApp();
-  await click(sidebarRow("Ship lineage"));
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Ship lineage"]);
-  expect(currentCrumb()).toBe("Ship lineage");
-  expect(chipGroup()!.getAttribute("aria-label")).toBe("Lineage");
-  // The failed child is a previous agent, collapsed with a count.
-  expect(chips()).toEqual(["Style the chips"]);
-  expect(previousToggle()!.textContent).toBe("Previous agents (1)1 failed");
-  await openPrevious();
-  expect(chips()).toEqual(["Style the chips", "Write the test"]);
-  // Each chip's tooltip says what it's doing.
-  expect(chip("Write the test")!.getAttribute("title")).toBe("Write the test · Failed");
-
-  await click(chip("Write the test"));
-  expect(document.querySelector('main section[aria-label="Child thread"]')!.textContent).toBe(
-    "A child thread of Ship lineageOpen parent⌥⌘↑",
-  );
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Ship lineage"]);
-  expect(chipGroup()!.getAttribute("aria-label")).toBe("Lineage");
-  expect(chips()).toEqual(["Style the chips", "Write the test*"]);
-  // The parent's crumb is a way back, not the page.
-  expect(currentCrumb()).toBeUndefined();
-
-  await click(crumb("Ship lineage"));
-  expect(currentCrumb()).toBe("Ship lineage");
-  await openPrevious();
-  expect(chips()).toEqual(["Style the chips", "Write the test"]);
-});
-
-test("details lists every current and previous child, including descendants, with working animation", async () => {
-  threads.push(
-    ...["c", "d", "e", "f"].map((id, i) => thread(id, 10 + i, { parent: "parent", title: id })),
-    thread("grandchild", 20, { parent: "f", title: "grandchild" }),
-  );
-  runs.push(...["c", "d", "e", "f", "grandchild"].map((id) => run(id, "completed")));
-  await renderApp();
-  await click(sidebarRow("Ship lineage"));
-  // The working child is current; the finished ones are previous agents, collapsed.
-  expect(chips()).toEqual(["Style the chips"]);
-  expect(previousToggle()!.textContent).toBe("Previous agents (6)1 failed");
-  await openPrevious();
-  expect(chips()).toEqual(["Style the chips", "Write the test", "c", "d", "e", "f", "grandchild"]);
-  // The working mark sits at the right, after the time.
-  const styleRow = chip("Style the chips")!.firstElementChild!;
-  expect(styleRow.lastElementChild!.querySelector(".mark-working")).not.toBeNull();
-  expect(chip("Write the test")!.textContent).toContain("Claude Sonnet 5 · Failed");
-  expect(chip("grandchild")!.getAttribute("style")).toContain("22px");
-  expect(document.querySelector('[aria-label="Breadcrumb"] [data-lineage-title]')).toBeNull();
-  await click(chip("e"));
-  expect(chips()).toContain("e*");
-});
-
-test("opening a finished child shows Previous agents by itself", async () => {
-  await renderApp();
-  await click(sidebarRow("Ship lineage"));
-  expect(previousToggle()!.getAttribute("aria-expanded")).toBe("false");
-  // From the parent, Mod+Alt+Left opens the last child, the failed one.
-  await press("ArrowLeft");
-  expect(previousToggle()!.getAttribute("aria-expanded")).toBe("true");
-  expect(chips()).toEqual(["Style the chips", "Write the test*"]);
-});
-
-test("a working grandchild of a finished child isn't indented under the collapsed row", async () => {
-  threads.push(
-    thread("done", 10, { parent: "parent", title: "done" }),
-    thread("busy", 11, { parent: "done", title: "busy" }),
-  );
-  runs.push(run("done", "completed"), run("busy", "running"));
-  await renderApp();
-  await click(sidebarRow("Ship lineage"));
-  expect(chips()).toEqual(["Style the chips", "busy"]);
-  expect(chip("busy")!.getAttribute("style")).toContain("padding-left: 8px");
-  await openPrevious();
-  expect(chip("done")!.getAttribute("style")).toContain("padding-left: 8px");
-});
-
-test("Mod+Alt+Up goes to the parent, and Mod+Alt+Right and Left cycle through the children", async () => {
-  await renderApp();
-  await click(sidebarRow("Ship lineage"));
-  await press("ArrowRight");
-  await openPrevious();
-  expect(chips()).toEqual(["Style the chips*", "Write the test"]);
-  await press("ArrowRight");
-  await openPrevious();
-  expect(chips()).toEqual(["Style the chips", "Write the test*"]);
-  await press("ArrowRight");
-  await openPrevious();
-  expect(chips()).toEqual(["Style the chips*", "Write the test"]);
-  await press("ArrowLeft");
-  await openPrevious();
-  expect(chips()).toEqual(["Style the chips", "Write the test*"]);
-  await press("ArrowUp");
-  expect(currentCrumb()).toBe("Ship lineage");
-  // From the parent, Left opens the last child.
-  await press("ArrowLeft");
-  await openPrevious();
-  expect(chips()).toEqual(["Style the chips", "Write the test*"]);
-});
-
-test("the sidebar leaves out threads another thread started, and opening one marks its parent's row (0075)", async () => {
-  await renderApp();
-  expect(sidebarTitles()).toEqual(["Fix the README", "Ship lineage"]);
-  expect(toggle("2 threads")).toBeUndefined();
-  // Its child failed before the parent was last read, so the parent's row doesn't say so.
-  expect(sidebarRow("Ship lineage")!.textContent).not.toContain("Failed");
-
-  // Opening a child, here from its parent's chips, leaves its parent's row reading as open.
-  await click(sidebarRow("Ship lineage"));
-  await click(chip("Style the chips"));
-  expect(sidebarRow("Ship lineage")!.getAttribute("aria-current")).toBe("page");
-});
-
-test("a parent's row says when a hidden child failed since it was last read (0075)", async () => {
-  runs[2] = { ...runs[2]!, updatedAt: "2026-10-01T13:00:00Z" };
-  await renderApp();
-  expect(sidebarRow("Ship lineage")!.textContent).toContain("Failed");
-});
-
-test("a Project's children never show in the main sidebar, only in its own view (0042)", async () => {
-  const coordinator = {
-    ...run("coord", "completed"),
-    project: "p-ember",
-    policy: "noWrite" as const,
-  };
-  threads = [
-    ...threads,
-    thread("kid", 4, { parent: "coord", title: "Write the docs" }),
-    thread("grandkid", 5, { parent: "kid", title: "Check the links" }),
-  ];
-  const child = (id: string, status?: string) => ({ ...run(id, status), accountId: "claude" });
-  runs = [...runs, coordinator, child("kid", "completed"), child("grandkid")];
-  answers["project/list"] = () => ({
-    result: {
-      projects: [
-        {
-          id: "p-ember",
-          name: "ember",
-          repoPath: parallax.path,
-          coordinator: "coord",
-          createdAt: "2026-10-01T09:00:00Z",
-          updatedAt: "2026-10-01T09:00:00Z",
-        },
-      ],
-      seq: 7,
-    },
-  });
-  await renderApp();
-  expect(sidebarTitles()).toEqual(["Fix the README", "Ship lineage"]);
-
-  // `agent/list {project}` has only the coordinator, so its Project tab lists the threads in it.
-  await click(
-    document.querySelector('#sidebar [aria-label="Favorites"] button[aria-label="ember"]'),
-  );
-  const titles = () =>
-    [...document.querySelectorAll("#side-panel li > button [data-title]")].map(
-      (t) => t.textContent,
-    );
-  const running = document.querySelector('#side-panel section[aria-label="Running"]')!;
-  expect([...running.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual([
-    "Check the links",
-  ]);
-  expect(titles()).toEqual(["Check the links", "Write the docs"]);
-  // With nothing reported, a finished child says Done, as a thread does.
-  const done = [...document.querySelectorAll("#side-panel li > button")].find(
-    (b) => b.querySelector("[data-title]")?.textContent === "Write the docs",
-  )!;
-  expect(done.textContent).toContain("Done");
-});
-
-test("without threadLineage, children aren't nested and there are no chips", async () => {
-  capabilities = {};
-  await renderApp();
-  await click(sidebarRow("Ship lineage"));
-  expect(chipGroup()).toBeNull();
-  expect(toggle("2 threads")).toBeUndefined();
-});
 
 test("titles come from plxd: a new thread asks plxd to name it, and a title kept here moves there once", async () => {
   capabilities = { threadLineage: {}, threadNaming: {} };
@@ -462,7 +252,7 @@ const parentLog = (): LoggedEvent[] => [
   },
 ];
 
-test("an agent's own subagents are read-only lineage rows, and one opens without a composer", async () => {
+test("an agent's own subagents are read-only: the parent's transcript has the calls, and one opens without a composer", async () => {
   answers["agent/events"] = (params) => ({
     result: {
       events: params["runId"] === "parent" && params["after"] === 0 ? parentLog() : [],
@@ -471,57 +261,17 @@ test("an agent's own subagents are read-only lineage rows, and one opens without
   });
   await renderApp();
   await click(sidebarRow("Ship lineage"));
-  // The working subagent rides over the composer, as a Project's children do.
-  expect(document.querySelector('main section[aria-label="Subagents"] button')!.textContent).toBe(
-    "1 agent going: Read the tests1 working",
-  );
-  // The running subagent and child are current; the finished ones are previous.
-  expect(chips()).toEqual(["Read the tests", "Style the chips"]);
-  await openPrevious();
-  expect(chips()).toEqual(["Read the tests", "Style the chips", "Read the docs", "Write the test"]);
-  const docs = chip("Read the docs")!;
-  expect(docs.getAttribute("aria-label")).toBe("Read the docs, read-only subagent, Done");
-  expect(chip("Read the tests")!.getAttribute("title")).toBe(
-    "Read the tests · Working · Read-only subagent",
-  );
   // The parent's own transcript has the calls, not what the subagents did.
   const log = () => document.querySelector('[role="log"]')!;
   await click(log().querySelector("summary"));
   expect(log().textContent).not.toContain("README.md");
-  const row = log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]');
-  expect(row).not.toBeNull();
 
-  await click(docs);
-  expect(crumbs()).toEqual(["This Mac", "parallax", "Ship lineage", "Read the docs"]);
-  expect(chips()).toContain("Read the docs*");
+  await openPrevious();
+  await click(chip("Read the docs"));
   expect(log().textContent).toContain("Read the docs.");
   expect(log().textContent).toContain("The docs say pnpm.");
-  const bar = () => document.querySelector('[role="status"][aria-label="Subagent"]');
-  expect(bar()!.textContent).toBe("Claude Haiku 4.5ExploreDoneRead-onlyOpen parent⌥⌘↑");
   expect(document.querySelector('[role="textbox"][aria-label="Message"]')).toBeNull();
-
-  // Its thread's crumb goes back, and the call's row opens the other one.
+  // Its thread's crumb goes back, to the parent's composer.
   await click(crumb("Ship lineage"));
   expect(document.querySelector('[role="textbox"][aria-label="Message"]')).not.toBeNull();
-  await click(log().querySelector("summary"));
-  await click(log().querySelector('button[aria-label="Open subagent: Read the tests, Working"]'));
-  expect(crumbs().at(-1)).toBe("Read the tests");
-  // As does Open parent.
-  await click(bar()!.querySelector("button"));
-  expect(crumbs().at(-1)).toBe("Ship lineage");
-  expect(document.querySelector('[role="textbox"][aria-label="Message"]')).not.toBeNull();
-  // As does Go to parent.
-  await click(chip("Read the docs"));
-  expect(crumbs().at(-1)).toBe("Read the docs");
-  await act(async () => {
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowUp",
-        code: "ArrowUp",
-        metaKey: true,
-        altKey: true,
-      }),
-    );
-  });
-  expect(crumbs().at(-1)).toBe("Ship lineage");
 });

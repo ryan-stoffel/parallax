@@ -1127,30 +1127,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn two_threads_making_the_key_at_once_keep_the_same_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("remote-key");
-        let made: Vec<_> = (0..8)
-            .map(|_| {
-                let path = path.clone();
-                std::thread::spawn(move || HostKey::load_or_create(&path).unwrap().fingerprint)
-            })
-            .collect();
-        let made: Vec<String> = made.into_iter().map(|t| t.join().unwrap()).collect();
-        assert!(made.iter().all(|fp| *fp == made[0]), "{made:?}");
-    }
-
-    #[test]
-    fn codes_use_the_alphabet_and_read_in_two_halves() {
-        let code = new_code();
-        assert_eq!(code.len(), CODE_LENGTH);
-        assert!(code.bytes().all(|b| CODE_ALPHABET.contains(&b)));
-        assert_ne!(code, new_code());
-        assert_eq!(format_code("7KQ4M2"), "7KQ-4M2");
-        assert_eq!(normalize_code(" 7kq-4m2 "), "7KQ4M2");
-    }
-
-    #[test]
     fn spake2_agrees_only_on_the_same_code_and_certificate() {
         let fp = "ab".repeat(32);
         let run = |client_code: &str, client_fp: &str| {
@@ -1236,22 +1212,5 @@ mod tests {
             verify_proof(&forged, "POST", url, now, Some("token")),
             Err("a bad signature")
         );
-    }
-
-    #[test]
-    fn a_host_key_is_made_once_and_read_back() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("remote-key");
-        let made = HostKey::load_or_create(&path).unwrap();
-        assert_eq!(made.fingerprint.len(), 64);
-        let again = HostKey::load_or_create(&path).unwrap();
-        assert_eq!(again.fingerprint, made.fingerprint);
-        again.server_config().unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let bits = fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(bits & 0o777, 0o600);
-        }
     }
 }

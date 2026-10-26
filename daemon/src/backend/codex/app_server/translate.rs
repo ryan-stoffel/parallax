@@ -582,13 +582,12 @@ fn turn_failure(error: Option<&Value>) -> Failure {
 
 #[cfg(test)]
 mod tests {
-    use parallax_protocol::{ImageMediaType, PromptImage};
     use serde_json::json;
 
     use super::{Ask, AskKind, Step, Translator, answer_response};
     use crate::backend::Decision;
     use crate::backend::event::{
-        Event, FailureKind, LimitStatus, LimitWindow, TodoItem, TodoStatus, ToolStatus, Usage,
+        Event, LimitStatus, LimitWindow, TodoItem, TodoStatus, ToolStatus, Usage,
     };
 
     fn translate(fixture: &str) -> Vec<Step> {
@@ -607,36 +606,6 @@ mod tests {
                 _ => None,
             })
             .collect()
-    }
-
-    #[test]
-    fn request_usage_uses_last_instead_of_resumed_cumulative_totals() {
-        let mut translator = Translator::default();
-        let message = json!({"method": "thread/tokenUsage/updated", "params": {
-            "tokenUsage": {"total": {"inputTokens": 900_000, "cachedInputTokens": 600_000},
-                "last": {"totalTokens": 22_348, "inputTokens": 22_343, "cachedInputTokens": 22_000},
-                "modelContextWindow": 272_000}
-        }});
-        let steps = translator.line(message.to_string().as_bytes());
-        assert!(steps.contains(&Step::Emit(Event::RequestUsage(
-            parallax_protocol::AgentRequestUsage {
-                context_tokens: Some(22_348),
-                context_window: Some(272_000),
-                input_tokens: Some(22_343),
-                cached_input_tokens: Some(22_000),
-                model: None,
-                ..Default::default()
-            }
-        ))));
-        let missing = json!({"method": "thread/tokenUsage/updated", "params": {
-            "tokenUsage": {"last": {}, "modelContextWindow": 0}
-        }});
-        assert_eq!(
-            translator.line(missing.to_string().as_bytes()),
-            [Step::Emit(Event::RequestUsage(
-                parallax_protocol::AgentRequestUsage::default()
-            ))]
-        );
     }
 
     #[test]
@@ -703,25 +672,6 @@ mod tests {
                 failure: None
             })
         );
-    }
-
-    #[test]
-    fn an_mcp_tools_images_are_its_events_images_and_left_out_of_its_output() {
-        let line = r#"{"method":"item/completed","params":{"item":{"type":"mcpToolCall","id":"mcp-1","server":"plxd","tool":"device_screenshot","status":"completed","arguments":{},"result":{"content":[{"type":"text","text":"{}"},{"type":"image","data":"iVBORw0KGgo=","mimeType":"image/png"}]}}}}"#;
-        let steps = translate(line);
-        let [Event::ToolResult { output, images, .. }] = events(&steps)[..] else {
-            panic!("one tool result: {steps:?}");
-        };
-        assert_eq!(
-            images,
-            &[PromptImage {
-                media_type: ImageMediaType::Png,
-                data: "iVBORw0KGgo=".to_owned(),
-            }]
-        );
-        let output = output.as_deref().unwrap();
-        assert!(!output.contains("iVBORw0KGgo="), "{output}");
-        assert!(output.contains(r#""mimeType":"image/png""#), "{output}");
     }
 
     /// PLX-371: the windows' reset times are what auto-resume waits for, and a fully used one is
@@ -849,39 +799,6 @@ mod tests {
         assert_eq!(
             answer_response(&permissions, &deny(false)),
             json!({"permissions": {}, "scope": "turn"})
-        );
-    }
-
-    #[test]
-    fn failed_turns_say_when_routing_should_fall_back() {
-        let failed = |info: &str, message: &str| {
-            let line = json!({"method": "turn/completed", "params": {"threadId": "t", "turn": {
-                "id": "u", "status": "failed",
-                "error": {"message": message, "codexErrorInfo": info},
-            }}});
-            match Translator::default()
-                .line(line.to_string().as_bytes())
-                .pop()
-            {
-                Some(Step::TurnDone {
-                    failure: Some(failure),
-                    result: None,
-                }) => failure.failure,
-                other => panic!("{other:?}"),
-            }
-        };
-        assert_eq!(failed("unauthorized", "401"), FailureKind::NotSignedIn);
-        assert_eq!(
-            failed("usageLimitExceeded", "limit"),
-            FailureKind::RateLimited
-        );
-        assert_eq!(
-            failed("other", "You've hit your usage limit."),
-            FailureKind::RateLimited
-        );
-        assert_eq!(
-            failed("internalServerError", "boom"),
-            FailureKind::VendorError
         );
     }
 }

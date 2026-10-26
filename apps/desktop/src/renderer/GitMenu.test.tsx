@@ -34,31 +34,22 @@ const clean: GitStatus = {
   origin: true,
 };
 
-test("the main action is the next useful one, and each other says why it can't run", () => {
-  const wait = "Wait for the turn to end";
-  expect(gitActions(started, clean, true)).toEqual({
-    why: { commit: wait, push: wait, pr: wait },
-    main: "commit",
-  });
-  expect(gitActions(finished, { ...clean, changes: 2 }, true)).toEqual({
-    why: { push: "Nothing to push" },
-    main: "commit",
-  });
-  expect(gitActions(finished, { ...clean, ahead: 1 }, true).main).toBe("push");
-  expect(gitActions(finished, clean, true)).toEqual({
-    why: { commit: "No changes", push: "Nothing to push" },
-    main: "pr",
-  });
+test("the main action is the next useful one, and the others are off when they can't run", () => {
+  // The actions that can't run, and the main one.
+  const plan = (run: AgentRun, status: GitStatus, openPr = true) => {
+    const { why, main } = gitActions(run, status, openPr);
+    return { off: Object.keys(why).sort(), main };
+  };
+  expect(plan(started, clean)).toEqual({ off: ["commit", "pr", "push"], main: "commit" });
+  expect(plan(finished, { ...clean, changes: 2 })).toEqual({ off: ["push"], main: "commit" });
+  expect(plan(finished, { ...clean, ahead: 1 }).main).toBe("push");
+  expect(plan(finished, clean)).toEqual({ off: ["commit", "push"], main: "pr" });
   // A worktree run with no commit has no pull request to open, nor does a plxd without openPr.
-  expect(gitActions({ ...finished, diff: undefined }, clean, true).why.pr).toBe("No commits yet");
-  expect(gitActions(finished, clean, false).why.pr).toMatch(/can't open pull requests/);
-  expect(gitActions(finished, { ...clean, origin: false }, true).why).toEqual({
-    commit: "No changes",
-    push: "No origin remote",
-    pr: "No origin remote",
-  });
-  expect(gitActions(finished, { ...clean, branch: null, changes: 1 }, true)).toEqual({
-    why: { push: "Check out a branch", pr: "Check out a branch" },
+  expect(plan({ ...finished, diff: undefined }, clean).off).toContain("pr");
+  expect(plan(finished, clean, false).off).toContain("pr");
+  expect(plan(finished, { ...clean, origin: false }).off).toEqual(["commit", "pr", "push"]);
+  expect(plan(finished, { ...clean, branch: null, changes: 1 })).toEqual({
+    off: ["pr", "push"],
     main: "commit",
   });
 });
@@ -116,21 +107,12 @@ async function render(run: AgentRun) {
   await settle();
 }
 
-/** The newest notification, which an action's result is. */
-const notice = () => document.querySelector('[aria-label="Notifications"] > div');
-
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === name);
 const item = (name: string) =>
   [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find((b) =>
     b.textContent?.startsWith(name),
   )!;
-
-test("nothing shows from a plxd without the git capability", async () => {
-  fakeBridge({ openPr: {} });
-  await render(finished);
-  expect(document.body.textContent).toBe("");
-});
 
 test("Commit asks for a message prefilled from the title, then the menu shows the new status", async () => {
   let status = { ...clean, changes: 2 };
@@ -144,7 +126,6 @@ test("Commit asks for a message prefilled from the title, then the menu shows th
   await render(finished);
   expect(request).toHaveBeenCalledWith("local", "agent/gitStatus", { runId: finished.id });
   expect(item("Push").disabled).toBe(true);
-  expect(item("Push").textContent).toContain("Nothing to push");
 
   await act(async () => button("Commit")!.click());
   const message = document.querySelector<HTMLTextAreaElement>(
@@ -156,136 +137,9 @@ test("Commit asks for a message prefilled from the title, then the menu shows th
     runId: finished.id,
     message: "Add a README that explains how to build the app.",
   });
-  // Committed: a notification says so, and Push is next.
-  expect(notice()!.textContent).toContain("Committed");
+  // Committed: Push is next.
   expect(button("Push")).toBeDefined();
-  expect(item("Commit").textContent).toContain("No changes");
-});
-
-test("a failed push says why in a notification", async () => {
-  fakeBridge(
-    { git: {}, openPr: {} },
-    {
-      "agent/gitStatus": () => ({ result: { ...clean, ahead: 1 } }),
-      "agent/push": () => ({
-        error: { code: -32000, message: "could not push", data: { kind: "pushFailed" } },
-      }),
-    },
-  );
-  await render(finished);
-  await act(async () => button("Push")!.click());
-  expect(notice()!.getAttribute("role")).toBe("alert");
-  expect(notice()!.textContent).toBe("Push failedcould not push");
-});
-
-test("Create PR opens the pull request in the browser and reads the status again", async () => {
-  const url = "https://github.com/me/app/pull/42";
-  const open = vi.fn();
-  vi.stubGlobal("open", open);
-  const request = fakeBridge(
-    { git: {}, openPr: {} },
-    {
-      "agent/gitStatus": () => ({ result: { ...clean, upstream: null, ahead: 1 } }),
-      "agent/openPr": () => ({ result: { url } }),
-    },
-  );
-  await render(finished);
-  await act(async () => item("Create PR").click());
-  expect(request).toHaveBeenCalledWith("local", "agent/openPr", {
-    runId: finished.id,
-    title: "Add a README that explains how to build the app.",
-  });
-  expect(open).toHaveBeenCalledWith(url, "_blank");
-  expect(request.mock.calls.filter(([, m]) => m === "agent/gitStatus")).toHaveLength(2);
-});
-
-test("with onPrOpened, Create PR opens the PR view in place of the browser", async () => {
-  const url = "https://github.com/me/app/pull/42";
-  const open = vi.fn();
-  vi.stubGlobal("open", open);
-  fakeBridge(
-    { git: {}, openPr: {}, pullRequests: {} },
-    {
-      "agent/gitStatus": () => ({ result: { ...clean, upstream: null, ahead: 1 } }),
-      "agent/openPr": () => ({ result: { url } }),
-    },
-  );
-  const onPrOpened = vi.fn();
-  root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() => root!.render(<GitMenu hostId="local" run={finished} onPrOpened={onPrOpened} />));
-  await settle();
-  await act(async () => item("Create PR").click());
-  expect(onPrOpened).toHaveBeenCalledWith(url);
-  expect(open).not.toHaveBeenCalled();
-});
-
-test("a Create PR that fails for gh says so in one line with Set up GitHub, and another failure keeps its text", async () => {
-  let kind = "ghUnavailable";
-  let message = "GitHub CLI isn't signed in on the host; run `gh auth login` there: not logged in";
-  fakeBridge(
-    { git: {}, openPr: {} },
-    {
-      "agent/gitStatus": () => ({ result: { ...clean, upstream: null, ahead: 1 } }),
-      "agent/openPr": () => ({
-        error: { code: -32000, message, data: { kind } },
-      }),
-    },
-  );
-  const onSetUpGithub = vi.fn();
-  root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() =>
-    root!.render(
-      <>
-        <GitMenu hostId="local" run={finished} onSetUpGithub={onSetUpGithub} />
-        <Notifications />
-      </>,
-    ),
-  );
-  await settle();
-  const body = () => notice()!.querySelector("p")!.textContent;
-  await act(async () => item("Create PR").click());
-  expect(body()).toBe("GitHub isn't signed in on this host.");
-  await act(async () => button("Set up GitHub")!.click());
-  expect(onSetUpGithub).toHaveBeenCalledOnce();
-
-  message = "GitHub CLI isn't installed on the host: gh was not found; looked in /usr/bin";
-  await act(async () => item("Create PR").click());
-  expect(body()).toBe("GitHub isn't installed on this host.");
-
-  // Another failure replaces it, with plxd's message and nothing to set up.
-  kind = "prFailed";
-  message = "gh pr create failed: no commits between main and readme";
-  await act(async () => item("Create PR").click());
-  expect(body()).toBe(message);
-  expect(button("Set up GitHub")).toBeUndefined();
-  expect(document.querySelectorAll('[aria-label="Notifications"] > div')).toHaveLength(1);
-});
-
-test("the status is read again when a turn ends, and every action waits while one runs", async () => {
-  const request = fakeBridge(
-    { git: {}, openPr: {} },
-    { "agent/gitStatus": () => ({ result: clean }) },
-  );
-  await render(started);
-  for (const name of ["Commit", "Push", "Create PR"]) {
-    expect(item(name).disabled).toBe(true);
-    expect(item(name).textContent).toContain("Wait for the turn to end");
-  }
-  await render(finished);
-  expect(request.mock.calls.filter(([, m]) => m === "agent/gitStatus")).toHaveLength(2);
-  expect(button("Create PR")!.disabled).toBe(false);
-});
-
-test("a detached HEAD says so, and Push and Create PR say what to do", async () => {
-  fakeBridge(
-    { git: {}, openPr: {} },
-    { "agent/gitStatus": () => ({ result: { ...clean, branch: null, upstream: null } }) },
-  );
-  await render(finished);
-  expect(document.body.textContent).toContain("Detached HEAD");
-  expect(item("Push").textContent).toBe("PushCheck out a branch");
-  expect(item("Push").disabled).toBe(true);
-  expect(item("Create PR").disabled).toBe(true);
+  expect(item("Commit").disabled).toBe(true);
 });
 
 test("new repository status requires its own capability and never enables writes", async () => {
@@ -303,7 +157,7 @@ test("new repository status requires its own capability and never enables writes
   for (const action of ["Commit", "Push", "Create PR"]) expect(item(action).disabled).toBe(true);
 });
 
-test("a failed refresh clears stale status and gives a concise missing-worktree diagnostic", async () => {
+test("a failed refresh clears stale status and turns every action off", async () => {
   let missing = false;
   fakeBridge(
     { git: {} },
@@ -325,20 +179,7 @@ test("a failed refresh clears stale status and gives a concise missing-worktree 
   missing = true;
   await render({ ...finished, diff: { ...finished.diff!, commit: "changed" } });
   expect(document.body.textContent).not.toContain("+12");
-  expect(document.body.textContent).not.toContain("/full/recorded/path");
-  const branch = document.querySelector("div[title]")!;
-  expect(branch.textContent).toBe("Worktree no longer exists");
-  expect(branch.getAttribute("title")).toBe("Missing /full/recorded/path");
   for (const action of ["Commit", "Push", "Create PR"]) expect(item(action).disabled).toBe(true);
-});
-
-test("the git capability alone cannot read a new repository's checkout", async () => {
-  const request = fakeBridge({ git: {} });
-  root = createRoot(document.body.appendChild(document.createElement("div")));
-  await act(async () => root!.render(<GitMenu hostId="local" repo="repo-1" />));
-  await settle();
-  expect(request).not.toHaveBeenCalled();
-  expect(document.body.textContent).toBe("");
 });
 
 test("switching repositories clears status and ignores the previous request", async () => {

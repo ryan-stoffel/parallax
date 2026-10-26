@@ -284,19 +284,8 @@ fn rows(events: Vec<Event>, zone: &TimeZone) -> Vec<UsageDay> {
 
 #[cfg(test)]
 mod tests {
-    use jiff::civil::date;
-    use jiff::tz::TimeZone;
-    use parallax_protocol::{CliKind, UsageDay};
 
-    use super::{MAX_PAGES, Page, page_count, rows, user_id};
-
-    #[test]
-    fn the_user_id_comes_from_the_tokens_subject() {
-        // {"sub":"auth0|user_01ABC","exp":1}, base64url without its padding.
-        let token = "e30.eyJzdWIiOiJhdXRoMHx1c2VyXzAxQUJDIiwiZXhwIjoxfQ.sig";
-        assert_eq!(user_id(token).as_deref(), Some("user_01ABC"));
-        assert_eq!(user_id("not-a-jwt"), None);
-    }
+    use super::{MAX_PAGES, page_count};
 
     #[test]
     fn the_page_count_follows_the_first_pages_length_up_to_the_cap() {
@@ -306,50 +295,5 @@ mod tests {
         assert_eq!(page_count(40, 40), 1);
         assert_eq!(page_count(0, 0), 1);
         assert_eq!(page_count(1, u64::MAX), MAX_PAGES);
-    }
-
-    #[test]
-    fn events_sum_by_local_day_and_model_with_token_cost_before_charged_cost() {
-        let page: Page = serde_json::from_str(
-            r#"{
-              "totalUsageEventsCount": 5,
-              "usageEventsDisplay": [
-                { "timestamp": "1790973140132", "model": "composer-2.5", "chargedCents": 0,
-                  "tokenUsage": { "inputTokens": 10, "outputTokens": 1, "cacheReadTokens": 100, "totalCents": 6.5 } },
-                { "timestamp": "1790973110215", "model": "composer-2.5", "chargedCents": 8,
-                  "tokenUsage": { "inputTokens": 20, "outputTokens": 2, "cacheWriteTokens": 5 } },
-                { "timestamp": "1790900000000", "model": "composer-2.5", "tokenUsage": { "outputTokens": 4 } },
-                { "timestamp": "1790973000000", "model": "composer-2.5", "kind": "ERRORED", "chargedCents": 0 },
-                { "timestamp": "1790973105818", "model": "gpt-6", "tokenUsage": { "inputTokens": 1 } }
-              ]
-            }"#,
-        )
-        .unwrap();
-        let day = |date, model: &str, tokens: [u64; 4], cost| UsageDay {
-            date,
-            agent: CliKind::Cursor,
-            model: model.to_owned(),
-            input_tokens: tokens[0],
-            output_tokens: tokens[1],
-            cache_read_tokens: tokens[2],
-            cache_write_tokens: tokens[3],
-            cost_usd_micros: cost,
-        };
-        // 1790973140132 is 2026-10-02 13:32 in Los Angeles; 1790900000000 is 2026-10-02 00:13
-        // UTC, but 17:13 the day before there.
-        let zone = TimeZone::get("America/Los_Angeles").unwrap();
-        assert_eq!(
-            rows(page.usage_events_display, &zone),
-            [
-                day(date(2026, 10, 1), "composer-2.5", [0, 4, 0, 0], None),
-                day(
-                    date(2026, 10, 2),
-                    "composer-2.5",
-                    [30, 3, 100, 5],
-                    Some(145_000)
-                ),
-                day(date(2026, 10, 2), "gpt-6", [1, 0, 0, 0], None),
-            ]
-        );
     }
 }

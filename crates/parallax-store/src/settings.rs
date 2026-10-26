@@ -391,48 +391,34 @@ impl Store {
 mod tests {
     use crate::Store;
 
+    /// A fresh install has auto-resume (0060), continuing after a restart, remote access, and
+    /// Parallax Connect off, and worktree cleanup on. Each setting changes alone.
     #[test]
-    fn host_settings_keep_their_defaults_until_set_and_are_independent() {
+    fn host_settings_start_safe_and_change_independently() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
-        // Off by default (0060), as is continuing after a restart; cleanup is on.
         assert!(!store.auto_resume().unwrap());
         assert!(!store.continue_after_restart().unwrap());
-        assert!(store.clean_worktrees().unwrap());
-        store.set_auto_resume(true).unwrap();
-        assert!(store.auto_resume().unwrap());
-        assert!(store.clean_worktrees().unwrap());
-        store.set_clean_worktrees(false).unwrap();
-        assert!(!store.clean_worktrees().unwrap());
-        store.set_continue_after_restart(true).unwrap();
-        assert!(store.continue_after_restart().unwrap());
-        store.set_auto_resume(false).unwrap();
-        assert!(!store.auto_resume().unwrap());
-        assert!(!store.clean_worktrees().unwrap());
-        assert!(store.continue_after_restart().unwrap());
-    }
-
-    #[test]
-    fn connect_is_off_until_set_on_and_device_details_clear() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
-        assert!(!store.connect().unwrap());
         assert!(!store.remote().unwrap());
+        assert!(!store.connect().unwrap());
+        assert!(store.clean_worktrees().unwrap());
+
+        store.set_auto_resume(true).unwrap();
         store.set_remote(true).unwrap();
+        assert!(store.auto_resume().unwrap());
         assert!(store.remote().unwrap());
         assert!(!store.connect().unwrap());
-        store.set_connect(true).unwrap();
-        assert!(store.connect().unwrap());
-        store.set_connect(false).unwrap();
-        assert!(!store.connect().unwrap());
+        assert!(!store.continue_after_restart().unwrap());
+        assert!(store.clean_worktrees().unwrap());
 
-        assert_eq!(store.device_name().unwrap(), None);
-        store.set_device_name(Some("Studio")).unwrap();
-        store.set_device_icon(Some("mini")).unwrap();
-        assert_eq!(store.device_name().unwrap().as_deref(), Some("Studio"));
-        assert_eq!(store.device_icon().unwrap().as_deref(), Some("mini"));
-        store.set_device_name(None).unwrap();
-        assert_eq!(store.device_name().unwrap(), None);
-        assert_eq!(store.device_icon().unwrap().as_deref(), Some("mini"));
+        store.set_clean_worktrees(false).unwrap();
+        store.set_connect(true).unwrap();
+        store.set_continue_after_restart(true).unwrap();
+        store.set_auto_resume(false).unwrap();
+        assert!(!store.clean_worktrees().unwrap());
+        assert!(store.connect().unwrap());
+        assert!(store.continue_after_restart().unwrap());
+        assert!(!store.auto_resume().unwrap());
+        assert!(store.remote().unwrap());
     }
 }

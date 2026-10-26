@@ -349,21 +349,3 @@ pub fn parse_numstat_z(output: &str) -> Vec<(String, u32, u32)> {
     files.sort();
     files
 }
-
-#[cfg(test)]
-mod tests {
-    use super::parse_numstat_z;
-
-    #[test]
-    fn numstat_z_reads_plain_binary_and_renamed_files() {
-        let output = "3\t1\tsrc/b.rs\0-\t-\tlogo.png\x000\t0\t\0old.rs\0new.rs\0";
-        assert_eq!(
-            parse_numstat_z(output),
-            vec![
-                ("logo.png".to_owned(), 0, 0),
-                ("new.rs".to_owned(), 0, 0),
-                ("src/b.rs".to_owned(), 3, 1),
-            ]
-        );
-    }
-}

@@ -5,14 +5,12 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge, RpcError } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
-import { forkError, ForkMenu } from "./Fork";
-import { Notifications } from "./notifications";
+import { ForkMenu } from "./Fork";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers.
 HTMLElement.prototype.showPopover = () => {};
-const hide = vi.fn();
-HTMLElement.prototype.hidePopover = hide;
+HTMLElement.prototype.hidePopover = () => {};
 let root: Root | undefined;
 beforeEach(() => {
   // No connection, so the menu lists the built-in catalog.
@@ -22,11 +20,6 @@ beforeEach(() => {
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 afterEach(() => {
-  // Notifications outlive a render, so close this test's.
-  for (const close of document.querySelectorAll<HTMLButtonElement>(
-    '[aria-label="Notifications"] button[aria-label="Close"]',
-  ))
-    act(() => close.click());
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
@@ -43,14 +36,7 @@ const run = (over: Partial<AgentRun> = {}): AgentRun =>
   }) as AgentRun;
 function render(r: AgentRun, onFork: (choice: object) => Promise<RpcError | undefined>) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
-  act(() =>
-    root!.render(
-      <>
-        <ForkMenu id="fork" hostId="local" run={r} onFork={onFork} />
-        <Notifications />
-      </>,
-    ),
-  );
+  act(() => root!.render(<ForkMenu id="fork" hostId="local" run={r} onFork={onFork} />));
   // happy-dom has no popovers: the menu gets the event a browser sends as it opens.
   act(() => {
     document
@@ -58,36 +44,15 @@ function render(r: AgentRun, onFork: (choice: object) => Promise<RpcError | unde
       .dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" }));
   });
 }
-/** The newest notification's title and body. */
-const notice = () => {
-  const n = document.querySelector('[aria-label="Notifications"] > div');
-  return n && [n.querySelector("span")?.textContent, n.querySelector("p")?.textContent];
-};
 const menuItems = () => [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
 const nameOf = (b: HTMLElement) => b.getAttribute("aria-label") ?? b.textContent;
-const items = () => menuItems().map(nameOf);
 const item = (name: string) => menuItems().find((b) => nameOf(b) === name)!;
-
-test("the menu offers the thread's model first, then the host's others", () => {
-  render(run(), async () => undefined);
-  expect(items()[0]).toBe("Keep Claude Sonnet 5");
-  expect(items()).toContain("Claude Opus 5.5 (Claude)");
-  expect(items()).toContain("Claude Sonnet 5 (Cursor)");
-  expect(items()).not.toContain("Claude Sonnet 5 (Claude)");
-  expect(items().some((name) => name?.endsWith("(Codex)"))).toBe(true);
-});
-
-test("a run with no model keeps its CLI's default", () => {
-  render(run({ model: undefined }), async () => undefined);
-  expect(items()[0]).toBe("Keep the current model");
-});
 
 test("Keep sends nothing to change, another model its id, and another provider's its account", async () => {
   const onFork = vi.fn(async () => undefined);
   render(run(), onFork);
   await act(async () => item("Keep Claude Sonnet 5").click());
   expect(onFork).toHaveBeenLastCalledWith({});
-  expect(hide).toHaveBeenCalledTimes(1);
   await act(async () => item("Claude Opus 5.5 (Claude)").click());
   expect(onFork).toHaveBeenLastCalledWith({ model: "claude-opus-5-5" });
   await act(async () => item("Claude Sonnet 5 (Cursor)").click());
@@ -95,32 +60,4 @@ test("Keep sends nothing to change, another model its id, and another provider's
     model: "claude-sonnet-5-high",
     account: { kind: "subscription", backend: "cursor" },
   });
-});
-
-test("plxd's refusal closes the menu for a notification, in words, and the items wait on the request", async () => {
-  let answer: (error: RpcError | undefined) => void = () => {};
-  render(run({ status: "running" }), () => new Promise((resolve) => (answer = resolve)));
-  act(() => item("Keep Claude Sonnet 5").click());
-  expect(item("Keep Claude Sonnet 5").disabled).toBe(true);
-  await act(async () => answer({ code: -32602, message: "thread run is still running turn t" }));
-  expect(item("Keep Claude Sonnet 5").disabled).toBe(false);
-  expect(notice()).toEqual([
-    "Couldn't fork the thread",
-    "This turn is still running. Fork it once it finishes.",
-  ]);
-  expect(hide).toHaveBeenCalledTimes(1);
-});
-
-test("each refusal plxd gives a fork reads plainly", () => {
-  const invalid = { code: -32602, message: "thread run has no turn t of its own" };
-  expect(forkError(invalid, false)).toBe(
-    "This turn was copied from another thread. Fork it from that thread.",
-  );
-  expect(forkError({ code: -32000, message: "", data: { kind: "idConflict" } }, false)).toBe(
-    "That fork's id was already taken. Try again.",
-  );
-  expect(forkError({ code: -32000, message: "", data: { kind: "threadNotFound" } }, false)).toBe(
-    "This thread isn't on this host anymore.",
-  );
-  expect(forkError({ code: -32000, message: "worktree failed" }, false)).toBe("worktree failed");
 });

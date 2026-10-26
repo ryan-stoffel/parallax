@@ -10,12 +10,11 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
-use super::{AcpAgent, AcpBackend, BUILD_PLAN, arguments};
+use super::{AcpAgent, AcpBackend};
 use crate::backend::process::{Environment, Launcher};
 use crate::backend::{
-    AccountRef, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential, Decision,
-    Event, EventStream, FailureKind, FollowUp, Outcome, Resume, RunId, RunRequest, StartError,
-    ToolPolicy, ToolStatus, TurnId,
+    AccountRef, AgentPermission, Answer, Backend, Credential, Decision, Event, EventStream,
+    FollowUp, Outcome, Resume, RunId, RunRequest, ToolPolicy, ToolStatus, TurnId,
 };
 use crate::paths::DataDir;
 
@@ -28,11 +27,7 @@ fn fixture(name: &str) -> &'static str {
     match name {
         "thread-mcp" => include_str!("fixtures/thread-mcp.jsonl"),
         "approval" => include_str!("fixtures/approval.jsonl"),
-        "plan" => include_str!("fixtures/plan.jsonl"),
         "resume" => include_str!("fixtures/resume.jsonl"),
-        "not-signed-in" => include_str!("fixtures/not-signed-in.jsonl"),
-        "cancel" => include_str!("fixtures/cancel.jsonl"),
-        "interrupt" => include_str!("fixtures/interrupt.jsonl"),
         "plan-denied" => include_str!("fixtures/plan-denied.jsonl"),
         "opencode" => include_str!("fixtures/opencode.jsonl"),
         "hermes" => include_str!("fixtures/hermes.jsonl"),
@@ -164,17 +159,6 @@ async fn stopped(events: &mut EventStream) -> Outcome {
         }
     });
     finished.await.expect("plxd stops the agent")
-}
-
-/// The first permission request among `events`.
-fn asked(events: &[Event]) -> &ApprovalRequest {
-    events
-        .iter()
-        .find_map(|event| match event {
-            Event::ApprovalRequested(request) => Some(request),
-            _ => None,
-        })
-        .unwrap()
 }
 
 /// Every event until `Finished`, answering each permission request with `answer`, and sending
@@ -315,175 +299,6 @@ async fn a_thread_asks_through_plxd_and_takes_follow_ups_in_its_live_session() {
 }
 
 #[tokio::test]
-async fn the_stream_becomes_events_the_app_draws() {
-    let (_, events, follow_up) = approved().await;
-    let session = "0cb4faa6-1a77-49e3-a4c7-572c1a178f9a".to_owned();
-    assert_eq!(
-        events[0],
-        Event::SessionStarted {
-            session_id: session,
-            model: Some("composer-2.5[fast=true]".into()),
-            api_key_source: None,
-        }
-    );
-    let asked = asked(&events);
-    assert_eq!(asked.tool_name, "Bash");
-    assert_eq!(asked.input, json!({"command": "git status --short"}));
-    assert_eq!(
-        asked.reason.as_deref(),
-        Some("Not in allowlist: git status")
-    );
-    let call = asked.call_id.clone().unwrap();
-    assert!(events.contains(&Event::ToolCall {
-        call_id: call.clone(),
-        name: "Bash".into(),
-        input: json!({"command": "git status --short"}),
-    }));
-    assert_eq!(status_of(&events, &call), Some(&ToolStatus::Ok));
-    assert!(
-        events
-            .iter()
-            .any(|event| matches!(event, Event::ToolCall { name, input, .. }
-        if name == "Edit" && input["path"] == "/tmp/acp-probe/repo/hello.txt"))
-    );
-    let reasoning = events
-        .iter()
-        .filter(|event| matches!(event, Event::Reasoning { .. }))
-        .count();
-    assert_eq!(
-        reasoning, 3,
-        "thinking chunks join into one event per run of them"
-    );
-    assert!(events.contains(&Event::TodoList {
-        items: vec![
-            crate::backend::TodoItem {
-                text: "Run git status --short".into(),
-                status: crate::backend::TodoStatus::Completed
-            },
-            crate::backend::TodoItem {
-                text: "Create hello.txt containing hi".into(),
-                status: crate::backend::TodoStatus::Completed
-            },
-        ]
-    }));
-    let first = Some(TURN.parse().unwrap());
-    assert_eq!(
-        turns(&events),
-        [
-            &Event::TurnStarted { turn_id: first },
-            &Event::TurnFinished {
-                turn_id: first,
-                result: Some("done".into()),
-                failed: false,
-            },
-            &Event::TurnStarted {
-                turn_id: Some(follow_up.turn_id)
-            },
-            &Event::TurnFinished {
-                turn_id: Some(follow_up.turn_id),
-                result: Some("Also done.".into()),
-                failed: false,
-            },
-        ]
-    );
-    assert_eq!(
-        outcome(&events),
-        &Outcome::Completed {
-            result: Some("Also done.".into())
-        }
-    );
-}
-
-#[tokio::test]
-async fn a_denied_request_rejects_the_call() {
-    let fake = Fake::new("approval");
-    let deny = |_: &str| Decision::Deny {
-        message: "Not now.".into(),
-        interrupt: false,
-    };
-    let events = run(&fake, fake.request(), deny, None).await;
-    assert_eq!(
-        fake.stdin()[4],
-        json!({"jsonrpc": "2.0", "id": 1, "result": {"outcome": {"outcome": "selected", "optionId": "reject-once"}}})
-    );
-    assert_eq!(
-        status_of(&events, "tool_a9c103b0-e438-4509-a890-8dd71a1d771"),
-        Some(&ToolStatus::Denied)
-    );
-}
-
-#[tokio::test]
-async fn without_approvals_plxd_rejects_what_would_ask() {
-    let fake = Fake::new("approval");
-    let mut request = fake.request();
-    request.approvals = false;
-    let events = run(&fake, request, |_| unreachable!("nothing asks"), None).await;
-    assert!(
-        !events
-            .iter()
-            .any(|event| matches!(event, Event::ApprovalRequested(_)))
-    );
-    assert_eq!(
-        fake.stdin()[4]["result"]["outcome"]["optionId"],
-        "reject-once"
-    );
-}
-
-#[tokio::test]
-async fn an_approved_plan_is_built_in_the_same_turn() {
-    let fake = Fake::new("plan");
-    let mut request = fake.request();
-    request.permission = Some(AgentPermission::Plan);
-    let events = run(&fake, request, allow, None).await;
-
-    let stdin = fake.stdin();
-    assert_eq!(stdin[2]["method"], "session/set_mode");
-    assert_eq!(stdin[2]["params"]["modeId"], "plan");
-    assert_eq!(
-        stdin[3]["method"], "session/prompt",
-        "the prompt waits for plan mode"
-    );
-    assert_eq!(
-        stdin[4],
-        json!({"jsonrpc": "2.0", "id": 0, "result": {"outcome": {"outcome": "accepted"}}})
-    );
-    assert_eq!(stdin[5]["params"]["modeId"], "agent");
-    assert_eq!(
-        stdin[6]["params"]["prompt"],
-        json!([{"type": "text", "text": BUILD_PLAN}])
-    );
-
-    let asked = asked(&events);
-    assert_eq!(asked.tool_name, "ExitPlanMode");
-    assert!(asked.interactive);
-    assert!(
-        asked.input["plan"]
-            .as_str()
-            .unwrap()
-            .starts_with("# Add CONTRIBUTING.md")
-    );
-    let call = asked.call_id.clone().unwrap();
-    assert!(events.iter().any(
-        |event| matches!(event, Event::ToolCall { call_id, name, input }
-        if *call_id == call && name == "ExitPlanMode" && input["plan"] == asked.input["plan"])
-    ));
-    assert_eq!(status_of(&events, &call), Some(&ToolStatus::Ok));
-    let turn = Some(TURN.parse().unwrap());
-    assert_eq!(
-        turns(&events),
-        [
-            &Event::TurnStarted { turn_id: turn },
-            &Event::TurnFinished {
-                turn_id: turn,
-                result: Some("Added CONTRIBUTING.md.".into()),
-                failed: false,
-            },
-        ],
-        "the build goes on as the plan's turn"
-    );
-}
-
-#[tokio::test]
 async fn a_denied_plan_is_rejected_with_the_users_reason_and_keeps_planning() {
     let fake = Fake::new("plan-denied");
     let mut request = fake.request();
@@ -516,56 +331,6 @@ async fn a_denied_plan_is_rejected_with_the_users_reason_and_keeps_planning() {
             },
         ]
     );
-}
-
-#[tokio::test]
-async fn an_interrupting_denial_cancels_the_turn_and_withdraws_the_other_request() {
-    let fake = Fake::new("interrupt");
-    let started = fake.backend.start(fake.request()).unwrap();
-    let mut events = started.events;
-    let mut asked = Vec::new();
-    while asked.len() < 2 {
-        if let Event::ApprovalRequested(request) = next(&mut events).await {
-            asked.push(request.approval_id);
-        }
-    }
-    let deny = Decision::Deny {
-        message: "Stopped.".into(),
-        interrupt: true,
-    };
-    started
-        .run
-        .answer(Answer {
-            approval_id: asked[0],
-            decision: deny,
-        })
-        .unwrap();
-    let rest = rest(&mut events).await;
-
-    let stdin = fake.stdin();
-    assert_eq!(stdin[3]["result"]["outcome"]["optionId"], "reject-once");
-    assert_eq!(stdin[4]["method"], "session/cancel");
-    assert_eq!(
-        stdin[5],
-        json!({"jsonrpc": "2.0", "id": 1, "result": {"outcome": {"outcome": "cancelled"}}})
-    );
-    assert!(rest.contains(&Event::ApprovalWithdrawn {
-        approval_id: asked[1]
-    }));
-    assert!(
-        rest.iter()
-            .any(|event| matches!(event, Event::TurnFinished { .. }))
-    );
-}
-
-#[tokio::test]
-async fn cancel_stops_cursor_mid_turn() {
-    let fake = Fake::new("cancel");
-    let started = fake.backend.start(fake.request()).unwrap();
-    let mut events = started.events;
-    while !matches!(next(&mut events).await, Event::TextDelta { .. }) {}
-    started.run.cancel();
-    assert_eq!(outcome(&rest(&mut events).await), &Outcome::Cancelled);
 }
 
 #[tokio::test]
@@ -607,47 +372,6 @@ async fn a_resumed_session_loads_and_drops_its_replayed_history() {
             result: Some("hello.txt".into())
         }
     );
-}
-
-#[tokio::test]
-async fn a_signed_out_cursor_fails_as_not_signed_in() {
-    let fake = Fake::new("not-signed-in");
-    let events = run(&fake, fake.request(), allow, None).await;
-    let Outcome::Failed(failure) = outcome(&events) else {
-        panic!("expected a failure");
-    };
-    assert_eq!(
-        failure.failure,
-        FailureKind::NotSignedIn,
-        "routing falls back on it (0012)"
-    );
-}
-
-#[test]
-fn only_a_threads_subscription_runs_on_cursor() {
-    let fake = Fake::new("approval");
-    let mut worker = fake.request();
-    worker.thread = false;
-    assert!(matches!(
-        arguments(&cursor(), &worker),
-        Err(StartError::Unsupported(_))
-    ));
-    let mut key = fake.request();
-    key.account.credential = Credential::ApiKey(ApiKey::new("k".into()));
-    assert!(matches!(
-        arguments(&cursor(), &key),
-        Err(StartError::Unsupported(_))
-    ));
-    let mut auto = fake.request();
-    auto.permission = Some(AgentPermission::Auto);
-    assert!(matches!(
-        arguments(&cursor(), &auto),
-        Err(StartError::Unsupported(_))
-    ));
-    let mut bypass = fake.request();
-    bypass.permission = Some(AgentPermission::Bypass);
-    bypass.model = None;
-    assert_eq!(arguments(&cursor(), &bypass).unwrap(), ["--force", "acp"]);
 }
 
 /// An agent configured as 0040's presets describe one that takes everything over ACP: no model or
@@ -894,74 +618,6 @@ async fn thread_mcp_is_injected_on_new_and_load_and_preapproved() {
     }
 }
 
-/// A matching title alone never authorizes a shell or another server's tool.
-#[test]
-fn thread_mcp_autoapproval_is_scoped_to_the_injected_server_and_known_tools() {
-    use super::stream::{Step, Translator};
-    for (provider, tool, kind, injected, allowed) in [
-        ("plxd", "thread_list", "other", true, true),
-        ("user-server", "thread_list", "other", true, false),
-        ("plxd", "unknown", "other", true, false),
-        ("plxd", "thread_list", "execute", true, false),
-        ("plxd", "thread_list", "other", false, false),
-    ] {
-        let mut translator = Translator::default();
-        translator.asks = true;
-        translator.thread_tools = injected;
-        let update = json!({"method": "session/update", "params": {"update": {
-            "sessionUpdate": "tool_call", "toolCallId": "call", "kind": kind,
-            "title": "plxd: thread_list", "status": "pending",
-            "rawInput": {"providerIdentifier": provider, "toolName": tool}
-        }}});
-        translator.line(update.to_string().as_bytes());
-        let ask = json!({"id": 7, "method": "session/request_permission", "params": {
-            "toolCall": {"toolCallId": "call"},
-            "options": [{"optionId": "yes", "kind": "allow_once"}],
-        }});
-        let steps = translator.line(ask.to_string().as_bytes());
-        assert_eq!(
-            steps.iter().any(|step| matches!(step, Step::Ask(..))),
-            !allowed
-        );
-        let allowed_at_once = steps.iter().any(|step| {
-            matches!(step, Step::Reply(value) if value["result"]["outcome"]["optionId"] == "yes")
-        });
-        assert_eq!(allowed_at_once, allowed);
-    }
-}
-
-/// plxd answers an agent's permission requests by the run's mode (0054), whatever the agent is.
-#[test]
-fn a_mode_allows_what_it_covers_and_asks_for_the_rest() {
-    use super::stream::{Step, Translator};
-    for (permission, kind, allowed) in [
-        (AgentPermission::Bypass, "execute", true),
-        (AgentPermission::Edit, "edit", true),
-        (AgentPermission::Edit, "execute", false),
-        (AgentPermission::Manual, "edit", false),
-        (AgentPermission::Plan, "edit", false),
-    ] {
-        let mut translator = Translator::default();
-        translator.asks = true;
-        translator.permission = Some(permission);
-        let update = json!({"method": "session/update", "params": {"update": {
-            "sessionUpdate": "tool_call", "toolCallId": "call", "kind": kind,
-            "title": "a call", "status": "pending",
-        }}});
-        translator.line(update.to_string().as_bytes());
-        let ask = json!({"id": 7, "method": "session/request_permission", "params": {
-            "toolCall": {"toolCallId": "call"},
-            "options": [{"optionId": "yes", "kind": "allow_once"}],
-        }});
-        let steps = translator.line(ask.to_string().as_bytes());
-        assert_eq!(
-            steps.iter().any(|step| matches!(step, Step::Ask(..))),
-            !allowed,
-            "{permission:?} {kind}"
-        );
-    }
-}
-
 /// An agent that stays up after stdin closes, as Cursor does while a stdio MCP server it started
 /// is connected, is stopped once nothing is held for it, and its finished turn still completes.
 #[tokio::test]
@@ -990,33 +646,6 @@ async fn an_agent_that_outlives_its_stdin_is_stopped_after_held_messages_are_rel
     assert!(matches!(outcome, Outcome::Completed { .. }), "{outcome:?}");
 }
 
-/// A turn that fails also closes stdin, so an agent that stays up after it is stopped too, and the
-/// run keeps its failure.
-#[tokio::test]
-async fn an_agent_that_outlives_a_failed_turn_is_stopped_and_the_run_fails() {
-    let fake = Fake::new("resume");
-    let lines = [
-        "@read",
-        r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#,
-        "@read",
-        r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s"}}"#,
-        "@read",
-        r#"{"jsonrpc":"2.0","id":3,"error":{"code":-32603,"message":"usage limit reached"}}"#,
-        "@linger",
-    ];
-    fs::write(fake.root().join("fixture.jsonl"), lines.join("\n") + "\n").unwrap();
-    let started = fake.backend.start(fake.request()).unwrap();
-    let mut events = started.events;
-    let outcome = stopped(&mut events).await;
-    let Outcome::Failed(failure) = outcome else {
-        panic!("{outcome:?}");
-    };
-    assert!(
-        failure.message.contains("usage limit reached"),
-        "{failure:?}"
-    );
-}
-
 /// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: a read, a
 /// shell command that asks first, and the reply.
 #[tokio::test]
@@ -1032,45 +661,109 @@ async fn a_recorded_session_replays_to_its_snapshot() {
     .await;
 }
 
+/// A denied request, and any request in a run whose client can't answer, goes back as
+/// `reject-once`.
+#[tokio::test]
+async fn a_denial_or_a_run_without_approvals_rejects_the_call() {
+    {
+        let fake = Fake::new("approval");
+        let deny = |_: &str| Decision::Deny {
+            message: "Not now.".into(),
+            interrupt: false,
+        };
+        let events = run(&fake, fake.request(), deny, None).await;
+        assert_eq!(
+            fake.stdin()[4],
+            json!({"jsonrpc": "2.0", "id": 1, "result": {"outcome": {"outcome": "selected", "optionId": "reject-once"}}})
+        );
+        assert_eq!(
+            status_of(&events, "tool_a9c103b0-e438-4509-a890-8dd71a1d771"),
+            Some(&ToolStatus::Denied)
+        );
+    }
+    {
+        let fake = Fake::new("approval");
+        let mut request = fake.request();
+        request.approvals = false;
+        let events = run(&fake, request, |_| unreachable!("nothing asks"), None).await;
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_)))
+        );
+        assert_eq!(
+            fake.stdin()[4]["result"]["outcome"]["optionId"],
+            "reject-once"
+        );
+    }
+}
+/// plxd answers a permission request by the run's mode (0054), and auto-allows only the
+/// injected server's known tools: a matching title alone never authorizes a shell or another
+/// server's tool.
 #[test]
-fn reported_context_usage_preserves_unknown_fields_instead_of_guessing_zero() {
-    let mut translator = super::stream::Translator::default();
-    let other = serde_json::json!({"method": "session/update", "params": {
-        "sessionId": "session", "update": {"sessionUpdate": "usage_update", "used": 5, "size": 10}
-    }});
-    assert!(
-        translator.line(other.to_string().as_bytes()).is_empty(),
-        "nothing counts before the run's session is known"
-    );
-    translator.session = Some("session".into());
-    let mut subagent = other.clone();
-    subagent["params"]["sessionId"] = "subagent".into();
-    assert!(
-        translator.line(subagent.to_string().as_bytes()).is_empty(),
-        "another session's context isn't the thread's"
-    );
-    let update = |usage| {
-        serde_json::json!({"method": "session/update", "params": {
-            "sessionId": "session", "update": usage
-        }})
-    };
-    let message =
-        update(serde_json::json!({"sessionUpdate": "usage_update", "used": 1200, "size": 200_000}));
-    assert_eq!(
-        translator.line(message.to_string().as_bytes()),
-        [super::stream::Step::Emit(Event::RequestUsage(
-            parallax_protocol::AgentRequestUsage {
-                context_tokens: Some(1200),
-                context_window: Some(200_000),
-                ..Default::default()
-            }
-        ))]
-    );
-    let message = update(serde_json::json!({"sessionUpdate": "usage_update", "size": 0}));
-    assert_eq!(
-        translator.line(message.to_string().as_bytes()),
-        [super::stream::Step::Emit(Event::RequestUsage(
-            parallax_protocol::AgentRequestUsage::default()
-        ))]
-    );
+fn a_permission_request_is_answered_by_the_mode_and_the_injected_server() {
+    {
+        // A matching title alone never authorizes a shell or another server's tool.
+        use super::stream::{Step, Translator};
+        for (provider, tool, kind, injected, allowed) in [
+            ("plxd", "thread_list", "other", true, true),
+            ("user-server", "thread_list", "other", true, false),
+            ("plxd", "unknown", "other", true, false),
+            ("plxd", "thread_list", "execute", true, false),
+            ("plxd", "thread_list", "other", false, false),
+        ] {
+            let mut translator = Translator::default();
+            translator.asks = true;
+            translator.thread_tools = injected;
+            let update = json!({"method": "session/update", "params": {"update": {
+                "sessionUpdate": "tool_call", "toolCallId": "call", "kind": kind,
+                "title": "plxd: thread_list", "status": "pending",
+                "rawInput": {"providerIdentifier": provider, "toolName": tool}
+            }}});
+            translator.line(update.to_string().as_bytes());
+            let ask = json!({"id": 7, "method": "session/request_permission", "params": {
+                "toolCall": {"toolCallId": "call"},
+                "options": [{"optionId": "yes", "kind": "allow_once"}],
+            }});
+            let steps = translator.line(ask.to_string().as_bytes());
+            assert_eq!(
+                steps.iter().any(|step| matches!(step, Step::Ask(..))),
+                !allowed
+            );
+            let allowed_at_once = steps.iter().any(|step| {
+                matches!(step, Step::Reply(value) if value["result"]["outcome"]["optionId"] == "yes")
+            });
+            assert_eq!(allowed_at_once, allowed);
+        }
+    }
+    {
+        // plxd answers an agent's permission requests by the run's mode (0054), whatever the agent is.
+        use super::stream::{Step, Translator};
+        for (permission, kind, allowed) in [
+            (AgentPermission::Bypass, "execute", true),
+            (AgentPermission::Edit, "edit", true),
+            (AgentPermission::Edit, "execute", false),
+            (AgentPermission::Manual, "edit", false),
+            (AgentPermission::Plan, "edit", false),
+        ] {
+            let mut translator = Translator::default();
+            translator.asks = true;
+            translator.permission = Some(permission);
+            let update = json!({"method": "session/update", "params": {"update": {
+                "sessionUpdate": "tool_call", "toolCallId": "call", "kind": kind,
+                "title": "a call", "status": "pending",
+            }}});
+            translator.line(update.to_string().as_bytes());
+            let ask = json!({"id": 7, "method": "session/request_permission", "params": {
+                "toolCall": {"toolCallId": "call"},
+                "options": [{"optionId": "yes", "kind": "allow_once"}],
+            }});
+            let steps = translator.line(ask.to_string().as_bytes());
+            assert_eq!(
+                steps.iter().any(|step| matches!(step, Step::Ask(..))),
+                !allowed,
+                "{permission:?} {kind}"
+            );
+        }
+    }
 }

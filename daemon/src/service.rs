@@ -511,17 +511,6 @@ mod tests {
     use super::{DEFAULT_LABEL, ServiceError, check_label_serves};
     use crate::paths::DataDir;
 
-    /// A stand-in for `launchctl` or `loginctl`: a `sh` script named `name` in `dir`.
-    #[cfg(unix)]
-    pub(super) fn fake_program(dir: &std::path::Path, name: &str, script: &str) -> String {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path.to_str().unwrap().to_owned()
-    }
-
     #[test]
     fn the_default_label_serves_only_the_default_data_folder() {
         let default = DataDir::new("/Users/me/Library/Application Support/parallax").unwrap();

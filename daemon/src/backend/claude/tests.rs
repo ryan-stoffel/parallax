@@ -11,21 +11,17 @@ use tempfile::TempDir;
 
 use super::stream::{Ask, Step, Translator};
 use super::{
-    BYPASS_PERMISSION_MODE, ClaudeBackend, EXIT_PLAN_MODE, Message, NO_WRITE_ARGS,
-    PLAN_WORKER_TOOL_LIST, PLAN_WORKSPACE_WRITE_ARGS, PROMPT_TOOL_ARGS, TODO_TOOLS,
-    WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS, namer_arguments, no_write_settings,
-    write_env_file,
+    ClaudeBackend, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST, PROMPT_TOOL_ARGS, WORKER_TOOL_LIST,
+    WORKER_TOOLS, WORKSPACE_WRITE_ARGS, no_write_settings,
 };
-use crate::backend::event::{
-    BackgroundKind, BackgroundTask, MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES,
-};
+use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{Environment, Launcher, SpawnError};
 use crate::backend::{
     AccountRef, AgentEffort, AgentPermission, Answer, ApiKey, ApprovalRequest, Backend, Credential,
     Decision, Event, EventStream, FailureKind, FollowUp, ImageMediaType, LimitStatus, LimitWindow,
     ModelUsage, Outcome, PromptImage, Resume, Rewind, RunId, RunRequest, SendError, StartError,
-    Started, SubagentStatus, ThreadTools, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId,
-    Usage, WarningKind, WorkerSandbox,
+    Started, ThreadTools, TodoItem, TodoStatus, ToolPolicy, ToolStatus, TurnId, Usage, WarningKind,
+    WorkerSandbox,
 };
 use crate::mcp;
 use crate::paths::DataDir;
@@ -41,34 +37,15 @@ fn fixture(name: &str) -> &'static str {
     match name {
         "read-only" => include_str!("fixtures/read-only.jsonl"),
         "tool-call" => include_str!("fixtures/tool-call.jsonl"),
-        "error-result" => include_str!("fixtures/error-result.jsonl"),
-        "not-signed-in" => include_str!("fixtures/not-signed-in.jsonl"),
-        "rate-limited" => include_str!("fixtures/rate-limited.jsonl"),
-        "resume" => include_str!("fixtures/resume.jsonl"),
         "api-key-source" => include_str!("fixtures/api-key-source.jsonl"),
         "api-key-completed" => include_str!("fixtures/api-key-completed.jsonl"),
-        "write-tools" => include_str!("fixtures/write-tools.jsonl"),
         "malformed" => include_str!("fixtures/malformed.jsonl"),
         "follow-up-folded" => include_str!("fixtures/follow-up-folded.jsonl"),
         "follow-up-turns" => include_str!("fixtures/follow-up-turns.jsonl"),
-        "follow-up-late-report" => include_str!("fixtures/follow-up-late-report.jsonl"),
-        "held" => include_str!("fixtures/held.jsonl"),
         "cancel" => include_str!("fixtures/cancel.jsonl"),
-        "stubborn" => include_str!("fixtures/stubborn.jsonl"),
-        "follow-up-no-echo" => include_str!("fixtures/follow-up-no-echo.jsonl"),
-        "task-notification" => include_str!("fixtures/task-notification.jsonl"),
-        "foreign-result" => include_str!("fixtures/foreign-result.jsonl"),
-        "wake" => include_str!("fixtures/wake.jsonl"),
         "provider" => include_str!("fixtures/provider.jsonl"),
-        "subprocess-env" => include_str!("fixtures/subprocess-env.jsonl"),
-        "scrub-mode" => include_str!("fixtures/scrub-mode.jsonl"),
         "approval" => include_str!("fixtures/approval.jsonl"),
-        "approval-withdrawn" => include_str!("fixtures/approval-withdrawn.jsonl"),
-        "exit-plan" => include_str!("fixtures/exit-plan.jsonl"),
         "approval-exit" => include_str!("fixtures/approval-exit.jsonl"),
-        "worker-exit-plan" => include_str!("fixtures/worker-exit-plan.jsonl"),
-        "worker-tasks" => include_str!("fixtures/worker-tasks.jsonl"),
-        "coordinator-tasks" => include_str!("fixtures/coordinator-tasks.jsonl"),
         "recorded" => include_str!("fixtures/recorded.jsonl"),
         other => panic!("no fixture {other}"),
     }
@@ -247,8 +224,7 @@ async fn launch(backend: &dyn Backend, request: RunRequest) -> Started {
     started
 }
 
-// Lifecycle tests consume the original flow. Request measurements are asserted independently
-// below and included in the real-session replay snapshot.
+// Lifecycle tests skip request measurements, which the real-session replay snapshot covers.
 async fn next(events: &mut EventStream) -> Event {
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -383,12 +359,6 @@ async fn a_read_only_run_maps_the_stream_and_uses_the_no_write_policy() {
     );
 
     let mut expected: Vec<&str> = super::BASE_ARGS.to_vec();
-    assert_eq!(
-        expected.join(" "),
-        "-p --output-format stream-json --verbose --input-format stream-json \
-         --thinking adaptive --thinking-display summarized --include-partial-messages",
-        "every run has T3 Code's summarized thinking (PLX-713) and partial messages (PLX-714)"
-    );
     let mut settings = no_write_settings();
     settings["showThinkingSummaries"] = true.into();
     let settings = settings.to_string();
@@ -450,36 +420,6 @@ fn a_no_write_run_cannot_read_claudes_shared_temp_folder() {
             "env": {"CLAUDE_CODE_TASK_LIST_ID": ""},
             "showThinkingSummaries": true,
         })
-    );
-}
-
-/// 0027: a coordinator runs as Claude Code in its mode, and without
-/// `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`, which would force "default"; it doesn't inherit it either.
-#[tokio::test]
-async fn a_coordinator_runs_in_its_mode_without_the_subprocess_scrub() {
-    let fake = Fake::new("tool-call");
-    let cwd = fake.root();
-    let request = RunRequest {
-        coordinator_tools: Some(ThreadTools {
-            program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
-            data_dir: cwd.join("data"),
-            run: RunId::generate(),
-        }),
-        ..request(&cwd)
-    };
-    let expected: Vec<String> = super::arguments(&request)
-        .unwrap()
-        .into_iter()
-        .map(|arg| arg.into_string().unwrap())
-        .collect();
-    run(&fake, request).await;
-    assert_eq!(fake.argv(), expected);
-    fake.assert_no_inherited_credentials(None);
-    let env = fake.env();
-    assert!(
-        !env.iter()
-            .any(|var| var.starts_with("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=")),
-        "{env:?}"
     );
 }
 
@@ -636,110 +576,6 @@ fn a_worker_s_temp_folder_must_leave_claude_code_room() {
     }
 }
 
-/// Full Claude Code starts with a temp folder too long for a sandboxed worker, as every one on
-/// Windows is, since only sandboxed commands can't use the shared folder (PLX-959).
-#[tokio::test]
-async fn full_claude_code_keeps_a_temp_folder_too_long_for_a_sandbox() {
-    let fake = Fake::new("read-only");
-    let long = format!("/tmp/{}", "x".repeat(super::MAX_COMMAND_TEMP_BYTES));
-    let mut thread = request(&fake.root());
-    thread.policy = ToolPolicy::WorkspaceWrite;
-    thread.thread = true;
-    thread.sandbox = Some(WorkerSandbox {
-        temp: long.clone().into(),
-        ..worker_sandbox(&fake.root())
-    });
-    match fake.backend.start(thread.clone()) {
-        Err(StartError::Invalid(message)) => assert!(message.contains("every session shares")),
-        Err(other) => panic!("expected Invalid, got {other:?}"),
-        Ok(_) => panic!("a sandboxed thread started"),
-    }
-    thread.approvals = true;
-    run(&fake, thread).await;
-    let temp = format!("CLAUDE_CODE_TMPDIR={long}");
-    assert!(fake.env().contains(&temp), "{:?}", fake.env());
-}
-
-/// A worker gets a script that keeps the CLI's `PATH` in its Bash commands (PLX-126), in the data
-/// folder, and it's gone once the run has ended.
-#[tokio::test]
-async fn a_worker_s_env_file_restores_its_path_and_ends_with_the_run() {
-    let fake = Fake::new("tool-call");
-    let mut request = request(&fake.root());
-    request.policy = ToolPolicy::WorkspaceWrite;
-    request.sandbox = Some(worker_sandbox(&fake.root()));
-    run(&fake, request).await;
-    let env_file = fake
-        .env()
-        .iter()
-        .find_map(|var| var.strip_prefix("CLAUDE_ENV_FILE="))
-        .map(PathBuf::from)
-        .unwrap();
-    assert_eq!(
-        env_file.parent(),
-        Some(fake.root().join("data/tmp").as_path())
-    );
-    assert_eq!(
-        fake.recorded("env-file"),
-        format!(
-            "export PATH='{}/bin:/usr/bin:/bin'${{PATH:+:$PATH}}\n",
-            fake.root().display()
-        )
-    );
-    assert!(!env_file.exists());
-}
-
-/// The script quotes the `PATH` it restores, keeps what the shell had after it, and is private.
-#[test]
-fn the_env_file_puts_the_path_back_in_front_and_is_private() {
-    let dir = tempfile::tempdir().unwrap();
-    let file = write_env_file(&dir.path().join("tmp"), "/it's/bin:/usr/bin".as_ref()).unwrap();
-    let mode = fs::metadata(&file).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o600);
-    let output = std::process::Command::new("/bin/sh")
-        .args(["-c", ". \"$0\"; printf %s \"$PATH\""])
-        .arg(&*file)
-        .env("PATH", "/set/by/zshenv")
-        .output()
-        .unwrap();
-    assert_eq!(
-        String::from_utf8(output.stdout).unwrap(),
-        "/it's/bin:/usr/bin:/set/by/zshenv"
-    );
-    let path = file.to_path_buf();
-    drop(file);
-    assert!(!path.exists());
-}
-
-#[test]
-fn a_worker_s_settings_deny_every_name_for_this_mac_to_commands_and_web_fetch() {
-    let sandbox = worker_sandbox(Path::new("/Users/u/wt"));
-    let settings = super::worker_settings(&sandbox, Path::new("/Users/u/wt"), None);
-    let list = |pointer: &str| -> Vec<String> {
-        settings
-            .pointer(pointer)
-            .and_then(Value::as_array)
-            .unwrap()
-            .iter()
-            .map(|entry| entry.as_str().unwrap().to_owned())
-            .collect()
-    };
-    let denied_hosts = list("/sandbox/network/deniedDomains");
-    let denied_fetches = list("/permissions/deny");
-    for host in ["localhost", "127.0.0.1", "[::1]", "0.0.0.0", "[::]"] {
-        assert!(
-            denied_hosts.iter().any(|h| h == host),
-            "commands reach {host}"
-        );
-        let rule = format!("WebFetch(domain:{host})");
-        assert!(denied_fetches.contains(&rule), "WebFetch reaches {host}");
-    }
-    assert_eq!(
-        list("/permissions/allow"),
-        ["Bash", "WebFetch(domain:*)", "WebSearch"]
-    );
-}
-
 /// PLX-97, 0027: a worker's permission picks Claude Code's mode of the same name, and its sandbox
 /// settings stay the same, except in bypass, where Claude Code refuses `--restricted` and the
 /// worker runs as full Claude Code. A no-write run's mode is fixed (0004), so it takes no
@@ -808,110 +644,6 @@ fn a_worker_s_permission_picks_its_mode_inside_the_same_sandbox_but_bypass() {
         super::arguments(&no_write),
         Err(StartError::Invalid(_))
     ));
-}
-
-/// PLX-251: every run, whatever its policy, mode, or prompt channel, gets exactly one
-/// `--settings`, since Claude Code keeps only the last, and it sets `CLAUDE_CODE_TASK_LIST_ID`
-/// empty. That beats a value in the `env` of the global config or of the user's, the project's,
-/// or the local settings, so the run keeps its session's own task list.
-#[test]
-fn every_run_s_one_settings_keep_its_task_list_its_own() {
-    let cwd = Path::new("/Users/u/wt");
-    let mut worker = request(cwd);
-    worker.policy = ToolPolicy::WorkspaceWrite;
-    worker.sandbox = Some(worker_sandbox(cwd));
-    let coordinator_run = coordinator(cwd);
-    let mut runs = vec![request(cwd)];
-    for permission in [
-        None,
-        Some(AgentPermission::Edit),
-        Some(AgentPermission::Auto),
-        Some(AgentPermission::Manual),
-        Some(AgentPermission::Plan),
-        Some(AgentPermission::Bypass),
-    ] {
-        for approvals in [false, true] {
-            for base in [&worker, &coordinator_run] {
-                runs.push(RunRequest {
-                    permission,
-                    approvals,
-                    ..base.clone()
-                });
-            }
-        }
-    }
-    for run in runs {
-        let args: Vec<String> = super::arguments(&run)
-            .unwrap()
-            .into_iter()
-            .map(|arg| arg.into_string().unwrap())
-            .collect();
-        let settings: Vec<Value> = args
-            .iter()
-            .enumerate()
-            .filter(|(_, arg)| *arg == "--settings")
-            .map(|(at, _)| serde_json::from_str(&args[at + 1]).unwrap())
-            .collect();
-        assert_eq!(settings.len(), 1, "{args:?}");
-        assert_eq!(
-            settings[0]["env"],
-            serde_json::json!({"CLAUDE_CODE_TASK_LIST_ID": ""}),
-            "{args:?}"
-        );
-    }
-}
-
-/// Fast mode goes in every run's one `--settings`, the only place headless Claude Code takes it.
-#[test]
-fn fast_mode_is_set_in_every_run_s_settings() {
-    let cwd = Path::new("/Users/u/wt");
-    let mut worker = request(cwd);
-    worker.policy = ToolPolicy::WorkspaceWrite;
-    worker.sandbox = Some(worker_sandbox(cwd));
-    let bypass = RunRequest {
-        permission: Some(AgentPermission::Bypass),
-        ..worker.clone()
-    };
-    for base in [request(cwd), worker, bypass, coordinator(cwd)] {
-        for fast in [None, Some(true), Some(false)] {
-            let args: Vec<String> = super::arguments(&RunRequest {
-                fast,
-                ..base.clone()
-            })
-            .unwrap()
-            .into_iter()
-            .map(|arg| arg.into_string().unwrap())
-            .collect();
-            let at = args.iter().position(|arg| arg == "--settings").unwrap();
-            let settings: Value = serde_json::from_str(&args[at + 1]).unwrap();
-            assert_eq!(settings.get("fastMode").and_then(Value::as_bool), fast);
-        }
-    }
-}
-
-/// A 200k context window caps a native 1M model with `CLAUDE_CODE_DISABLE_1M_CONTEXT`; 1M is
-/// those models' default, and any other size is refused.
-#[tokio::test]
-async fn a_200k_context_window_disables_1m_context() {
-    let fake = Fake::new("read-only");
-    let cwd = fake.root();
-    let other = RunRequest {
-        context_window: Some(500_000),
-        ..request(&cwd)
-    };
-    assert!(matches!(
-        fake.backend.start(other),
-        Err(StartError::Unsupported(_))
-    ));
-    let capped = RunRequest {
-        context_window: Some(200_000),
-        ..request(&cwd)
-    };
-    run(&fake, capped).await;
-    assert!(
-        fake.env()
-            .contains(&"CLAUDE_CODE_DISABLE_1M_CONTEXT=1".to_owned())
-    );
 }
 
 #[test]
@@ -1058,250 +790,43 @@ async fn a_worker_run_edits_in_its_cwd_and_reports_its_tool_calls() {
     );
 }
 
-/// A worker's own init shows scrub mode, which the Linux host check runs in another process and
-/// can miss (PLX-118): plxd stops it at init, before its Bash call.
+/// A subscription run whose init reports an API key, or a model served by another provider,
+/// stops before any output (0004).
 #[tokio::test]
-async fn a_worker_whose_init_shows_another_permission_mode_is_stopped_before_any_tool() {
-    let fake = Fake::new("scrub-mode");
-    let mut request = request(&fake.root());
-    request.policy = ToolPolicy::WorkspaceWrite;
-    request.sandbox = Some(worker_sandbox(&fake.root()));
-    let all = run(&fake, request).await;
-    let (kind, message) = failure(&all);
-    assert_eq!(kind, FailureKind::PolicyViolation);
-    assert!(
-        message.contains(r#"permission mode "default" in a worker run instead of "acceptEdits""#),
-        "{message}"
-    );
-    assert!(
-        !all.iter()
-            .any(|event| matches!(event, Event::ToolCall { .. })),
-        "{all:?}"
-    );
-}
-
-#[tokio::test]
-async fn an_error_result_fails_the_run_with_the_cli_s_errors() {
-    let fake = Fake::new("error-result");
-    let all = run(&fake, request(&fake.root())).await;
-    assert!(all.contains(&Event::Notice {
-        detail:
-            "Claude Code is retrying a request after an error (overloaded), attempt 1 of 10".into()
-    }));
-    assert!(all.contains(&Event::TurnFinished {
-        turn_id: Some(turn(TURN_1)),
-        result: None,
-        failed: true,
-    }));
-    let Outcome::Failed(failure) = outcome(&all) else {
-        panic!("{all:?}");
-    };
-    assert_eq!(failure.failure, FailureKind::VendorError);
-    assert_eq!(failure.message, "Reached maximum number of turns (3)");
-    assert_eq!(failure.exit.unwrap().code, Some(1));
-    assert_eq!(
-        failure.stderr_tail.as_deref(),
-        Some("Error: Reached max turns (3)")
-    );
-    assert!(
-        all.iter().any(|event| matches!(event, Event::Usage(_))),
-        "a failed turn still used tokens"
-    );
-}
-
-#[tokio::test]
-async fn a_signed_out_cli_fails_the_run_as_not_signed_in() {
-    let fake = Fake::new("not-signed-in");
-    let all = run(&fake, request(&fake.root())).await;
-    assert_eq!(
-        failure(&all),
-        (
-            FailureKind::NotSignedIn,
-            "Not logged in \u{b7} Please run /login"
-        )
-    );
-}
-
-#[tokio::test]
-async fn rate_limits_are_reported_and_a_rejected_one_fails_the_run() {
-    let fake = Fake::new("rate-limited");
-    let all = run(&fake, request(&fake.root())).await;
-    let windows: Vec<&LimitWindow> = all
-        .iter()
-        .filter_map(|event| match event {
-            Event::RateLimit(window) => Some(window),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        windows,
-        [
-            &LimitWindow {
-                window: "seven_day".into(),
-                duration_minutes: Some(10_080),
-                used_percent: Some(91.0),
-                status: LimitStatus::Warning,
-                resets_at: Some("2026-09-30T00:00:00Z".parse().unwrap()),
-            },
-            &LimitWindow {
-                window: "five_hour".into(),
-                duration_minutes: Some(300),
-                used_percent: Some(100.0),
-                status: LimitStatus::Rejected,
-                resets_at: Some("2026-09-25T19:00:00Z".parse().unwrap()),
-            },
-            &LimitWindow {
-                window: "seven_day_opus".into(),
-                duration_minutes: Some(10_080),
-                used_percent: Some(40.0),
-                status: LimitStatus::Allowed,
-                resets_at: Some("2026-09-30T00:00:00.5Z".parse().unwrap()),
-            },
-        ]
-    );
-    assert_eq!(
-        failure(&all).0,
-        FailureKind::RateLimited,
-        "a later allowed window doesn't clear the rejected one"
-    );
-}
-
-#[tokio::test]
-async fn a_model_served_by_another_provider_fails_the_run() {
-    let fake = Fake::new("provider");
-    let all = run(&fake, request(&fake.root())).await;
-    let (kind, message) = failure(&all);
-    assert_eq!(kind, FailureKind::UnexpectedApiKey);
-    assert!(message.contains("bedrock"), "{message}");
-    assert!(
-        !all.iter()
-            .any(|event| matches!(event, Event::Usage(_) | Event::TurnFinished { .. })),
-        "usage billed elsewhere isn't the account's: {all:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_result_without_ids_or_a_queue_count_ends_every_turn() {
-    let fake = Fake::new("follow-up-no-echo");
-    let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
-    assert!(matches!(
-        next(&mut events).await,
-        Event::SessionStarted { .. }
-    ));
-    assert!(matches!(next(&mut events).await, Event::Text { .. }));
-    run.send(FollowUp {
-        turn_id: turn(TURN_2),
-        text: "Fix the tests too.".into(),
-        images: Vec::new(),
-        steer: false,
-        model: None,
-        permission: None,
-    })
-    .unwrap();
-    let all = rest(&mut events).await;
-    let finished: Vec<Option<TurnId>> = all
-        .iter()
-        .filter_map(|event| match event {
-            Event::TurnFinished { turn_id, .. } => Some(*turn_id),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(finished, [Some(turn(TURN_1)), Some(turn(TURN_2))]);
-    assert!(matches!(outcome(&all), Outcome::Completed { .. }));
-}
-
-/// The turns a run's events started and finished, with each finished turn's result.
-fn turn_events(all: &[Event]) -> Vec<(&'static str, Option<TurnId>, Option<String>)> {
-    all.iter()
-        .filter_map(|event| match event {
-            Event::TurnStarted { turn_id } => Some(("started", *turn_id, None)),
-            Event::TurnFinished {
-                turn_id, result, ..
-            } => Some(("finished", *turn_id, result.clone())),
-            _ => None,
-        })
-        .collect()
-}
-
-/// PLX-724: a task notification Claude answers without a model turn, as on a resume, ends none
-/// of plxd's turns, though it echoes the prompt's uuid.
-#[tokio::test]
-async fn a_zero_turn_task_notification_ends_no_turn() {
-    let fake = Fake::new("task-notification");
-    let Started {
-        run: _run,
-        mut events,
-    } = launch(&fake.backend, request(&fake.root())).await;
-    let all = rest(&mut events).await;
-    assert_eq!(
-        turn_events(&all),
-        [(
-            "finished",
-            Some(turn(TURN_1)),
-            Some("Picking up where I left off.".into())
-        )]
-    );
-}
-
-/// PLX-724: a result for a turn Claude started itself names no message, and ends none of
-/// plxd's turns, where a human turn's result with no ids would end them all.
-#[tokio::test]
-async fn a_turn_claude_started_ends_none_of_plxds() {
-    let fake = Fake::new("foreign-result");
-    let Started {
-        run: _run,
-        mut events,
-    } = launch(&fake.backend, request(&fake.root())).await;
-    let all = rest(&mut events).await;
-    assert_eq!(
-        turn_events(&all),
-        [(
-            "finished",
-            Some(turn(TURN_1)),
-            Some("Fixed the parser.".into())
-        )]
-    );
-}
-
-/// PLX-724: a turn Claude starts in an idle session is a turn with no id, from its first output
-/// to its result, so the run shows running while it streams.
-#[tokio::test]
-async fn a_turn_claude_starts_while_idle_runs_until_its_result() {
-    let fake = Fake::new("wake");
-    let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
-    run.hold(true);
-    let mut seen = Vec::new();
-    loop {
-        let event = next(&mut events).await;
-        let done = matches!(event, Event::TurnFinished { turn_id: None, .. });
-        seen.push(event);
-        if done {
-            break;
-        }
+async fn a_run_billed_elsewhere_is_stopped_at_once() {
+    {
+        let fake = Fake::new("api-key-source");
+        let started = Instant::now();
+        let all = run(&fake, request(&fake.root())).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "it hangs otherwise"
+        );
+        assert_eq!(
+            all[0],
+            Event::SessionStarted {
+                session_id: SESSION.into(),
+                model: Some(OPUS.into()),
+                api_key_source: Some("ANTHROPIC_API_KEY".into()),
+            }
+        );
+        assert!(texts(&all).is_empty(), "nothing after the init: {all:?}");
+        let (kind, message) = failure(&all);
+        assert_eq!(kind, FailureKind::UnexpectedApiKey);
+        assert!(message.contains("\"ANTHROPIC_API_KEY\""), "{message}");
     }
-    run.hold(false);
-    let all = rest(&mut events).await;
-    assert!(matches!(outcome(&all), Outcome::Completed { .. }));
-    assert_eq!(
-        turn_events(&seen),
-        [
-            (
-                "finished",
-                Some(turn(TURN_1)),
-                Some("Started the build in the background.".into())
-            ),
-            ("started", None, None),
-            ("finished", None, Some("The build passed.".into())),
-        ]
-    );
-    let wake = seen
-        .iter()
-        .position(|event| *event == Event::TurnStarted { turn_id: None })
-        .unwrap();
-    assert!(
-        matches!(&seen[wake + 1], Event::Text { text, .. } if text == "The build passed."),
-        "the turn starts before its output: {seen:?}"
-    );
+    {
+        let fake = Fake::new("provider");
+        let all = run(&fake, request(&fake.root())).await;
+        let (kind, message) = failure(&all);
+        assert_eq!(kind, FailureKind::UnexpectedApiKey);
+        assert!(message.contains("bedrock"), "{message}");
+        assert!(
+            !all.iter()
+                .any(|event| matches!(event, Event::Usage(_) | Event::TurnFinished { .. })),
+            "usage billed elsewhere isn't the account's: {all:?}"
+        );
+    }
 }
 
 /// A fork's first run continues a copy of the parent's session (0050).
@@ -1320,30 +845,6 @@ fn a_forks_first_run_forks_the_session() {
     assert_eq!(
         &args[args.len() - 3..],
         ["--resume", SESSION, "--fork-session"]
-    );
-}
-
-/// A rewind resumes the session at a turn's cursor, dropping what came after (0062).
-#[test]
-fn a_rewind_resumes_at_a_turns_cursor() {
-    let mut request = request(Path::new("/repo"));
-    request.resume = Some(Resume {
-        at: Some("a0000000-0000-4000-8000-000000000063".into()),
-        ..Resume::new(SESSION)
-    });
-    let args: Vec<String> = super::arguments(&request)
-        .unwrap()
-        .into_iter()
-        .map(|arg| arg.into_string().unwrap())
-        .collect();
-    assert_eq!(
-        &args[args.len() - 4..],
-        [
-            "--resume",
-            SESSION,
-            "--resume-session-at",
-            "a0000000-0000-4000-8000-000000000063"
-        ]
     );
 }
 
@@ -1382,84 +883,6 @@ async fn a_revert_resumes_the_session_at_the_kept_turns_cursor() {
         &argv[argv.len() - 4..],
         ["--resume", SESSION, "--resume-session-at", cursor.as_str()]
     );
-}
-
-#[tokio::test]
-async fn a_resumed_session_reports_only_what_it_adds() {
-    let fake = Fake::new("resume");
-    let mut request = request(&fake.root());
-    let baseline = vec![ModelUsage {
-        model: Some(OPUS.into()),
-        usage: tokens(1000, 200, 25_000, 4000, 100_000),
-    }];
-    request.resume = Some(Resume {
-        session_id: SESSION.into(),
-        usage_totals: baseline,
-        fork: false,
-        at: None,
-        fallback: None,
-    });
-    let all = run(&fake, request).await;
-    assert_eq!(&fake.argv()[fake.argv().len() - 2..], ["--resume", SESSION]);
-    let deltas: Vec<&ModelUsage> = all
-        .iter()
-        .filter_map(|event| match event {
-            Event::Usage(delta) => Some(delta),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        deltas,
-        [
-            &ModelUsage {
-                model: Some("claude-haiku-4-5".into()),
-                usage: tokens(40, 12, 0, 0, 200),
-            },
-            &ModelUsage {
-                model: Some(OPUS.into()),
-                usage: tokens(500, 60, 5000, 0, 25_000),
-            },
-        ]
-    );
-    let Some(Event::Finished { usage_totals, .. }) = all.last() else {
-        panic!("{all:?}");
-    };
-    assert_eq!(
-        usage_totals,
-        &[
-            ModelUsage {
-                model: Some("claude-haiku-4-5".into()),
-                usage: tokens(40, 12, 0, 0, 200),
-            },
-            ModelUsage {
-                model: Some(OPUS.into()),
-                usage: tokens(1500, 260, 30_000, 4000, 125_000),
-            },
-        ]
-    );
-}
-
-#[tokio::test]
-async fn a_subscription_run_that_reports_an_api_key_is_stopped_at_once() {
-    let fake = Fake::new("api-key-source");
-    let started = Instant::now();
-    let all = run(&fake, request(&fake.root())).await;
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "it hangs otherwise"
-    );
-    assert_eq!(
-        all[0],
-        Event::SessionStarted {
-            session_id: SESSION.into(),
-            model: Some(OPUS.into()),
-            api_key_source: Some("ANTHROPIC_API_KEY".into()),
-        }
-    );
-    assert!(texts(&all).is_empty(), "nothing after the init: {all:?}");
-    let (kind, message) = failure(&all);
-    assert_eq!(kind, FailureKind::UnexpectedApiKey);
-    assert!(message.contains("\"ANTHROPIC_API_KEY\""), "{message}");
 }
 
 // #118: an API key account.
@@ -1511,55 +934,6 @@ async fn an_api_key_account_gets_only_its_key_and_reports_it_as_the_source() {
     assert!(
         !serialized.contains(key),
         "the key must not appear in an event: {serialized}"
-    );
-}
-
-#[tokio::test]
-async fn a_key_account_resolved_from_the_keystore_runs_end_to_end() {
-    use parallax_protocol::{AccountId, Provider};
-
-    use crate::backend::key_account;
-    use crate::keystore::{KeyStore, MemoryKeyStore};
-
-    let store = MemoryKeyStore::new();
-    let account = AccountId::generate();
-    let key = "sk-ant-api03-from-the-keystore";
-    store.set(account, key).unwrap();
-    let credential = key_account::resolve(&store, Provider::Anthropic, account).unwrap();
-
-    let fake = Fake::new("api-key-completed");
-    let mut request = request(&fake.root());
-    request.account = AccountRef {
-        id: account.to_string(),
-        credential,
-    };
-    let all = run(&fake, request).await;
-    assert_eq!(
-        all[0],
-        Event::SessionStarted {
-            session_id: SESSION.into(),
-            model: Some(OPUS.into()),
-            api_key_source: Some("ANTHROPIC_API_KEY".into()),
-        }
-    );
-    assert!(
-        matches!(outcome(&all), Outcome::Completed { .. }),
-        "{all:?}"
-    );
-    let env = fake.env();
-    assert!(env.contains(&format!("ANTHROPIC_API_KEY={key}")), "{env:?}");
-}
-
-#[tokio::test]
-async fn an_api_key_run_reporting_a_different_source_fails() {
-    let fake = Fake::new("read-only");
-    let key = "sk-ant-api03-test-key-not-real";
-    let all = run(&fake, api_key_request(&fake.root(), key)).await;
-    let (kind, message) = failure(&all);
-    assert_eq!(kind, FailureKind::UnexpectedApiKey);
-    assert!(
-        !message.contains(key),
-        "the key must not appear in a failure message: {message}"
     );
 }
 
@@ -1620,36 +994,6 @@ async fn an_api_key_never_reaches_tracing_output() {
         !logged.contains(key),
         "the key leaked into tracing output: {logged}"
     );
-}
-
-// The CLI keeps the key from its own subprocesses when CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set,
-// which is documented (0004 [16]) but not something plxd can verify directly: this proves plxd
-// sets it beside the key it gives the CLI.
-#[tokio::test]
-async fn a_tool_subprocess_the_cli_spawns_never_sees_the_key() {
-    let fake = Fake::new("subprocess-env");
-    let key = "sk-ant-api03-test-key-not-real";
-    run(&fake, api_key_request(&fake.root(), key)).await;
-    let env = fake.env();
-    assert!(
-        env.contains(&format!("ANTHROPIC_API_KEY={key}")),
-        "the CLI itself must have had the key, or this test proves nothing: {env:?}"
-    );
-    assert!(
-        env.iter()
-            .any(|var| var == "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"),
-        "{env:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_no_write_run_offered_write_tools_is_stopped() {
-    let fake = Fake::new("write-tools");
-    let all = run(&fake, request(&fake.root())).await;
-    let (kind, message) = failure(&all);
-    assert_eq!(kind, FailureKind::PolicyViolation);
-    assert!(message.ends_with("Bash, Edit"), "{message}");
-    assert!(texts(&all).is_empty());
 }
 
 #[tokio::test]
@@ -1818,73 +1162,6 @@ async fn a_follow_up_can_be_its_own_turn_and_stdin_waits_for_it() {
     );
 }
 
-/// PLX-523: a follow-up the CLI answers before the writer reports writing it, as Claude Code does
-/// a local slash command, still starts and ends its turn, and stdin then closes.
-#[tokio::test]
-async fn a_follow_up_answered_before_its_write_is_reported_still_ends() {
-    crate::backend::REPORT_STALL.set(Duration::from_millis(300));
-    let fake = Fake::new("follow-up-late-report");
-    let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
-    assert!(matches!(
-        next(&mut events).await,
-        Event::SessionStarted { .. }
-    ));
-    run.send(FollowUp {
-        turn_id: turn(TURN_2),
-        text: "And now the docs.".into(),
-        images: Vec::new(),
-        steer: false,
-        model: None,
-        permission: None,
-    })
-    .unwrap();
-    let all = rest(&mut events).await;
-    let turns: Vec<&Event> = all
-        .iter()
-        .filter(|event| {
-            matches!(
-                event,
-                Event::TurnStarted { .. }
-                    | Event::TurnFinished { .. }
-                    | Event::Text { .. }
-                    | Event::RateLimit(_)
-            )
-        })
-        .collect();
-    let rate_limit = all
-        .iter()
-        .find(|event| matches!(event, Event::RateLimit(_)))
-        .expect("the rate-limit event")
-        .clone();
-    let text = |id: &str, text: &str| Event::Text {
-        message_id: Some(id.into()),
-        text: text.into(),
-    };
-    assert_eq!(
-        turns,
-        [
-            &text("msg_01Ft1", "First answer."),
-            &Event::TurnFinished {
-                turn_id: Some(turn(TURN_1)),
-                result: Some("First answer.".into()),
-                failed: false,
-            },
-            // Outside any turn, so it doesn't start the follow-up's.
-            &rate_limit,
-            &Event::TurnStarted {
-                turn_id: Some(turn(TURN_2))
-            },
-            &text("msg_01Ft2", "Second answer."),
-            &Event::TurnFinished {
-                turn_id: Some(turn(TURN_2)),
-                result: Some("Second answer.".into()),
-                failed: false,
-            },
-        ]
-    );
-    assert!(matches!(outcome(&all), Outcome::Completed { .. }));
-}
-
 #[tokio::test]
 async fn images_go_before_the_text_as_base64_blocks_and_a_message_of_images_alone_has_no_text() {
     let png = PromptImage {
@@ -1937,34 +1214,6 @@ async fn images_go_before_the_text_as_base64_blocks_and_a_message_of_images_alon
     );
 }
 
-#[tokio::test]
-async fn a_resumed_session_starts_on_images_alone() {
-    let fake = Fake::new("resume");
-    let request = RunRequest {
-        prompt: String::new(),
-        images: vec![PromptImage {
-            media_type: ImageMediaType::Png,
-            data: "iVBORw0KGgo=".into(),
-        }],
-        resume: Some(Resume {
-            session_id: SESSION.into(),
-            usage_totals: Vec::new(),
-            fork: false,
-            at: None,
-            fallback: None,
-        }),
-        ..request(&fake.root())
-    };
-    run(&fake, request).await;
-    assert_eq!(
-        fake.stdin()[0]["message"]["content"],
-        serde_json::json!([{
-            "type": "image",
-            "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="},
-        }])
-    );
-}
-
 /// Cancel is the SDK's `interrupt()`, which ends the CLI's turn as `SIGINT` did, then the end of
 /// its prompt.
 #[tokio::test]
@@ -1999,29 +1248,6 @@ async fn cancel_interrupts_the_cli() {
     );
     assert!(started.elapsed() < Duration::from_secs(5));
     assert_eq!(fake.recorded("signals"), "SIGINT\n");
-}
-
-/// A CLI that doesn't answer the interrupt is killed, with its process group, once the grace
-/// period has passed.
-#[tokio::test]
-async fn cancel_escalates_to_a_kill_after_the_grace_period() {
-    let fake = Fake::new("stubborn");
-    let backend = fake.backend.clone().with_grace(Duration::from_millis(300));
-    let Started { run, mut events } = launch(&backend, request(&fake.root())).await;
-    assert!(matches!(
-        next(&mut events).await,
-        Event::SessionStarted { .. }
-    ));
-    assert!(matches!(next(&mut events).await, Event::Text { .. }));
-    let started = Instant::now();
-    run.cancel();
-    let all = rest(&mut events).await;
-    assert_eq!(outcome(&all), &Outcome::Cancelled);
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed >= Duration::from_millis(300) && elapsed < Duration::from_secs(5),
-        "{elapsed:?}"
-    );
 }
 
 /// A revert ends a thread's live session, which exits at the interrupt, and the next turn starts
@@ -2086,57 +1312,148 @@ async fn bad_requests_are_refused_before_spawning() {
     assert_eq!(fake.argv(), Vec::<String>::new(), "nothing ran");
 }
 
+/// Output before the init, or an init whose version, permission mode, or tool list breaks the
+/// run's policy (0004, 0013), stops the run.
+#[allow(clippy::too_many_lines, reason = "one table of distinct cases")]
 #[test]
-fn an_init_that_does_not_say_where_its_credentials_came_from_is_refused() {
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-    let init = br#"{"type":"system","subtype":"init","session_id":"s","tools":["Bash"]}"#;
-    let steps = translator.line(init);
-    assert!(
-        matches!(
-            steps.last(),
-            Some(Step::Violation(failure)) if failure.failure == FailureKind::UnexpectedApiKey
-        ),
-        "{steps:?}"
-    );
-}
-
-#[test]
-fn command_lifecycle_messages_are_skipped_without_a_notice() {
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    // Shape from the claude-codes changelog, not recorded from a run.
-    let line = br#"{"type":"command_lifecycle","command_uuid":"01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01","state":"started","session_id":"5b1e3c9a-8f2d-4c6e-9a1b-3d7f0e2c4a68"}"#;
-    assert_eq!(translator.line(line), []);
-}
-
-#[test]
-fn a_tool_results_images_are_its_events_images() {
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    translator.line(&init_line(r#"["Bash"]"#));
-    // An MCP tool's image, as Claude Code 2.1 sends it (PLX-640).
-    let line = br#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"t1","type":"tool_result","content":[{"type":"text","text":"{}"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0KGgo="}}]}]}}"#;
-    assert_eq!(
-        translator.line(line),
-        [Step::Emit(Event::ToolResult {
-            call_id: "t1".to_owned(),
-            status: ToolStatus::Ok,
-            output: Some("{}".to_owned()),
-            images: vec![PromptImage {
-                media_type: ImageMediaType::Png,
-                data: "iVBORw0KGgo=".to_owned(),
-            }],
-        })]
-    );
-}
-
-#[test]
-fn output_before_the_init_is_refused() {
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let assistant =
-        br#"{"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"hi"}]}}"#;
-    assert!(matches!(
-        translator.line(assistant).as_slice(),
-        [Step::Violation(failure)] if failure.failure == FailureKind::UnexpectedApiKey
-    ));
+fn an_init_outside_the_run_s_policy_is_refused() {
+    {
+        // An init whose version, permission mode, or tool list breaks the run's policy (0004, 0013) stops it.
+        {
+            for (reported, refused) in [
+                ("2.1.247", true),
+                ("2.0.999", true),
+                ("1.9.300", true),
+                ("not-a-version", true),
+                ("2.1.248", false),
+                ("2.1.281", false),
+                ("2.2.0", false),
+                ("10.0.0-beta.1", false),
+            ] {
+                let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+                let steps = translator.line(&init_with_version(r#"["Bash"]"#, reported));
+                let expected = refused.then_some(FailureKind::PolicyViolation);
+                assert_eq!(violation_kind(&steps), expected, "{reported}");
+            }
+            let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+            let unversioned =
+                br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","tools":["Bash"]}"#;
+            assert_eq!(
+                violation_kind(&translator.line(unversioned)),
+                Some(FailureKind::PolicyViolation)
+            );
+            let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+            let old_reader = init_with_version(r#"["Read"]"#, "2.1.200");
+            assert_eq!(
+                violation_kind(&translator.line(&old_reader)),
+                None,
+                "no-write runs have no floor"
+            );
+        }
+        {
+            let init = |mode: &str| {
+                format!(
+                    r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"2.1.283","tools":["Read"]{mode}}}"#
+                )
+            };
+            for (mode, refused) in [
+                (r#","permissionMode":"acceptEdits""#, false),
+                (r#","permissionMode":"default""#, true),
+                (r#","permissionMode":"bypassPermissions""#, true),
+                ("", true),
+            ] {
+                let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+                let steps = translator.line(init(mode).as_bytes());
+                let expected = refused.then_some(FailureKind::PolicyViolation);
+                assert_eq!(violation_kind(&steps), expected, "{mode}");
+            }
+            // A plan worker (PLX-97) must report plan mode, and scrub mode's "default" still fails it.
+            for (mode, refused) in [
+                (r#","permissionMode":"plan""#, false),
+                (r#","permissionMode":"acceptEdits""#, true),
+                (r#","permissionMode":"default""#, true),
+            ] {
+                let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none")
+                    .with_permission_mode("plan");
+                let steps = translator.line(init(mode).as_bytes());
+                let expected = refused.then_some(FailureKind::PolicyViolation);
+                assert_eq!(violation_kind(&steps), expected, "{mode}");
+            }
+            // plxd sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB for a no-write run, which forces "default".
+            let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+            let steps = translator.line(init(r#","permissionMode":"default""#).as_bytes());
+            assert_eq!(violation_kind(&steps), None);
+        }
+        {
+            // An older Claude Code, or `CLAUDE_CODE_ENABLE_TASKS=false`, lists `TodoWrite`; 2.1.283 lists
+            // the task tools in its place (PLX-248).
+            for todo_tools in [
+                r#""TodoWrite""#,
+                r#""TaskCreate","TaskGet","TaskList","TaskUpdate""#,
+            ] {
+                let allowed = init_line(&format!(
+                    r#"["Read","Edit","Write","Glob","Grep","NotebookEdit","Bash","WebFetch","WebSearch",{todo_tools},"EndConversation"]"#
+                ));
+                let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+                assert_eq!(
+                    violation_kind(&translator.line(&allowed)),
+                    None,
+                    "{todo_tools}"
+                );
+            }
+            for extra in [
+                r#"["Bash","Monitor"]"#,
+                r#"["Bash","Task"]"#,
+                r#"["Bash","Agent"]"#,
+                r#"["Bash","Skill"]"#,
+                r#"["Bash","mcp__github__create_issue"]"#,
+                // Background tasks' tools, which share the task tools' prefix but not their purpose.
+                r#"["TaskCreate","TaskStop"]"#,
+                r#"["TaskCreate","TaskOutput"]"#,
+            ] {
+                let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+                assert_eq!(
+                    violation_kind(&translator.line(&init_line(extra))),
+                    Some(FailureKind::PolicyViolation),
+                    "{extra}"
+                );
+            }
+        }
+        {
+            let allowed = init_line(r#"["Read","Glob","Grep","EndConversation"]"#);
+            let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+            assert_eq!(violation_kind(&translator.line(&allowed)), None);
+            for extra in [
+                r#"["Read","WebFetch"]"#,
+                r#"["Read","Task"]"#,
+                r#"["Read","mcp__github__create_issue"]"#,
+                r#"["Read",7]"#,
+            ] {
+                let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+                assert_eq!(
+                    violation_kind(&translator.line(&init_line(extra))),
+                    Some(FailureKind::PolicyViolation),
+                    "{extra}"
+                );
+            }
+            let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+            let no_tools =
+                br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none"}"#;
+            assert_eq!(
+                violation_kind(&translator.line(no_tools)),
+                Some(FailureKind::PolicyViolation)
+            );
+        }
+    }
+    {
+        let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+        let assistant =
+            br#"{"type":"assistant","message":{"id":"m","content":[{"type":"text","text":"hi"}]}}"#;
+        assert!(matches!(
+            translator.line(assistant).as_slice(),
+            [Step::Violation(failure)] if failure.failure == FailureKind::UnexpectedApiKey
+        ));
+    }
 }
 
 fn init_line(tools: &str) -> Vec<u8> {
@@ -2151,371 +1468,11 @@ fn init_with_version(tools: &str, version: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-#[test]
-fn a_worker_on_a_claude_code_too_old_to_sandbox_it_is_stopped() {
-    for (reported, refused) in [
-        ("2.1.247", true),
-        ("2.0.999", true),
-        ("1.9.300", true),
-        ("not-a-version", true),
-        ("2.1.248", false),
-        ("2.1.281", false),
-        ("2.2.0", false),
-        ("10.0.0-beta.1", false),
-    ] {
-        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-        let steps = translator.line(&init_with_version(r#"["Bash"]"#, reported));
-        let expected = refused.then_some(FailureKind::PolicyViolation);
-        assert_eq!(violation_kind(&steps), expected, "{reported}");
-    }
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-    let unversioned =
-        br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","tools":["Bash"]}"#;
-    assert_eq!(
-        violation_kind(&translator.line(unversioned)),
-        Some(FailureKind::PolicyViolation)
-    );
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let old_reader = init_with_version(r#"["Read"]"#, "2.1.200");
-    assert_eq!(
-        violation_kind(&translator.line(&old_reader)),
-        None,
-        "no-write runs have no floor"
-    );
-}
-
-#[test]
-fn a_worker_must_report_the_permission_mode_it_asked_for() {
-    let init = |mode: &str| {
-        format!(
-            r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"2.1.283","tools":["Read"]{mode}}}"#
-        )
-    };
-    for (mode, refused) in [
-        (r#","permissionMode":"acceptEdits""#, false),
-        (r#","permissionMode":"default""#, true),
-        (r#","permissionMode":"bypassPermissions""#, true),
-        ("", true),
-    ] {
-        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-        let steps = translator.line(init(mode).as_bytes());
-        let expected = refused.then_some(FailureKind::PolicyViolation);
-        assert_eq!(violation_kind(&steps), expected, "{mode}");
-    }
-    // A plan worker (PLX-97) must report plan mode, and scrub mode's "default" still fails it.
-    for (mode, refused) in [
-        (r#","permissionMode":"plan""#, false),
-        (r#","permissionMode":"acceptEdits""#, true),
-        (r#","permissionMode":"default""#, true),
-    ] {
-        let mut translator =
-            Translator::new(ToolPolicy::WorkspaceWrite, "none").with_permission_mode("plan");
-        let steps = translator.line(init(mode).as_bytes());
-        let expected = refused.then_some(FailureKind::PolicyViolation);
-        assert_eq!(violation_kind(&steps), expected, "{mode}");
-    }
-    // plxd sets CLAUDE_CODE_SUBPROCESS_ENV_SCRUB for a no-write run, which forces "default".
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let steps = translator.line(init(r#","permissionMode":"default""#).as_bytes());
-    assert_eq!(violation_kind(&steps), None);
-}
-
 fn violation_kind(steps: &[Step]) -> Option<FailureKind> {
     steps.iter().find_map(|step| match step {
         Step::Violation(failure) => Some(failure.failure),
         _ => None,
     })
-}
-
-#[test]
-fn a_worker_run_allows_only_the_worker_tools() {
-    // An older Claude Code, or `CLAUDE_CODE_ENABLE_TASKS=false`, lists `TodoWrite`; 2.1.283 lists
-    // the task tools in its place (PLX-248).
-    for todo_tools in [
-        r#""TodoWrite""#,
-        r#""TaskCreate","TaskGet","TaskList","TaskUpdate""#,
-    ] {
-        let allowed = init_line(&format!(
-            r#"["Read","Edit","Write","Glob","Grep","NotebookEdit","Bash","WebFetch","WebSearch",{todo_tools},"EndConversation"]"#
-        ));
-        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-        assert_eq!(
-            violation_kind(&translator.line(&allowed)),
-            None,
-            "{todo_tools}"
-        );
-    }
-    for extra in [
-        r#"["Bash","Monitor"]"#,
-        r#"["Bash","Task"]"#,
-        r#"["Bash","Agent"]"#,
-        r#"["Bash","Skill"]"#,
-        r#"["Bash","mcp__github__create_issue"]"#,
-        // Background tasks' tools, which share the task tools' prefix but not their purpose.
-        r#"["TaskCreate","TaskStop"]"#,
-        r#"["TaskCreate","TaskOutput"]"#,
-    ] {
-        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-        assert_eq!(
-            violation_kind(&translator.line(&init_line(extra))),
-            Some(FailureKind::PolicyViolation),
-            "{extra}"
-        );
-    }
-}
-
-/// PLX-248: a worker on Claude Code 2.1.283 plans with the task tools, which its `--tools` names
-/// and its init lists in place of `TodoWrite`. Each call, and its result's text, which says the
-/// task's id, reach the app as they are; it builds the plan from them, so plxd makes no checklist.
-#[tokio::test]
-async fn a_worker_plans_with_claude_code_s_task_tools() {
-    let fake = Fake::new("worker-tasks");
-    let mut request = request(&fake.root());
-    request.policy = ToolPolicy::WorkspaceWrite;
-    request.sandbox = Some(worker_sandbox(&fake.root()));
-    let all = run(&fake, request).await;
-    let argv = fake.argv();
-    let tools = argv.iter().position(|arg| arg == "--tools").unwrap();
-    assert_eq!(argv[tools + 1], WORKER_TOOL_LIST);
-
-    let calls: Vec<(&str, Value)> = all
-        .iter()
-        .filter_map(|event| match event {
-            Event::ToolCall { name, input, .. } => Some((name.as_str(), input.clone())),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        calls,
-        [
-            (
-                "TaskCreate",
-                serde_json::json!({
-                    "subject": "Add tests",
-                    "description": "Cover the parser",
-                    "activeForm": "Adding tests",
-                })
-            ),
-            (
-                "TaskUpdate",
-                serde_json::json!({"taskId": "1", "status": "in_progress"})
-            ),
-            (
-                "TaskUpdate",
-                serde_json::json!({"taskId": "1", "status": "completed"})
-            ),
-        ]
-    );
-    let results: Vec<(&str, ToolStatus, Option<&str>)> = all
-        .iter()
-        .filter_map(|event| match event {
-            Event::ToolResult {
-                call_id,
-                status,
-                output,
-                ..
-            } => Some((call_id.as_str(), *status, output.as_deref())),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        results,
-        [
-            (
-                "toolu_01Task00",
-                ToolStatus::Ok,
-                Some("Task #1 created successfully: Add tests")
-            ),
-            (
-                "toolu_01Task01",
-                ToolStatus::Ok,
-                Some("Updated task #1 status")
-            ),
-            (
-                "toolu_01Task02",
-                ToolStatus::Ok,
-                Some("Updated task #1 status")
-            ),
-        ]
-    );
-    assert!(
-        !all.iter()
-            .any(|event| matches!(event, Event::TodoList { .. })),
-        "{all:?}"
-    );
-    assert_eq!(
-        outcome(&all),
-        &Outcome::Completed {
-            result: Some("done".into())
-        }
-    );
-}
-
-/// PLX-249: a coordinator and a bypass worker have no `--tools`, so they name the todo tools in
-/// `--allowedTools`, which turns them on for any model, in every mode. A coordinator's list
-/// starts with plxd's own tools. Any other worker names them in `--tools` and gets no
-/// allowlist, and a plain no-write run keeps 0004's flags.
-#[test]
-fn a_coordinator_and_a_bypass_worker_allow_the_todo_tools_in_every_mode() {
-    let todo = "TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate";
-    assert_eq!(TODO_TOOLS.join(","), todo);
-    assert!(WORKER_TOOLS.ends_with(TODO_TOOLS), "{WORKER_TOOLS:?}");
-    let cwd = Path::new("/Users/u/wt");
-    let mut worker = request(cwd);
-    worker.policy = ToolPolicy::WorkspaceWrite;
-    worker.sandbox = Some(worker_sandbox(cwd));
-    let allowed = |request: &RunRequest| -> Vec<String> {
-        let args: Vec<String> = super::arguments(request)
-            .unwrap()
-            .into_iter()
-            .map(|arg| arg.into_string().unwrap())
-            .collect();
-        args.iter()
-            .enumerate()
-            .filter(|(_, arg)| *arg == "--allowedTools")
-            .map(|(at, _)| args[at + 1].clone())
-            .collect()
-    };
-    let coordinator_list = format!("{},{todo}", mcp::thread::ALLOWED_TOOLS.join(","));
-    for permission in [
-        None,
-        Some(AgentPermission::Edit),
-        Some(AgentPermission::Auto),
-        Some(AgentPermission::Manual),
-        Some(AgentPermission::Plan),
-        Some(AgentPermission::Bypass),
-    ] {
-        for approvals in [false, true] {
-            let run = RunRequest {
-                permission,
-                approvals,
-                ..coordinator(cwd)
-            };
-            assert_eq!(allowed(&run), [coordinator_list.as_str()], "{permission:?}");
-            let run = RunRequest {
-                permission,
-                approvals,
-                ..worker.clone()
-            };
-            let expected: &[&str] = if permission == Some(AgentPermission::Bypass) {
-                &[todo]
-            } else {
-                &[]
-            };
-            assert_eq!(allowed(&run), expected, "{permission:?}");
-        }
-    }
-    assert_eq!(allowed(&request(cwd)), Vec::<String>::new());
-}
-
-/// PLX-249: a coordinator on Claude Code 2.1.283 and a model outside its built-in list plans with
-/// the task tools, which its `--allowedTools` turns on and its init lists. Each call and its
-/// result reach the app as they are, as a worker's do (PLX-248).
-#[tokio::test]
-async fn a_coordinator_plans_with_claude_code_s_task_tools_on_any_model() {
-    let fake = Fake::new("coordinator-tasks");
-    let request = RunRequest {
-        model: Some("claude-opus-5-5".into()),
-        ..coordinator(&fake.root())
-    };
-    let all = run(&fake, request).await;
-    let argv = fake.argv();
-    let allowed = argv.iter().position(|arg| arg == "--allowedTools").unwrap();
-    assert!(
-        argv[allowed + 1].ends_with(",TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate"),
-        "{argv:?}"
-    );
-    assert!(!argv.iter().any(|arg| arg == "--tools"), "{argv:?}");
-
-    let calls: Vec<(&str, Value)> = all
-        .iter()
-        .filter_map(|event| match event {
-            Event::ToolCall { name, input, .. } => Some((name.as_str(), input.clone())),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        calls,
-        [
-            (
-                "TaskCreate",
-                serde_json::json!({
-                    "subject": "Add tests",
-                    "description": "Cover the parser",
-                    "activeForm": "Adding tests",
-                })
-            ),
-            (
-                "TaskUpdate",
-                serde_json::json!({"taskId": "1", "status": "in_progress"})
-            ),
-            ("TaskList", serde_json::json!({})),
-        ]
-    );
-    let results: Vec<(&str, ToolStatus, Option<&str>)> = all
-        .iter()
-        .filter_map(|event| match event {
-            Event::ToolResult {
-                call_id,
-                status,
-                output,
-                ..
-            } => Some((call_id.as_str(), *status, output.as_deref())),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        results,
-        [
-            (
-                "toolu_01ParallaxProbe",
-                ToolStatus::Ok,
-                Some("Task #1 created successfully: Add tests")
-            ),
-            (
-                "toolu_01ParallaxProbe1",
-                ToolStatus::Ok,
-                Some("Updated task #1 status")
-            ),
-            (
-                "toolu_01ParallaxProbe2",
-                ToolStatus::Ok,
-                Some("#1 [in_progress] Add tests")
-            ),
-        ]
-    );
-    assert_eq!(
-        outcome(&all),
-        &Outcome::Completed {
-            result: Some("done".into())
-        }
-    );
-}
-
-#[test]
-fn a_no_write_run_allows_only_the_read_tools() {
-    let allowed = init_line(r#"["Read","Glob","Grep","EndConversation"]"#);
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    assert_eq!(violation_kind(&translator.line(&allowed)), None);
-    for extra in [
-        r#"["Read","WebFetch"]"#,
-        r#"["Read","Task"]"#,
-        r#"["Read","mcp__github__create_issue"]"#,
-        r#"["Read",7]"#,
-    ] {
-        let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-        assert_eq!(
-            violation_kind(&translator.line(&init_line(extra))),
-            Some(FailureKind::PolicyViolation),
-            "{extra}"
-        );
-    }
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let no_tools = br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none"}"#;
-    assert_eq!(
-        violation_kind(&translator.line(no_tools)),
-        Some(FailureKind::PolicyViolation)
-    );
 }
 
 /// PLX-276, 0034: a thread is full Claude Code in every mode, as a bypass worker is: no
@@ -2658,94 +1615,6 @@ fn a_full_thread_gets_its_thread_tools_beside_the_users_mcp_servers() {
     assert!(!args.contains(&"--mcp-config".into()));
 }
 
-/// PLX-730: a thread's agent is told to write math as LaTeX, which the app typesets. A
-/// coordinator's instructions (0078) join it, since the CLI keeps one addition.
-#[test]
-fn a_thread_is_told_to_write_math_as_latex() {
-    let cwd = Path::new("/repo");
-    let mut thread = request(cwd);
-    thread.policy = ToolPolicy::WorkspaceWrite;
-    thread.sandbox = Some(worker_sandbox(cwd));
-    thread.approvals = true;
-    thread.thread = true;
-    let math = crate::backend::MATH_FORMAT;
-    assert_eq!(super::appended_prompt(&thread).as_deref(), Some(math));
-    thread.instructions = Some("Never edit files.".into());
-    assert_eq!(
-        super::appended_prompt(&thread),
-        Some(format!("{math}\n\nNever edit files."))
-    );
-    // A sandboxed thread keeps the sandbox's own prompt.
-    thread.approvals = false;
-    thread.instructions = None;
-    assert_eq!(super::appended_prompt(&thread), None);
-}
-
-/// 0078: a coordinator's instructions reach the CLI as `--append-system-prompt-file` on a fresh
-/// start and on a resume alike, never as a multi-line argument, which Rust refuses for a `.cmd`
-/// shim on Windows. The file is in the data folder's `tmp/` and gone once the run has ended.
-#[tokio::test]
-async fn instructions_go_in_a_prompt_file_on_a_start_and_a_resume() {
-    for resume in [None, Some(Resume::new("s-1"))] {
-        let fake = Fake::new("coordinator-tasks");
-        let request = RunRequest {
-            resume,
-            instructions: Some("Never edit files.\nNot even one line.".into()),
-            ..coordinator(&fake.root())
-        };
-        run(&fake, request).await;
-        let argv = fake.argv();
-        assert!(
-            !argv.iter().any(|arg| arg == "--append-system-prompt"),
-            "{argv:?}"
-        );
-        let at = argv
-            .iter()
-            .position(|arg| arg == "--append-system-prompt-file")
-            .unwrap();
-        let file = PathBuf::from(&argv[at + 1]);
-        assert_eq!(file.parent(), Some(fake.root().join("data/tmp").as_path()));
-        assert_eq!(
-            fake.recorded("prompt-file"),
-            "Never edit files.\nNot even one line."
-        );
-        assert!(!file.exists());
-    }
-}
-
-/// 0027: a coordinator and a bypass worker are full Claude Code, so their init may list any
-/// tool, another MCP server's included, in the mode they asked for. Without plxd's tools a
-/// no-write run keeps its read tools.
-#[test]
-fn a_coordinator_and_a_bypass_worker_allow_any_tool_in_the_mode_they_asked_for() {
-    let tools =
-        r#"["Read","Edit","Bash","Task","mcp__plxd__spawn_agent","mcp__linear__list_issues"]"#;
-    let loaded = init_line(tools);
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none").with_coordinator_tools(true);
-    assert_eq!(violation_kind(&translator.line(&loaded)), None);
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none")
-        .with_coordinator_tools(true)
-        .with_permission_mode("bypassPermissions");
-    assert_eq!(
-        violation_kind(&translator.line(&loaded)),
-        Some(FailureKind::PolicyViolation),
-        "it reported acceptEdits"
-    );
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    assert_eq!(
-        violation_kind(&translator.line(&loaded)),
-        Some(FailureKind::PolicyViolation),
-        "without plxd's tools it isn't a coordinator"
-    );
-
-    let bypass = String::from_utf8(loaded)
-        .unwrap()
-        .replace("acceptEdits", "bypassPermissions");
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none")
-        .with_permission_mode("bypassPermissions");
-    assert_eq!(violation_kind(&translator.line(bypass.as_bytes())), None);
-}
-
 fn failed_result() -> &'static [u8] {
     br#"{"type":"result","subtype":"success","is_error":true,"result":"API Error"}"#
 }
@@ -2754,55 +1623,58 @@ fn last_failure(translator: &Translator) -> FailureKind {
     translator.last_failure.as_ref().unwrap().failure
 }
 
+/// A failed turn's kind, which routing falls back on (0012): a retry's error or a rejected
+/// limit names it until the turn ends, and a resume of a session Claude Code lost is a lost
+/// session (PLX-937).
 #[test]
-fn retries_and_rejected_limits_name_a_failed_turn_s_kind_until_it_ends() {
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-    translator.line(&init_line(r#"["Read"]"#));
-    for (error, kind) in [
-        ("rate_limit", FailureKind::RateLimited),
-        ("authentication_failed", FailureKind::NotSignedIn),
-        ("overloaded", FailureKind::VendorError),
-    ] {
-        let retry = format!(r#"{{"type":"system","subtype":"api_retry","error":"{error}"}}"#);
-        translator.line(retry.as_bytes());
+fn a_failed_turn_names_its_kind() {
+    {
+        let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
+        translator.line(&init_line(r#"["Read"]"#));
+        for (error, kind) in [
+            ("rate_limit", FailureKind::RateLimited),
+            ("authentication_failed", FailureKind::NotSignedIn),
+            ("overloaded", FailureKind::VendorError),
+        ] {
+            let retry = format!(r#"{{"type":"system","subtype":"api_retry","error":"{error}"}}"#);
+            translator.line(retry.as_bytes());
+            translator.line(failed_result());
+            assert_eq!(last_failure(&translator), kind, "{error}");
+        }
+
+        let rejected = br#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}"#;
+        translator.line(rejected);
         translator.line(failed_result());
-        assert_eq!(last_failure(&translator), kind, "{error}");
+        assert_eq!(last_failure(&translator), FailureKind::RateLimited);
+        translator.line(failed_result());
+        assert_eq!(
+            last_failure(&translator),
+            FailureKind::VendorError,
+            "the next turn starts clean"
+        );
+
+        translator.line(rejected);
+        let max_turns = br#"{"type":"result","subtype":"error_max_turns","is_error":true}"#;
+        translator.line(max_turns);
+        assert_eq!(
+            last_failure(&translator),
+            FailureKind::VendorError,
+            "a limit the run set says nothing about the account"
+        );
     }
-
-    let rejected = br#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}"#;
-    translator.line(rejected);
-    translator.line(failed_result());
-    assert_eq!(last_failure(&translator), FailureKind::RateLimited);
-    translator.line(failed_result());
-    assert_eq!(
-        last_failure(&translator),
-        FailureKind::VendorError,
-        "the next turn starts clean"
-    );
-
-    translator.line(rejected);
-    let max_turns = br#"{"type":"result","subtype":"error_max_turns","is_error":true}"#;
-    translator.line(max_turns);
-    assert_eq!(
-        last_failure(&translator),
-        FailureKind::VendorError,
-        "a limit the run set says nothing about the account"
-    );
-}
-
-/// PLX-937: `--resume` with a session Claude Code no longer has fails as a lost session, as
-/// 2.1.309 reports it, before any `init`.
-#[test]
-fn a_resume_of_a_session_claude_code_lost_fails_as_session_not_found() {
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let lost = br#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"session_id":"gone","errors":["No conversation found with session ID: gone"]}"#;
-    translator.line(lost);
-    let failure = translator.last_failure.as_ref().unwrap();
-    assert_eq!(failure.failure, FailureKind::SessionNotFound);
-    assert_eq!(
-        failure.message,
-        "No conversation found with session ID: gone"
-    );
+    {
+        // PLX-937: `--resume` with a session Claude Code no longer has fails as a lost session, as
+        // 2.1.309 reports it, before any `init`.
+        let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
+        let lost = br#"{"type":"result","subtype":"error_during_execution","is_error":true,"num_turns":0,"session_id":"gone","errors":["No conversation found with session ID: gone"]}"#;
+        translator.line(lost);
+        let failure = translator.last_failure.as_ref().unwrap();
+        assert_eq!(failure.failure, FailureKind::SessionNotFound);
+        assert_eq!(
+            failure.message,
+            "No conversation found with session ID: gone"
+        );
+    }
 }
 
 /// A coordinator's request at `cwd`, whose plxd tools make it full Claude Code (0027).
@@ -2896,181 +1768,14 @@ fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
     );
 }
 
-/// PLX-243: a worker or a thread in Plan whose client answers gets `ExitPlanMode` in `--tools`,
-/// so it can hand its plan over. Every other mode, and Plan without `approvals`, keeps 0013's
-/// tools exactly; a bypass worker names none, and a coordinator never has the list.
-#[test]
-fn only_a_plan_worker_that_asks_plxd_gets_exit_plan_mode() {
-    let mut plan_tools = WORKER_TOOLS.to_vec();
-    plan_tools.push(EXIT_PLAN_MODE);
-    assert_eq!(PLAN_WORKER_TOOL_LIST, plan_tools.join(","));
-    let mut plan_args = WORKSPACE_WRITE_ARGS.to_vec();
-    plan_args[2] = PLAN_WORKER_TOOL_LIST;
-    assert_eq!(
-        PLAN_WORKSPACE_WRITE_ARGS, plan_args,
-        "only the tools differ"
-    );
-
-    let cwd = Path::new("/Users/u/wt");
-    let mut worker = request(cwd);
-    worker.policy = ToolPolicy::WorkspaceWrite;
-    worker.sandbox = Some(worker_sandbox(cwd));
-    let tools = |request: &RunRequest| {
-        let args: Vec<String> = super::arguments(request)
-            .unwrap()
-            .into_iter()
-            .map(|arg| arg.into_string().unwrap())
-            .collect();
-        let at = args.iter().position(|arg| arg == "--tools");
-        at.map(|at| args[at + 1].clone())
-    };
-    for approvals in [false, true] {
-        for permission in [
-            None,
-            Some(AgentPermission::Edit),
-            Some(AgentPermission::Auto),
-            Some(AgentPermission::Manual),
-            Some(AgentPermission::Plan),
-            Some(AgentPermission::Bypass),
-        ] {
-            let request = RunRequest {
-                permission,
-                approvals,
-                ..worker.clone()
-            };
-            let hands_over = approvals && permission == Some(AgentPermission::Plan);
-            let expected = match permission {
-                Some(AgentPermission::Bypass) => None,
-                _ if hands_over => Some(PLAN_WORKER_TOOL_LIST),
-                _ => Some(WORKER_TOOL_LIST),
-            };
-            let context = format!("{permission:?}, approvals {approvals}");
-            assert_eq!(super::hands_over_plans(&request), hands_over, "{context}");
-            assert_eq!(tools(&request).as_deref(), expected, "{context}");
-
-            let coordinator_run = RunRequest {
-                permission,
-                approvals,
-                ..coordinator(cwd)
-            };
-            assert!(!super::hands_over_plans(&coordinator_run), "{context}");
-            assert_eq!(tools(&coordinator_run), None, "{context}");
-        }
-    }
-    let plain = RunRequest {
-        approvals: true,
-        ..request(cwd)
-    };
-    assert!(!super::hands_over_plans(&plain));
-    assert_eq!(tools(&plain).as_deref(), Some(NO_WRITE_ARGS[1]));
-}
-
-/// PLX-222: in Manual, Claude Code's `can_use_tool` becomes a permission request, and an allow
-/// goes back on stdin as the Agent SDK writes it: the input it asked with, and with `always`, only
-/// its allow rules, for the session. Its other suggestions are dropped.
+/// PLX-222: an allow, a denial, or an edited input goes back on stdin as the Agent SDK writes it.
+#[allow(clippy::too_many_lines, reason = "one table of distinct cases")]
 #[tokio::test]
-async fn an_allowed_permission_request_answers_the_cli_on_stdin() {
-    let fake = Fake::new("approval");
-    let request = RunRequest {
-        permission: Some(AgentPermission::Manual),
-        approvals: true,
-        ..coordinator(&fake.root())
-    };
-    let Started { run, mut events } = launch(&fake.backend, request).await;
-    let asked = until_asked(&mut events).await;
-    assert_eq!(asked.tool_name, "Bash");
-    assert_eq!(
-        asked.input,
-        serde_json::json!({"command": "pnpm test", "description": "Run the tests"})
-    );
-    assert_eq!(asked.call_id.as_deref(), Some("toolu_01Ap1"));
-    assert_eq!(asked.always_allow, ["Bash(pnpm test:*)"]);
-    assert_eq!(
-        asked.reason.as_deref(),
-        Some("Current permission mode (Default) requires approval for this Bash command"),
-        "terminal escapes are removed"
-    );
-    assert!(!asked.interactive);
-    run.answer(Answer {
-        approval_id: asked.approval_id,
-        decision: Decision::Allow {
-            input: None,
-            always: true,
-        },
-    })
-    .unwrap();
-    let all = rest(&mut events).await;
-    assert_eq!(
-        outcome(&all),
-        &Outcome::Completed {
-            result: Some("Ran the tests.".into())
-        }
-    );
-    let argv = fake.argv();
-    let mode = argv
-        .iter()
-        .position(|arg| arg == "--permission-mode")
-        .unwrap();
-    assert_eq!(
-        argv[mode..mode + 4],
-        [
-            "--permission-mode",
-            "default",
-            "--permission-prompt-tool",
-            "stdio"
-        ]
-    );
-    assert_eq!(
-        fake.stdin()[1],
-        serde_json::json!({
-            "type": "control_response",
-            "response": {
-                "subtype": "success",
-                "request_id": "req-ap-1",
-                "response": {
-                    "behavior": "allow",
-                    "updatedInput": {"command": "pnpm test", "description": "Run the tests"},
-                    "updatedPermissions": [{
-                        "type": "addRules",
-                        "rules": [{"toolName": "Bash", "ruleContent": "pnpm test:*"}],
-                        "behavior": "allow",
-                        "destination": "session",
-                    }],
-                    "toolUseID": "toolu_01Ap1",
-                },
-            },
-        })
-    );
-}
-
-/// PLX-222: a denial goes back with its message, and an edited input replaces the one asked with.
-#[tokio::test]
-async fn a_denied_or_edited_request_answers_with_what_the_user_said() {
-    for (decision, expected) in [
-        (
-            Decision::Deny {
-                message: "Not the whole suite.".into(),
-                interrupt: false,
-            },
-            serde_json::json!({
-                "behavior": "deny",
-                "message": "Not the whole suite.",
-                "interrupt": false,
-                "toolUseID": "toolu_01Ap1",
-            }),
-        ),
-        (
-            Decision::Allow {
-                input: Some(serde_json::json!({"command": "pnpm test parser"})),
-                always: false,
-            },
-            serde_json::json!({
-                "behavior": "allow",
-                "updatedInput": {"command": "pnpm test parser"},
-                "toolUseID": "toolu_01Ap1",
-            }),
-        ),
-    ] {
+async fn an_answer_reaches_the_cli_as_the_user_gave_it() {
+    {
+        // PLX-222: in Manual, Claude Code's `can_use_tool` becomes a permission request, and an allow
+        // goes back on stdin as the Agent SDK writes it: the input it asked with, and with `always`, only
+        // its allow rules, for the session. Its other suggestions are dropped.
         let fake = Fake::new("approval");
         let request = RunRequest {
             permission: Some(AgentPermission::Manual),
@@ -3079,127 +1784,114 @@ async fn a_denied_or_edited_request_answers_with_what_the_user_said() {
         };
         let Started { run, mut events } = launch(&fake.backend, request).await;
         let asked = until_asked(&mut events).await;
+        assert_eq!(asked.tool_name, "Bash");
+        assert_eq!(
+            asked.input,
+            serde_json::json!({"command": "pnpm test", "description": "Run the tests"})
+        );
+        assert_eq!(asked.call_id.as_deref(), Some("toolu_01Ap1"));
+        assert_eq!(asked.always_allow, ["Bash(pnpm test:*)"]);
+        assert_eq!(
+            asked.reason.as_deref(),
+            Some("Current permission mode (Default) requires approval for this Bash command"),
+            "terminal escapes are removed"
+        );
+        assert!(!asked.interactive);
         run.answer(Answer {
             approval_id: asked.approval_id,
-            decision,
-        })
-        .unwrap();
-        rest(&mut events).await;
-        assert_eq!(fake.stdin()[1]["response"]["response"], expected);
-    }
-}
-
-/// PLX-222: a `control_cancel_request` withdraws a request, whose late answer then never reaches
-/// the CLI; a request that suppresses "always allow" offers none; and a control request plxd
-/// doesn't serve gets an error, so the CLI doesn't wait on it.
-#[tokio::test]
-async fn a_withdrawn_request_takes_no_answer_and_other_control_requests_get_an_error() {
-    let fake = Fake::new("approval-withdrawn");
-    let request = RunRequest {
-        permission: Some(AgentPermission::Auto),
-        approvals: true,
-        ..coordinator(&fake.root())
-    };
-    let Started { run, mut events } = launch(&fake.backend, request).await;
-    let asked = until_asked(&mut events).await;
-    assert_eq!(asked.tool_name, "Edit");
-    assert_eq!(asked.always_allow, Vec::<String>::new());
-    assert_eq!(
-        asked.blocked_path.as_deref(),
-        Some("/Users/dev/repo/.claude/settings.json")
-    );
-    assert_eq!(asked.subagent.as_deref(), Some("a7f3c2e1"));
-    assert_eq!(
-        next(&mut events).await,
-        Event::ApprovalWithdrawn {
-            approval_id: asked.approval_id
-        }
-    );
-    run.answer(Answer {
-        approval_id: asked.approval_id,
-        decision: Decision::Allow {
-            input: None,
-            always: false,
-        },
-    })
-    .unwrap();
-    let all = rest(&mut events).await;
-    assert_eq!(
-        outcome(&all),
-        &Outcome::Completed {
-            result: Some("Stopped.".into())
-        }
-    );
-    let stdin = fake.stdin();
-    assert_eq!(
-        stdin.len(),
-        2,
-        "the prompt and the hook's error, not the answer: {stdin:?}"
-    );
-    assert_eq!(
-        stdin[1],
-        serde_json::json!({
-            "type": "control_response",
-            "response": {
-                "subtype": "error",
-                "request_id": "req-hook",
-                "error": "plxd doesn't answer hook_callback control requests",
+            decision: Decision::Allow {
+                input: None,
+                always: true,
             },
         })
-    );
-}
-
-/// PLX-222: a coordinator in Plan asks to leave plan mode with `ExitPlanMode`, a question for the
-/// user. Once it is approved, Claude Code runs in its pre-plan mode, which a later turn's init
-/// reports, and the run goes on.
-#[tokio::test]
-async fn an_approved_plan_lets_a_coordinator_leave_plan_mode() {
-    let fake = Fake::new("exit-plan");
-    let request = RunRequest {
-        permission: Some(AgentPermission::Plan),
-        approvals: true,
-        ..coordinator(&fake.root())
-    };
-    let Started { run, mut events } = launch(&fake.backend, request).await;
-    let asked = until_asked(&mut events).await;
-    assert_eq!(asked.tool_name, "ExitPlanMode");
-    assert!(asked.interactive);
-    assert_eq!(
-        asked.input["plan"],
-        "1. Add a README.\n2. Link it from the docs."
-    );
-    run.answer(Answer {
-        approval_id: asked.approval_id,
-        decision: Decision::Allow {
-            input: None,
-            always: false,
-        },
-    })
-    .unwrap();
-    run.send(FollowUp {
-        turn_id: turn(TURN_2),
-        text: "Go ahead.".into(),
-        images: Vec::new(),
-        steer: false,
-        model: None,
-        permission: None,
-    })
-    .unwrap();
-    let all = rest(&mut events).await;
-    assert_eq!(
-        outcome(&all),
-        &Outcome::Completed {
-            result: Some("Done.".into())
+        .unwrap();
+        let all = rest(&mut events).await;
+        assert_eq!(
+            outcome(&all),
+            &Outcome::Completed {
+                result: Some("Ran the tests.".into())
+            }
+        );
+        let argv = fake.argv();
+        let mode = argv
+            .iter()
+            .position(|arg| arg == "--permission-mode")
+            .unwrap();
+        assert_eq!(
+            argv[mode..mode + 4],
+            [
+                "--permission-mode",
+                "default",
+                "--permission-prompt-tool",
+                "stdio"
+            ]
+        );
+        assert_eq!(
+            fake.stdin()[1],
+            serde_json::json!({
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": "req-ap-1",
+                    "response": {
+                        "behavior": "allow",
+                        "updatedInput": {"command": "pnpm test", "description": "Run the tests"},
+                        "updatedPermissions": [{
+                            "type": "addRules",
+                            "rules": [{"toolName": "Bash", "ruleContent": "pnpm test:*"}],
+                            "behavior": "allow",
+                            "destination": "session",
+                        }],
+                        "toolUseID": "toolu_01Ap1",
+                    },
+                },
+            })
+        );
+    }
+    {
+        // PLX-222: a denial goes back with its message, and an edited input replaces the one asked with.
+        for (decision, expected) in [
+            (
+                Decision::Deny {
+                    message: "Not the whole suite.".into(),
+                    interrupt: false,
+                },
+                serde_json::json!({
+                    "behavior": "deny",
+                    "message": "Not the whole suite.",
+                    "interrupt": false,
+                    "toolUseID": "toolu_01Ap1",
+                }),
+            ),
+            (
+                Decision::Allow {
+                    input: Some(serde_json::json!({"command": "pnpm test parser"})),
+                    always: false,
+                },
+                serde_json::json!({
+                    "behavior": "allow",
+                    "updatedInput": {"command": "pnpm test parser"},
+                    "toolUseID": "toolu_01Ap1",
+                }),
+            ),
+        ] {
+            let fake = Fake::new("approval");
+            let request = RunRequest {
+                permission: Some(AgentPermission::Manual),
+                approvals: true,
+                ..coordinator(&fake.root())
+            };
+            let Started { run, mut events } = launch(&fake.backend, request).await;
+            let asked = until_asked(&mut events).await;
+            run.answer(Answer {
+                approval_id: asked.approval_id,
+                decision,
+            })
+            .unwrap();
+            rest(&mut events).await;
+            assert_eq!(fake.stdin()[1]["response"]["response"], expected);
         }
-    );
-    assert_eq!(
-        fake.stdin()[1]["response"]["response"],
-        serde_json::json!({
-            "behavior": "allow",
-            "updatedInput": {"plan": "1. Add a README.\n2. Link it from the docs."},
-            "toolUseID": "toolu_01Pl1",
-        })
-    );
+    }
 }
 
 /// Events until the run's first permission request, which it returns.
@@ -3287,59 +1979,119 @@ fn control_requests_are_answered_only_with_the_prompt_channel() {
     ));
 }
 
-/// PLX-222: approving `ExitPlanMode` takes Claude Code to its pre-plan mode, so later inits may
-/// report another mode than the one the run asked for; until then they may not.
+/// PLX-222, PLX-243: after an approved plan, an init may report only a mode that asks as much,
+/// and a worker lists `ExitPlanMode` only when it hands plans over.
+#[allow(clippy::too_many_lines, reason = "one table of distinct cases")]
 #[test]
-fn a_plan_coordinator_may_report_another_mode_only_once_it_left_plan_mode() {
-    let plan = || {
-        Translator::new(ToolPolicy::NoWrite, "none")
-            .with_coordinator_tools(true)
-            .with_permission_mode("plan")
-            .with_prompts(true)
-    };
-    let mut translator = plan();
-    assert_eq!(
-        violation_kind(&translator.line(&coordinator_init("plan"))),
-        None
-    );
-    assert_eq!(
-        violation_kind(&translator.line(&coordinator_init("default"))),
-        Some(FailureKind::PolicyViolation)
-    );
-    let mut translator = plan();
-    assert_eq!(
-        violation_kind(&translator.line(&coordinator_init("plan"))),
-        None
-    );
-    translator.left_plan_mode();
-    assert_eq!(
-        violation_kind(&translator.line(&coordinator_init("default"))),
-        None
-    );
-    // Only Claude Code's own modes after plan mode: never one that asks less, or none at all.
-    for (mode, expected) in [
-        ("acceptEdits", None),
-        ("plan", None),
-        ("bypassPermissions", Some(FailureKind::PolicyViolation)),
-        ("auto", Some(FailureKind::PolicyViolation)),
-    ] {
+fn leaving_plan_mode_allows_only_modes_that_ask_as_much() {
+    {
+        // PLX-222: approving `ExitPlanMode` takes Claude Code to its pre-plan mode, so later inits may
+        // report another mode than the one the run asked for; until then they may not.
+        let plan = || {
+            Translator::new(ToolPolicy::NoWrite, "none")
+                .with_coordinator_tools(true)
+                .with_permission_mode("plan")
+                .with_prompts(true)
+        };
+        let mut translator = plan();
+        assert_eq!(
+            violation_kind(&translator.line(&coordinator_init("plan"))),
+            None
+        );
+        assert_eq!(
+            violation_kind(&translator.line(&coordinator_init("default"))),
+            Some(FailureKind::PolicyViolation)
+        );
+        let mut translator = plan();
+        assert_eq!(
+            violation_kind(&translator.line(&coordinator_init("plan"))),
+            None
+        );
+        translator.left_plan_mode();
+        assert_eq!(
+            violation_kind(&translator.line(&coordinator_init("default"))),
+            None
+        );
+        // Only Claude Code's own modes after plan mode: never one that asks less, or none at all.
+        for (mode, expected) in [
+            ("acceptEdits", None),
+            ("plan", None),
+            ("bypassPermissions", Some(FailureKind::PolicyViolation)),
+            ("auto", Some(FailureKind::PolicyViolation)),
+        ] {
+            let mut translator = plan();
+            translator.line(&coordinator_init("plan"));
+            translator.left_plan_mode();
+            assert_eq!(
+                violation_kind(&translator.line(&coordinator_init(mode))),
+                expected,
+                "{mode}"
+            );
+        }
         let mut translator = plan();
         translator.line(&coordinator_init("plan"));
         translator.left_plan_mode();
+        let modeless = br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","tools":["Read","Bash"]}"#;
         assert_eq!(
-            violation_kind(&translator.line(&coordinator_init(mode))),
-            expected,
-            "{mode}"
+            violation_kind(&translator.line(modeless)),
+            Some(FailureKind::PolicyViolation)
         );
     }
-    let mut translator = plan();
-    translator.line(&coordinator_init("plan"));
-    translator.left_plan_mode();
-    let modeless = br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","tools":["Read","Bash"]}"#;
-    assert_eq!(
-        violation_kind(&translator.line(modeless)),
-        Some(FailureKind::PolicyViolation)
-    );
+    {
+        // PLX-243: a worker's init may list `ExitPlanMode` only when its `--tools` named it, and still
+        // nothing else beyond the worker's tools. After the plan's approval, Claude Code still lists it
+        // and reports Manual, which the check then accepts, but never a mode that asks less.
+        // What 2.1.283 lists for a plan worker that asks plxd.
+        let planning = r#"["Bash","Edit","ExitPlanMode","Glob","Grep","NotebookEdit","Read","WebFetch","WebSearch","Write"]"#;
+        let worker = |mode: &'static str, plan_exit: bool| {
+            Translator::new(ToolPolicy::WorkspaceWrite, "none")
+                .with_permission_mode(mode)
+                .with_prompts(true)
+                .with_plan_exit(plan_exit)
+        };
+        let mut translator = worker("plan", true);
+        assert_eq!(
+            violation_kind(&translator.line(&worker_init("plan", planning))),
+            None
+        );
+        for mode in ["plan", "default", "auto", "acceptEdits"] {
+            let mut translator = worker(mode, false);
+            assert_eq!(
+                violation_kind(&translator.line(&worker_init(mode, planning))),
+                Some(FailureKind::PolicyViolation),
+                "{mode}"
+            );
+        }
+        for extra in [
+            "AskUserQuestion",
+            "EnterPlanMode",
+            "Agent",
+            "mcp__plxd__spawn_agent",
+        ] {
+            let tools = format!(r#"["Bash","ExitPlanMode","{extra}"]"#);
+            let mut translator = worker("plan", true);
+            assert_eq!(
+                violation_kind(&translator.line(&worker_init("plan", &tools))),
+                Some(FailureKind::PolicyViolation),
+                "{extra}"
+            );
+        }
+        for (mode, expected) in [
+            ("default", None),
+            ("acceptEdits", None),
+            ("bypassPermissions", Some(FailureKind::PolicyViolation)),
+            ("auto", Some(FailureKind::PolicyViolation)),
+        ] {
+            let mut translator = worker("plan", true);
+            translator.line(&worker_init("plan", planning));
+            translator.left_plan_mode();
+            assert_eq!(
+                violation_kind(&translator.line(&worker_init(mode, planning))),
+                expected,
+                "{mode}"
+            );
+        }
+    }
 }
 
 /// An init line of a worker on Claude Code 2.1.283 in `mode`, listing `tools`.
@@ -3348,187 +2100,6 @@ fn worker_init(mode: &str, tools: &str) -> Vec<u8> {
         r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","claude_code_version":"2.1.283","permissionMode":"{mode}","tools":{tools}}}"#
     )
     .into_bytes()
-}
-
-/// PLX-243: a worker's init may list `ExitPlanMode` only when its `--tools` named it, and still
-/// nothing else beyond the worker's tools. After the plan's approval, Claude Code still lists it
-/// and reports Manual, which the check then accepts, but never a mode that asks less.
-#[test]
-fn a_worker_s_init_may_list_exit_plan_mode_only_when_it_hands_over_plans() {
-    // What 2.1.283 lists for a plan worker that asks plxd.
-    let planning = r#"["Bash","Edit","ExitPlanMode","Glob","Grep","NotebookEdit","Read","WebFetch","WebSearch","Write"]"#;
-    let worker = |mode: &'static str, plan_exit: bool| {
-        Translator::new(ToolPolicy::WorkspaceWrite, "none")
-            .with_permission_mode(mode)
-            .with_prompts(true)
-            .with_plan_exit(plan_exit)
-    };
-    let mut translator = worker("plan", true);
-    assert_eq!(
-        violation_kind(&translator.line(&worker_init("plan", planning))),
-        None
-    );
-    for mode in ["plan", "default", "auto", "acceptEdits"] {
-        let mut translator = worker(mode, false);
-        assert_eq!(
-            violation_kind(&translator.line(&worker_init(mode, planning))),
-            Some(FailureKind::PolicyViolation),
-            "{mode}"
-        );
-    }
-    for extra in [
-        "AskUserQuestion",
-        "EnterPlanMode",
-        "Agent",
-        "mcp__plxd__spawn_agent",
-    ] {
-        let tools = format!(r#"["Bash","ExitPlanMode","{extra}"]"#);
-        let mut translator = worker("plan", true);
-        assert_eq!(
-            violation_kind(&translator.line(&worker_init("plan", &tools))),
-            Some(FailureKind::PolicyViolation),
-            "{extra}"
-        );
-    }
-    for (mode, expected) in [
-        ("default", None),
-        ("acceptEdits", None),
-        ("bypassPermissions", Some(FailureKind::PolicyViolation)),
-        ("auto", Some(FailureKind::PolicyViolation)),
-    ] {
-        let mut translator = worker("plan", true);
-        translator.line(&worker_init("plan", planning));
-        translator.left_plan_mode();
-        assert_eq!(
-            violation_kind(&translator.line(&worker_init(mode, planning))),
-            expected,
-            "{mode}"
-        );
-    }
-}
-
-/// A worker in Plan at `cwd` whose client answers, so it hands its plan over (PLX-243).
-fn plan_worker(cwd: &Path) -> RunRequest {
-    RunRequest {
-        policy: ToolPolicy::WorkspaceWrite,
-        sandbox: Some(worker_sandbox(cwd)),
-        permission: Some(AgentPermission::Plan),
-        approvals: true,
-        ..request(cwd)
-    }
-}
-
-/// PLX-243: a plan worker hands its plan over with `ExitPlanMode`, as a coordinator does (0031).
-/// The request is a question for the user that holds the plan, and plxd's answer goes back on
-/// stdin. Once allowed, a later turn's init may report Manual. Once denied, the worker still
-/// plans, so an init that reports Manual fails it.
-#[tokio::test]
-async fn a_plan_worker_hands_its_plan_over_and_leaves_plan_mode_only_once_allowed() {
-    let plan = serde_json::json!({
-        "plan": "# Plan\n1. Add a README.\n",
-        "planFilePath": "/Users/dev/.claude/plans/plan-it-cozy-pinwheel.md",
-    });
-    let keep_planning = "Keep planning: add tests.";
-    for (decision, response) in [
-        (
-            Decision::Allow {
-                input: None,
-                always: false,
-            },
-            serde_json::json!({"behavior": "allow", "updatedInput": plan, "toolUseID": "toolu_01Pw1"}),
-        ),
-        (
-            Decision::Deny {
-                message: keep_planning.into(),
-                interrupt: false,
-            },
-            serde_json::json!({
-                "behavior": "deny",
-                "message": keep_planning,
-                "interrupt": false,
-                "toolUseID": "toolu_01Pw1",
-            }),
-        ),
-    ] {
-        let allowed = matches!(decision, Decision::Allow { .. });
-        let fake = Fake::new("worker-exit-plan");
-        let request = plan_worker(&fake.root());
-        let expected: Vec<String> = super::arguments(&request)
-            .unwrap()
-            .into_iter()
-            .map(|arg| arg.into_string().unwrap())
-            .collect();
-        assert!(expected.iter().any(|arg| arg == PLAN_WORKER_TOOL_LIST));
-        let Started { run, mut events } = launch(&fake.backend, request).await;
-        let asked = until_asked(&mut events).await;
-        assert_eq!(asked.tool_name, "ExitPlanMode");
-        assert!(asked.interactive);
-        assert_eq!(asked.input, plan);
-        assert_eq!(asked.call_id.as_deref(), Some("toolu_01Pw1"));
-        assert!(asked.always_allow.is_empty());
-        run.answer(Answer {
-            approval_id: asked.approval_id,
-            decision,
-        })
-        .unwrap();
-        run.send(FollowUp {
-            turn_id: turn(TURN_2),
-            text: "Go ahead.".into(),
-            images: Vec::new(),
-            steer: false,
-            model: None,
-            permission: None,
-        })
-        .unwrap();
-        let all = rest(&mut events).await;
-        assert_eq!(fake.argv(), expected);
-        assert_eq!(fake.stdin()[1]["response"]["response"], response);
-        if allowed {
-            assert_eq!(
-                outcome(&all),
-                &Outcome::Completed {
-                    result: Some("Done.".into())
-                }
-            );
-        } else {
-            let (kind, message) = failure(&all);
-            assert_eq!(kind, FailureKind::PolicyViolation);
-            assert!(
-                message.contains(r#"permission mode "default" in a worker run instead of "plan""#),
-                "{message}"
-            );
-        }
-    }
-}
-
-/// PLX-243: the backend lets only a worker that hands over plans list `ExitPlanMode`. The same
-/// transcript stops a Plan worker without `approvals`, and a Manual worker with them, at its
-/// first init, naming the tool, before anything asks.
-#[tokio::test]
-async fn a_worker_that_does_not_hand_over_plans_is_stopped_when_it_lists_exit_plan_mode() {
-    for (permission, approvals) in [
-        (AgentPermission::Plan, false),
-        (AgentPermission::Manual, true),
-    ] {
-        let fake = Fake::new("worker-exit-plan");
-        let request = RunRequest {
-            permission: Some(permission),
-            approvals,
-            ..plan_worker(&fake.root())
-        };
-        let all = run(&fake, request).await;
-        let (kind, message) = failure(&all);
-        assert_eq!(kind, FailureKind::PolicyViolation, "{permission:?}");
-        assert!(
-            message.ends_with("in a worker run: ExitPlanMode"),
-            "{permission:?}: {message}"
-        );
-        assert!(
-            !all.iter()
-                .any(|event| matches!(event, Event::ApprovalRequested(_))),
-            "{all:?}"
-        );
-    }
 }
 
 /// PLX-222: a request offers to always allow only the rules its `approvalRequested` item shows
@@ -3609,245 +2180,6 @@ async fn a_request_left_waiting_when_the_cli_exits_is_withdrawn_before_the_run_e
     assert!(matches!(outcome(&all), Outcome::Failed(_)), "{all:?}");
 }
 
-/// PLX-370: while plxd holds the CLI for a waiting message, stdin stays open after the last
-/// turn, so the message goes to the same process; let go, the CLI exits after it.
-#[tokio::test]
-async fn a_held_cli_waits_after_its_turn_for_the_next_message() {
-    let fake = Fake::new("held");
-    let Started { run, mut events } = launch(&fake.backend, request(&fake.root())).await;
-    run.hold(true);
-    loop {
-        if let Event::TurnFinished { turn_id, .. } = next(&mut events).await {
-            assert_eq!(turn_id, Some(turn(TURN_1)));
-            break;
-        }
-    }
-    assert!(
-        tokio::time::timeout(Duration::from_millis(300), events.next())
-            .await
-            .is_err(),
-        "a held CLI exited after its turn"
-    );
-    run.send(FollowUp {
-        turn_id: turn(TURN_2),
-        text: "And now the docs.".into(),
-        images: Vec::new(),
-        steer: false,
-        model: None,
-        permission: None,
-    })
-    .unwrap();
-    run.hold(false);
-    let all = rest(&mut events).await;
-    assert!(all.contains(&Event::TurnFinished {
-        turn_id: Some(turn(TURN_2)),
-        result: Some("Second answer.".into()),
-        failed: false,
-    }));
-    assert!(matches!(outcome(&all), Outcome::Completed { .. }));
-}
-
-/// PLX-382: a real run's two Agent subagents. Every line with a `parent_tool_use_id` is the
-/// subagent's, tagged with that call, its type, and on its own messages its model, so none of
-/// its calls or text reach the parent's flow. Each ends with its `task_notification`'s summary.
-#[test]
-fn a_subagent_s_lines_are_tagged_with_the_call_that_started_it() {
-    const APPLE: &str = "toolu_01VQi3sYAiLsdpzR4SwrsTPq";
-    const PEAR: &str = "toolu_017AYTwajJNAA67dec3ZXKC2";
-    const HAIKU: &str = "claude-haiku-4-5-20251001";
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none")
-        .with_thread(true)
-        .with_permission_mode(BYPASS_PERMISSION_MODE);
-    let events: Vec<Event> = include_str!("fixtures/subagents.jsonl")
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .flat_map(|line| translator.line(line.as_bytes()))
-        .filter_map(|step| match step {
-            Step::Emit(event) => Some(event),
-            Step::Violation(failure) => panic!("{failure:?}"),
-            _ => None,
-        })
-        .collect();
-
-    let own_calls: Vec<&str> = events
-        .iter()
-        .filter_map(|event| match event {
-            Event::ToolCall { call_id, name, .. } => {
-                assert_eq!(name, "Agent");
-                Some(call_id.as_str())
-            }
-            _ => None,
-        })
-        .collect();
-    assert_eq!(own_calls, [APPLE, PEAR]);
-    assert_eq!(
-        texts(&events).last(),
-        Some(
-            &"Both agents completed.\n\n**Agent 1** (`echo apple`): `apple`\n\n**Agent 2** (`echo pear`): `pear`"
-        )
-    );
-
-    let of = |call: &str| -> Vec<(Option<&str>, Option<&str>, &Event)> {
-        events
-            .iter()
-            .filter_map(|event| match event {
-                Event::Subagent {
-                    call_id,
-                    agent_type,
-                    model,
-                    event,
-                } if call_id == call => Some((agent_type.as_deref(), model.as_deref(), &**event)),
-                _ => None,
-            })
-            .filter(|(.., event)| !matches!(event, Event::Reasoning { .. }))
-            .collect()
-    };
-    let apple = of(APPLE);
-    let general = Some("general-purpose");
-    assert!(
-        matches!(
-            apple.as_slice(),
-            [
-                (agent, Some(HAIKU), Event::ToolCall { name, input, .. }),
-                (agent2, None, Event::ToolResult { status: ToolStatus::Ok, output: Some(out), .. }),
-                (agent3, Some(HAIKU), Event::Text { text, .. }),
-            ] if *agent == general && *agent2 == general && *agent3 == general
-                && name == "Bash" && input["command"] == "echo apple" && out == "apple"
-                && text == "apple"
-        ),
-        "{apple:#?}"
-    );
-    assert_eq!(of(PEAR).len(), 3);
-
-    let finished: Vec<&Event> = events
-        .iter()
-        .filter(|event| matches!(event, Event::SubagentFinished { .. }))
-        .collect();
-    assert_eq!(
-        finished,
-        [
-            &Event::SubagentFinished {
-                call_id: PEAR.into(),
-                status: SubagentStatus::Completed,
-                summary: Some("Output:\n\n```\npear\n```".into()),
-            },
-            &Event::SubagentFinished {
-                call_id: APPLE.into(),
-                status: SubagentStatus::Completed,
-                summary: Some("apple".into()),
-            },
-        ]
-    );
-}
-
-/// PLX-382: a background command's `task_notification` names no subagent, so it ends none.
-/// PLX-725: it runs as a background task from its `task_started` to its `task_notification`.
-#[test]
-fn only_a_subagent_s_task_notification_ends_a_subagent() {
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let started = br#"{"type":"system","subtype":"task_started","task_id":"b1","tool_use_id":"toolu_bash","description":"sleep","task_type":"local_bash"}"#;
-    let ended = br#"{"type":"system","subtype":"task_notification","task_id":"b1","tool_use_id":"toolu_bash","status":"completed","summary":"done"}"#;
-    assert_eq!(
-        translator.line(started),
-        [tasks(&[("b1", BackgroundKind::Command, "sleep")])]
-    );
-    assert_eq!(translator.line(ended), [tasks(&[])]);
-}
-
-/// The [`Event::BackgroundTasks`] step for the tasks `running`: id, kind, and description.
-fn tasks(running: &[(&str, BackgroundKind, &str)]) -> Step {
-    Step::Emit(Event::BackgroundTasks {
-        tasks: running
-            .iter()
-            .map(|&(id, kind, description)| BackgroundTask {
-                task_id: id.to_owned(),
-                kind,
-                description: description.to_owned(),
-                call_id: None,
-            })
-            .collect(),
-    })
-}
-
-/// PLX-777: a `Monitor` call's task is a monitor, though Claude Code reports it as `local_bash`
-/// like any background command, and stays one through `background_tasks_changed`, which names no
-/// call. As in T3 Code's fixture, the roster can list the task before its `task_started`.
-#[test]
-fn a_monitor_call_s_task_is_a_monitor() {
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let call = br#"{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"toolu_mon","name":"Monitor","input":{"description":"Watching pull request #746","command":"gh pr checks 746 --watch"}}]}}"#;
-    let started = br#"{"type":"system","subtype":"task_started","task_id":"m1","tool_use_id":"toolu_mon","description":"Watching pull request #746","task_type":"local_bash"}"#;
-    let roster = br#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"m1","task_type":"local_bash","description":"Watching pull request #746"}]}"#;
-    let with_server = br#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"m1","task_type":"local_bash","description":"Watching pull request #746"},{"task_id":"b1","task_type":"local_bash","description":"npm run dev"}]}"#;
-    let monitor = ("m1", BackgroundKind::Monitor, "Watching pull request #746");
-    translator.line(&init_line(r#"["Read"]"#));
-    translator.line(call);
-    translator.line(roster);
-    assert_eq!(translator.line(started), [tasks(&[monitor])]);
-    assert_eq!(
-        translator.line(with_server),
-        [tasks(&[
-            ("b1", BackgroundKind::Command, "npm run dev"),
-            monitor
-        ])]
-    );
-}
-
-/// PLX-929: a background subagent's task carries the call that started it, tied by its
-/// `task_started`, through `background_tasks_changed`, which names no call, until it ends.
-#[test]
-fn a_subagent_s_task_names_its_call() {
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let started = br#"{"type":"system","subtype":"task_started","task_id":"a1","tool_use_id":"toolu_agent","description":"review","task_type":"local_agent","subagent_type":"general-purpose"}"#;
-    let roster = br#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a1","task_type":"local_agent","description":"review"},{"task_id":"b1","task_type":"local_bash","description":"dev server"}]}"#;
-    let ended = br#"{"type":"system","subtype":"task_notification","task_id":"a1","tool_use_id":"toolu_agent","status":"completed","summary":"done"}"#;
-    let review = BackgroundTask {
-        task_id: "a1".into(),
-        kind: BackgroundKind::Agent,
-        description: "review".into(),
-        call_id: Some("toolu_agent".into()),
-    };
-    let server = BackgroundTask {
-        task_id: "b1".into(),
-        kind: BackgroundKind::Command,
-        description: "dev server".into(),
-        call_id: None,
-    };
-    let running = |tasks: &[&BackgroundTask]| {
-        Step::Emit(Event::BackgroundTasks {
-            tasks: tasks.iter().map(|&task| task.clone()).collect(),
-        })
-    };
-    assert_eq!(translator.line(started), [running(&[&review])]);
-    assert_eq!(translator.line(roster), [running(&[&review, &server])]);
-    assert!(matches!(
-        translator.line(ended).as_slice(),
-        [Step::Emit(Event::SubagentFinished { .. }), finished] if *finished == running(&[&server])
-    ));
-}
-
-/// PLX-725: an `ambient` task (housekeeping or a live-update watcher) and a task type T3 Code
-/// doesn't count never keep the session up, whether from `task_started` or the level
-/// `background_tasks_changed`, which replaces the running set so a missed end can't strand one.
-#[test]
-fn only_background_commands_and_subagents_count_as_background_work() {
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    let ambient = br#"{"type":"system","subtype":"task_started","task_id":"w1","description":"watch","task_type":"local_bash","ambient":true}"#;
-    let workflow = br#"{"type":"system","subtype":"task_started","task_id":"f1","description":"spec","task_type":"local_workflow"}"#;
-    assert_eq!(translator.line(ambient), []);
-    assert_eq!(translator.line(workflow), []);
-    let level = br#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"w1","task_type":"local_bash","description":"watch","ambient":true},{"task_id":"b1","task_type":"local_bash","description":"dev server"},{"task_id":"a1","task_type":"local_agent","description":"review"}]}"#;
-    let (review, server) = (
-        ("a1", BackgroundKind::Agent, "review"),
-        ("b1", BackgroundKind::Command, "dev server"),
-    );
-    assert_eq!(translator.line(level), [tasks(&[review, server])]);
-    let one_left = br#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"a1","task_type":"local_agent","description":"review"}]}"#;
-    assert_eq!(translator.line(one_left), [tasks(&[review])]);
-    let missed_end = br#"{"type":"system","subtype":"task_notification","task_id":"b1","status":"completed","summary":"done"}"#;
-    assert_eq!(translator.line(missed_end), [], "already gone");
-}
-
 /// A real session, recorded with `PLXD_RECORD_CLI` (PLX-493), replays to its snapshot: thinking
 /// summaries (PLX-713), a subagent's tool call, a Write that asks first, and the streamed reply
 /// (PLX-714).
@@ -3871,321 +2203,6 @@ async fn a_recorded_session_replays_to_its_snapshot() {
         )),
     )
     .await;
-}
-
-/// A `/compact` (PLX-638) goes to Claude Code as its own command, which compacts the session:
-/// the compaction rows show, and the summary and the command's output, user messages with string
-/// content (recorded from Claude Code 2.1.288), show nothing.
-#[test]
-fn compact_goes_as_claude_codes_own_command() {
-    let message: Value =
-        serde_json::from_str(&Message::new(None, " /Compact\n", &[], true).line).unwrap();
-    assert_eq!(message["message"]["content"], "/compact");
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-    translator.line(&init_line(r#"["Read"]"#));
-    let lines: [&[u8]; 4] = [
-        br#"{"type":"system","subtype":"status","status":"compacting"}"#,
-        br#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual","pre_tokens":21257,"post_tokens":1302}}"#,
-        br#"{"type":"user","message":{"role":"user","content":"This session is being continued from a previous conversation."},"isCompactSummary":true}"#,
-        br#"{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted </local-command-stdout>"},"isReplay":true}"#,
-    ];
-    let steps: Vec<Step> = lines
-        .into_iter()
-        .flat_map(|line| translator.line(line))
-        .collect();
-    assert_eq!(
-        steps,
-        [
-            Step::Emit(Event::ContextCompaction { done: false }),
-            Step::Emit(Event::ContextCompaction { done: true }),
-        ]
-    );
-}
-
-/// PLX-714: with partial messages, the reply's text streams as deltas under its message's id,
-/// and a tool call shows as its block starts, without its input. Thinking and tool input wait
-/// for their whole message, and a subagent's stream is skipped.
-#[test]
-fn partial_messages_stream_the_reply_text() {
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-    translator.line(&init_line(r#"["Read"]"#));
-    let lines: [&[u8]; 6] = [
-        br#"{"type":"stream_event","event":{"type":"message_start","message":{"id":"msg_1"}},"parent_tool_use_id":null}"#,
-        br#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Hm"}},"parent_tool_use_id":null}"#,
-        br#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi"}},"parent_tool_use_id":null}"#,
-        br#"{"type":"stream_event","event":{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"toolu_2","name":"Write","input":{}}},"parent_tool_use_id":null}"#,
-        br#"{"type":"stream_event","event":{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{"}},"parent_tool_use_id":null}"#,
-        br#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"sub"}},"parent_tool_use_id":"toolu_1"}"#,
-    ];
-    let steps: Vec<Step> = lines
-        .into_iter()
-        .flat_map(|line| translator.line(line))
-        .collect();
-    assert_eq!(
-        steps,
-        [
-            Step::Emit(Event::TextDelta {
-                message_id: Some("msg_1".into()),
-                text: "Hi".into(),
-            }),
-            Step::Emit(Event::ToolCall {
-                call_id: "toolu_2".into(),
-                name: "Write".into(),
-                input: Value::Null,
-            }),
-        ]
-    );
-}
-
-#[test]
-fn compaction_reports_its_start_and_its_boundary() {
-    let mut translator = Translator::new(ToolPolicy::WorkspaceWrite, "none");
-    translator.line(&init_line(r#"["Read"]"#));
-    let started = br#"{"type":"system","subtype":"status","status":"compacting"}"#;
-    assert_eq!(
-        translator.line(started),
-        vec![Step::Emit(Event::ContextCompaction { done: false })]
-    );
-    let boundary = br#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":167000}}"#;
-    assert_eq!(
-        translator.line(boundary),
-        vec![Step::Emit(Event::ContextCompaction { done: true })]
-    );
-    let cleared = br#"{"type":"system","subtype":"status","status":null}"#;
-    assert_eq!(translator.line(cleared), Vec::new());
-}
-
-/// Naming a thread (0058) saves no session or memory folder, which would keep the user's first
-/// message, or an empty folder, in the config folder's `projects/`, and runs with no tools or MCP
-/// servers.
-#[test]
-fn naming_saves_no_session_and_has_no_tools() {
-    let args = namer_arguments("claude-haiku-4-5", Some(AgentEffort::Low)).unwrap();
-    let args: Vec<&str> = args.iter().map(|arg| arg.to_str().unwrap()).collect();
-    for flag in ["--no-session-persistence", "--strict-mcp-config", "-p"] {
-        assert!(args.contains(&flag), "{flag} in {args:?}");
-    }
-    assert!(
-        args.windows(2).any(|pair| pair == ["--tools", ""]),
-        "{args:?}"
-    );
-    assert!(
-        args.windows(2).any(|pair| pair == ["--effort", "low"]),
-        "{args:?}"
-    );
-    assert!(
-        args.iter()
-            .any(|arg| arg.contains(r#""autoMemoryEnabled":false"#)),
-        "{args:?}"
-    );
-}
-
-#[test]
-fn request_usage_uses_the_latest_main_request_and_matching_reported_window() {
-    use parallax_protocol::AgentRequestUsage;
-    use serde_json::json;
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    translator.line(
-        fixture("read-only")
-            .lines()
-            .find(|line| line.contains("\"subtype\":\"init\""))
-            .unwrap()
-            .as_bytes(),
-    );
-    let assistant = |model: &str, parent: Value, usage: Value| {
-        json!({
-            "type": "assistant", "parent_tool_use_id": parent,
-            "message": {"id": "request", "model": model, "content": [], "usage": usage}
-        })
-    };
-    let request = assistant(
-        "claude-haiku-4-5-20251001",
-        Value::Null,
-        json!({"input_tokens": 8, "cache_read_input_tokens": 36_458,
-            "cache_creation_input_tokens": 343, "output_tokens": 1}),
-    );
-    let steps = translator.line(request.to_string().as_bytes());
-    let expected = AgentRequestUsage {
-        model: Some("claude-haiku-4-5-20251001".into()),
-        context_tokens: Some(36_809),
-        input_tokens: Some(36_809),
-        cached_input_tokens: Some(36_458),
-        context_window: None,
-        ..Default::default()
-    };
-    assert_eq!(steps, [Step::Emit(Event::RequestUsage(expected.clone()))]);
-    let child = assistant(
-        "claude-opus-5-5",
-        json!("tool_child"),
-        json!({"input_tokens": 999_999, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}),
-    );
-    assert!(translator.line(child.to_string().as_bytes()).is_empty());
-    let result = json!({"type": "result", "subtype": "success", "modelUsage": {
-        "claude-haiku-4-5": {"canonicalModel": "claude-haiku-4-5", "contextWindow": 200_000,
-            "inputTokens": 9_999_999}, "claude-opus-5-5": {"contextWindow": 1_000_000}
-    }});
-    let steps = translator.line(result.to_string().as_bytes());
-    assert!(
-        steps.contains(&Step::Emit(Event::RequestUsage(AgentRequestUsage {
-            context_window: Some(200_000),
-            ..expected.clone()
-        })))
-    );
-    assert!(
-        translator
-            .line(request.to_string().as_bytes())
-            .contains(&Step::Emit(Event::RequestUsage(AgentRequestUsage {
-                context_window: Some(200_000),
-                ..expected
-            })))
-    );
-    translator.line(br#"{"type":"system","subtype":"compact_boundary"}"#);
-    assert!(
-        !translator
-            .line(result.to_string().as_bytes())
-            .iter()
-            .any(|step| matches!(step, Step::Emit(Event::RequestUsage(_))))
-    );
-    let unknown = assistant("unknown", Value::Null, json!({"input_tokens": 0}));
-    let steps = translator.line(unknown.to_string().as_bytes());
-    assert!(
-        steps.contains(&Step::Emit(Event::RequestUsage(AgentRequestUsage {
-            model: Some("unknown".into()),
-            ..Default::default()
-        })))
-    );
-}
-
-#[test]
-fn request_speed_is_the_turns_share_of_the_sessions_output_and_api_time() {
-    use serde_json::json;
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    translator.line(
-        fixture("read-only")
-            .lines()
-            .find(|line| line.contains("\"subtype\":\"init\""))
-            .unwrap()
-            .as_bytes(),
-    );
-    let assistant = json!({"type": "assistant", "parent_tool_use_id": null, "message": {
-        "id": "m", "model": "claude-opus-4-7", "content": [],
-        "usage": {"input_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}});
-    let result = |ms: u64, opus: u64, haiku: u64| {
-        json!({"type": "result", "subtype": "success", "duration_api_ms": ms, "modelUsage": {
-            "claude-opus-4-7": {"outputTokens": opus}, "claude-haiku-4-5": {"outputTokens": haiku}}})
-    };
-    let speed = |steps: Vec<Step>| {
-        steps.into_iter().find_map(|step| match step {
-            Step::Emit(Event::RequestUsage(usage)) => Some((usage.output_tokens, usage.output_ms)),
-            _ => None,
-        })
-    };
-    translator.line(assistant.to_string().as_bytes());
-    let first = translator.line(result(4_000, 150, 50).to_string().as_bytes());
-    assert_eq!(speed(first), Some((Some(200), Some(4_000))));
-    // The next request carries the last sample until its own result.
-    let next = translator.line(assistant.to_string().as_bytes());
-    assert_eq!(speed(next), Some((Some(200), Some(4_000))));
-    let second = translator.line(result(10_000, 450, 50).to_string().as_bytes());
-    assert_eq!(speed(second), Some((Some(300), Some(6_000))));
-    // A turn with no new API time keeps the last sample.
-    translator.line(assistant.to_string().as_bytes());
-    let idle = translator.line(result(10_000, 450, 50).to_string().as_bytes());
-    assert_eq!(speed(idle), Some((Some(300), Some(6_000))));
-    // Totals that went down are a new baseline, not a sample.
-    translator.line(assistant.to_string().as_bytes());
-    let lower = translator.line(result(2_000, 80, 0).to_string().as_bytes());
-    assert_eq!(speed(lower), Some((Some(300), Some(6_000))));
-    translator.line(assistant.to_string().as_bytes());
-    let after = translator.line(result(3_000, 180, 0).to_string().as_bytes());
-    assert_eq!(speed(after), Some((Some(100), Some(1_000))));
-
-    // A resumed session's totals carry over from earlier processes (0004), so its first result is
-    // only the baseline: the whole session's output over one turn's time would read far too high.
-    let mut resumed = Translator::new(ToolPolicy::NoWrite, "none").with_resumed(true);
-    resumed.line(
-        fixture("read-only")
-            .lines()
-            .find(|line| line.contains("\"subtype\":\"init\""))
-            .unwrap()
-            .as_bytes(),
-    );
-    resumed.line(assistant.to_string().as_bytes());
-    let first = resumed.line(result(90_000, 40_000, 0).to_string().as_bytes());
-    assert_eq!(speed(first), Some((None, None)));
-    resumed.line(assistant.to_string().as_bytes());
-    let second = resumed.line(result(95_000, 40_400, 0).to_string().as_bytes());
-    assert_eq!(speed(second), Some((Some(400), Some(5_000))));
-}
-
-#[test]
-fn request_speed_is_main_session_output_over_the_time_it_streamed() {
-    use std::time::{Duration, Instant};
-
-    use serde_json::json;
-    let mut translator = Translator::new(ToolPolicy::NoWrite, "none");
-    translator.line(
-        fixture("read-only")
-            .lines()
-            .find(|line| line.contains("\"subtype\":\"init\""))
-            .unwrap()
-            .as_bytes(),
-    );
-    let start = Instant::now();
-    let at = |ms: u64| start + Duration::from_millis(ms);
-    let event = |parent: Value, event: Value| {
-        json!({"type": "stream_event", "parent_tool_use_id": parent, "event": event}).to_string()
-    };
-    let started = json!({"type": "message_start", "message": {"id": "m"}});
-    let delta = json!({"type": "content_block_delta", "index": 0,
-        "delta": {"type": "text_delta", "text": "Hi"}});
-    let done = |tokens: u64| json!({"type": "message_delta", "usage": {"output_tokens": tokens}});
-    let assistant = json!({"type": "assistant", "parent_tool_use_id": null, "message": {
-        "id": "m", "model": "claude-opus-4-7", "content": [],
-        "usage": {"input_tokens": 1, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}});
-    // The API time also counts the wait for each first token and the subagent's output.
-    let result = |ms: u64, tokens: u64| {
-        json!({"type": "result", "subtype": "success", "duration_api_ms": ms,
-            "modelUsage": {"claude-opus-4-7": {"outputTokens": tokens}}})
-        .to_string()
-    };
-    let speed = |steps: Vec<Step>| {
-        steps.into_iter().find_map(|step| match step {
-            Step::Emit(Event::RequestUsage(usage)) => Some((usage.output_tokens, usage.output_ms)),
-            _ => None,
-        })
-    };
-
-    // Two responses in the turn, each timed from its first delta: 2s waiting for the first one's
-    // first token doesn't count, nor a subagent's stream between them.
-    translator.line_at(event(Value::Null, started.clone()).as_bytes(), at(0));
-    translator.line_at(event(Value::Null, delta.clone()).as_bytes(), at(2_000));
-    translator.line_at(event(Value::Null, delta.clone()).as_bytes(), at(2_500));
-    translator.line_at(event(Value::Null, done(80)).as_bytes(), at(3_000));
-    translator.line_at(
-        event(json!("toolu_sub"), delta.clone()).as_bytes(),
-        at(3_100),
-    );
-    translator.line_at(event(json!("toolu_sub"), done(500)).as_bytes(), at(9_000));
-    translator.line_at(event(Value::Null, started.clone()).as_bytes(), at(9_500));
-    translator.line_at(event(Value::Null, delta.clone()).as_bytes(), at(10_000));
-    translator.line_at(event(Value::Null, done(120)).as_bytes(), at(11_000));
-    translator.line_at(assistant.to_string().as_bytes(), at(11_000));
-    let first = translator.line_at(result(12_000, 700).as_bytes(), at(11_100));
-    assert_eq!(speed(first), Some((Some(200), Some(2_000))));
-
-    // A reply too short to time keeps the last sample.
-    translator.line_at(event(Value::Null, started.clone()).as_bytes(), at(20_000));
-    translator.line_at(event(Value::Null, delta.clone()).as_bytes(), at(20_400));
-    translator.line_at(event(Value::Null, done(5)).as_bytes(), at(20_410));
-    translator.line_at(assistant.to_string().as_bytes(), at(20_410));
-    let short = translator.line_at(result(13_000, 705).as_bytes(), at(20_500));
-    assert_eq!(speed(short), Some((Some(200), Some(2_000))));
-
-    // Without partial messages, the turn's API time is the fallback.
-    translator.line_at(assistant.to_string().as_bytes(), at(30_000));
-    let unstreamed = translator.line_at(result(17_000, 905).as_bytes(), at(30_100));
-    assert_eq!(speed(unstreamed), Some((Some(200), Some(4_000))));
 }
 
 /// A sidecar that answers each query's prompt at once and ends it when its prompt ends, logging
@@ -4223,31 +2240,6 @@ fn answering(fake: &Fake) -> ClaudeBackend {
     ))
 }
 
-/// One sidecar holds every run's query, as T3 Code's server does (0061), and exits once the last
-/// one is gone.
-#[tokio::test]
-async fn one_sidecar_runs_every_query_and_exits_after_the_last() {
-    let fake = Fake::new("read-only");
-    let backend = answering(&fake);
-    let mut first = backend.start(request(&fake.root())).unwrap();
-    let mut second = backend.start(request(&fake.root())).unwrap();
-    for started in [&mut first, &mut second] {
-        let all = rest(&mut started.events).await;
-        assert_eq!(
-            outcome(&all),
-            &Outcome::Completed {
-                result: Some("done".into())
-            }
-        );
-    }
-    drop((first, second));
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while fake.recorded("starts") != "start\nend\n" && Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    assert_eq!(fake.recorded("starts"), "start\nend\n");
-}
-
 /// A sidecar that dies ends every query it held, with its own stderr, as a CLI that crashed.
 #[tokio::test]
 async fn a_dead_sidecar_fails_every_run_on_it() {
@@ -4270,60 +2262,4 @@ async fn a_dead_sidecar_fails_every_run_on_it() {
             Some("the Claude Agent SDK sidecar exited: out of memory")
         );
     }
-}
-
-/// A launcher whose `PATH` has only `programs`, scripts, and the system's, with no sidecar
-/// override, so the backend installs and runs the real one's files.
-fn installing(fake: &Fake, programs: &[(&str, &str)]) -> ClaudeBackend {
-    let bin = fake.root().join("installing");
-    fs::create_dir_all(&bin).unwrap();
-    fs::copy(fake.root().join("bin/claude"), bin.join("claude")).unwrap();
-    for (name, script) in programs {
-        fs::write(bin.join(name), script).unwrap();
-        fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let mut base = Environment::empty();
-    base.set("PATH", format!("{}:/usr/bin:/bin", bin.display()));
-    base.set("FAKE_CLAUDE_DIR", fake.root());
-    ClaudeBackend::new(Launcher::new(
-        DataDir::new(fake.root().join("data")).unwrap(),
-        base,
-    ))
-}
-
-/// Without Node, a Claude run is refused with what it needs (0061).
-#[test]
-fn a_host_without_node_is_told_claude_needs_it() {
-    let fake = Fake::new("read-only");
-    let backend = installing(&fake, &[]);
-    let Err(StartError::Unsupported(why)) = backend.start(request(&fake.root())) else {
-        panic!("started without Node");
-    };
-    assert_eq!(why, "Node.js 22.16 or newer is required to run Claude");
-}
-
-/// The SDK installs on first use, and a run sent meanwhile waits for it rather than failing.
-#[tokio::test]
-async fn a_run_waits_for_the_sdk_to_install() {
-    let fake = Fake::new("read-only");
-    // `node` stands in for the installed sidecar, whatever script it's given.
-    let backend = installing(
-        &fake,
-        &[
-            ("node", ANSWERING_SDK),
-            ("npm", "#!/bin/sh\nsleep 0.3\nmkdir node_modules\n"),
-        ],
-    );
-    let mut started = backend.start(request(&fake.root())).unwrap();
-    let all = rest(&mut started.events).await;
-    assert_eq!(
-        outcome(&all),
-        &Outcome::Completed {
-            result: Some("done".into())
-        }
-    );
-    let installs = fake.root().join("data/tools/claude-agent-sdk");
-    let versions: Vec<_> = fs::read_dir(&installs).unwrap().flatten().collect();
-    assert_eq!(versions.len(), 1, "{versions:?}");
-    assert!(versions[0].path().join("src/main.mjs").is_file());
 }

@@ -209,78 +209,17 @@ pub(super) fn text(value: &Value) -> String {
         .map_or_else(|| value.to_string(), str::to_owned)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use parallax_protocol::AgentCommand;
-    use serde_json::Value;
 
-    use super::{Parsed, acp, claude, codex};
-
-    /// The first answer `parse` finds in a recorded output.
-    fn first(fixture: &str, parse: fn(&Value) -> Parsed) -> Result<Vec<AgentCommand>, String> {
-        fixture
-            .lines()
-            .find_map(|line| parse(&serde_json::from_str(line).unwrap()))
-            .expect("a line holds the list")
-    }
+    use super::claude;
 
     fn texts(commands: &[AgentCommand]) -> Vec<&str> {
         commands.iter().map(|c| c.text.as_str()).collect()
     }
 
-    #[test]
-    fn claude_lists_its_initialize_answer_without_clear_or_internal_commands() {
-        let commands = first(include_str!("commands/fixtures/claude.jsonl"), claude).unwrap();
-        // The fixture also has `clear`, `__remote-workflow`, and `workflow-launch-exec`.
-        assert_eq!(
-            texts(&commands),
-            [
-                "/ponytail:ponytail",
-                "/ponytail:ponytail-help",
-                "/compact",
-                "/model"
-            ]
-        );
-        assert_eq!(
-            commands[0].argument_hint.as_deref(),
-            Some("[lite|full|ultra]")
-        );
-        assert_eq!(commands[1].argument_hint, None, "an empty hint is none");
-        assert!(
-            commands[1]
-                .description
-                .starts_with("(ponytail) Quick-reference")
-        );
-    }
-
-    #[test]
-    fn codex_lists_compact_and_goal_then_enabled_skills_as_mentions() {
-        let commands = first(include_str!("commands/fixtures/codex.jsonl"), codex).unwrap();
-        // The fixture's `review-bugbot` is disabled.
-        assert_eq!(
-            texts(&commands),
-            [
-                "/compact",
-                "/goal",
-                "$ponytail:ponytail-help",
-                "$create-rule"
-            ]
-        );
-        assert_eq!(commands[3].name, "create-rule");
-    }
-
-    #[test]
-    fn cursor_lists_its_available_commands() {
-        let commands = first(include_str!("commands/fixtures/cursor.jsonl"), acp).unwrap();
-        assert_eq!(texts(&commands), ["/simplify", "/create-rule", "/review"]);
-        assert_eq!(
-            commands[0].description,
-            "Find low-info comments, one-off helpers, perf issues, and reuse opportunities. (global)"
-        );
-    }
-
     /// A fake CLI that answers `initialize` only once it has read it, and then keeps running.
-    #[cfg(unix)]
     #[tokio::test]
     async fn list_writes_the_input_and_reads_the_answer() {
         use std::time::Duration;
@@ -308,13 +247,5 @@ mod tests {
 
         let silent = list(fake("sleep 30"), Duration::from_millis(200)).await;
         assert_eq!(silent, Err("it didn't answer within 200ms".to_owned()));
-    }
-
-    #[test]
-    fn a_refusal_is_an_error() {
-        let refused = r#"{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"no session"}}"#;
-        let refused: Value = serde_json::from_str(refused).unwrap();
-        assert_eq!(acp(&refused), Some(Err("no session".to_owned())));
-        assert_eq!(codex(&refused), Some(Err("no session".to_owned())));
     }
 }

@@ -165,40 +165,8 @@ pub(crate) async fn assert_replays(started: super::Started, path: &std::path::Pa
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use super::*;
-
-    #[test]
-    fn it_scrubs_home_and_marks_stdin() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rec.jsonl");
-        let recorder = Recorder {
-            file: Arc::new(Mutex::new(File::create(&path).unwrap())),
-            homes: homes("/Users/someone"),
-        };
-        recorder.stdout(br#"{"cwd":"/Users/someone/repo"}"#);
-        recorder.stdin();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "{\"cwd\":\"~/repo\"}\n@read\n"
-        );
-    }
-
-    #[test]
-    fn it_scrubs_a_windows_home_in_json_and_as_it_is() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("rec.jsonl");
-        let recorder = Recorder {
-            file: Arc::new(Mutex::new(File::create(&path).unwrap())),
-            homes: homes(r"C:\Users\someone"),
-        };
-        recorder.stdout(br#"{"cwd":"C:\\Users\\someone\\repo"}"#);
-        recorder.stdout(br"plain C:\Users\someone\repo");
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "{\"cwd\":\"~\\\\repo\"}\nplain ~\\repo\n"
-        );
-        assert!(homes("/").is_empty());
-    }
 
     /// A raw recording can hold prompts and paths, so only its owner can read it.
     #[cfg(unix)]

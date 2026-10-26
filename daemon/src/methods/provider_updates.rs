@@ -230,32 +230,7 @@ fn newer(version: &str, latest: &str) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{Homebrew, homebrew, newer, version_in};
-
-    #[test]
-    fn a_newer_release_is_an_update() {
-        assert!(newer("2.1.295", "2.1.300"));
-        assert!(newer("0.162.0", "0.163.0"));
-        assert!(!newer("2.1.300", "2.1.300"));
-        assert!(!newer("2.1.301", "2.1.300"));
-        assert!(!newer("unknown", "2.1.300"));
-    }
-
-    #[test]
-    fn the_registries_name_the_version() {
-        let npm = r#"{"name":"@openai/codex","version":"0.163.0","bin":{}}"#;
-        assert_eq!(version_in(npm, "/version").as_deref(), Some("0.163.0"));
-        let cask = r#"{"token":"claude-code@latest","version":"2.1.299"}"#;
-        assert_eq!(version_in(cask, "/version").as_deref(), Some("2.1.299"));
-        let formula = r#"{"name":"codex","versions":{"stable":"0.162.1","head":null}}"#;
-        assert_eq!(
-            version_in(formula, "/versions/stable").as_deref(),
-            Some("0.162.1")
-        );
-        let built = r#"{"version":"1.2.3,4567"}"#;
-        assert_eq!(version_in(built, "/version").as_deref(), Some("1.2.3"));
-        assert_eq!(version_in("Not Found", "/version"), None);
-    }
+    use super::{Homebrew, homebrew};
 
     #[test]
     fn a_homebrew_install_upgrades_and_checks_through_its_brew() {

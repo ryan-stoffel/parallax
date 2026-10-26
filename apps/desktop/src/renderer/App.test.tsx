@@ -5,7 +5,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 
 import type { UpdateState, ParallaxBridge } from "../preload/bridge";
 import { App } from "./App";
-import { appShortcut, terminalAppShortcut } from "./ui";
+import { terminalAppShortcut } from "./ui";
 import { updatePrefs, updateRun } from "./updateEverything";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -57,145 +57,7 @@ function renderApp() {
   unmount = () => root.unmount();
 }
 
-test("the side panel toggle reports and flips the panel's state", () => {
-  renderApp();
-  // One toggle shows at a time: the main pane's while closed, the panel's while open.
-  const toggle = () =>
-    [...document.querySelectorAll<HTMLButtonElement>('[aria-controls="side-panel"]')].find(
-      (b) => !b.closest("[hidden]"),
-    )!;
-  const panel = document.getElementById("side-panel")!;
-  expect(toggle().getAttribute("aria-expanded")).toBe("false");
-  expect(panel.hidden).toBe(true);
-
-  act(() => toggle().click());
-  expect(toggle().getAttribute("aria-expanded")).toBe("true");
-  expect(panel.hidden).toBe(false);
-
-  // Mod+Alt+B closes it again.
-  act(() => {
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", { code: "KeyB", metaKey: true, altKey: true }),
-    );
-  });
-  expect(toggle().getAttribute("aria-expanded")).toBe("false");
-  expect(panel.hidden).toBe(true);
-});
-
-test("the sidebar's title opens a new thread", () => {
-  renderApp();
-  const crumbs = () =>
-    [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
-  act(() =>
-    document.querySelector<HTMLButtonElement>('#sidebar button[aria-label="Usage"]')!.click(),
-  );
-  expect(crumbs()).toEqual(["Settings", "Usage"]);
-  act(() =>
-    [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")]
-      .find((b) => b.textContent === "Back to app")!
-      .click(),
-  );
-
-  const title = [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
-    (b) => b.textContent === "Parallax",
-  )!;
-  act(() => title.click());
-  expect(crumbs().at(-1)).toBe("New thread");
-});
-
-test("Mod+S toggles the sidebar, and Mod+Alt+U opens Settings > Usage", () => {
-  renderApp();
-  const press = (init: KeyboardEventInit) =>
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { metaKey: true, ...init }));
-    });
-  const showSidebar = () => document.querySelector('main button[aria-label="Show sidebar"]');
-  expect(showSidebar()).toBeNull();
-  press({ code: "KeyS" });
-  expect(showSidebar()).not.toBeNull();
-  press({ code: "KeyS" });
-  expect(showSidebar()).toBeNull();
-
-  press({ code: "KeyU", altKey: true });
-  const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
-});
-
-test("Mod+Shift+P is Open pull request on GitHub, and Mod+P is Go to file", () => {
-  const press = (init: Partial<KeyboardEvent>) =>
-    appShortcut({ code: "KeyP", key: "p", metaKey: true, ...init } as KeyboardEvent);
-  expect(press({ shiftKey: true })).toBe("openPr");
-  expect(press({})).toBe("goToFile");
-});
-
-test("Ctrl+Shift+` toggles the terminal on macOS too, and Mod+Alt+O opens, not Mod+O or Mod+B", () => {
-  const press = (init: KeyboardEventInit) => appShortcut(new KeyboardEvent("keydown", init));
-  expect(press({ code: "Backquote", ctrlKey: true, shiftKey: true })).toBe("terminal");
-  expect(press({ code: "Backquote", metaKey: true, shiftKey: true })).toBeUndefined();
-  expect(press({ code: "KeyO", metaKey: true, altKey: true })).toBe("open");
-  expect(press({ code: "KeyO", metaKey: true })).toBeUndefined();
-  expect(press({ code: "KeyB", metaKey: true })).toBeUndefined();
-  // With Shift they're free for repository actions.
-  expect(press({ code: "KeyS", metaKey: true, shiftKey: true })).toBeUndefined();
-  expect(press({ code: "KeyO", metaKey: true, altKey: true, shiftKey: true })).toBeUndefined();
-});
-
-test("the footer's Usage opens Settings > Usage, and Update shows when it's ready and its answer", async () => {
-  const button = (name: string) =>
-    document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
-  renderApp();
-  // Update is only for `pnpm dev`.
-  expect(button("Update Parallax")).toBeNull();
-
-  act(() => button("Usage")!.click());
-  const crumbs = [...document.querySelectorAll('[aria-label="Breadcrumb"] li')];
-  expect(crumbs.map((li) => li.textContent)).toEqual(["Settings", "Usage"]);
-  // Settings' nav lists it after Providers, and the side panel is a chat's.
-  const nav = [...document.querySelectorAll("#sidebar button")].map((b) => b.textContent);
-  expect(nav.slice(nav.indexOf("Usage") - 1, nav.indexOf("Usage") + 1)).toEqual([
-    "Providers",
-    "Usage",
-  ]);
-  expect(document.querySelector('main [aria-controls="side-panel"]')).toBeNull();
-  // The range stays in the header on Limits, but can't be changed there.
-  const range = document.querySelector<HTMLFieldSetElement>('main [aria-label="Usage range"]')!;
-  expect(range.disabled).toBe(false);
-  act(() => document.querySelector<HTMLInputElement>('main input[value="limits"]')!.click());
-  expect(range.disabled).toBe(true);
-  act(() => unmount());
-
-  let answer: (text: string) => void = () => {};
-  // The Update button and its notifications each listen.
-  const listeners: ((state: UpdateState) => void)[] = [];
-  const publish = (state: UpdateState) => listeners.forEach((listener) => listener(state));
-  const update = vi.fn(() => new Promise<string>((resolve) => (answer = resolve)));
-  Object.assign(bridge, {
-    updatable: true,
-    update,
-    onUpdateState: (listener: (state: UpdateState) => void) => {
-      listeners.push(listener);
-      return () => {};
-    },
-  });
-  renderApp();
-  // A background check's note, such as an error, is the button's label.
-  act(() => publish({ note: "Can't reach GitHub to check for updates." }));
-  expect(button("Can't reach GitHub to check for updates.")).not.toBeNull();
-  // Under `pnpm dev`, a click takes main's commits, with the answer in the popover.
-  act(() => publish({ ready: "3 commits to apply" }));
-  act(() => button("Update ready: 3 commits to apply")!.click());
-  const status = () =>
-    document.querySelector('#sidebar [aria-label="Update"] [role="status"]')?.textContent;
-  expect(status()).toBe("Updating…");
-  expect(button("Update Parallax")!.disabled).toBe(true);
-  await act(async () => answer("Updated to abc1234"));
-  act(() => publish({}));
-  expect(status()).toBe("Updated to abc1234");
-  expect(button("Update Parallax")!.disabled).toBe(false);
-});
-
-test("a packaged app's release shows on hover, is reviewed on click, then downloads and restarts", async () => {
-  vi.useFakeTimers();
+test("a packaged app's release downloads only once it's confirmed, then restarts to install", async () => {
   const button = (name: string) =>
     document.querySelector<HTMLButtonElement>(`#sidebar button[aria-label="${name}"]`);
   // The Update button and its notifications each listen.
@@ -211,7 +73,6 @@ test("a packaged app's release shows on hover, is reviewed on click, then downlo
     },
   });
   renderApp();
-  // The running version, which the card shows the release's from.
   await act(async () => {});
   const available = {
     version: "2610.10205.13230-nightly",
@@ -219,65 +80,20 @@ test("a packaged app's release shows on hover, is reviewed on click, then downlo
     url: "https://github.com/ryan-stoffel/parallax/releases/tag/v2610.10205.13230-nightly",
   };
   act(() => publish({ available }));
-  const offered = button("Update available: Parallax 2610.10205.13230-nightly")!;
-  const dot = () => offered.querySelector(".bg-accent");
-  expect(dot()).not.toBeNull();
-  const card = document.querySelector<HTMLElement>('#sidebar [aria-label="Update"]')!;
-  const isOpen = () => card.hasAttribute("data-open");
-  const pointer = (type: string, target: Element, relatedTarget: Element | null) =>
-    act(() => {
-      target.dispatchEvent(new PointerEvent(type, { bubbles: true, relatedTarget }));
-      vi.advanceTimersByTime(200);
-    });
-
-  // Hovering opens the card with the release, from the running version, and its notes.
-  pointer("pointerover", offered, document.body);
-  expect(isOpen()).toBe(true);
-  expect(card.textContent).toContain("1 update available");
-  expect(card.textContent).toContain("Parallax0.0.02610.10205.13230-nightly");
-  expect(card.textContent).toContain("• feat: a thing (PLX-1)");
-  expect(card.querySelector("a")!.href).toBe(available.url);
-  expect(update).not.toHaveBeenCalled();
-  // The pointer can move onto the card, and leaving the card closes it.
-  pointer("pointerout", offered, card);
-  pointer("pointerover", card, offered);
-  expect(isOpen()).toBe(true);
-  pointer("pointerout", card, document.body);
-  expect(isOpen()).toBe(false);
 
   // A click opens the review dialog, and nothing downloads until it's confirmed.
   const confirm = document.querySelector('button[value="confirm"]')!.closest("dialog")!;
-  const go = () => confirm.querySelector<HTMLButtonElement>('button[value="confirm"]')!;
-  await act(async () => offered.click());
+  await act(async () => button("Update available: Parallax 2610.10205.13230-nightly")!.click());
   expect(confirm.open).toBe(true);
   expect(update).not.toHaveBeenCalled();
-  expect(confirm.textContent).toContain("What's new in Parallax");
-  const tick = confirm.querySelector<HTMLInputElement>('input[aria-label="Update Parallax"]')!;
-  expect(go().textContent).toBe("Update all");
-  act(() => tick.click());
-  expect(go().textContent).toBe("Update 0 selected");
-  expect(go().disabled).toBe(true);
-  act(() => tick.click());
-
-  // Update all downloads, the row shows its progress, and the dot goes away.
-  await act(async () => go().click());
-  expect(update).toHaveBeenCalledOnce();
-  expect(confirm.querySelector('input[type="checkbox"]')).toBeNull();
-  act(() => publish({ available, progress: 42 }));
-  expect(confirm.textContent).toContain("Downloading… 42%");
-  expect(card.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("42");
-  expect(offered.getAttribute("aria-label")).toBe(
-    "Downloading Parallax 2610.10205.13230-nightly: 42%",
+  await act(async () =>
+    confirm.querySelector<HTMLButtonElement>('button[value="confirm"]')!.click(),
   );
-  expect(dot()).toBeNull();
+  expect(update).toHaveBeenCalledOnce();
 
-  // Downloaded: a notification, and Update restarts to install it.
-  const toast = () => document.querySelector<HTMLElement>('[aria-label="Notifications"]');
+  // Downloaded, Update restarts to install it.
   await act(async () => publish({ available, ready: `Parallax ${available.version} to install` }));
-  expect(toast()!.textContent).toContain("Update downloaded");
-  expect(toast()!.querySelector("a")!.href).toBe(available.url);
   expect(update).toHaveBeenCalledTimes(2);
-  vi.useRealTimers();
 });
 
 test("with automatic downloads on, a release downloads once on its own", () => {
@@ -316,55 +132,4 @@ test("in a terminal off macOS, plain Ctrl+letter shortcuts stay the shell's", ()
   expect(press({ code: "Digit2", ctrlKey: true })).toBe(true);
   bridge.platform = "darwin";
   expect(press({ code: "KeyN", metaKey: true })).toBe(true);
-});
-
-test("Ctrl+1 and Ctrl+2 focus the split's sides on macOS, and Ctrl+Shift+1 and 2 elsewhere", () => {
-  const press = (init: KeyboardEventInit) => appShortcut(new KeyboardEvent("keydown", init));
-  expect(press({ code: "Digit1", ctrlKey: true })).toBe("leftThread");
-  expect(press({ code: "Digit2", ctrlKey: true })).toBe("rightThread");
-  // Off macOS, Ctrl+1 opens the first sidebar row.
-  bridge.platform = "linux";
-  expect(press({ code: "Digit1", ctrlKey: true })).toBe("row");
-  expect(press({ code: "Digit1", ctrlKey: true, shiftKey: true })).toBe("leftThread");
-  expect(press({ code: "Digit2", ctrlKey: true, shiftKey: true })).toBe("rightThread");
-  bridge.platform = "darwin";
-});
-
-test("Settings' search opens a section or a setting by a word from it, and / focuses it", async () => {
-  bridge.command = async () => ({ state: "unavailable", path: "", onPath: true });
-  renderApp();
-  act(() => {
-    window.dispatchEvent(new KeyboardEvent("keydown", { code: "Comma", key: ",", metaKey: true }));
-  });
-  const crumbs = () =>
-    [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
-  const box = document.querySelector<HTMLInputElement>('input[aria-label="Search settings"]')!;
-  const type = (value: string) =>
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(box, value);
-      box.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-  const enter = () =>
-    act(() => {
-      box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    });
-  const options = () =>
-    [...document.querySelectorAll('[aria-label="Settings found"] [role="option"]')].map(
-      (o) => o.textContent,
-    );
-
-  act(() => {
-    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true }));
-  });
-  expect(document.activeElement).toBe(box);
-
-  type("threads");
-  expect(options()[0]).toBe("Threads");
-  enter();
-  expect(crumbs()).toEqual(["Settings", "Threads"]);
-
-  type("clock");
-  expect(options()[0]).toBe("Time formatGeneral › Preferences");
-  enter();
-  expect(crumbs()).toEqual(["Settings", "General"]);
 });

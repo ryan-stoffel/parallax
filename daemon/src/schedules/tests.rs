@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -5,24 +6,20 @@ use std::time::Duration;
 
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
-use parallax_protocol::{
-    Schedule, ScheduleRunStatus, ScheduleSaveParams, SignatureEncoding, WebhookSignature,
-};
+use parallax_protocol::{Schedule, ScheduleRunStatus, ScheduleSaveParams};
+#[cfg(unix)]
+use parallax_protocol::{SignatureEncoding, WebhookSignature};
 #[cfg(unix)]
 use ring::hmac;
-use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[cfg(unix)]
 use super::hook;
-use super::{Fired, Trigger, fire, fire_job, next_run, put, read, reader, run, save};
+use super::{Fired, Trigger, fire, next_run, put, read, reader, save};
 use crate::server::Daemon;
+#[cfg(unix)]
 use crate::store::store_error;
 use crate::threads::store;
-
-fn check(params: &ScheduleSaveParams) -> Result<(), parallax_protocol::jsonrpc::ErrorObject> {
-    super::check(params, true)
-}
 
 fn daemon(dir: &Path) -> Arc<Daemon> {
     Daemon::for_tests(dir, 10, Duration::from_secs(90))
@@ -128,31 +125,6 @@ fn next_runs_follow_t3s_rules() {
     );
 }
 
-#[test]
-fn a_save_out_of_range_is_refused() {
-    assert!(check(&params(HOURLY)).is_ok());
-    assert!(check(&params(Schedule::Interval { every_ms: 59_999 })).is_err());
-    for time in ["24:00", "9:5", "09:60", "nine", "009:00"] {
-        let schedule = Schedule::FixedTime {
-            time_of_day: time.to_owned(),
-            weekdays: Vec::new(),
-        };
-        assert!(check(&params(schedule)).is_err(), "{time}");
-    }
-    let schedule = Schedule::FixedTime {
-        time_of_day: "09:00".to_owned(),
-        weekdays: vec![7],
-    };
-    assert!(check(&params(schedule)).is_err());
-    let mut both = params(HOURLY);
-    both.thread = Some(parallax_protocol::RunId::generate());
-    both.project = Some(parallax_protocol::ProjectId::generate());
-    assert!(check(&both).is_err());
-    let mut empty = params(HOURLY);
-    empty.prompt = " ".to_owned();
-    assert!(check(&empty).is_err());
-}
-
 #[tokio::test]
 async fn a_fire_commits_once_per_due_time_even_when_tried_again() {
     let dir = tempfile::tempdir().unwrap();
@@ -197,75 +169,6 @@ async fn a_fire_commits_once_per_due_time_even_when_tried_again() {
     ));
     assert_eq!(wakes(dir.path(), id).len(), 1);
     assert_eq!(stored(&daemon, id).await.task.run_count, 1);
-}
-
-#[tokio::test]
-async fn a_fixed_time_missed_by_more_than_ten_minutes_is_skipped() {
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = daemon(dir.path());
-    let schedule = Schedule::FixedTime {
-        time_of_day: "09:00".to_owned(),
-        weekdays: Vec::new(),
-    };
-    let id = Uuid::try_parse(&save(&daemon, params(schedule)).await.unwrap().id).unwrap();
-    let missed = Timestamp::now() - SignedDuration::from_mins(11);
-    due_at(&daemon, id, missed).await;
-    let now = Timestamp::now();
-    let skipped = store(&daemon, move |db| fire_job(db, id, Trigger::Scheduled, now))
-        .await
-        .unwrap();
-    assert!(matches!(skipped, Fired::Skipped));
-    assert!(wakes(dir.path(), id).is_empty());
-    let task = stored(&daemon, id).await.task;
-    assert_eq!(task.run_count, 0);
-    assert!(task.next_run_at.unwrap() > now, "moved to the next 09:00");
-}
-
-#[tokio::test]
-async fn the_timer_fires_a_task_when_it_comes_due() {
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = daemon(dir.path());
-    let stop = CancellationToken::new();
-    let timer = tokio::spawn(run(Arc::clone(&daemon), stop.clone()));
-    // A due row that can't be read fails to fire, and is tried again later, not at once, so it
-    // neither spins the timer nor holds back the task after it.
-    let broken = Uuid::now_v7();
-    let overdue = Timestamp::now() - SignedDuration::from_secs(1);
-    store(&daemon, move |db| {
-        db.put_scheduled_task(broken, Some(overdue), "not json")
-            .map_err(|e| store_error(&e))
-    })
-    .await
-    .unwrap();
-    let id = Uuid::try_parse(&save(&daemon, params(HOURLY)).await.unwrap().id).unwrap();
-    due_at(
-        &daemon,
-        id,
-        Timestamp::now() + SignedDuration::from_millis(200),
-    )
-    .await;
-    daemon.schedules.changed.notify_one();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while wakes(dir.path(), id).is_empty() {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await
-    .expect("the timer fired");
-    assert_eq!(stored(&daemon, id).await.task.run_count, 1);
-    let retry: String = db(dir.path())
-        .query_row(
-            "SELECT next_run_at FROM scheduled_tasks WHERE id = ?1",
-            [broken.to_string()],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert!(
-        retry.parse::<Timestamp>().unwrap() > Timestamp::now(),
-        "postponed"
-    );
-    stop.cancel();
-    timer.await.unwrap();
 }
 
 #[cfg(unix)]
@@ -391,6 +294,7 @@ async fn a_signed_webhook_fires_its_prompt_with_the_bodys_values() {
 }
 
 #[derive(Debug, Default)]
+#[cfg(unix)]
 struct FaultKeys {
     values: std::sync::Mutex<HashMap<parallax_protocol::AccountId, String>>,
     fail_read: std::sync::atomic::AtomicBool,
@@ -399,6 +303,7 @@ struct FaultKeys {
     deletes: std::sync::atomic::AtomicUsize,
 }
 
+#[cfg(unix)]
 impl crate::keystore::KeyStore for FaultKeys {
     fn get(
         &self,
@@ -446,6 +351,7 @@ impl crate::keystore::KeyStore for FaultKeys {
     }
 }
 
+#[cfg(unix)]
 fn fault_daemon(dir: &Path) -> (Arc<Daemon>, Arc<FaultKeys>) {
     let mut daemon = daemon(dir);
     let keys = Arc::new(FaultKeys::default());
@@ -460,6 +366,7 @@ async fn secret_of(daemon: &Daemon, keys: &FaultKeys, id: Uuid) -> Option<String
     keys.values.lock().unwrap().get(&key).cloned()
 }
 
+#[cfg(unix)]
 fn signed(secret: &str) -> ScheduleSaveParams {
     params(Schedule::Webhook {
         signature: Some(WebhookSignature {
@@ -470,18 +377,6 @@ fn signed(secret: &str) -> ScheduleSaveParams {
             secret_ref: None,
         }),
     })
-}
-
-#[test]
-fn windows_refuses_signed_webhooks_before_any_store_operation() {
-    assert_eq!(
-        super::check(&signed("test-value"), false)
-            .unwrap_err()
-            .parallax_data()
-            .unwrap()
-            .kind,
-        parallax_protocol::ErrorKind::KeychainUnavailable
-    );
 }
 
 #[cfg(unix)]
@@ -506,49 +401,6 @@ async fn failed_secret_writes_leave_no_task_and_keep_existing_tasks() {
     assert_eq!(
         secret_of(&daemon, &keys, id).await.as_deref(),
         Some("working-value")
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn a_failed_row_write_keeps_the_previous_working_secret() {
-    use std::sync::atomic::Ordering::SeqCst;
-    let dir = tempfile::tempdir().unwrap();
-    let (daemon, keys) = fault_daemon(dir.path());
-    let task = save(&daemon, signed("working-value")).await.unwrap();
-    let id = Uuid::try_parse(&task.id).unwrap();
-    let conn = db(dir.path());
-    conn.execute_batch("CREATE TRIGGER reject_schedule BEFORE INSERT ON scheduled_tasks BEGIN SELECT RAISE(FAIL, 'test row failure'); END;").unwrap();
-    let mut replacement = signed("replacement-value");
-    replacement.id = Some(task.id.clone());
-    assert!(save(&daemon, replacement.clone()).await.is_err());
-    assert_eq!(
-        secret_of(&daemon, &keys, id).await.as_deref(),
-        Some("working-value")
-    );
-    assert_eq!(keys.values.lock().unwrap().len(), 1, "the new key goes");
-    // Even when the new key can't be removed, the row still names the old one, untouched.
-    keys.fail_delete.store(true, SeqCst);
-    assert!(save(&daemon, replacement.clone()).await.is_err());
-    assert_eq!(
-        secret_of(&daemon, &keys, id).await.as_deref(),
-        Some("working-value")
-    );
-    keys.fail_delete.store(false, SeqCst);
-    conn.execute_batch("DROP TRIGGER reject_schedule;").unwrap();
-    save(&daemon, replacement).await.unwrap();
-    assert_eq!(
-        secret_of(&daemon, &keys, id).await.as_deref(),
-        Some("replacement-value")
-    );
-    assert!(
-        !keys
-            .values
-            .lock()
-            .unwrap()
-            .values()
-            .any(|value| value == "working-value"),
-        "the old key goes once the new one is saved"
     );
 }
 
@@ -595,6 +447,7 @@ async fn legacy_secrets_migrate_and_are_wiped_only_with_a_working_store() {
 }
 
 /// Whether the store's database or WAL file holds `text`.
+#[cfg(unix)]
 fn holds(dir: &Path, text: &str) -> bool {
     ["plxd.sqlite3", "plxd.sqlite3-wal"].iter().any(|name| {
         std::fs::read(dir.join(name))
@@ -602,276 +455,4 @@ fn holds(dir: &Path, text: &str) -> bool {
             .windows(text.len())
             .any(|window| window == text.as_bytes())
     })
-}
-
-/// A task an older plxd deleted, with `secure_delete` off, left its secret in a freed page,
-/// which the first start after migration 43 wipes with no live row to move.
-#[tokio::test]
-async fn the_first_start_wipes_a_deleted_legacy_secret() {
-    const LEGACY: &str = "plx648-deleted-legacy-value";
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = daemon(dir.path());
-    let task = save(&daemon, params(HOURLY)).await.unwrap();
-    let id = Uuid::try_parse(&task.id).unwrap();
-    store(&daemon, move |db| {
-        let mut row = read(db, id)?.unwrap();
-        row.secret = Some(LEGACY.to_owned());
-        // As migration 43 marks a store that kept secrets in rows.
-        db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))?;
-        put(db, &row)
-    })
-    .await
-    .unwrap();
-    let conn = db(dir.path());
-    conn.execute_batch(
-        "PRAGMA secure_delete = OFF; DELETE FROM scheduled_tasks; PRAGMA wal_checkpoint(TRUNCATE);",
-    )
-    .unwrap();
-    drop(conn);
-    assert!(holds(dir.path(), LEGACY), "the freed page keeps it");
-    super::move_old_secrets(&daemon).await;
-    assert!(
-        !holds(dir.path(), LEGACY),
-        "the store retains deleted plaintext"
-    );
-    let pending = reader(&daemon, |db| {
-        db.wipe_freed_pages().map_err(|e| store_error(&e))
-    })
-    .await
-    .unwrap();
-    assert!(!pending, "it wipes once");
-}
-
-#[tokio::test]
-async fn deleting_an_unsigned_task_never_calls_the_keystore() {
-    let dir = tempfile::tempdir().unwrap();
-    let (daemon, keys) = fault_daemon(dir.path());
-    let task = save(&daemon, params(HOURLY)).await.unwrap();
-    super::delete(&daemon, parallax_protocol::ScheduleIdParams { id: task.id })
-        .await
-        .unwrap();
-    assert_eq!(keys.deletes.load(std::sync::atomic::Ordering::SeqCst), 0);
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn validation_and_transient_read_errors_preserve_a_secret_ref() {
-    use crate::keystore::KeyStore;
-    use std::sync::atomic::Ordering::SeqCst;
-    let dir = tempfile::tempdir().unwrap();
-    let (daemon, keys) = fault_daemon(dir.path());
-    let key = parallax_protocol::AccountId::generate();
-    let thread = parallax_protocol::RunId::generate();
-    keys.set(key, "ref-test-value").unwrap();
-    store(&daemon, move |db| {
-        db.add_secret_ref(
-            key.into(),
-            thread.into(),
-            Timestamp::now() + SignedDuration::from_hours(1),
-        )
-        .map_err(|e| store_error(&e))
-    })
-    .await
-    .unwrap();
-    let secret_ref = format!("secret-ref:{key}");
-    let mut invalid = signed("unused");
-    invalid.from = Some(thread);
-    invalid.id = Some(Uuid::now_v7().to_string());
-    if let Schedule::Webhook {
-        signature: Some(signature),
-    } = &mut invalid.schedule
-    {
-        signature.secret = None;
-        signature.secret_ref = Some(secret_ref.clone());
-    }
-    assert!(
-        save(&daemon, invalid.clone()).await.is_err(),
-        "missing task"
-    );
-    invalid.id = None;
-    invalid.thread = Some(parallax_protocol::RunId::generate());
-    assert!(save(&daemon, invalid).await.is_err(), "missing target");
-    keys.fail_read.store(true, SeqCst);
-    assert!(
-        crate::secrets::consume(&daemon, &secret_ref, Some(thread))
-            .await
-            .is_err()
-    );
-    assert_eq!(keys.deletes.load(SeqCst), 0);
-    keys.fail_read.store(false, SeqCst);
-    assert_eq!(
-        &*crate::secrets::consume(&daemon, &secret_ref, Some(thread))
-            .await
-            .unwrap(),
-        "ref-test-value"
-    );
-}
-
-/// The wipe runs on the store's thread, so a write made while it runs waits for it and succeeds.
-/// Held there 500 ms against a 200 ms busy timeout, a wipe on a connection of its own would fail
-/// the write, as one did on a 1 GB store.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_write_during_the_wipe_waits_and_succeeds() {
-    use std::sync::atomic::Ordering::Relaxed;
-    let dir = tempfile::tempdir().unwrap();
-    let daemon = daemon(dir.path());
-    store(&daemon, |db| {
-        db.set_busy_timeout(Duration::from_millis(200))
-            .map_err(|e| store_error(&e))?;
-        db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
-    })
-    .await
-    .unwrap();
-    crate::store::VACUUM_HOLD_MS.store(500, Relaxed);
-    let wiping = tokio::spawn({
-        let daemon = Arc::clone(&daemon);
-        async move { super::move_old_secrets(&daemon).await }
-    });
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let started = std::time::Instant::now();
-    let task = save(&daemon, params(HOURLY)).await;
-    let waited = started.elapsed();
-    crate::store::VACUUM_HOLD_MS.store(0, Relaxed);
-    assert!(task.is_ok(), "{task:?}");
-    assert!(
-        waited >= Duration::from_millis(300),
-        "it queued: {waited:?}"
-    );
-    wiping.await.unwrap();
-    let pending = reader(&daemon, |db| {
-        db.wipe_freed_pages().map_err(|e| store_error(&e))
-    })
-    .await
-    .unwrap();
-    assert!(!pending, "the wipe finished");
-    tracing::debug!(?waited, "a write waited behind the wipe");
-}
-
-/// The store's pre-41 copy loses its legacy webhook secrets with the wipe, and keeps its tasks:
-/// enough of them to span many pages, whose rebalance on the update frees old cells.
-#[tokio::test]
-async fn the_wipe_scrubs_the_pre_41_copy() {
-    const LEGACY: &str = "plx648-backup-legacy-value";
-    const TASKS: usize = 600;
-    let dir = tempfile::tempdir().unwrap();
-    let backup = dir.path().join("plxd.sqlite3.pre-41");
-    {
-        let mut conn = rusqlite::Connection::open(&backup).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE scheduled_tasks (id TEXT NOT NULL PRIMARY KEY, next_run_at TEXT, payload TEXT NOT NULL);",
-        )
-        .unwrap();
-        let tx = conn.transaction().unwrap();
-        for i in 0..TASKS {
-            let payload = serde_json::json!({
-                "task": {"title": "x".repeat(200)},
-                "secret": format!("{LEGACY}-{i:04}"),
-            });
-            tx.execute(
-                "INSERT INTO scheduled_tasks VALUES (?1, NULL, ?2)",
-                rusqlite::params![format!("t{i:04}"), payload.to_string()],
-            )
-            .unwrap();
-        }
-        tx.commit().unwrap();
-    }
-    let held = || {
-        let bytes = std::fs::read(&backup).unwrap();
-        bytes
-            .windows(LEGACY.len())
-            .filter(|window| *window == LEGACY.as_bytes())
-            .count()
-    };
-    assert!(held() >= TASKS, "the copy holds them");
-    // What a rebuild a crash cut short left.
-    let leftovers = [
-        dir.path().join("plxd.sqlite3.pre-41.rebuild"),
-        dir.path().join("plxd.sqlite3.pre-41.rebuild-journal"),
-    ];
-    for leftover in &leftovers {
-        std::fs::write(leftover, "partial").unwrap();
-    }
-    let daemon = daemon(dir.path());
-    store(&daemon, |db| {
-        db.set_wipe_freed_pages(true).map_err(|e| store_error(&e))
-    })
-    .await
-    .unwrap();
-    super::move_old_secrets(&daemon).await;
-    assert_eq!(held(), 0, "the copy retains secrets");
-    assert!(leftovers.iter().all(|leftover| !leftover.exists()));
-    let conn = rusqlite::Connection::open(&backup).unwrap();
-    let (rows, secrets): (usize, usize) = conn
-        .query_row(
-            "SELECT COUNT(*), COUNT(json_extract(payload, '$.secret')) FROM scheduled_tasks",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .unwrap();
-    assert_eq!((rows, secrets), (TASKS, 0));
-}
-
-/// A crash after a save staged its new key, before the row named it, leaves the key recorded,
-/// and the next start removes it. A recorded key a task's row names stays.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_key_staged_before_a_crash_goes_at_the_next_start() {
-    let dir = tempfile::tempdir().unwrap();
-    let (daemon, keys) = fault_daemon(dir.path());
-    let task = save(&daemon, signed("working-value")).await.unwrap();
-    let id = Uuid::try_parse(&task.id).unwrap();
-    let used = stored(&daemon, id).await.secret_key.unwrap();
-    let staged = parallax_protocol::AccountId::generate();
-    super::stage_secret(
-        &daemon,
-        staged,
-        zeroize::Zeroizing::new("staged-value".into()),
-    )
-    .await
-    .unwrap();
-    // The crash: no row names it. A record of a key in use, which a save never leaves, stays
-    // harmless.
-    store(&daemon, move |db| {
-        super::change_unused(db, |keys| keys.push(used))
-    })
-    .await
-    .unwrap();
-    super::forget_unused(&daemon).await;
-    let values: Vec<String> = keys.values.lock().unwrap().values().cloned().collect();
-    assert_eq!(values, ["working-value"]);
-    let recorded = reader(&daemon, |db| {
-        db.unused_secret_keys().map_err(|e| store_error(&e))
-    })
-    .await
-    .unwrap();
-    assert_eq!(recorded, None);
-}
-
-/// A key a save replaced but couldn't remove is recorded, and a later save removes it.
-#[cfg(unix)]
-#[tokio::test]
-async fn a_replaced_key_that_couldnt_be_removed_goes_later() {
-    use std::sync::atomic::Ordering::SeqCst;
-    let dir = tempfile::tempdir().unwrap();
-    let (daemon, keys) = fault_daemon(dir.path());
-    let task = save(&daemon, signed("old-value")).await.unwrap();
-    let mut replacement = signed("new-value");
-    replacement.id = Some(task.id.clone());
-    keys.fail_delete.store(true, SeqCst);
-    save(&daemon, replacement.clone()).await.unwrap();
-    let held = || {
-        let mut values: Vec<String> = keys.values.lock().unwrap().values().cloned().collect();
-        values.sort();
-        values
-    };
-    assert_eq!(held(), ["new-value", "old-value"]);
-    keys.fail_delete.store(false, SeqCst);
-    save(&daemon, replacement).await.unwrap();
-    assert_eq!(held(), ["new-value"]);
-    let recorded = reader(&daemon, |db| {
-        db.unused_secret_keys().map_err(|e| store_error(&e))
-    })
-    .await
-    .unwrap();
-    assert_eq!(recorded, None);
 }

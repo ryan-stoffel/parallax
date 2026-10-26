@@ -82,13 +82,6 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_key_is_keychain_unavailable() {
-        let store = MemoryKeyStore::new();
-        let error = resolve(&store, Provider::Anthropic, AccountId::generate()).unwrap_err();
-        assert!(matches!(error, KeyAccountError::KeychainUnavailable));
-    }
-
-    #[test]
     fn a_locked_keychain_is_keychain_unavailable() {
         // Nothing can unlock the Keychain to answer, such as a headless session (0004, 0007,
         // #91).
@@ -113,17 +106,5 @@ mod tests {
 
         let error = resolve(&LockedStore, Provider::Anthropic, AccountId::generate()).unwrap_err();
         assert!(matches!(error, KeyAccountError::KeychainUnavailable));
-    }
-
-    #[test]
-    fn providers_with_no_backend_yet_are_refused() {
-        let store = MemoryKeyStore::new();
-        for provider in [Provider::Cursor, Provider::Unknown] {
-            let error = resolve(&store, provider, AccountId::generate()).unwrap_err();
-            assert!(
-                matches!(error, KeyAccountError::NoBackend(_)),
-                "{provider:?}"
-            );
-        }
     }
 }

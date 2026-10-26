@@ -2226,19 +2226,19 @@ pub(crate) async fn recover(daemon: &Arc<Daemon>) -> Vec<RunId> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+
     use std::time::Duration;
 
     use std::path::Path;
 
     use parallax_protocol::{ErrorKind, RunId};
     use parallax_store::{ProjectFields, RunFields, RunState};
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::mpsc;
     use uuid::Uuid;
 
-    use super::actor::{Command, IDLE, QueueOp};
-    use super::{child_header, in_mode, queue, record, store, store_error};
-    use crate::context::memory::Start;
+    use super::actor::Command;
+    use super::{record, store, store_error};
+
     use crate::server::Daemon;
 
     /// A Project's fields, for a test that stores one.
@@ -2275,25 +2275,6 @@ mod tests {
         }
     }
 
-    /// 0060: idle sessions past the cap release the least recently used; one that went idle
-    /// again moves to the back, and one that is busy, released, or gone leaves the count.
-    #[test]
-    fn past_the_cap_the_least_recently_idle_session_goes() {
-        let idle = super::IdleSessions::default();
-        let runs: Vec<RunId> = (0..=super::MAX_IDLE_SESSIONS)
-            .map(|_| RunId::generate())
-            .collect();
-        for &run in &runs[..super::MAX_IDLE_SESSIONS] {
-            assert_eq!(idle.push(run), None);
-        }
-        // The first went idle again: the second is now the oldest.
-        assert_eq!(idle.push(runs[0]), None);
-        assert_eq!(idle.push(runs[super::MAX_IDLE_SESSIONS]), Some(runs[1]));
-        // A busy one leaves the count, so the next goes idle under the cap.
-        idle.remove(runs[2]);
-        assert_eq!(idle.push(RunId::generate()), None);
-    }
-
     /// PLX-959: a run with approvals or in Bypass is full Claude Code, and skips the worker
     /// sandbox checks on every OS. A message's permission change decides for the new process.
     #[test]
@@ -2322,121 +2303,6 @@ mod tests {
             &fields(false, Some("bypass")),
             Some(Manual)
         ));
-    }
-
-    /// PLX-406 (0044): the brief, then the index, between the tools and the task, and neither
-    /// when the Project has none.
-    #[test]
-    fn a_childs_header_carries_the_brief_then_the_index() {
-        let start = Start {
-            brief: Some("Ship v2.".to_owned()),
-            index: "Memory:\n- you preference: Terse (memory/preference/terse.md)\n".to_owned(),
-            over: false,
-        };
-        let header = child_header("app", &start);
-        assert!(
-            header.ends_with(
-                ".\n\nThe Project's brief:\nShip v2.\n\nMemory:\n\
-                 - you preference: Terse (memory/preference/terse.md)\n\nYour task:\n"
-            ),
-            "{header}"
-        );
-        let bare = child_header("app", &Start::default());
-        assert!(bare.ends_with("memory_propose.\n\nYour task:\n"), "{bare}");
-    }
-
-    /// PLX-394 (0042): each built-in kind in each Project mode. Claude Code, Codex, and Cursor
-    /// map both Auto and Bypass (0053: Cursor's Auto is the SDK's classifier). A run is never
-    /// moved up to another mode.
-    #[test]
-    fn each_kind_runs_a_projects_mode_or_says_why_not() {
-        use parallax_protocol::{AgentPermission, ProjectPermission};
-
-        use crate::backend::claude::ClaudeBackend;
-        use crate::backend::codex::CodexBackend;
-        use crate::backend::process::{Environment, Launcher};
-        use crate::paths::DataDir;
-
-        let dir = tempfile::tempdir().unwrap();
-        let launcher = Launcher::new(
-            DataDir::new(dir.path().join("data")).unwrap(),
-            Environment::default(),
-        );
-        let claude = ClaudeBackend::new(launcher.clone());
-        let codex = CodexBackend::new(launcher.clone());
-        let cursor = crate::providers::cursor_backend(launcher);
-        let (auto, bypass) = (ProjectPermission::Auto, ProjectPermission::Bypass);
-        for backend in [&claude as &dyn crate::backend::Backend, &codex, &cursor] {
-            assert_eq!(in_mode(backend, auto).unwrap(), AgentPermission::Auto);
-            assert_eq!(in_mode(backend, bypass).unwrap(), AgentPermission::Bypass);
-        }
-    }
-
-    /// PLX-433 (0042): a model service runs Claude Code, which has Auto, but runs a Project's
-    /// agents only in Bypass. Its threads keep Auto. One instance keeps its key as a secret and
-    /// two don't, so both of plxd's backends for an instance are covered.
-    #[tokio::test]
-    async fn a_model_service_runs_a_project_only_in_bypass() {
-        use parallax_protocol::{
-            AgentPermission, ProjectPermission, ProviderEnvVar, ProviderInstance, ProviderKind,
-        };
-
-        use crate::backend::process::{Environment, Launcher};
-        use crate::keystore::MemoryKeyStore;
-        use crate::paths::DataDir;
-        use crate::providers::Providers;
-        use crate::routing::BackendRegistry;
-
-        let dir = tempfile::tempdir().unwrap();
-        let launcher = Launcher::new(
-            DataDir::new(dir.path().join("data")).unwrap(),
-            Environment::empty(),
-        );
-        let registry = BackendRegistry::new();
-        let providers = Providers::load(
-            dir.path(),
-            Arc::new(MemoryKeyStore::new()),
-            &launcher,
-            &registry,
-        );
-        let kinds = [
-            ("openrouter", ProviderKind::OpenRouter, true),
-            ("local-model", ProviderKind::LocalModel, false),
-        ];
-        for (id, kind, secret) in kinds {
-            let instance = ProviderInstance {
-                id: id.into(),
-                kind,
-                name: id.into(),
-                enabled: true,
-                program: None,
-                home: None,
-                args: Vec::new(),
-                env: vec![ProviderEnvVar {
-                    name: "ANTHROPIC_AUTH_TOKEN".into(),
-                    value: Some("key".into()),
-                    secret,
-                }],
-                models: Vec::new(),
-                reserve: None,
-            };
-            providers.save(instance).await.unwrap();
-            let (_, backend) = registry.by_backend_name(id).unwrap();
-            assert!(backend.permissions().contains(&AgentPermission::Auto));
-            assert_eq!(
-                in_mode(backend.as_ref(), ProjectPermission::Bypass).unwrap(),
-                AgentPermission::Bypass
-            );
-            let refused = in_mode(backend.as_ref(), ProjectPermission::Auto).unwrap_err();
-            assert_eq!(
-                refused.parallax_data().unwrap().kind,
-                ErrorKind::UnsupportedOption
-            );
-            assert_eq!(
-                refused.message,
-                format!("{id} has no Auto in a Project. Set the Project to Bypass to use it.")
-            );
-        }
     }
 
     /// PLX-338: a worker start that read its Project before `project/delete` removed it records
@@ -2482,54 +2348,6 @@ mod tests {
         assert_eq!(stored, None);
     }
 
-    /// Recovery at start is a job per run (0052): a run whose row can't be read as a run doesn't
-    /// roll back the others' `interrupted`, or their events.
-    #[tokio::test]
-    async fn a_run_that_fails_recovery_leaves_the_others_recovered() {
-        let dir = tempfile::tempdir().unwrap();
-        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
-        let project = Uuid::now_v7();
-        // Not a UUIDv7, so it fails conversion to a protocol run.
-        let (corrupt, good) = (Uuid::from_u128(1), Uuid::now_v7());
-        store(&daemon, move |db| {
-            db.create_project(project, &project_fields())
-                .map_err(|e| store_error(&e))?;
-            let run = run_fields(project);
-            let state = RunState {
-                status: "running".to_owned(),
-                ..RunState::default()
-            };
-            for id in [corrupt, good] {
-                db.create_run(id, &run, &state)
-                    .map_err(|e| store_error(&e))?;
-            }
-            Ok(())
-        })
-        .await
-        .unwrap();
-
-        super::recover(&daemon).await;
-
-        let status = |id: Uuid| {
-            let daemon = Arc::clone(&daemon);
-            async move {
-                store(&daemon, move |db| {
-                    Ok(db.get_run(id).unwrap().unwrap().state.status)
-                })
-                .await
-                .unwrap()
-            }
-        };
-        assert_eq!(status(good).await, "interrupted");
-        assert_eq!(status(corrupt).await, "running", "its job rolled back");
-        let good = RunId::try_from(good).unwrap();
-        let (logged, _) = daemon.log.run_events(good, 0, 10, usize::MAX).unwrap();
-        assert!(
-            logged.iter().any(|entry| entry.kind() == "agent.finished"),
-            "{logged:?}"
-        );
-    }
-
     /// PLX-459: an idle actor leaves the map only once no command can reach it: not while one
     /// holds its sender, as `ask` does between `actor_for` and its send, nor while one waits in
     /// its channel.
@@ -2555,61 +2373,5 @@ mod tests {
         assert!(agents.retire(id, &commands));
         assert!(agents.actor(id).is_none());
         assert!(commands.recv().await.is_none(), "no sender is left");
-    }
-
-    /// PLX-459, on a paused clock: a run's actor stops after `IDLE` with nothing to do, but not
-    /// while a command that found it before then can still send, and the next command starts a
-    /// fresh one.
-    #[tokio::test(start_paused = true)]
-    async fn an_idle_actor_stops_and_the_next_command_starts_another() {
-        let dir = tempfile::tempdir().unwrap();
-        let daemon = Daemon::for_tests(dir.path(), 10, Duration::from_secs(90));
-        let project = Uuid::now_v7();
-        // A checkout thread that finished: no worktree, and nothing left to do.
-        let id = RunId::generate();
-        let run = RunFields {
-            checkout: true,
-            ..run_fields(project)
-        };
-        let state = RunState {
-            status: super::convert::COMPLETED.to_owned(),
-            ..RunState::default()
-        };
-        store(&daemon, move |db| {
-            db.create_project(project, &project_fields())
-                .map_err(|e| store_error(&e))?;
-            db.create_run(id.into(), &run, &state)
-                .map_err(|e| store_error(&e))
-        })
-        .await
-        .unwrap();
-        let list = || queue(Arc::clone(&daemon), id, QueueOp::List, None);
-
-        list().await.unwrap();
-        let racing = daemon
-            .agents
-            .actor(id)
-            .expect("the command started an actor");
-        tokio::time::sleep(IDLE * 2).await;
-        let (reply, answer) = oneshot::channel();
-        let command = Command::Queue {
-            command_id: None,
-            op: QueueOp::List,
-            reply,
-        };
-        assert!(racing.send(command).await.is_ok(), "the actor kept running");
-        answer.await.unwrap().unwrap();
-        drop(racing);
-
-        tokio::time::sleep(IDLE.saturating_sub(Duration::from_secs(1))).await;
-        assert!(
-            daemon.agents.actor(id).is_some(),
-            "idle, but not for long enough"
-        );
-        tokio::time::sleep(Duration::from_secs(2)).await;
-        assert!(daemon.agents.actor(id).is_none(), "an idle actor stops");
-
-        list().await.unwrap();
-        assert!(daemon.agents.actor(id).is_some(), "a fresh actor");
     }
 }

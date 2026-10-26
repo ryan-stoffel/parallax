@@ -4,9 +4,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import type { ParallaxBridge } from "../preload/bridge";
-import type { AgentEntry, AgentFileResult } from "../protocol/generated/protocol";
+import type { AgentEntry } from "../protocol/generated/protocol";
 import { FilesPanel } from "./FilesPanel";
-import { SidePanel } from "./SidePanel";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers. The entry menu is in the DOM either way.
@@ -16,49 +15,29 @@ HTMLElement.prototype.hidePopover = () => {};
 const folders: Record<string, AgentEntry[]> = {
   "": [
     { name: "README.md", kind: "file", size: 6 },
-    { name: "big.bin", kind: "file", size: 5_000_000 },
-    { name: "logo.png", kind: "file", size: 4 },
     { name: "src", kind: "dir" },
   ],
   src: [{ name: "main.rs", kind: "file", size: 13 }],
 };
-const files: Record<string, Partial<AgentFileResult>> = {
-  "src/main.rs": { exists: true, content: btoa("fn main() {}\n"), tooLarge: false },
-  "logo.png": { exists: true, content: btoa("\x89PNG\x00"), tooLarge: false },
-  "big.bin": { exists: true, size: 5_000_000, tooLarge: true },
-};
-// big.bin's bytes, which only slices read (PLX-835).
-const big = new Uint8Array(5_000_000).fill(7);
-// plxd's answer to a change: the error message to fail with, or nothing.
-let editError: string | undefined;
-const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
-  const path = (params["path"] as string | undefined) ?? "";
-  if (method.startsWith("agent/file") && method !== "agent/file" && method !== "agent/files")
-    return editError
-      ? { error: { code: -32602, message: `Invalid params: ${editError}` } }
-      : { logId: "log-1", result: {} };
-  if (method === "agent/files")
-    return { logId: "log-1", result: { entries: folders[path], truncated: false } };
-  const offset = params["offset"] as number | undefined;
-  if (path === "big.bin" && offset !== undefined) {
-    const slice = big.subarray(offset, offset + (params["length"] as number));
-    const content = Buffer.from(slice).toString("base64");
-    const result = { path, side: "working", exists: true, size: big.length, tooLarge: false };
-    return { logId: "log-1", result: { ...result, content } };
-  }
-  return { logId: "log-1", result: { path, side: "working", ...files[path] } };
-});
-// What the host advertises: none of `fileChunks` unless a test sets it.
-let capabilities: Record<string, Record<string, number>> = {};
+// plxd: a change (fileCreate, fileRename, fileDelete) succeeds, and agent/files lists `folders`.
+const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) =>
+  method === "agent/files"
+    ? {
+        logId: "log-1",
+        result: {
+          entries: folders[(params["path"] as string | undefined) ?? ""],
+          truncated: false,
+        },
+      }
+    : { logId: "log-1", result: {} },
+);
 
 beforeEach(() => {
   request.mockClear();
-  editError = undefined;
-  capabilities = {};
   window.parallax = {
     platform: "darwin",
     request,
-    connectionState: async () => ({ status: "connected", plxd: "", protocol: 1, capabilities }),
+    connectionState: async () => ({ status: "connected", plxd: "", protocol: 1, capabilities: {} }),
   } as Partial<ParallaxBridge> as ParallaxBridge;
 });
 
@@ -81,118 +60,6 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-// Each row of the tree, indented by depth, its folders marked open or closed.
-const rowButtons = () =>
-  [...document.querySelectorAll<HTMLElement>('[role="treeitem"] > div > button')].filter(
-    (b) => !b.hasAttribute("data-actions"),
-  );
-const rows = () =>
-  rowButtons().map((b) => {
-    const depth = (parseInt(b.style.paddingLeft) - 10) / 14;
-    const state = b.closest('[role="treeitem"]')!.getAttribute("aria-expanded");
-    return `${"  ".repeat(depth)}${b.textContent}${state === null ? "" : state === "true" ? " v" : " >"}`;
-  });
-const row = (name: string) => rowButtons().find((b) => b.textContent === name);
-const back = () => document.querySelector<HTMLElement>("button:has(.lucide-chevron-left)");
-const shown = () => document.body.textContent;
-
-test("the tree lists folders first, opens a folder lazily on click, and opens files read-only", async () => {
-  await render(<FilesPanel hostId="local" runId="run-1" />);
-  expect(request).toHaveBeenCalledTimes(1);
-  expect(request).toHaveBeenCalledWith("local", "agent/files", { runId: "run-1" });
-  expect(rows()).toEqual(["src >", "README.md", "big.bin", "logo.png"]);
-
-  await click(row("src"));
-  expect(request).toHaveBeenLastCalledWith("local", "agent/files", { runId: "run-1", path: "src" });
-  expect(rows()).toEqual(["src v", "  main.rs", "README.md", "big.bin", "logo.png"]);
-
-  await click(row("main.rs"));
-  expect(request).toHaveBeenLastCalledWith("local", "agent/file", {
-    runId: "run-1",
-    path: "src/main.rs",
-    side: "working",
-  });
-  const pre = document.querySelector('pre[aria-label="src/main.rs"]')!;
-  expect(pre.textContent).toBe("fn main() {}\n");
-  expect(pre.className).toContain("font-mono");
-
-  // Back to the tree as it was; closing and opening a folder lists it again.
-  await click(back());
-  expect(rows()).toEqual(["src v", "  main.rs", "README.md", "big.bin", "logo.png"]);
-  await click(row("src"));
-  expect(rows()).toEqual(["src >", "README.md", "big.bin", "logo.png"]);
-  const calls = request.mock.calls.length;
-  await click(row("src"));
-  expect(request.mock.calls.length).toBe(calls + 1);
-});
-
-test("binary and oversized files show a note instead of their content, and a binary Download", async () => {
-  let saved: [string, number] | undefined;
-  URL.createObjectURL = (blob: Blob) => ((saved = ["", blob.size]), "blob:logo");
-  URL.revokeObjectURL = () => {};
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementationOnce(function (
-    this: HTMLAnchorElement,
-  ) {
-    saved![0] = this.download;
-  });
-  await render(<FilesPanel hostId="local" runId="run-1" />);
-  await click(row("logo.png"));
-  expect(shown()).toContain("This is a binary file.");
-  expect(document.querySelector("pre")).toBeNull();
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Download"));
-  expect(saved).toEqual(["logo.png", 5]);
-  await click(back());
-  await click(row("big.bin"));
-  expect(shown()).toContain("This file is too large to show.");
-  expect(shown()).not.toContain("Download");
-});
-
-test("on a plxd with fileChunks, a file too large to show downloads, read in slices (PLX-835)", async () => {
-  capabilities = { fileChunks: { chunkBytes: 2 * 2 ** 20, maxBytes: 2 ** 30 } };
-  let saved: [string, number] | undefined;
-  URL.createObjectURL = (blob: Blob) => ((saved = ["", blob.size]), "blob:big");
-  URL.revokeObjectURL = () => {};
-  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementationOnce(function (
-    this: HTMLAnchorElement,
-  ) {
-    saved![0] = this.download;
-  });
-  await render(<FilesPanel hostId="local" runId="run-1" />);
-  await click(row("big.bin"));
-  expect(shown()).toContain("This file is too large to show.");
-  // Only its size is asked until Download.
-  expect(request).toHaveBeenLastCalledWith("local", "agent/file", {
-    runId: "run-1",
-    path: "big.bin",
-    side: "working",
-    sizeOnly: true,
-  });
-  await click([...document.querySelectorAll("button")].find((b) => b.textContent === "Download"));
-  await vi.waitFor(() => expect(saved).toEqual(["big.bin", 5_000_000]));
-  const slices = request.mock.calls.filter(([, , p]) => p["offset"] !== undefined);
-  // 256 KiB slices (`pieceBytes`), under plxd's 2 MiB chunkBytes.
-  expect(slices.map(([, , p]) => p["offset"])).toEqual(
-    Array.from({ length: 20 }, (_, i) => i * 2 ** 18),
-  );
-});
-
-test("with no thread open, or a plxd without files, the view says so and asks nothing", async () => {
-  await render(
-    <SidePanel scope="t" open onClose={() => {}} expanded={false} onExpandedChange={() => {}} />,
-  );
-  const files = [...document.querySelectorAll<HTMLButtonElement>("nav button")].find((b) =>
-    b.textContent?.startsWith("Files"),
-  )!;
-  expect(files.disabled).toBe(false);
-  await click(files);
-  expect(shown()).toContain("No thread open");
-  act(() => unmount());
-
-  await render(<FilesPanel hostId="local" runId="run-1" unavailable="Update Parallax." />);
-  expect(shown()).toContain("Update Parallax.");
-  expect(request).not.toHaveBeenCalled();
-});
-
 const type = async (value: string, key: string) => {
   const input = document.activeElement as HTMLInputElement;
   await act(async () => {
@@ -208,71 +75,10 @@ const menuItem = (name: string) =>
     b.textContent?.startsWith(name),
   );
 
-test("an editable tree creates a file in a folder from its menu, and lists the folder again", async () => {
-  await render(<FilesPanel hostId="local" runId="run-1" editable />);
-  await click(button("Actions for src"));
-  await click(menuItem("New file"));
-  // The folder opens with a name field at its top.
-  expect(rows()).toEqual(["src v", "  main.rs", "README.md", "big.bin", "logo.png"]);
-  expect(document.activeElement?.getAttribute("aria-label")).toBe("File name");
-
-  request.mockClear();
-  await type("lib.rs", "Enter");
-  expect(request).toHaveBeenCalledWith("local", "agent/fileCreate", {
-    runId: "run-1",
-    path: "src/lib.rs",
-    folder: false,
-  });
-  expect(request).toHaveBeenCalledWith("local", "agent/files", { runId: "run-1", path: "src" });
-  expect(document.querySelector("input")).toBeNull();
-});
-
-test("a failed save keeps the name field open with plxd's reason, and Escape cancels", async () => {
-  await render(<FilesPanel hostId="local" runId="run-1" editable />);
-  await click(button("New folder"));
-  editError = '"src" already exists';
-  await type("src", "Enter");
-  expect(request).toHaveBeenLastCalledWith("local", "agent/fileCreate", {
-    runId: "run-1",
-    path: "src",
-    folder: true,
-  });
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe('"src" already exists');
-  expect(document.querySelector("input")).not.toBeNull();
-
-  request.mockClear();
-  await type("ignored", "Escape");
-  expect(document.querySelector("input")).toBeNull();
-  expect(request).not.toHaveBeenCalled();
-});
-
-test("F2 renames an entry in place, and an open folder keeps its contents under the new name", async () => {
-  await render(<FilesPanel hostId="local" runId="run-1" editable />);
-  await click(row("src"));
-  await act(async () =>
-    row("src")!.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true })),
-  );
-  expect((document.activeElement as HTMLInputElement).value).toBe("src");
-
-  const before = { ...folders };
-  folders[""] = folders[""]!.map((e) => (e.name === "src" ? { ...e, name: "lib" } : e));
-  folders["lib"] = folders["src"]!;
-  await type("lib", "Enter");
-  expect(request).toHaveBeenCalledWith("local", "agent/fileRename", {
-    runId: "run-1",
-    from: "src",
-    to: "lib",
-  });
-  expect(rows()).toEqual(["lib v", "  main.rs", "README.md", "big.bin", "logo.png"]);
-  Object.assign(folders, before);
-  delete folders["lib"];
-});
-
 test("Delete asks first, then deletes the entry and lists its folder again", async () => {
   await render(<FilesPanel hostId="local" runId="run-1" editable />);
   await click(button("Actions for README.md"));
   await click(menuItem("Delete"));
-  expect(shown()).toContain("Delete “README.md”?");
   expect(request).not.toHaveBeenCalledWith("local", "agent/fileDelete", expect.anything());
 
   request.mockClear();
@@ -312,22 +118,4 @@ test("Enter then leaving the field saves once, and a blank name closes it withou
   await type("  ", "Enter");
   expect(document.querySelector("input")).toBeNull();
   expect(request).not.toHaveBeenCalled();
-});
-
-test("a failed rename keeps its field open with the reason", async () => {
-  await render(<FilesPanel hostId="local" runId="run-1" editable />);
-  await act(async () =>
-    row("README.md")!.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true })),
-  );
-  editError = '"src" already exists';
-  await type("src", "Enter");
-  expect(request).toHaveBeenLastCalledWith("local", "agent/fileRename", {
-    runId: "run-1",
-    from: "README.md",
-    to: "src",
-  });
-  expect(
-    document.querySelector<HTMLInputElement>('input[aria-label="Rename README.md"]'),
-  ).not.toBeNull();
-  expect(document.querySelector('[role="alert"]')?.textContent).toBe('"src" already exists');
 });

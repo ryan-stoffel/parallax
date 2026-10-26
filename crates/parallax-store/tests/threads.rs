@@ -1,6 +1,6 @@
 use parallax_store::{
-    ForkedFrom, ProjectFields, ProjectIcon, RepoFields, RunFields, RunState, Store, StoreError,
-    StoredEvent, StoredImage, ThreadFields, ThreadUpdate, WorktreeFields,
+    ForkedFrom, ProjectFields, RepoFields, RunFields, RunState, Store, StoredEvent, StoredImage,
+    ThreadFields, ThreadUpdate, WakeState, WorktreeFields,
 };
 use rusqlite::Connection;
 use uuid::Uuid;
@@ -61,180 +61,7 @@ fn state() -> RunState {
 }
 
 #[test]
-fn a_path_has_one_repo_entry_whatever_id_asks_for_it() {
-    let (_dir, mut store) = open();
-    let first = Uuid::now_v7();
-    let repo = store
-        .add_repo(first, &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    assert_eq!(repo.id, first);
-    assert_eq!(repo.fields.name, "parallax");
-    assert!(!repo.fields.scratch);
-
-    let again = store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    assert_eq!(
-        again, repo,
-        "a second id for the same path gets the first entry"
-    );
-    let retried = store
-        .add_repo(first, &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    assert_eq!(retried, repo);
-
-    let conflict = store
-        .add_repo(first, &repo_fields("/Users/me/src/other"))
-        .unwrap_err();
-    assert!(matches!(conflict, StoreError::IdConflict { id } if id == first));
-
-    let other = store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/other"))
-        .unwrap();
-    assert_eq!(store.list_repos().unwrap(), vec![repo.clone(), other]);
-    assert_eq!(store.get_repo(first).unwrap(), Some(repo));
-    assert_eq!(store.scratch_repo().unwrap(), None);
-}
-
-/// A repo entry's icon replaces whole, image included (decision records
-/// 0033 and 0038), and reads back from get and list.
-#[test]
-fn a_repo_icon_with_an_image_round_trips_and_an_icon_without_one_clears_it() {
-    let (_dir, mut store) = open();
-    let id = Uuid::now_v7();
-    store
-        .add_repo(id, &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    let glyph = ProjectIcon {
-        name: "flame".to_owned(),
-        color: Some("orange".to_owned()),
-        image: None,
-    };
-    let with_image = ProjectIcon {
-        image: Some(StoredImage {
-            media_type: "image/webp".to_owned(),
-            data: "UklGRg==".to_owned(),
-        }),
-        ..glyph.clone()
-    };
-
-    let (repo, changed) = store.set_repo_icon(id, &with_image).unwrap();
-    assert!(changed);
-    assert_eq!(repo.icon, Some(with_image.clone()));
-    assert_eq!(store.list_repos().unwrap(), [repo]);
-    assert!(!store.set_repo_icon(id, &with_image).unwrap().1);
-
-    let (cleared, changed) = store.set_repo_icon(id, &glyph).unwrap();
-    assert!(changed);
-    assert_eq!(cleared.icon, Some(glyph));
-    assert_eq!(store.get_repo(id).unwrap(), Some(cleared));
-}
-
-#[test]
-fn the_scratch_entry_is_found_by_its_flag() {
-    let (_dir, mut store) = open();
-    store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    let scratch = store
-        .add_repo(
-            Uuid::now_v7(),
-            &RepoFields {
-                name: "No Repo".to_owned(),
-                path: "/data/scratch".to_owned(),
-                scratch: true,
-                space: false,
-            },
-        )
-        .unwrap();
-    assert_eq!(store.scratch_repo().unwrap(), Some(scratch));
-}
-
-#[test]
-fn a_thread_is_recorded_with_its_run_and_worktree_and_archives() {
-    let (_dir, mut store) = open();
-    let repo = store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    let id = Uuid::now_v7();
-    let (thread, run, worktree) = store
-        .create_thread_run(
-            id,
-            repo.id,
-            &run_fields(repo.id),
-            &state(),
-            Some(&worktree_fields(id)),
-            &ThreadFields::default(),
-        )
-        .unwrap();
-    assert_eq!(thread.id, id);
-    assert_eq!(thread.repo_id, repo.id);
-    assert!(!thread.archived);
-    assert_eq!(run.fields.project_id, repo.id);
-    assert_eq!(worktree.unwrap().id, id);
-    assert_eq!(store.list_runs(Some(repo.id)).unwrap(), vec![run]);
-
-    let duplicate = store
-        .create_thread_run(
-            id,
-            repo.id,
-            &run_fields(repo.id),
-            &state(),
-            Some(&worktree_fields(id)),
-            &ThreadFields::default(),
-        )
-        .unwrap_err();
-    assert!(matches!(duplicate, StoreError::IdConflict { .. }));
-    assert_eq!(store.list_threads().unwrap(), vec![thread.clone()]);
-
-    let archived = store.set_thread_archived(id, true).unwrap();
-    assert!(archived.archived);
-    assert_eq!(store.get_thread(id).unwrap(), Some(archived.clone()));
-    assert_eq!(archived.unarchived_at, None);
-    let back = store.set_thread_archived(id, false).unwrap();
-    assert!(!back.archived);
-    // Bringing it back records when, which the merge sweep counts as activity (PLX-795).
-    assert!(back.unarchived_at.is_some());
-    let missing = Uuid::now_v7();
-    assert!(matches!(
-        store.set_thread_archived(missing, true).unwrap_err(),
-        StoreError::NotFound { id } if id == missing
-    ));
-}
-
-#[test]
-fn a_thread_in_the_current_checkout_is_recorded_with_no_worktree() {
-    let (_dir, mut store) = open();
-    let repo = store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    let id = Uuid::now_v7();
-    let fields = RunFields {
-        checkout: true,
-        ..run_fields(repo.id)
-    };
-    let (thread, run, worktree) = store
-        .create_thread_run(
-            id,
-            repo.id,
-            &fields,
-            &state(),
-            None,
-            &ThreadFields::default(),
-        )
-        .unwrap();
-    assert_eq!(thread.id, id);
-    assert!(run.fields.checkout);
-    assert_eq!(worktree, None);
-    assert_eq!(store.get_worktree(id).unwrap(), None);
-    assert_eq!(store.get_run(id).unwrap(), Some(run));
-
-    assert!(store.delete_thread(id).unwrap());
-    assert_eq!(store.get_run(id).unwrap(), None);
-}
-
-#[test]
-fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
+fn deleting_a_thread_removes_every_row_kept_for_it_and_nothing_else() {
     let (_dir, mut store) = open();
     let repo = store
         .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
@@ -279,6 +106,14 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     }
     store.record_attached_seen(gone, &[(kept, 3)]).unwrap();
     store.record_attached_seen(kept, &[(gone, 4)]).unwrap();
+    let paused = WakeState {
+        in_a_row: 2,
+        paused: true,
+        woken: None,
+    };
+    for run in [kept, gone] {
+        store.set_wake_state(run, paused).unwrap();
+    }
 
     assert!(store.delete_thread(gone).unwrap());
     assert!(
@@ -293,6 +128,7 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     assert_eq!(store.image(gone, image).unwrap(), None);
     assert_eq!(store.attached_seen(gone, kept).unwrap(), None);
     assert_eq!(store.attached_seen(kept, gone).unwrap(), None);
+    assert_eq!(store.wake_state(gone).unwrap(), WakeState::default());
     let found: Vec<Uuid> = (store.search_threads("flaky", 10).unwrap())
         .iter()
         .map(|thread| thread.id)
@@ -308,6 +144,7 @@ fn deleting_a_thread_removes_its_run_worktree_events_turns_and_images_only() {
     assert_eq!(store.run_events(kept, 0, 10, 1 << 20).unwrap().0.len(), 1);
     assert_eq!(store.run_turns(kept).unwrap().len(), 1);
     assert!(store.image(kept, image).unwrap().is_some());
+    assert!(store.wake_state(kept).unwrap().paused);
 }
 
 /// Makes threads with a prompt and logs their `agent.output` events, for the search tests.
@@ -380,62 +217,6 @@ fn indexed_rows(path: &std::path::Path) -> i64 {
         .unwrap()
 }
 
-#[test]
-fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls() {
-    let (_dir, mut store) = open();
-    let mut threads = Threads::new(&mut store);
-    let prompted = threads.thread(&mut store, "Fix the flaky attach test.");
-    let followed_up = threads.thread(&mut store, "Rename the sidebar");
-    store
-        .record_turn(followed_up, Uuid::now_v7(), "Also the 50% case")
-        .unwrap();
-    let replied = threads.thread(&mut store, "Look into CI");
-    threads.output(
-        &store,
-        replied,
-        r#"[{"kind":"text","text":"The \"flaky\" attach test passes now"}]"#,
-    );
-    let tool_only = threads.thread(&mut store, "Read the logs");
-    threads.output(
-        &store,
-        tool_only,
-        r#"[{"kind":"toolCall","callId":"1","name":"Bash","input":{"command":"grep flaky"}},
-            {"kind":"toolResult","callId":"1","status":"ok","output":"flaky"}]"#,
-    );
-    let titled = threads.thread(&mut store, "Go");
-    let title = ThreadUpdate {
-        title: Some(Some("Quarantine the attach test".to_owned())),
-        ..ThreadUpdate::default()
-    };
-    store.update_thread(titled, &title).unwrap();
-    assert_eq!(
-        found(&store, "flaky", 10),
-        [prompted],
-        "a prompt is searchable as it's stored, a reply when its turn ends"
-    );
-    assert_eq!(found(&store, "50%", 10), [followed_up], "a sent turn, too");
-    for run in [replied, tool_only] {
-        store.index_run_text(run).unwrap();
-    }
-
-    assert_eq!(
-        found(&store, "FLAKY", 10),
-        [replied, prompted],
-        "case-insensitive, newest message first, and a tool call's text doesn't count"
-    );
-    assert_eq!(
-        found(&store, "fla", 10),
-        [replied, prompted],
-        "a word prefix"
-    );
-    assert_eq!(found(&store, "flaky", 1), [replied], "the limit holds");
-    assert_eq!(
-        found(&store, "attach test", 10),
-        [titled, replied, prompted],
-        "a title matches, first"
-    );
-}
-
 /// Quotes, FTS5 operators, and a NUL in a query are plain text: they never fail a search.
 #[test]
 fn search_takes_quotes_and_operators_as_text() {
@@ -463,39 +244,6 @@ fn search_takes_quotes_and_operators_as_text() {
     ] {
         assert!(found(&store, query, 10).is_empty(), "{query}");
     }
-}
-
-/// A turn's replies become searchable when the turn ends, once however often it's indexed.
-#[test]
-fn a_new_turn_becomes_searchable_when_it_ends() {
-    let (dir, mut store) = open();
-    let path = dir.path().join("parallax.sqlite3");
-    let mut threads = Threads::new(&mut store);
-    let run = threads.thread(&mut store, "Look into CI");
-
-    threads.output(
-        &store,
-        run,
-        r#"[{"kind":"textDelta","messageId":"m","text":"The ca"}]"#,
-    );
-    threads.output(
-        &store,
-        run,
-        r#"[{"kind":"text","messageId":"m","text":"The cache was stale"}]"#,
-    );
-    assert!(found(&store, "stale", 10).is_empty(), "mid-turn");
-    store.index_run_text(run).unwrap();
-    assert_eq!(found(&store, "stale", 10), [run]);
-    store.index_run_text(run).unwrap();
-    store
-        .record_turn(run, Uuid::now_v7(), "Now the sidebar")
-        .unwrap();
-    store.index_run_text(run).unwrap();
-    assert_eq!(
-        indexed_rows(&path),
-        3,
-        "the prompt, the turn's replies, and the follow-up, each once"
-    );
 }
 
 /// Migration 36 indexes a store's existing runs from their prompts, turns, and events. The
@@ -645,59 +393,81 @@ fn migration_23_makes_a_coordinators_runs_its_children() {
     assert!(!thread.settled);
 }
 
+/// A snippet longer than 120 characters is cut around its match, on character boundaries
+/// (PLX-789).
 #[test]
-fn a_thread_keeps_its_lineage_and_updates_its_title_and_settled_flag() {
+fn a_long_snippet_is_cut_around_its_match() {
     let (_dir, mut store) = open();
-    let repo = store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    let [parent, id] = [Uuid::now_v7(), Uuid::now_v7()];
-    store
-        .create_run(parent, &run_fields(repo.id), &state())
-        .unwrap();
-    let lineage = ThreadFields {
-        forked_from: Some(ForkedFrom {
-            run: parent,
-            turn: Uuid::now_v7(),
-        }),
-        title: Some("Fix attach".to_owned()),
+    let threads = Threads::new(&mut store);
+    let prompt = format!("{} flaky {}", "é".repeat(150), "ü".repeat(150));
+    let id = threads.thread(&mut store, &prompt);
+    let snippets = store.search_snippets("flaky", &[id]).unwrap();
+    let [(found, snippet)] = snippets.as_slice() else {
+        panic!("one snippet, got {snippets:?}");
     };
-    let fields = RunFields {
-        parent: Some(parent),
-        ..run_fields(repo.id)
-    };
-    let (thread, run, _) = store
-        .create_thread_run(id, repo.id, &fields, &state(), None, &lineage)
-        .unwrap();
-    assert_eq!(run.fields.parent, Some(parent));
-    assert_eq!(thread.parent, Some(parent));
-    assert_eq!(thread.fields, lineage);
-    assert!(!thread.settled);
-
-    let rename = ThreadUpdate {
-        title: Some(Some("Fix the attach test".to_owned())),
-        settled: Some(true),
-        ..ThreadUpdate::default()
-    };
-    let (updated, changed) = store.update_thread(id, &rename).unwrap();
-    assert!(changed);
-    assert_eq!(updated.fields.title.as_deref(), Some("Fix the attach test"));
-    assert!(updated.settled);
-    assert_eq!(
-        store.list_threads().unwrap(),
-        std::slice::from_ref(&updated)
+    assert_eq!(*found, id);
+    assert_eq!(snippet.chars().count(), 120, "{snippet}");
+    assert!(
+        snippet.starts_with("…é") && snippet.ends_with("ü…"),
+        "{snippet}"
     );
-    assert_eq!(store.update_thread(id, &rename).unwrap(), (updated, false));
+    assert!(snippet.contains(" flaky "), "{snippet}");
+}
 
-    let clear = ThreadUpdate {
-        title: Some(None),
-        settled: Some(false),
+#[test]
+fn search_matches_titles_prompts_turns_and_replies_but_not_tool_calls() {
+    let (_dir, mut store) = open();
+    let mut threads = Threads::new(&mut store);
+    let prompted = threads.thread(&mut store, "Fix the flaky attach test.");
+    let followed_up = threads.thread(&mut store, "Rename the sidebar");
+    store
+        .record_turn(followed_up, Uuid::now_v7(), "Also the 50% case")
+        .unwrap();
+    let replied = threads.thread(&mut store, "Look into CI");
+    threads.output(
+        &store,
+        replied,
+        r#"[{"kind":"text","text":"The \"flaky\" attach test passes now"}]"#,
+    );
+    let tool_only = threads.thread(&mut store, "Read the logs");
+    threads.output(
+        &store,
+        tool_only,
+        r#"[{"kind":"toolCall","callId":"1","name":"Bash","input":{"command":"grep flaky"}},
+            {"kind":"toolResult","callId":"1","status":"ok","output":"flaky"}]"#,
+    );
+    let titled = threads.thread(&mut store, "Go");
+    let title = ThreadUpdate {
+        title: Some(Some("Quarantine the attach test".to_owned())),
         ..ThreadUpdate::default()
     };
-    let (cleared, changed) = store.update_thread(id, &clear).unwrap();
-    assert!(changed);
-    assert_eq!(cleared.fields.title, None);
-    assert!(!cleared.settled);
+    store.update_thread(titled, &title).unwrap();
+    assert_eq!(
+        found(&store, "flaky", 10),
+        [prompted],
+        "a prompt is searchable as it's stored, a reply when its turn ends"
+    );
+    assert_eq!(found(&store, "50%", 10), [followed_up], "a sent turn, too");
+    for run in [replied, tool_only] {
+        store.index_run_text(run).unwrap();
+    }
+
+    assert_eq!(
+        found(&store, "FLAKY", 10),
+        [replied, prompted],
+        "case-insensitive, newest message first, and a tool call's text doesn't count"
+    );
+    assert_eq!(
+        found(&store, "fla", 10),
+        [replied, prompted],
+        "a word prefix"
+    );
+    assert_eq!(found(&store, "flaky", 1), [replied], "the limit holds");
+    assert_eq!(
+        found(&store, "attach test", 10),
+        [titled, replied, prompted],
+        "a title matches, first"
+    );
 }
 
 /// Deleting a run clears it from its children's parent and its forks' origin, and touches no
@@ -736,24 +506,6 @@ fn deleting_a_parent_leaves_its_children_with_no_parent() {
     assert_eq!(orphan.fields.forked_from, None);
     assert_eq!(store.get_run(child).unwrap().unwrap().fields.parent, None);
     assert_eq!(store.get_thread(other).unwrap(), Some(untouched));
-}
-
-#[test]
-fn a_space_is_renamed_and_deleted() {
-    let (_dir, mut store) = open();
-    let id = Uuid::now_v7();
-    let fields = RepoFields {
-        space: true,
-        ..repo_fields("/data/spaces/one")
-    };
-    assert!(store.add_repo(id, &fields).unwrap().fields.space);
-    let (renamed, changed) = store.rename_repo(id, "Research").unwrap();
-    assert!(changed);
-    assert_eq!(renamed.fields.name, "Research");
-    assert!(!store.rename_repo(id, "Research").unwrap().1);
-    assert!(store.delete_repo(id).unwrap());
-    assert!(!store.delete_repo(id).unwrap());
-    assert_eq!(store.get_repo(id).unwrap(), None);
 }
 
 /// An area keeps only top-level threads and Projects, once each in the order given, and loses a
@@ -841,110 +593,4 @@ fn an_area_keeps_top_level_members_until_they_are_deleted() {
     assert!(!store.delete_area(id).unwrap());
     assert_eq!(store.get_area(id).unwrap(), None);
     assert!(store.get_thread(other).unwrap().is_some(), "members stay");
-}
-
-/// An area keeps repo entries and Spaces once each in the order given, never the scratch entry,
-/// and loses one when it is deleted (PLX-852).
-#[test]
-fn an_area_keeps_repo_entries_until_they_are_deleted() {
-    let (_dir, mut store) = open();
-    let repo = store
-        .add_repo(Uuid::now_v7(), &repo_fields("/Users/me/src/parallax"))
-        .unwrap();
-    let space = store
-        .add_repo(
-            Uuid::now_v7(),
-            &RepoFields {
-                space: true,
-                ..repo_fields("/data/spaces/math")
-            },
-        )
-        .unwrap();
-    let scratch = store
-        .add_repo(
-            Uuid::now_v7(),
-            &RepoFields {
-                scratch: true,
-                ..repo_fields("/data/scratch")
-            },
-        )
-        .unwrap();
-
-    let id = Uuid::now_v7();
-    let repos = [space.id, scratch.id, Uuid::now_v7(), repo.id, space.id];
-    let area = store
-        .save_area(id, "School", "sky", None, None, Some(&repos))
-        .unwrap();
-    assert_eq!(area.fields.repos, [space.id, repo.id]);
-    let renamed = store
-        .save_area(id, "Classes", "sky", None, None, None)
-        .unwrap();
-    assert_eq!(
-        renamed.fields.repos,
-        [space.id, repo.id],
-        "kept when not sent"
-    );
-
-    assert!(store.in_area(space.id).unwrap());
-    assert!(store.delete_repo(space.id).unwrap());
-    assert!(!store.in_area(space.id).unwrap());
-    assert_eq!(store.get_area(id).unwrap().unwrap().fields.repos, [repo.id]);
-}
-
-/// A pin round-trips, and pinning a pinned thread changes nothing (PLX-789).
-#[test]
-fn a_thread_is_pinned_once() {
-    let (_dir, mut store) = open();
-    let threads = Threads::new(&mut store);
-    let id = threads.thread(&mut store, "Pin me.");
-    let pin = ThreadUpdate {
-        pinned: Some(true),
-        ..ThreadUpdate::default()
-    };
-    let (thread, changed) = store.update_thread(id, &pin).unwrap();
-    assert!(thread.pinned && changed);
-    assert!(!store.update_thread(id, &pin).unwrap().1);
-}
-
-/// A thread that matched in a message gets that message's line around the match; one that matched
-/// only by its title gets none (PLX-789).
-#[test]
-fn a_message_match_has_a_snippet_and_a_title_match_has_none() {
-    let (_dir, mut store) = open();
-    let threads = Threads::new(&mut store);
-    let message = threads.thread(&mut store, "Fix the\n   flaky attach test.");
-    let titled = threads.thread(&mut store, "Something else.");
-    let title = ThreadUpdate {
-        title: Some(Some("A flaky dashboard".to_owned())),
-        ..ThreadUpdate::default()
-    };
-    store.update_thread(titled, &title).unwrap();
-    let mut ids = found(&store, "flaky", 10);
-    ids.sort();
-    assert_eq!(ids, [message, titled]);
-    assert_eq!(
-        store.search_snippets("flaky", &ids).unwrap(),
-        [(message, "Fix the flaky attach test.".to_owned())]
-    );
-}
-
-/// A snippet longer than 120 characters is cut around its match, on character boundaries
-/// (PLX-789).
-#[test]
-fn a_long_snippet_is_cut_around_its_match() {
-    let (_dir, mut store) = open();
-    let threads = Threads::new(&mut store);
-    let prompt = format!("{} flaky {}", "é".repeat(150), "ü".repeat(150));
-    let id = threads.thread(&mut store, &prompt);
-    let snippets = store.search_snippets("flaky", &[id]).unwrap();
-    let [(found, snippet)] = snippets.as_slice() else {
-        panic!("one snippet, got {snippets:?}");
-    };
-    assert_eq!(*found, id);
-    assert_eq!(snippet.chars().count(), 120, "{snippet}");
-    assert!(
-        snippet.starts_with("…é") && snippet.ends_with("ü…"),
-        "{snippet}"
-    );
-    assert!(snippet.contains(" flaky "), "{snippet}");
 }

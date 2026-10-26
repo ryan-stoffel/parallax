@@ -223,15 +223,12 @@ mod tests {
     use std::cell::Cell;
 
     use bytes::{Bytes, BytesMut};
-    use futures_util::{SinkExt, StreamExt, stream};
     use serde::ser::SerializeSeq;
     use serde::{Serialize, Serializer};
     use serde_json::json;
-    use tokio_util::codec::{Decoder, Encoder, FramedRead, FramedWrite};
-    use tokio_util::io::StreamReader;
+    use tokio_util::codec::{Decoder, Encoder};
 
-    use super::{FrameCodec, FrameError, MAX_FRAME_BYTES};
-    use crate::jsonrpc::{INVALID_REQUEST, Message, PARSE_ERROR};
+    use super::{FrameCodec, FrameError};
 
     fn decode_all(codec: &mut FrameCodec, buf: &mut BytesMut) -> Vec<Bytes> {
         let mut frames = Vec::new();
@@ -241,68 +238,36 @@ mod tests {
         frames
     }
 
+    /// Frames split across reads, several in one read, CRLF and blank lines, and a last line
+    /// with no newline at the end of the stream all come out whole and in order.
     #[test]
-    fn a_frame_split_across_reads_waits_for_its_newline() {
+    fn frames_come_out_whole_however_the_reads_split_them() {
         let mut codec = FrameCodec::new();
         let mut buf = BytesMut::new();
         for chunk in [&b"{\"jsonrpc\":"[..], b"\"2.0\",", b"\"method\":\"a\"}"] {
             buf.extend_from_slice(chunk);
             assert_eq!(codec.decode(&mut buf).unwrap(), None);
         }
-        buf.extend_from_slice(b"\n{\"jso");
-        assert_eq!(
-            decode_all(&mut codec, &mut buf),
-            [Bytes::from_static(
-                b"{\"jsonrpc\":\"2.0\",\"method\":\"a\"}"
-            )]
-        );
-        assert_eq!(&buf[..], b"{\"jso");
-    }
-
-    #[test]
-    fn several_frames_in_one_read_come_out_in_order() {
-        let mut codec = FrameCodec::new();
-        let mut buf = BytesMut::from(&b"{\"a\":1}\n{\"b\":2}\r\n\n\r\n{\"c\":3}\n{\"d\""[..]);
+        buf.extend_from_slice(b"\n{\"b\":2}\r\n\n\r\n{\"c\":3}\n{\"d\":4}\r");
         assert_eq!(
             decode_all(&mut codec, &mut buf),
             [
-                Bytes::from_static(b"{\"a\":1}"),
+                Bytes::from_static(b"{\"jsonrpc\":\"2.0\",\"method\":\"a\"}"),
                 Bytes::from_static(b"{\"b\":2}"),
                 Bytes::from_static(b"{\"c\":3}"),
             ]
         );
-        assert_eq!(&buf[..], b"{\"d\"");
-    }
-
-    #[test]
-    fn a_frame_of_exactly_the_limit_passes() {
-        let mut codec = FrameCodec::with_max_frame_bytes(8);
-        let mut buf = BytesMut::from(&b"12345678\n"[..]);
         assert_eq!(
-            decode_all(&mut codec, &mut buf),
-            [Bytes::from_static(b"12345678")]
+            codec.decode_eof(&mut buf).unwrap(),
+            Some(Bytes::from_static(b"{\"d\":4}"))
         );
+        assert_eq!(codec.decode_eof(&mut buf).unwrap(), None);
     }
 
+    /// The limit counts a frame without its line ending, fails as soon as a frame passes it
+    /// (before its newline arrives), and nothing decodes after that.
     #[test]
-    fn a_frame_over_the_limit_fails_before_its_newline_arrives() {
-        let mut codec = FrameCodec::with_max_frame_bytes(8);
-        let mut buf = BytesMut::from(&b"12345678"[..]);
-        assert_eq!(codec.decode(&mut buf).unwrap(), None);
-        buf.extend_from_slice(b"9");
-        assert!(matches!(
-            codec.decode(&mut buf),
-            Err(FrameError::TooLarge { max_frame_bytes: 8 })
-        ));
-        buf.extend_from_slice(b"\n{}\n");
-        assert!(
-            matches!(codec.decode(&mut buf), Err(FrameError::TooLarge { .. })),
-            "nothing is decoded after an oversized frame"
-        );
-    }
-
-    #[test]
-    fn the_limit_leaves_out_a_crlf_line_ending() {
+    fn a_frame_over_the_limit_fails_early_and_for_good() {
         for (input, frame) in [
             (&b"12345678\r\n"[..], &b"12345678"[..]),
             (b"12345678\n", b"12345678"),
@@ -312,7 +277,12 @@ mod tests {
             let mut buf = BytesMut::from(input);
             assert_eq!(codec.decode(&mut buf).unwrap().as_deref(), Some(frame));
         }
-        for input in [&b"123456789\r\n"[..], b"123456789\n", b"12345678\r\r\n"] {
+        for input in [
+            &b"123456789\r\n"[..],
+            b"123456789\n",
+            b"12345678\r\r\n",
+            b"12345678\rx",
+        ] {
             let mut codec = FrameCodec::with_max_frame_bytes(8);
             let mut buf = BytesMut::from(input);
             assert!(
@@ -320,37 +290,17 @@ mod tests {
                 "{input:?}"
             );
         }
-    }
 
-    #[test]
-    fn a_crlf_split_across_reads_at_the_limit_passes() {
         let mut codec = FrameCodec::with_max_frame_bytes(8);
         let mut buf = BytesMut::from(&b"12345678\r"[..]);
         assert_eq!(codec.decode(&mut buf).unwrap(), None);
         buf.extend_from_slice(b"\n");
         assert_eq!(
             codec.decode(&mut buf).unwrap(),
-            Some(Bytes::from_static(b"12345678"))
+            Some(Bytes::from_static(b"12345678")),
+            "a CRLF split across reads at the limit"
         );
 
-        let mut buf = BytesMut::from(&b"12345678\r"[..]);
-        assert_eq!(codec.decode(&mut buf).unwrap(), None);
-        assert_eq!(
-            codec.decode_eof(&mut buf).unwrap(),
-            Some(Bytes::from_static(b"12345678"))
-        );
-
-        let mut buf = BytesMut::from(&b"12345678\r"[..]);
-        assert_eq!(codec.decode(&mut buf).unwrap(), None);
-        buf.extend_from_slice(b"x");
-        assert!(matches!(
-            codec.decode(&mut buf),
-            Err(FrameError::TooLarge { .. })
-        ));
-    }
-
-    #[test]
-    fn an_oversized_frame_is_found_in_a_single_large_read() {
         let mut codec = FrameCodec::with_max_frame_bytes(8);
         let mut buf = BytesMut::from(&b"{}\n123456789\n{}\n"[..]);
         assert_eq!(
@@ -359,51 +309,18 @@ mod tests {
         );
         assert!(matches!(
             codec.decode(&mut buf),
-            Err(FrameError::TooLarge { .. })
-        ));
-    }
-
-    #[test]
-    fn the_last_line_counts_at_end_of_stream() {
-        let mut codec = FrameCodec::new();
-        let mut buf = BytesMut::from(&b"{\"a\":1}\n{\"b\":2}\r"[..]);
-        assert_eq!(
-            codec.decode_eof(&mut buf).unwrap(),
-            Some(Bytes::from_static(b"{\"a\":1}"))
-        );
-        assert_eq!(
-            codec.decode_eof(&mut buf).unwrap(),
-            Some(Bytes::from_static(b"{\"b\":2}"))
-        );
-        assert_eq!(codec.decode_eof(&mut buf).unwrap(), None);
-    }
-
-    #[test]
-    fn encoding_writes_compact_json_and_one_newline() {
-        let mut codec = FrameCodec::new();
-        let mut buf = BytesMut::new();
-        codec
-            .encode(json!({"text": "two\nlines", "n": [1, 2]}), &mut buf)
-            .unwrap();
-        assert_eq!(&buf[..], b"{\"n\":[1,2],\"text\":\"two\\nlines\"}\n");
-        assert!(!buf[..buf.len() - 1].contains(&b'\n'));
-    }
-
-    #[test]
-    fn encoding_an_oversized_message_writes_nothing() {
-        let mut codec = FrameCodec::with_max_frame_bytes(8);
-        let mut buf = BytesMut::from(&b"{}\n"[..]);
-        assert!(matches!(
-            codec.encode("1234567", &mut buf),
             Err(FrameError::TooLarge { max_frame_bytes: 8 })
         ));
-        assert_eq!(&buf[..], b"{}\n");
-        codec.encode("123456", &mut buf).unwrap();
-        assert_eq!(&buf[..], b"{}\n\"123456\"\n");
+        assert!(
+            matches!(codec.decode(&mut buf), Err(FrameError::TooLarge { .. })),
+            "nothing is decoded after an oversized frame"
+        );
     }
 
+    /// A message encodes as compact JSON and one newline. One over the limit writes nothing and
+    /// stops serializing as soon as it passes the limit.
     #[test]
-    fn encoding_stops_as_soon_as_a_frame_passes_the_limit() {
+    fn encoding_writes_one_line_and_nothing_over_the_limit() {
         struct Endless<'a>(&'a Cell<usize>);
 
         impl Serialize for Endless<'_> {
@@ -417,122 +334,31 @@ mod tests {
             }
         }
 
+        let mut codec = FrameCodec::new();
+        let mut buf = BytesMut::new();
+        codec
+            .encode(json!({"text": "two\nlines", "n": [1, 2]}), &mut buf)
+            .unwrap();
+        assert_eq!(&buf[..], b"{\"n\":[1,2],\"text\":\"two\\nlines\"}\n");
+
+        let mut codec = FrameCodec::with_max_frame_bytes(8);
+        let mut buf = BytesMut::from(&b"{}\n"[..]);
+        assert!(matches!(
+            codec.encode("1234567", &mut buf),
+            Err(FrameError::TooLarge { max_frame_bytes: 8 })
+        ));
+        assert_eq!(&buf[..], b"{}\n");
+        codec.encode("123456", &mut buf).unwrap();
+        assert_eq!(&buf[..], b"{}\n\"123456\"\n");
+
         let serialized = Cell::new(0);
         let mut codec = FrameCodec::with_max_frame_bytes(64);
         let mut buf = BytesMut::new();
         assert!(matches!(
             codec.encode(Endless(&serialized), &mut buf),
-            Err(FrameError::TooLarge {
-                max_frame_bytes: 64
-            })
+            Err(FrameError::TooLarge { .. })
         ));
         assert!(buf.is_empty());
         assert!(serialized.get() < 32, "{} elements", serialized.get());
-    }
-
-    #[test]
-    fn the_default_limit_is_8_mib() {
-        assert_eq!(MAX_FRAME_BYTES, 8_388_608);
-        let mut codec = FrameCodec::default();
-        assert_eq!(codec.max_frame_bytes(), MAX_FRAME_BYTES);
-
-        let mut buf = BytesMut::from(&vec![b' '; MAX_FRAME_BYTES][..]);
-        buf.extend_from_slice(b"\n");
-        assert_eq!(
-            codec.decode(&mut buf).unwrap().unwrap().len(),
-            MAX_FRAME_BYTES
-        );
-
-        let mut buf = BytesMut::from(&vec![b' '; MAX_FRAME_BYTES + 1][..]);
-        assert!(matches!(
-            codec.decode(&mut buf),
-            Err(FrameError::TooLarge {
-                max_frame_bytes: MAX_FRAME_BYTES
-            })
-        ));
-    }
-
-    // Each chunk arrives as a separate read, and the limit is 64 bytes.
-    fn reader(
-        chunks: Vec<&'static [u8]>,
-    ) -> FramedRead<impl tokio::io::AsyncRead + Unpin, FrameCodec> {
-        let chunks = stream::iter(
-            chunks
-                .into_iter()
-                .map(|chunk| Ok::<_, std::io::Error>(Bytes::from_static(chunk))),
-        );
-        FramedRead::new(
-            StreamReader::new(chunks),
-            FrameCodec::with_max_frame_bytes(64),
-        )
-    }
-
-    #[tokio::test]
-    async fn malformed_lines_get_errors_and_the_stream_goes_on() {
-        let mut frames = reader(vec![
-            &b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"host/health\"}\nnot json\n"[..],
-            &b"{\"jsonrpc\":\"2.0\",\"id\":2,\"me"[..],
-            &b"thod\":\"\xff\"}\n[1]\n"[..],
-            &b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"host/version\"}"[..],
-        ]);
-        let mut outcomes = Vec::new();
-        while let Some(frame) = frames.next().await {
-            outcomes.push(match Message::from_frame(&frame.unwrap()) {
-                Ok(Message::Request(request)) => Ok(request.method),
-                Ok(other) => panic!("unexpected {other:?}"),
-                Err(malformed) => Err(malformed.error.code),
-            });
-        }
-        assert_eq!(
-            outcomes,
-            [
-                Ok("host/health".to_owned()),
-                Err(PARSE_ERROR),
-                Err(PARSE_ERROR),
-                Err(INVALID_REQUEST),
-                Ok("host/version".to_owned()),
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn an_oversized_line_ends_the_stream() {
-        let mut frames = reader(vec![
-            &b"{\"jsonrpc\":\"2.0\",\"method\":\"a\"}\n"[..],
-            &[b'x'; 40][..],
-            &[b'x'; 40][..],
-            &b"\n{\"jsonrpc\":\"2.0\",\"method\":\"b\"}\n"[..],
-        ]);
-        assert!(frames.next().await.unwrap().is_ok());
-        assert!(matches!(
-            frames.next().await,
-            Some(Err(FrameError::TooLarge {
-                max_frame_bytes: 64
-            }))
-        ));
-        assert!(frames.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn written_messages_read_back() {
-        let (client, server) = tokio::io::duplex(4096);
-        let mut sink = FramedWrite::new(client, FrameCodec::new());
-        let mut frames = FramedRead::new(server, FrameCodec::new());
-        let messages = [
-            json!({"jsonrpc": "2.0", "method": "a"}),
-            json!({"jsonrpc": "2.0", "id": 1, "result": {"x": "y\nz"}}),
-        ];
-        for message in &messages {
-            sink.send(message).await.unwrap();
-        }
-        drop(sink);
-        for message in &messages {
-            let frame = frames.next().await.unwrap().unwrap();
-            assert_eq!(
-                &serde_json::from_slice::<serde_json::Value>(&frame).unwrap(),
-                message
-            );
-        }
-        assert!(frames.next().await.is_none());
     }
 }

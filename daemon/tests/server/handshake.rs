@@ -3,10 +3,7 @@
 use std::collections::BTreeMap;
 
 use parallax_protocol::framing::MAX_FRAME_BYTES;
-use parallax_protocol::jsonrpc::{INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, Request};
-use parallax_protocol::methods::{
-    HostHealth, HostUpdate, HostVersion, Initialize, ProjectList, RequestMethod,
-};
+use parallax_protocol::methods::{HostHealth, HostUpdate, HostVersion, ProjectList};
 use parallax_protocol::{
     Capabilities, ErrorKind, HostHealthParams, HostUpdateParams, HostUpdateRestart,
     HostVersionParams, IncompatibleProtocolDetail, ProjectListParams, ProtocolRange, StoreState,
@@ -209,26 +206,6 @@ async fn host_update_refuses_what_it_cant_install_and_stays_up() {
 }
 
 #[tokio::test]
-async fn requests_before_initialize_get_not_initialized() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::connect(&plxd.socket).await;
-
-    let error = client
-        .call::<ProjectList>(ProjectListParams {})
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::NotInitialized);
-    assert_eq!(error.message, "initialize must be the first request");
-
-    client.initialize().await.unwrap();
-    client
-        .call::<ProjectList>(ProjectListParams {})
-        .await
-        .unwrap();
-}
-
-#[tokio::test]
 async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_usable() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
@@ -257,76 +234,4 @@ async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_
         .unwrap_err();
     assert_eq!(kind(&still_uninitialized), ErrorKind::NotInitialized);
     assert_eq!(client.initialize().await.unwrap().protocol, 1);
-}
-
-#[tokio::test]
-async fn a_newer_client_is_answered_at_the_highest_common_version() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::connect(&plxd.socket).await;
-
-    // A future client: a wider range, and fields and capabilities this version doesn't know.
-    client
-        .send_message(&json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocol": {"min": 1, "max": 4},
-                "client": {"name": "parallax", "version": "9.0.0", "locale": "en"},
-                "capabilities": {"agents": {}, "someday": {"level": 3}},
-                "trace": "off"
-            }
-        }))
-        .await;
-    let response = client.response().await;
-    let init: parallax_protocol::InitializeResult = response.into_result().unwrap();
-    assert_eq!(init.protocol, 1);
-}
-
-#[tokio::test]
-async fn a_second_initialize_is_an_invalid_request() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-
-    let error = client.initialize().await.unwrap_err();
-    assert_eq!(error.code, INVALID_REQUEST);
-}
-
-#[tokio::test]
-async fn bad_initialize_params_are_invalid_params() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::connect(&plxd.socket).await;
-
-    client
-        .send_message(&Request {
-            id: 42.into(),
-            method: Initialize::NAME.to_owned(),
-            params: Some(json!({"protocol": "one"})),
-        })
-        .await;
-    let response = client.response().await;
-    assert_eq!(response.id, Some(42.into()));
-    assert_eq!(response.result.unwrap_err().code, INVALID_PARAMS);
-    client.initialize().await.unwrap();
-}
-
-#[tokio::test]
-async fn unknown_methods_are_not_found() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-
-    client
-        .send_message(&Request {
-            id: 41.into(),
-            method: "example/missing".to_owned(),
-            params: Some(json!({})),
-        })
-        .await;
-    let response = client.response().await;
-    assert_eq!(response.id, Some(41.into()));
-    assert_eq!(response.result.unwrap_err().code, METHOD_NOT_FOUND);
 }

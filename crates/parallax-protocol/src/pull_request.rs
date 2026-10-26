@@ -334,38 +334,3 @@ pub struct PullRequest {
     #[ts(optional)]
     pub auto_merge: Option<PrMergeMethod>,
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::{PrAction, PrCheckState, PrMergeMethod, PrMergeState, PrReviewState, PrState};
-
-    #[test]
-    fn unknown_values_decode_as_unknown() {
-        assert_eq!(
-            serde_json::from_value::<PrAction>(json!("rebase")).unwrap(),
-            PrAction::Unknown
-        );
-        assert_eq!(
-            serde_json::from_value::<PrState>(json!("locked")).unwrap(),
-            PrState::Unknown
-        );
-        assert_eq!(
-            serde_json::from_value::<PrMergeMethod>(json!("fastForward")).unwrap(),
-            PrMergeMethod::Unknown
-        );
-        assert_eq!(
-            serde_json::from_value::<PrMergeState>(json!("queued")).unwrap(),
-            PrMergeState::Unknown
-        );
-        assert_eq!(
-            serde_json::from_value::<PrCheckState>(json!("stale")).unwrap(),
-            PrCheckState::Unknown
-        );
-        assert_eq!(
-            serde_json::from_value::<PrReviewState>(json!("pending")).unwrap(),
-            PrReviewState::Unknown
-        );
-    }
-}

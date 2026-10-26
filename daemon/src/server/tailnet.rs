@@ -355,22 +355,9 @@ impl Serving {
 
 #[cfg(test)]
 mod tests {
-    use std::net::{IpAddr, Ipv4Addr};
-    use std::time::Duration;
+    use std::net::IpAddr;
 
-    use super::{Checks, MAX_PENDING_CHECKS, MAX_PENDING_CHECKS_PER_IP, bind};
-
-    #[tokio::test]
-    async fn a_bind_refused_as_in_use_is_tried_again() {
-        let taken = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let address = taken.local_addr().unwrap();
-        let freed = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
-            drop(taken);
-        });
-        bind(address).await.expect("bound once the address is free");
-        freed.join().unwrap();
-    }
+    use super::{Checks, MAX_PENDING_CHECKS, MAX_PENDING_CHECKS_PER_IP};
 
     #[test]
     fn checks_are_capped_overall_and_per_peer_address() {

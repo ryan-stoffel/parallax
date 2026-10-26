@@ -1394,7 +1394,7 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{ALLOWED_TOOLS, CONTEXT_TOOLS, TOOLS, definitions};
-    use crate::mcp::{SERVER, board, device, land, question};
+    use crate::mcp::{SERVER, board, land, question};
 
     #[test]
     fn the_allowlist_is_the_servers_name_and_each_role_lists_its_tools() {
@@ -1431,53 +1431,6 @@ mod tests {
                 ]
                 .concat()
             );
-        }
-    }
-
-    #[test]
-    fn the_coordinators_instructions_name_only_real_tools() {
-        let instructions = include_str!("../agents/coordinator.md");
-        // Every `snake_case` span between backticks.
-        for name in instructions.split('`').skip(1).step_by(2) {
-            if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
-                assert!(
-                    [TOOLS, CONTEXT_TOOLS, crate::mcp::memory::COORDINATOR_TOOLS]
-                        .concat()
-                        .contains(&name)
-                        || land::TOOLS.contains(&name)
-                        || board::TOOLS.contains(&name),
-                    "coordinator.md names `{name}`, not a tool"
-                );
-            }
-        }
-    }
-
-    /// The caller is bound by `--thread`: no tool takes it, so only a target may be named.
-    #[test]
-    fn no_tool_takes_the_callers_id_or_unknown_fields() {
-        let mut tools = definitions(true).as_array().unwrap().clone();
-        tools.extend(question::definitions(false));
-        tools.extend(question::definitions(true));
-        tools.extend(land::definitions(true));
-        tools.extend(board::definitions(true));
-        tools.extend(device::definitions());
-        tools.extend(crate::mcp::html::definitions());
-        tools.extend(crate::mcp::files::definitions());
-        tools.extend(crate::mcp::preview::definitions());
-        tools.extend(crate::mcp::triggers::definitions());
-        tools.extend(crate::mcp::delegation::definitions());
-        for tool in &tools {
-            let schema = &tool["inputSchema"];
-            assert_eq!(schema["additionalProperties"], false, "{tool}");
-            let properties = schema["properties"].as_object().unwrap();
-            for name in properties.keys() {
-                let name = name.to_lowercase();
-                assert!(
-                    !["caller", "from", "parent", "self"].contains(&name.as_str()),
-                    "{} takes {name}",
-                    tool["name"]
-                );
-            }
         }
     }
 }

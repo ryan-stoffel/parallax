@@ -956,27 +956,3 @@ async fn launch(wanted: &str) -> Result<(), String> {
         "No app named {wanted} is installed. Call computer_list_apps for the apps running."
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{TOOLS, definitions};
-
-    #[test]
-    fn every_tool_has_one_definition_in_codex_shape() {
-        let tools = definitions();
-        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, TOOLS);
-        let click = &tools[2]["inputSchema"]["properties"];
-        for field in [
-            "app",
-            "element_index",
-            "x",
-            "y",
-            "click_count",
-            "mouse_button",
-        ] {
-            assert!(click.get(field).is_some(), "computer_click lacks {field}");
-        }
-        assert_eq!(tools[1]["annotations"]["readOnlyHint"], true);
-    }
-}

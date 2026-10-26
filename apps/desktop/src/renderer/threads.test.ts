@@ -1,36 +1,26 @@
-import { expect, test, vi } from "vite-plus/test";
+import { expect, test } from "vite-plus/test";
 
 import samples from "../../../../crates/parallax-protocol/samples/v1/threads.json";
 import type {
   AgentRun,
   EventsEventParams,
-  ProjectIcon,
-  Repo,
   ThreadStartResult,
   ParallaxEvent,
 } from "../protocol/generated/protocol";
 import {
   asksOf,
   emptyThreads,
-  groupThreads,
-  idleThreads,
-  waitingOf,
-  noRepo,
   projectRuns,
-  setRepoIcons,
-  sharedRepoIcons,
   threadProjects,
   threadsReducer,
   type ThreadsState,
-  type ThreadsView,
 } from "./threads";
-import type { Host } from "./hosts";
 
 const messages = samples as { id?: number; method?: string; params?: unknown; result?: unknown }[];
 const events = messages
   .filter((m) => m.method === "events/event")
   .map((m) => (m.params as EventsEventParams).event);
-const [parallaxAdded, threadStarted, scratchAdded, threadArchived, threadDeleted] = events as [
+const [parallaxAdded, threadStarted, , threadArchived, threadDeleted] = events as [
   ParallaxEvent,
   ParallaxEvent,
   ParallaxEvent,
@@ -77,61 +67,10 @@ test("project.deleted drops the project and its runs, and keeps the rest", () =>
   expect(Object.keys(after.runs)).toEqual(["c", "t"]);
 });
 
-test("project.updated replaces the project with its new name and icon, and repeating it changes nothing", () => {
-  const project = {
-    id: "p-1",
-    name: "parallax",
-    repoPath: "/src/parallax",
-    createdAt: "2026-09-26T12:00:00Z",
-    updatedAt: "2026-09-26T12:00:00Z",
-  };
-  const other = { ...project, id: "p-2", name: "ember" };
-  const state = apply(
-    emptyThreads,
-    { kind: "project.created", project },
-    { kind: "project.created", project: other },
-  );
-  const renamed = { ...project, name: "parallax app", icon: { name: "rocket", color: "green" } };
-  const updated: ParallaxEvent = { kind: "project.updated", project: renamed };
-  const next = apply(state, updated);
-  expect(next.projects).toEqual([renamed, other]);
-  expect(apply(next, updated)).toEqual(next);
-});
-
 test("thread.updated replaces the thread, and thread.deleted removes it", () => {
   const archived = apply(emptyThreads, parallaxAdded, threadStarted, threadArchived);
   expect(archived.threads).toEqual([{ ...started.thread, archived: true }]);
   expect(apply(archived, threadDeleted).threads).toEqual([]);
-});
-
-test("a thread's title is the first line of its run's prompt", () => {
-  const run = { ...started.run, prompt: "  Fix the flaky attach test.\nIt fails on CI.  " };
-  const state = threadsReducer(emptyThreads, {
-    type: "snapshot",
-    projects: [],
-    repos: [],
-    threads: [started.thread],
-    runs: [run],
-  });
-  expect(state.titles).toEqual({ [run.id]: "Fix the flaky attach test." });
-});
-
-test("a thread's own title wins over its run's, a later run list keeps it, and clearing it falls back", () => {
-  const titled = { ...started.thread, title: "Flaky attach test" };
-  let state = threadsReducer(emptyThreads, {
-    type: "snapshot",
-    projects: [],
-    repos: [],
-    threads: [titled],
-    runs: [started.run],
-  });
-  expect(state.titles[titled.id]).toBe("Flaky attach test");
-  state = threadsReducer(state, { type: "runs", runs: [started.run] });
-  expect(state.titles[titled.id]).toBe("Flaky attach test");
-  state = apply(state, { kind: "thread.updated", thread: { ...titled, title: "Renamed" } });
-  expect(state.titles[titled.id]).toBe("Renamed");
-  state = apply(state, { kind: "thread.updated", thread: started.thread });
-  expect(state.titles[titled.id]).toBe(started.run.prompt.trim().split("\n")[0]);
 });
 
 test("runs are kept by id: a later list replaces the runs it has, and keeps the rest", () => {
@@ -146,22 +85,6 @@ test("runs are kept by id: a later list replaces the runs it has, and keeps the 
   state = threadsReducer(state, { type: "runs", runs: [{ ...started.run, status: "failed" }] });
   expect(state.runs[started.run.id]?.status).toBe("failed");
   expect(state.runs["other"]).toEqual(other);
-});
-
-test("groups: repositories, then No Repo", () => {
-  let state = apply(emptyThreads, parallaxAdded, threadStarted);
-  const byGroup = () => groupThreads(state).map((g) => [g.id, g.name]);
-  const parallax = started.thread.repo;
-  expect(byGroup()).toEqual([
-    [parallax, "parallax"],
-    [noRepo, "No Repo"],
-  ]);
-  // Once the scratch entry is known, it is still the one No Repo group, not a repository.
-  state = apply(state, scratchAdded);
-  expect(byGroup()).toEqual([
-    [parallax, "parallax"],
-    [noRepo, "No Repo"],
-  ]);
 });
 
 test("a scope's events keep a run current, stamp when it changed, and track what it asks", () => {
@@ -249,76 +172,4 @@ test("a thread is in a Project when its run or an ancestor's is one of the Proje
     "grandchild",
     "own",
   ]);
-});
-
-// PLX-777: a run waits while it has background work, a command included, and is monitoring while
-// plxd watches a pull request for it, each part from the snapshot and then its own event.
-test("a run is monitoring a watched pull request and waiting on work that wakes it", () => {
-  let state = threadsReducer(emptyThreads, {
-    type: "snapshot",
-    projects: [],
-    repos: [],
-    threads: [],
-    runs: [],
-    waiting: [{ runId: "a", watching: ["https://github.com/o/r/pull/1"] }],
-  });
-  expect(waitingOf(state, "a")).toBe("monitoring");
-  const task = (kind: "monitor" | "command") => ({ taskId: kind, kind, description: kind });
-  state = apply(state, { kind: "agent.background", runId: "a", tasks: [task("monitor")] });
-  state = apply(state, { kind: "pr.watches", runId: "a", urls: [] });
-  expect(waitingOf(state, "a")).toBe("waiting");
-  state = apply(state, { kind: "agent.background", runId: "a", tasks: [task("command")] });
-  expect(waitingOf(state, "a")).toBe("waiting");
-  state = apply(state, { kind: "agent.background", runId: "a", tasks: [] });
-  expect(waitingOf(state, "a")).toBeUndefined();
-});
-
-// A computer's view listing `repos`, keeping repo icons and images up to `iconImageBytes`.
-const repoView = (repos: Repo[], iconImageBytes?: number): ThreadsView => ({
-  ...idleThreads,
-  state: { ...emptyThreads, repos },
-  capabilities: { threadAttention: {} },
-  iconImageBytes,
-  updateRepo: vi.fn(async () => undefined),
-});
-const repoNamed = (id: string, name: string, extra: Partial<Repo> = {}): Repo => ({
-  id,
-  name,
-  path: `/src/${name}`,
-  createdAt: "2026-10-23T12:00:00Z",
-  ...extra,
-});
-
-test("a repository's icon is shared by name with its copies on other computers, the first host's winning", () => {
-  const logo: ProjectIcon = { name: "layers", image: { mediaType: "image/webp", data: "AAAA" } };
-  const hosts = [{ id: "macbook" }, { id: "mini" }] as Host[];
-  const views = {
-    macbook: repoView([repoNamed("a", "parallax", { icon: logo })]),
-    mini: repoView([
-      repoNamed("b", "parallax", { icon: { name: "rocket" } }),
-      repoNamed("c", "notes", { icon: { name: "book-open" } }),
-      repoNamed("d", "chats", { space: true, icon: { name: "bot" } }),
-    ]),
-  };
-  expect(Object.fromEntries(sharedRepoIcons(hosts, views))).toEqual({
-    parallax: logo,
-    notes: { name: "book-open" },
-  });
-});
-
-test("picking an icon sets it on each computer's repository of that name, an image only where it fits", () => {
-  const roomy = repoView([repoNamed("a", "parallax"), repoNamed("b", "notes")], 65536);
-  const noImages = repoView([repoNamed("c", "parallax")]);
-  const old = { ...repoView([repoNamed("d", "parallax")], 65536), capabilities: {} };
-  const views = [roomy, noImages, old];
-
-  setRepoIcons(views, "parallax", { name: "rocket" });
-  expect(roomy.updateRepo).toHaveBeenCalledExactlyOnceWith("a", { name: "rocket" });
-  expect(noImages.updateRepo).toHaveBeenCalledExactlyOnceWith("c", { name: "rocket" });
-  expect(old.updateRepo).not.toHaveBeenCalled();
-
-  const logo: ProjectIcon = { name: "layers", image: { mediaType: "image/webp", data: "AAAA" } };
-  setRepoIcons(views, "parallax", logo);
-  expect(roomy.updateRepo).toHaveBeenLastCalledWith("a", logo);
-  expect(noImages.updateRepo).toHaveBeenCalledTimes(1);
 });

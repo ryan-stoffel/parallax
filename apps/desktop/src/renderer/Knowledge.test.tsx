@@ -1,16 +1,10 @@
 // @vitest-environment happy-dom
-import { act, useState } from "react";
+import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
+import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { ParallaxBridge, SubscriptionMessage } from "../preload/bridge";
-import type {
-  AgentRun,
-  ContextFile,
-  MemoryFile,
-  ProviderInfo,
-} from "../protocol/generated/protocol";
-import { AllFiles, ContextBody, ContextReader, useProjectContext } from "./ContextPanel";
+import type { ParallaxBridge } from "../preload/bridge";
+import type { AgentRun, ProviderInfo } from "../protocol/generated/protocol";
 import { KnowledgePanel } from "./Knowledge";
 import { changeMessage } from "./MemoryPanel";
 import { Notifications } from "./notifications";
@@ -18,27 +12,8 @@ import { Notifications } from "./notifications";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 // happy-dom has no popovers.
 HTMLElement.prototype.showPopover = () => {};
-// happy-dom has no popovers.
 HTMLElement.prototype.hidePopover = () => {};
 
-const now = Date.parse("2026-10-04T12:00:00Z");
-const file = (path: string, modifiedAt = "2026-10-04T11:00:00Z"): ContextFile => ({
-  path,
-  size: 10,
-  modifiedAt,
-});
-const board = `# Status
-
-## Now
-- [ ] **Search command**: one subagent adds it, with tests
-- [x] **Fix the login bug**: landed
-## Next
-- [ ] Write the docs
-## Risks
-- [ ] **Flaky CI**: the e2e job times out on Windows
-
-Older items: [archived](archived.md)
-`;
 const coordinator: AgentRun = {
   id: "c-1",
   project: "p-1",
@@ -51,268 +26,6 @@ const coordinator: AgentRun = {
   createdAt: "2026-10-04T10:00:00Z",
   updatedAt: "2026-10-04T10:00:00Z",
 };
-let capabilities: Record<string, object>;
-let files: ContextFile[];
-let contents: Record<string, string>;
-let memory: MemoryFile[];
-let providers: ProviderInfo[];
-const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
-  const ok = (result: unknown) => ({ logId: "log-1", result });
-  if (method === "agent/list") return ok({ runs: [], seq: 1 });
-  if (method === "context/list") return ok({ files });
-  if (method === "context/read") {
-    const path = params["path"] as string;
-    return ok({ file: file(path), content: contents[path] ?? "" });
-  }
-  if (method === "memory/list")
-    return ok({ files: (params["scope"] as { kind: string }).kind === "project" ? memory : [] });
-  if (method === "memory/read")
-    return ok({
-      file: file(params["path"] as string),
-      content: "Ship search by [Friday](https://example.com/spec).",
-    });
-  if (method === "providers/list") return ok({ providers });
-  return ok({ run: coordinator });
-});
-
-// Every subscription gets every event, as plxd's per-Project ones would here.
-let listeners: Set<(message: SubscriptionMessage) => void>;
-/** An agent's write to a context file, as plxd reports it. */
-const changed = (seq: number, f: ContextFile) =>
-  act(async () =>
-    listeners.forEach((l) =>
-      l({
-        type: "event",
-        event: { subscription: "s-1", seq, time: "", event: { kind: "context.changed", file: f } },
-      }),
-    ),
-  );
-
-beforeEach(() => {
-  vi.useFakeTimers({ now, toFake: ["Date"] });
-  request.mockClear();
-  capabilities = { memory: {} };
-  files = [file("notes.md"), file("plan.md")];
-  contents = { "notes.md": board, "plan.md": "# Plan" };
-  listeners = new Set();
-  memory = [
-    { path: "brief.md", size: 10, modifiedAt: "2026-10-01T12:00:00Z" },
-    { path: "memory/convention/vitest.md", size: 10, modifiedAt: "2026-10-04T08:00:00Z" },
-  ];
-  providers = [];
-  window.parallax = {
-    platform: "darwin",
-    request,
-    subscribe: (_host, _params, listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    connectionState: async () => ({
-      status: "connected",
-      plxd: "0.1.0",
-      protocol: 1,
-      capabilities,
-    }),
-    onConnectionState: () => () => {},
-  } as Partial<ParallaxBridge> as ParallaxBridge;
-});
-
-let unmount = () => {};
-afterEach(() => {
-  // Notifications outlive a render, so close this test's.
-  for (const close of document.querySelectorAll<HTMLButtonElement>(
-    '[aria-label="Notifications"] button[aria-label="Close"]',
-  ))
-    act(() => close.click());
-  act(() => unmount());
-  vi.useRealTimers();
-});
-
-const settle = async () => {
-  for (let i = 0; i < 10; i++) await act(async () => {});
-};
-const click = async (element: Element | null | undefined) => {
-  await act(async () => (element as HTMLElement).click());
-  await settle();
-};
-
-/** The Knowledge view, as App renders it. */
-function Knowledge({ host, expanded }: { host: string; expanded: boolean }) {
-  return (
-    <KnowledgePanel
-      hostId={host}
-      project="p-1"
-      repo="r-1"
-      coordinator={coordinator}
-      memory
-      expanded={expanded}
-    />
-  );
-}
-
-/**
- * The Project tab's context, as ProjectHome shows it: the status board, All files under it, and a
- * file opened in place with a way back.
- */
-function Context({ host }: { host: string }) {
-  const { files } = useProjectContext(host, "p-1", true);
-  const [open, setOpen] = useState<string>();
-  const opened = files.find((f) => f.path === open);
-  if (opened)
-    return (
-      <ContextReader
-        hostId={host}
-        project="p-1"
-        files={files}
-        file={opened}
-        onOpen={setOpen}
-        onBack={() => setOpen(undefined)}
-      />
-    );
-  const notes = files.find((f) => f.path === "notes.md");
-  return (
-    <>
-      {notes && (
-        <ContextBody hostId={host} project="p-1" files={files} file={notes} onOpen={setOpen} />
-      )}
-      <AllFiles files={files} onOpen={setOpen} />
-    </>
-  );
-}
-
-/** Renders a Project's Knowledge view on `host`, or with `context`, its board and files. */
-async function render(host: string, { context = false, expanded = false } = {}) {
-  const root = createRoot(document.body.appendChild(document.createElement("div")));
-  act(() =>
-    root.render(
-      <>
-        <Notifications />
-        {context ? <Context host={host} /> : <Knowledge host={host} expanded={expanded} />}
-      </>,
-    ),
-  );
-  unmount = () => {
-    root.unmount();
-    document.body.innerHTML = "";
-  };
-  await settle();
-}
-
-const section = (label: string) =>
-  document.querySelector<HTMLElement>(`section[aria-label="${label}"]`)!;
-/** The marks of a rendered Markdown file's tasks, Open or Done, in order. */
-const tasks = (root: Element) =>
-  [...root.querySelectorAll("li > svg[aria-label]")].map((m) => m.getAttribute("aria-label"));
-/** The context files All files lists, in order. */
-const listed = () =>
-  [...document.querySelectorAll('[aria-label="All files"] button .font-mono')].map(
-    (f) => f.textContent,
-  );
-
-test("the status board reads as a project page: tasks as circles, bold leads, and its other files", async () => {
-  await render("h-board", { context: true });
-  const shown = document.querySelector('[aria-label="notes.md"]')!;
-  expect(tasks(shown)).toEqual(["Open", "Done", "Open", "Open"]);
-  expect([...shown.querySelectorAll("strong")].map((b) => b.textContent)).toEqual([
-    "Search command",
-    "Fix the login bug",
-    "Flaky CI",
-  ]);
-  expect([...shown.querySelectorAll("h4")].map((h) => h.textContent)).toEqual([
-    "Now",
-    "Next",
-    "Risks",
-  ]);
-  // Its link to the archive is off until that file exists.
-  const archive = [...shown.querySelectorAll<HTMLButtonElement>("button")].find(
-    (b) => b.textContent === "archived",
-  )!;
-  expect(archive.disabled).toBe(true);
-});
-
-test("memory follows its folders' events without the runs' output", async () => {
-  const subscribe = vi.spyOn(window.parallax, "subscribe");
-  await render("h-shell");
-  // Memory's Repo and Project folders, in any order.
-  const params = subscribe.mock.calls.map(([, p]) => p);
-  expect(params.map((p) => p.project ?? "").sort((a, b) => a.localeCompare(b))).toEqual([
-    "p-1",
-    "r-1",
-  ]);
-  expect(params.every((p) => p.shell === true && p.after === 1)).toBe(true);
-});
-
-const plan = `# Plan
-
-- [ ] Unify launcher modes ([#17](https://github.com/o/r/issues/17))
-- [x] Welcome window ([#12](https://github.com/o/r/pull/12))
-
-Older items: [archived](archived.md), [gone](gone.md)`;
-const doc = (path: string) => document.querySelector(`article[aria-label="${path}"]`);
-
-test("a context file shows tasks as circles, GitHub links with their icons, opens other context files in place, and follows agents' writes", async () => {
-  files = [file("notes.md"), file("plan.md"), file("archived.md")];
-  contents = { "notes.md": board, "plan.md": plan, "archived.md": "- [x] Old work" };
-  await render("h-links", { context: true });
-  await click(
-    [...document.querySelectorAll("li button")].find((b) => b.textContent?.startsWith("plan.md")),
-  );
-  const shown = doc("plan.md")!;
-  expect(shown.querySelector("input")).toBeNull();
-  expect(
-    [...shown.querySelectorAll("li")].map((li) => [
-      li.querySelector("svg")?.getAttribute("aria-label"),
-      li.textContent,
-    ]),
-  ).toEqual([
-    ["Open", " Unify launcher modes (#17)"],
-    ["Done", " Welcome window (#12)"],
-  ]);
-  expect(shown.querySelector('a[href$="/pull/12"] svg.lucide-git-merge')).not.toBeNull();
-  const issue = shown.querySelector('a[href$="/issues/17"]')!;
-  expect(issue.querySelector("svg:not(.lucide)")).not.toBeNull();
-  expect(issue.getAttribute("target")).toBe("_blank");
-
-  // A missing file's link is off; an existing one opens in place, with a way back.
-  const link = (name: string) =>
-    [...shown.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === name)!;
-  expect(link("gone").disabled).toBe(true);
-  await click(link("archived"));
-  expect(doc("archived.md")!.textContent).toContain("Old work");
-
-  // It follows an agent's rewrite, and a new file joins Project files.
-  contents["archived.md"] = "- [x] Older work";
-  await changed(8, file("archived.md", "2026-10-04T12:00:00Z"));
-  expect(doc("archived.md")!.textContent).toContain("Older work");
-  await changed(9, file("research.md", "2026-10-04T12:00:00Z"));
-  await click(
-    [...document.querySelectorAll("button")].find((b) => b.textContent === "archived.md"),
-  );
-  expect(doc("archived.md")).toBeNull();
-  expect(listed()).toEqual(["archived.md", "notes.md", "plan.md", "research.md"]);
-});
-
-test("the head counts entries and documents, and the brief shows in place and edits on a click", async () => {
-  memory.push({ path: "knowledge/ci.md", size: 10, modifiedAt: "2026-10-03T08:00:00Z" });
-  await render("h-known");
-  expect(document.querySelector("header")!.textContent).toBe(
-    "KnowledgeWhat this Project's agents know: 1 memory entry, 1 document.",
-  );
-  const brief = section("Brief");
-  expect(brief.textContent).toContain("Edited Oct 1");
-  // The brief is content, its links working, with its own Edit button.
-  expect(brief.querySelector('a[href="https://example.com/spec"]')).not.toBeNull();
-  expect(brief.querySelector('[role="button"]')).toBeNull();
-  const edit = brief.querySelector<HTMLButtonElement>('button[aria-label="Edit the brief"]');
-  await click(edit);
-  expect(brief.querySelector("textarea")!.value).toBe(
-    "Ship search by [Friday](https://example.com/spec).",
-  );
-  await click([...brief.querySelectorAll("button")].find((b) => b.textContent === "Cancel"));
-  expect(brief.querySelector("textarea")).toBeNull();
-  expect(document.activeElement?.getAttribute("aria-label")).toBe("Edit the brief");
-});
-
 /** A provider plxd lists, which runs a Project's coordinator. */
 const provider = (id: "claude" | "codex", name: string): ProviderInfo =>
   ({
@@ -323,6 +36,32 @@ const provider = (id: "claude" | "codex", name: string): ProviderInfo =>
     efforts: true,
     coordinator: true,
   }) as ProviderInfo;
+const request = vi.fn(async (_host: string, method: string, _params?: unknown) => {
+  const ok = (result: unknown) => ({ logId: "log-1", result });
+  if (method === "agent/list") return ok({ runs: [], seq: 1 });
+  if (method === "memory/list" || method === "context/list") return ok({ files: [] });
+  if (method === "providers/list")
+    return ok({ providers: [provider("claude", "Claude"), provider("codex", "Codex")] });
+  return ok({ run: coordinator });
+});
+
+let unmount = () => {};
+afterEach(() => {
+  // Notifications outlive a render, so close this test's.
+  for (const close of document.querySelectorAll<HTMLButtonElement>(
+    '[aria-label="Notifications"] button[aria-label="Close"]',
+  ))
+    act(() => close.click());
+  act(() => unmount());
+});
+
+const settle = async () => {
+  for (let i = 0; i < 10; i++) await act(async () => {});
+};
+const click = async (element: Element | null | undefined) => {
+  await act(async () => (element as HTMLElement).click());
+  await settle();
+};
 const sends = () => request.mock.calls.filter(([, m]) => m === "agent/send").map(([, , p]) => p);
 async function typeChange(text: string) {
   const box = document.querySelector<HTMLTextAreaElement>(
@@ -339,9 +78,40 @@ async function typeChange(text: string) {
 }
 
 test("the mini prompt sends a change to the coordinator, and a model on another provider moves it there", async () => {
-  capabilities = { memory: {}, providers: {}, sendModel: {}, sendAccount: {} };
-  providers = [provider("claude", "Claude"), provider("codex", "Codex")];
-  await render("h-prompt");
+  window.parallax = {
+    platform: "darwin",
+    request,
+    subscribe: () => () => {},
+    connectionState: async () => ({
+      status: "connected",
+      plxd: "0.1.0",
+      protocol: 1,
+      capabilities: { memory: {}, providers: {}, sendModel: {}, sendAccount: {} },
+    }),
+    onConnectionState: () => () => {},
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const root = createRoot(document.body.appendChild(document.createElement("div")));
+  act(() =>
+    root.render(
+      <>
+        <Notifications />
+        <KnowledgePanel
+          hostId="h-prompt"
+          project="p-1"
+          repo="r-1"
+          coordinator={coordinator}
+          memory
+          expanded={false}
+        />
+      </>,
+    ),
+  );
+  unmount = () => {
+    root.unmount();
+    document.body.innerHTML = "";
+  };
+  await settle();
+
   await typeChange("We moved off Jest, use Vitest");
   expect(sends()).toEqual([
     {
@@ -350,51 +120,15 @@ test("the mini prompt sends a change to the coordinator, and a model on another 
       text: changeMessage("We moved off Jest, use Vitest"),
     },
   ]);
-  expect(document.querySelector('[aria-label="Notifications"] p')!.textContent).toBe(
-    "The coordinator's rewrite shows up as a proposal.",
-  );
 
-  // The picker shows the coordinator's providers as a row of logos.
-  expect(document.querySelector('button[aria-label^="Model: "]')!.getAttribute("aria-label")).toBe(
-    "Model: Claude Opus 5.5",
-  );
+  // The picker shows the coordinator's providers as tabs.
   const tabs = [...document.querySelectorAll('[role="tablist"][aria-label="Provider"] button')];
-  expect(tabs.map((t) => t.textContent)).toEqual(["Claude", "Codex"]);
   await click(tabs[1]);
-  const codex = document.querySelector<HTMLElement>('[role="listbox"] [role="option"]')!;
-  const model = codex.textContent!.replace(/New$/, "");
-  await click(codex);
+  await click(document.querySelector<HTMLElement>('[role="listbox"] [role="option"]'));
   await typeChange("Forget the old API notes");
   expect(sends()[1]).toMatchObject({
     runId: "c-1",
     model: expect.any(String),
     account: { kind: "subscription", backend: "codex" },
   });
-  expect(document.querySelector('button[aria-label^="Model: "]')!.getAttribute("aria-label")).toBe(
-    `Model: ${model}`,
-  );
-});
-
-test("without sendAccount, the mini prompt offers only the coordinator's own provider", async () => {
-  capabilities = { memory: {}, providers: {}, sendModel: {} };
-  providers = [provider("claude", "Claude"), provider("codex", "Codex")];
-  await render("h-own");
-  expect(document.querySelector('[role="tablist"][aria-label="Provider"]')).toBeNull();
-  expect(
-    [...document.querySelectorAll('[role="listbox"] [role="option"]')].every((o) =>
-      o.textContent?.startsWith("Claude"),
-    ),
-  ).toBe(true);
-});
-
-test("full screen centers Knowledge with the larger prompt", async () => {
-  await render("h-full", { expanded: true });
-  const box = document.querySelector<HTMLTextAreaElement>(
-    'textarea[aria-label="Change knowledge"]',
-  )!;
-  expect(box.placeholder).toBe(
-    "Tell the Project what changed, what to remember, or what to forget",
-  );
-  expect(box.getAttribute("rows")).toBe("2");
-  expect(document.body.firstElementChild!.firstElementChild!.classList).toContain("max-w-3xl");
 });

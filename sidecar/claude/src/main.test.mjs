@@ -58,7 +58,7 @@ function scratchSidecar(t, entry = path.join(here, "main.mjs")) {
   return { dir, lines, cleanup, send, until, open, prompt, exit, sidecar };
 }
 
-test("the files plxd embeds start a query through the real SDK and Rust supervisor",
+test("the files plxd embeds run a query through the real SDK and Rust supervisor, with plxd's flags and answers",
   { skip: !installed, timeout: 10000 }, async (t) => {
     const staged = mkdtempSync(path.join(tmpdir(), "claude-embedded-"));
     t.after(() => rmSync(staged, { recursive: true, force: true }));
@@ -72,13 +72,31 @@ test("the files plxd embeds start a query through the real SDK and Rust supervis
     }
     // The SDK is installed separately on first use.
     symlinkSync(path.join(here, "../node_modules"), path.join(staged, "node_modules"), "dir");
-    const { lines, open, prompt, until, send, exit } = scratchSidecar(t, path.join(staged, "src/main.mjs"));
-    open("packaged", []);
+    const { dir, lines, open, prompt, until, send, exit } = scratchSidecar(t, path.join(staged, "src/main.mjs"));
+    const flags = ["--permission-mode", "default", "--permission-prompt-tool", "stdio", "--restricted",
+      "--settings", '{"env":{}}', "--add-dir", "/tmp/a"];
+    open("packaged", flags, {
+      env: { PATH: "/usr/bin:/bin", HOME: dir, FAKE_CLAUDE_DIR: dir,
+        FAKE_CLAUDE_FIXTURE: path.join(fixtures, "approval.jsonl") },
+    });
     prompt("packaged");
+    const ask = (line) => line.startsWith("packaged ") && line.includes('"can_use_tool"');
+    await until((lines) => lines.some(ask));
+    const request = JSON.parse(lines.find(ask).slice("packaged ".length));
+    send({ id: "packaged", stdin: { type: "control_response", response: { subtype: "success",
+      request_id: request.request_id, response: { behavior: "allow", updatedInput: { command: "pnpm test" } } } } });
     await until((lines) => lines.some((line) => line.startsWith("packaged ") && line.includes('"type":"result"')));
     send({ id: "packaged", type: "end" });
     assert.deepEqual(await exit("packaged"), { code: 0, signal: null, stderr: "" });
     assert.equal(lines.filter((line) => line.startsWith("packaged exit ")).length, 1);
+    // Every flag plxd gave reached the CLI, beside the SDK's own.
+    const argv = readFileSync(path.join(dir, "argv"), "utf8").trim().split("\n");
+    for (const flag of flags) assert.ok(argv.includes(flag), `${flag}: ${argv}`);
+    // The SDK initialized the CLI, then sent plxd's prompt and its answer as plxd wrote them.
+    const stdin = readFileSync(path.join(dir, "stdin"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(stdin[0].request.subtype, "initialize");
+    assert.equal(stdin[1].uuid, "01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01");
+    assert.equal(stdin[2].response.response.behavior, "allow");
   });
 
 test("killing the shared sidecar group still cleans up a live CLI and its child",
@@ -201,109 +219,3 @@ process.stdout.write(${JSON.stringify(stream.join("\n") + "\n")}, () => process.
       else assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
     });
 }
-
-test(
-  "a query runs the CLI through the SDK with plxd's flags and answers its permission request",
-  {
-    skip: !installed && "the SDK isn't installed",
-  },
-  async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "claude-sidecar-"));
-    copyFileSync(path.join(fixtures, "approval.jsonl"), path.join(dir, "fixture.jsonl"));
-    const claude = path.join(dir, "claude");
-    copyFileSync(path.join(fixtures, "fake-claude.sh"), claude);
-    chmodSync(claude, 0o755);
-    const sidecar = spawn(process.execPath, [path.join(here, "main.mjs")], {
-      stdio: ["pipe", "pipe", "inherit"],
-    });
-    const send = (value) => sidecar.stdin.write(`${JSON.stringify(value)}\n`);
-    const flags = [
-      "--permission-mode",
-      "default",
-      "--permission-prompt-tool",
-      "stdio",
-      "--restricted",
-      "--settings",
-      '{"env":{}}',
-      "--add-dir",
-      "/tmp/a",
-    ];
-    send({
-      id: "q1",
-      type: "open",
-      supervisor,
-      executable: claude,
-      args: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--input-format",
-        "stream-json",
-        ...flags,
-      ],
-      cwd: dir,
-      env: {
-        PATH: "/usr/bin:/bin",
-        HOME: dir,
-        FAKE_CLAUDE_DIR: dir,
-        FAKE_CLAUDE_FIXTURE: path.join(dir, "fixture.jsonl"),
-      },
-    });
-    const turn = "01997e2a-4c3b-7d10-8a2e-5f6b7c8d9e01";
-    send({
-      id: "q1",
-      stdin: {
-        type: "user",
-        message: { role: "user", content: "hi" },
-        parent_tool_use_id: null,
-        uuid: turn,
-      },
-    });
-
-    const lines = [];
-    for await (const line of readline.createInterface({ input: sidecar.stdout })) {
-      lines.push(line);
-      const [id, rest] = [line.slice(0, line.indexOf(" ")), line.slice(line.indexOf(" ") + 1)];
-      assert.equal(id, "q1");
-      if (rest.includes('"can_use_tool"')) {
-        const request = JSON.parse(rest);
-        send({
-          id: "q1",
-          stdin: {
-            type: "control_response",
-            response: {
-              subtype: "success",
-              request_id: request.request_id,
-              response: { behavior: "allow", updatedInput: { command: "pnpm test" } },
-            },
-          },
-        });
-      }
-      if (rest.includes('"type":"result"')) send({ id: "q1", type: "end" });
-      if (rest.startsWith("exit ")) break;
-    }
-    sidecar.stdin.end();
-
-    const types = lines
-      .map((line) => line.slice(3))
-      .map((rest) => (rest.startsWith("exit ") ? "exit" : JSON.parse(rest).type));
-    assert.deepEqual(types, ["system", "assistant", "control_request", "user", "result", "exit"]);
-    assert.deepEqual(JSON.parse(lines.at(-1).slice("q1 exit ".length)), {
-      code: 0,
-      signal: null,
-      stderr: "",
-    });
-    // Every flag plxd gave reached the CLI, beside the SDK's own.
-    const argv = readFileSync(path.join(dir, "argv"), "utf8").trim().split("\n");
-    for (const flag of flags) assert.ok(argv.includes(flag), `${flag}: ${argv}`);
-    // The SDK initialized the CLI, then sent plxd's prompt and its answer as plxd wrote them.
-    const stdin = readFileSync(path.join(dir, "stdin"), "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    assert.equal(stdin[0].request.subtype, "initialize");
-    assert.equal(stdin[1].uuid, turn);
-    assert.equal(stdin[2].response.response.behavior, "allow");
-  },
-);

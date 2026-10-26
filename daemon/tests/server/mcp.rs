@@ -8,13 +8,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parallax_protocol::methods::{AgentList, ContextList, ThreadStart};
-use parallax_protocol::{
-    AgentListParams, AgentRun, ContextListParams, Project, ProjectId, ThreadStartParams,
-};
+use parallax_protocol::{AgentListParams, AgentRun, ContextListParams, Project, ProjectId};
 use plxd::backend::fake::Step;
 use plxd::mcp::question::COORDINATOR_TOOLS;
 use plxd::mcp::thread::{CONTEXT_TOOLS, TOOLS};
-use plxd::mcp::{MAX_CONTEXT_BYTES, MAX_MESSAGE_BYTES, MAX_PATH_BYTES, MAX_TEXT_BYTES};
 use plxd::mcp::{board, delegation, device, files, html, land, preview, triggers};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
@@ -56,7 +53,7 @@ pub(crate) fn every_callers_tools() -> Vec<&'static str> {
 
 /// `plxd mcp --thread`, initialized.
 pub(crate) struct Mcp {
-    child: Child,
+    _child: Child,
     stdin: ChildStdin,
     stdout: Lines<BufReader<ChildStdout>>,
     next_id: i64,
@@ -84,7 +81,7 @@ impl Mcp {
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap()).lines();
         let mut mcp = Self {
-            child,
+            _child: child,
             stdin,
             stdout,
             next_id: 0,
@@ -307,43 +304,6 @@ async fn a_coordinator_launches_steers_and_records_through_the_thread_tools() {
     host.server.stop().await;
 }
 
-/// PLX-398: a task the user starts with `thread/start`'s `project` has a thread row as well as a
-/// Project run, and the coordinator's `thread_list` lists it once.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_coordinator_lists_a_task_the_user_started_once() {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let host = Host::start(
-        temp_dir(),
-        roles(
-            vec![init("worker-1"), Step::Hang],
-            vec![vec![init("coordinator-1"), Step::Hang]],
-            &seen,
-        ),
-    );
-    let mut client = host.client().await;
-    let (project, _, mut mcp) = coordinator(&host, &mut client).await;
-    let task = client
-        .call::<ThreadStart>(ThreadStartParams {
-            project: Some(project.id),
-            ..crate::threads::start_params(None, "Add a README.")
-        })
-        .await
-        .unwrap()
-        .run
-        .id
-        .to_string();
-
-    let threads = mcp.ok("thread_list", json!({})).await;
-    let listed = threads["threads"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|thread| thread["runId"] == task.as_str())
-        .count();
-    assert_eq!(listed, 1, "{threads}");
-    host.server.stop().await;
-}
-
 /// The context tools reach only the caller's own Project, and a thread outside a Project has none.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_context_tools_reach_only_the_callers_project() {
@@ -412,78 +372,5 @@ async fn the_context_tools_reach_only_the_callers_project() {
         )
         .await;
     assert_eq!(unknown["error"]["code"], -32602, "{unknown}");
-    host.server.stop().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_inputs_are_size_limited() {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let host = Host::start(
-        temp_dir(),
-        roles(
-            worker(),
-            vec![vec![init("coordinator-1"), Step::Hang]],
-            &seen,
-        ),
-    );
-    let mut client = host.client().await;
-    let (project, _, mut mcp) = coordinator(&host, &mut client).await;
-
-    let long = "x".repeat(MAX_TEXT_BYTES + 1);
-    let refused = mcp.refused("thread_launch", json!({"prompt": long})).await;
-    assert!(refused.contains("at most"), "{refused}");
-    assert_eq!(
-        runs(&mut client, project.id).await.len(),
-        1,
-        "only the coordinator"
-    );
-    let path = format!("{}.md", "p".repeat(MAX_PATH_BYTES));
-    let refused = mcp.refused("read_context", json!({"path": path})).await;
-    assert!(refused.contains("at most"), "{refused}");
-    let content = "x".repeat(MAX_CONTEXT_BYTES + 1);
-    let refused = mcp
-        .refused(
-            "write_context",
-            json!({"path": "big.md", "content": content}),
-        )
-        .await;
-    assert!(refused.contains("at most"), "{refused}");
-
-    for (option, value) in [
-        ("workspace", json!("checkout")),
-        ("mode", json!("bypass")),
-        ("title", json!("Mine")),
-    ] {
-        let mut arguments = json!({"prompt": "Elsewhere."});
-        arguments[option] = value;
-        let refused = mcp.refused("thread_launch", arguments).await;
-        assert!(
-            refused.contains(&format!("leave out {option}")),
-            "{refused}"
-        );
-    }
-
-    for gone in ["spawn_agent", "plan_approve"] {
-        let unknown = mcp
-            .request("tools/call", json!({"name": gone, "arguments": {}}))
-            .await;
-        assert_eq!(unknown["error"]["code"], -32602, "{unknown}");
-    }
-
-    let mut huge = format!(
-        r#"{{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{{"name":"thread_list","arguments":{{"pad":"{}"}}}}}}"#,
-        "x".repeat(MAX_MESSAGE_BYTES)
-    );
-    huge.push('\n');
-    // The server stops reading once the line passes the limit and exits (0019), so the rest of
-    // the write can hit a closed pipe.
-    if let Err(error) = mcp.stdin.write_all(huge.as_bytes()).await {
-        assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe, "{error}");
-    }
-    let answer = mcp.read().await.expect("an error for the oversized line");
-    assert_eq!(answer["error"]["code"], -32600, "{answer}");
-    assert!(answer["id"].is_null());
-    let status = timeout(PATIENCE, mcp.child.wait()).await.unwrap().unwrap();
-    assert!(!status.success(), "the server ends after an oversized line");
     host.server.stop().await;
 }

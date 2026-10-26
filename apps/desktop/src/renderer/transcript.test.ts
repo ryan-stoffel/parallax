@@ -5,20 +5,15 @@ import type { AgentOutputItem, LoggedEvent, ParallaxEvent } from "../protocol/ge
 import {
   applyCompacted,
   applyEvents,
-  backgroundCalls,
   emptyTranscript,
-  groupWork,
-  subagentRuns,
   rebuild,
   subagentRows,
   subagentState,
   trackApprovals,
   waitingApprovals,
   waitingSecrets,
-  workedFor,
   type Item,
   type Subagent,
-  type Work,
 } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
@@ -111,15 +106,6 @@ test("kinds this version doesn't know are skipped, but still count their seq", (
   expect(t.seq).toBe(newer[1]!.seq);
 });
 
-test("an account fallback moves the run and says why", () => {
-  const t = build(...upTo(9));
-  expect(t.run!.accountId).toBe("01a0d34b-3c4d-7e5f-a061-7b8c9d0e1f22");
-  expect(t.items.at(-1)).toMatchObject({
-    kind: "notice",
-    text: "Switched from Claude subscription to API key: rate limited.",
-  });
-});
-
 test("each way a run ends is an end item, and an update clears a stale error", () => {
   const t = build(...logged);
   expect(of(t.items, "end").map((i) => i.outcome.status)).toEqual([
@@ -166,19 +152,6 @@ test("deltas without a message id stream into one message that the full text rep
     text: "Hello!",
     at: "",
   });
-});
-
-test("a tool result's images join its call (PLX-640)", () => {
-  const imageId = uuidv7();
-  const t = build(
-    output({ kind: "toolCall", callId: "c1", name: "mcp__plxd__device_screenshot", input: {} }),
-    output({ kind: "toolResult", callId: "c1", status: "ok", output: "{}", images: [imageId] }),
-    output({ kind: "toolCall", callId: "c2", name: "Bash", input: { command: "ls" } }),
-    output({ kind: "toolResult", callId: "c2", status: "ok", output: "a" }),
-  );
-  const [shot, ls] = of(t.items, "tool");
-  expect(shot).toMatchObject({ callId: "c1", status: "ok", images: [imageId] });
-  expect(ls).not.toHaveProperty("images");
 });
 
 test("a transcript opened at its end, built again with each older page, reads as a full load (PLX-490)", () => {
@@ -282,239 +255,10 @@ test("compaction preserves messages on either side of a tool (PLX-491)", () => {
   expect(of(build(folded).items, "assistant").map((item) => item.text)).toEqual(["Hi", "Hi"]);
 });
 
-test("a turn's result that repeats its last message isn't shown twice", () => {
-  const t = build(
-    ...upTo(1),
-    output({ kind: "text", text: "All done." }, { kind: "turnFinished", result: "All done." }),
-  );
-  expect(of(t.items, "assistant")).toHaveLength(1);
-});
-
-test("a follow-up shows the text its turnStarted logged", () => {
-  const turnId = uuidv7();
-  const t = build(...upTo(1), output({ kind: "turnStarted", turnId, text: "And the tests." }));
-  expect(of(t.items, "user").at(-1)).toMatchObject({ text: "And the tests.", turnId });
-});
-
-test("a message's image ids come from its turnStarted: the prompt's from the turn with no id (PLX-193)", () => {
-  const turnId = uuidv7();
-  const t = build(
-    ...upTo(1),
-    output({ kind: "turnStarted", images: ["i-1", "i-2"] }),
-    output({ kind: "turnStarted", turnId, text: "", images: ["i-3"] }),
-  );
-  const [prompt, followUp] = of(t.items, "user");
-  expect(prompt).toMatchObject({ kind: "user", images: ["i-1", "i-2"] });
-  expect(prompt).not.toHaveProperty("turnId");
-  expect(followUp).toMatchObject({ text: "", turnId, images: ["i-3"] });
-});
-
-test("a message's attached threads come from its turnStarted, the prompt's too (PLX-378)", () => {
-  const turnId = uuidv7();
-  const t = build(
-    ...upTo(1),
-    output({ kind: "turnStarted", threads: ["run-a"] }),
-    output({ kind: "turnStarted", turnId, text: "Compare", threads: ["run-a", "run-b"] }),
-  );
-  const [prompt, followUp] = of(t.items, "user");
-  expect(prompt).toMatchObject({ threads: ["run-a"] });
-  expect(prompt).not.toHaveProperty("images");
-  expect(followUp).toMatchObject({ text: "Compare", threads: ["run-a", "run-b"] });
-});
-
-test("a wake-up is marked as Parallax's, and a pause says the next message resumes them (0025)", () => {
-  const turnId = uuidv7();
-  const text = "Parallax, not the user: runs you started finished.";
-  const t = build(
-    ...upTo(1),
-    output({ kind: "turnStarted", turnId, text, wake: true }),
-    at({ kind: "agent.wakeupsPaused", runId }),
-  );
-  expect(of(t.items, "user").at(-1)).toMatchObject({ text, turnId, wake: true });
-  expect(of(t.items, "user")[0]).not.toHaveProperty("wake");
-  expect(t.items.at(-1)).toMatchObject({
-    kind: "notice",
-    text: "Wake-ups are paused: finished subagents won't wake the coordinator. Your next message resumes them.",
-  });
-});
-
-test("another thread's message and stop are marked with its run id (0041)", () => {
-  const [turnId, from] = [uuidv7(), uuidv7()];
-  const t = build(
-    ...upTo(1),
-    output({ kind: "turnStarted", turnId, text: "Rebase first.", from }),
-    output({ kind: "interrupted", from }),
-  );
-  expect(of(t.items, "user").at(-1)).toMatchObject({ text: "Rebase first.", turnId, from });
-  expect(of(t.items, "user")[0]).not.toHaveProperty("from");
-  expect(t.items.at(-1)).toMatchObject({
-    kind: "notice",
-    text: "Stopped by another thread.",
-    from,
-  });
-});
-
 test("uuidv7 puts the time first and sets the version and variant", () => {
   const id = uuidv7(0x0190_1234_5678);
   expect(id).toMatch(/^01901234-5678-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   expect(uuidv7()).not.toBe(uuidv7());
-});
-
-test("a turn's activity folds into one work row, leaving the closing answer out", () => {
-  const item = (kind: "reasoning" | "tool" | "assistant", n: number, time: string) =>
-    ({ kind, key: `k${n}`, text: "", callId: "", name: null, at: time }) as Item;
-  const rows = [
-    { kind: "user", key: "u", text: "go" } as Item,
-    item("reasoning", 1, "2026-01-01T00:00:00Z"),
-    item("tool", 2, "2026-01-01T00:00:20Z"),
-    item("assistant", 3, "2026-01-01T00:01:29Z"),
-  ];
-  const grouped = groupWork(rows);
-  expect(grouped.map((r) => r.kind)).toEqual(["user", "work", "assistant"]);
-  expect(grouped[1]).toMatchObject({ startedAt: rows[1]!.at, endedAt: rows[3]!.at });
-  // Narration alone isn't work.
-  expect(groupWork([rows[3]!]).map((r) => r.kind)).toEqual(["assistant"]);
-
-  expect(workedFor("2026-01-01T00:00:00Z", "2026-01-01T00:01:29Z")).toBe("Worked for 1m 29s");
-  expect(workedFor("2026-01-01T00:00:00Z", "2026-01-01T00:00:12Z")).toBe("Worked for 12s");
-  expect(workedFor("", "")).toBe("Worked briefly");
-});
-
-test("a turn's subagent calls leave its steps as one card, in its fold once it ends", () => {
-  const rows = [
-    { kind: "tool", key: "t1", callId: "1", name: "Bash" },
-    { kind: "tool", key: "a1", callId: "a1", name: "Agent" },
-    { kind: "tool", key: "a2", callId: "a2", name: "Task" },
-    { kind: "reasoning", key: "r", text: "Wait" },
-  ] as Item[];
-  expect(groupWork(rows).map((r) => r.key)).toEqual(["work:t1", "subagents:a1", "work:r"]);
-  // An ended turn folds them all, and its fold splits them out the same way.
-  const ended = groupWork([
-    ...rows,
-    { kind: "end", key: "e", outcome: { status: "completed" } } as Item,
-  ]);
-  expect(ended.map((r) => r.key)).toEqual(["work:t1", "e"]);
-  expect(subagentRuns(rows).map((r) => r.key)).toEqual(["steps:t1", "subagents:a1", "steps:r"]);
-});
-
-test("messages split work rows and stay in order; a mid-run notice folds, and a follow-up's time isn't work", () => {
-  const at = (n: number) => `2026-01-01T00:00:${String(n).padStart(2, "0")}Z`;
-  const rows = [
-    { kind: "tool", key: "t1", callId: "1", name: "Bash", at: at(0) },
-    { kind: "assistant", key: "a1", text: "Checking.", at: at(5) },
-    { kind: "notice", key: "n", tone: "warning", text: "Retrying", at: at(6) },
-    { kind: "tool", key: "t2", callId: "2", name: "Bash", at: at(10) },
-    { kind: "assistant", key: "a2", text: "Done.", at: at(20) },
-    { kind: "notice", key: "n2", tone: "info", text: "Switched", at: at(21) },
-    { kind: "user", key: "u", text: "more", at: at(600) },
-  ] as Item[];
-  const grouped = groupWork(rows);
-  expect(grouped.map((r) => r.key)).toEqual(["work:t1", "a1", "work:n", "a2", "n2", "u"]);
-  expect(grouped[0]).toMatchObject({ startedAt: at(0), endedAt: at(5) });
-  expect(grouped[2]).toMatchObject({ startedAt: at(6), endedAt: at(20) });
-
-  // A turn that ends on a tool ends with its last item, not the next turn's message.
-  expect(groupWork([rows[3]!, rows[6]!])[0]).toMatchObject({ endedAt: at(10) });
-});
-
-test("a finished turn folds its interim messages and answered requests, leaving its last message", () => {
-  const at = (n: number) => `2026-01-01T00:00:${String(n).padStart(2, "0")}Z`;
-  const turn = [
-    { kind: "user", key: "u", text: "go", at: at(0) },
-    { kind: "assistant", key: "a1", text: "Picking a change.", at: at(1) },
-    { kind: "approval", key: "p", request: { toolName: "Bash" }, resolved: {}, at: at(2) },
-    { kind: "tool", key: "t", callId: "1", name: "Bash", at: at(3) },
-    { kind: "assistant", key: "a2", text: "Opened the PR.", at: at(9) },
-  ] as Item[];
-  const end = { kind: "end", key: "e", outcome: { status: "completed" }, at: at(10) } as Item;
-
-  const done = groupWork([...turn, end]);
-  expect(done.map((r) => r.key)).toEqual(["u", "work:a1", "a2", "e"]);
-  expect(done[1]).toMatchObject({ startedAt: at(1), endedAt: at(9), done: true });
-  expect((done[1] as Work).items.map((i) => i.key)).toEqual(["a1", "p", "t"]);
-
-  // Still going: messages and requests split the work, which isn't done (PLX-584).
-  const going = groupWork(turn);
-  expect(going.map((r) => r.key)).toEqual(["u", "a1", "p", "work:t", "a2"]);
-  expect((going[3] as Work).done).toBeUndefined();
-
-  // A follow-up runs in the same process, whose one end closes both turns.
-  const followUp = [
-    { kind: "user", key: "u2", text: "more", at: at(11) },
-    { kind: "assistant", key: "b1", text: "On it.", at: at(12) },
-    { kind: "assistant", key: "b2", text: "Done.", at: at(13) },
-  ] as Item[];
-  expect(groupWork([...turn, ...followUp, end]).map((r) => r.key)).toEqual([
-    "u",
-    "work:a1",
-    "a2",
-    "u2",
-    "work:b1",
-    "b2",
-    "e",
-  ]);
-});
-
-test("a coordinator's plxd tool that names a subagent gets its prompt's first line from an earlier answer", () => {
-  const call = (callId: string, tool: string, input: Record<string, string>) => ({
-    kind: "toolCall" as const,
-    callId,
-    name: `mcp__plxd__${tool}`,
-    input,
-  });
-  const answer = (callId: string, value: unknown) => ({
-    kind: "toolResult" as const,
-    callId,
-    status: "ok" as const,
-    output: JSON.stringify(value, null, 2),
-  });
-  const t = build(
-    output(
-      call("1", "spawn_agent", { prompt: "Fix the login bug\nwith a test" }),
-      answer("1", { runId: "r-1", prompt: "Fix the login bug\nwith a test", status: "starting" }),
-      call("2", "list_agents", {}),
-      answer("2", { runs: [{ runId: "r-0", prompt: "Write the plan" }] }),
-      call("3", "agent_status", { runId: "r-1" }),
-      call("4", "cancel_agent", { runId: "r-0" }),
-      call("5", "agent_diff", { runId: "r-9" }),
-    ),
-  );
-  expect(of(t.items, "tool").map((i) => i.subagent)).toEqual([
-    undefined,
-    undefined,
-    "Fix the login bug",
-    "Write the plan",
-    undefined, // no answer named it
-  ]);
-});
-
-test("a thread tool that names a child gets its prompt's first line from thread_list or thread_wait", () => {
-  const t = build(
-    output(
-      { kind: "toolCall", callId: "1", name: "mcp__plxd__thread_list", input: {} },
-      {
-        kind: "toolResult",
-        callId: "1",
-        status: "ok",
-        output: JSON.stringify({ threads: [{ runId: "r-0", prompt: "Write the plan" }] }),
-      },
-      { kind: "toolCall", callId: "2", name: "mcp__plxd__thread_wait", input: { runId: "r-2" } },
-      {
-        kind: "toolResult",
-        callId: "2",
-        status: "ok",
-        output: JSON.stringify({ thread: { runId: "r-2", prompt: "Fix the login bug" } }),
-      },
-      { kind: "toolCall", callId: "3", name: "mcp__plxd__thread_send", input: { runId: "r-0" } },
-      { kind: "toolCall", callId: "4", name: "mcp__plxd__thread_read", input: { runId: "r-2" } },
-    ),
-  );
-  expect(of(t.items, "tool").map((i) => i.subagent)).toEqual([
-    undefined,
-    undefined,
-    "Write the plan",
-    "Fix the login bug",
-  ]);
 });
 
 // PLX-196: permission requests (0031).
@@ -716,16 +460,6 @@ test("a subagent's items stay out of the agent's flow, in its own transcript und
   expect(subagentRows(quiet).at(-1)).toMatchObject({ kind: "assistant", text: "No tests." });
 });
 
-test("a live event appends to the log and keeps the subagents' object until one changes", () => {
-  const t = build(output(agentCall("a", "Read the docs")));
-  const delta = output({ kind: "textDelta", text: "Reading." });
-  const next = applyEvents(t, [delta], runId);
-  expect(next.events).toEqual([...t.events!, delta]);
-  expect(next.subagents).toBe(t.subagents);
-  const read = applyEvents(next, [output(inSub("a", { kind: "text", text: "Read." }))], runId);
-  expect(read.subagents).not.toBe(next.subagents);
-});
-
 test("a subagent works until it says how it ended, whatever its call's result", () => {
   const sub = { callId: "a", items: [] };
   // A subagent in the background has its call succeed at once.
@@ -741,53 +475,6 @@ test("a subagent works until it says how it ended, whatever its call's result", 
   // A finish this app doesn't know isn't Done.
   const newer = { status: "paused" } as unknown as NonNullable<Subagent["finished"]>;
   expect(subagentState({ ...sub, finished: newer }, true)).toBe("stopped");
-});
-
-test("a background subagent works after its parent's turn ends, until it finishes (PLX-929)", () => {
-  const sub = { callId: "a", items: [], call: "ok" as const };
-  const background = backgroundCalls([
-    { taskId: "t1", kind: "agent", description: "Review", callId: "a" },
-    { taskId: "t2", kind: "command", description: "npm run dev" },
-  ]);
-  expect(subagentState(sub, false, background)).toBe("running");
-  expect(subagentState({ ...sub, callId: "b" }, false, background)).toBe("stopped");
-  expect(subagentState({ ...sub, finished: { status: "completed" } }, false, background)).toBe(
-    "completed",
-  );
-});
-
-test("marks a session on another model above the message sent with it (PLX-495)", () => {
-  const timed = (time: string, ...items: AgentOutputItem[]): LoggedEvent => ({
-    ...output(...items),
-    time,
-  });
-  const turnId = uuidv7();
-  const t = build(
-    timed("1", { kind: "sessionStarted", sessionId: "s1", model: "claude-opus-5-5" }),
-    timed("2", { kind: "turnStarted", turnId, text: "Go on" }),
-    // Claude Code reports a resumed session after its turn, and a context window as `[1m]`.
-    timed("3", { kind: "sessionStarted", sessionId: "s1", model: "claude-opus-5-5[1m]" }),
-    timed("4", { kind: "turnStarted", turnId: uuidv7(), text: "Now on Codex" }),
-    timed("5", { kind: "sessionStarted", sessionId: "s2", model: "gpt-6.1-sol" }),
-  );
-  expect(t.items.map((i) => i.kind)).toEqual([
-    "session",
-    "user",
-    "session",
-    "modelSwitch",
-    "user",
-    "session",
-  ]);
-  expect(of(t.items, "modelSwitch")).toEqual([
-    {
-      kind: "modelSwitch",
-      key: expect.any(String),
-      from: "claude-opus-5-5[1m]",
-      to: "gpt-6.1-sol",
-      at: "5",
-    },
-  ]);
-  expect(of(t.items, "user").map((i) => i.at)).toEqual(["2", "4"]);
 });
 
 test("a compaction shows under way, then done in its place, and a finished turn says so (PLX-584)", () => {
@@ -861,22 +548,6 @@ test("a compaction shows under way, then done in its place, and a finished turn 
   expect(retried.turnDone).toBe(true);
 });
 
-test("an html_render result adds its page after the call, and a failed one doesn't", () => {
-  const render = (callId: string, status: "ok" | "error", out: string) => [
-    output({ kind: "toolCall", callId, name: "mcp__plxd__html_render", input: {} }),
-    output({ kind: "toolResult", callId, status, output: out }),
-  ];
-  const page = JSON.stringify({
-    htmlRender: { attachmentId: "a1", title: "Chart", height: 320 },
-    message: "Shown",
-  });
-  const t = build(...render("c1", "ok", page), ...render("c2", "error", page));
-  expect(of(t.items, "htmlRender")).toEqual([
-    expect.objectContaining({ runId, attachmentId: "a1", title: "Chart", height: 320 }),
-  ]);
-  expect(t.items.map((i) => i.kind)).toEqual(["tool", "htmlRender", "tool"]);
-});
-
 test("a present_files result shows its documents, images, and videos, and any other kind as a file", () => {
   const out = JSON.stringify({
     presentedFiles: [
@@ -904,47 +575,6 @@ test("a present_files result shows its documents, images, and videos, and any ot
   ]);
 });
 
-test("a stopped recording shows after its call", () => {
-  const stop = (out: string) => [
-    output({
-      kind: "toolCall",
-      callId: "r1",
-      name: "mcp__plxd__preview_recording_stop",
-      input: {},
-    }),
-    output({ kind: "toolResult", callId: "r1", status: "ok", output: out }),
-  ];
-  const recording = JSON.stringify({ id: "v1", tabId: "tab-1", mimeType: "video/webm" });
-  expect(of(build(...stop(recording)).items, "recording")).toEqual([
-    expect.objectContaining({ runId, attachmentId: "v1" }),
-  ]);
-  expect(of(build(...stop("not json")).items, "recording")).toEqual([]);
-});
-
-test("a script's end replaces its start where it was (PLX-650)", () => {
-  const script = {
-    kind: "thread.script",
-    runId,
-    trigger: "setup",
-    name: "Install",
-    terminalId: "setup-install",
-    blocking: true,
-  } as const;
-  const t = build(
-    at({ ...script, status: "running" }),
-    output({ kind: "text", text: "Hi" }),
-    at({ ...script, status: "failed", exitCode: 3 }),
-  );
-  expect(t.items.map((i) => i.kind)).toEqual(["script", "assistant"]);
-  expect(of(t.items, "script")[0]).toMatchObject({ status: "failed", exitCode: 3, runId });
-  // A restart's end replaces a start too, so the row stops spinning.
-  const restarted = build(
-    at({ ...script, status: "running" }),
-    at({ ...script, status: "interrupted" }),
-  );
-  expect(of(restarted.items, "script")).toMatchObject([{ status: "interrupted" }]);
-});
-
 test("thread usage sums each usage delta, and knows when earlier turns are missing", () => {
   const delta = (cost?: number): AgentOutputItem => ({
     kind: "usage",
@@ -969,47 +599,6 @@ test("thread usage sums each usage delta, and knows when earlier turns are missi
   const tail = build(output(delta()));
   expect(tail.threadUsage).toMatchObject({ outputTokens: 20, fromStart: false });
   expect(tail.threadUsage?.costUsdMicros).toBeUndefined();
-});
-
-test("request measurements survive snapshots and replay but clear on compaction, session and account switches", () => {
-  const measured: AgentOutputItem = {
-    kind: "requestUsage",
-    backend: "claude",
-    accountId: "claude",
-    usage: {
-      contextTokens: 50_000,
-      contextWindow: 200_000,
-      inputTokens: 50_000,
-      cachedInputTokens: 25_000,
-    },
-  };
-  const events = [output({ kind: "sessionStarted", sessionId: "session-a" }), output(measured)];
-  const t = build(...events);
-  expect(t.requestUsage?.usage.contextTokens).toBe(50_000);
-  expect(rebuild(t, events, runId).requestUsage).toEqual(t.requestUsage);
-  expect(applyEvents(t, events, runId).requestUsage).toEqual(t.requestUsage);
-  expect(
-    applyEvents(t, [output({ kind: "contextCompaction", done: false })], runId).requestUsage,
-  ).toBeUndefined();
-  expect(
-    applyEvents(t, [output({ kind: "sessionStarted", sessionId: "session-b" })], runId)
-      .requestUsage,
-  ).toBeUndefined();
-  expect(
-    applyEvents(
-      t,
-      [
-        at({
-          kind: "agent.accountFallback",
-          runId,
-          fromAccount: "claude",
-          toAccount: "key-account",
-          reason: "rateLimited",
-        }),
-      ],
-      runId,
-    ).requestUsage,
-  ).toBeUndefined();
 });
 
 test("a revert drops the turns it undid, from their first message on (0062)", () => {

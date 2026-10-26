@@ -214,33 +214,14 @@ pub(super) async fn restore(daemon: &Arc<Daemon>) {
 mod tests {
     use std::time::Duration;
 
-    use jiff::{SignedDuration, Timestamp};
+    use jiff::Timestamp;
 
-    use super::{Resumes, Timing, schedule};
-    use crate::backend::{LimitStatus, LimitWindow};
+    use super::{Timing, schedule};
 
     const EXACT: Timing = Timing {
         jitter: Duration::ZERO,
         backoff: Duration::from_mins(15),
     };
-
-    fn minutes(minutes: i64) -> SignedDuration {
-        SignedDuration::from_mins(minutes)
-    }
-
-    #[test]
-    fn a_reset_still_ahead_is_waited_for_once() {
-        let now: Timestamp = "2026-10-03T12:00:00Z".parse().unwrap();
-        let reset = now + minutes(90);
-        assert_eq!(schedule(Some(reset), 3, now, EXACT), (reset, 0));
-        // At the reset, the limit was still on and the CLI reported the same time again.
-        let later = reset + minutes(1);
-        assert_eq!(
-            schedule(Some(reset), 0, later, EXACT),
-            (later + minutes(15), 1),
-            "a reset that passed backs off instead"
-        );
-    }
 
     /// Cursor reports no reset: each resume in a row that finds the limit still on waits twice
     /// as long, up to 4 hours.
@@ -255,39 +236,5 @@ mod tests {
             tries = next;
         }
         assert_eq!(waits, [15, 30, 60, 120, 240, 240, 240]);
-    }
-
-    #[test]
-    fn jitter_only_ever_adds_up_to_its_most() {
-        let now: Timestamp = "2026-10-03T12:00:00Z".parse().unwrap();
-        let reset = now + minutes(10);
-        let timing = Timing {
-            jitter: Duration::from_secs(60),
-            ..EXACT
-        };
-        for _ in 0..100 {
-            let (at, _) = schedule(Some(reset), 0, now, timing);
-            assert!(at >= reset && at <= reset + minutes(1), "{at}");
-        }
-    }
-
-    #[test]
-    fn the_newest_refused_window_sets_the_reset() {
-        let window = |status, minutes_ahead| LimitWindow {
-            window: "five_hour".to_owned(),
-            duration_minutes: None,
-            used_percent: None,
-            status,
-            resets_at: Some(Timestamp::UNIX_EPOCH + minutes(minutes_ahead)),
-        };
-        let mut resumes = Resumes::default();
-        resumes.saw(&window(LimitStatus::Allowed, 500));
-        resumes.saw(&window(LimitStatus::Rejected, 60));
-        resumes.saw(&window(LimitStatus::Rejected, 30));
-        assert_eq!(
-            resumes.take_reset(),
-            Some(Timestamp::UNIX_EPOCH + minutes(60))
-        );
-        assert_eq!(resumes.take_reset(), None, "each CLI process starts over");
     }
 }

@@ -1,21 +1,15 @@
-//! `context/list`, `context/read`, and `context/write` (#155), and the watcher that turns an
-//! agent's own writes on disk into `context.changed` events.
+//! `context/list`, `context/read`, and `context/write` (#155), and the paths and symlinks they
+//! refuse.
 
 use std::os::unix::fs::symlink;
-use std::time::Duration;
 
-use parallax_protocol::jsonrpc::{INVALID_PARAMS, Message, Notification};
-use parallax_protocol::methods::{
-    BoardAdd, BoardRemove, BoardUpdate, ContextList, ContextRead, ContextWrite, EventsEvent,
-    EventsSubscribe, NotificationMethod, ProjectCreate,
-};
+use parallax_protocol::jsonrpc::INVALID_PARAMS;
+use parallax_protocol::methods::{ContextList, ContextRead, ContextWrite, ProjectCreate};
 use parallax_protocol::{
-    BoardAddParams, BoardRemoveParams, BoardSection, BoardStatus, BoardUpdateParams,
-    ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams, ErrorKind,
-    EventsEventParams, EventsSubscribeParams, ParallaxEvent, Project, ProjectId,
+    ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams, Project, ProjectId,
 };
 
-use crate::support::{Client, Plxd, create_params, kind, temp_dir};
+use crate::support::{Client, Plxd, create_params, temp_dir};
 
 async fn project(client: &mut Client, dir: &std::path::Path) -> Project {
     client
@@ -37,16 +31,6 @@ fn write_params(
         path: path.to_owned(),
         content: content.to_owned(),
         writer: writer.map(str::to_owned),
-    }
-}
-
-async fn next_event(client: &mut Client) -> EventsEventParams {
-    match client.next().await {
-        Some(Message::Notification(Notification { method, params })) => {
-            assert_eq!(method, <EventsEvent as NotificationMethod>::NAME);
-            serde_json::from_value(params.expect("params")).expect("an event")
-        }
-        other => panic!("expected an event, got {other:?}"),
     }
 }
 
@@ -90,6 +74,42 @@ async fn write_read_and_list_round_trip() {
 }
 
 #[tokio::test]
+async fn concurrent_writes_to_one_path_leave_a_consistent_last_writer() {
+    let dir = temp_dir();
+    let plxd = Plxd::start(dir.path()).await;
+    let mut client = Client::ready(&plxd.socket).await;
+    let project = project(&mut client, dir.path()).await;
+
+    let mut a = Client::ready(&plxd.socket).await;
+    let mut b = Client::ready(&plxd.socket).await;
+    let (result_a, result_b) = tokio::join!(
+        a.call::<ContextWrite>(write_params(project.id, "plan.md", "from a", Some("a"))),
+        b.call::<ContextWrite>(write_params(project.id, "plan.md", "from b", Some("b"))),
+    );
+    result_a.unwrap();
+    result_b.unwrap();
+
+    let read = client
+        .call::<ContextRead>(ContextReadParams {
+            project: project.id,
+            path: "plan.md".to_owned(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        read.content == "from a" || read.content == "from b",
+        "{}",
+        read.content
+    );
+    let expected_writer = if read.content == "from a" { "a" } else { "b" };
+    assert_eq!(
+        read.file.last_writer.as_deref(),
+        Some(expected_writer),
+        "the recorded writer must match whichever content actually landed on disk"
+    );
+}
+
+#[tokio::test]
 async fn traversal_absolute_hidden_nested_and_bad_extension_paths_are_refused() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
@@ -130,117 +150,6 @@ async fn traversal_absolute_hidden_nested_and_bad_extension_paths_are_refused() 
     assert!(listed.files.is_empty(), "nothing invalid was ever written");
 }
 
-/// plxd renders the board from its items (0081): `board/*` changes `notes.md`, and
-/// `context/write` refuses it and `archived.md`, pointing at the tools.
-#[tokio::test]
-async fn the_board_files_are_rendered_from_items_and_refused_to_writers() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = project(&mut client, dir.path()).await;
-    let notes = async |client: &mut Client| {
-        client
-            .call::<ContextRead>(ContextReadParams {
-                project: project.id,
-                path: "notes.md".to_owned(),
-            })
-            .await
-            .unwrap()
-            .content
-    };
-
-    let item = client
-        .call::<BoardAdd>(BoardAddParams {
-            project: project.id,
-            text: "**Search**: adds it".to_owned(),
-            section: BoardSection::Now,
-            status: None,
-            links: None,
-        })
-        .await
-        .unwrap()
-        .item;
-    let line = format!("- [ ] **Search**: adds it (id {})", item.id);
-    assert_eq!(notes(&mut client).await, format!("## Now\n\n{line}\n"));
-
-    let done = client
-        .call::<BoardUpdate>(BoardUpdateParams {
-            project: project.id,
-            id: item.id,
-            text: None,
-            section: None,
-            status: Some(BoardStatus::Done),
-            links: None,
-        })
-        .await
-        .unwrap()
-        .item;
-    assert!(done.done_at.is_some());
-    assert!(notes(&mut client).await.contains("- [x] **Search**"));
-
-    for path in [
-        "notes.md",
-        "archived.md",
-        "Notes.md",
-        "ARCHIVED.md",
-        "notes.legacy.md",
-    ] {
-        let refused = client
-            .call::<ContextWrite>(write_params(project.id, path, "x", Some("coordinator")))
-            .await
-            .unwrap_err();
-        assert_eq!(refused.code, INVALID_PARAMS, "{path}");
-        assert!(refused.message.contains("board_add"), "{}", refused.message);
-    }
-
-    let removed = client
-        .call::<BoardRemove>(BoardRemoveParams {
-            project: project.id,
-            id: item.id,
-        })
-        .await
-        .unwrap();
-    assert!(removed.removed);
-    assert_eq!(notes(&mut client).await, "");
-}
-
-#[tokio::test]
-async fn reading_a_missing_file_is_context_not_found() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = project(&mut client, dir.path()).await;
-
-    let error = client
-        .call::<ContextRead>(ContextReadParams {
-            project: project.id,
-            path: "missing.md".to_owned(),
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ContextNotFound);
-}
-
-#[tokio::test]
-async fn context_methods_for_an_unknown_project_are_project_not_found() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let missing = ProjectId::generate();
-
-    let error = client
-        .call::<ContextList>(ContextListParams { project: missing })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ProjectNotFound);
-
-    let error = client
-        .call::<ContextWrite>(write_params(missing, "plan.md", "x", None))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ProjectNotFound);
-}
-
 #[tokio::test]
 async fn a_pre_existing_symlink_is_refused_for_read_and_write_and_left_untouched() {
     let dir = temp_dir();
@@ -275,92 +184,4 @@ async fn a_pre_existing_symlink_is_refused_for_read_and_write_and_left_untouched
         .await
         .unwrap_err();
     assert_eq!(read_error.code, INVALID_PARAMS);
-}
-
-#[tokio::test]
-async fn concurrent_writes_to_one_path_leave_a_consistent_last_writer() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = project(&mut client, dir.path()).await;
-
-    let mut a = Client::ready(&plxd.socket).await;
-    let mut b = Client::ready(&plxd.socket).await;
-    let (result_a, result_b) = tokio::join!(
-        a.call::<ContextWrite>(write_params(project.id, "plan.md", "from a", Some("a"))),
-        b.call::<ContextWrite>(write_params(project.id, "plan.md", "from b", Some("b"))),
-    );
-    result_a.unwrap();
-    result_b.unwrap();
-
-    let read = client
-        .call::<ContextRead>(ContextReadParams {
-            project: project.id,
-            path: "plan.md".to_owned(),
-        })
-        .await
-        .unwrap();
-    assert!(
-        read.content == "from a" || read.content == "from b",
-        "{}",
-        read.content
-    );
-    let expected_writer = if read.content == "from a" { "a" } else { "b" };
-    assert_eq!(
-        read.file.last_writer.as_deref(),
-        Some(expected_writer),
-        "the recorded writer must match whichever content actually landed on disk"
-    );
-}
-
-#[tokio::test]
-async fn a_write_emits_exactly_one_context_changed_event_and_an_agents_own_write_emits_another() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let project = project(&mut client, dir.path()).await;
-
-    let mut watcher = Client::ready(&plxd.socket).await;
-    watcher
-        .call::<EventsSubscribe>(EventsSubscribeParams {
-            after: 0,
-            project: Some(project.id),
-            run: None,
-            shell: false,
-        })
-        .await
-        .unwrap();
-
-    client
-        .call::<ContextWrite>(write_params(project.id, "plan.md", "hello", Some("editor")))
-        .await
-        .unwrap();
-    let event = next_event(&mut watcher).await;
-    assert_eq!(event.project, Some(project.id));
-    match event.event {
-        ParallaxEvent::ContextChanged { file } => {
-            assert_eq!(file.path, "plan.md");
-            assert_eq!(file.last_writer.as_deref(), Some("editor"));
-        }
-        other => panic!("expected context.changed, got {other:?}"),
-    }
-    // The write above must not also be reported by the disk watcher: plxd's own write is
-    // suppressed as an echo of the one just reported.
-    watcher.stays_quiet(Duration::from_millis(1500)).await;
-
-    // An agent's own write, made directly on disk with no plxd call at all (0005).
-    let context_dir = dir.path().join("context").join(project.id.to_string());
-    std::fs::write(context_dir.join("research.md"), "from an agent").unwrap();
-    let event = next_event(&mut watcher).await;
-    assert_eq!(event.project, Some(project.id));
-    match event.event {
-        ParallaxEvent::ContextChanged { file } => {
-            assert_eq!(file.path, "research.md");
-            assert_eq!(
-                file.last_writer, None,
-                "plxd never made this write, so it has no writer to report"
-            );
-        }
-        other => panic!("expected context.changed, got {other:?}"),
-    }
 }

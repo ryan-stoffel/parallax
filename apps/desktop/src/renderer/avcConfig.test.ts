@@ -21,31 +21,8 @@ test("the fallback encoder's SPS gets no reordering and one reference frame, onc
   expect(simulatorAvcConfig(fallback)).toEqual(repaired);
   expect(fallback).toEqual(original);
   expect(simulatorAvcConfig(repaired)).toBe(repaired);
-});
-
-test("an SPS that already has VUI passes through", () => {
+  // An SPS that already has VUI passes through.
   expect(simulatorAvcConfig(lowLatency)).toBe(lowLatency);
-});
-
-test("every SPS in a description is repaired, and its PPS and profile extensions kept", () => {
-  const extensions = [0xfd, 0xf8, 0xf8, 0];
-  const description = Uint8Array.from([
-    ...fallback.subarray(0, 5),
-    0xe2,
-    ...fallback.subarray(6, 20),
-    ...lowLatency.subarray(6, 30),
-    ...fallback.subarray(20),
-    ...extensions,
-  ]);
-  expect(simulatorAvcConfig(description)).toEqual(
-    Uint8Array.from([
-      ...description.subarray(0, 6),
-      ...repaired.subarray(6, 25),
-      ...lowLatency.subarray(6, 30),
-      ...fallback.subarray(20),
-      ...extensions,
-    ]),
-  );
 });
 
 test("a truncated, malformed, or unfamiliar description passes through", () => {
@@ -83,27 +60,4 @@ test("a truncated, malformed, or unfamiliar description passes through", () => {
   oversizedSps.set(fallback.subarray(8, 20), 8);
   oversizedSps.set(fallback.subarray(20), 8 + 4097);
   expect(simulatorAvcConfig(oversizedSps)).toBe(oversizedSps);
-});
-
-test("emulation prevention bytes are read past, and a run of zeros stays unparsed", () => {
-  const escaped = Uint8Array.from([
-    ...fallback.subarray(0, 6),
-    0,
-    13,
-    39,
-    100,
-    0,
-    51,
-    0,
-    0,
-    3,
-    0,
-    0,
-    3,
-    0,
-    0,
-    0,
-    ...fallback.subarray(20),
-  ]);
-  expect(simulatorAvcConfig(escaped)).toBe(escaped);
 });

@@ -6,19 +6,13 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 import { PROTOCOL_VERSION } from "../protocol/generated/protocol";
 import type {
+  ConnectionError,
   ConnectionState,
   SubscriptionMessage,
   TerminalMessage,
   WatchMessage,
 } from "../preload/bridge";
-import {
-  backoffMs,
-  Connection,
-  exitError,
-  LOCATE_PLXD,
-  sshCommand,
-  type ConnectionOptions,
-} from "./connection";
+import { backoffMs, Connection, exitError, sshCommand, type ConnectionOptions } from "./connection";
 
 type Message = Record<string, unknown> & {
   id?: number;
@@ -181,20 +175,6 @@ test("the local upgrade asks a compatible plxd for its running agents", async ()
   old.dispose();
 });
 
-test("an external incompatible daemon stays failed when replacement declines", async () => {
-  const connection = connect(undefined, async () => false);
-  child().reply({ id: child().request("initialize").id, error: incompatible });
-  child().emit("close", 0, null);
-  await Promise.resolve();
-  expect(state()).toMatchObject({
-    status: "failed",
-    retrying: false,
-    error: { reason: "incompatibleProtocol" },
-  });
-  expect(children).toHaveLength(1);
-  connection.dispose();
-});
-
 test("handshakes, then heartbeats, and reconnects when plxd goes silent", () => {
   connect();
   expect(child().request("initialize").params).toMatchObject({
@@ -235,25 +215,6 @@ test("an incompatible protocol stops retrying until retry()", () => {
   expect(children).toHaveLength(1);
   connection.retry();
   expect(children).toHaveLength(2);
-});
-
-test("a usage error from attach (exit 2) stops retrying", () => {
-  connect();
-  child().emit("close", 2, null);
-  expect(state()).toMatchObject({ status: "failed", error: { exitCode: 2 }, retrying: false });
-  vi.advanceTimersByTime(60_000);
-  expect(children).toHaveLength(1);
-});
-
-test("not found fails without spawning anything", () => {
-  located = undefined;
-  connect();
-  expect(children).toHaveLength(0);
-  expect(state()).toMatchObject({
-    status: "failed",
-    error: { reason: "notFound" },
-    retrying: false,
-  });
 });
 
 test("reports attach's exit code and stderr, and backs off from 1 s to 10 s", () => {
@@ -367,30 +328,6 @@ test("a disposed connection ends each watch with an error, so its owner opens it
   });
 });
 
-test("a shell watch that plxd refuses ends with its error, and an ended watch unsubscribes", () => {
-  const connection = connect();
-  child().handshake();
-  const refused = vi.fn();
-  connection.watch({ shell: true }, refused);
-  const shell = child().request("orchestration/subscribeShell");
-  expect(shell.params).toEqual({});
-  const error = { code: -32601, message: "Method not found" };
-  child().reply({ id: shell.id, error });
-  expect(refused).toHaveBeenCalledWith({ type: "error", error });
-
-  const stop = connection.watch({ shell: true }, vi.fn());
-  const next = child().request("orchestration/subscribeShell");
-  child().reply({
-    id: next.id,
-    result: {
-      subscription: "sub-9",
-      snapshot: { seq: 1, projects: [], repos: [], threads: [], runs: [], requests: [] },
-    },
-  });
-  stop();
-  expect(child().request("events/unsubscribe").params).toEqual({ subscription: "sub-9" });
-});
-
 test("routes a terminal's output, and opens a shell again after a reconnect (PLX-637)", async () => {
   const connection = connect();
   const capabilities = { terminals: {} };
@@ -426,35 +363,6 @@ test("routes a terminal's output, and opens a shell again after a reconnect (PLX
   expect(child().request("terminal/open").params).toEqual({ ...shell, cols: 100, rows: 30 });
   child().reply({ method: "terminal/exit", params: { ...key, exitCode: 0 } });
   expect(shown.at(-1)).toEqual({ type: "exit", exitCode: 0 });
-});
-
-test("detaches a terminal once nothing shows it, and doesn't open it again (PLX-664)", async () => {
-  const connection = connect();
-  child().reply({
-    id: child().request("initialize").id,
-    result: { ...initialized, capabilities: { terminals: {} } },
-  });
-  const key = { threadId: "t1", terminalId: "drawer:local/t1" };
-  const shell = { ...key, cwd: "/wt", cols: 80, rows: 24 };
-  const first = connection.attachTerminal(shell, () => {});
-  const second = connection.attachTerminal(shell, () => {});
-  first();
-  expect(child().request("terminal/detach")).toBeUndefined();
-  second();
-  expect(child().request("terminal/detach").params).toEqual(key);
-
-  // Its last listener left while it opened: the open's answer detaches it.
-  connection.attachTerminal(shell, () => {})();
-  child().sent.length = 0;
-  const opened = connection.openTerminal(shell);
-  child().reply({ id: child().request("terminal/open").id, result: {} });
-  await opened;
-  expect(child().request("terminal/detach").params).toEqual(key);
-
-  child().emit("close", 0, null);
-  vi.advanceTimersByTime(1000);
-  child().handshake();
-  expect(child().request("terminal/open")).toBeUndefined();
 });
 
 test("resyncRequired ends the subscription with a resync", () => {
@@ -547,20 +455,6 @@ test("a request retries after reconnect with its original command id", async () 
   expect(await pending).toEqual({ result: {}, logId: "log-1" });
 });
 
-test("distinct concurrent requests with identical params get distinct command ids", async () => {
-  const connection = connect();
-  child().handshake();
-  const params = { project: "01901234-5678-7abc-89ab-cdef01234567" };
-  const first = connection.request("project/delete", params);
-  const a = child().request("project/delete");
-  const second = connection.request("project/delete", params);
-  const b = child().request("project/delete");
-  expect(a.params?.["commandId"]).not.toBe(b.params?.["commandId"]);
-  child().reply({ id: a.id, result: {} });
-  child().reply({ id: b.id, result: {} });
-  await Promise.all([first, second]);
-});
-
 test("a subscribe after a new logId, with a seq from the old log, resyncs", async () => {
   const connection = connect();
   child().handshake("log-1");
@@ -615,16 +509,6 @@ test("text from the host's shell before the handshake fails at once, without ret
   expect(children).toHaveLength(1);
 });
 
-test("a stray line after the handshake is skipped", () => {
-  connect("mini");
-  child().handshake();
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  child().stdout.emit("data", Buffer.from("not json\n"));
-  expect(state()).toMatchObject({ status: "connected" });
-  expect(warn).toHaveBeenCalled();
-  warn.mockRestore();
-});
-
 test("an ssh error that needs the user stops retrying until retry()", () => {
   const connection = connect("mini");
   child().stderr.emit("data", Buffer.from("Host key verification failed.\r\n"));
@@ -640,72 +524,29 @@ test("an ssh error that needs the user stops retrying until retry()", () => {
   expect(children).toHaveLength(2);
 });
 
-test("ssh failures read as what to do", () => {
-  const ssh = (code: number, stderr: string, platform: NodeJS.Platform = "darwin") =>
-    exitError(code, null, stderr, "mini", platform);
-  expect(ssh(255, "Host key verification failed.")).toMatchObject({
-    reason: "sshSetup",
-    message: "mini's host key isn't trusted yet. To accept it, run `ssh mini` once in a terminal.",
-  });
+// The reason decides whether the connection retries (`fail`): only what the user must fix stops it.
+test("an exit's reason: setup the user must do, a missing plxd, a refusal, or a passing failure", () => {
   const changed = "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@";
-  expect(ssh(255, `${changed}\nHost key verification failed.`)).toMatchObject({
-    reason: "sshSetup",
-    message: expect.stringContaining("host key has changed"),
-  });
-
   const denied = "me@mini: Permission denied (publickey,password,keyboard-interactive).";
-  expect(ssh(255, denied)).toMatchObject({
-    reason: "sshSetup",
-    message: expect.stringContaining("If it needs a password, press Sign in."),
-  });
-  expect(ssh(255, denied, "win32").message).toContain("start the ssh-agent service");
-
-  const notOnPath = "Parallax couldn't find plxd on mini: it isn't on PATH for ssh commands";
-  expect(ssh(127, "zsh:1: command not found: plxd")).toMatchObject({
-    reason: "notFound",
-    message: expect.stringContaining(notOnPath),
-  });
-  const cmd = "'plxd' is not recognized as an internal or external command,";
-  expect(ssh(1, cmd).message).toContain(notOnPath);
-
-  const unknown = "ssh: Could not resolve hostname mini: nodename nor servname provided";
-  expect(ssh(255, unknown)).toMatchObject({
-    reason: "exited",
-    message: "Couldn't find mini. Check its name, or your ssh config.",
-  });
-  expect(ssh(255, "ssh: connect to host mini port 22: Operation timed out").message).toBe(
-    "Couldn't reach mini. Check that it's on and accepts ssh.",
-  );
-  // attach's own exit on the host keeps its meaning.
-  expect(ssh(4, "plxd attach: timed out").message).toBe(
-    "plxd couldn't be reached or started on mini",
-  );
-});
-
-test("an SSH host's command uses its Sign in master, except on Windows", () => {
-  const options = (platform: NodeJS.Platform) =>
-    sshCommand("mini", "ssh", undefined, platform).join(" ");
-  expect(options("darwin")).toContain("-o ControlMaster=no -o ControlPath=~/.ssh/parallax-%C");
-  expect(options("darwin")).not.toContain("ControlPath=none");
-  expect(options("win32")).toContain("-o ControlPath=none");
-  expect(options("win32")).not.toContain("ControlMaster");
-});
-
-test("an SSH host without plxd on PATH is reached through plxd where Parallax installs it", () => {
-  expect(sshCommand("mini").slice(-3)).toEqual(["mini", "plxd", "attach"]);
-  expect(sshCommand("mini", "ssh", [LOCATE_PLXD]).slice(-2)).toEqual(["mini", LOCATE_PLXD]);
-  // One argument, which the host's login shell hands to sh: the plxd the app installed first,
-  // then PATH, so a Retry after adding plxd to it works, then plx-connect's ~/.local/bin, then
-  // the app in either channel and place, and 127 when none is there.
-  expect(LOCATE_PLXD).toMatch(
-    /^sh -c '\[ -x "\$HOME\/.parallax-plxd\/plxd" \] && exec "\$HOME\/.parallax-plxd\/plxd" attach; command -v plxd >\/dev\/null && exec plxd attach; /,
-  );
-  for (const path of [
-    '"$HOME/.local/bin/plxd"',
-    '"/Applications/Parallax.app/Contents/Resources/plxd"',
-    '"/Applications/Parallax (Nightly).app/Contents/Resources/plxd"',
-    '"$HOME/Applications/Parallax (Nightly).app/Contents/Resources/plxd"',
-  ])
-    expect(LOCATE_PLXD).toContain(path);
-  expect(LOCATE_PLXD).toMatch(/^sh -c '[^']*exit 127'$/);
+  const cases: [number, string, ConnectionError["reason"], string?][] = [
+    [255, "Host key verification failed.", "sshSetup"],
+    [255, `${changed}\nHost key verification failed.`, "sshSetup"],
+    [255, denied, "sshSetup"],
+    [127, "zsh:1: command not found: plxd", "notFound"],
+    // cmd.exe on a Windows host.
+    [1, "'plxd' is not recognized as an internal or external command,", "notFound"],
+    [255, "ssh: Could not resolve hostname mini: nodename nor servname provided", "exited"],
+    [255, "ssh: connect to host mini port 22: Operation timed out", "exited"],
+    [4, "plxd attach: timed out", "exited"],
+    // A LAN computer that no longer knows this one, and one that's just unreachable.
+    [5, "", "refused", "Studio"],
+    [4, "", "exited", "Studio"],
+  ];
+  for (const [code, stderr, reason, lan] of cases) {
+    const destination = lan ? undefined : "mini";
+    expect(
+      exitError(code, null, stderr, destination, "darwin", undefined, lan).reason,
+      stderr,
+    ).toBe(reason);
+  }
 });

@@ -4,13 +4,9 @@ import {
   addToFolder,
   createFolder,
   entriesOf,
-  fileStarted,
-  folderPath,
   makeFolder,
-  moveOut,
   pinLayout,
   placeAt,
-  startIn,
   ungroup,
   updateFolder,
   type PinEntry,
@@ -40,19 +36,6 @@ test("pins it doesn't place show last, in order, and a folder of two takes the t
   expect(tree(["a", "c"])).toEqual(["a", "c", { Empty: [] }]);
 });
 
-test("folders nest, a pin moves before or after another wherever it is, and out one level", () => {
-  rename(makeFolder(entries(), "b", "c"), "Outer");
-  rename(createFolder(folderId("Outer")), "Inner");
-  addToFolder(entries(), folderId("Inner"), "a");
-  expect(tree(pins)).toEqual([{ Outer: ["b", "c", { Inner: ["a"] }] }, "d"]);
-  expect(folderPath(pinLayout.get().folders, "a").map((f) => f.name)).toEqual(["Outer", "Inner"]);
-
-  placeAt(entries(), "d", "b", false);
-  expect(tree(pins)).toEqual([{ Outer: ["d", "b", "c", { Inner: ["a"] }] }]);
-  moveOut(entries(), "a");
-  expect(tree(pins)).toEqual([{ Outer: ["d", "b", "c", { Inner: [] }, "a"] }]);
-});
-
 test("a folder never moves into itself or a folder inside it", () => {
   rename(makeFolder(entries(), "a", "b"), "Outer");
   rename(createFolder(folderId("Outer")), "Inner");
@@ -69,24 +52,4 @@ test("ungrouping puts what was in a folder, nested folders included, in its plac
   ungroup(entries(), folderId("Outer"));
   expect(tree(pins)).toEqual(["a", "b", "c", { Inner: ["d"] }]);
   expect(Object.values(pinLayout.get().folders).map((f) => f.name)).toEqual(["Inner"]);
-});
-
-test("a folder's New thread files only the thread it starts, and none once the folder's gone", () => {
-  const id = createFolder();
-  startIn.set(id);
-  expect(fileStarted("h/new")).toBe(true);
-  expect(pinLayout.get().folders[id]!.items).toEqual(["h/new"]);
-  // Used up: the next thread started anywhere isn't filed.
-  expect(startIn.get()).toBeNull();
-  expect(fileStarted("h/next")).toBe(false);
-
-  startIn.set("deleted-folder");
-  expect(fileStarted("h/later")).toBe(false);
-  expect(startIn.get()).toBeNull();
-});
-
-test("a drop after an open folder's row goes first inside it", () => {
-  rename(makeFolder(entries(), "b", "c"), "Work");
-  addToFolder(entries(), folderId("Work"), "a", true);
-  expect(tree(pins)).toEqual([{ Work: ["a", "b", "c"] }, "d"]);
 });

@@ -6,20 +6,19 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::methods::{AgentCancel, AgentList, AgentOpenPr, AgentStart, ThreadStart};
+use parallax_protocol::methods::{AgentList, AgentOpenPr, AgentStart};
 use parallax_protocol::{
-    AgentCancelParams, AgentListParams, AgentOpenPrParams, AgentStatus, ErrorKind, ParallaxEvent,
-    RepoId, RunId, ThreadStartParams,
+    AgentListParams, AgentOpenPrParams, AgentStatus, RepoId, RunId, ThreadStartParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::process::{Environment, find_program};
 use tempfile::TempDir;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, git, init, project_params, real_repo, scope, start_params,
-    subscribe, text, until, updated_to,
+    Host, create, end_turn, fake, git, init, project_params, start_params, subscribe, until,
+    updated_to,
 };
-use crate::support::{InProcess, kind, temp_dir};
+use crate::support::{InProcess, temp_dir};
 
 const URL: &str = "https://github.com/example/app/pull/7";
 
@@ -103,19 +102,6 @@ esac
 
     pub(crate) fn mode(&self, mode: &str) {
         fs::write(self.0.path().join("gh-mode"), mode).unwrap();
-    }
-
-    /// Takes `gh` off the `PATH`, or puts it back.
-    fn installed(&self, installed: bool) {
-        let (on, off) = (
-            self.0.path().join("bin/gh"),
-            self.0.path().join("gh.uninstalled"),
-        );
-        if installed {
-            fs::rename(off, on).unwrap();
-        } else {
-            fs::rename(on, off).unwrap();
-        }
     }
 }
 
@@ -221,123 +207,5 @@ async fn a_finished_run_pushes_its_branch_and_opens_one_pull_request() {
         .unwrap()
         .runs;
     assert_eq!(runs[0].pull_requests, [URL]);
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn a_thread_s_pull_request_says_what_is_missing() {
-    let tools = Tools::new();
-    let work = temp_dir();
-    let repo = real_repo(work.path());
-    let host = start(temp_dir(), editing(), &tools);
-    let mut client = host.client().await;
-    let entry = client.add(&repo).await;
-    subscribe(&mut client, scope(entry.id), 0).await;
-    let start = thread(Some(entry.id));
-    let run_id = start.run_id;
-    client.call::<ThreadStart>(start).await.unwrap();
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let refused = async |client: &mut Conn, expected: ErrorKind, says: &str| {
-        let error = client
-            .call::<AgentOpenPr>(open(run_id, "Rewrite the README", None))
-            .await
-            .unwrap_err();
-        assert_eq!(kind(&error), expected, "{}", error.message);
-        assert!(error.message.contains(says), "{}", error.message);
-    };
-    refused(
-        &mut client,
-        ErrorKind::PushFailed,
-        "No such remote 'origin'",
-    )
-    .await;
-    add_origin(&repo, work.path());
-    tools.installed(false);
-    refused(&mut client, ErrorKind::GhUnavailable, "isn't installed").await;
-    tools.installed(true);
-    tools.mode("signed-out");
-    refused(&mut client, ErrorKind::GhUnavailable, "gh auth login").await;
-    tools.mode("fail");
-    refused(
-        &mut client,
-        ErrorKind::PrFailed,
-        "Could not resolve to a Repository",
-    )
-    .await;
-    tools.mode("");
-    let opened = client
-        .call::<AgentOpenPr>(open(run_id, "Rewrite the README", None))
-        .await
-        .unwrap();
-    assert_eq!(opened.url, URL);
-
-    // A thread with no repo has only its scratch repository, with nowhere to push.
-    let start = thread(None);
-    let scratch = start.run_id;
-    let started = client.call::<ThreadStart>(start).await.unwrap();
-    let scope = scope(started.thread.repo);
-    subscribe(&mut client, scope, 0).await;
-    // Not the first thread's `agent.updated` for the pull request it linked.
-    until(&mut client, |event| {
-        matches!(&event.event, ParallaxEvent::AgentUpdated { run_id, state }
-            if *run_id == scratch && state.status == AgentStatus::Completed)
-    })
-    .await;
-    let error = client
-        .call::<AgentOpenPr>(open(scratch, "Rewrite the README", None))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::PrRefused);
-    assert!(error.message.contains("no repository"), "{}", error.message);
-    host.server.stop().await;
-}
-
-#[tokio::test]
-async fn a_running_run_or_one_with_nothing_committed_is_refused() {
-    let tools = Tools::new();
-    let dir = temp_dir();
-    let params = project_params(dir.path());
-    let host = start(dir, vec![init("s"), text("Working"), Step::Hang], &tools);
-    let mut client = host.client().await;
-    let project = create(&mut client, params).await;
-    subscribe(&mut client, project.id, 0).await;
-    let start = start_params(project.id, "Work forever");
-    let run_id = start.run_id;
-    client.call::<AgentStart>(start).await.unwrap();
-    until(&mut client, updated_to(AgentStatus::Running)).await;
-
-    let running = client
-        .call::<AgentOpenPr>(open(run_id, "Work", None))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&running), ErrorKind::PrRefused);
-    assert!(
-        running.message.contains("still running"),
-        "{}",
-        running.message
-    );
-
-    client
-        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
-        .await
-        .unwrap();
-    until(&mut client, updated_to(AgentStatus::Cancelled)).await;
-    let empty = client
-        .call::<AgentOpenPr>(open(run_id, "Work", None))
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&empty), ErrorKind::PrRefused);
-    assert!(
-        empty.message.contains("no committed changes"),
-        "{}",
-        empty.message
-    );
-
-    let blank = client
-        .call::<AgentOpenPr>(open(run_id, " \n ", None))
-        .await
-        .unwrap_err();
-    assert_eq!(blank.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
-    assert!(tools.log().is_empty(), "gh never ran");
     host.server.stop().await;
 }

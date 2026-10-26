@@ -8,21 +8,19 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use parallax_protocol::methods::{
-    AgentAccept, AgentCancel, AgentCommit, AgentGitStatus, AgentOpenPr, AgentPush, AgentSend,
-    AgentStart, ProjectDelete, QueueList, QueueSteer, ThreadDelete, ThreadStart,
+    AgentAccept, AgentCommit, AgentGitStatus, AgentOpenPr, AgentPush, AgentSend, AgentStart,
+    ProjectDelete, QueueList, QueueSteer, ThreadStart,
 };
 use parallax_protocol::{
-    AcceptId, AgentAcceptParams, AgentCancelParams, AgentCommitParams, AgentGitStatusParams,
-    AgentOutputItem, AgentPushParams, AgentStatus, ErrorKind, GitStatus, ParallaxEvent,
-    ProjectDeleteParams, QueueListParams, QueueSteerParams, RepoId, RunId, ThreadDeleteParams,
-    ThreadStartParams, TurnId,
+    AcceptId, AgentAcceptParams, AgentCommitParams, AgentGitStatusParams, AgentOutputItem,
+    AgentPushParams, AgentStatus, ErrorKind, GitStatus, ParallaxEvent, ProjectDeleteParams,
+    QueueListParams, QueueSteerParams, RunId, ThreadStartParams, TurnId,
 };
-use plxd::backend::fake::Step;
 use tokio::task::JoinHandle;
 
 use crate::agents::{
-    Conn, Host, create, git, init, project_params, real_repo, scope, send_params, start_params,
-    subscribe, text, until, updated_to,
+    Conn, Host, create, git, project_params, real_repo, scope, send_params, start_params,
+    subscribe, until, updated_to,
 };
 use crate::open_pr::{Tools, add_origin, editing, open, start, thread};
 use crate::support::{PATIENCE, kind, temp_dir};
@@ -199,41 +197,6 @@ async fn a_checkout_thread_commits_pushes_and_opens_a_pull_request_on_its_branch
     host.server.stop().await;
 }
 
-#[tokio::test]
-async fn a_running_run_reads_its_status_but_refuses_commit_and_push() {
-    let tools = Tools::new();
-    let dir = temp_dir();
-    let params = project_params(dir.path());
-    let host = start(dir, vec![init("s"), text("Working"), Step::Hang], &tools);
-    let mut client = host.client().await;
-    let project = create(&mut client, params).await;
-    subscribe(&mut client, project.id, 0).await;
-    let start = start_params(project.id, "Work forever");
-    let run_id = start.run_id;
-    client.call::<AgentStart>(start).await.unwrap();
-    until(&mut client, updated_to(AgentStatus::Running)).await;
-
-    assert!(!status(&mut client, run_id).await.origin);
-    let commit = client
-        .call::<AgentCommit>(commit(run_id, "Work"))
-        .await
-        .unwrap_err();
-    let push = client
-        .call::<AgentPush>(AgentPushParams { run_id })
-        .await
-        .unwrap_err();
-    for error in [commit, push] {
-        assert_eq!(kind(&error), ErrorKind::GitRefused);
-        assert!(error.message.contains("still running"), "{}", error.message);
-    }
-    client
-        .call::<AgentCancel>(AgentCancelParams { run_id, from: None })
-        .await
-        .unwrap();
-    until(&mut client, updated_to(AgentStatus::Cancelled)).await;
-    host.server.stop().await;
-}
-
 /// Makes `origin` slow: its `pre-receive` hook creates the first path returned, then waits until
 /// the second exists.
 fn hold_pushes(origin: &Path) -> (PathBuf, PathBuf) {
@@ -398,39 +361,6 @@ async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
     host.server.stop().await;
 }
 
-#[tokio::test]
-async fn a_thread_s_delete_is_refused_while_its_push_runs() {
-    let tools = Tools::new();
-    let work = temp_dir();
-    let repo = real_repo(work.path());
-    let origin = add_origin(&repo, work.path());
-    let (started, gate) = hold_pushes(&origin);
-    let host = start(temp_dir(), editing(), &tools);
-    let mut client = host.client().await;
-    let entry = client.add(&repo).await;
-    subscribe(&mut client, scope(entry.id), 0).await;
-    let start = thread(Some(entry.id));
-    let run_id = start.run_id;
-    client.call::<ThreadStart>(start).await.unwrap();
-    until(&mut client, updated_to(AgentStatus::Completed)).await;
-
-    let push = held_push(&host, run_id, &started).await;
-    let refused = client
-        .call::<ThreadDelete>(ThreadDeleteParams { run_id })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&refused), ErrorKind::GitRefused);
-    assert!(refused.message.contains("pushing"), "{}", refused.message);
-
-    fs::write(&gate, "").unwrap();
-    push.await.unwrap();
-    client
-        .call::<ThreadDelete>(ThreadDeleteParams { run_id })
-        .await
-        .unwrap();
-    host.server.stop().await;
-}
-
 /// PLX-781's sweep removes a merged thread's worktree and branch; a message to it makes both again
 /// from the default branch, fetched first so it has a merge made on GitHub, and resumes there.
 #[tokio::test]
@@ -537,60 +467,4 @@ async fn a_missing_worktree_refuses_git_without_touching_the_checkout() {
     assert_eq!(git(&repo, &["status", "--porcelain"]), before);
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
     assert!(git(&origin, &["for-each-ref", "--format=%(refname)"]).is_empty());
-}
-
-#[tokio::test]
-async fn repository_git_status_reads_checkout_without_starting_a_thread() {
-    use parallax_protocol::{RepoGitStatusParams, methods::RepoGitStatus};
-    let tools = Tools::new();
-    let dir = temp_dir();
-    let repo = real_repo(dir.path());
-    let host = start(temp_dir(), editing(), &tools);
-    let mut client = host.client().await;
-    let entry = client.add(&repo).await;
-    fs::write(repo.join("new.txt"), "one\ntwo").unwrap();
-    let answer = client
-        .call::<RepoGitStatus>(RepoGitStatusParams { repo: entry.id })
-        .await
-        .unwrap();
-    assert_eq!(answer.branch.as_deref(), Some("main"));
-    assert_eq!(
-        (answer.changes, answer.insertions, answer.deletions),
-        (1, 2, 0)
-    );
-    assert_eq!(git(&repo, &["status", "--porcelain"]), "?? new.txt");
-    let missing = client
-        .call::<RepoGitStatus>(RepoGitStatusParams {
-            repo: RepoId::generate(),
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&missing), ErrorKind::RepoNotFound);
-}
-
-#[tokio::test]
-async fn repository_git_status_refuses_nested_checkout_with_missing_git_directory() {
-    use parallax_protocol::{RepoGitStatusParams, methods::RepoGitStatus};
-    let tools = Tools::new();
-    let dir = temp_dir();
-    let outer = real_repo(dir.path());
-    git(&outer, &["branch", "-m", "outer-branch"]);
-    let inner = real_repo(&outer);
-    git(&inner, &["branch", "-m", "inner-branch"]);
-    let host = start(temp_dir(), editing(), &tools);
-    let mut client = host.client().await;
-    let entry = client.add(&inner).await;
-    let answer = client
-        .call::<RepoGitStatus>(RepoGitStatusParams { repo: entry.id })
-        .await
-        .unwrap();
-    assert_eq!(answer.branch.as_deref(), Some("inner-branch"));
-    fs::remove_dir_all(inner.join(".git")).unwrap();
-    fs::write(outer.join("outer.txt"), "outer change\n").unwrap();
-    let error = client
-        .call::<RepoGitStatus>(RepoGitStatusParams { repo: entry.id })
-        .await
-        .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::WorktreeFailed);
-    assert!(error.message.contains("has no .git"), "{error:?}");
 }

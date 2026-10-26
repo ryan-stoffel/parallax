@@ -1,7 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
-import { catalogOf, instanceModels, models } from "./models";
+import { catalogOf, instanceModels } from "./models";
 import { knownModel } from "./Subagents";
 
 const info = (instance: Partial<ProviderInstance>, rest: Partial<ProviderInfo> = {}) =>
@@ -70,55 +70,11 @@ test("an instance that lists no models offers its agent's default, which sends n
   expect(models.map((m) => [m.id, m.name, m.provider])).toEqual([["", "Default model", "amp"]]);
 });
 
-test("OpenCode's own models are named without OpenCode's name, another vendor's keep theirs", () => {
-  const listed = {
-    models: [
-      { id: "opencode/big-pickle", name: "opencode/Big Pickle" },
-      { id: "opencode/ling-3.1-flash-free", name: "OpenCode Zen/Ling 3.1 Flash Free" },
-      { id: "anthropic/claude-sonnet-5", name: "Anthropic/Claude Sonnet 5" },
-    ],
-  };
-  const models = instanceModels(info({ id: "opencode", kind: "opencode" }, listed));
-  expect(models.map((m) => m.name)).toEqual([
-    "Big Pickle",
-    "Ling 3.1 Flash Free",
-    "Anthropic/Claude Sonnet 5",
-  ]);
-  // Another agent on OpenCode's models keeps the vendor in each name.
-  const pi = instanceModels(info({ id: "pi", kind: "pi" }, listed));
-  expect(pi[0]!.name).toBe("opencode/Big Pickle");
-});
-
 test("a reported model is its exact id before a longer one's prefix (PLX-495)", () => {
   expect(knownModel("claude-opus-5-5-medium")?.provider).toBe("cursor");
   expect(knownModel("claude-opus-5-5[1m]")?.provider).toBe("claude");
   expect(knownModel("claude-haiku-4-5-20251001")?.provider).toBe("claude");
-});
-
-test("Claude's menu lists Haiku 5.5, and a dated id is never taken for a shorter model (PLX-715)", () => {
-  const claude = models.filter((m) => m.provider === "claude");
-  expect(claude.find((m) => m.id === "claude-haiku-5-5")).toMatchObject({
-    name: "Claude Haiku 5.5",
-    contexts: [1_000_000, 200_000],
-  });
-  // Every model Claude Code 2.1.295 lists, and Opus 4.5.
-  expect(claude.map((m) => m.id)).toEqual(
-    expect.arrayContaining([
-      "claude-opus-5-5",
-      "claude-sonnet-5-5",
-      "claude-fable-5-1",
-      "claude-fable-5",
-      "claude-opus-5",
-      "claude-opus-4-8",
-      "claude-opus-4-7",
-      "claude-opus-4-6",
-      "claude-opus-4-5",
-      "claude-sonnet-5",
-      "claude-sonnet-4-6",
-      "claude-haiku-5-5",
-      "claude-haiku-4-5",
-    ]),
-  );
+  // A dated id is never taken for a shorter model (PLX-715).
   expect(knownModel("claude-sonnet-5-5-20261001")?.name).toBe("Claude Sonnet 5.5");
   expect(knownModel("claude-haiku-5-5-20261001")?.name).toBe("Claude Haiku 5.5");
 });

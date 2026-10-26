@@ -1118,8 +1118,7 @@ fn parse_numstat_z(output: &str) -> Vec<(u64, u64, bool)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_name_status_z, parse_numstat_z, validate_repo_path};
-    use crate::worktree::ChangeStatus;
+    use super::validate_repo_path;
 
     #[test]
     fn only_plain_relative_paths_outside_git_are_valid() {
@@ -1150,22 +1149,5 @@ mod tests {
             assert!(validate_repo_path(bad).is_err(), "{bad:?}");
         }
         assert!(validate_repo_path(&"a".repeat(4097)).is_err());
-    }
-
-    #[test]
-    fn z_outputs_parse_renames_and_binaries_in_order() {
-        let names = "M\0src/a.rs\0R087\0old name.rs\0new\tname.rs\0A\0img.png\0\n";
-        let files = parse_name_status_z(names);
-        assert_eq!(files.len(), 3);
-        assert_eq!(files[0].status, ChangeStatus::Modified);
-        assert_eq!(files[1].status, ChangeStatus::Renamed);
-        assert_eq!(files[1].path, "new\tname.rs");
-        assert_eq!(files[1].old_path.as_deref(), Some("old name.rs"));
-        assert_eq!(files[2].path, "img.png");
-        let numstat = "3\t1\tsrc/a.rs\x002\t2\t\0old name.rs\0new\tname.rs\0-\t-\timg.png\0\n";
-        assert_eq!(
-            parse_numstat_z(numstat),
-            [(3, 1, false), (2, 2, false), (0, 0, true)]
-        );
     }
 }

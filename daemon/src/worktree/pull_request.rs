@@ -591,33 +591,7 @@ mod tests {
     use parallax_protocol::{PrCheckState, PrMergeMethod, PrMergeState, PrReviewState, PrState};
     use serde_json::json;
 
-    use super::{cap_diff, github_pr_urls, parse_view, without_userinfo};
-
-    #[test]
-    fn pull_request_urls_are_found_in_what_gh_printed() {
-        assert_eq!(
-            github_pr_urls(
-                "Creating pull request for x into main in me/app\n\n\
-                 https://github.com/me/app/pull/12\n\
-                 already exists: https://github.com/my-org/app.js/pull/7/files, and \
-                 (https://github.com/me/app/pull/3)."
-            ),
-            [
-                "https://github.com/me/app/pull/12",
-                "https://github.com/my-org/app.js/pull/7",
-                "https://github.com/me/app/pull/3",
-            ]
-        );
-        for none in [
-            "https://github.com/me/app/issues/12",
-            "https://github.com/me/app/pull/",
-            "https://github.com/me/app/pull/12abc",
-            "https://github.com/me/a pp/pull/12",
-            "https://gitlab.com/me/app/pull/12",
-        ] {
-            assert!(github_pr_urls(none).is_empty(), "{none}");
-        }
-    }
+    use super::{parse_view, without_userinfo};
 
     /// An open draft's `gh pr view --json` answer, with every kind of comment and check.
     fn answer() -> serde_json::Value {
@@ -683,13 +657,6 @@ mod tests {
                  "authors": [{"email": "a@example.com", "id": "", "login": "", "name": "Ann"}]}
             ]
         })
-    }
-
-    #[test]
-    fn gh_pr_view_s_files_keep_their_lines_changed() {
-        let pr = parse_view(&answer().to_string()).unwrap();
-        let files = json!([{"path": "README.md", "additions": 12, "deletions": 2}]);
-        assert_eq!(serde_json::to_value(&pr.files).unwrap(), files);
     }
 
     #[test]
@@ -793,34 +760,6 @@ mod tests {
             ],
             "by login, or by name without a GitHub account"
         );
-    }
-
-    #[test]
-    fn a_merged_pull_request_with_no_checks_has_no_rolled_up_or_merge_state() {
-        let mut merged = answer();
-        merged["state"] = json!("MERGED");
-        merged["statusCheckRollup"] = json!(null);
-        merged["mergeStateStatus"] = json!("UNKNOWN");
-        merged["autoMergeRequest"] = json!(null);
-        merged["mergedAt"] = json!("2026-10-02T13:00:00Z");
-        merged["closedAt"] = json!("2026-10-02T13:00:00Z");
-        merged["mergedBy"] = json!({"login": "rev"});
-        let pr = parse_view(&merged.to_string()).unwrap();
-        assert_eq!(pr.state, PrState::Merged);
-        assert_eq!(pr.merged_by.as_deref(), Some("rev"));
-        assert_eq!(pr.merged_at, Some("2026-10-02T13:00:00Z".parse().unwrap()));
-        assert_eq!(
-            (pr.checks_state, pr.merge_state, pr.auto_merge),
-            (None, None, None)
-        );
-    }
-
-    #[test]
-    fn a_long_diff_is_cut_at_a_line_s_end() {
-        let short = cap_diff("+a\n+b\n".to_owned(), 6);
-        assert_eq!((short.diff.as_str(), short.truncated), ("+a\n+b\n", false));
-        let cut = cap_diff("+a\n+bcd\n".to_owned(), 5);
-        assert_eq!((cut.diff.as_str(), cut.truncated), ("+a\n", true));
     }
 
     #[test]

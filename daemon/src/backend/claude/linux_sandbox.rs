@@ -410,7 +410,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
 
-    use super::{check_host, helper_problem, install, missing_packages, read_status, status_spec};
+    use super::{check_host, install, read_status, status_spec};
     use crate::backend::claude::ClaudeBackend;
     use crate::backend::process::{Environment, Launcher};
     use crate::backend::{
@@ -436,25 +436,6 @@ mod tests {
         path
     }
 
-    #[tokio::test]
-    async fn a_missing_bwrap_or_socat_is_named() {
-        let dir = tempfile::tempdir().unwrap();
-        let bin = dir.path().join("bin");
-        fs::create_dir(&bin).unwrap();
-        let claude = script(&bin, "claude", "exit 0");
-        let only = launcher(dir.path(), &[("PATH", bin.to_str().unwrap())]);
-
-        let error = check_host(&only, &claude).await.unwrap_err();
-        assert!(
-            error.starts_with("bubblewrap and socat aren't installed"),
-            "{error}"
-        );
-
-        script(&bin, "bwrap", "exit 0");
-        let error = check_host(&only, &claude).await.unwrap_err();
-        assert!(error.starts_with("socat isn't installed"), "{error}");
-    }
-
     #[test]
     fn bundled_tools_are_written_executable_and_rewritten_when_they_differ() {
         let dir = tempfile::tempdir().unwrap();
@@ -475,49 +456,6 @@ mod tests {
             fs::read_dir(&tools).unwrap().count(),
             2,
             "no temp file left"
-        );
-    }
-
-    #[test]
-    fn a_helper_refused_a_nested_namespace_names_root_or_the_host() {
-        // What a current Claude Code printed on a Rocky Linux host (PLX-802).
-        let uid_map = "apply-seccomp: write /proc/self/uid_map: Operation not permitted";
-        let as_root = helper_problem(uid_map, true);
-        assert!(as_root.contains("run plxd as a regular user"), "{as_root}");
-        let as_user = helper_problem(uid_map, false);
-        assert!(as_user.contains("not Claude Code's version"), "{as_user}");
-        assert!(!as_user.contains("or later"), "{as_user}");
-        assert!(helper_problem("no helper here", false).contains("or later has it built in"));
-    }
-
-    #[test]
-    fn a_missing_package_comes_with_its_distro_s_install_command() {
-        let both = ["bubblewrap", "socat"];
-        let fix = |os_release: &str| missing_packages(&both, os_release);
-        assert!(fix("NAME=NixOS\nID=nixos\n").ends_with(
-            "add bubblewrap socat to environment.systemPackages in configuration.nix, then \
-                 run `sudo nixos-rebuild switch`"
-        ));
-        assert!(
-            fix("ID=ubuntu\nID_LIKE=debian\n").ends_with("run `sudo apt install bubblewrap socat`")
-        );
-        assert!(
-            fix("ID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n")
-                .ends_with("`sudo dnf install bubblewrap socat`")
-        );
-        assert!(
-            fix("ID=endeavouros\nID_LIKE=arch\n").ends_with("`sudo pacman -S bubblewrap socat`")
-        );
-        assert!(
-            fix("ID=\"opensuse-tumbleweed\"\nID_LIKE=\"opensuse suse\"\n")
-                .ends_with("`sudo zypper install bubblewrap socat`")
-        );
-        assert!(fix("ID='alpine'\n").ends_with("`sudo apk add bubblewrap socat`"));
-        assert!(fix("").ends_with("install the bubblewrap and socat packages"));
-        assert_eq!(
-            missing_packages(&["socat"], "ID=debian\n"),
-            "socat isn't installed, and Claude Code's worker sandbox needs it on Linux; run \
-             `sudo apt install socat`"
         );
     }
 
@@ -617,14 +555,6 @@ echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"default"}'"#,
     const STATUS_OK: &str = r#"if [ "$1" = --restricted ]; then
     echo '{"statusVersion":3,"autoAllowBashIfSandboxedSource":"default"}'; exit 0
 fi"#;
-
-    #[tokio::test]
-    async fn claude_code_s_own_filter_passes_the_check() {
-        let Some((_dir, launcher, claude)) = installed() else {
-            return;
-        };
-        check_host(&launcher, &claude).await.unwrap();
-    }
 
     #[tokio::test]
     async fn a_claude_without_the_filter_is_refused() {

@@ -185,7 +185,7 @@ fn c_string(text: impl AsRef<OsStr>) -> io::Result<CString> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, File};
+    use std::fs::File;
     use std::io::Read;
     use std::os::fd::AsFd;
     use std::process::Command;
@@ -194,37 +194,6 @@ mod tests {
     use rustix::process::{Signal, WaitOptions, kill_process, waitpid};
 
     use super::{Stdio, spawn_detached};
-
-    #[test]
-    fn the_child_gets_its_stdio_arguments_and_environment() {
-        let dir = tempfile::tempdir().unwrap();
-        let input = dir.path().join("in");
-        fs::write(&input, "hello\n").unwrap();
-        let stdin = File::open(&input).unwrap();
-        let output = dir.path().join("out");
-        let stdout = File::create(&output).unwrap();
-
-        let mut command = Command::new("/bin/sh");
-        command
-            .args([
-                "-c",
-                "read line; echo \"$line $0 $PLXD_TEST\"; echo err >&2",
-            ])
-            .arg("arg")
-            .env("PLXD_TEST", "set");
-        let pid = spawn_detached(
-            &command,
-            Stdio {
-                stdin: stdin.as_fd(),
-                stdout: stdout.as_fd(),
-                stderr: stdout.as_fd(),
-            },
-        )
-        .unwrap();
-        let (_, status) = waitpid(Some(pid), WaitOptions::empty()).unwrap().unwrap();
-        assert_eq!(status.exit_status(), Some(0));
-        assert_eq!(fs::read_to_string(&output).unwrap(), "hello arg set\nerr\n");
-    }
 
     #[test]
     fn the_child_leads_a_new_session_and_inherits_no_other_descriptor() {

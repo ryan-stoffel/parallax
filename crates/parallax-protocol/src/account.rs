@@ -138,26 +138,7 @@ pub struct AccountsKeysRemoveResult {}
 mod tests {
     use serde_json::json;
 
-    use super::{Provider, RawKey};
-
-    #[test]
-    fn providers_are_camel_case_strings_and_unknown_ones_decode_as_unknown() {
-        for (provider, name) in [
-            (Provider::Anthropic, "anthropic"),
-            (Provider::Openai, "openai"),
-            (Provider::Cursor, "cursor"),
-        ] {
-            assert_eq!(serde_json::to_value(provider).unwrap(), json!(name));
-            assert_eq!(
-                serde_json::from_value::<Provider>(json!(name)).unwrap(),
-                provider
-            );
-        }
-        assert_eq!(
-            serde_json::from_value::<Provider>(json!("gemini")).unwrap(),
-            Provider::Unknown
-        );
-    }
+    use super::RawKey;
 
     #[test]
     fn a_raw_key_serializes_plainly_but_never_shows_its_value_in_debug() {

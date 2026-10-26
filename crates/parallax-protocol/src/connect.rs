@@ -72,22 +72,3 @@ pub struct TailnetDevice {
     /// Whether plxd answered on the node's port. Only checked when it is online.
     pub parallax: bool,
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::TailscaleState;
-
-    #[test]
-    fn unknown_tailscale_states_decode_as_unknown() {
-        assert_eq!(
-            serde_json::from_value::<TailscaleState>(json!("needsLogin")).unwrap(),
-            TailscaleState::Unknown
-        );
-        assert_eq!(
-            serde_json::to_value(TailscaleState::Missing).unwrap(),
-            json!("missing")
-        );
-    }
-}

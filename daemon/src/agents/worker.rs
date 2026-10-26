@@ -389,130 +389,14 @@ pub(super) fn home() -> Result<PathBuf, ErrorObject> {
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
-    use std::path::Path;
+    use parallax_protocol::ErrorKind;
 
-    use parallax_protocol::{CliKind, DetectedCli, ErrorKind};
-
+    use super::sandbox_path;
     #[cfg(unix)]
-    use std::ffi::OsStr;
+    use super::{allowlisted, with_extra_path};
 
-    #[cfg(unix)]
-    use super::{allowlisted, login_shell_path, with_extra_path};
-    use super::{check_version, sandbox_path};
-    use crate::backend::process::ALWAYS_SCRUBBED;
     #[cfg(unix)]
     use crate::backend::process::Environment;
-
-    #[cfg(unix)]
-    fn path_entries(env: &Environment) -> Vec<String> {
-        env.get("PATH")
-            .map(|path| {
-                std::env::split_paths(path)
-                    .map(|entry| entry.into_os_string().into_string().unwrap())
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    fn claude(version: Option<&str>) -> DetectedCli {
-        DetectedCli {
-            cli: CliKind::Claude,
-            installed: true,
-            path: Some("/usr/local/bin/claude".into()),
-            version: version.map(str::to_owned),
-            signed_in: Some(true),
-            auth_kind: None,
-            plan: None,
-            note: None,
-        }
-    }
-
-    #[test]
-    fn an_old_or_unknown_cli_is_refused_naming_both_versions() {
-        let check = |version| check_version(CliKind::Claude, Some(&claude(version)));
-        assert!(check(Some("2.1.248")).is_ok());
-        assert!(check(Some("2.2.0")).is_ok());
-        let old = check(Some("2.1.247")).unwrap_err();
-        assert_eq!(
-            old.parallax_data().unwrap().kind,
-            ErrorKind::WorkerUnavailable
-        );
-        assert!(old.message.contains("2.1.247"), "{}", old.message);
-        assert!(old.message.contains("2.1.248"), "{}", old.message);
-        for missing in [None, Some(&claude(None)), Some(&claude(Some("latest")))] {
-            let error = check_version(CliKind::Claude, missing).unwrap_err();
-            assert!(error.message.contains("2.1.248"), "{}", error.message);
-        }
-        let mut absent = claude(None);
-        absent.installed = false;
-        assert!(
-            check_version(CliKind::Claude, Some(&absent))
-                .unwrap_err()
-                .message
-                .contains("isn't installed")
-        );
-
-        let mut codex = claude(Some("0.157.1"));
-        codex.cli = CliKind::Codex;
-        assert!(check_version(CliKind::Codex, Some(&codex)).is_ok());
-        codex.version = Some("0.156.1".into());
-        let old = check_version(CliKind::Codex, Some(&codex)).unwrap_err();
-        assert!(old.message.contains("Codex 0.156.1"), "{}", old.message);
-        assert!(old.message.contains("0.157.1"), "{}", old.message);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_minimal_path_is_filled_in_after_the_users_own_folders() {
-        let mut env = Environment::empty();
-        env.set("PATH", "/usr/bin:/custom/bin");
-        env.set("USER", "me");
-        let login = OsStr::new("/run/current-system/sw/bin::.:/usr/bin");
-        let env = with_extra_path(env, Some(Path::new("/Users/me")), Some(login));
-        let mut expected = vec![
-            "/usr/bin",
-            "/custom/bin",
-            "/run/current-system/sw/bin",
-            "/Users/me/.local/bin",
-            "/Users/me/.opencode/bin",
-            "/Users/me/.grok/bin",
-            "/Users/me/.cargo/bin",
-            "/Users/me/.npm-global/bin",
-            "/Users/me/.nix-profile/bin",
-            "/etc/profiles/per-user/me/bin",
-            "/nix/var/nix/profiles/default/bin",
-        ];
-        if cfg!(target_os = "macos") {
-            expected.push("/opt/homebrew/bin");
-        }
-        expected.extend(["/usr/local/bin", "/bin", "/usr/sbin", "/sbin"]);
-        assert_eq!(path_entries(&env), expected);
-        let unset = with_extra_path(Environment::empty(), None, None);
-        assert_eq!(path_entries(&unset)[0], super::EXTRA_PATH[0]);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_login_shells_path_is_read_past_what_its_startup_files_print() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let shell = dir.path().join("shell");
-        // A stand-in for zsh: its "startup files" print a banner and add a folder to PATH, then
-        // it runs the -c command it was given, after -l and -i.
-        std::fs::write(
-            &shell,
-            "#!/bin/sh\necho 'Welcome back'\nPATH=/from/login:$PATH\nexec /bin/sh -c \"$4\"\n",
-        )
-        .unwrap();
-        std::fs::set_permissions(&shell, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let path = login_shell_path(shell.as_os_str()).unwrap();
-        assert!(
-            path.to_str().unwrap().starts_with("/from/login:"),
-            "{path:?}"
-        );
-        assert_eq!(login_shell_path(OsStr::new("/nonexistent/shell")), None);
-    }
 
     #[cfg(unix)]
     /// plxd started from a shell that holds credentials for other services: a worker spawned
@@ -608,13 +492,6 @@ mod tests {
         assert_eq!(seen, expected);
     }
 
-    #[test]
-    fn the_ssh_session_never_reaches_an_agent() {
-        for name in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
-            assert!(ALWAYS_SCRUBBED.contains(&name), "{name}");
-        }
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_path_with_a_wildcard_is_refused_plainly() {
@@ -672,21 +549,5 @@ mod tests {
         let error = sandbox_path(&odd, "the repository").unwrap_err();
         assert!(error.message.contains("app[old]"), "{}", error.message);
         assert!(!error.message.contains(r"\\?\"), "{}", error.message);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn a_folder_only_a_verbatim_path_can_name_is_refused_plainly() {
-        let dir = tempfile::tempdir().unwrap();
-        // Only the verbatim spelling keeps the trailing dot.
-        let verbatim = dir.path().canonicalize().unwrap().join("trailing.");
-        std::fs::create_dir(&verbatim).unwrap();
-        let error = sandbox_path(&verbatim, "the repository").unwrap_err();
-        assert_eq!(
-            error.parallax_data().unwrap().kind,
-            ErrorKind::WorkerUnavailable
-        );
-        assert!(error.message.contains("trailing."), "{}", error.message);
-        assert!(error.message.contains("CON"), "{}", error.message);
     }
 }

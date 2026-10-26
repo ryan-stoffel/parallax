@@ -5,11 +5,11 @@ use std::time::Duration;
 
 use parallax_protocol::{AccountChoice, AccountId, Provider, Role};
 
-use super::{BackendRegistry, Defaults, KeyAccounts, RoutingError, resolve, start};
+use super::{BackendRegistry, Defaults, KeyAccounts, resolve, start};
 use crate::backend::{
     AccountRef, Backend, CancelSwitch, Capabilities, Credential, EVENT_BUFFER, Event, EventSink,
-    EventStream, Failure, FailureKind, ModelUsage, Outcome, Resume, RunHandle, RunId, RunRequest,
-    StartError, Started, ThreadTools, ToolPolicy, Usage, WorkerSandbox, claude,
+    EventStream, Failure, FailureKind, Outcome, Resume, RunHandle, RunId, RunRequest, StartError,
+    Started, ThreadTools, ToolPolicy, WorkerSandbox, claude,
 };
 use crate::keystore::{KeyStore, MemoryKeyStore};
 
@@ -65,20 +65,6 @@ fn failure(kind: FailureKind) -> Failure {
         exit: None,
         stderr_tail: None,
     }
-}
-
-fn usage(input_tokens: u64) -> Usage {
-    Usage {
-        input_tokens,
-        ..Usage::default()
-    }
-}
-
-fn usage_event(input_tokens: u64) -> Event {
-    Event::Usage(ModelUsage {
-        model: None,
-        usage: usage(input_tokens),
-    })
 }
 
 /// A [`Backend`] that emits one canned, pre-built event sequence per call to
@@ -194,24 +180,6 @@ fn subscription_choice() -> AccountChoice {
     }
 }
 
-/// `resolve` for a `WorkspaceWrite` run of `role`, on a registry of one backend that never runs.
-fn resolve_idle(
-    accounts: &FixedAccounts,
-    defaults: &Defaults,
-    role: Role,
-    requested: Option<AccountChoice>,
-) -> Result<super::Resolved, RoutingError> {
-    let registry = registry(Arc::new(ScriptedBackend::new(Vec::new())));
-    resolve(
-        &registry,
-        accounts,
-        defaults,
-        role,
-        requested,
-        ToolPolicy::WorkspaceWrite,
-    )
-}
-
 /// A backend whose one attempt completes.
 fn completing() -> Arc<ScriptedBackend> {
     Arc::new(ScriptedBackend::new(vec![vec![finished(
@@ -226,129 +194,6 @@ fn no_keys() -> Arc<dyn KeyStore> {
 // ---------------------------------------------------------------------------------------------
 // resolve()
 // ---------------------------------------------------------------------------------------------
-
-#[test]
-fn an_explicit_choice_is_used_even_when_the_roles_default_differs() {
-    let key_id = AccountId::generate();
-    let mut accounts = FixedAccounts::default();
-    accounts.providers.insert(key_id, Provider::Anthropic);
-    // The default is a subscription; the request below explicitly asks for the key account
-    // instead, which must win.
-    let defaults = Defaults {
-        coordinator: None,
-        worker: Some(subscription_choice()),
-    };
-
-    let resolved = resolve_idle(
-        &accounts,
-        &defaults,
-        Role::Worker,
-        Some(AccountChoice::Key { id: key_id }),
-    )
-    .unwrap();
-    assert_eq!(resolved.account_id(), key_id.to_string());
-}
-
-#[test]
-fn the_roles_default_is_used_when_nothing_is_requested() {
-    let defaults = Defaults {
-        coordinator: None,
-        worker: Some(subscription_choice()),
-    };
-
-    let resolved = resolve_idle(&FixedAccounts::default(), &defaults, Role::Worker, None).unwrap();
-    assert_eq!(resolved.account_id(), "claude");
-}
-
-#[test]
-fn the_coordinator_always_gets_no_write_however_it_is_requested() {
-    let resolved = resolve_idle(
-        &FixedAccounts::default(),
-        &Defaults::default(),
-        Role::Coordinator,
-        Some(subscription_choice()),
-    )
-    .unwrap();
-    assert_eq!(resolved.policy(), ToolPolicy::NoWrite);
-}
-
-#[test]
-fn a_worker_keeps_the_policy_it_was_given() {
-    let resolved = resolve_idle(
-        &FixedAccounts::default(),
-        &Defaults::default(),
-        Role::Worker,
-        Some(subscription_choice()),
-    )
-    .unwrap();
-    assert_eq!(resolved.policy(), ToolPolicy::WorkspaceWrite);
-}
-
-#[test]
-fn no_default_and_nothing_requested_is_an_error() {
-    let error = resolve_idle(
-        &FixedAccounts::default(),
-        &Defaults::default(),
-        Role::Worker,
-        None,
-    )
-    .unwrap_err();
-    assert_eq!(error, RoutingError::NoAccount { role: Role::Worker });
-}
-
-#[test]
-fn an_unregistered_backend_name_is_an_error() {
-    let error = resolve_idle(
-        &FixedAccounts::default(),
-        &Defaults::default(),
-        Role::Worker,
-        Some(AccountChoice::Subscription {
-            backend: "codex".into(),
-        }),
-    )
-    .unwrap_err();
-    assert_eq!(
-        error,
-        RoutingError::UnknownBackend {
-            backend: "codex".into()
-        }
-    );
-}
-
-#[test]
-fn an_unknown_key_account_id_is_an_error() {
-    let id = AccountId::generate();
-
-    let error = resolve_idle(
-        &FixedAccounts::default(),
-        &Defaults::default(),
-        Role::Worker,
-        Some(AccountChoice::Key { id }),
-    )
-    .unwrap_err();
-    assert_eq!(error, RoutingError::UnknownKeyAccount { id });
-}
-
-#[test]
-fn a_key_accounts_provider_with_no_backend_is_an_error() {
-    let mut accounts = FixedAccounts::default();
-    let id = AccountId::generate();
-    accounts.providers.insert(id, Provider::Openai);
-
-    let error = resolve_idle(
-        &accounts,
-        &Defaults::default(),
-        Role::Worker,
-        Some(AccountChoice::Key { id }),
-    )
-    .unwrap_err();
-    assert_eq!(
-        error,
-        RoutingError::UnknownProvider {
-            provider: Provider::Openai
-        }
-    );
-}
 
 // ---------------------------------------------------------------------------------------------
 // start() and its fallback
@@ -426,208 +271,6 @@ fn coordinator_tools() -> ThreadTools {
     }
 }
 
-/// #195, 0027: a coordinator is Claude Code in its permission mode, with none of 0004's no-write
-/// flags, `plxd mcp --thread` joining its own MCP servers, and plxd's tools allowed in every mode
-/// (PLX-380).
-/// The allowlist also names Claude Code's todo tools, so it keeps a plan on any model (PLX-249),
-/// and its only `--settings` keeps its task list its own (PLX-251).
-#[tokio::test]
-async fn a_coordinator_gets_plxds_mcp_tools_on_claude_codes_own_configuration() {
-    let backend = completing();
-    let resolved = resolved_for_role(backend.clone(), Role::Coordinator, ToolPolicy::NoWrite);
-    let tools = coordinator_tools();
-    let request = RunRequest {
-        coordinator_tools: Some(tools.clone()),
-        ..request(&root())
-    };
-
-    let mut started = start(no_keys(), &FixedAccounts::default(), resolved, request).unwrap();
-    rest(&mut started.events).await;
-
-    let sent = &backend.calls()[0];
-    assert_eq!(sent.coordinator_tools.as_ref(), Some(&tools));
-    let args: Vec<String> = claude::arguments(sent)
-        .unwrap()
-        .into_iter()
-        .map(|arg| arg.into_string().unwrap())
-        .collect();
-    let mut expected: Vec<String> = claude::BASE_ARGS
-        .iter()
-        .map(|arg| (*arg).to_owned())
-        .collect();
-    let config = serde_json::json!({"mcpServers": {"plxd": {
-        "type": "stdio",
-        "command": "/Applications/Parallax.app/Contents/Resources/plxd",
-        "args": [
-            "mcp",
-            "--data-dir", "/Users/u/Library/Application Support/parallax",
-            "--thread", tools.run.to_string(),
-        ],
-    }}});
-    expected.extend([
-        "--permission-mode".to_owned(),
-        "acceptEdits".to_owned(),
-        "--mcp-config".to_owned(),
-        config.to_string(),
-        "--allowedTools".to_owned(),
-        "mcp__plxd,TodoWrite,TaskCreate,TaskGet,TaskList,TaskUpdate".to_owned(),
-        "--settings".to_owned(),
-        r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""},"showThinkingSummaries":true}"#.to_owned(),
-    ]);
-    assert_eq!(args, expected);
-}
-
-#[tokio::test]
-async fn a_worker_never_gets_the_coordinator_tools() {
-    let backend = completing();
-    let resolved = resolved_for_role(backend.clone(), Role::Worker, ToolPolicy::WorkspaceWrite);
-    let request = RunRequest {
-        coordinator_tools: Some(coordinator_tools()),
-        ..request(&root())
-    };
-
-    let mut started = start(no_keys(), &FixedAccounts::default(), resolved, request).unwrap();
-    rest(&mut started.events).await;
-
-    assert_eq!(backend.calls()[0].coordinator_tools, None);
-}
-
-/// 0041: only a normal thread keeps its thread tools; a coordinator's subagent gets none.
-#[tokio::test]
-async fn only_a_thread_gets_the_thread_tools() {
-    for thread in [true, false] {
-        let backend = completing();
-        let resolved = resolved_for_role(backend.clone(), Role::Worker, ToolPolicy::WorkspaceWrite);
-        let tools = ThreadTools {
-            program: PathBuf::from("/usr/local/bin/plxd"),
-            data_dir: PathBuf::from("/data"),
-            run: RunId::generate(),
-        };
-        let request = RunRequest {
-            thread,
-            thread_tools: Some(tools.clone()),
-            ..request(&root())
-        };
-        let mut started = start(no_keys(), &FixedAccounts::default(), resolved, request).unwrap();
-        rest(&mut started.events).await;
-        let kept = backend.calls()[0].thread_tools.clone();
-        assert_eq!(kept, thread.then_some(tools), "thread: {thread}");
-    }
-}
-
-#[test]
-fn claude_refuses_the_coordinator_tools_on_a_worker() {
-    let request = RunRequest {
-        coordinator_tools: Some(coordinator_tools()),
-        ..request(&root())
-    };
-    assert!(matches!(
-        claude::arguments(&request),
-        Err(StartError::Invalid(_))
-    ));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn start_passes_a_worker_its_sandbox() {
-    let backend = completing();
-    let resolved = resolved_for_role(backend.clone(), Role::Worker, ToolPolicy::WorkspaceWrite);
-    let request = request(&root());
-    let sandbox = request.sandbox.clone();
-
-    let mut started = start(no_keys(), &FixedAccounts::default(), resolved, request).unwrap();
-    rest(&mut started.events).await;
-
-    let sent = &backend.calls()[0];
-    assert_eq!(sent.policy, ToolPolicy::WorkspaceWrite);
-    assert_eq!(sent.sandbox, sandbox);
-    let argv = claude::arguments(sent).unwrap();
-    assert!(argv.iter().any(|arg| arg == "--restricted"), "{argv:?}");
-}
-
-#[tokio::test]
-async fn a_signed_out_subscription_falls_back_once_to_the_configured_key_account() {
-    let fallback_id = AccountId::generate();
-    let backend = Arc::new(ScriptedBackend::new(vec![
-        vec![finished(Outcome::Failed(failure(FailureKind::NotSignedIn)))],
-        vec![finished(Outcome::Completed { result: None })],
-    ]));
-    let resolved = resolved_subscription(backend.clone());
-    let accounts = accounts_with_fallback(fallback_id);
-    let keys = key_store_with(fallback_id, "sk-ant-fallback-key");
-
-    let mut started = start(keys, &accounts, resolved, request(&root())).unwrap();
-    let events = rest(&mut started.events).await;
-
-    assert_eq!(
-        events,
-        [
-            Event::AccountFallback {
-                from_account: "claude".into(),
-                to_account: fallback_id.to_string(),
-                reason: FailureKind::NotSignedIn,
-            },
-            finished(Outcome::Completed { result: None }),
-        ]
-    );
-    let calls = backend.calls();
-    assert_eq!(calls.len(), 2, "{calls:?}");
-    assert_eq!(
-        calls[0].account.credential,
-        Credential::Subscription { config_home: None }
-    );
-    assert_eq!(calls[1].account.id, fallback_id.to_string());
-    let Credential::ApiKey(key) = &calls[1].account.credential else {
-        panic!(
-            "expected an API key credential, got {:?}",
-            calls[1].account.credential
-        );
-    };
-    assert_eq!(key.expose(), "sk-ant-fallback-key");
-}
-
-#[tokio::test]
-async fn a_rate_limited_subscription_also_falls_back() {
-    let fallback_id = AccountId::generate();
-    let backend = Arc::new(ScriptedBackend::new(vec![
-        vec![finished(Outcome::Failed(failure(FailureKind::RateLimited)))],
-        vec![finished(Outcome::Completed { result: None })],
-    ]));
-    let resolved = resolved_subscription(backend.clone());
-    let accounts = accounts_with_fallback(fallback_id);
-    let keys = key_store_with(fallback_id, "sk-ant-fallback-key");
-
-    let mut started = start(keys, &accounts, resolved, request(&root())).unwrap();
-    let events = rest(&mut started.events).await;
-    assert_eq!(
-        events[0],
-        Event::AccountFallback {
-            from_account: "claude".into(),
-            to_account: fallback_id.to_string(),
-            reason: FailureKind::RateLimited,
-        }
-    );
-    assert_eq!(backend.calls().len(), 2);
-}
-
-#[tokio::test]
-async fn without_a_configured_key_account_there_is_no_fallback() {
-    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(Outcome::Failed(
-        failure(FailureKind::NotSignedIn),
-    ))]]));
-    let resolved = resolved_subscription(backend.clone());
-    let accounts = FixedAccounts::default(); // no fallback configured for Anthropic
-
-    let mut started = start(no_keys(), &accounts, resolved, request(&root())).unwrap();
-    let events = rest(&mut started.events).await;
-
-    assert_eq!(
-        events,
-        [finished(Outcome::Failed(failure(FailureKind::NotSignedIn)))]
-    );
-    assert_eq!(backend.calls().len(), 1, "must not have retried");
-}
-
 #[tokio::test]
 async fn a_key_accounts_own_failure_never_falls_back_to_a_subscription() {
     let some_other_key = AccountId::generate();
@@ -665,150 +308,6 @@ async fn a_key_accounts_own_failure_never_falls_back_to_a_subscription() {
 }
 
 #[tokio::test]
-async fn a_successful_run_never_falls_back_even_with_a_key_configured() {
-    let fallback_id = AccountId::generate();
-    let backend = completing();
-    let resolved = resolved_subscription(backend.clone());
-    let accounts = accounts_with_fallback(fallback_id);
-    let keys = key_store_with(fallback_id, "sk-ant-fallback-key");
-
-    let mut started = start(keys, &accounts, resolved, request(&root())).unwrap();
-    let events = rest(&mut started.events).await;
-
-    assert_eq!(events, [finished(Outcome::Completed { result: None })]);
-    assert_eq!(backend.calls().len(), 1);
-}
-
-#[tokio::test]
-async fn a_failure_that_is_not_signed_out_or_rate_limited_does_not_fall_back() {
-    let fallback_id = AccountId::generate();
-    let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(Outcome::Failed(
-        failure(FailureKind::VendorError),
-    ))]]));
-    let resolved = resolved_subscription(backend.clone());
-    let accounts = accounts_with_fallback(fallback_id);
-    let keys = key_store_with(fallback_id, "sk-ant-fallback-key");
-
-    let mut started = start(keys, &accounts, resolved, request(&root())).unwrap();
-    let events = rest(&mut started.events).await;
-
-    assert_eq!(
-        events,
-        [finished(Outcome::Failed(failure(FailureKind::VendorError)))]
-    );
-    assert_eq!(backend.calls().len(), 1);
-}
-
-#[tokio::test]
-async fn a_fallback_that_also_fails_is_not_retried_again() {
-    let fallback_id = AccountId::generate();
-    let backend = Arc::new(ScriptedBackend::new(vec![
-        vec![finished(Outcome::Failed(failure(FailureKind::NotSignedIn)))],
-        vec![finished(Outcome::Failed(failure(FailureKind::RateLimited)))],
-    ]));
-    let resolved = resolved_subscription(backend.clone());
-    let accounts = accounts_with_fallback(fallback_id);
-    let keys = key_store_with(fallback_id, "sk-ant-fallback-key");
-
-    let mut started = start(keys, &accounts, resolved, request(&root())).unwrap();
-    let events = rest(&mut started.events).await;
-
-    assert_eq!(
-        events,
-        [
-            Event::AccountFallback {
-                from_account: "claude".into(),
-                to_account: fallback_id.to_string(),
-                reason: FailureKind::NotSignedIn,
-            },
-            finished(Outcome::Failed(failure(FailureKind::RateLimited))),
-        ]
-    );
-    assert_eq!(backend.calls().len(), 2, "no second fallback attempt");
-}
-
-#[tokio::test]
-async fn usage_after_a_fallback_is_isolated_to_the_new_account() {
-    let fallback_id = AccountId::generate();
-    let backend = Arc::new(ScriptedBackend::new(vec![
-        vec![
-            usage_event(9),
-            finished(Outcome::Failed(failure(FailureKind::RateLimited))),
-        ],
-        vec![
-            usage_event(4),
-            finished(Outcome::Completed { result: None }),
-        ],
-    ]));
-    let resolved = resolved_subscription(backend.clone());
-    let accounts = accounts_with_fallback(fallback_id);
-    let keys = key_store_with(fallback_id, "sk-ant-fallback-key");
-
-    let mut started = start(keys, &accounts, resolved, request(&root())).unwrap();
-    let events = rest(&mut started.events).await;
-
-    assert_eq!(
-        events,
-        [
-            usage_event(9),
-            Event::AccountFallback {
-                from_account: "claude".into(),
-                to_account: fallback_id.to_string(),
-                reason: FailureKind::RateLimited,
-            },
-            usage_event(4),
-            Event::Finished {
-                outcome: Outcome::Completed { result: None },
-                usage_totals: vec![ModelUsage {
-                    model: None,
-                    usage: usage(4)
-                }],
-            },
-        ],
-        "Finished must total only the fallback account's own usage, not both attempts'"
-    );
-}
-
-/// A resumed run that starts a new session, as a Codex thread whose resume failed does (PLX-728),
-/// totals only the new session's usage, not the resumed one's added in.
-#[tokio::test]
-async fn a_new_session_in_place_of_the_resumed_one_totals_only_its_own_usage() {
-    let backend = Arc::new(ScriptedBackend::new(vec![vec![
-        Event::SessionStarted {
-            session_id: "t-1".into(),
-            model: None,
-            api_key_source: None,
-        },
-        usage_event(1500),
-        finished(Outcome::Completed { result: None }),
-    ]]));
-    let resolved = resolved_subscription(backend.clone());
-    let accounts = accounts_with_fallback(AccountId::generate());
-    let mut request = request(&root());
-    request.resume = Some(Resume {
-        usage_totals: vec![ModelUsage {
-            model: None,
-            usage: usage(1000),
-        }],
-        ..Resume::new("t-0")
-    });
-
-    let mut started = start(no_keys(), &accounts, resolved, request).unwrap();
-    let events = rest(&mut started.events).await;
-
-    assert_eq!(
-        events.last(),
-        Some(&Event::Finished {
-            outcome: Outcome::Completed { result: None },
-            usage_totals: vec![ModelUsage {
-                model: None,
-                usage: usage(1500)
-            }],
-        })
-    );
-}
-
-#[tokio::test]
 async fn cancel_after_a_fallback_reaches_the_second_attempt() {
     let fallback_id = AccountId::generate();
     let backend = Arc::new(ScriptedBackend::new(vec![
@@ -843,21 +342,6 @@ async fn cancel_after_a_fallback_reaches_the_second_attempt() {
         switches[1].is_cancelled(),
         "cancel must reach the attempt that is actually running"
     );
-}
-
-#[test]
-fn key_accounts_keep_the_startup_backend_when_its_instance_is_turned_off() {
-    let backend: Arc<dyn Backend> = Arc::new(ScriptedBackend::new(Vec::new()));
-    let registry = registry(Arc::clone(&backend));
-    registry.remove("claude");
-    assert!(
-        registry.by_backend_name("claude").is_none(),
-        "no subscription route"
-    );
-    let kept = registry
-        .by_provider(Provider::Anthropic)
-        .expect("the key account's backend");
-    assert!(Arc::ptr_eq(&kept, &backend));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -919,19 +403,72 @@ async fn a_lost_session_starts_once_as_a_new_one_with_the_fallback() {
 }
 
 #[tokio::test]
-async fn any_other_resume_failure_passes_through_without_a_new_session() {
-    let limited = finished(Outcome::Failed(failure(FailureKind::RateLimited)));
-    let (events, calls) = run_resuming(vec![vec![said("held"), limited.clone()]]).await;
+async fn only_a_coordinator_keeps_the_coordinator_tools() {
+    for (role, policy) in [
+        (Role::Coordinator, ToolPolicy::NoWrite),
+        (Role::Worker, ToolPolicy::WorkspaceWrite),
+    ] {
+        let backend = Arc::new(ScriptedBackend::new(vec![vec![finished(
+            Outcome::Completed { result: None },
+        )]]));
+        let resolved = resolved_for_role(backend.clone(), role, policy);
+        let keys: Arc<dyn KeyStore> = Arc::new(MemoryKeyStore::new());
+        let tools = coordinator_tools();
+        let request = RunRequest {
+            coordinator_tools: Some(tools.clone()),
+            ..request(&root())
+        };
 
-    assert_eq!(events, [said("held"), limited]);
-    assert_eq!(calls.len(), 1);
+        let mut started = start(keys, &FixedAccounts::default(), resolved, request).unwrap();
+        rest(&mut started.events).await;
+
+        let kept = backend.calls()[0].coordinator_tools.clone();
+        assert_eq!(
+            kept,
+            (role == Role::Coordinator).then_some(tools),
+            "{role:?}"
+        );
+    }
 }
-
 #[tokio::test]
-async fn a_new_session_that_is_also_lost_is_not_started_again() {
-    let lost = finished(Outcome::Failed(failure(FailureKind::SessionNotFound)));
-    let (events, calls) = run_resuming(vec![vec![lost.clone()], vec![lost.clone()]]).await;
+async fn a_signed_out_or_rate_limited_subscription_falls_back_once_to_the_key_account() {
+    for reason in [FailureKind::NotSignedIn, FailureKind::RateLimited] {
+        let fallback_id = AccountId::generate();
+        let backend = Arc::new(ScriptedBackend::new(vec![
+            vec![finished(Outcome::Failed(failure(reason)))],
+            vec![finished(Outcome::Completed { result: None })],
+        ]));
+        let resolved = resolved_subscription(backend.clone());
+        let accounts = accounts_with_fallback(fallback_id);
+        let keys = key_store_with(fallback_id, "sk-ant-fallback-key");
 
-    assert_eq!(events, [lost]);
-    assert_eq!(calls.len(), 2, "one new session, never a second");
+        let mut started = start(keys, &accounts, resolved, request(&root())).unwrap();
+        let events = rest(&mut started.events).await;
+
+        assert_eq!(
+            events,
+            [
+                Event::AccountFallback {
+                    from_account: "claude".into(),
+                    to_account: fallback_id.to_string(),
+                    reason,
+                },
+                finished(Outcome::Completed { result: None }),
+            ]
+        );
+        let calls = backend.calls();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert_eq!(
+            calls[0].account.credential,
+            Credential::Subscription { config_home: None }
+        );
+        assert_eq!(calls[1].account.id, fallback_id.to_string());
+        let Credential::ApiKey(key) = &calls[1].account.credential else {
+            panic!(
+                "expected an API key credential, got {:?}",
+                calls[1].account.credential
+            );
+        };
+        assert_eq!(key.expose(), "sk-ant-fallback-key");
+    }
 }

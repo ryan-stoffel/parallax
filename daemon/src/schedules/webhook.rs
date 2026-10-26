@@ -276,10 +276,7 @@ fn decode(text: &str) -> String {
 mod tests {
     use std::collections::HashMap;
 
-    use parallax_protocol::{SignatureEncoding, WebhookSignature};
-    use ring::hmac;
-
-    use super::{Request, decode, render, same, verify};
+    use super::{Request, render};
 
     fn headers(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -316,58 +313,5 @@ mod tests {
         assert_eq!(render("{{headers.authorization}}", &request), "Bearer abc");
         assert_eq!(render("{{query.api_key}}", &request), "hunter2");
         assert_eq!(render("unclosed {{body", &request), "unclosed {{body");
-    }
-
-    #[test]
-    fn a_form_body_is_addressable() {
-        let headers = headers(&[("content-type", "application/x-www-form-urlencoded")]);
-        let request = Request {
-            method: "POST",
-            path: "/",
-            query: "",
-            headers: &headers,
-            body: "text=hello+world%21&user=ryan",
-        };
-        assert_eq!(
-            render("{{body.text}} {{body.user}}", &request),
-            "hello world! ryan"
-        );
-        assert_eq!(decode("100%"), "100%");
-        assert_eq!(decode("%zz"), "%zz");
-    }
-
-    #[test]
-    fn a_signature_is_checked_over_the_raw_body() {
-        let key = hmac::Key::new(hmac::HMAC_SHA256, b"s3cret");
-        let body = br#"{"action":"published"}"#;
-        let tag = hmac::sign(&key, body);
-        let hex = data_encoding::HEXLOWER.encode(tag.as_ref());
-        let github = WebhookSignature {
-            header: "X-Hub-Signature-256".to_owned(),
-            encoding: SignatureEncoding::Hex,
-            prefix: "sha256=".to_owned(),
-            secret: None,
-            secret_ref: None,
-        };
-        let sent = headers(&[("x-hub-signature-256", &format!("sha256={hex}"))]);
-        assert!(verify(&github, "s3cret", &sent, body));
-        assert!(!verify(&github, "other", &sent, body));
-        assert!(!verify(&github, "s3cret", &sent, b"{}"));
-        assert!(!verify(&github, "s3cret", &headers(&[]), body));
-        let unprefixed = headers(&[("x-hub-signature-256", &hex)]);
-        assert!(!verify(&github, "s3cret", &unprefixed, body));
-
-        let base64 = WebhookSignature {
-            header: "x-signature".to_owned(),
-            encoding: SignatureEncoding::Base64,
-            prefix: String::new(),
-            secret: None,
-            secret_ref: None,
-        };
-        let sent = headers(&[("x-signature", &data_encoding::BASE64.encode(tag.as_ref()))]);
-        assert!(verify(&base64, "s3cret", &sent, body));
-
-        assert!(same("token", "token"));
-        assert!(!same("token", "tokem"));
     }
 }

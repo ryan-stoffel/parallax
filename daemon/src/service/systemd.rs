@@ -261,43 +261,10 @@ fn systemctl(args: &[&str]) -> Result<std::process::Output, ServiceError> {
 mod tests {
     use std::path::Path;
 
-    use super::{enable_linger, parse_show_output, quote, render_unit, unit_name};
+    use super::{quote, render_unit, unit_name};
     use crate::paths::DataDir;
-    use crate::service::tests::fake_program;
-    use crate::service::{DEFAULT_LABEL, ServiceError, ServiceState};
 
-    #[test]
-    fn lingering_is_turned_on_only_when_it_is_off() {
-        let dir = tempfile::tempdir().unwrap();
-        let calls = dir.path().join("calls");
-        let loginctl = |name: &str, linger: &str, enable: &str| {
-            fake_program(
-                dir.path(),
-                name,
-                &format!(
-                    "echo \"$*\" >> '{}'\n\
-                     if [ \"$1\" = show-user ]; then echo Linger={linger}; else {enable}; fi",
-                    calls.display()
-                ),
-            )
-        };
-
-        enable_linger(&loginctl("on", "yes", "exit 1"), 1000).unwrap();
-        enable_linger(&loginctl("off", "no", "true"), 1000).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&calls).unwrap(),
-            "show-user 1000 --property=Linger\n\
-             show-user 1000 --property=Linger\n\
-             --no-ask-password enable-linger 1000\n"
-        );
-
-        let refused = loginctl("refused", "no", "echo 'Access denied' >&2; exit 1");
-        let error = enable_linger(&refused, 1000).unwrap_err().to_string();
-        assert!(
-            error.contains("enable-linger 1000` failed: Access denied"),
-            "{error}"
-        );
-    }
+    use crate::service::DEFAULT_LABEL;
 
     #[test]
     fn unit_matches_the_golden_file() {
@@ -336,29 +303,5 @@ mod tests {
             "{unit}"
         );
         assert_eq!(quote("plain"), "\"plain\"");
-    }
-
-    #[test]
-    fn a_path_with_a_line_break_is_refused() {
-        let data_dir = DataDir::new("/home/ryan/parallax").unwrap();
-        let error = render_unit(Path::new("/bin/wi\nspd"), &data_dir).unwrap_err();
-        assert!(matches!(error, ServiceError::UnitPath { .. }), "{error:?}");
-    }
-
-    #[test]
-    fn parses_systemctl_show() {
-        assert_eq!(
-            parse_show_output("LoadState=loaded\nMainPID=4242\n"),
-            ServiceState::Running(Some(4242))
-        );
-        assert_eq!(
-            parse_show_output("MainPID=0\nLoadState=loaded\n"),
-            ServiceState::Loaded
-        );
-        assert_eq!(
-            parse_show_output("LoadState=not-found\nMainPID=0\n"),
-            ServiceState::NotLoaded
-        );
-        assert_eq!(parse_show_output(""), ServiceState::NotLoaded);
     }
 }

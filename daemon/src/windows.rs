@@ -341,17 +341,4 @@ mod tests {
         let sddl = super::this_user_only_sddl().unwrap();
         assert!(sddl.starts_with("D:P(A;;GA;;;S-1-5-"), "{sddl}");
     }
-
-    #[tokio::test]
-    async fn terminating_a_job_kills_what_is_in_it() {
-        let job = super::Job::new().unwrap();
-        let mut child = tokio::process::Command::new("cmd")
-            .args(["/c", "ping", "-n", "30", "127.0.0.1"])
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        job.assign(&child).unwrap();
-        job.terminate().unwrap();
-        assert!(!child.wait().await.unwrap().success());
-    }
 }

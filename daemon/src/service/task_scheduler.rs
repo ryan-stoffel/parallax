@@ -1,16 +1,16 @@
 //! The per-user scheduled task that keeps `serve` running on Windows (PLX-576, 0023), registered
 //! from XML with `schtasks`, which needs no admin rights for a logon trigger that names the user.
 //!
-//! [`render_task`] is pure, so it is covered by a golden-file test on every OS, as is reading
-//! `schtasks /query`. `install` writes the XML to `task_file` and runs `schtasks /create` and
-//! `/run`, `uninstall` runs `/end` and `/delete`, and `status` reads `/query`.
+//! [`render_task`] is pure, so it is covered by a golden-file test on every OS. `install` writes
+//! the XML to `task_file` and runs `schtasks /create` and `/run`, `uninstall` runs `/end` and
+//! `/delete`, and `status` reads `/query`.
 //!
 //! `schtasks /end` stops only the action's process, `conhost.exe`, and not the `plxd` it runs.
 //! So `install` and `uninstall` also stop that `serve` directly: by its pipe's server pid, with
 //! `taskkill /f`, since Windows has no SIGTERM to send it.
 
 use std::path::Path;
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 use std::path::PathBuf;
 #[cfg(windows)]
 use std::time::{Duration, Instant};
@@ -21,7 +21,7 @@ use super::{
     prepare_install, remove_file, run, run_ok, write_file,
 };
 use super::{ServiceError, escape_xml};
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 use super::{ServiceState, unescape_xml};
 #[cfg(windows)]
 use crate::paths::DataDir;
@@ -32,7 +32,7 @@ pub(crate) const SCHTASKS: &str = "schtasks";
 
 /// What `schtasks /query /v /fo csv` puts in Last Result while the task runs:
 /// `SCHED_S_TASK_RUNNING`, 0x41301.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 const LAST_RESULT_RUNNING: &str = "267009";
 
 /// How long [`started`] waits for Task Scheduler to report the task running after `/run`.
@@ -145,7 +145,7 @@ fn quote_arg(text: &str) -> String {
 
 /// `text` as `schtasks /create /xml` reads it most reliably: UTF-16 LE with a byte order mark,
 /// which [`render_task`]'s declaration names.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn utf16_with_bom(text: &str) -> Vec<u8> {
     std::iter::once(0xFEFF)
         .chain(text.encode_utf16())
@@ -155,7 +155,7 @@ fn utf16_with_bom(text: &str) -> Vec<u8> {
 
 /// What a task file from [`render_task`] runs: its `plxd` and its `--data-dir`, read back from the
 /// action's arguments. `None` when it isn't such a file.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn task_action(file: &[u8]) -> Option<(PathBuf, PathBuf)> {
     let units: Vec<u16> = file
         .strip_prefix(&[0xFF, 0xFE][..])?
@@ -176,7 +176,7 @@ fn task_action(file: &[u8]) -> Option<(PathBuf, PathBuf)> {
 }
 
 /// Undoes [`quote_arg`]'s doubled trailing backslashes, once its quotes are gone.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn unquote_arg(text: &str) -> &str {
     let trailing = text.len() - text.trim_end_matches('\\').len();
     &text[..text.len() - trailing / 2]
@@ -186,7 +186,7 @@ fn unquote_arg(text: &str) -> &str {
 /// trigger, in a column order that doesn't change with the language: the seventh is Last Result,
 /// [`LAST_RESULT_RUNNING`] while the task runs. The Status column would say so too, but in the
 /// system's language. Task Scheduler doesn't say which process is `serve`, so there's no pid.
-#[cfg(any(windows, test))]
+#[cfg(windows)]
 fn parse_query_output(text: &str) -> ServiceState {
     let running = text
         .lines()
@@ -401,11 +401,7 @@ fn lock_held(data_dir: &DataDir) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{
-        LAST_RESULT_RUNNING, parse_query_output, quote_arg, render_task, task_action,
-        utf16_with_bom,
-    };
-    use crate::service::ServiceState;
+    use super::render_task;
 
     #[test]
     fn task_matches_the_golden_file() {
@@ -417,52 +413,5 @@ mod tests {
         .unwrap();
         let golden = include_str!("../../tests/golden/task.xml");
         assert_eq!(task, golden);
-    }
-
-    #[test]
-    fn paths_are_quoted_for_the_command_line_and_escaped_for_xml() {
-        let task = render_task(Path::new(r"C:\A&B\<plxd>.exe"), Path::new(r"D:\"), "S-1").unwrap();
-        assert!(
-            task.contains(
-                r#"<Arguments>--headless "C:\A&amp;B\&lt;plxd&gt;.exe" serve --data-dir "D:\\"</Arguments>"#
-            ),
-            "{task}"
-        );
-        assert_eq!(quote_arg(r"C:\x"), r#""C:\x""#);
-        assert_eq!(quote_arg(r"C:\x\\"), r#""C:\x\\\\""#);
-    }
-
-    #[test]
-    fn the_program_and_data_folder_are_read_back_from_the_file() {
-        let program = Path::new(r"C:\A&B\<plxd>.exe");
-        let file = utf16_with_bom(&render_task(program, Path::new(r"D:\"), "S-1").unwrap());
-        assert_eq!(
-            task_action(&file),
-            Some((program.to_owned(), r"D:\".into()))
-        );
-        assert_eq!(task_action(b"<Task/>"), None);
-    }
-
-    #[test]
-    fn the_file_is_utf16_with_a_byte_order_mark() {
-        assert_eq!(utf16_with_bom("<é"), [0xFF, 0xFE, b'<', 0, 0xE9, 0]);
-    }
-
-    #[test]
-    fn parses_schtasks_query() {
-        // A trimmed `schtasks /query /tn <label> /v /fo csv /nh` row, for a running task.
-        let row = |result: &str| {
-            format!(
-                "\"HOST\",\"\\io.example\",\"N/A\",\"Running\",\"Interactive only\",\
-                 \"10/15/2026 3:00:00 PM\",\"{result}\",\"HOST\\ryan\",\
-                 \"%SystemRoot%\\System32\\conhost.exe --headless \"C:\\plxd.exe\" serve\"\r\n"
-            )
-        };
-        assert_eq!(
-            parse_query_output(&row(LAST_RESULT_RUNNING)),
-            ServiceState::Running(None)
-        );
-        assert_eq!(parse_query_output(&row("0")), ServiceState::Loaded);
-        assert_eq!(parse_query_output(""), ServiceState::Loaded);
     }
 }

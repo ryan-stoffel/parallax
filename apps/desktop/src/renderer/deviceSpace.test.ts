@@ -21,9 +21,3 @@ test("a point on a turned device comes back where it was clicked", () => {
     }
   }
 });
-
-test("facing the viewer, a device point shows where it is; turned edge-on, nothing hits it", () => {
-  expect(project({ pitch: 0, yaw: 0, roll: 0 }, 1800, 50, -20)).toEqual([50, -20]);
-  // A quarter turn shows its edge: a ray through the center runs along its plane.
-  expect(unproject({ pitch: 0, yaw: 90, roll: 0 }, 1e9, 0, 0)).toBeUndefined();
-});

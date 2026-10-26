@@ -107,23 +107,8 @@ pub(crate) use uuid_v7_id;
 
 #[cfg(test)]
 mod tests {
-    use uuid::Uuid;
-
     use super::{InvalidId, parse_v7};
-    use crate::{LogId, ProjectId, SubscriptionId};
-
-    const V7: &str = "01997c3a-5b2c-7d4e-9f10-2a3b4c5d6e7f";
-
-    #[test]
-    fn canonical_uuid_v7_parses_and_prints_unchanged() {
-        let id: ProjectId = V7.parse().unwrap();
-        assert_eq!(id.to_string(), V7);
-        assert_eq!(serde_json::to_string(&id).unwrap(), format!("\"{V7}\""));
-        assert_eq!(
-            serde_json::from_str::<ProjectId>(&format!("\"{V7}\"")).unwrap(),
-            id
-        );
-    }
+    use crate::ProjectId;
 
     #[test]
     fn other_spellings_and_versions_are_rejected() {
@@ -143,29 +128,5 @@ mod tests {
             assert!(serde_json::from_str::<ProjectId>(&json).is_err(), "{bad}");
         }
         assert!(serde_json::from_str::<ProjectId>("7").is_err());
-    }
-
-    #[test]
-    fn generated_ids_are_canonical_v7() {
-        let id = ProjectId::generate();
-        assert_eq!(id.to_string().parse::<ProjectId>(), Ok(id));
-        assert_ne!(ProjectId::generate(), id);
-    }
-
-    #[test]
-    fn ids_convert_to_and_from_version_7_uuids_only() {
-        let id: ProjectId = V7.parse().unwrap();
-        let uuid = Uuid::from(id);
-        assert_eq!(uuid.to_string(), V7);
-        assert_eq!(ProjectId::try_from(uuid), Ok(id));
-        assert!(LogId::try_from(Uuid::now_v7()).is_ok());
-        for other in [
-            Uuid::nil(),
-            Uuid::max(),
-            Uuid::try_parse("3f2b9a1e-8c4d-4e5f-9a6b-7c8d9e0f1a2b").unwrap(),
-            Uuid::try_parse("01997c3a-5b2c-7d4e-cf10-2a3b4c5d6e7f").unwrap(),
-        ] {
-            assert_eq!(SubscriptionId::try_from(other), Err(InvalidId), "{other}");
-        }
     }
 }

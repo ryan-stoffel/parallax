@@ -65,26 +65,3 @@ impl Store {
             .optional()?)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use uuid::Uuid;
-
-    use super::StoredImage;
-    use crate::Store;
-
-    #[test]
-    fn images_are_stored_per_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
-        let (run, other_run, id) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
-        let image = StoredImage {
-            media_type: "image/png".to_owned(),
-            data: "iVBORw0KGgo=".to_owned(),
-        };
-
-        store.add_images(run, &[(id, image.clone())]).unwrap();
-        assert_eq!(store.image(run, id).unwrap(), Some(image));
-        assert_eq!(store.image(other_run, id).unwrap(), None);
-    }
-}

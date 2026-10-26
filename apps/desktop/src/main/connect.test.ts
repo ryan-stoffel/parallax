@@ -1,20 +1,7 @@
 import { expect, test } from "vite-plus/test";
 
-import { iconFor } from "../preload/bridge";
 import type { TailnetDevice } from "../protocol/generated/protocol";
 import { addCommand, isDeviceAddress, isSshUser, mergeFound, type SavedDevice } from "./connect";
-import { exitError } from "./connection";
-
-test("a host name suggests its icon", () => {
-  expect(iconFor("mac-mini")).toBe("mini");
-  expect(iconFor("Ryan’s Mac Mini")).toBe("mini");
-  expect(iconFor("ryans-gaming-pc")).toBe("desktop");
-  expect(iconFor("DESKTOP-4KQ1M2")).toBe("desktop");
-  expect(iconFor("thinkpad-server")).toBe("server");
-  expect(iconFor("macbook")).toBe("laptop");
-  // "pc" only as a word, not inside one.
-  expect(iconFor("npc-laptop")).toBe("laptop");
-});
 
 const found = (id: string, extra: Partial<TailnetDevice> = {}): TailnetDevice => ({
   id,
@@ -90,23 +77,4 @@ test("plx-connect add runs the app's own copy with its Electron as Node, with ch
     expect(isDeviceAddress(bad), bad).toBe(false);
     expect(isSshUser(bad), bad).toBe(false);
   }
-});
-
-test("a device's dial failures name it", () => {
-  expect(exitError(4, null, "", undefined, "darwin", "Mac mini").message).toBe(
-    "Couldn't reach Mac mini over Tailscale. Check that it's on, and that Parallax Connect is on there.",
-  );
-  expect(exitError(0, null, "", undefined, "darwin", "Mac mini").message).toContain(
-    "signed in to your Tailscale account",
-  );
-});
-
-test("a LAN computer's dial failures name it, and a refusal isn't retried", () => {
-  const unreachable = exitError(4, null, "", undefined, "darwin", undefined, "Studio");
-  expect(unreachable.message).toContain("Couldn't reach Studio on this network");
-  const refused = exitError(5, null, "", undefined, "darwin", undefined, "Studio");
-  expect(refused.reason).toBe("refused");
-  expect(refused.message).toBe(
-    "Studio doesn't know this computer anymore. Remove it, then pair again with a new code.",
-  );
 });

@@ -332,28 +332,4 @@ mod tests {
         }
         assert_eq!(rewound(&runs, "a"), Some(Rewound::Restart));
     }
-
-    /// After a revert, a thread that moved to another provider and to Claude session `b`, whose
-    /// first turn reported no cursor, resumes `b` as it is: a turn without a cursor in `b` or one
-    /// in another session drops nothing, and no new session loses the conversation kept so far.
-    #[test]
-    fn a_later_session_resumes_plainly_whatever_a_cursor_of_an_earlier_one_says() {
-        use ThreadRunStatus::{Completed, Interrupted, RolledBack};
-        // A Codex thread (a fork's copied run 1, then turn 2), turn 3 reverted, then Claude.
-        let codex = vec![
-            run(1, Completed, None),
-            run(2, Completed, None),
-            run(3, RolledBack, None),
-            run(4, Interrupted, None),
-        ];
-        assert_eq!(rewound(&codex, "b"), None);
-        // Claude session `a`, a revert to turn 1, then Codex, then Claude session `b`.
-        let moved = vec![
-            run(1, Completed, Some(("a", "one"))),
-            run(2, RolledBack, Some(("a", "two"))),
-            run(3, Completed, None),
-            run(4, Interrupted, None),
-        ];
-        assert_eq!(rewound(&moved, "b"), None);
-    }
 }

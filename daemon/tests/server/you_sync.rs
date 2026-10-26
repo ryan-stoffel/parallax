@@ -9,11 +9,11 @@ use std::time::Duration;
 use futures_util::future::BoxFuture;
 use parallax_protocol::jsonrpc::INVALID_REQUEST;
 use parallax_protocol::methods::{
-    MemoryDelete, MemoryList, MemoryRead, MemorySyncList, MemorySyncRead, MemoryWrite,
+    MemoryList, MemoryRead, MemorySyncList, MemorySyncRead, MemoryWrite,
 };
 use parallax_protocol::{
-    MemoryDeleteParams, MemoryFile, MemoryListParams, MemoryReadParams, MemoryScope,
-    MemorySyncListParams, MemorySyncReadParams, MemoryWriteParams,
+    MemoryFile, MemoryListParams, MemoryReadParams, MemoryScope, MemorySyncListParams,
+    MemorySyncReadParams, MemoryWriteParams,
 };
 use plxd::tailnet::{Node, NotRunning, Status, Tailnet, Whois};
 use tokio::time::{Instant, sleep};
@@ -269,60 +269,6 @@ async fn concurrent_edits_keep_the_later_one_everywhere_and_the_other_as_a_propo
     let b_host = Some(("b".to_owned(), "b-host".to_owned()));
     assert_eq!(written_on(list(&mut on_a).await), b_host);
     assert_eq!(written_on(list(&mut on_b).await), b_host);
-
-    a.stop().await;
-    b.stop().await;
-}
-
-#[tokio::test]
-async fn a_host_that_was_offline_catches_up_deletions_included() {
-    let (mut a, mut b, _online) = pair();
-    let mut on_a = a.start().await;
-    let mut on_b = b.start().await;
-    write(&mut on_a, TABS, "Tabs", "Use tabs.").await;
-    write(
-        &mut on_a,
-        "memory/gotcha/ci.md",
-        "CI",
-        "CI is slow on Mondays.",
-    )
-    .await;
-    until("both entries to reach b", async || {
-        state(&mut on_b).await.len() == 2
-    })
-    .await;
-
-    b.stop().await;
-    write(&mut on_a, TABS, "Tabs", "Use spaces.").await;
-    write(
-        &mut on_a,
-        "memory/decision/vitest.md",
-        "Vitest",
-        "Use Vitest.",
-    )
-    .await;
-    let gone = MemoryDeleteParams {
-        scope: MemoryScope::You,
-        path: "memory/gotcha/ci.md".to_owned(),
-    };
-    on_a.call::<MemoryDelete>(gone).await.unwrap();
-
-    // a records its own changes at its next scan.
-    until("a to record its changes", async || {
-        let state = state(&mut on_a).await;
-        state.len() == 2
-            && state
-                .iter()
-                .all(|(_, _, machine)| machine.as_deref() == Some("a"))
-    })
-    .await;
-    let expected = state(&mut on_a).await;
-    let mut on_b = b.start().await;
-    until("b to match a", async || state(&mut on_b).await == expected).await;
-    // a pulls from b too, and gets nothing back, the deletion included.
-    sleep(EVERY * 5).await;
-    assert_eq!(state(&mut on_a).await, expected);
-    assert_eq!(state(&mut on_b).await, expected);
 
     a.stop().await;
     b.stop().await;

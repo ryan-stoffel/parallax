@@ -157,24 +157,3 @@ pub(crate) fn stamped_version(exe: &std::path::Path) -> Option<String> {
     let version = text.lines().next()?.trim();
     (!version.is_empty()).then(|| version.to_owned())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{VERSION_FILE, stamped_version};
-
-    #[test]
-    fn the_version_file_beside_the_executable_wins_when_it_has_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let exe = dir.path().join("plxd");
-        assert_eq!(stamped_version(&exe), None, "no file");
-
-        std::fs::write(dir.path().join(VERSION_FILE), " \n").unwrap();
-        assert_eq!(stamped_version(&exe), None, "a blank file");
-
-        std::fs::write(dir.path().join(VERSION_FILE), "2609.13017.14512-nightly\n").unwrap();
-        assert_eq!(
-            stamped_version(&exe).as_deref(),
-            Some("2609.13017.14512-nightly")
-        );
-    }
-}

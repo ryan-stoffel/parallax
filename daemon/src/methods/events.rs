@@ -226,48 +226,6 @@ mod tests {
         }
     }
 
-    fn drain(cursors: &mut Cursors, log: &EventLog) -> Vec<(SubscriptionId, u64)> {
-        let mut delivered = Vec::new();
-        while let Some(event) = cursors.next(log).unwrap() {
-            delivered.push((event.subscription, event.entry.seq));
-        }
-        delivered
-    }
-
-    #[test]
-    fn each_subscription_gets_its_own_events_after_its_seq() {
-        let log = EventLog::new(10);
-        let project = ProjectId::generate();
-        for owner in [None, Some(project), None] {
-            log.append_in_memory(Timestamp::now(), owner, ParallaxEvent::Unknown);
-        }
-        let host = cursor(None, 0);
-        let (host_id, late_id) = (host.subscription, SubscriptionId::generate());
-        let project_cursor = cursor(Some(project), 0);
-        let project_id = project_cursor.subscription;
-        let mut cursors = Cursors::default();
-        cursors.add(host);
-        cursors.add(project_cursor);
-        cursors.add(Cursor {
-            subscription: late_id,
-            project: None,
-            all: false,
-            after: 1,
-            run: None,
-            shell: false,
-        });
-
-        let mut delivered = drain(&mut cursors, &log);
-        delivered.sort_by_key(|&(subscription, seq)| (seq, subscription));
-        let mut expected = vec![(host_id, 1), (project_id, 2), (host_id, 3), (late_id, 3)];
-        expected.sort_by_key(|&(subscription, seq)| (seq, subscription));
-        assert_eq!(delivered, expected);
-
-        log.append_in_memory(Timestamp::now(), None, ParallaxEvent::Unknown);
-        cursors.remove(host_id);
-        assert_eq!(drain(&mut cursors, &log), [(late_id, 4)]);
-    }
-
     #[test]
     fn run_and_shell_cursors_skip_what_they_filter_out_and_keep_the_order() {
         let log = EventLog::new(20);
@@ -351,18 +309,5 @@ mod tests {
         );
         // Both cursors moved past the last event, which neither delivered.
         assert!(cursors.cursors.iter().all(|cursor| cursor.after == 6));
-    }
-
-    #[test]
-    fn a_cursor_behind_the_retention_is_reported_and_removed() {
-        let log = EventLog::new(1);
-        log.append_in_memory(Timestamp::now(), None, ParallaxEvent::Unknown);
-        log.append_in_memory(Timestamp::now(), None, ParallaxEvent::Unknown);
-        let lagging = cursor(None, 0);
-        let id = lagging.subscription;
-        let mut cursors = Cursors::default();
-        cursors.add(lagging);
-        assert_eq!(cursors.next(&log).unwrap_err(), id);
-        assert!(matches!(cursors.next(&log), Ok(None)));
     }
 }

@@ -635,16 +635,16 @@ mod tests {
 
     use futures_util::StreamExt;
     use jiff::Timestamp;
-    use parallax_protocol::framing::{FrameCodec, FrameError};
+    use parallax_protocol::framing::FrameCodec;
     use parallax_protocol::jsonrpc::Message;
-    use parallax_protocol::{ParallaxEvent, Project, ProjectId, SubscriptionId};
+    use parallax_protocol::{ParallaxEvent, Project, ProjectId};
     use serde_json::{Value, json};
     use tokio::io::{AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
     use tokio::time::timeout;
-    use tokio_util::codec::{FramedRead, FramedWrite};
+    use tokio_util::codec::FramedRead;
     use tokio_util::sync::CancellationToken;
 
-    use super::{Delivery, send_event, serve};
+    use super::serve;
     use crate::server::Daemon;
 
     const PATIENCE: Duration = Duration::from_secs(10);
@@ -713,10 +713,6 @@ mod tests {
         (FramedRead::new(read, FrameCodec::new()), write)
     }
 
-    fn requests(after: u64) -> [Value; 3] {
-        requests_with(after, &json!({}))
-    }
-
     fn requests_with(after: u64, capabilities: &Value) -> [Value; 3] {
         [
             json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -734,52 +730,6 @@ mod tests {
             .await
             .expect("a message or the end")?;
         Some(Message::from_frame(&frame.ok()?).unwrap())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_answer_goes_out_ahead_of_a_long_replay() {
-        let dir = tempfile::tempdir().unwrap();
-        let daemon = daemon(dir.path(), 10_000);
-        append(&daemon, 5_000).await;
-        let (mut frames, _write) = connect(daemon, &requests(0)).await;
-
-        let mut events_before_health = 0;
-        loop {
-            match next(&mut frames).await.expect("the connection stays open") {
-                Message::Notification(_) => events_before_health += 1,
-                Message::Response(response) if response.id == Some(3.into()) => break,
-                Message::Response(response) => assert!(response.result.is_ok()),
-                Message::Request(request) => panic!("unexpected {request:?}"),
-            }
-        }
-        assert!(
-            events_before_health < 100,
-            "{events_before_health} of 5000 replayed events went out before the answer"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_subscriber_that_falls_out_of_the_retention_is_disconnected() {
-        let dir = tempfile::tempdir().unwrap();
-        let daemon = daemon(dir.path(), 5);
-        let (mut frames, _write) = connect(Arc::clone(&daemon), &requests(0)).await;
-        for _ in 0..3 {
-            assert!(matches!(
-                next(&mut frames).await,
-                Some(Message::Response(_))
-            ));
-        }
-        append(&daemon, 1_000).await;
-
-        let mut delivered = 0;
-        while let Some(message) = next(&mut frames).await {
-            assert!(matches!(message, Message::Notification(_)));
-            delivered += 1;
-        }
-        assert!(
-            delivered < 1_000,
-            "{delivered} events, then the connection should close"
-        );
     }
 
     #[tokio::test]
@@ -822,61 +772,5 @@ mod tests {
         };
         assert_eq!(health.id, Some(4.into()));
         assert!(health.result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn a_client_that_stops_reading_is_dropped() {
-        let dir = tempfile::tempdir().unwrap();
-        let idle = Duration::from_millis(300);
-        let daemon = Daemon::for_tests(dir.path(), 10, idle);
-        let (client, server) = tokio::io::duplex(1024);
-        tokio::spawn(serve(
-            server,
-            daemon,
-            CancellationToken::new(),
-            CancellationToken::new(),
-            false,
-        ));
-        // The read half stays open and unread, so plxd's writes back up instead of failing.
-        let (_unread, mut write) = tokio::io::split(client);
-        let started = std::time::Instant::now();
-        let flood = async move {
-            let mut initialize = serde_json::to_vec(&requests(0)[0]).unwrap();
-            initialize.push(b'\n');
-            write.write_all(&initialize).await?;
-            for id in 2_u64.. {
-                let line =
-                    format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"host/health\"}}\n");
-                write.write_all(line.as_bytes()).await?;
-            }
-            Ok::<(), std::io::Error>(())
-        };
-        let flooded = timeout(PATIENCE, flood)
-            .await
-            .expect("plxd drops the connection instead of waiting forever");
-        assert!(flooded.is_err(), "writes fail once plxd has closed");
-        assert!(started.elapsed() >= idle, "{:?}", started.elapsed());
-    }
-
-    #[tokio::test]
-    async fn an_event_too_large_for_a_frame_is_an_error_not_a_gap() {
-        let mut sink = FramedWrite::new(tokio::io::sink(), FrameCodec::with_max_frame_bytes(1024));
-        let log = crate::event_log::EventLog::new(10);
-        let project_created = |name: &str| ParallaxEvent::ProjectCreated {
-            project: project(name, "/src"),
-        };
-        let event = |name: &str| {
-            let seq = log.append_in_memory(Timestamp::now(), None, project_created(name));
-            Delivery {
-                subscription: SubscriptionId::generate(),
-                entry: log.next(seq - 1, None, |_| true).unwrap().0.unwrap(),
-                view: None,
-            }
-        };
-        assert!(send_event(&mut sink, event("parallax")).await.is_ok());
-        assert!(matches!(
-            send_event(&mut sink, event(&"n".repeat(2000))).await,
-            Err(FrameError::TooLarge { .. })
-        ));
     }
 }

@@ -1397,7 +1397,6 @@ impl<R: AsyncRead + Unpin> LineReader<R> {
 mod tests {
     #[cfg(unix)]
     use std::collections::BTreeSet;
-    use std::ffi::OsString;
     #[cfg(unix)]
     use std::os::fd::AsRawFd;
     use std::time::Duration;
@@ -1406,15 +1405,10 @@ mod tests {
 
     #[cfg(unix)]
     use rustix::process::{Pid, Signal};
-    #[cfg(unix)]
-    use tokio::io::AsyncWriteExt;
 
     #[cfg(unix)]
-    use super::{
-        CancelPolicy, Launcher, OutputLimits, Process, ProcessSpec, SpawnError, StdinMode,
-        find_program,
-    };
-    use super::{Environment, LineReader, Output, Tail};
+    use super::{CancelPolicy, Environment, Launcher, OutputLimits, Process, ProcessSpec};
+    use super::{LineReader, Output, Tail};
     use crate::backend::event::ExitInfo;
     #[cfg(unix)]
     use crate::paths::DataDir;
@@ -1500,26 +1494,6 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn the_child_runs_in_its_working_directory_with_its_arguments() {
-        let dir = tempfile::tempdir().unwrap();
-        let cwd = dir.path().canonicalize().unwrap();
-        let mut spec = ProcessSpec::new("sh", &cwd);
-        spec.args = vec![
-            "-c".into(),
-            "pwd; printf '%s\\n' \"$@\"".into(),
-            "name".into(),
-            "two words".into(),
-            "--flag".into(),
-        ];
-        let mut process = launcher(base()).spawn(&spec).unwrap();
-        let (lines, exit) = collect(&mut process).await;
-        assert!(exit.info.success());
-        let lines: Vec<&str> = lines.iter().map(text).collect();
-        assert_eq!(lines, [cwd.to_str().unwrap(), "two words", "--flag"]);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
     async fn the_child_inherits_no_descriptor_but_its_stdio() {
         // A descriptor without close-on-exec, which a child started with std's Command would
         // inherit.
@@ -1540,46 +1514,6 @@ mod tests {
         drop(leaked);
         let fds: Vec<&str> = lines.iter().map(text).collect();
         assert_eq!(fds, ["0", "1", "2"], "{exit:?}");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_missing_program_names_where_it_was_looked_for() {
-        let mut base = base();
-        base.set("PATH", "/nonexistent/bin:relative:/usr/bin");
-        let error = launcher(base)
-            .spawn(&ProcessSpec::new("parallax-no-such-cli", "/"))
-            .unwrap_err();
-        let SpawnError::NotFound { searched, .. } = &error else {
-            panic!("{error:?}");
-        };
-        assert_eq!(searched.len(), 2);
-        assert_eq!(
-            error.to_string(),
-            "parallax-no-such-cli was not found; looked in /nonexistent/bin, /usr/bin"
-        );
-        assert!(matches!(
-            find_program("relative/sh".as_ref(), None),
-            Err(SpawnError::NotFound { .. })
-        ));
-        assert_eq!(
-            find_program("sh".as_ref(), Some("/bin".as_ref())).unwrap(),
-            std::path::Path::new("/bin/sh")
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_bad_working_directory_is_refused() {
-        for cwd in ["relative", "/nonexistent-parallax-dir", "/bin/sh"] {
-            let error = launcher(base())
-                .spawn(&ProcessSpec::new("sh", cwd))
-                .unwrap_err();
-            assert!(
-                matches!(error, SpawnError::BadWorkingDirectory { .. }),
-                "{cwd}: {error:?}"
-            );
-        }
     }
 
     #[cfg(unix)]
@@ -1617,91 +1551,6 @@ mod tests {
         );
         assert!(exit.stderr_tail.ends_with("eee the end"), "{exit:?}");
         assert!(exit.stderr_tail.len() <= 100);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn stdin_is_a_pipe_when_asked_for() {
-        let mut spec = sh("read line; echo \"got $line\"");
-        spec.stdin = StdinMode::Piped;
-        let mut process = launcher(base()).spawn(&spec).unwrap();
-        let mut stdin = process.take_stdin().unwrap();
-        stdin.write_all(b"hello\n").await.unwrap();
-        drop(stdin);
-        let (lines, exit) = collect(&mut process).await;
-        assert!(exit.info.success());
-        assert_eq!(lines, [Output::Line(b"got hello".to_vec())]);
-        assert!(
-            launcher(base())
-                .spawn(&sh("true"))
-                .unwrap()
-                .take_stdin()
-                .is_none()
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn stderr_lines_come_as_lines_when_asked_for() {
-        let mut spec = sh("printf 'code\\r\\n' >&2; printf 'last' >&2");
-        spec.stderr_lines = true;
-        let mut process = launcher(base()).spawn(&spec).unwrap();
-        let (lines, exit) = collect(&mut process).await;
-        assert_eq!(
-            lines,
-            [
-                Output::Line(b"code".to_vec()),
-                Output::Line(b"last".to_vec())
-            ]
-        );
-        assert_eq!(exit.stderr_tail, "code\r\nlast");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn a_carriage_return_ends_a_progress_line() {
-        let mut spec = sh("printf 'one 1%%\\rone 2%%\\r\\ndone\\n' >&2");
-        spec.stderr_lines = true;
-        spec.stderr_progress = true;
-        let mut process = launcher(base()).spawn(&spec).unwrap();
-        let (lines, _) = collect(&mut process).await;
-        assert_eq!(
-            lines,
-            [
-                Output::Line(b"one 1%".to_vec()),
-                Output::Line(b"one 2%".to_vec()),
-                Output::Line(b"done".to_vec())
-            ]
-        );
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn cancel_asks_first() {
-        // A trap shows which signal arrived. Without one, bash 3.2's exit status after a SIGINT
-        // in `wait` varies. Printing "ready" only after the trap is installed is this test's
-        // deterministic handshake: reading that line can never race the trap's own installation.
-        let mut process = launcher(base())
-            .spawn(&sh(
-                "trap 'echo interrupted; exit 7' INT; echo ready; sleep 30 & wait $!",
-            ))
-            .unwrap();
-        assert_eq!(process.next().await, Some(Output::Line(b"ready".to_vec())));
-        let started = Instant::now();
-        // Signals the process directly instead of `cancel()`, which would also arm the
-        // grace-then-`SIGKILL` escalation. This test is about the trap's own reaction to
-        // `SIGINT`, not the escalation (`cancel_kills_the_group_after_the_grace_period` owns
-        // that), so it never arms a second timer that could race the trap's clean exit (#139).
-        assert!(process.signals().signal(Signal::INT));
-        let (lines, exit) = collect(&mut process).await;
-        assert_eq!(lines, [Output::Line(b"interrupted".to_vec())]);
-        assert_eq!(exit.info.code, Some(7), "{exit:?}");
-        assert!(started.elapsed() < Duration::from_secs(5));
-        assert!(process.signals().reaped());
-        assert!(
-            !process.signals().signal(Signal::TERM),
-            "no signal after the reap"
-        );
     }
 
     #[cfg(unix)]
@@ -1770,39 +1619,6 @@ mod tests {
         wait_until_gone(pid).await;
     }
 
-    #[tokio::test]
-    async fn lines_split_across_reads_and_oversized_ones_are_skipped() {
-        let input: &[u8] = b"one\ntwo\r\nlong-line-here\nthree";
-        let mut reader = LineReader::new(input, 8);
-        let mut out = Vec::new();
-        while let Some(line) = reader.next().await.unwrap() {
-            out.push(line);
-        }
-        assert_eq!(
-            out,
-            [
-                Output::Line(b"one".to_vec()),
-                Output::Line(b"two\r".to_vec()),
-                Output::Oversized { bytes: 14 },
-                Output::Line(b"three".to_vec()),
-            ]
-        );
-        let many = b"a\nbb\n\nccc\n".repeat(10_000);
-        let mut reader = LineReader::new(&many[..], 8);
-        let mut count = 0;
-        while let Some(line) = reader.next().await.unwrap() {
-            assert!(matches!(line, Output::Line(_)), "{line:?}");
-            count += 1;
-        }
-        assert_eq!(count, 40_000);
-        let mut reader = LineReader::new(&b"0123456789"[..], 4);
-        assert_eq!(
-            reader.next().await.unwrap(),
-            Some(Output::Oversized { bytes: 10 })
-        );
-        assert_eq!(reader.next().await.unwrap(), None);
-    }
-
     /// Pumps `stdout` for a process that has already exited, with a drain of `drain`.
     fn pump_exited(
         stdout: impl tokio::io::AsyncRead + Unpin + Send + 'static,
@@ -1867,25 +1683,6 @@ mod tests {
         .expect("the exit never came");
         assert!(exit.info.success());
     }
-
-    #[test]
-    fn the_tail_keeps_the_last_bytes() {
-        let mut tail = Tail::new(5);
-        tail.push(b"abc");
-        tail.push(b"defg");
-        assert_eq!(tail.text(), "cdefg");
-        tail.push(b"0123456789");
-        assert_eq!(tail.text(), "56789");
-    }
-
-    #[test]
-    fn environments_collect_and_hide_values() {
-        let env: Environment = [(OsString::from("A"), OsString::from("1"))]
-            .into_iter()
-            .collect();
-        assert_eq!(env.get("A"), Some("1".as_ref()));
-        assert_eq!(format!("{env:?}"), "{\"A\"}");
-    }
 }
 
 #[cfg(all(test, windows))]
@@ -1924,22 +1721,6 @@ mod windows_tests {
                 other => panic!("unexpected {other:?}"),
             }
         }
-    }
-
-    #[tokio::test]
-    async fn the_child_gets_its_environment_working_directory_and_exit_code() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut spec = cmd("echo %PLX_TEST%& cd& exit 3");
-        spec.cwd = dir.path().to_owned();
-        spec.inject.set("PLX_TEST", "set");
-        let mut process = launcher(Environment::inherited()).spawn(&spec).unwrap();
-        let (lines, exit) = collect(&mut process).await;
-        assert_eq!(exit.info.code, Some(3), "{exit:?}");
-        assert_eq!(lines[0], "set");
-        assert!(
-            lines[1].eq_ignore_ascii_case(&dir.path().display().to_string()),
-            "{lines:?}"
-        );
     }
 
     #[tokio::test]

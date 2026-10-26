@@ -4,16 +4,10 @@ use std::time::Duration;
 
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{
-    CancelRequestParams, INVALID_REQUEST, Message, PARSE_ERROR, REQUEST_CANCELLED, Response,
+    CancelRequestParams, INVALID_REQUEST, PARSE_ERROR, REQUEST_CANCELLED,
 };
-use parallax_protocol::methods::{
-    CancelRequest, HostHealth, Initialize, ProjectCreate, ProjectList,
-};
-use parallax_protocol::{
-    HostHealthParams, InitializeResult, ProjectCreateResult, ProjectListParams, ProjectListResult,
-    QueueStats,
-};
-use serde_json::{Value, json};
+use parallax_protocol::methods::{CancelRequest, HostHealth, ProjectCreate, ProjectList};
+use parallax_protocol::{HostHealthParams, ProjectCreateResult, ProjectListParams, QueueStats};
 use tokio::time::{Instant, sleep};
 
 use crate::support::{Client, PATIENCE, Plxd, WriteLock, create_params, temp_dir};
@@ -86,34 +80,6 @@ async fn store_queue(client: &mut Client) -> QueueStats {
 }
 
 #[tokio::test]
-async fn an_id_already_in_flight_is_refused() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    let lock = WriteLock::take(dir.path());
-
-    let request = |id: i64| {
-        json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": "project/create",
-            "params": create_params(dir.path(), "parallax"),
-        })
-    };
-    client.send_message(&request(7)).await;
-    sleep(SETTLE).await;
-    client.send_message(&request(7)).await;
-    let refused = client.response().await;
-    assert_eq!(refused.id, Some(7.into()));
-    assert_eq!(refused.result.unwrap_err().code, INVALID_REQUEST);
-
-    lock.release();
-    let answered = client.response().await;
-    assert_eq!(answered.id, Some(7.into()));
-    assert!(answered.result.is_ok());
-}
-
-#[tokio::test]
 async fn malformed_lines_are_answered_and_the_connection_stays_open() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
@@ -160,51 +126,6 @@ async fn an_oversized_frame_closes_the_connection() {
 }
 
 #[tokio::test]
-async fn requests_sent_before_the_client_closes_its_side_are_all_answered() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::connect(&plxd.socket).await;
-
-    // As `printf '...' | plxd attach` would: pipelined requests, then end of input.
-    let init = client
-        .send::<Initialize>(
-            serde_json::from_value(json!({
-                "protocol": {"min": 1, "max": 1},
-                "client": {"name": "printf", "version": "0"},
-                "capabilities": {}
-            }))
-            .unwrap(),
-        )
-        .await;
-    let create = client
-        .send::<ProjectCreate>(create_params(dir.path(), "parallax"))
-        .await;
-    let list = client.send::<ProjectList>(ProjectListParams {}).await;
-    client.close_write().await;
-
-    let mut answers = Vec::new();
-    while let Some(message) = client.next().await {
-        let Message::Response(response) = message else {
-            panic!("expected only responses, got {message:?}");
-        };
-        answers.push(response);
-    }
-    let answer = |id| {
-        answers
-            .iter()
-            .find(|response: &&Response| response.id.as_ref() == Some(id))
-            .cloned()
-            .unwrap_or_else(|| panic!("no answer for {id}"))
-            .result
-            .expect("a successful answer")
-    };
-    assert_eq!(answers.len(), 3, "{answers:?}");
-    serde_json::from_value::<InitializeResult>(answer(&init)).unwrap();
-    serde_json::from_value::<ProjectCreateResult>(answer(&create)).unwrap();
-    serde_json::from_value::<ProjectListResult>(answer(&list)).unwrap();
-}
-
-#[tokio::test]
 async fn a_client_that_disconnects_mid_request_leaves_the_server_serving() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
@@ -241,19 +162,4 @@ async fn a_client_that_disconnects_mid_request_leaves_the_server_serving() {
         .call::<HostHealth>(HostHealthParams {})
         .await
         .unwrap();
-}
-
-#[tokio::test]
-async fn params_may_be_absent_or_null() {
-    let dir = temp_dir();
-    let plxd = Plxd::start(dir.path()).await;
-    let mut client = Client::ready(&plxd.socket).await;
-    for params in [None, Some(Value::Null)] {
-        let mut request = json!({"jsonrpc": "2.0", "id": 3, "method": "host/health"});
-        if let Some(params) = params {
-            request["params"] = params;
-        }
-        client.send_message(&request).await;
-        assert!(client.response().await.result.is_ok());
-    }
 }

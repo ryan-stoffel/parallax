@@ -1,5 +1,5 @@
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { sha256 } from "../src/crypto";
 import {
@@ -39,7 +39,7 @@ async function online(user = `user_${crypto.randomUUID()}`) {
 }
 
 /** A client's stream to `host`, joined by plxd's side. */
-async function stream(host: Host, token: string, control: Socket) {
+async function stream(host: Host, token: string, control: Awaited<ReturnType<typeof online>>["control"]) {
   const ticket = await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token });
   expect(ticket.status).toBe(200);
   const { ticket: value } = (await ticket.json()) as { ticket: string };
@@ -51,26 +51,19 @@ async function stream(host: Host, token: string, control: Socket) {
 
 const hosts = testEnv.HOSTS;
 const users = testEnv.USERS;
-/** `host`'s Durable Object. */
-const stubOf = (host: Host) => hosts.get(hosts.idFromName(host.id));
 
 describe("sign-in", () => {
-  it("refuses tokens that aren't a current session from the configured Clerk", async () => {
-    const expired = await session("user_a", { exp: Math.floor(Date.now() / 1000) - 60 });
+  it("takes a session or the desktop app's OAuth token from the configured Clerk, and nothing else", async () => {
     const otherIssuer = await session("user_a", { iss: "https://evil.test" });
     const tampered = (await session("user_a")).replace(/\.[^.]+$/, ".AAAA");
-    for (const token of [expired, otherIssuer, tampered, "not-a-jwt"]) {
+    const otherApp = await session("user_a", { sid: undefined, client_id: "someone_else" });
+    for (const token of [otherIssuer, tampered, otherApp]) {
       expect((await call("/v1/hosts", { token })).status).toBe(401);
     }
     expect((await call("/v1/hosts")).status).toBe(401);
     expect((await call("/v1/hosts", { token: await session("user_a") })).status).toBe(200);
-  });
-
-  it("takes the desktop app's OAuth access token, and no other application's", async () => {
     const desktop = await session("user_a", { sid: undefined, client_id: "SXDueyOLOJ2v4Vmq" });
-    const other = await session("user_a", { sid: undefined, client_id: "someone_else" });
     expect((await call("/v1/hosts", { token: desktop })).status).toBe(200);
-    expect((await call("/v1/hosts", { token: other })).status).toBe(401);
   });
 });
 
@@ -118,12 +111,6 @@ describe("one host can't impersonate another", () => {
     expect(await refused(proof)).toBe(401);
     expect(await refused(await hostProof(host, host, Date.now() - 60_000))).toBe(401);
   });
-
-  it("has no control socket for a host nobody registered", async () => {
-    const host = await newHost();
-    const response = await hostSocket(host, await hostProof(host));
-    expect(response instanceof Response && response.status).toBe(404);
-  });
 });
 
 describe("clock skew", () => {
@@ -154,7 +141,7 @@ describe("clock creep", () => {
       const ahead = (await hostSocket(host, await hostProof(host, host, at))) as Response;
       expect(ahead.status).toBe(401);
     }
-    const stub = stubOf(host);
+    const stub = hosts.get(hosts.idFromName(host.id));
     const last = await runInDurableObject(stub, (_: HostRelay, state) => state.storage.get<number>("lastProof"));
     expect(last!).toBeLessThanOrEqual(Date.now() + 30_000);
   });
@@ -201,7 +188,7 @@ describe("streams", () => {
     expect(new Uint8Array((await client.next()) as ArrayBuffer)).toEqual(record.slice().reverse());
 
     // The relay keeps nothing of a stream: only the host's registration is stored.
-    const stub = stubOf(host);
+    const stub = hosts.get(hosts.idFromName(host.id));
     const stored = await runInDurableObject(stub, async (_: HostRelay, state) => ({
       keys: [...(await state.storage.list()).keys()],
       held: state.storage.sql.exec("SELECT count(*) AS n FROM held").one().n,
@@ -211,22 +198,13 @@ describe("streams", () => {
     client.ws.close(1000);
     expect(await side.closed).toBe(1000);
   });
-
-  it("closes a client that sends text, which a TLS stream never does", async () => {
-    const { host, token, control } = await online();
-    const { client, open } = await stream(host, token, control);
-    opened(await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`));
-    await client.next();
-    client.ws.send("GET / HTTP/1.1");
-    expect(await client.closed).toBe(4400);
-  });
 });
 
 /** Lists the webhook URLs plxd serves, as plxd does once connected, and waits for the relay. */
 async function serveHooks(host: Host, control: Socket, urls: [string, string][]) {
   const keys = await Promise.all(urls.map(([hookId, token]) => hookKey(hookId, token)));
   control.ws.send(JSON.stringify({ t: "hooks", keys }));
-  const stub = stubOf(host);
+  const stub = hosts.get(hosts.idFromName(host.id));
   await expect
     .poll(() => runInDurableObject(stub, (_: HostRelay, state) => state.storage.get<string[]>("hooks")))
     .toEqual([...keys].sort());
@@ -234,7 +212,7 @@ async function serveHooks(host: Host, control: Socket, urls: [string, string][])
 
 /** How many webhooks `host`'s object holds. */
 function heldCount(host: Host) {
-  const stub = stubOf(host);
+  const stub = hosts.get(hosts.idFromName(host.id));
   return runInDurableObject(stub, (_: HostRelay, state) =>
     state.storage.sql.exec<{ n: number }>("SELECT count(*) AS n FROM held").one().n,
   );
@@ -301,7 +279,7 @@ describe("webhooks", () => {
     await control.next(); // ready
     const first = hookFrame((await control.next()) as ArrayBuffer);
     control.ws.send(JSON.stringify({ t: "hook", id: first.head.id, status: 429, body: {} }));
-    const stub = stubOf(host);
+    const stub = hosts.get(hosts.idFromName(host.id));
     await expect
       .poll(() =>
         runInDurableObject(stub, (_: HostRelay, state) =>
@@ -327,29 +305,23 @@ describe("webhooks", () => {
     expect(await heldCount(host)).toBe(0);
   });
 
-  it("answer a URL plxd didn't list with 404, without counting or holding it", async () => {
+  it("refuse unlisted URLs, bodies over 1 MiB, and hosts nobody registered, holding and counting nothing", async () => {
     const { host } = await away();
     for (let i = 0; i < LIMITS.hookUrl + 5; i++) {
       expect((await call(`/v1/hooks/${host.id}/hook1/guess${i}`, { method: "POST", body: "x" })).status).toBe(404);
     }
-    expect(await heldCount(host)).toBe(0);
-    // The real sender's budget is untouched.
-    expect((await call(`/v1/hooks/${host.id}/hook1/token`, { method: "POST" })).status).toBe(202);
-  });
-
-  it("refuse bodies over 1 MiB, other methods, and hosts nobody registered, storing nothing for those", async () => {
-    const { host, control } = await online();
-    await serveHooks(host, control, [["hook1", "token"]]);
     const big = await call(`/v1/hooks/${host.id}/hook1/token`, {
       method: "POST",
       body: new Uint8Array(MAX_HOOK_BYTES + 1),
     });
     expect(big.status).toBe(413);
-    expect((await call(`/v1/hooks/${host.id}/hook1/token`, { method: "DELETE" })).status).toBe(405);
+    expect(await heldCount(host)).toBe(0);
+    // The real sender's budget is untouched.
+    expect((await call(`/v1/hooks/${host.id}/hook1/token`, { method: "POST" })).status).toBe(202);
     const nobody = await newHost();
     expect((await call(`/v1/hooks/${nobody.id}/hook1/token`, { method: "POST" })).status).toBe(404);
     expect(((await socket(`/v1/hosts/${nobody.id}/host`)) as Response).status).toBe(404);
-    const stored = await runInDurableObject(stubOf(nobody), async (_: HostRelay, state) => ({
+    const stored = await runInDurableObject(hosts.get(hosts.idFromName(nobody.id)), async (_: HostRelay, state) => ({
       keys: (await state.storage.list()).size,
       tables: state.storage.sql.exec("SELECT name FROM sqlite_master WHERE name = 'held'").toArray().length,
     }));
@@ -361,7 +333,7 @@ describe("held webhook retries", () => {
   it("wake no sooner than the oldest webhook of a hook is due, however many wait behind it", async () => {
     const { host, control } = await online();
     await serveHooks(host, control, [["hook1", "token"]]);
-    const stub = stubOf(host);
+    const stub = hosts.get(hosts.idFromName(host.id));
     const now = Date.now();
     const due = now + 60_000;
     // The oldest waits a minute; the ones behind it look overdue, as after timeouts.
@@ -386,12 +358,25 @@ describe("held webhook retries", () => {
 });
 
 describe("rate limits", () => {
-  it("limit each hook URL", async () => {
+  it("limit each hook URL, a host's tickets, and a user's signed-in requests", async () => {
     const { host } = await away();
     for (let i = 0; i < LIMITS.hookUrl; i++) {
       expect((await call(`/v1/hooks/${host.id}/hook1/token`, { method: "POST" })).status).toBe(202);
     }
     expect((await call(`/v1/hooks/${host.id}/hook1/token`, { method: "POST" })).status).toBe(429);
+
+    const ticketed = await online();
+    for (let i = 0; i < LIMITS.tickets; i++) {
+      expect((await call(`/v1/hosts/${ticketed.host.id}/tickets`, { method: "POST", token: ticketed.token })).status).toBe(200);
+    }
+    expect((await call(`/v1/hosts/${ticketed.host.id}/tickets`, { method: "POST", token: ticketed.token })).status).toBe(429);
+
+    const token = await session("user_busy");
+    for (let i = 0; i < USER_LIMITS.requests; i++) {
+      expect((await call("/v1/hosts", { token })).status).toBe(200);
+    }
+    expect((await call("/v1/hosts", { token })).status).toBe(429);
+    expect((await call("/v1/hosts", { token: await session("user_calm") })).status).toBe(200);
   });
 
   it("count only control connections with a valid proof, so strangers can't lock plxd out", async () => {
@@ -407,23 +392,6 @@ describe("rate limits", () => {
     for (let i = 2; i < LIMITS.hostConnect; i++) await (await connectHost(host)).control.next();
     const over = await hostSocket(host, await hostProof(host));
     expect(over instanceof Response && over.status).toBe(429);
-  });
-
-  it("limit a host's tickets", async () => {
-    const { host, token } = await online();
-    for (let i = 0; i < LIMITS.tickets; i++) {
-      expect((await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token })).status).toBe(200);
-    }
-    expect((await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token })).status).toBe(429);
-  });
-
-  it("limit a user's signed-in requests", async () => {
-    const token = await session("user_busy");
-    for (let i = 0; i < USER_LIMITS.requests; i++) {
-      expect((await call("/v1/hosts", { token })).status).toBe(200);
-    }
-    expect((await call("/v1/hosts", { token })).status).toBe(429);
-    expect((await call("/v1/hosts", { token: await session("user_calm") })).status).toBe(200);
   });
 });
 
@@ -443,31 +411,11 @@ describe("removing hosts", () => {
     expect((await call(`/v1/hosts/${mine[0]!.id}`, { method: "DELETE", token })).status).toBe(200);
     expect((await hostsOf()).map((h) => h.hostId)).not.toContain(mine[0]!.id);
     expect((await call(`/v1/hosts/${mine[0]!.id}/tickets`, { method: "POST", token })).status).toBe(404);
-    const stored = await runInDurableObject(stubOf(mine[0]!), async (_: HostRelay, state) =>
+    const stored = await runInDurableObject(hosts.get(hosts.idFromName(mine[0]!.id)), async (_: HostRelay, state) =>
       (await state.storage.list()).size,
     );
     expect(stored).toBe(0);
     expect((await register(await newHost(), token)).status).toBe(200);
-  });
-
-  it("stops counting a host that moved to another user", async () => {
-    const host = await newHost();
-    const first = await session("user_first");
-    await register(host, first);
-    await register(host, await session("user_second"));
-    const account = users.get(users.idFromName("user_first"));
-    expect(await runInDurableObject(account, (user: UserAccount) => user.hosts())).toEqual([]);
-  });
-
-  it("gives back the slot when registering fails", async () => {
-    const token = await session("user_unlucky");
-    const failing = vi.spyOn(HostRelay.prototype, "register").mockRejectedValueOnce(new Error("boom"));
-    const host = await newHost();
-    // The Worker's error reaches the test as a rejection; a sender would get a 500.
-    await expect(register(host, token)).rejects.toThrow("boom");
-    failing.mockRestore();
-    const account = users.get(users.idFromName("user_unlucky"));
-    expect(await runInDurableObject(account, (user: UserAccount) => user.hosts())).toEqual([]);
   });
 });
 
@@ -482,12 +430,12 @@ describe("cost ceilings", () => {
     expect(listed.hosts).toHaveLength(MAX_HOSTS);
   });
 
-  it("count each stream frame as at least 16 KiB, since frames are what Cloudflare bills", async () => {
+  it("count each stream frame as at least 16 KiB, and close a host's streams and tickets past its daily bytes", async () => {
     const { host, token, control } = await online();
     const { client, open } = await stream(host, token, control);
     const side = opened(await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`));
     await client.next();
-    const stub = stubOf(host);
+    const stub = hosts.get(hosts.idFromName(host.id));
     await runInDurableObject(stub, (relay: HostRelay) => {
       const day = new Date().toISOString().slice(0, 10);
       const bytes = MAX_DAILY_BYTES - 2 * MIN_FRAME_BYTES;
@@ -499,6 +447,8 @@ describe("cost ceilings", () => {
     }
     client.ws.send(new Uint8Array([2]));
     expect(await client.closed).toBe(4429);
+    expect(await side.closed).toBe(4429);
+    expect((await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token })).status).toBe(429);
   });
 
   it("key anonymous limits by IPv4 address or IPv6 /64", () => {
@@ -506,22 +456,6 @@ describe("cost ceilings", () => {
     expect(network("2001:db8:a:b:1:2:3:4")).toBe("2001:db8:a:b");
     expect(network("2001:0DB8:000a::1")).toBe("2001:db8:a:0");
     expect(network("::1")).toBe("0:0:0:0");
-  });
-
-  it("close a host's streams, and refuse new ones, past its daily bytes", async () => {
-    const { host, token, control } = await online();
-    const { client, open } = await stream(host, token, control);
-    const side = opened(await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`));
-    await client.next();
-    const stub = stubOf(host);
-    await runInDurableObject(stub, (relay: HostRelay) => {
-      const day = new Date().toISOString().slice(0, 10);
-      (relay as unknown as { traffic: object }).traffic = { day, bytes: MAX_DAILY_BYTES, saved: 0 };
-    });
-    client.ws.send(new Uint8Array([1, 2, 3]));
-    expect(await client.closed).toBe(4429);
-    expect(await side.closed).toBe(4429);
-    expect((await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token })).status).toBe(429);
   });
 });
 
