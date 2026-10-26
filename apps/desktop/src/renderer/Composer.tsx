@@ -1752,7 +1752,7 @@ export function Composer({
   );
 
   return (
-    <div className="w-full">
+    <div className="w-full px-4">
       <form
         ref={box}
         onSubmit={(e) => {
@@ -1797,7 +1797,7 @@ export function Composer({
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
         data-back={back || undefined}
-        className={`relative z-10 rounded-xl border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_7%,var(--background))] hover:bg-[color-mix(in_oklab,var(--foreground)_10%,var(--background))]" : "bg-surface shadow-composer"}`}
+        className={`relative z-10 rounded-prompt border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_7%,var(--background))] hover:bg-[color-mix(in_oklab,var(--foreground)_10%,var(--background))]" : "bg-surface shadow-composer"}`}
       >
         {menuOpen && (
           <div
@@ -2019,13 +2019,13 @@ export function Composer({
       </form>
       {back && pickers ? (
         // A thin tray tucked under the stepped-back line, in place of any tab, as low as it can be.
-        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-prompt border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
           {pickers}
         </div>
       ) : (
         tab && (
           // Tucked under the box, so what it shows reads as part of it.
-          <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
+          <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-prompt border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
             {tab}
           </div>
         )

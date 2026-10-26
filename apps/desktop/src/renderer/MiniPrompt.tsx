@@ -91,7 +91,7 @@ export function MiniPrompt({
           e.preventDefault();
           void send();
         }}
-        className={`relative z-10 flex items-end gap-2 border border-border bg-surface shadow-composer transition-colors focus-within:border-foreground/20 ${large ? "rounded-xl py-2.5 pr-2.5 pl-5" : "rounded-xl py-1.5 pr-1.5 pl-3.5"}`}
+        className={`relative z-10 flex items-end gap-2 border border-border bg-surface shadow-composer transition-colors focus-within:border-foreground/20 ${large ? "rounded-prompt py-2.5 pr-2.5 pl-5" : "rounded-prompt py-1.5 pr-1.5 pl-3.5"}`}
       >
         <textarea
           ref={box}
@@ -132,7 +132,7 @@ export function MiniPrompt({
       {model && (
         // Tucked under the box, as the composer's tab is.
         <div
-          className={`tucked -mt-4 flex items-center rounded-b-xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
+          className={`tucked -mt-4 flex items-center rounded-b-prompt border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
         >
           <ModelPick providers={providers} models={offered} value={model} onChange={setPicked} />
         </div>
