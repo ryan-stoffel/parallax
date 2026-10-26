@@ -144,10 +144,12 @@ test("a long run opens at its end and scrolls back to its start (PLX-490)", asyn
     // Every other page arrives after the list has stopped scrolling, as from a slow host: plxd
     // is paused until then (PLX-545). Windows has no way to pause it.
     const slow = pages % 2 === 1 && process.platform !== "win32";
-    // Two screens down, where nothing loads, so the rows around there render.
+    // 300 px under the last screen, where nothing loads, so the rows the jump lands on render and
+    // are measured, whatever the window's height: the list's overscan reaches up past the last
+    // screen's top, and the margin takes the drift of rows measured from their estimate.
     await page.evaluate(`(() => {
       const log = document.querySelector('[role="log"]');
-      log.scrollTop = log.clientHeight * 2;
+      log.scrollTop = log.clientHeight + 300;
     })()`);
     await page.waitForTimeout(300);
     // Then up into the last screen in one go, which loads the page before. The rows rendered
