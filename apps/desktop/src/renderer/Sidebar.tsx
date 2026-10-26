@@ -205,23 +205,28 @@ interface SidebarProps {
   open: boolean;
   onClose: () => void;
   onNewThread: () => void;
+  /** Opens the Notifications page, in place of the main pane (PLX-1015). */
+  onOpenNotifications: () => void;
   children: ReactNode;
 }
 
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
- * open a new thread. A nightly build paints a sky behind that row and the Search row under it,
- * as the column's own background (index.css), with stars and clouds (NightSky.tsx).
+ * open a new thread, and at the far end Notifications, with a dot for unseen ones (PLX-1015). A
+ * nightly build paints a sky behind that row and the Search row under it, as the column's own
+ * background (index.css), with stars and clouds (NightSky.tsx).
  */
 export function Sidebar({
   open,
   onClose,
   onNewThread,
+  onOpenNotifications,
   children,
   width = 288,
   onResize,
 }: SidebarProps) {
+  const { unseen } = useNotificationLog();
   return (
     <nav
       id="sidebar"
@@ -251,6 +256,16 @@ export function Sidebar({
           <ParallaxMark className="size-5" />
           Parallax
         </button>
+        <IconButton
+          label={unseen ? `Notifications (${unseen} new)` : "Notifications"}
+          onClick={onOpenNotifications}
+          className="relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+        >
+          <Bell />
+          {unseen > 0 && (
+            <span aria-hidden className="absolute top-1 right-1 size-1.5 rounded-full bg-accent" />
+          )}
+        </IconButton>
       </TopBar>
       {children}
     </nav>
@@ -276,8 +291,6 @@ interface ThreadListProps {
   onOpenSettings: (section: SettingsSection) => void;
   /** Opens the Pull requests page, in place of the main pane. */
   onOpenPullRequests: () => void;
-  /** Opens the Notifications page, in place of the main pane (PLX-1015). */
-  onOpenNotifications: () => void;
   /** Opens the permanent browser, in place of the main pane (PLX-964), and whether it's open. */
   onOpenBrowser?: () => void;
   browserOpen?: boolean;
@@ -514,7 +527,6 @@ export function ThreadList({
   onOpenProject,
   onOpenSettings,
   onOpenPullRequests,
-  onOpenNotifications,
   onOpenBrowser,
   browserOpen,
   onDelete,
@@ -1929,7 +1941,6 @@ export function ThreadList({
           listed={hosts}
           onOpenSettings={onOpenSettings}
           onOpenPullRequests={onOpenPullRequests}
-          onOpenNotifications={onOpenNotifications}
           {...(onOpenBrowser && { onOpenBrowser })}
           {...(browserOpen !== undefined && { browserOpen })}
         />
@@ -2417,23 +2428,21 @@ function ScopeMenu({
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
  * (ProfileMenu.tsx), then the places that open in the main pane, Browser, the permanent one
- * (PLX-964), Pull requests, Notifications, with a dot for unseen ones (PLX-1015), and Usage, and
- * at the far end Settings, then Update when `updatable` (Update.tsx), where it has always been.
+ * (PLX-964), Pull requests, and Usage, and at the far end Settings, then Update when `updatable`
+ * (Update.tsx), where it has always been.
  */
 function Footer({
   listed,
   onOpenSettings,
   onOpenPullRequests,
-  onOpenNotifications,
   onOpenBrowser,
   browserOpen,
 }: Pick<
   ThreadListProps,
-  "onOpenSettings" | "onOpenPullRequests" | "onOpenNotifications" | "onOpenBrowser" | "browserOpen"
+  "onOpenSettings" | "onOpenPullRequests" | "onOpenBrowser" | "browserOpen"
 > & {
   listed: HostThreads[];
 }) {
-  const { unseen } = useNotificationLog();
   return (
     <div className="flex items-center gap-1">
       <ProfileButton listed={listed} />
@@ -2444,16 +2453,6 @@ function Footer({
       )}
       <IconButton label="Pull requests" onClick={onOpenPullRequests}>
         <GitPullRequest />
-      </IconButton>
-      <IconButton
-        label={unseen ? `Notifications (${unseen} new)` : "Notifications"}
-        onClick={onOpenNotifications}
-        className="relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-      >
-        <Bell />
-        {unseen > 0 && (
-          <span aria-hidden className="absolute top-1 right-1 size-1.5 rounded-full bg-accent" />
-        )}
       </IconButton>
       <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />

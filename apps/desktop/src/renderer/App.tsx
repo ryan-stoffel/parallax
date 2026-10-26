@@ -1202,6 +1202,7 @@ export function App() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onNewThread={() => newThread()}
+        onOpenNotifications={() => openMainPage("notifications")}
       >
         {settings ? (
           <SettingsNav
@@ -1232,7 +1233,6 @@ export function App() {
             onOpenProject={openProject}
             onOpenSettings={openSettings}
             onOpenPullRequests={() => openMainPage("pullRequests")}
-            onOpenNotifications={() => openMainPage("notifications")}
             browserOpen={!settings && mainPage === "browser"}
             onOpenBrowser={() => openMainPage("browser")}
             onDelete={deleteThread}
