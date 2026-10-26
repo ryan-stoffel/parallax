@@ -173,7 +173,7 @@ async fn refused(daemon: &Daemon, error: PrError, what: &str) -> ErrorObject {
 }
 
 /// When the spent `core` or `graphql` limit in `gh api rate_limit`'s answer resets, if one is.
-fn spent_until(answer: &str) -> Option<Timestamp> {
+pub(crate) fn spent_until(answer: &str) -> Option<Timestamp> {
     let answer: Value = serde_json::from_str(answer).ok()?;
     ["core", "graphql"]
         .iter()

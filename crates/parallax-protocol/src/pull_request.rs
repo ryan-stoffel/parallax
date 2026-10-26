@@ -334,3 +334,103 @@ pub struct PullRequest {
     #[ts(optional)]
     pub auto_merge: Option<PrMergeMethod>,
 }
+
+/// Params of `pr/write` (PLX-1022): one write to a GitHub pull request, sent through plxd's
+/// paced write queue. It needn't be linked.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrWriteParams {
+    /// The pull request's web URL.
+    pub url: String,
+    /// What to write.
+    pub write: PrWrite,
+}
+
+/// A write to a pull request.
+///
+/// A newer client may send a write this version does not know; plxd refuses it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum PrWrite {
+    /// A comment on the conversation.
+    Comment {
+        /// The comment, in Markdown.
+        body: String,
+    },
+    /// A review.
+    Review {
+        /// Its verdict.
+        event: PrReviewEvent,
+        /// The review's text, in Markdown.
+        body: String,
+    },
+    /// A new title, body, or both.
+    Edit {
+        /// The new title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        title: Option<String>,
+        /// The new body, in Markdown.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        body: Option<String>,
+    },
+    /// A reply to a review thread, resolving it too, or resolving it alone.
+    ReplyToThread {
+        /// The review thread's id, as `pr/status` lists it.
+        review_thread_id: String,
+        /// The reply, in Markdown. Absent resolves without replying.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        body: Option<String>,
+        /// Whether to resolve the thread, after the reply.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        resolve: bool,
+    },
+    /// A write this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// A review's verdict.
+///
+/// A newer client may send one this version does not know; plxd refuses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum PrReviewEvent {
+    /// Comments without a verdict.
+    Comment,
+    /// Approves.
+    Approve,
+    /// Requests changes.
+    RequestChanges,
+    /// A verdict this version does not know yet.
+    #[serde(other)]
+    #[ts(skip)]
+    Unknown,
+}
+
+/// Result of `pr/write`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrWriteResult {
+    /// The pull request's URL.
+    pub url: String,
+}
+
+/// Params of `pr/mergeWhenReady` (PLX-1022).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct PrMergeWhenReadyParams {
+    /// The run to wake with the result.
+    pub run_id: RunId,
+    /// The pull request's web URL.
+    pub url: String,
+    /// How to merge it.
+    pub method: PrMergeMethod,
+}

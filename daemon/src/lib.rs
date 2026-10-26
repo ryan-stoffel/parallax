@@ -81,6 +81,7 @@ pub mod paths;
 pub mod peer;
 mod pr_media;
 mod pr_watch;
+mod pr_write;
 pub(crate) mod preview;
 pub mod providers;
 #[cfg(unix)]

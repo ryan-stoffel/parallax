@@ -146,7 +146,7 @@ fn a_read_is_refused_when_its_quota_is_nearly_spent() {
     // A REST read and a write still run.
     let output = fixture.gh(&["run", "list"], "", &low);
     assert_eq!(output.status.code(), Some(3), "{output:?}");
-    let output = fixture.gh(&["pr", "merge", "12"], "", &low);
+    let output = fixture.gh(&["pr", "close", "12"], "", &low);
     assert_eq!(output.status.code(), Some(3), "{output:?}");
 }
 

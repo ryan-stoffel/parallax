@@ -127,6 +127,75 @@ const REDIRECTS: &[Redirect] = &[
         },
         tool: "pull_request_diff",
     },
+    // The paced writes (PLX-1022), each only for what its tool does.
+    Redirect {
+        command: ["pr", "comment"],
+        when: When::Answers {
+            unless: &[
+                "--edit-last",
+                "--delete-last",
+                "--editor",
+                "-e",
+                "--web",
+                "-w",
+            ],
+            fields: &[],
+        },
+        tool: "pull_request_comment",
+    },
+    Redirect {
+        command: ["pr", "review"],
+        when: When::Answers {
+            unless: &[],
+            fields: &[],
+        },
+        tool: "pull_request_review",
+    },
+    // pull_request_edit changes the title and body only, so labels, reviewers, and the rest run.
+    Redirect {
+        command: ["pr", "edit"],
+        when: When::Answers {
+            unless: &[
+                "--add-assignee",
+                "--remove-assignee",
+                "--add-label",
+                "--remove-label",
+                "--add-project",
+                "--remove-project",
+                "--add-reviewer",
+                "--remove-reviewer",
+                "--base",
+                "-B",
+                "--milestone",
+                "-m",
+                "--remove-milestone",
+            ],
+            fields: &[],
+        },
+        tool: "pull_request_edit",
+    },
+    // merge_when_ready merges with a method only, so a merge with more than that runs.
+    Redirect {
+        command: ["pr", "merge"],
+        when: When::Answers {
+            unless: &[
+                "--disable-auto",
+                "--admin",
+                "--subject",
+                "-t",
+                "--body",
+                "-b",
+                "--body-file",
+                "-F",
+                "--author-email",
+                "-A",
+                "--delete-branch",
+                "-d",
+            ],
+            fields: &[],
+        },
+        tool: "merge_when_ready",
+    },
     Redirect {
         command: ["run", "watch"],
         when: When::Always,
@@ -140,8 +209,24 @@ const REDIRECTS: &[Redirect] = &[
 ];
 
 /// Flags that take the next argument as their value, among those [`positionals`] skips: `-R` is
-/// the one gh takes between a command and its subcommand.
-const VALUE_FLAGS: &[&str] = &["-R", "--repo", "--json", "-q", "--jq", "-t", "--template"];
+/// the one gh takes between a command and its subcommand, and a body or title can come before
+/// the pull request.
+const VALUE_FLAGS: &[&str] = &[
+    "-R",
+    "--repo",
+    "--json",
+    "-q",
+    "--jq",
+    "-t",
+    "--template",
+    "--title",
+    "-b",
+    "--body",
+    "-F",
+    "--body-file",
+    "--match-head-commit",
+    "--color",
+];
 
 /// The indexes of `args`' arguments that aren't flags or a [`VALUE_FLAGS`] flag's value: the
 /// command, the subcommand, and then the subcommand's own, such as a pull request.

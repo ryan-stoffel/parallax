@@ -405,22 +405,23 @@ where
     }
 }
 
-/// Which rate limit a gh error is.
+/// Which rate limit a gh error is. `crate::pr_write` shares it.
 #[derive(Debug, PartialEq, Eq)]
-enum Limit {
+pub(crate) enum Limit {
     /// The hourly quota is used up, until it resets.
     Primary,
-    /// Too many requests too fast: a secondary limit, its older "abuse detection" wording, or a
-    /// 429.
+    /// Too many requests too fast: a secondary limit, its older "abuse detection" wording, a
+    /// 429, or GraphQL's "was submitted too quickly" for a comment.
     Secondary,
 }
 
 /// The rate limit gh's `error` reports, if any.
-fn limit(error: &str) -> Option<Limit> {
+pub(crate) fn limit(error: &str) -> Option<Limit> {
     let error = error.to_ascii_lowercase();
     if error.contains("secondary rate limit")
         || error.contains("abuse detection")
         || error.contains("http 429")
+        || error.contains("submitted too quickly")
     {
         Some(Limit::Secondary)
     } else if error.contains("rate limit") {

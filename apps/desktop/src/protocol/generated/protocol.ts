@@ -841,6 +841,19 @@ export type ParallaxRequests = {
 	 */
 	"pr/sharedDiff": { params: PrViewParams, result: PrDiffResult },
 	/**
+	 * `pr/write` (PLX-1022): comments on, reviews, edits, or replies to a review thread of a
+	 * GitHub pull request through plxd's one paced write queue per host. Fails with
+	 * `prFailed` when GitHub refuses or rate limits it or the queue stays busy, and with
+	 * `ghUnavailable` without a signed-in `gh`. Gated on `prWatch`.
+	 */
+	"pr/write": { params: PrWriteParams, result: PrWriteResult },
+	/**
+	 * `pr/mergeWhenReady` (PLX-1022): watches a pull request for a run, as `pr/watch` does,
+	 * and has plxd merge it, pinned to the head it judged, once it is ready, then wake the
+	 * run with the result. Unwatching cancels the merge. Gated on `prWatch`.
+	 */
+	"pr/mergeWhenReady": { params: PrMergeWhenReadyParams, result: PrWatchResult },
+	/**
 	 * `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
 	 * declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
 	 * `setupScripts` capability, like `repo/saveScripts`.
@@ -1115,6 +1128,8 @@ export const REQUEST_METHODS = [
 	"pr/failureLog",
 	"pr/uploadMedia",
 	"pr/sharedDiff",
+	"pr/write",
+	"pr/mergeWhenReady",
 	"repo/scripts",
 	"repo/saveScripts",
 	"task/delegate",
@@ -9435,6 +9450,96 @@ export type PrMediaUploaded = {
 	 * Whether the same bytes were uploaded to the repository before, so no upload was made.
 	 */
 	reused: boolean,
+};
+
+/**
+ * Params of `pr/write` (PLX-1022): one write to a GitHub pull request, sent through plxd's
+ * paced write queue. It needn't be linked.
+ */
+export type PrWriteParams = {
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+	/**
+	 * What to write.
+	 */
+	write: PrWrite,
+};
+
+/**
+ * A write to a pull request.
+ *
+ * A newer client may send a write this version does not know; plxd refuses it.
+ */
+export type PrWrite = { "kind": "comment",
+	/**
+	 * The comment, in Markdown.
+	 */
+	body: string, } | { "kind": "review",
+	/**
+	 * Its verdict.
+	 */
+	event: PrReviewEvent,
+	/**
+	 * The review's text, in Markdown.
+	 */
+	body: string, } | { "kind": "edit",
+	/**
+	 * The new title.
+	 */
+	title?: string,
+	/**
+	 * The new body, in Markdown.
+	 */
+	body?: string, } | { "kind": "replyToThread",
+	/**
+	 * The review thread's id, as `pr/status` lists it.
+	 */
+	reviewThreadId: string,
+	/**
+	 * The reply, in Markdown. Absent resolves without replying.
+	 */
+	body?: string,
+	/**
+	 * Whether to resolve the thread, after the reply.
+	 */
+	resolve?: boolean,
+};
+
+/**
+ * A review's verdict.
+ *
+ * A newer client may send one this version does not know; plxd refuses it.
+ */
+export type PrReviewEvent = "comment" | "approve" | "requestChanges";
+
+/**
+ * Result of `pr/write`.
+ */
+export type PrWriteResult = {
+	/**
+	 * The pull request's URL.
+	 */
+	url: string,
+};
+
+/**
+ * Params of `pr/mergeWhenReady` (PLX-1022).
+ */
+export type PrMergeWhenReadyParams = {
+	/**
+	 * The run to wake with the result.
+	 */
+	runId: RunId,
+	/**
+	 * The pull request's web URL.
+	 */
+	url: string,
+	/**
+	 * How to merge it.
+	 */
+	method: PrMergeMethod,
 };
 
 /**

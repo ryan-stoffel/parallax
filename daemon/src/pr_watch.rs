@@ -17,6 +17,10 @@
 //! for [`SHARE`] (PLX-1018), so several agents asking about one pull request cost one read. A
 //! shared read never answers ready: [`judged`] reads again first.
 //!
+//! [`merge_when_ready`], `pr/mergeWhenReady` (PLX-1022), records a merge in a watch. Each pass
+//! that finds the pull request ready by [`blockers`] reads it again fresh and merges it, pinned to
+//! that read's head, through `crate::pr_write`'s queue, then wakes the run and ends the watch.
+//!
 //! A watch ends when its pull request merges or closes, when its thread settles or is archived,
 //! after [`WAKE_LIMIT`] comment-only wakes in a row, or after [`READ_FAILURE_LIMIT`] failed reads
 //! in a row; a rate limit only delays it. A watch goes with its run.
@@ -28,8 +32,9 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ParallaxEvent, PrStatusCheck, PrStatusFile, PrStatusResult, PrStatusThread, PrViewParams,
-    PrWatchResult, PrWatchesParams, PrWatchesResult, ProjectId, RunId, TurnId,
+    ParallaxEvent, PrMergeMethod, PrMergeWhenReadyParams, PrStatusCheck, PrStatusFile,
+    PrStatusResult, PrStatusThread, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
+    ProjectId, RunId, TurnId,
 };
 use parallax_store::Store;
 use serde::{Deserialize, Serialize};
@@ -38,6 +43,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::pr_write::Refusal;
 use crate::schedules::{To, Wake};
 use crate::server::Daemon;
 use crate::store::{Tx, store_error};
@@ -62,10 +68,10 @@ const LISTED: usize = 10;
 const SNIPPET: usize = 200;
 
 /// One `gh api graphql` read: the viewer, the GraphQL quota left (for the `gh` shim, PLX-1023),
-/// and the pull request's title, body, state, draft, head
-/// and base, changed files, checks with whether each is required and its Actions run,
-/// mergeability, merge state, review decision, and its newest comments, reviews, and review
-/// threads with whether each is resolved.
+/// and the pull request's title, body, state, draft, head and base, changed files, checks with
+/// whether each is required and its Actions run, the head's check suites, mergeability, merge
+/// state, whether the base has a merge queue, review decision, and its newest comments, reviews,
+/// and review threads with whether each is resolved.
 // ponytail: reads the first 100 files and the newest 50 comments, reviews, and threads (20
 // comments each) per read; page them if a pull request ever gets more than that.
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
@@ -84,8 +90,13 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
       headRefName
       headRefOid
       mergeable
+      isMergeQueueEnabled
       files(first: 100) { nodes { path additions deletions } }
-      commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+      commits(last: 1) { nodes { commit {
+        checkSuites(first: 50) {
+          pageInfo { hasNextPage } nodes { status workflowRun { databaseId } }
+        }
+        statusCheckRollup { contexts(first: 100) { nodes {
         __typename
         ... on CheckRun {
           name status conclusion detailsUrl isRequired(pullRequestNumber: $number)
@@ -172,6 +183,9 @@ struct Watch {
     remark_ids: Vec<String>,
     conflicting: bool,
     wakes: u32,
+    /// The merge `merge_when_ready` asked for, until plxd makes it or GitHub refuses it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    merge: Option<PrMergeMethod>,
 }
 
 impl Watch {
@@ -186,6 +200,7 @@ impl Watch {
             remark_ids: Vec::new(),
             conflicting: false,
             wakes: 0,
+            merge: None,
         }
     }
 }
@@ -207,6 +222,12 @@ struct Detail {
     /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
     mergeable: String,
     merge_state: String,
+    /// The base branch has a merge queue, so a merge joins it rather than merging.
+    merge_queue: bool,
+    /// Why the head's check suites hold a merge: a GitHub Actions workflow hasn't finished, or
+    /// the suites couldn't all be read. Jobs behind `needs:` aren't checks until they start, so
+    /// the checks alone can look green mid-run.
+    actions_hold: Option<String>,
     review_decision: Option<String>,
     /// Review threads nobody has resolved, by their first comment.
     unresolved: Vec<PrStatusThread>,
@@ -253,9 +274,14 @@ struct Remark {
 #[derive(Debug, PartialEq, Eq)]
 enum Change {
     ChecksFailed(Vec<Check>),
-    ChecksPassed { count: usize, required: bool },
+    ChecksPassed {
+        count: usize,
+        required: bool,
+    },
     Remarks(Vec<Remark>),
     Conflicting,
+    /// What became of the merge `merge_when_ready` asked for.
+    Merge(String),
 }
 
 /// A pass's verdict on one watch.
@@ -289,9 +315,9 @@ pub(crate) async fn watch(
             "the thread is settled or archived; unsettle it before watching a pull request",
         ));
     }
-    let detail = read(daemon, &url).await.map_err(|error| {
-        ErrorObject::invalid_params(format!("could not read the pull request: {error}"))
-    })?;
+    let detail = read(daemon, &url)
+        .await
+        .map_err(|error| crate::agents::pr_error(&error))?;
     if detail.state != "OPEN" {
         return Err(ErrorObject::invalid_params(format!(
             "the pull request is {}, so there is nothing to watch",
@@ -325,6 +351,133 @@ pub(crate) async fn watch(
         watching: true,
         was_watching,
     })
+}
+
+/// `pr/mergeWhenReady`: watches the pull request as [`watch`] does, and records `method` in the
+/// watch for a pass to merge it with once it is ready. Returns at once.
+pub(crate) async fn merge_when_ready(
+    daemon: &Arc<Daemon>,
+    params: PrMergeWhenReadyParams,
+) -> Result<PrWatchResult, ErrorObject> {
+    let PrMergeWhenReadyParams {
+        run_id,
+        url,
+        method,
+    } = params;
+    if method == PrMergeMethod::Unknown {
+        return Err(ErrorObject::invalid_params(
+            "method must be merge, squash, or rebase",
+        ));
+    }
+    let watching = watch(
+        daemon,
+        PrViewParams {
+            run_id,
+            url: url.clone(),
+        },
+    )
+    .await?;
+    let id = Uuid::from(run_id);
+    let _lane = daemon.orchestrator.lane(id).await;
+    daemon
+        .store
+        .run(&CancellationToken::new(), move |db| {
+            let payload = db.pr_watch(id, &url).map_err(|e| store_error(&e))?;
+            let Some(mut watch) =
+                payload.and_then(|payload| serde_json::from_str::<Watch>(&payload).ok())
+            else {
+                return Err(ErrorObject::internal_error(
+                    "the watch ended before the merge was recorded; call merge_when_ready again",
+                ));
+            };
+            watch.merge = Some(method);
+            let payload = serde_json::to_string(&watch).map_err(ErrorObject::internal_error)?;
+            db.put_pr_watch(id, &url, &payload)
+                .map_err(|e| store_error(&e))
+        })
+        .await?;
+    Ok(watching)
+}
+
+/// Why `merge_when_ready` can't merge `detail` yet: [`verdict`]'s reasons, but for being behind
+/// its base, a GitHub Actions workflow still running, and GitHub's merge state unless that is
+/// `CLEAN` or `HAS_HOOKS`. GitHub says `BEHIND` only when the base requires branches to be up to
+/// date, so behind holds a merge only then.
+fn blockers(url: &str, detail: &Detail) -> Vec<String> {
+    let mut reasons = verdict(url.to_owned(), detail.clone(), 0, false).reasons;
+    reasons.extend(detail.actions_hold.clone());
+    if reasons.is_empty() && !matches!(detail.merge_state.as_str(), "CLEAN" | "HAS_HOOKS") {
+        reasons.push(match detail.merge_state.as_str() {
+            "BEHIND" => format!("{} requires it to be up to date", detail.base_branch),
+            "BLOCKED" => "GitHub's branch rules block it, such as for a required review".to_owned(),
+            state => format!("GitHub's merge state is {state:?}"),
+        });
+    }
+    reasons
+}
+
+/// What a pass did about a watch's merge.
+#[derive(Debug, PartialEq, Eq)]
+enum Merging {
+    /// It isn't ready, for these reasons.
+    Waiting(Vec<String>),
+    /// Merged at this head.
+    Merged(String),
+    /// Added to the base's merge queue at this head.
+    Queued(String),
+    /// Someone merged it already, such as another run's `merge_when_ready`.
+    AlreadyMerged,
+    /// Not this pass: a rate limit, a busy queue, a failed read, or a head that moved.
+    Later,
+    /// GitHub refused it, saying this.
+    Refused(String),
+}
+
+/// Merges a pull request `shared`, a read that may be shared, shows ready by [`blockers`], once a
+/// fresh read by `fetch` agrees, with `merge` pinned to the fresh read's head. A shared read can
+/// predate a push, so only a read made for this merge decides it. A merge that ran out of time
+/// may have gone through, so another fresh read tells.
+async fn try_merge<Fetch, Merge>(
+    url: &str,
+    shared: &Detail,
+    fetch: impl Fn() -> Fetch,
+    merge: impl FnOnce(String) -> Merge,
+) -> Merging
+where
+    Fetch: Future<Output = Result<Detail, PrError>>,
+    Merge: Future<Output = Result<(), Refusal>>,
+{
+    let reasons = blockers(url, shared);
+    if !reasons.is_empty() {
+        return Merging::Waiting(reasons);
+    }
+    let Ok(fresh) = fetch().await else {
+        return Merging::Later;
+    };
+    if fresh.state == "MERGED" {
+        return Merging::AlreadyMerged;
+    }
+    let reasons = blockers(url, &fresh);
+    let Some(head) = fresh.head_sha.filter(|_| reasons.is_empty()) else {
+        return Merging::Waiting(reasons);
+    };
+    match merge(head.clone()).await {
+        Ok(()) if fresh.merge_queue => Merging::Queued(head),
+        Ok(()) => Merging::Merged(head),
+        Err(Refusal::Later(why)) => {
+            info!(%url, %why, "merging again next pass");
+            Merging::Later
+        }
+        Err(Refusal::Unsure(why)) => match fetch().await {
+            Ok(after) if after.state == "MERGED" => Merging::Merged(head),
+            _ => {
+                info!(%url, %why, "a merge ran out of time unmerged; merging again next pass");
+                Merging::Later
+            }
+        },
+        Err(Refusal::Final(why)) if why.contains("already merged") => Merging::AlreadyMerged,
+        Err(Refusal::Final(why)) => Merging::Refused(why),
+    }
 }
 
 /// `pr/status`: takes the shared read of `url` or reads it as a pass does, plus how far its head
@@ -684,13 +837,25 @@ async fn pass(daemon: &Daemon, url: &str, targets: &[Target]) {
         }
         _ => {
             for target in targets {
-                record(daemon, url, target, None, None, "merged").await;
+                let text = target.watch.merge.map(|_| {
+                    format!(
+                        "Pull request {url} was merged, so Parallax has no merge left to make \
+                         and stopped watching it."
+                    )
+                });
+                record(daemon, url, target, None, text, "merged").await;
             }
             return;
         }
     }
     for target in targets {
-        let report = evaluate(&target.watch, &detail);
+        let mut report = evaluate(&target.watch, &detail);
+        if let Some(method) = target.watch.merge
+            && let Some(text) = merge_step(daemon, url, &detail, method, &mut report).await
+        {
+            record(daemon, url, target, None, Some(text), "merged").await;
+            continue;
+        }
         if !report.changes.is_empty() {
             let text = message(url, &detail, &report);
             let next = (!report.exhausted).then_some(report.next);
@@ -700,6 +865,60 @@ async fn pass(daemon: &Daemon, url: &str, targets: &[Target]) {
             record(daemon, url, target, Some(report.next), None, "").await;
         }
     }
+}
+
+/// Acts on a watch's merge with `method` after a pass read `detail`: adds what became of it to
+/// `report`, or returns the wake that ends the watch once the pull request is merged.
+async fn merge_step(
+    daemon: &Daemon,
+    url: &str,
+    detail: &Detail,
+    method: PrMergeMethod,
+    report: &mut Report,
+) -> Option<String> {
+    let gh = daemon.agents.worktrees();
+    let merge = |head: String| async move { crate::pr_write::merge(gh, url, method, &head).await };
+    let how = format!("{method:?}").to_lowercase();
+    let short = |head: &str| head[..head.len().min(7)].to_owned();
+    match try_merge(url, detail, || fetch(daemon, url), merge).await {
+        Merging::Merged(head) => {
+            return Some(format!(
+                "Parallax merged pull request {url} ({how}) at {}, as merge_when_ready asked, \
+                 and stopped watching it.",
+                short(&head)
+            ));
+        }
+        Merging::AlreadyMerged => {
+            return Some(format!(
+                "Pull request {url} is already merged, so Parallax has no merge left to make and \
+                 stopped watching it."
+            ));
+        }
+        Merging::Queued(head) => {
+            report.next.merge = None;
+            report.changes.push(Change::Merge(format!(
+                "Parallax queued it for merge at {}: {} uses a merge queue, which merges it. \
+                 Parallax keeps watching it.",
+                short(&head),
+                detail.base_branch
+            )));
+        }
+        Merging::Refused(why) => {
+            report.next.merge = None;
+            report.changes.push(Change::Merge(format!(
+                "Parallax could not merge it: {why}. Call merge_when_ready again once that is \
+                 fixed."
+            )));
+        }
+        Merging::Waiting(reasons) if !report.changes.is_empty() => {
+            report.changes.push(Change::Merge(format!(
+                "Parallax merges it ({how}) once it is ready, which it isn't yet: {}.",
+                reasons.join("; ")
+            )));
+        }
+        Merging::Waiting(_) | Merging::Later => {}
+    }
+    None
 }
 
 /// Records `target`'s next watch, or ends it with `None`, and wakes its run with `text`, in its
@@ -713,13 +932,13 @@ async fn record(
     ended: &str,
 ) {
     let run = target.run;
-    let started_at = target.watch.started_at;
+    let (started_at, seen_merge) = (target.watch.started_at, target.watch.merge);
     let key = url.to_owned();
     let _lane = daemon.orchestrator.lane(run).await;
     let recorded = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
-            record_job(db, run, &key, started_at, next.as_ref(), text)
+            record_job(db, run, &key, (started_at, seen_merge), next, text)
         })
         .await;
     match recorded {
@@ -734,31 +953,37 @@ async fn record(
     }
 }
 
-/// [`record`]'s job. Says whether it changed anything.
+/// [`record`]'s job, for the watch the pass saw, by when it started and the merge it held. Says
+/// whether it changed anything.
 fn record_job(
     db: &mut Tx,
     run: Uuid,
     url: &str,
-    started_at: Timestamp,
-    next: Option<&Watch>,
+    (started_at, seen_merge): (Timestamp, Option<PrMergeMethod>),
+    next: Option<Watch>,
     text: Option<String>,
 ) -> Result<bool, ErrorObject> {
     let current = db.pr_watch(run, url).map_err(|e| store_error(&e))?;
-    let same = current
+    let Some(current) = current
         .and_then(|payload| serde_json::from_str::<Watch>(&payload).ok())
-        .is_some_and(|watch| watch.started_at == started_at);
-    if !same {
+        .filter(|watch| watch.started_at == started_at)
+    else {
         return Ok(false);
-    }
+    };
+    let ends = next.is_none();
     match next {
-        Some(next) => {
-            let payload = serde_json::to_string(next).map_err(ErrorObject::internal_error)?;
+        Some(mut next) => {
+            // A merge_when_ready since the pass read the watch wins over what the pass made of it.
+            if current.merge != seen_merge {
+                next.merge = current.merge;
+            }
+            let payload = serde_json::to_string(&next).map_err(ErrorObject::internal_error)?;
             db.put_pr_watch(run, url, &payload)
         }
         None => db.delete_pr_watch(run, url).map(drop),
     }
     .map_err(|e| store_error(&e))?;
-    if next.is_none() {
+    if ends {
         stage_watches(db, run)?;
     }
     if let Some(text) = text {
@@ -816,6 +1041,7 @@ fn evaluate(watch: &Watch, detail: &Detail) -> Report {
             remark_ids: remarks.remark_ids,
             conflicting,
             wakes,
+            merge: watch.merge,
         },
         exhausted: comments_only && wakes >= WAKE_LIMIT,
     }
@@ -1004,6 +1230,7 @@ fn message(url: &str, detail: &Detail, report: &Report) -> String {
                     detail.base_branch
                 ));
             }
+            Change::Merge(line) => lines.push(format!("- {line}")),
         }
     }
     lines.push(String::new());
@@ -1159,24 +1386,15 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
     if let Some(error) = error {
         warn!(%error, "GitHub left part of a pull request out");
     }
-    let checks = pr
+    let commits: Vec<Commit> = pr
         .commits
         .nodes
         .into_iter()
         .flatten()
-        .filter_map(|node| node.commit.status_check_rollup)
-        .flat_map(|rollup| rollup.contexts.nodes.into_iter().flatten())
-        .map(|context| Check {
-            state: check_state(&context),
-            name: context.name.or(context.context).unwrap_or_default(),
-            required: context.is_required,
-            url: context.details_url.or(context.target_url),
-            run_id: context
-                .check_suite
-                .and_then(|suite| suite.workflow_run)
-                .and_then(|run| run.database_id),
-        })
+        .map(|node| node.commit)
         .collect();
+    let actions_hold = commits.iter().find_map(Commit::actions_hold);
+    let checks = commits.into_iter().flat_map(Commit::checks).collect();
     let mut remarks: Vec<Remark> = pr
         .comments
         .nodes
@@ -1232,6 +1450,8 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
         checks,
         mergeable: pr.mergeable,
         merge_state: pr.merge_state_status,
+        merge_queue: pr.is_merge_queue_enabled,
+        actions_hold,
         review_decision: pr.review_decision,
         unresolved,
         viewer: viewer.map(|viewer| viewer.login),
@@ -1325,6 +1545,8 @@ struct PullRequest {
     head_ref_name: String,
     head_ref_oid: Option<String>,
     mergeable: String,
+    #[serde(default)]
+    is_merge_queue_enabled: bool,
     /// Null when GitHub can't list them, such as for a huge diff.
     #[serde(default)]
     files: Option<Nodes<PrStatusFile>>,
@@ -1354,6 +1576,79 @@ struct CommitNode {
 #[serde(rename_all = "camelCase")]
 struct Commit {
     status_check_rollup: Option<Rollup>,
+    #[serde(default)]
+    check_suites: Option<Suites>,
+}
+
+impl Commit {
+    /// Its checks, from its rollup.
+    fn checks(self) -> impl Iterator<Item = Check> {
+        self.status_check_rollup
+            .into_iter()
+            .flat_map(|rollup| rollup.contexts.nodes.into_iter().flatten())
+            .map(|context| Check {
+                state: check_state(&context),
+                name: context.name.or(context.context).unwrap_or_default(),
+                required: context.is_required,
+                url: context.details_url.or(context.target_url),
+                run_id: context
+                    .check_suite
+                    .and_then(|suite| suite.workflow_run)
+                    .and_then(|run| run.database_id),
+            })
+    }
+
+    /// Why its check suites hold a merge, failing closed: a GitHub Actions workflow run hasn't
+    /// finished, GitHub left the suites out, or there are more than one page of them. A suite
+    /// without a workflow run belongs to an app, which can leave it queued for good.
+    fn actions_hold(&self) -> Option<String> {
+        let Some(suites) = &self.check_suites else {
+            return Some("GitHub didn't list its head's check suites".to_owned());
+        };
+        if suites
+            .page_info
+            .as_ref()
+            .is_some_and(|page| page.has_next_page)
+            || suites.nodes.len() >= SUITES
+        {
+            return Some(format!(
+                "its head has more than {SUITES} check suites, more than Parallax reads"
+            ));
+        }
+        suites
+            .nodes
+            .iter()
+            .flatten()
+            .any(|suite| {
+                suite.workflow_run.is_some() && suite.status.as_deref() != Some("COMPLETED")
+            })
+            .then(|| "a GitHub Actions workflow on its head is still running".to_owned())
+    }
+}
+
+/// The check suites [`QUERY`] reads, `checkSuites(first: 50)`.
+const SUITES: usize = 50;
+
+/// A page of the head's check suites.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Suites {
+    page_info: Option<PageInfo>,
+    nodes: Vec<Option<Suite>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageInfo {
+    has_next_page: bool,
+}
+
+/// A check suite on the head: one per app, and one per GitHub Actions workflow run.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Suite {
+    status: Option<String>,
+    workflow_run: Option<WorkflowRun>,
 }
 
 #[derive(Deserialize)]
