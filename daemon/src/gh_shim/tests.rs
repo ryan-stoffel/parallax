@@ -17,6 +17,7 @@ fn tool(line: &str) -> Option<&'static str> {
         "watch_pull_request",
         "pull_request_status",
         "ci_failure_log",
+        "pull_request_diff",
     ]
     .into_iter()
     .find(|tool| refusal.contains(&format!("the {tool} tool")))
@@ -43,6 +44,13 @@ fn the_redirect_table_sends_replaced_commands_to_their_tools() {
             "pr view 12 --json=statusCheckRollup --jq .x",
             "pull_request_status",
         ),
+        ("pr diff 12", "pull_request_diff"),
+        ("pr diff 12 --name-only", "pull_request_diff"),
+        (
+            "pr diff https://github.com/o/r/pull/12 --patch",
+            "pull_request_diff",
+        ),
+        ("pr -R o/r diff 12", "pull_request_diff"),
         ("run watch 99", "watch_pull_request"),
         ("run view 99 --log-failed", "ci_failure_log"),
         // gh takes `-R` between a command and its subcommand.
@@ -79,6 +87,9 @@ fn commands_no_tool_replaces_run() {
         "pr view 12 -c",
         "pr view 12 --json=comments",
         "pr view 12 --web",
+        // pull_request_diff needs the pull request's number or URL too.
+        "pr diff",
+        "pr diff feature/x --name-only",
         // A run's log or list, which ci_failure_log (a pull request's failed checks) doesn't
         // replace.
         "run view 99",

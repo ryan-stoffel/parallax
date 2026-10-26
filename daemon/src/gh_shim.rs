@@ -118,6 +118,15 @@ const REDIRECTS: &[Redirect] = &[
         },
         tool: "pull_request_status",
     },
+    // Any form that names the pull request; with none, or a branch, the tool has no URL.
+    Redirect {
+        command: ["pr", "diff"],
+        when: When::Answers {
+            unless: &[],
+            fields: &[],
+        },
+        tool: "pull_request_diff",
+    },
     Redirect {
         command: ["run", "watch"],
         when: When::Always,
