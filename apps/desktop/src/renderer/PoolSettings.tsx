@@ -1,4 +1,4 @@
-import { Layers, Plus, X } from "lucide-react";
+import { Layers, Plus, Settings2, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
@@ -281,7 +281,7 @@ export function PoolPane({
   list: ProviderInfo[];
   /** The field that edits its display name, as every instance's pane has. */
   nameField: (save: (name: string) => void) => ReactNode;
-  onOpen: (id: string) => void;
+  onOpen: (id: string, signIn?: boolean) => void;
 }) {
   const { instance } = info;
   const members = instance.members ?? [];
@@ -374,11 +374,19 @@ export function PoolPane({
                 {inPool && member.installed && member.signedIn !== true && (
                   <button
                     type="button"
-                    onClick={() => onOpen(memberId)}
+                    onClick={() => onOpen(memberId, true)}
                     className={`${quietButton} border border-border`}
                   >
                     Sign in
                   </button>
+                )}
+                {inPool && (
+                  <IconButton
+                    label={`Settings for ${accountLabel(member)}`}
+                    onClick={() => onOpen(memberId, false)}
+                  >
+                    <Settings2 aria-hidden />
+                  </IconButton>
                 )}
                 <Switch
                   label={`Pool ${member.instance.name}`}

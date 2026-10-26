@@ -30,25 +30,49 @@ test.beforeAll(async () => {
 function fakeCodex(): string {
   const bin = mkdtempSync(path.join(tmpdir(), "parallax-e2e-bin-"));
   const marker = path.join(bin, "signed-in");
+  const cli = path.join(bin, "codex.cjs");
+  writeFileSync(
+    cli,
+    `const { existsSync, writeFileSync } = require("node:fs");
+const { createInterface } = require("node:readline");
+const marker = ${JSON.stringify(marker)};
+const [command, action] = process.argv.slice(2);
+if (command === "login" && action === "status") process.exit(existsSync(marker) ? 0 : 1);
+if (command === "login") {
+  console.log("Fake Codex sign-in. Press Enter.");
+  createInterface({ input: process.stdin }).once("line", () => {
+    writeFileSync(marker, "");
+    process.exit(0);
+  });
+} else if (command === "app-server") {
+  createInterface({ input: process.stdin }).on("line", line => {
+    const request = JSON.parse(line);
+    if (request.method === "initialize") console.log(JSON.stringify({ id: request.id, result: {} }));
+    if (request.method === "account/read") {
+      const account = existsSync(marker)
+        ? { type: "chatgpt", email: "e2e@example.test", planType: "plus" }
+        : null;
+      console.log(JSON.stringify({ id: request.id, result: { account } }));
+    }
+  });
+} else process.exit(2);
+`,
+  );
   if (process.platform === "win32") {
-    const script = [
-      "@echo off",
-      `if "%~1 %~2"=="login status" if exist "${marker}" (exit 0) else (exit 1)`,
-      `if "%~1"=="login" (echo Fake Codex sign-in. Press Enter.& set /p line=& type nul > "${marker}"& exit 0)`,
-      "exit 2",
-    ];
-    writeFileSync(path.join(bin, "codex.cmd"), script.join("\r\n"));
+    writeFileSync(
+      path.join(bin, "codex.cmd"),
+      `@echo off\r\n"${process.execPath}" "${cli}" %*\r\n`,
+    );
     writeFileSync(path.join(bin, "claude.cmd"), "@echo off\r\nexit 1\r\n");
   } else {
-    const script = [
-      "#!/bin/sh",
-      'case "$*" in',
-      `  "login status") test -f '${marker}' ;;`,
-      `  login) echo "Fake Codex sign-in. Press Enter."; read -r _; touch '${marker}' ;;`,
-      "  *) exit 2 ;;",
-      "esac",
-    ];
-    writeFileSync(path.join(bin, "codex"), script.join("\n"), { mode: 0o755 });
+    const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+    writeFileSync(
+      path.join(bin, "codex"),
+      `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(cli)} "$@"\n`,
+      {
+        mode: 0o755,
+      },
+    );
     writeFileSync(path.join(bin, "claude"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
   }
   return bin;
@@ -134,7 +158,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
 test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();
-  const codex = page.getByRole("tab", { name: /^Codex/ });
+  const codex = page.getByRole("tab", { name: /^(Codex|e2e@example\.test)/ });
   await codex.click();
   await expect(codex).toHaveText("CodexNot authenticated");
   await page.getByRole("button", { name: "Sign in to Codex" }).click();
@@ -145,7 +169,7 @@ test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", a
   await page.keyboard.press("Enter");
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
   // The sign-in's end ran accounts/refresh, which found the fake signed in.
-  await expect(codex).toHaveText("CodexAuthenticated");
+  await expect(codex).toHaveText("e2e@example.testAuthenticated");
 });
 
 test("creates a project on a repository it adds, and opens it (PLX-166)", async () => {

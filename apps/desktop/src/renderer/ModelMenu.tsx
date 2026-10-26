@@ -216,7 +216,7 @@ export function ModelMenu({
             />
           </label>
           {accounts.length > 1 && (
-            <div className="relative border-b border-border bg-surface px-2 py-2">
+            <div className="relative border-b border-border px-1.5 py-1.5">
               <button
                 type="button"
                 ref={accountChooser}
@@ -230,9 +230,9 @@ export function ModelMenu({
                   e.stopPropagation();
                   setChoosingAccount(true);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-lg border border-border px-2.5 py-2 text-left hover:bg-hover"
+                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left hover:bg-hover"
               >
-                <span className="grid size-7 shrink-0 place-items-center rounded-md bg-selected text-muted-foreground">
+                <span className="grid size-5 shrink-0 place-items-center text-muted-foreground">
                   {instance(account)?.members ? (
                     <Layers className="size-4" />
                   ) : (
@@ -243,9 +243,7 @@ export function ModelMenu({
                   <span className="flex items-center gap-2 text-body font-medium">
                     <span className="truncate">{nameOf(account)}</span>
                     {instance(account)?.members && (
-                      <span className="rounded bg-selected px-1.5 py-0.5 text-caption text-accent">
-                        Auto
-                      </span>
+                      <span className="text-meta text-faint-foreground">Auto</span>
                     )}
                   </span>
                   <span className="block truncate text-meta text-faint-foreground">
@@ -303,7 +301,7 @@ export function ModelMenu({
                         <span className="min-w-0 flex-1">
                           <span className="flex items-center gap-2 text-body font-medium">
                             <span className="truncate">{nameOf(p)}</span>
-                            {pool && <span className="text-caption text-accent">Auto</span>}
+                            {pool && <span className="text-meta text-faint-foreground">Auto</span>}
                           </span>
                           <span className="block text-meta text-faint-foreground">
                             {pool
@@ -323,7 +321,7 @@ export function ModelMenu({
                 </div>
               )}
               {instance(account)?.members && (
-                <p className="px-1 pt-2 text-meta text-faint-foreground">
+                <p className="px-2.5 pt-1 pb-0.5 text-meta text-faint-foreground">
                   New threads use the account with the most usage left, then stay on it.
                 </p>
               )}

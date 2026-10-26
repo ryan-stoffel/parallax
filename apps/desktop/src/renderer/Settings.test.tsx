@@ -322,6 +322,98 @@ describe("on a plxd with providers", () => {
     },
   );
 
+  const poolAccounts = () => {
+    states["local"] = {
+      ...states["local"]!,
+      capabilities: { providers: {}, accountPools: {} },
+    } as ConnectionState;
+    listed.push(
+      {
+        ...listed[1]!,
+        instance: { ...instance("work", "codex", "Work"), home: "~/.codex-work" },
+        signedIn: true,
+        account: "work@example.test",
+      },
+      {
+        ...listed[1]!,
+        instance: { ...instance("backup", "codex", "Backup"), home: "~/.codex-backup" },
+        signedIn: true,
+      },
+      {
+        ...listed[1]!,
+        instance: { ...instance("pool", "codex", "Codex pool"), members: ["codex", "work"] },
+      },
+    );
+  };
+  const providerNames = () =>
+    [...document.querySelectorAll('[role="tablist"][aria-label="Providers"] [role="tab"]')].map(
+      (t) => t.textContent,
+    );
+
+  test("pool members are managed inside their pool without standalone provider rows", async () => {
+    poolAccounts();
+    await renderSettings();
+    expect(providerNames()).toHaveLength(3);
+    expect(tab("Codex")).toBe(tab("Codex pool"));
+    expect(tab("Work")).toBeUndefined();
+    await click(tab("Codex pool"));
+    await click(button(section("Accounts"), "Sign in"));
+    expect(visible('[role="tabpanel"] h2').textContent).toBe("Codex");
+    expect(tab("Codex pool").getAttribute("aria-selected")).toBe("true");
+    expect(visible('[aria-label="Codex sign-in terminal"]')).toBeDefined();
+    expect(providerNames()).toHaveLength(3);
+    await click(button(document.body, "Back to Codex pool"));
+    const workSettings = document.querySelector<HTMLElement>('[aria-label="Settings for Work"]')!;
+    workSettings.focus();
+    await click(workSettings);
+    expect(document.activeElement).toBe(button(document.body, "Back to Codex pool"));
+    expect(visible('[role="tabpanel"] h2').textContent).toBe("Work");
+    expect(providerNames()).toHaveLength(3);
+    expect(document.querySelector('[aria-label="Work sign-in terminal"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Codex sign-in terminal"]')).not.toBeNull();
+    await click(button(document.body, "Back to Codex pool"));
+    expect(document.activeElement).toBe(workSettings);
+  });
+
+  test("a disabled pool member can be enabled inside its settings without a standalone row", async () => {
+    poolAccounts();
+    listed[1] = { ...listed[1]!, instance: { ...listed[1]!.instance, enabled: false } };
+    await renderSettings();
+    await click(tab("Codex pool"));
+    await click(visible('[aria-label="Settings for Codex"]'));
+    const toggle = visible('[role="switch"][aria-label="Use Codex"]');
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(toggle.hasAttribute("disabled")).toBe(false);
+    await click(toggle);
+    expect(saved()).toMatchObject({ id: "codex", enabled: true });
+    expect(visible('[role="switch"][aria-label="Use Codex"]').getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(providerNames()).toHaveLength(3);
+    expect(tab("Codex")).toBe(tab("Codex pool"));
+    expect(tab("Codex pool").getAttribute("aria-selected")).toBe("true");
+  });
+
+  test("joining a pool hides a standalone account and leaving restores it", async () => {
+    poolAccounts();
+    await renderSettings();
+    expect(tab("Backup")).toBeDefined();
+    await click(tab("Codex pool"));
+    await click(visible('[aria-label="Pool Backup"]'));
+    expect(tab("Backup")).toBeUndefined();
+    expect(listed.find((p) => p.instance.id === "pool")?.instance.members).toEqual([
+      "codex",
+      "work",
+      "backup",
+    ]);
+    await click(visible('[aria-label="Pool Codex"]'));
+    expect(tab("Codex").textContent).toMatch(/^Codex(?! pool)/);
+    expect(listed.find((p) => p.instance.id === "pool")?.instance.members).toEqual([
+      "work",
+      "backup",
+    ]);
+  });
+
   test("adds a model service with its key as a secret", async () => {
     await renderSettings();
     await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
