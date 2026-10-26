@@ -35,8 +35,8 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 use crate::backend::acp::{self, AcpAgent, AcpBackend};
-use crate::backend::claude::ClaudeBackend;
-use crate::backend::codex::CodexBackend;
+use crate::backend::claude::{self, ClaudeBackend};
+use crate::backend::codex::{self, CodexBackend};
 use crate::backend::opencode::{self, Opencode, OpencodeBackend};
 use crate::backend::process::{Launcher, Output, ProcessSpec, StdinMode};
 use crate::backend::{Backend, Overrides, check_argument};
@@ -76,7 +76,7 @@ struct Preset {
     driver: Driver,
     /// The command that signs it in, in a terminal on the host. Empty: none.
     login: &'static [&'static str],
-    /// The variable the instance's home folder sets, for an ACP agent.
+    /// The variable the instance's home folder sets, for an ACP agent or an account probe.
     home_env: Option<&'static str>,
     /// Where a model service lists its models, `OpenAI` style, and the variable that holds its key.
     models_url: Option<(&'static str, &'static str)>,
@@ -134,10 +134,12 @@ fn preset(kind: ProviderKind) -> Option<Preset> {
     Some(match kind {
         ProviderKind::Claude => Preset {
             login: &["claude", "auth", "login"],
+            home_env: Some(claude::CONFIG_DIR_ENV),
             ..base("claude", Driver::Claude)
         },
         ProviderKind::Codex => Preset {
             login: &["codex", "login"],
+            home_env: Some(codex::CONFIG_DIR_ENV),
             ..base("codex", Driver::Codex)
         },
         ProviderKind::Cursor => Preset {
@@ -1853,7 +1855,7 @@ mod tests {
 
     use parallax_protocol::{ProviderEnvVar, ProviderInstance, ProviderKind};
 
-    use super::{Found, Providers, Stored, with_pools};
+    use super::{Found, Providers, Stored, home_var, preset, with_pools};
     use crate::backend::process::{Environment, Launcher};
     use crate::keystore::{KeyStore, MemoryKeyStore};
     use crate::paths::DataDir;
@@ -1977,6 +1979,23 @@ mod tests {
 
         account.home = Some("relative-account-home".into());
         assert!(providers.save(account).await.is_err());
+    }
+
+    #[test]
+    fn an_account_probe_reads_its_own_home() {
+        for (kind, var) in [
+            (ProviderKind::Claude, "CLAUDE_CONFIG_DIR"),
+            (ProviderKind::Codex, "CODEX_HOME"),
+        ] {
+            let account = ProviderInstance {
+                home: Some("/accounts/work".into()),
+                ..instance("work", kind, "Work")
+            };
+            assert_eq!(
+                home_var(&account, &preset(kind).unwrap()),
+                Some((var.into(), "/accounts/work".into()))
+            );
+        }
     }
 
     #[tokio::test]
