@@ -826,6 +826,15 @@ body {
 .enriched > * + * {
   margin-top: 10px;
 }
+/* A table's cells wrap only between words, so a column is never narrower than its longest word
+   and a table too wide for its container scrolls in the renderer's wrapper instead. Each cell
+   starts at its row's top. */
+.enriched table {
+  overflow-wrap: normal;
+}
+.enriched :is(th, td) {
+  vertical-align: top;
+}
 .enriched .katex {
   font-size: 1.1em;
 }
