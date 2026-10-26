@@ -57,6 +57,7 @@ mod land;
 mod memory;
 pub mod methods;
 mod orchestration;
+mod pr_media;
 mod preview;
 mod project;
 mod provider;
@@ -190,6 +191,7 @@ pub use orchestration::{
     ThreadHistoryParams, ThreadHistoryResult, ThreadRun, ThreadRunStatus, ThreadRunsParams,
     ThreadRunsResult, ThreadSnapshot, TurnCheckpoint, TurnDiffParams, TurnDiffResult,
 };
+pub use pr_media::{PrMediaFile, PrMediaUploaded, PrUploadMediaParams, PrUploadMediaResult};
 pub use preview::{
     PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult, PreviewInput,
     PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult, PreviewMouse,

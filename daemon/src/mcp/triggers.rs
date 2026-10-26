@@ -3,8 +3,8 @@
 //! `run_scheduled_task_now` through `schedule/*`, and `link_pull_request`,
 //! `unlink_pull_request`, `watch_pull_request`, `unwatch_pull_request`, and
 //! `list_thread_pull_requests` through `pr/*`, and Parallax's own `pull_request_status`
-//! (PLX-837) and `ci_failure_log` (PLX-1019). Every caller gets them, and [`INSTRUCTIONS`], which
-//! tell the agent to use them instead of `gh`.
+//! (PLX-837), `ci_failure_log` (PLX-1019), and `upload_pr_media` (PLX-1020). Every caller gets
+//! them, and [`INSTRUCTIONS`], which tell the agent to use them instead of `gh`.
 
 use parallax_protocol::methods::{
     PrFailureLog, PrLink, PrStatus, PrUnlink, PrUnwatch, PrWatch, PrWatches, ScheduleDelete,
@@ -35,6 +35,7 @@ pub const TOOLS: &[&str] = &[
     "list_thread_pull_requests",
     "pull_request_status",
     "ci_failure_log",
+    "upload_pr_media",
 ];
 
 /// What every thread's agent is told at startup, through MCP's `instructions`, as T3 Code's
@@ -198,6 +199,30 @@ pub fn definitions() -> Vec<Value> {
             ),
             true,
         ),
+        tool(
+            "upload_pr_media",
+            "Upload screenshots, GIFs, or videos for a pull request's body and get links that render on GitHub. Use this instead of the upload-media-pr skill's upload.sh, gh api, or committing media yourself: Parallax uploads one file at a time per host, waits out GitHub rate limits, and reuses the link without uploading for bytes already uploaded to the repository. Pass the pull request's URL and absolute paths to png, jpg, jpeg, gif, webp, mp4, mov, or webm files of at most 25 MB each, with an optional caption each (the file name by default). Each file comes back with a raw.githubusercontent.com URL pinned to a commit and a markdown line to paste into the body as is: an image embed, or a link for a video, since GitHub only plays videos it hosts. Upload all of a pull request's files in one call.",
+            object(
+                json!({
+                    "url": {"type": "string", "description": "The pull request's URL, such as https://github.com/owner/repo/pull/123. The files go to its repository."},
+                    "files": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "The file's absolute path."},
+                                "caption": {"type": "string", "description": "The embed's text. The file name when omitted."},
+                            },
+                            "required": ["path"],
+                            "additionalProperties": false,
+                        },
+                    },
+                }),
+                &["url", "files"],
+            ),
+            false,
+        ),
     ]
 }
 
@@ -313,6 +338,11 @@ pub(super) async fn call(
             let params = PrFailureLogParams { url, check };
             Ok(pretty(&plxd.call::<PrFailureLog>(params).await?))
         }
+        "upload_pr_media" => Ok(pretty(
+            &plxd
+                .call::<parallax_protocol::methods::PrUploadMedia>(parse(arguments)?)
+                .await?,
+        )),
         _ => pull_request(binding, name, parse(arguments)?).await,
     }
 }

@@ -829,6 +829,12 @@ export type ParallaxRequests = {
 	 */
 	"pr/failureLog": { params: PrFailureLogParams, result: PrFailureLogResult },
 	/**
+	 * `pr/uploadMedia` (PLX-1020): commits images and videos to the pull request's
+	 * repository's `pr-media` branch, one upload at a time per host, and returns links pinned
+	 * to the commit. Bytes uploaded to the repository before reuse their link.
+	 */
+	"pr/uploadMedia": { params: PrUploadMediaParams, result: PrUploadMediaResult },
+	/**
 	 * `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
 	 * declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
 	 * `setupScripts` capability, like `repo/saveScripts`.
@@ -1101,6 +1107,7 @@ export const REQUEST_METHODS = [
 	"pr/watches",
 	"pr/status",
 	"pr/failureLog",
+	"pr/uploadMedia",
 	"repo/scripts",
 	"repo/saveScripts",
 	"task/delegate",
@@ -9361,6 +9368,66 @@ export type PrFailureLog = {
 	 * there is no log, such as for a check that isn't an Actions job.
 	 */
 	log: string,
+};
+
+/**
+ * Params of `pr/uploadMedia`.
+ */
+export type PrUploadMediaParams = {
+	/**
+	 * A GitHub pull request URL. The files go to its repository.
+	 */
+	url: string,
+	/**
+	 * The files, in order.
+	 */
+	files: Array<PrMediaFile>,
+};
+
+/**
+ * A file to upload in [`PrUploadMediaParams`].
+ */
+export type PrMediaFile = {
+	/**
+	 * Its absolute path on the host: an image or a video, at most 25 MB.
+	 */
+	path: string,
+	/**
+	 * The embed's text. The file's name when absent.
+	 */
+	caption?: string,
+};
+
+/**
+ * Result of `pr/uploadMedia`: each file, in the order asked.
+ */
+export type PrUploadMediaResult = {
+	/**
+	 * The files.
+	 */
+	files: Array<PrMediaUploaded>,
+};
+
+/**
+ * An uploaded file in [`PrUploadMediaResult`].
+ */
+export type PrMediaUploaded = {
+	/**
+	 * The path asked for.
+	 */
+	path: string,
+	/**
+	 * `https://raw.githubusercontent.com/<owner>/<repo>/<commit>/<path>`.
+	 */
+	url: string,
+	/**
+	 * `![caption](url)` for an image, `[caption](url)` for a video.
+	 */
+	markdown: string,
+	/**
+	 * Whether the same bytes were uploaded to the repository before, so no upload was made.
+	 */
+	reused: boolean,
 };
 
 /**
