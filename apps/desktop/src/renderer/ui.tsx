@@ -699,7 +699,7 @@ type Tip = { text: string; keys?: string; top: number; left: number; above: bool
  * The app's one tooltip, mounted once. Hovering or keyboard-focusing an element with a `title`,
  * or an icon-only button or link with an `aria-label`, shows that text in a small panel under it
  * (above it when there's no room). The `title` is held aside while it shows, so the OS tooltip
- * doesn't show too.
+ * doesn't show too. An element with `data-tooltip="off"` shows its own and gets none.
  */
 export function Tooltips() {
   const [tip, setTip] = useState<Tip>();
@@ -718,7 +718,7 @@ export function Tooltips() {
     };
     const show = (e: Event) => {
       const el = (e.target as Element | null)?.closest?.<HTMLElement>(
-        '[title], :is(button, a, [role="button"])[aria-label]',
+        ':is([title], :is(button, a, [role="button"])[aria-label]):not([data-tooltip="off"])',
       );
       if (el === target) return;
       hide();
