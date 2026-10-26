@@ -2550,17 +2550,19 @@ function linkContent({ url, children }: { url: string; children: ReactNode }) {
 /**
  * A site's icon, before a link's text: GitHub's mark in the text's color, which GitHub's own dark
  * favicon isn't on a dark theme, or the site's favicon once main has fetched it, a globe until
- * then or when it has none.
+ * then or when it has none or it doesn't load.
  */
 function SiteIcon({ site }: { site: string }) {
   const github = site === "https://github.com";
   const icon = siteIcons.use()[site];
+  // An icon sent as an image that doesn't decode.
+  const [broken, setBroken] = useState(false);
   useEffect(() => {
     if (!github) askSiteIcon(site);
   }, [site, github]);
   if (github) return <GitHubLogo className={`${linkIcon} text-foreground`} />;
-  return icon ? (
-    <img src={icon} alt="" className={linkIcon} />
+  return icon && !broken ? (
+    <img src={icon} alt="" onError={() => setBroken(true)} className={linkIcon} />
   ) : (
     <Globe aria-hidden className={`${linkIcon} text-foreground`} />
   );

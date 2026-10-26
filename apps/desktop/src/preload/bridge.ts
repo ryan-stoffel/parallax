@@ -206,7 +206,7 @@ export interface ParallaxBridge {
   onDownloads(listener: (downloads: DownloadInfo[]) => void): () => void;
   /**
    * The favicon of `page`'s site, its /favicon.ico, as a data url, or undefined for none. An
-   * agent's tab, whose page is in plxd's browser, shows it.
+   * agent's tab, whose page is in plxd's browser, and a transcript's link show it (siteIcons.ts).
    */
   siteIcon(page: string): Promise<string | undefined>;
   /** The Google account signed in to the browser, for its profile button (PLX-981). */
