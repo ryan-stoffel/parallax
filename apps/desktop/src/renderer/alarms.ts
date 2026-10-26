@@ -7,7 +7,7 @@ import type { Host } from "./hosts";
 import { locale } from "./locale";
 import { notify, type Notice } from "./notifications";
 import type { HostThreads } from "./Sidebar";
-import { asksOf } from "./threads";
+import { asksOf, waitingOf } from "./threads";
 import { clockOptions } from "./prefs";
 
 // The app's notifications about things that happen away from the screen the user is on (PLX-507).
@@ -89,23 +89,33 @@ export function useNeedsYouAlarm(
   }, []);
 }
 
-/** What a thread's notifications follow: its attention, or that its run waits on a usage limit. */
-export type ThreadMark = Attention | "waiting";
+/**
+ * What a thread's notifications follow: its attention, Waiting and Monitoring included, or that
+ * its run waits on a usage limit (`limited`).
+ */
+export type ThreadMark = Attention | "limited";
 
-function markOf(thread: Thread, run: AgentRun | undefined, asks: number): ThreadMark {
-  if (asks === 0 && run?.status === "waiting") return "waiting";
-  return attentionOf(thread, run, asks);
+export function markOf(
+  thread: Thread,
+  run: AgentRun | undefined,
+  asks: number,
+  waiting: "monitoring" | "waiting" | undefined,
+): ThreadMark {
+  if (asks === 0 && run?.status === "waiting") return "limited";
+  return attentionOf(thread, run, asks, waiting);
 }
 
-// The marks a turn is under way in: only a change from one of them finished or failed a turn,
-// rather than, say, a pull request linked to a run that finished long ago.
-const active: ThreadMark[] = ["working", "needsYou", "waiting"];
+// The marks a thread is busy in: only a change from one of them finished or failed it, rather
+// than, say, a pull request linked to a run that finished long ago. A turn that ends while the
+// agent waits on background work or a watched pull request is still busy (PLX-1015).
+const active: ThreadMark[] = ["working", "monitoring", "waiting", "needsYou", "limited"];
 
 const clock = (at: string) => new Date(at).toLocaleTimeString(locale(), clockOptions());
 
 /**
  * The notice for a thread whose mark changed from `before` to `now`, named `name`, if the change
- * is news: it finished or failed a turn, started needing the user, or hit a usage limit.
+ * is news: it finished or failed, started needing the user, or hit a usage limit. A thread
+ * finishes once its agent waits on nothing, not when a turn ends.
  */
 export function threadNotice(
   before: ThreadMark,
@@ -116,7 +126,7 @@ export function threadNotice(
   if (before === now) return undefined;
   if (now === "needsYou")
     return { tone: "attention", title: "Thread needs your input", body: name };
-  if (now === "waiting")
+  if (now === "limited")
     return {
       tone: "info",
       title: "Thread hit a usage limit",
@@ -159,7 +169,7 @@ export function useThreadAlarms(
       for (const t of view.state.threads) {
         const key = `${host.id}/${t.id}`;
         const run = view.state.runs[t.id];
-        const mark = markOf(t, run, asksOf(view.state, t.id));
+        const mark = markOf(t, run, asksOf(view.state, t.id), waitingOf(view.state, t.id));
         const before = marks.current.get(key);
         marks.current.set(key, mark);
         if (before === undefined || t.archived) continue;

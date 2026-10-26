@@ -13,10 +13,11 @@ import { behaviorPrefs } from "./prefs";
 
 // Every notification the app shows (PLX-507): one stack of toasts in the window's top right, in
 // the update toast's look. Anything can call `notify`; App draws the stack once. A message about
-// what an action did goes here, not in a line under the control that ran it (PLX-930).
+// what an action did goes here, not in a line under the control that ran it (PLX-930). Each one
+// also goes in this session's history, which the Notifications page lists (PLX-1015).
 
 /** A notice's color and icon: done, waiting on the user, gone wrong, or just news. */
-type Tone = "success" | "attention" | "error" | "info";
+export type Tone = "success" | "attention" | "error" | "info";
 
 export type Notice = {
   /**
@@ -63,8 +64,47 @@ function set(next: readonly Shown[]) {
   for (const listener of listeners) listener();
 }
 
-/** Shows `notice` on top of the stack, in place of any with its key. */
+/** A notice in the history, with when it showed. */
+export type Logged = Notice & { id: number; at: string };
+
+/** The most notices the history keeps; a newer one drops the oldest. */
+const MAX_LOGGED = 200;
+
+/** The history, newest first, and how many came since the Notifications page last showed it. */
+let log: { list: readonly Logged[]; unseen: number } = { list: [], unseen: 0 };
+const logListeners = new Set<() => void>();
+const subscribeLog = (listener: () => void) => {
+  logListeners.add(listener);
+  return () => logListeners.delete(listener);
+};
+
+function setLog(next: typeof log) {
+  log = next;
+  for (const listener of logListeners) listener();
+}
+
+/** This session's notices, newest first, and how many are unseen. */
+export const useNotificationLog = () => useSyncExternalStore(subscribeLog, () => log);
+
+/** Marks every notice in the history seen, as the Notifications page does while it's open. */
+export function markLogSeen() {
+  if (log.unseen) setLog({ ...log, unseen: 0 });
+}
+
+/** Empties the history. */
+export const clearLog = () => setLog({ list: [], unseen: 0 });
+
+/** Shows `notice` on top of the stack, in place of any with its key, and adds it to the history. */
 export function notify(notice: Notice) {
+  // Work under way isn't news yet; what it ends with is.
+  if (!notice.progress)
+    setLog({
+      list: [{ ...notice, id: nextId++, at: new Date().toISOString() }, ...log.list].slice(
+        0,
+        MAX_LOGGED,
+      ),
+      unseen: log.unseen + 1,
+    });
   // Settings > General turns off the OS alerts and the toasts of notices that have an OS alert.
   const { systemNotifications, inAppNotifications } = behaviorPrefs.get();
   if (notice.system && !document.hasFocus() && systemNotifications) {
@@ -97,7 +137,8 @@ export function dismiss(key: string) {
 
 const close = (id: number) => set(shown.filter((n) => n.id !== id));
 
-const icons: Record<Tone, ReactNode> = {
+/** Each tone's icon, as a toast and the Notifications page show it. */
+export const icons: Record<Tone, ReactNode> = {
   success: <CircleCheck className="size-4 shrink-0 text-added" />,
   attention: <MessageCircleQuestion className="size-4 shrink-0 text-warning" />,
   error: <CircleAlert className="size-4 shrink-0 text-danger" />,

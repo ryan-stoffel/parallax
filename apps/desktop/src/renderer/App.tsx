@@ -63,6 +63,7 @@ import {
   PullRequestView,
   usePullRequests,
 } from "./PullRequests";
+import { NotificationsPage } from "./NotificationsPage";
 import { PullRequestsPage } from "./PullRequestsPage";
 import type { PrEntry } from "./pullRequestSearch";
 import { Settings } from "./Settings";
@@ -185,9 +186,9 @@ export function App() {
   const [settingsHost, setSettingsHost] = useState<string>();
   // The setting Settings' search picked last, to scroll to; a new object each pick.
   const [settingsFocus, setSettingsFocus] = useState<{ anchor: string }>();
-  // The page shown in place of the chat, if any: Pull requests, or the sidebar's permanent browser
-  // (PLX-964). Opening a thread or Settings closes it.
-  const [mainPage, setMainPage] = useState<"pullRequests" | "browser">();
+  // The page shown in place of the chat, if any: Pull requests, Notifications (PLX-1015), or the
+  // sidebar's permanent browser (PLX-964). Opening a thread or Settings closes it.
+  const [mainPage, setMainPage] = useState<"pullRequests" | "notifications" | "browser">();
   const browserStyle = useBrowserTheme();
   // The permanent browser mounts the first time it opens and stays, so its pages keep running.
   const [browserPage, setBrowserPage] = useState(false);
@@ -803,7 +804,7 @@ export function App() {
     });
     addDialog.current?.open(start);
   };
-  const openMainPage = (next: "pullRequests" | "browser") => {
+  const openMainPage = (next: "pullRequests" | "notifications" | "browser") => {
     setSettings(null);
     setMainPage(next);
   };
@@ -1231,6 +1232,7 @@ export function App() {
             onOpenProject={openProject}
             onOpenSettings={openSettings}
             onOpenPullRequests={() => openMainPage("pullRequests")}
+            onOpenNotifications={() => openMainPage("notifications")}
             browserOpen={!settings && mainPage === "browser"}
             onOpenBrowser={() => openMainPage("browser")}
             onDelete={deleteThread}
@@ -1272,6 +1274,14 @@ export function App() {
               {showSidebar}
               <BrowserTabBar scope="permanent" />
             </TopBar>
+          ) : mainPage === "notifications" ? (
+            <>
+              <TopBar className={topBarInset}>
+                {showSidebar}
+                <Breadcrumb items={[{ label: "Notifications" }]} />
+              </TopBar>
+              <NotificationsPage />
+            </>
           ) : mainPage === "pullRequests" ? (
             <>
               <TopBar className={topBarInset}>

@@ -4,6 +4,7 @@ import {
   ArchiveRestore,
   ArrowLeft,
   ArrowUp,
+  Bell,
   Bot,
   CalendarClock,
   ChartNoAxesColumn,
@@ -121,7 +122,7 @@ import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NightSky } from "./NightSky";
-import { dismiss, notify } from "./notifications";
+import { dismiss, notify, useNotificationLog } from "./notifications";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
@@ -275,6 +276,8 @@ interface ThreadListProps {
   onOpenSettings: (section: SettingsSection) => void;
   /** Opens the Pull requests page, in place of the main pane. */
   onOpenPullRequests: () => void;
+  /** Opens the Notifications page, in place of the main pane (PLX-1015). */
+  onOpenNotifications: () => void;
   /** Opens the permanent browser, in place of the main pane (PLX-964), and whether it's open. */
   onOpenBrowser?: () => void;
   browserOpen?: boolean;
@@ -511,6 +514,7 @@ export function ThreadList({
   onOpenProject,
   onOpenSettings,
   onOpenPullRequests,
+  onOpenNotifications,
   onOpenBrowser,
   browserOpen,
   onDelete,
@@ -1925,6 +1929,7 @@ export function ThreadList({
           listed={hosts}
           onOpenSettings={onOpenSettings}
           onOpenPullRequests={onOpenPullRequests}
+          onOpenNotifications={onOpenNotifications}
           {...(onOpenBrowser && { onOpenBrowser })}
           {...(browserOpen !== undefined && { browserOpen })}
         />
@@ -2412,21 +2417,23 @@ function ScopeMenu({
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
  * (ProfileMenu.tsx), then the places that open in the main pane, Browser, the permanent one
- * (PLX-964), Pull requests, and Usage, and at the far end Settings, then Update when `updatable`
- * (Update.tsx), where it has always been.
+ * (PLX-964), Pull requests, Notifications, with a dot for unseen ones (PLX-1015), and Usage, and
+ * at the far end Settings, then Update when `updatable` (Update.tsx), where it has always been.
  */
 function Footer({
   listed,
   onOpenSettings,
   onOpenPullRequests,
+  onOpenNotifications,
   onOpenBrowser,
   browserOpen,
 }: Pick<
   ThreadListProps,
-  "onOpenSettings" | "onOpenPullRequests" | "onOpenBrowser" | "browserOpen"
+  "onOpenSettings" | "onOpenPullRequests" | "onOpenNotifications" | "onOpenBrowser" | "browserOpen"
 > & {
   listed: HostThreads[];
 }) {
+  const { unseen } = useNotificationLog();
   return (
     <div className="flex items-center gap-1">
       <ProfileButton listed={listed} />
@@ -2437,6 +2444,16 @@ function Footer({
       )}
       <IconButton label="Pull requests" onClick={onOpenPullRequests}>
         <GitPullRequest />
+      </IconButton>
+      <IconButton
+        label={unseen ? `Notifications (${unseen} new)` : "Notifications"}
+        onClick={onOpenNotifications}
+        className="relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
+      >
+        <Bell />
+        {unseen > 0 && (
+          <span aria-hidden className="absolute top-1 right-1 size-1.5 rounded-full bg-accent" />
+        )}
       </IconButton>
       <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
         <ChartNoAxesColumn />
