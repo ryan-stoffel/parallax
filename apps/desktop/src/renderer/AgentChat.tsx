@@ -1772,7 +1772,11 @@ export const RowView = memo(function RowView({
         <div className="group/prompt flex flex-col gap-1.5">
           {body}
           <TurnChanges turnId={replyTurn} />
-          <PromptMeta text={row.text} fork={forkable && <ForkButton turnId={replyTurn} />} />
+          <PromptMeta
+            at={copied ? undefined : row.at}
+            text={row.text}
+            fork={forkable && <ForkButton turnId={replyTurn} />}
+          />
         </div>
       );
     }
@@ -2658,7 +2662,10 @@ export function useCopy() {
   return [copied, copy] as const;
 }
 
-/** Under a prompt, on hover or focus: when it was sent, Copy for its text, Edit, and `fork`. */
+/**
+ * Under a prompt or a turn's reply, on hover or focus: when it was sent, Copy for its text, Edit,
+ * and `fork`.
+ */
 function PromptMeta({
   at,
   text,
