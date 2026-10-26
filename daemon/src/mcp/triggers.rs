@@ -3,9 +3,9 @@
 //! `run_scheduled_task_now` through `schedule/*`, and `link_pull_request`,
 //! `unlink_pull_request`, `watch_pull_request`, `unwatch_pull_request`, and
 //! `list_thread_pull_requests` through `pr/*`, and Parallax's own `pull_request_status`
-//! (PLX-837), `ci_failure_log` (PLX-1019), `upload_pr_media` (PLX-1020), and `pull_request_diff`
-//! (PLX-1021). Every caller gets them, and [`INSTRUCTIONS`], which tell the agent to use them
-//! instead of `gh`.
+//! (PLX-837), `ci_failure_log` (PLX-1019), `upload_pr_media` (PLX-1020), `pull_request_diff`
+//! (PLX-1021), and `github_budget` (PLX-1023). Every caller gets them, and [`INSTRUCTIONS`], which
+//! tell the agent to use them instead of `gh`.
 
 use parallax_protocol::methods::{
     PrFailureLog, PrLink, PrSharedDiff, PrStatus, PrUnlink, PrUnwatch, PrWatch, PrWatches,
@@ -38,12 +38,13 @@ pub const TOOLS: &[&str] = &[
     "ci_failure_log",
     "upload_pr_media",
     "pull_request_diff",
+    "github_budget",
 ];
 
 /// What every thread's agent is told at startup, through MCP's `instructions`, as T3 Code's
 /// runtime instructions tell it (PLX-837): without it, each agent reads and waits on its pull
 /// requests its own way, with `gh` loops, sleeps, and watchers that spend the shared GitHub quota.
-pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's title, body, branches, head commit, changed files, checks with their links and Actions run ids, reviews, unresolved review threads with their ids, conflicts, and whether it is ready to merge with pull_request_status, never gh pr view or gh pr checks. Read its diff, or only some files' diff, with pull_request_diff, never gh pr diff: one read per head serves every thread. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Read why a check failed with ci_failure_log, not gh run list, gh run view --log-failed, or gh api: it returns each failed job's error lines and reads each log from GitHub once. Use gh only for what these tools don't do, such as replying to or resolving a review thread, and merging.";
+pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's title, body, branches, head commit, changed files, checks with their links and Actions run ids, reviews, unresolved review threads with their ids, conflicts, and whether it is ready to merge with pull_request_status, never gh pr view or gh pr checks. Read its diff, or only some files' diff, with pull_request_diff, never gh pr diff: one read per head serves every thread. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Read why a check failed with ci_failure_log, not gh run list, gh run view --log-failed, or gh api: it returns each failed job's error lines and reads each log from GitHub once. Check how much of the shared GitHub quota is left with github_budget. Use gh only for what these tools don't do, such as replying to or resolving a review thread, and merging.";
 
 /// What `link_pull_request` and `list_thread_pull_requests` remind the agent of, as T3's do.
 const REGISTER: &str = "Register every pull request you open for this thread, including each layer of a stack, right after creating it.";
@@ -238,6 +239,12 @@ pub fn definitions() -> Vec<Value> {
             },
             true,
         ),
+        tool(
+            "github_budget",
+            "How much of the GitHub quota every agent on this computer shares is left: the REST and GraphQL requests remaining, when each resets, and when Parallax saw each (seenAt), which shows its age: Parallax reads it again when it is over 60 seconds old, unless that read fails or gh isn't installed, when the answer can be older or empty. Use this instead of gh api rate_limit. When one is low, wait for its reset instead of retrying: under 200, gh refuses reads that spend it.",
+            object(json!({}), &[]),
+            true,
+        ),
     ]
 }
 
@@ -357,6 +364,13 @@ pub(super) async fn call(
         "list_thread_pull_requests" => {
             let ThreadArgs { thread_id } = parse(arguments)?;
             pull_requests(binding, thread_id.unwrap_or(binding.run)).await
+        }
+        "github_budget" => {
+            let data_dir = binding.data_dir.clone();
+            let budget = tokio::task::spawn_blocking(move || crate::gh_shim::budget(&data_dir))
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(pretty(&budget))
         }
         "ci_failure_log" => {
             // `check`, then the rest as any pull request tool's target.

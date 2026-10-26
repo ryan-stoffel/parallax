@@ -64,6 +64,7 @@ mod delegation;
 mod detect;
 mod devices;
 mod event_log;
+pub mod gh_shim;
 mod github;
 mod graph;
 mod images;

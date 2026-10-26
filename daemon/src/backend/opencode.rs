@@ -219,6 +219,7 @@ impl Opencode {
             .collect();
         spec.inject = self.env.iter().cloned().collect();
         spec.inject.set(PASSWORD_VAR, password);
+        spec.agent = true;
         if let Some(user) = &self.username {
             spec.inject.set(USERNAME_VAR, user);
         }

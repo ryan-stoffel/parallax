@@ -358,6 +358,10 @@ pub struct ProcessSpec {
     /// The name a recording of this process's session goes under when plxd records CLI
     /// sessions (see [`record`](super::record)). `None` for anything that isn't an agent's CLI.
     pub record: Option<&'static str>,
+    /// Whether this is an agent's process, whose `PATH` starts with the `gh` shim's folder
+    /// ([`gh_shim`](crate::gh_shim), PLX-1023). Never for the user's terminals or plxd's own
+    /// `gh` calls.
+    pub agent: bool,
 }
 
 impl ProcessSpec {
@@ -374,6 +378,7 @@ impl ProcessSpec {
             stderr_progress: false,
             limits: OutputLimits::default(),
             record: None,
+            agent: false,
         }
     }
 }
@@ -487,6 +492,15 @@ impl Launcher {
             };
         }
         env.extend(&spec.inject);
+        if spec.agent
+            && let Some(path) = env.get("PATH")
+            && let Ok(path) = std::env::join_paths(
+                std::iter::once(crate::gh_shim::dir(&self.data_dir))
+                    .chain(std::env::split_paths(path)),
+            )
+        {
+            env.set("PATH", path);
+        }
         // plxd's own bwrap and socat go last, so the host's win (PLX-895).
         #[cfg(target_os = "linux")]
         if let (Some(dir), Some(path)) = (

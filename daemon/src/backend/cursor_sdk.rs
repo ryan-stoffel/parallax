@@ -808,6 +808,7 @@ fn command(
     let mut spec = ProcessSpec::new(program, cwd);
     spec.args = args;
     spec.scrub = launcher.base().starting_with(&["CURSOR_"]);
+    spec.agent = true;
     for (name, value) in env {
         spec.inject.set(name, value);
     }

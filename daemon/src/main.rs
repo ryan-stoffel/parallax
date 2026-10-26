@@ -240,6 +240,11 @@ struct InstallOptions {
 }
 
 fn main() -> ExitCode {
+    // Run as the `gh` shim on an agent's `PATH` (PLX-1023), before anything slower.
+    let mut args = std::env::args_os();
+    if plxd::gh_shim::invoked(args.next().as_deref()) {
+        plxd::gh_shim::main(&args.collect::<Vec<_>>());
+    }
     // Before anything else, so the version is the one this process started as (see `version`).
     plxd::version();
     let invoked_as = std::env::var_os(INVOKED_AS_ENV);

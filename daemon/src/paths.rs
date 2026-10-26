@@ -18,6 +18,8 @@
 //!   [`DataDir::temp_dir`].
 //! - `tools/`: CLIs plxd installs itself: `gh` (`tools/gh/`, PLX-423), and on Linux the `bwrap`
 //!   and `socat` a release plxd carries (`tools/sandbox/`, PLX-895). See [`DataDir::tools_dir`].
+//!   `tools/gh-shim/` holds the `gh` shim agents run, and `github-budget.json` the GitHub quota it
+//!   checks (PLX-1023, [`gh_shim`](crate::gh_shim)).
 //! - `logs/plxd.log`: the log.
 //! - `ci-logs/`: failed CI jobs' log excerpts, one file per head commit and job (PLX-1019). See
 //!   [`DataDir::ci_logs_dir`].

@@ -61,7 +61,8 @@ const WAKE_LIMIT: u32 = 10;
 const LISTED: usize = 10;
 const SNIPPET: usize = 200;
 
-/// One `gh api graphql` read: the viewer, and the pull request's title, body, state, draft, head
+/// One `gh api graphql` read: the viewer, the GraphQL quota left (for the `gh` shim, PLX-1023),
+/// and the pull request's title, body, state, draft, head
 /// and base, changed files, checks with whether each is required and its Actions run,
 /// mergeability, merge state, review decision, and its newest comments, reviews, and review
 /// threads with whether each is resolved.
@@ -69,6 +70,7 @@ const SNIPPET: usize = 200;
 // comments each) per read; page them if a pull request ever gets more than that.
 const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
+  rateLimit { remaining resetAt }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       title
@@ -1076,6 +1078,7 @@ async fn fetch(daemon: &Daemon, url: &str) -> Result<Detail, PrError> {
         ],
     )
     .await?;
+    crate::gh_shim::record_graphql(&daemon.data_dir, &answer);
     let detail = parse(&answer)?;
     daemon.pr_watches.share(url, started, &detail);
     Ok(detail)
