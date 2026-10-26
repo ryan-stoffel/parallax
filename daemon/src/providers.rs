@@ -311,6 +311,7 @@ struct Found {
     version: Option<String>,
     signed_in: Option<bool>,
     account: Option<String>,
+    plan: Option<String>,
     note: Option<String>,
     models: Vec<ProviderModel>,
     /// The command that signs it in, from the agent's own sign-in methods.
@@ -793,7 +794,8 @@ impl Providers {
                 path: detected.path,
                 version: detected.version,
                 signed_in: detected.signed_in,
-                account: detected.plan,
+                account: detected.plan.clone(),
+                plan: detected.plan,
                 note: detected.note,
                 ..Found::default()
             }
@@ -1831,6 +1833,7 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
         version: found.version,
         signed_in: found.signed_in,
         account: found.account,
+        plan: found.plan,
         note: found.note,
         models: found.models,
         permissions,

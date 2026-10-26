@@ -21,6 +21,7 @@ pub(super) async fn probe(
     // A built-in detector may have read the default home, rather than this instance's home.
     found.signed_in = None;
     found.account = None;
+    found.plan = None;
     let mut spec = detect::probe_spec(program);
     spec.inject = env.into_iter().collect();
     match instance.kind {
@@ -58,8 +59,12 @@ fn apply_claude(found: &mut Found, stdout: &str, exit_code: Option<i32>) {
             Some(1) => Some(false),
             _ => None,
         });
-    found.account = (found.signed_in == Some(true))
+    let signed_in = found.signed_in == Some(true);
+    found.account = signed_in
         .then(|| text(&value, &["email", "subscriptionType", "plan", "tier"]))
+        .flatten();
+    found.plan = signed_in
+        .then(|| text(&value, &["subscriptionType", "plan", "tier"]))
         .flatten();
 }
 
@@ -70,6 +75,7 @@ fn apply_codex(found: &mut Found, account: &Value) {
         _ => None,
     };
     found.account = text(account, &["email", "planType"]);
+    found.plan = text(account, &["planType"]);
 }
 
 /// The app-server stays alive after replying, so stop it as soon as account/read answers.
@@ -124,15 +130,18 @@ mod tests {
             Some(0),
         );
         assert_eq!(found.account.as_deref(), Some("personal@example.com"));
+        assert_eq!(found.plan.as_deref(), Some("max"));
         apply_claude(&mut found, r#"{"loggedIn":false}"#, Some(0));
         assert_eq!(found.signed_in, Some(false));
         assert_eq!(found.account, None);
+        assert_eq!(found.plan, None);
 
         apply_codex(
             &mut found,
             &json!({"email":"work@example.com","planType":"pro"}),
         );
         assert_eq!(found.account.as_deref(), Some("work@example.com"));
+        assert_eq!(found.plan.as_deref(), Some("pro"));
         apply_codex(&mut found, &json!({"planType":"pro"}));
         assert_eq!(found.account.as_deref(), Some("pro"));
         apply_codex(&mut found, &serde_json::Value::Null);

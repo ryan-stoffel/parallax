@@ -30,8 +30,8 @@ const catalog: Catalog = {
   hostId: "local",
   instances: [
     { ...codex("claude", "Claude"), kind: "claude" },
-    codex("codex", "personal@example.test"),
-    { ...codex("codex-2", "Work"), account: "work@example.test" },
+    { ...codex("codex", "personal@example.test"), plan: "plus" },
+    { ...codex("codex-2", "Work"), account: "work@example.test", plan: "pro" },
     codex("pool", "Codex pool", ["codex", "codex-2"]),
   ],
   models: [
@@ -55,6 +55,7 @@ const listed = () =>
   [...document.querySelectorAll('ul [role="menuitemradio"]')].map(
     (item) => item.querySelector("span span")?.textContent,
   );
+const header = () => button("Choose account")?.textContent;
 
 test("a provider's accounts and pool share one rail button, with a pool-first account menu", () => {
   const container = document.body.appendChild(document.createElement("div"));
@@ -76,16 +77,36 @@ test("a provider's accounts and pool share one rail button, with a pool-first ac
     "personal@example.test",
     "Work",
   ]);
-  // It opens on the pool, and says what a pool does.
+  // It opens on the pool, and says it's a pool and what it does.
   expect(listed()).toEqual(["gpt-pool"]);
-  expect(document.body.textContent).toContain(
-    "New threads use the account with the most usage left, then stay on it.",
-  );
+  expect(header()).toBe("Codex poolPoolPicks from 2 accounts by usage left");
 
+  // An account's header names it, its plan, and its email, and its rows only their models.
   act(() => button("Work")!.click());
   expect(document.querySelector('[role="menu"][aria-label="Account"]')).toBeNull();
   expect(listed()).toEqual(["gpt-b"]);
-  expect(document.body.textContent).toContain("work@example.test");
+  expect(header()).toBe("WorkProwork@example.test");
+  expect(document.querySelector('ul [role="menuitemradio"]')?.textContent).toBe("gpt-b");
+});
+
+test("a lone account still shows its email and plan, and favorites say whose a model is", () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  root = createRoot(container);
+  const lone: Catalog = {
+    hostId: "local",
+    instances: [catalog.instances[0]!, catalog.instances[1]!],
+    models: catalog.models.slice(0, 2),
+  };
+  act(() => root!.render(<ModelMenu catalog={lone} value={lone.models[1]!} onChange={() => {}} />));
+  expect(button("Choose account")).toBeUndefined();
+  expect(document.body.textContent).toContain("personal@example.testPlus");
+
+  act(() => button("Favorite gpt-a")!.click());
+  act(() => button("Favorites")!.click());
+  expect(document.querySelector('ul [role="menuitemradio"]')?.textContent).toBe(
+    "gpt-apersonal@example.test",
+  );
+  act(() => button("Unfavorite gpt-a")!.click());
 });
 
 test("account keyboard navigation stays in the selector and returns focus on close", () => {

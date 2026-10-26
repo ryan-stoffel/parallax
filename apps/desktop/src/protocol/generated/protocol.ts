@@ -2165,6 +2165,10 @@ export type ProviderInfo = {
 	 */
 	account?: string,
 	/**
+	 * Its subscription plan, such as `pro`, where the agent says.
+	 */
+	plan?: string,
+	/**
 	 * Why something above is missing or uncertain.
 	 */
 	note?: string,
