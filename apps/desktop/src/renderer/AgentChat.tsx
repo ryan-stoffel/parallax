@@ -2478,7 +2478,7 @@ const markdownStyle: MarkdownStyle = (() => {
       borderRadius: 8,
       cellPaddingHorizontal: 11,
       cellPaddingVertical: 6,
-      // On the web, any alignment makes a table as wide as its content, up to the message's.
+      // On the web, any alignment makes a table as wide as its content, up to its container's.
       align: "left",
     },
     thematicBreak: { color: "var(--border)", height: 1, marginTop: 16, marginBottom: 16 },
