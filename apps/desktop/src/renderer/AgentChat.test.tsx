@@ -685,6 +685,14 @@ test("in a fork, only a turn that ended past the copied history offers Fork, at 
     expect.stringContaining("Build it"),
     expect.stringContaining("Built"),
   ]);
+  // Prompts and replies show when they were sent, but the copied ones' time is the fork's.
+  expect(
+    [...document.querySelectorAll("time")].map((t) => t.closest(".group\\/prompt")!.textContent),
+  ).toEqual([
+    expect.stringContaining("Build it"),
+    expect.stringContaining("Built"),
+    expect.stringContaining("Ship it"),
+  ]);
   // happy-dom has no popovers: the Fork menus get the event a browser sends as one opens.
   act(() => {
     for (const menu of document.querySelectorAll('[role="menu"][aria-label="Fork"]'))

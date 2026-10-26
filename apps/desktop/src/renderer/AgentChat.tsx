@@ -1772,7 +1772,11 @@ export const RowView = memo(function RowView({
         <div className="group/prompt flex flex-col gap-1.5">
           {body}
           <TurnChanges turnId={replyTurn} />
-          <PromptMeta text={row.text} fork={forkable && <ForkButton turnId={replyTurn} />} />
+          <PromptMeta
+            at={copied ? undefined : row.at}
+            text={row.text}
+            fork={forkable && <ForkButton turnId={replyTurn} />}
+          />
         </div>
       );
     }
