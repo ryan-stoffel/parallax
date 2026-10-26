@@ -1626,7 +1626,8 @@ export function App() {
                             selection.kind === "thread"
                               ? threads.state.titles[selection.threadId]
                               : agentTitle,
-                          onPrOpened: linksPrs ? openPr : undefined,
+                          // The PR view shows a thread's own; a child's opens in the browser.
+                          onPrOpened: linksPrs && threadRun ? openPr : undefined,
                           onSetUpGithub: setUpGithub,
                           onChanges: () => {
                             setPanelOpen(true);
