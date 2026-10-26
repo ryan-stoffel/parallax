@@ -43,7 +43,7 @@ import {
   versions,
   withVersion,
 } from "./providers";
-import { age, backendLogos } from "./Sidebar";
+import { age, backendLogos, SettingsNav, settingsNames } from "./Sidebar";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
 import { ConnectionSettings } from "./settings/ConnectionSettings";
@@ -78,7 +78,7 @@ import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
 import { ThreadSettings } from "./settings/ThreadSettings";
 import type { ThreadsView } from "./threads";
-import { IconButton, Segmented } from "./ui";
+import { Breadcrumb, IconButton, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
 import { UsagePage } from "./UsagePage";
 import { uuidv7 } from "./uuidv7";
@@ -124,7 +124,61 @@ function useScrollTo(focus?: { anchor: string }) {
   }, [focus]);
 }
 
-/** The Settings page body. The sidebar's SettingsNav picks the section, or its search a setting. */
+/**
+ * Settings as a modal window floating over the app, which shows blurred around it: SettingsNav on
+ * the left, and the section under its breadcrumb and Close on the right. Opens when mounted;
+ * Close and Escape call `onClose`.
+ */
+export function SettingsDialog({
+  onSection,
+  onClose,
+  ...props
+}: SettingsProps & {
+  /** Opens a section, scrolled to the setting with `anchor` as its `data-setting`. */
+  onSection: (section: SettingsSection, anchor?: string) => void;
+  onClose: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const d = dialog.current;
+    if (!d || d.open) return;
+    d.showModal();
+    // The window, not its search box, takes focus: `/` focuses the box.
+    d.focus();
+  }, []);
+  return (
+    <dialog
+      ref={dialog}
+      aria-label="Settings"
+      tabIndex={-1}
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      className="settings-dialog m-auto h-[calc(100vh-4rem)] max-h-none w-[calc(100vw-8rem)] max-w-[90rem] overflow-hidden rounded-xl border border-border bg-background p-0 text-foreground shadow-composer outline-none backdrop:bg-black/40 open:flex"
+    >
+      <nav
+        aria-label="Settings sections"
+        className="flex w-64 shrink-0 flex-col border-r border-border bg-surface pt-3"
+      >
+        <SettingsNav section={props.section} onSection={onSection} />
+      </nav>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex h-13 shrink-0 items-center gap-2 border-b border-border pr-3 pl-6">
+          <Breadcrumb items={[{ label: "Settings" }, { label: settingsNames[props.section] }]} />
+          <div className="ml-auto">
+            <IconButton label="Close settings" onClick={onClose}>
+              <X aria-hidden />
+            </IconButton>
+          </div>
+        </div>
+        <Settings {...props} />
+      </div>
+    </dialog>
+  );
+}
+
+/** The Settings page body. SettingsNav picks the section, or its search a setting. */
 export function Settings({
   section,
   listed,
@@ -784,10 +838,10 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           )}
         </div>
       ) : (
-        // Stacked until there's room for the list beside the pane; then one box the height of the
-        // window, in which the list and the pane each scroll.
+        // Stacked until there's room for the list beside the pane; then one box the height of
+        // Settings, in which the list and the pane each scroll.
         <div className="@container overflow-hidden rounded-xl border border-border">
-          <div className="grid @3xl:h-[calc(100vh-11rem)] @3xl:min-h-[28rem] @3xl:grid-cols-[17rem_minmax(0,1fr)]">
+          <div className="grid @3xl:h-[calc(100vh-15rem)] @3xl:min-h-[28rem] @3xl:grid-cols-[17rem_minmax(0,1fr)]">
             <div
               role="tablist"
               aria-label="Providers"

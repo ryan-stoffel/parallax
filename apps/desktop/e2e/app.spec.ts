@@ -98,7 +98,7 @@ test("starts a thread and shows the agent's output", async () => {
   expect(set).not.toHaveProperty("error");
   // New Thread reads the default when it opens, to offer that backend's models, so reopen it.
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
 
   await page.getByRole("textbox", { name: "Message" }).fill("Tidy up the README");
   await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -180,7 +180,7 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   const identity = ["-c", "user.name=parallax", "-c", "user.email=parallax@localhost"];
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The sign-in test left Settings open.
-  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("button", { name: "New project or repository" }).click();
   const dialog = page.getByRole("dialog", { name: "New project or repository" });
   await dialog.getByRole("option", { name: /^New Project/ }).click();
@@ -211,7 +211,7 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   expect(set).not.toHaveProperty("error");
   // The project chat reads the default when it opens, to offer its backend's models, so reopen it.
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
 
   // The last test left the ember project open. Every message goes to its coordinator.
   const message = page.getByRole("textbox", { name: "Message" });

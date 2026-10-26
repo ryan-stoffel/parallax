@@ -24,7 +24,7 @@ test("a thread's terminal keeps running, with its output, after the app quits an
   expect(defaults).not.toHaveProperty("error");
   // New Thread reads the default when it opens.
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("textbox", { name: "Message" }).fill("Tidy up the README");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await page.getByRole("button", { name: "Stop" }).click();
