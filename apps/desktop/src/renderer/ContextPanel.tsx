@@ -327,9 +327,9 @@ const inlineIcon = "mr-1 inline size-3.5 align-[-0.15em]";
 /** A task's checkbox as an open or a check circle. */
 const taskIcon: Components["input"] = ({ type, checked }) =>
   type !== "checkbox" ? null : checked ? (
-    <CircleCheck aria-label="Done" className={`${inlineIcon} text-faint-foreground`} />
+    <CircleCheck aria-label="Done" className={`${inlineIcon} text-added`} />
   ) : (
-    <Circle aria-label="Open" className={inlineIcon} />
+    <Circle aria-label="Open" className={`${inlineIcon} text-faint-foreground`} />
   );
 
 /** The Markdown mark (dcurtis/markdown-mark, CC0), sized like a lucide icon. */

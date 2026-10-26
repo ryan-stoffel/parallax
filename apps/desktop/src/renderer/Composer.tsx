@@ -1997,12 +1997,12 @@ export function Composer({
               aria-label={stopping ? "Stopping" : "Stop"}
               disabled={stopping}
               onClick={() => void stop()}
-              className="grid size-9 place-items-center rounded-full bg-danger text-background disabled:opacity-50"
+              className="grid size-9 place-items-center rounded-full bg-primary text-primary-foreground enabled:hover:opacity-85 disabled:opacity-50"
             >
               {stopping ? (
                 <LoaderCircle className="size-4 animate-spin" />
               ) : (
-                <Square className="size-3.5 fill-current" />
+                <Square className="size-3 fill-current" />
               )}
             </button>
           ) : (
@@ -2019,13 +2019,13 @@ export function Composer({
       </form>
       {back && pickers ? (
         // A thin tray tucked under the stepped-back line, in place of any tab, as low as it can be.
-        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+        <div className="tucked mx-3 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
           {pickers}
         </div>
       ) : (
         tab && (
           // Tucked under the box, so what it shows reads as part of it.
-          <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
+          <div className="tucked mx-3 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-5 pb-1.5">
             {tab}
           </div>
         )

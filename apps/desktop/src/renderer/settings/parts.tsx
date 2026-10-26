@@ -8,10 +8,11 @@ import { anchorOf } from "./search";
 
 export const settingRow =
   "flex items-center justify-between gap-4 border-border px-4 py-3 not-last:border-b";
+/** A row's action: outlined, so it reads as a button beside the row's text. */
 export const quietButton =
-  "rounded-md px-2.5 py-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground";
+  "rounded-md border border-border px-2.5 py-1 text-body text-foreground enabled:hover:bg-hover disabled:opacity-50";
 export const primaryButton =
-  "rounded-md bg-primary px-3 py-1 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50";
+  "rounded-md bg-send px-3 py-1 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50";
 export const dangerButton =
   "rounded-md bg-red-600 px-2.5 py-1 text-body font-medium text-white enabled:hover:opacity-90 disabled:opacity-50";
 export const field =

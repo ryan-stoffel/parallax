@@ -7,6 +7,7 @@ import {
   Bot,
   Brain,
   Check,
+  CircleCheck,
   Copy,
   FilePlus,
   FileText,
@@ -1954,7 +1955,13 @@ export const RowView = memo(function RowView({
       return (
         <div className="flex items-center gap-3 text-meta text-faint-foreground">
           <span className="h-px flex-1 bg-border" />
-          {label}
+          {/* Done gets the green check, so a finished turn reads as finished at a glance. */}
+          <span className="flex items-center gap-1.5">
+            {outcome.status === "completed" && (
+              <CircleCheck aria-hidden className="size-3.5 text-added" />
+            )}
+            {label}
+          </span>
           <span className="h-px flex-1 bg-border" />
         </div>
       );
@@ -2466,12 +2473,13 @@ const markdownStyle: MarkdownStyle = (() => {
   });
   return {
     paragraph: body,
-    h1: heading(19),
+    h1: heading(18),
     h2: heading(16),
     h3: heading(14),
     h4: heading(14),
     h5: heading(14),
     h6: heading(14),
+    // Drawn at the scale's heaviest weight, 600, by index.css's .enriched rule.
     strong: { fontWeight: "bold" },
     link: { color: "var(--accent)", underline: false },
     code: {

@@ -8,6 +8,7 @@ import {
   type ButtonHTMLAttributes,
   type ComponentProps,
   type CSSProperties,
+  type HTMLAttributes,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -124,6 +125,30 @@ export const toolbarButton =
   "grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-5";
 
 /**
+ * A card that waits on the person (an approval, a secret): an amber edge, so it stands apart from
+ * the transcript's other cards, with NeedsYouStatus in its top right.
+ */
+export const needsYouCard = "rounded-xl border border-warning/40 bg-surface";
+
+/** A waiting card's status: an amber dot and label while it waits, plain once it's answered. */
+export function NeedsYouStatus({
+  waiting,
+  className = "",
+  children,
+  ...props
+}: { waiting: boolean } & HTMLAttributes<HTMLSpanElement>) {
+  return (
+    <span
+      className={`flex shrink-0 items-center gap-1.5 text-meta tabular-nums ${waiting ? "font-medium text-warning" : "text-muted-foreground"} ${className}`}
+      {...props}
+    >
+      {waiting && <span aria-hidden className="size-1.5 rounded-full bg-warning" />}
+      {children}
+    </span>
+  );
+}
+
+/**
  * Set up GitHub, beside a pull request action that failed because `gh` is missing or signed out
  * on the host (PLX-423). It opens Settings > Source control on that host.
  */
@@ -141,7 +166,7 @@ export function SetUpGithub({ onClick }: { onClick: () => void }) {
 
 /** A segmented control's option: a label around a visually hidden radio. */
 export const segment =
-  "flex items-center gap-1.5 rounded-md whitespace-nowrap px-2.5 py-1 text-body text-muted-foreground hover:text-foreground has-checked:bg-selected has-checked:text-foreground has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
+  "flex items-center gap-1.5 rounded-md whitespace-nowrap px-2.5 py-1 text-body text-muted-foreground hover:text-foreground has-checked:bg-foreground/10 has-checked:text-foreground has-checked:shadow-[inset_0_0_0_1px_var(--border)] has-focus-visible:outline-2 has-focus-visible:outline-ring [&_svg]:size-3.5";
 
 /**
  * A row of radios drawn as one segmented control, named by `label`. Disabled, it stays in place

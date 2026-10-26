@@ -268,8 +268,8 @@ function Behavior() {
               { value: "12", label: "12-hour" },
               { value: "24", label: "24-hour" },
             ]}
-            className="w-48"
-            panelClassName="min-w-48"
+            className="w-56"
+            panelClassName="min-w-56"
           />
         </Row>
         <Row
@@ -289,8 +289,8 @@ function Behavior() {
               { value: "enter", label: "Enter" },
               { value: "modEnter", label: mac ? "⌘ Enter" : "Ctrl+Enter" },
             ]}
-            className="w-48"
-            panelClassName="min-w-48"
+            className="w-56"
+            panelClassName="min-w-56"
           />
         </Row>
         <Row
@@ -306,8 +306,8 @@ function Behavior() {
               { value: "external", label: "System browser" },
               { value: "browser", label: "Side panel browser" },
             ]}
-            className="w-48"
-            panelClassName="min-w-48"
+            className="w-56"
+            panelClassName="min-w-56"
           />
         </Row>
         <Row
@@ -323,8 +323,8 @@ function Behavior() {
               { value: "parallax", label: "Open in Parallax" },
               { value: "github", label: "Open on GitHub" },
             ]}
-            className="w-48"
-            panelClassName="min-w-48"
+            className="w-56"
+            panelClassName="min-w-56"
           />
         </Row>
       </Section>

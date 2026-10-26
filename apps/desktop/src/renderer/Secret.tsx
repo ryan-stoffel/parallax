@@ -10,6 +10,7 @@ import { quietButton } from "./Approval";
 import { describeError } from "./errors";
 import { notify } from "./notifications";
 import type { Item } from "./transcript";
+import { needsYouCard, NeedsYouStatus } from "./ui";
 
 type SecretItem = Extract<Item, { kind: "secret" }>;
 
@@ -61,19 +62,15 @@ export function SecretCard({
 
   return (
     <section aria-labelledby={titleId} className="mb-3">
-      <form
-        onSubmit={save}
-        autoComplete="off"
-        className="flex flex-col rounded-xl border border-border bg-surface"
-      >
+      <form onSubmit={save} autoComplete="off" className={`flex flex-col ${needsYouCard}`}>
         <div className="flex items-center gap-2 px-4 pt-3 text-body">
           <KeyRound aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
           <span id={titleId} className="min-w-0 truncate font-medium">
             {request.label}
           </span>
-          <span className="ml-auto shrink-0 pl-2 text-meta text-muted-foreground">
-            The agent asks for a secret
-          </span>
+          <NeedsYouStatus waiting className="ml-auto pl-2">
+            Needs a secret
+          </NeedsYouStatus>
         </div>
         <p className="px-4 pt-1.5 text-body leading-relaxed text-muted-foreground">
           {request.reason}
@@ -126,10 +123,10 @@ const outcomes: Record<string, string> = {
 export function SecretLine({ secret }: { secret: SecretItem }) {
   return (
     <TraceLine>
-      <TraceIcon>
+      <TraceIcon className={secret.status ? undefined : "text-warning"}>
         <KeyRound />
       </TraceIcon>
-      <TraceTitle className="shrink-0">
+      <TraceTitle className={secret.status ? "shrink-0" : "shrink-0 font-medium text-warning"}>
         {secret.status ? (outcomes[secret.status] ?? "Ended") : "Waiting for you"}
       </TraceTitle>
       <span className="truncate text-faint-foreground">{secret.request.label}</span>

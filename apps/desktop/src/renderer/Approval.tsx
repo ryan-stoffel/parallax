@@ -6,6 +6,7 @@
 import { TraceDescription, TraceIcon, TraceLine, TraceTitle } from "./Trace";
 import {
   ChevronDown,
+  ChevronRight,
   ChevronUp,
   ListRestart,
   MousePointerClick,
@@ -33,6 +34,7 @@ import type { JsonValue } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
 import { dismiss as dismissNotice, notify } from "./notifications";
 import { ProposedPlan } from "./Plan";
+import { needsYouCard, NeedsYouStatus } from "./ui";
 import {
   field,
   isObject,
@@ -186,7 +188,7 @@ export function outcomeOf({ request, resolved }: Approval, now = Date.now()): Ou
       verb: plan ? "Plan waiting for approval" : "Waiting for approval",
       who: "Nobody has answered yet.",
       Icon: ShieldQuestion,
-      color: "text-foreground",
+      color: "text-warning",
     };
   const quiet = { Icon: Undo2, color: "text-faint-foreground" };
   if (resolved.gone)
@@ -737,7 +739,7 @@ function ApprovalCard({
       tabIndex={-1}
       aria-labelledby={titleId}
       aria-describedby={statusId}
-      className="flex min-h-0 flex-col overflow-y-auto rounded-xl border border-border bg-surface focus-visible:outline-none"
+      className={`flex min-h-0 flex-col overflow-y-auto focus-visible:outline-none ${needsYouCard}`}
     >
       <div className="flex items-center gap-2 px-4 pt-3 text-body">
         <tool.Icon aria-hidden className="size-3.5 shrink-0 text-faint-foreground" />
@@ -756,12 +758,13 @@ function ApprovalCard({
               <span className="truncate text-muted-foreground">{detail.text}</span>
             ))}
         </span>
-        <span
+        <NeedsYouStatus
           id={statusId}
-          className="ml-auto shrink-0 pl-2 text-meta text-muted-foreground tabular-nums"
+          waiting={!state || state.state === "failed"}
+          className="ml-auto pl-2"
         >
           {statusText(state, count)}
-        </span>
+        </NeedsYouStatus>
       </div>
       {/* The preview scrolls past its bound; the header, a problem, and the buttons stay put. */}
       <div className="space-y-2 overflow-y-auto px-4 pt-2.5" style={{ maxHeight: pinnedMaxHeight }}>
@@ -828,7 +831,7 @@ function ComputerApprovalCard({
       tabIndex={-1}
       aria-labelledby={titleId}
       aria-describedby={statusId}
-      className="flex flex-col rounded-xl border border-border bg-surface focus-visible:outline-none"
+      className={`flex flex-col focus-visible:outline-none ${needsYouCard}`}
     >
       <div className="flex items-start gap-3 px-4 pt-3.5">
         <span
@@ -846,12 +849,13 @@ function ComputerApprovalCard({
             in it. Your pointer and keyboard stay yours.
           </p>
         </div>
-        <span
+        <NeedsYouStatus
           id={statusId}
-          className="shrink-0 pt-0.5 pl-2 text-meta text-muted-foreground tabular-nums"
+          waiting={!state || state.state === "failed"}
+          className="pt-0.5 pl-2"
         >
           {statusText(state, count)}
-        </span>
+        </NeedsYouStatus>
       </div>
       <div className="px-4 pt-2 empty:hidden">
         <Problem state={state} />
@@ -1112,9 +1116,10 @@ export function ApprovalQueue({
                   <button
                     type="button"
                     onClick={head.from.open}
-                    className="shrink-0 font-medium text-foreground underline underline-offset-2"
+                    className="flex shrink-0 items-center gap-0.5 font-medium text-foreground underline-offset-2 hover:underline"
                   >
                     Open its chat
+                    <ChevronRight aria-hidden className="size-3" />
                   </button>
                 )}
               </p>
@@ -1148,7 +1153,9 @@ export function ApprovalSummary({ approval, tool }: { approval: Approval; tool: 
         <Icon />
       </TraceIcon>
       <TraceTitle>
-        <span className="font-medium">{verb}</span>
+        <span className={approval.resolved ? "font-medium" : "font-medium text-warning"}>
+          {verb}
+        </span>
         {!plan && (
           <>
             {" "}

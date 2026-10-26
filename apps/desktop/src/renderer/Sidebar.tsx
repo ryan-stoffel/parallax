@@ -3095,9 +3095,9 @@ function ThreadRow({
             {prs.urls.length > 0 && (
               <span
                 title={`${prs.urls.length} linked pull ${prs.urls.length === 1 ? "request" : "requests"}`}
-                className={`flex shrink-0 items-center gap-0.5 tabular-nums ${prLook.color}`}
+                className="flex shrink-0 items-center gap-0.5 tabular-nums"
               >
-                <prLook.Icon aria-hidden className="size-3.5" />
+                <prLook.Icon aria-hidden className={`size-3.5 ${prLook.color}`} />
                 {prs.urls.length > 1 ? (
                   <span>+{prs.urls.length - 1}</span>
                 ) : (
@@ -3126,8 +3126,8 @@ function ThreadRow({
                 <DeviceIcon icon={device.icon} className="size-3.5" />
               </span>
             )}
-            {/* In gray, so a list of rows isn't striped with providers' colors. */}
-            {Logo && <Logo className="size-3.5 shrink-0 opacity-80 grayscale" />}
+            {/* In its own colors, as the agent's identity, as the composer shows it. */}
+            {Logo && <Logo className="size-3.5 shrink-0" />}
           </span>
         )}
         {snippet && (
@@ -3387,10 +3387,19 @@ function GitCounts({ git }: { git: GitStatus }) {
           title={`${plural(git.changes, "file")} uncommitted`}
           className="shrink-0 tabular-nums"
         >
-          <span className="text-added">+{git.insertions ?? 0}</span>{" "}
-          <span className="text-danger">−{git.deletions ?? 0}</span>
+          <DiffCount added={git.insertions ?? 0} removed={git.deletions ?? 0} />
         </span>
       )}
+    </>
+  );
+}
+
+/** Lines added and removed, green and red, with a count of 0 left in the text's own color. */
+function DiffCount({ added, removed }: { added: number; removed: number }) {
+  return (
+    <>
+      <span className={added ? "text-added" : undefined}>+{added}</span>{" "}
+      <span className={removed ? "text-danger" : undefined}>−{removed}</span>
     </>
   );
 }
@@ -3613,8 +3622,7 @@ function ThreadCard({
             <FileDiff />
             <span className="tabular-nums">
               {run.diff.files} {run.diff.files === 1 ? "file" : "files"}{" "}
-              <span className="text-added">+{run.diff.insertions}</span>{" "}
-              <span className="text-danger">−{run.diff.deletions}</span>
+              <DiffCount added={run.diff.insertions} removed={run.diff.deletions} />
             </span>
           </li>
         )}

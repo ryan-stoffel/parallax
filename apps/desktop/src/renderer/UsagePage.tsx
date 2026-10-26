@@ -714,7 +714,16 @@ function Bars({
       onPointerLeave={() => setActive(focused.current)}
       className={`${card} min-w-0 px-6 pt-5 pb-5`}
     >
-      <figcaption className="text-reading font-medium">{title}</figcaption>
+      <figcaption className="flex items-center justify-between gap-4">
+        <span className="text-reading font-medium">{title}</span>
+        {/* The average's key, beside the title rather than over the bars its line crosses. */}
+        {average > 0 && (
+          <span className="flex items-center gap-2 text-meta text-muted-foreground tabular-nums">
+            <span aria-hidden className="w-4 border-t border-dashed border-foreground/50" />
+            avg {format(average)}
+          </span>
+        )}
+      </figcaption>
       <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
         <div />
         <div aria-hidden className="relative mt-1 mb-3 h-10">
@@ -760,11 +769,7 @@ function Bars({
               aria-hidden
               className="usage-average pointer-events-none absolute inset-x-0 z-10 border-t border-dashed border-foreground/35"
               style={{ top: `${100 - (average / top) * 100}%` }}
-            >
-              <span className="absolute right-0 -translate-y-1/2 rounded-md border border-border bg-surface px-1.5 py-0.5 text-caption text-muted-foreground tabular-nums">
-                avg {format(average)}
-              </span>
-            </div>
+            />
           )}
           {bars.map((b, i) => {
             const total = totals[i]!;

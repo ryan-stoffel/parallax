@@ -1,5 +1,4 @@
 import {
-  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   Columns2,
@@ -1314,15 +1313,6 @@ export function App() {
                     <ChevronRight />
                   </IconButton>
                 </div>
-                {agentId && (
-                  <IconButton
-                    label="Back to the coordinator"
-                    command="parentThread"
-                    onClick={() => openAgent()}
-                  >
-                    <ArrowLeft />
-                  </IconButton>
-                )}
                 <Breadcrumb items={crumbs} />
                 <div className="ml-auto flex shrink-0 items-center gap-2">
                   {!group.space && (

@@ -119,16 +119,16 @@
 .scheme-light {
   color-scheme: light;
   --background: #ffffff;
-  --sidebar: #f6f6f9;
+  --sidebar: #f7f7f7;
   --surface: #ffffff;
-  --foreground: #1e1b4b;
-  --muted-foreground: #4a4868;
-  --faint-foreground: #64627e;
-  --border: rgb(30 27 75 / 10%);
-  --hover: rgb(30 27 75 / 4.5%);
-  --selected: rgb(30 27 75 / 7%);
-  /* The logo's blue; its indigo overlap is the text, and its coral, darkened to read, is
-     --danger. */
+  --foreground: #171717;
+  --muted-foreground: #525252;
+  --faint-foreground: #666666;
+  --border: rgb(0 0 0 / 9%);
+  --hover: rgb(0 0 0 / 4%);
+  --selected: rgb(0 0 0 / 6.5%);
+  /* Structure is neutral gray; color is kept for identity, action, and status. The logo's blue
+     is the accent, and its coral, darkened to read, is --danger. */
   --accent: #2b5cff;
   /* Black or white, whichever reads better on a fill, as a channel of
      color(from <fill> srgb-linear ...): white while the fill's WCAG luminance (from its linear
@@ -146,7 +146,7 @@
   --send-foreground: color(
     from var(--send) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
   );
-  --primary: #1e1b4b;
+  --primary: #171717;
   --primary-foreground: #ffffff;
   --ring: var(--accent);
   --danger: #d4330f;
@@ -155,13 +155,13 @@
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
   --added: #15803d;
   /* Code blocks and diffs: a step off the background, and highlight.js's token colors. */
-  --code: #f6f6f9;
+  --code: #f7f7f7;
   --syntax-keyword: #2b5cff;
   --syntax-string: #c2410c;
   --syntax-number: #7c3aed;
   --syntax-title: #4338ca;
   --syntax-type: #be185d;
-  --syntax-comment: #6e6c88;
+  --syntax-comment: #6b6b6b;
   --working: var(--accent);
   /* The Usage page's stacked bars (UsagePage.tsx): the accent, then a tint of it, then a neutral,
      each mixed into the surface so they stay opaque. Both modes compute from their own surface,
@@ -169,7 +169,7 @@
   --chart-1: var(--accent);
   --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
   --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
-  --shadow-composer: 0 10px 30px -16px rgb(30 27 75 / 22%);
+  --shadow-composer: 0 10px 30px -16px rgb(0 0 0 / 18%);
   /* A Project icon's colors (projectIcons.ts), by the key plxd keeps. Each keeps at least 3:1
      on the sidebar, the dialogs, and a selected row, in both themes. */
   --project-red: #dc2626;
@@ -190,9 +190,9 @@
 :root.dark,
 .scheme-dark {
   color-scheme: dark;
-  /* Near black with no tint, as T3 Code's dark mode is: a black sidebar, the thread a step above
-     it, and raised surfaces (the composer, cards, menus) a step above that. */
-  --background: #0a0a0a;
+  /* True black with no tint, as T3 Code's dark mode is: the sidebar and the thread are black, a
+     border between them, and raised surfaces (the composer, cards, menus) a step above. */
+  --background: #000000;
   --sidebar: #000000;
   --surface: #141414;
   --foreground: #ededed;
@@ -207,11 +207,11 @@
      accent's, and dark enough for white text. */
   --send: color-mix(in oklch, var(--accent) 84%, oklch(0 none none));
   --primary: #ededed;
-  --primary-foreground: #0a0a0a;
+  --primary-foreground: #000000;
   --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
-  --code: #111111;
+  --code: #0f0f0f;
   --syntax-keyword: #7b9bff;
   --syntax-string: #ff8a65;
   --syntax-number: #c4b5fd;
@@ -832,6 +832,28 @@ body {
 .enriched > * + * {
   margin-top: 10px;
 }
+/* Bold at the scale's heaviest weight (0085), over the renderer's inline 700. */
+.enriched :is(strong, b) {
+  font-weight: 600 !important;
+}
+/* Its lists leave their markers to the browser, which Tailwind's base styles take away. */
+.enriched ul {
+  list-style-type: disc;
+}
+.enriched ul ul {
+  list-style-type: circle;
+}
+.enriched ol {
+  list-style-type: decimal;
+}
+.enriched li::marker {
+  color: var(--faint-foreground);
+}
+/* In a side panel's document, such as the brief, headings stay under the panel's own (18px). */
+.context-doc .enriched :is(h1, h2) {
+  font-size: 15px !important;
+  line-height: 20px !important;
+}
 /* A table's cells wrap only between words, so a column is never narrower than its longest word
    and a table too wide for its container scrolls in the renderer's wrapper instead. Each cell
    starts at its row's top. */
@@ -1447,8 +1469,9 @@ body {
     rotate: 360deg;
   }
 }
-/* A working Project's square in the sidebar: a streak of Parallax blue runs around its edge, clear
-   of the icon or image inside. The mask keeps only a 1.5px border of the turning gradient. */
+/* A working Project's square in the sidebar: a faint blue ring with a streak of Parallax blue
+   running around it, clear of the icon or image inside. The mask keeps only a 1.5px border of the
+   turning gradient. */
 @property --sweep {
   syntax: "<angle>";
   inherits: false;
@@ -1462,8 +1485,8 @@ body {
   pointer-events: none;
   background: conic-gradient(
     from var(--sweep),
-    transparent 0turn 0.55turn,
-    color-mix(in srgb, var(--mark-blue) 30%, transparent) 0.8turn,
+    color-mix(in srgb, var(--mark-blue) 22%, transparent) 0turn 0.55turn,
+    color-mix(in srgb, var(--mark-blue) 45%, transparent) 0.8turn,
     var(--mark-blue) 1turn
   );
   mask:

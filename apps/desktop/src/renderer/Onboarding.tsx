@@ -50,7 +50,7 @@ const steps = ["Account", "Agents", "Import", "Tour", "Start"];
 const tourStep = steps.indexOf("Tour");
 
 const bigPrimary =
-  "flex items-center justify-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-4";
+  "flex items-center justify-center gap-1.5 rounded-lg bg-send px-4 py-2 text-body font-medium text-send-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-4";
 const bigOutline =
   "flex items-center justify-center gap-1.5 rounded-lg border border-border bg-surface px-4 py-2 text-body font-medium hover:bg-hover disabled:opacity-50";
 const quiet =
@@ -74,8 +74,9 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
   const providers = useProviders(localId)?.providers;
   useEffect(() => {
     dialog.current?.showModal();
-    // showModal focuses the first button, Skip setup: Create your account goes first instead.
-    dialog.current?.querySelector<HTMLElement>("[data-first]")?.focus();
+    // showModal focuses the first button, Skip setup, and draws its ring before anyone has typed.
+    // The dialog holds focus instead, so Tab starts at its first button with nothing lit at rest.
+    dialog.current?.focus();
   }, []);
 
   // The tour's layers lean with the pointer: --px and --py, each -1 to 1, on the dialog.
@@ -99,6 +100,7 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
   return (
     <dialog
       ref={dialog}
+      tabIndex={-1}
       aria-labelledby={titleId}
       onClose={finishOnboarding}
       onPointerMove={lean}
@@ -107,7 +109,7 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
         if (e.key === "ArrowRight" && slide < tour.length - 1) setSlide(slide + 1);
         if (e.key === "ArrowLeft" && slide > 0) setSlide(slide - 1);
       }}
-      className="m-auto h-[40rem] max-h-[92vh] w-[48rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-background text-foreground shadow-composer backdrop:bg-black/50 backdrop:backdrop-blur-sm"
+      className="m-auto h-[37rem] max-h-[92vh] w-[44rem] max-w-[94vw] overflow-hidden rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/40 backdrop:backdrop-blur-sm focus-visible:outline-none"
     >
       <div className="flex h-full flex-col">
         <header className="flex items-center justify-between gap-4 px-5 pt-4">
@@ -205,14 +207,12 @@ export function Onboarding({ onStart }: { onStart: () => void }) {
   );
 }
 
-/** The two circles of the logo, gliding together, under a glow in their colors. */
+/** The two circles of the logo, gliding together. */
 function Hero() {
   const clip = useId();
   return (
-    <div className="relative mb-6 grid size-28 place-items-center">
-      <span className="onboard-glow absolute top-2 left-2 size-16 rounded-full bg-mark-blue/40 blur-2xl" />
-      <span className="onboard-glow absolute right-2 bottom-2 size-16 rounded-full bg-mark-coral/40 blur-2xl [animation-delay:-3s]" />
-      <svg viewBox="0 0 24 24" aria-hidden className="onboard-mark relative size-24">
+    <div className="relative mb-5 grid size-20 place-items-center">
+      <svg viewBox="0 0 24 24" aria-hidden className="onboard-mark relative size-18">
         <clipPath id={clip}>
           <circle cx="9.5" cy="9.5" r="7" className="blue" />
         </clipPath>
@@ -288,7 +288,7 @@ function AccountStep({
         </div>
       ) : (
         <div className="mt-9 flex w-80 flex-col gap-2">
-          <button type="button" data-first onClick={() => void signIn(true)} className={bigPrimary}>
+          <button type="button" onClick={() => void signIn(true)} className={bigPrimary}>
             Create your Parallax account
           </button>
           <button type="button" onClick={() => void signIn(false)} className={bigOutline}>

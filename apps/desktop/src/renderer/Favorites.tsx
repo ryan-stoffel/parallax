@@ -275,7 +275,7 @@ export function Favorites({
                 setMenuFor(f.key);
                 openOnContextMenu(e, triggers.current.get(f.key) ?? null);
               }}
-              className={`relative grid w-full place-items-center rounded-xl transition-[background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none h-11 [&_svg]:size-5 ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_14%,transparent)]" : "bg-foreground/[0.045] hover:bg-foreground/[0.08]"}`}
+              className={`relative grid w-full place-items-center rounded-xl transition-[background-color,transform,opacity] duration-250 ease-[cubic-bezier(0.23,1,0.32,1)] outline-none focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none h-10 [&_svg]:size-5 ${dragging === f.key ? "opacity-40" : ""} ${f.selected ? "bg-selected shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--foreground)_12%,transparent)]" : "hover:bg-hover"}`}
             >
               {f.icon}
               {f.project ? (
@@ -316,7 +316,7 @@ export function Favorites({
           </li>
         ))}
         {over && (
-          <li className="grow-in grid h-11 place-items-center rounded-xl border border-dashed border-accent/50 text-meta font-medium text-accent">
+          <li className="grow-in grid h-10 place-items-center rounded-xl border border-dashed border-accent/50 text-meta font-medium text-accent">
             Favorite
           </li>
         )}

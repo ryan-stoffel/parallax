@@ -85,7 +85,10 @@ export function MiniPrompt({
   };
 
   return (
-    <div className={large ? "mx-auto w-full max-w-2xl px-6 pb-6" : "px-3 pb-3"}>
+    // A fade over its top edge, so what scrolls under the box goes soft rather than cut.
+    <div
+      className={`relative before:pointer-events-none before:absolute before:inset-x-0 before:-top-8 before:h-8 before:bg-linear-to-t before:from-pane before:to-transparent ${large ? "mx-auto w-full max-w-2xl px-6 pb-6" : "px-3 pb-3"}`}
+    >
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -132,7 +135,7 @@ export function MiniPrompt({
       {model && (
         // Tucked under the box, as the composer's tab is.
         <div
-          className={`tucked -mt-4 flex items-center rounded-b-xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
+          className={`tucked -mt-4 flex items-center rounded-b-xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-3 px-1"}`}
         >
           <ModelPick providers={providers} models={offered} value={model} onChange={setPicked} />
         </div>

@@ -1026,8 +1026,9 @@ function FolderItem({
       <span
         className={`flex shrink-0 items-center gap-1 text-meta text-faint-foreground tabular-nums ${hideOnHover}`}
       >
+        {/* A folder's Done is only its mark: its threads say Done themselves. */}
         {news(top) ? (
-          <Status attention={top} words />
+          <Status attention={top} words={top !== "done"} />
         ) : busy(top) ? (
           <Status attention={top} />
         ) : (

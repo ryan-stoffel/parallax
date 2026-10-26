@@ -28,7 +28,7 @@ export function ComposerTabs({
     <div
       role="group"
       aria-label="Composer tabs"
-      className={`relative mx-5 -mb-4 flex min-w-0 items-center gap-0.5 overflow-hidden rounded-t-xl border border-b-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1 ${short ? "pt-0.5 pb-4.5" : "pt-1 pb-5"}`}
+      className={`relative mx-3 -mb-4 flex min-w-0 items-center gap-0.5 overflow-hidden rounded-t-xl border border-b-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1 ${short ? "pt-0.5 pb-4.5" : "pt-1 pb-5"}`}
     >
       {tabs.map((tab, i) => (
         <div
