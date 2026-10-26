@@ -91,6 +91,3 @@ pub fn codex(message: &Value) -> Parsed<Name> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {}

@@ -100,6 +100,3 @@ pub fn codex(message: &Value) -> Parsed<Vec<UsageLimitWindow>> {
         })
         .collect()))
 }
-
-#[cfg(test)]
-mod tests {}

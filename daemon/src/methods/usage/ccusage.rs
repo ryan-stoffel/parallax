@@ -198,6 +198,3 @@ fn agent(name: &str) -> Option<CliKind> {
         _ => None,
     }
 }
-
-#[cfg(test)]
-mod tests {}

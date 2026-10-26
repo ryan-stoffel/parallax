@@ -269,6 +269,3 @@ pub use usage::{
 /// Additive changes keep it. Removals, renames, and type changes bump it, and the previous
 /// version stays supported for at least one release.
 pub const PROTOCOL_VERSION: u32 = 1;
-
-#[cfg(test)]
-mod tests {}
