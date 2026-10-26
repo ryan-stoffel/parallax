@@ -1,12 +1,13 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 use jiff::{SignedDuration, Timestamp};
 
 use super::{
-    Change, Check, CheckState, Detail, Remark, Watch, Watches, evaluate, judged, message, parse,
-    verdict,
+    Change, Check, CheckState, Detail, Merging, Remark, Watch, Watches, blockers, evaluate, judged,
+    message, parse, try_merge, verdict,
 };
+use crate::pr_write::Refusal;
 use parallax_protocol::{PrStatusCheck, PrStatusFile, PrStatusThread};
 
 fn start() -> Timestamp {
@@ -423,4 +424,286 @@ fn a_field_github_cant_answer_leaves_the_rest_of_the_read() {
     )
     .unwrap_err();
     assert!(error.to_string().contains("Could not resolve"), "{error}");
+}
+
+#[tokio::test]
+async fn merge_when_ready_waits_for_green() {
+    let url = "https://github.com/me/app/pull/1";
+    let green = Detail {
+        merge_state: "CLEAN".to_owned(),
+        ..open(
+            vec![check("lint", CheckState::Passed, true)],
+            Vec::new(),
+            "MERGEABLE",
+        )
+    };
+    assert!(blockers(url, &green).is_empty());
+    let held = |change: fn(&mut Detail)| {
+        let mut detail = green.clone();
+        change(&mut detail);
+        blockers(url, &detail)
+    };
+    assert_eq!(
+        held(|d| d.checks.push(check("test", CheckState::Pending, false))),
+        ["pending: test"]
+    );
+    assert_eq!(
+        held(|d| d.checks[0].state = CheckState::Failed("failure")),
+        ["failing: lint"]
+    );
+    assert_eq!(
+        held(|d| d.checks.clear()),
+        ["no checks have reported on its head yet"]
+    );
+    assert_eq!(held(|d| d.draft = true), ["it is a draft"]);
+    assert_eq!(
+        held(|d| d.review_decision = Some("CHANGES_REQUESTED".to_owned())),
+        ["changes requested"]
+    );
+    assert_eq!(
+        held(|d| d.mergeable = "CONFLICTING".to_owned()),
+        ["it conflicts with develop"]
+    );
+    // Behind its base holds a merge only where the base requires an up-to-date branch.
+    assert!(held(|d| d.behind_by = Some(3)).is_empty());
+    assert_eq!(
+        held(|d| d.merge_state = "BEHIND".to_owned()),
+        ["develop requires it to be up to date"]
+    );
+    assert_eq!(held(|d| d.merge_state = "BLOCKED".to_owned()).len(), 1);
+
+    let mut pending = green.clone();
+    pending.checks[0].state = CheckState::Pending;
+    let mut pushed = green.clone();
+    pushed.head_sha = Some("pushed".to_owned());
+    pushed.checks.clear();
+    let reads = Cell::new(0);
+    let merges = RefCell::new(Vec::<String>::new());
+    let fetch = |detail: &Detail| {
+        let (reads, detail) = (&reads, detail.clone());
+        move || {
+            reads.set(reads.get() + 1);
+            let detail = detail.clone();
+            async move { Ok(detail) }
+        }
+    };
+    let merge = |answer: fn() -> Result<(), Refusal>| {
+        let merges = &merges;
+        move |head: String| {
+            merges.borrow_mut().push(head);
+            async move { answer() }
+        }
+    };
+
+    // Not green: no fresh read, no merge.
+    let waiting = try_merge(url, &pending, fetch(&green), merge(|| Ok(()))).await;
+    assert_eq!(waiting, Merging::Waiting(vec!["pending: lint".to_owned()]));
+    assert_eq!(reads.get(), 0);
+    assert!(merges.borrow().is_empty());
+
+    // Green in a shared read, but pushed since: the fresh read decides, and it isn't green.
+    let waiting = try_merge(url, &green, fetch(&pushed), merge(|| Ok(()))).await;
+    assert!(matches!(waiting, Merging::Waiting(_)), "{waiting:?}");
+    assert_eq!(reads.get(), 1);
+    assert!(merges.borrow().is_empty());
+
+    // Green in both: merged, pinned to the head the fresh read judged.
+    let done = try_merge(url, &green, fetch(&green), merge(|| Ok(()))).await;
+    assert_eq!(done, Merging::Merged("abc1234def".to_owned()));
+    assert_eq!(*merges.borrow(), ["abc1234def"]);
+
+    let later = || Err(Refusal::Later("secondary rate limit".to_owned()));
+    let refused = || Err(Refusal::Final("Pull request is not mergeable".to_owned()));
+    let again = try_merge(url, &green, fetch(&green), merge(later)).await;
+    assert_eq!(again, Merging::Later);
+    let refused = try_merge(url, &green, fetch(&green), merge(refused)).await;
+    assert_eq!(
+        refused,
+        Merging::Refused("Pull request is not mergeable".to_owned())
+    );
+}
+
+#[tokio::test]
+async fn merge_when_ready_tells_a_merge_made_elsewhere_queued_or_unsure() {
+    let url = "https://github.com/me/app/pull/1";
+    let green = Detail {
+        merge_state: "CLEAN".to_owned(),
+        ..open(
+            vec![check("lint", CheckState::Passed, true)],
+            Vec::new(),
+            "MERGEABLE",
+        )
+    };
+    let read = |detail: &Detail| {
+        let detail = detail.clone();
+        move || {
+            let detail = detail.clone();
+            async move { Ok(detail) }
+        }
+    };
+    let answer = |answer: fn() -> Result<(), Refusal>| move |_: String| async move { answer() };
+
+    // Another run's merge got there first, before this pass merged or as it did.
+    let gone = Detail {
+        state: "MERGED".to_owned(),
+        ..green.clone()
+    };
+    let first = try_merge(url, &green, read(&gone), answer(|| Ok(()))).await;
+    assert_eq!(first, Merging::AlreadyMerged);
+    let raced = || {
+        Err(Refusal::Final(
+            "Pull request #1 was already merged".to_owned(),
+        ))
+    };
+    let raced = try_merge(url, &green, read(&green), answer(raced)).await;
+    assert_eq!(raced, Merging::AlreadyMerged);
+
+    // A merge that ran out of time is told by a read after it.
+    let unsure = || Err(Refusal::Unsure("timed out".to_owned()));
+    let still_open = try_merge(url, &green, read(&green), answer(unsure)).await;
+    assert_eq!(still_open, Merging::Later);
+    let landed = try_merge(url, &green, read_twice(&green, &gone), answer(unsure)).await;
+    assert_eq!(landed, Merging::Merged("abc1234def".to_owned()));
+
+    // A base with a merge queue queues it rather than merging it.
+    let queue = Detail {
+        merge_queue: true,
+        ..green.clone()
+    };
+    let queued = try_merge(url, &queue, read(&queue), answer(|| Ok(()))).await;
+    assert_eq!(queued, Merging::Queued("abc1234def".to_owned()));
+}
+
+/// A fetch that reads `first`, then `then` ever after.
+fn read_twice(
+    first: &Detail,
+    then: &Detail,
+) -> impl Fn() -> std::future::Ready<Result<Detail, crate::worktree::PrError>> {
+    let reads = Cell::new(0);
+    let (first, then) = (first.clone(), then.clone());
+    move || {
+        reads.set(reads.get() + 1);
+        std::future::ready(Ok(if reads.get() == 1 {
+            first.clone()
+        } else {
+            then.clone()
+        }))
+    }
+}
+
+/// Jobs behind `needs:` aren't checks until they start, so after the first wave every listed
+/// check can pass while the workflow still runs: its check suite holds the merge.
+#[tokio::test]
+async fn merge_when_ready_waits_for_a_running_workflow() {
+    let url = "https://github.com/me/app/pull/1";
+    let suites = |status: &str| {
+        with_suites(&format!(
+            r#"{{"nodes": [
+              {{"status": "{status}", "workflowRun": {{"databaseId": 42}}}},
+              {{"status": "QUEUED", "workflowRun": null}}
+            ]}}"#
+        ))
+    };
+    let running = parse(&suites("IN_PROGRESS")).unwrap();
+    assert!(running.actions_hold.is_some());
+    assert!(
+        running
+            .checks
+            .iter()
+            .all(|check| check.state == CheckState::Passed)
+    );
+    let merges = Cell::new(0);
+    let merge = |_head: String| {
+        merges.set(merges.get() + 1);
+        async { Ok(()) }
+    };
+    let held = try_merge(url, &running, || async { Ok(running.clone()) }, merge).await;
+    assert_eq!(
+        held,
+        Merging::Waiting(vec![
+            "a GitHub Actions workflow on its head is still running".to_owned()
+        ])
+    );
+    assert_eq!(merges.get(), 0);
+
+    // Done, with an app's suite left queued: that one never holds it.
+    let done = parse(&suites("COMPLETED")).unwrap();
+    assert_eq!(done.actions_hold, None);
+    let finished = try_merge(url, &done, || async { Ok(done.clone()) }, merge).await;
+    assert_eq!(finished, Merging::Merged("abc1234def".to_owned()));
+}
+
+/// [`ANSWER`] made green: mergeable, clean, every listed check passed, nothing unresolved, as
+/// after a workflow's first wave of jobs. Its commit has no `checkSuites`.
+fn first_wave() -> String {
+    ANSWER
+        .replace(
+            r#""mergeable": "CONFLICTING""#,
+            r#""mergeable": "MERGEABLE""#,
+        )
+        .replace(
+            r#""mergeStateStatus": "DIRTY""#,
+            r#""mergeStateStatus": "CLEAN""#,
+        )
+        .replace(
+            r#""reviewDecision": "CHANGES_REQUESTED""#,
+            r#""reviewDecision": null"#,
+        )
+        .replace(r#""state": "CHANGES_REQUESTED""#, r#""state": "COMMENTED""#)
+        .replace(r#""isResolved": false"#, r#""isResolved": true"#)
+        .replace(r#""conclusion": "FAILURE""#, r#""conclusion": "SUCCESS""#)
+        .replace(
+            r#""status": "IN_PROGRESS", "conclusion": null"#,
+            r#""status": "COMPLETED", "conclusion": "SUCCESS""#,
+        )
+}
+
+/// [`first_wave`] with its head's `checkSuites` as `suites`, JSON.
+fn with_suites(suites: &str) -> String {
+    first_wave().replace(
+        r#""commit": {"statusCheckRollup""#,
+        &format!(r#""commit": {{"checkSuites": {suites}, "statusCheckRollup""#),
+    )
+}
+
+/// The check-suite gate fails closed: suites GitHub left out, or more than one page of them,
+/// hold a merge as a running workflow does.
+#[tokio::test]
+async fn merge_when_ready_holds_when_it_cant_read_every_suite() {
+    let url = "https://github.com/me/app/pull/1";
+    let done = r#"{"status": "COMPLETED", "workflowRun": {"databaseId": 1}}"#;
+    let many = vec![done; 50].join(", ");
+    for (answer, reason) in [
+        (first_wave(), "GitHub didn't list its head's check suites"),
+        (
+            with_suites(&format!(
+                r#"{{"pageInfo": {{"hasNextPage": true}}, "nodes": [{done}]}}"#
+            )),
+            "its head has more than 50 check suites, more than Parallax reads",
+        ),
+        (
+            with_suites(&format!(
+                r#"{{"pageInfo": {{"hasNextPage": false}}, "nodes": [{many}]}}"#
+            )),
+            "its head has more than 50 check suites, more than Parallax reads",
+        ),
+    ] {
+        let detail = parse(&answer).unwrap();
+        let merges = Cell::new(0);
+        let merge = |_: String| {
+            merges.set(merges.get() + 1);
+            async { Ok(()) }
+        };
+        let held = try_merge(url, &detail, || async { Ok(detail.clone()) }, merge).await;
+        assert_eq!(held, Merging::Waiting(vec![reason.to_owned()]));
+        assert_eq!(merges.get(), 0);
+    }
+}
+
+#[test]
+fn a_watch_stored_before_merge_when_ready_still_reads() {
+    let stored = serde_json::to_string(&Watch::new(start())).unwrap();
+    assert!(!stored.contains("merge"), "{stored}");
+    let read: Watch = serde_json::from_str(&stored).unwrap();
+    assert_eq!(read.merge, None);
 }

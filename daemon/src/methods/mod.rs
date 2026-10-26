@@ -9,8 +9,8 @@
 //! `github/status` in `accounts.rs`; PLX-423 `githubSetup`: `github/install`, `github/signIn`, and
 //! `github/signInCancel` there too; PLX-401 `inbox`: `inbox.rs`; PLX-370 `queue`: `queue.rs`; PLX-402 `questions`: `question.rs`; PLX-405 `memory`: `memory.rs`; PLX-410 `landing`: `land.rs`; PLX-574 `connect`: `connect/devices` in `connect.rs`; PLX-637 `terminals`: `terminal/*` in
 //! `crate::terminals`; PLX-641 `remote`: `remote/*` in `remote.rs`; 0063 `schedules` and `prWatch`:
-//! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, and `pr/watches` in
-//! `crate::pr_watch`; PLX-650 `setupScripts`: `repo/scripts` and `repo/saveScripts` in
+//! `schedule/*` in `crate::schedules` and `pr/watch`, `pr/unwatch`, `pr/watches`, and
+//! `pr/mergeWhenReady` in `crate::pr_watch`, and `pr/write` in `crate::pr_write`; PLX-650 `setupScripts`: `repo/scripts` and `repo/saveScripts` in
 //! `crate::setup_scripts`; 0062 `checkpoints`: `orchestration/threadRuns`, `getTurnDiff`, and
 //! `getFullThreadDiff` in `crate::checkpoints`; PLX-648 `delegation`: `task/delegate`,
 //! `task/status`, and `thread/mergeBack` in `crate::delegation`; PLX-648 `secrets`:
@@ -412,6 +412,8 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         PrFailureLog => |p| crate::ci_logs::failure_log(daemon, p),
         PrUploadMedia => |p| crate::pr_media::upload(daemon, p),
         PrSharedDiff => |p| agents::shared_diff(Arc::clone(daemon), p),
+        PrWrite => |p| crate::pr_write::write(daemon, p),
+        PrMergeWhenReady => |p| crate::pr_watch::merge_when_ready(daemon, p),
         RepoScripts => |p| crate::setup_scripts::scripts(daemon, p),
         TaskDelegate => |p| crate::delegation::delegate(Arc::clone(daemon), p),
         TaskStatus => |p| crate::delegation::status(daemon, p),

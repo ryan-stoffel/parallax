@@ -64,18 +64,19 @@ use crate::{
     MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
     MemorySyncListParams, MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult,
     MemoryWriteParams, MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult,
-    PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult,
-    PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
-    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult,
-    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
-    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
-    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
-    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
-    ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
-    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
-    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
-    QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
-    RelayRegisterParams, RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
+    PrMergeWhenReadyParams, PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams,
+    PrWatchesResult, PrWriteParams, PrWriteResult, PreviewCallParams, PreviewCallResult,
+    PreviewFrameParams, PreviewFrameResult, PreviewInputParams, PreviewInputResult,
+    PreviewListParams, PreviewListResult, ProjectCreateParams, ProjectCreateResult,
+    ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult,
+    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
+    ProjectUpdateResult, PromptImage, ProvidersListParams, ProvidersListResult,
+    ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams, ProvidersUpdatesResult,
+    ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest, QuestionAnswerParams,
+    QuestionAskParams, QuestionEscalateParams, QuestionListParams, QuestionListResult,
+    QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams,
+    QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult, RelayRegisterParams,
+    RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
     RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
     RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
     RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoMatchParams, RepoMatchResult,
@@ -663,6 +664,15 @@ method_table! {
         /// it, read once per head and shared by every run that asks. It needn't be linked. Gated
         /// on `prWatch`.
         PrSharedDiff = "pr/sharedDiff": PrViewParams => PrDiffResult;
+        /// `pr/write` (PLX-1022): comments on, reviews, edits, or replies to a review thread of a
+        /// GitHub pull request through plxd's one paced write queue per host. Fails with
+        /// `prFailed` when GitHub refuses or rate limits it or the queue stays busy, and with
+        /// `ghUnavailable` without a signed-in `gh`. Gated on `prWatch`.
+        PrWrite = "pr/write": PrWriteParams => PrWriteResult;
+        /// `pr/mergeWhenReady` (PLX-1022): watches a pull request for a run, as `pr/watch` does,
+        /// and has plxd merge it, pinned to the head it judged, once it is ready, then wake the
+        /// run with the result. Unwatching cancels the merge. Gated on `prWatch`.
+        PrMergeWhenReady = "pr/mergeWhenReady": PrMergeWhenReadyParams => PrWatchResult;
         /// `repo/scripts`: a repo entry's setup and settle scripts, and those its `parallax.json`
         /// declares (PLX-650). Fails with `repoNotFound` for an unknown entry. Gated on the
         /// `setupScripts` capability, like `repo/saveScripts`.

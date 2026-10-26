@@ -4,16 +4,20 @@
 //! `unlink_pull_request`, `watch_pull_request`, `unwatch_pull_request`, and
 //! `list_thread_pull_requests` through `pr/*`, and Parallax's own `pull_request_status`
 //! (PLX-837), `ci_failure_log` (PLX-1019), `upload_pr_media` (PLX-1020), `pull_request_diff`
-//! (PLX-1021), and `github_budget` (PLX-1023). Every caller gets them, and [`INSTRUCTIONS`], which
-//! tell the agent to use them instead of `gh`.
+//! (PLX-1021), `github_budget` (PLX-1023), and the paced writes `pull_request_comment`,
+//! `pull_request_review`, `pull_request_edit`, `reply_to_review_thread`, and `merge_when_ready`
+//! (PLX-1022). Every caller gets them, and [`INSTRUCTIONS`], which tell the agent to use them
+//! instead of `gh`.
 
 use parallax_protocol::methods::{
-    PrFailureLog, PrLink, PrSharedDiff, PrStatus, PrUnlink, PrUnwatch, PrWatch, PrWatches,
-    ScheduleDelete, ScheduleList, ScheduleRun, ScheduleSave, ThreadList,
+    PrFailureLog, PrLink, PrMergeWhenReady, PrSharedDiff, PrStatus, PrUnlink, PrUnwatch, PrWatch,
+    PrWatches, PrWrite as WritePr, ScheduleDelete, ScheduleList, ScheduleRun, ScheduleSave,
+    ThreadList,
 };
 use parallax_protocol::{
-    AccountChoice, AgentRun, PrFailureLogParams, PrViewParams, PrWatchesParams, RunId, Schedule,
-    ScheduleIdParams, ScheduleListParams, ScheduleSaveParams, ScheduledTask, ThreadListParams,
+    AccountChoice, AgentRun, PrFailureLogParams, PrMergeWhenReadyParams, PrViewParams,
+    PrWatchesParams, PrWriteParams, RunId, Schedule, ScheduleIdParams, ScheduleListParams,
+    ScheduleSaveParams, ScheduledTask, ThreadListParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -39,12 +43,17 @@ pub const TOOLS: &[&str] = &[
     "upload_pr_media",
     "pull_request_diff",
     "github_budget",
+    "pull_request_comment",
+    "pull_request_review",
+    "pull_request_edit",
+    "reply_to_review_thread",
+    "merge_when_ready",
 ];
 
 /// What every thread's agent is told at startup, through MCP's `instructions`, as T3 Code's
 /// runtime instructions tell it (PLX-837): without it, each agent reads and waits on its pull
 /// requests its own way, with `gh` loops, sleeps, and watchers that spend the shared GitHub quota.
-pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's title, body, branches, head commit, changed files, checks with their links and Actions run ids, reviews, unresolved review threads with their ids, conflicts, and whether it is ready to merge with pull_request_status, never gh pr view or gh pr checks. Read its diff, or only some files' diff, with pull_request_diff, never gh pr diff: one read per head serves every thread. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Read why a check failed with ci_failure_log, not gh run list, gh run view --log-failed, or gh api: it returns each failed job's error lines and reads each log from GitHub once. Check how much of the shared GitHub quota is left with github_budget. Use gh only for what these tools don't do, such as replying to or resolving a review thread, and merging.";
+pub const INSTRUCTIONS: &str = "Parallax is your GitHub integration for pull requests. Register every pull request you open or work on with link_pull_request, each layer of a stack included. Read a pull request's title, body, branches, head commit, changed files, checks with their links and Actions run ids, reviews, unresolved review threads with their ids, conflicts, and whether it is ready to merge with pull_request_status, never gh pr view or gh pr checks. Read its diff, or only some files' diff, with pull_request_diff, never gh pr diff: one read per head serves every thread. To wait on CI or reviews, or when asked to monitor, watch, or babysit a pull request, call watch_pull_request and end your turn: Parallax wakes you when a check fails, the required checks pass, someone else comments or reviews, or the branch starts to conflict. Never poll, sleep, or run your own watcher, such as gh pr checks --watch, gh run watch, or a loop. Read why a check failed with ci_failure_log, not gh run list, gh run view --log-failed, or gh api: it returns each failed job's error lines and reads each log from GitHub once. Check how much of the shared GitHub quota is left with github_budget. Comment on, review, or edit the title or body of a pull request, and reply to or resolve a review thread, with pull_request_comment, pull_request_review, pull_request_edit, and reply_to_review_thread, never gh pr comment, gh pr review, gh pr edit, or gh api graphql: Parallax paces every pull request write on this host so parallel agents don't hit GitHub's secondary rate limit. To merge, call merge_when_ready and end your turn, never gh pr merge, gh pr merge --auto, or gh pr checks followed by gh pr merge: Parallax merges once the pull request is ready and wakes you with the result. Use gh only for what these tools don't do, such as opening a pull request.";
 
 /// What `link_pull_request` and `list_thread_pull_requests` remind the agent of, as T3's do.
 const REGISTER: &str = "Register every pull request you open for this thread, including each layer of a stack, right after creating it.";
@@ -245,7 +254,90 @@ pub fn definitions() -> Vec<Value> {
             object(json!({}), &[]),
             true,
         ),
+        tool(
+            "pull_request_comment",
+            &format!("Comment on a pull request's conversation. {PACED}"),
+            written(
+                json!({"body": {"type": "string", "description": "The comment, in Markdown."}}),
+                &["body"],
+            ),
+            false,
+        ),
+        tool(
+            "pull_request_review",
+            &format!(
+                "Review a pull request: comment, approve, or request changes, with a body. {PACED}"
+            ),
+            written(
+                json!({
+                    "event": {"type": "string", "enum": ["comment", "approve", "requestChanges"], "description": "The verdict."},
+                    "body": {"type": "string", "description": "The review, in Markdown. Required to comment or request changes."},
+                }),
+                &["event", "body"],
+            ),
+            false,
+        ),
+        tool(
+            "pull_request_edit",
+            &format!("Change a pull request's title, body, or both. {PACED}"),
+            written(
+                json!({
+                    "title": {"type": "string", "description": "The new title."},
+                    "body": {"type": "string", "description": "The new body, in Markdown, replacing the old one."},
+                }),
+                &[],
+            ),
+            false,
+        ),
+        tool(
+            "reply_to_review_thread",
+            &format!(
+                "Reply to a review thread on a pull request, resolve it, or both, by the thread id pull_request_status lists under unresolvedThreads. {PACED}"
+            ),
+            written(
+                json!({
+                    "reviewThreadId": {"type": "string", "description": "The review thread's id, such as PRRT_kwDO..., from pull_request_status."},
+                    "body": {"type": "string", "description": "The reply, in Markdown. Omit to resolve without replying."},
+                    "resolve": {"type": "boolean", "description": "Resolve the thread, after the reply. Defaults to false."},
+                }),
+                &["reviewThreadId"],
+            ),
+            false,
+        ),
+        tool(
+            "merge_when_ready",
+            "Have Parallax merge a pull request once it is ready, then wake you with the result; use this instead of gh pr merge, gh pr merge --auto, or polling checks. It watches the pull request for this thread as watch_pull_request does, and returns at once, so end your turn. Within about two minutes of it being ready, Parallax reads it again and merges it with method, only if its head is still the one it judged. Ready is pull_request_status's ready, except that being behind the base only holds it when the base requires branches to be up to date. It never merges a draft, a conflict, a pending or failing check, a GitHub Actions workflow still running, an unresolved review thread, or requested changes. On a base with a merge queue it queues the pull request instead, and says so. If GitHub refuses the merge, the wake says why. A registered merge survives plxd restarts. It is dropped when the watch ends: when this thread settles or is archived, the pull request closes, the watch reaches 10 comment-only wakes in a row, Parallax fails to read the pull request 8 times in a row, or you call unwatch_pull_request.",
+            object(
+                json!({
+                    "threadId": {"type": "string", "description": "The thread to wake. Omit for this thread."},
+                    "url": {"type": "string", "description": "The pull request's URL, such as https://github.com/owner/repo/pull/123. Preferred when you have it."},
+                    "repository": {"type": "string", "description": "owner/repo. With number, when url is omitted."},
+                    "number": {"type": "integer", "minimum": 1, "description": "The pull request's number. With repository, when url is omitted."},
+                    "host": {"type": "string", "description": "github.com, the only host Parallax reads."},
+                    "method": {"type": "string", "enum": ["merge", "squash", "rebase"], "description": "How to merge it."},
+                }),
+                &["method"],
+            ),
+            false,
+        ),
     ]
+}
+
+/// What each pull request write tool says about the queue.
+const PACED: &str = "Use this instead of gh or gh api: Parallax sends every pull request write on this host through one queue, a second apart, and backs off GitHub's secondary rate limit, so a call can take up to a minute. A busy queue or a rate limit is an error saying when to call again; don't retry with gh. It needn't be linked.";
+
+/// A pull request write tool's schema: the pull request, and `own`, its own fields.
+fn written(own: Value, required: &[&str]) -> Value {
+    let mut properties = json!({
+        "url": {"type": "string", "description": "The pull request's URL, such as https://github.com/owner/repo/pull/123. Preferred when you have it."},
+        "repository": {"type": "string", "description": "owner/repo. With number, when url is omitted."},
+        "number": {"type": "integer", "minimum": 1, "description": "The pull request's number. With repository, when url is omitted."},
+        "host": {"type": "string", "description": "github.com, the only host Parallax reads."},
+    });
+    if let (Some(properties), Value::Object(own)) = (properties.as_object_mut(), own) {
+        properties.extend(own);
+    }
+    object(properties, required)
 }
 
 #[derive(Deserialize)]
@@ -410,7 +502,62 @@ pub(super) async fn call(
             let read = plxd.call::<PrSharedDiff>(params).await?;
             Ok(agent_diff(read, &paths, MAX_RESULT_BYTES))
         }
+        "pull_request_comment"
+        | "pull_request_review"
+        | "pull_request_edit"
+        | "reply_to_review_thread"
+        | "merge_when_ready" => write(binding, name, arguments).await,
         _ => pull_request(binding, name, parse(arguments)?).await,
+    }
+}
+
+/// The paced write tools (PLX-1022): `pull_request_comment`, `pull_request_review`,
+/// `pull_request_edit`, `reply_to_review_thread`, and `merge_when_ready`.
+async fn write(binding: &Binding, name: &str, arguments: Value) -> Result<String, String> {
+    let plxd = &binding.plxd;
+    match name {
+        "pull_request_comment"
+        | "pull_request_review"
+        | "pull_request_edit"
+        | "reply_to_review_thread" => {
+            let (kind, keys): (&str, &[&str]) = match name {
+                "pull_request_comment" => ("comment", &["body"]),
+                "pull_request_review" => ("review", &["event", "body"]),
+                "pull_request_edit" => ("edit", &["title", "body"]),
+                _ => ("replyToThread", &["reviewThreadId", "body", "resolve"]),
+            };
+            let (mut own, target) = split(arguments, keys);
+            own.insert("kind".to_owned(), json!(kind));
+            let write = parse(Value::Object(own))?;
+            let url = target_url(parse(target)?)?;
+            plxd.call::<WritePr>(PrWriteParams {
+                url: url.clone(),
+                write,
+            })
+            .await?;
+            let mut answer = identity(&url);
+            answer["sent"] = json!(kind);
+            Ok(pretty(&answer))
+        }
+        "merge_when_ready" => {
+            let (mut own, target) = split(arguments, &["method"]);
+            let method = parse(own.remove("method").unwrap_or_default())?;
+            let target: TargetArgs = parse(target)?;
+            let run_id = target.thread_id.unwrap_or(binding.run);
+            let url = target_url(target)?;
+            let params = PrMergeWhenReadyParams {
+                run_id,
+                url: url.clone(),
+                method,
+            };
+            let result = plxd.call::<PrMergeWhenReady>(params).await?;
+            let mut answer = identity(&url);
+            answer["merge"] = json!(method);
+            answer["watching"] = json!(result.watching);
+            answer["wasWatching"] = json!(result.was_watching);
+            Ok(pretty(&answer))
+        }
+        other => Err(format!("no tool is named {other:?}")),
     }
 }
 
@@ -653,6 +800,20 @@ fn target_url(target: TargetArgs) -> Result<String, String> {
         ));
     }
     Ok(url)
+}
+
+/// `arguments` with `keys` taken out into their own object, then the rest, which names the pull
+/// request.
+fn split(mut arguments: Value, keys: &[&str]) -> (serde_json::Map<String, Value>, Value) {
+    let own = arguments
+        .as_object_mut()
+        .map(|args| {
+            keys.iter()
+                .filter_map(|key| Some(((*key).to_owned(), args.remove(*key)?)))
+                .collect()
+        })
+        .unwrap_or_default();
+    (own, arguments)
 }
 
 /// A pull request URL's host, repository, number, and URL.

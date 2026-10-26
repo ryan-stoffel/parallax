@@ -212,7 +212,8 @@ pub use provider::{
 };
 pub use pull_request::{
     PrActParams, PrAction, PrCheck, PrCheckState, PrComment, PrCommit, PrDiffResult, PrFile,
-    PrMergeMethod, PrMergeState, PrReview, PrReviewState, PrState, PrViewParams, PullRequest,
+    PrMergeMethod, PrMergeState, PrMergeWhenReadyParams, PrReview, PrReviewEvent, PrReviewState,
+    PrState, PrViewParams, PrWrite, PrWriteParams, PrWriteResult, PullRequest,
 };
 pub use question::{
     Question, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionId,
