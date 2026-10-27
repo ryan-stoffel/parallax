@@ -306,111 +306,31 @@ describe("on a plxd with providers", () => {
     await settle();
   };
 
-  test.each([false, true])(
-    "pool setup requires accountPools capability (%s)",
-    async (supported) => {
-      if (supported)
-        states["local"] = {
-          ...states["local"]!,
-          capabilities: { providers: {}, accountPools: {} },
-        } as ConnectionState;
-      await renderSettings();
-      await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
-      await click(button(dialog(), "CodexOpenAI's agent"));
-      expect(dialog().textContent?.includes("Several accounts")).toBe(supported);
-      expect(dialog().textContent?.includes("Create pool")).toBe(supported);
-    },
-  );
-
-  const poolAccounts = () => {
-    states["local"] = {
-      ...states["local"]!,
-      capabilities: { providers: {}, accountPools: {} },
-    } as ConnectionState;
-    listed.push(
-      {
-        ...listed[1]!,
-        instance: { ...instance("work", "codex", "Work"), home: "~/.codex-work" },
-        signedIn: true,
-        account: "work@example.test",
-      },
-      {
-        ...listed[1]!,
-        instance: { ...instance("backup", "codex", "Backup"), home: "~/.codex-backup" },
-        signedIn: true,
-      },
-      {
-        ...listed[1]!,
-        instance: { ...instance("pool", "codex", "Codex pool"), members: ["codex", "work"] },
-      },
-    );
-  };
-  const providerNames = () =>
-    [...document.querySelectorAll('[role="tablist"][aria-label="Providers"] [role="tab"]')].map(
-      (t) => t.textContent,
-    );
-
-  test("pool members are managed inside their pool without standalone provider rows", async () => {
-    poolAccounts();
+  test("a second account of a provider is warned about, and the first isn't", async () => {
     await renderSettings();
-    expect(providerNames()).toHaveLength(3);
-    expect(tab("Codex")).toBe(tab("Codex pool"));
-    expect(tab("Work")).toBeUndefined();
-    await click(tab("Codex pool"));
-    await click(button(section("Accounts"), "Sign in"));
-    expect(visible('[role="tabpanel"] h2').textContent).toBe("Codex");
-    expect(tab("Codex pool").getAttribute("aria-selected")).toBe("true");
-    expect(visible('[aria-label="Codex sign-in terminal"]')).toBeDefined();
-    expect(providerNames()).toHaveLength(3);
-    await click(button(document.body, "Back to Codex pool"));
-    const workSettings = document.querySelector<HTMLElement>('[aria-label="Settings for Work"]')!;
-    workSettings.focus();
-    await click(workSettings);
-    expect(document.activeElement).toBe(button(document.body, "Back to Codex pool"));
-    expect(visible('[role="tabpanel"] h2').textContent).toBe("Work");
-    expect(providerNames()).toHaveLength(3);
-    expect(document.querySelector('[aria-label="Work sign-in terminal"]')).toBeNull();
-    expect(document.querySelector('[aria-label="Codex sign-in terminal"]')).not.toBeNull();
-    await click(button(document.body, "Back to Codex pool"));
-    expect(document.activeElement).toBe(workSettings);
-  });
-
-  test("a disabled pool member can be enabled inside its settings without a standalone row", async () => {
-    poolAccounts();
-    listed[1] = { ...listed[1]!, instance: { ...listed[1]!.instance, enabled: false } };
-    await renderSettings();
-    await click(tab("Codex pool"));
-    await click(visible('[aria-label="Settings for Codex"]'));
-    const toggle = visible('[role="switch"][aria-label="Use Codex"]');
-    expect(toggle.getAttribute("aria-checked")).toBe("false");
-    expect(toggle.hasAttribute("disabled")).toBe(false);
-    await click(toggle);
-    expect(saved()).toMatchObject({ id: "codex", enabled: true });
-    expect(visible('[role="switch"][aria-label="Use Codex"]').getAttribute("aria-checked")).toBe(
-      "true",
+    await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+    await click(button(dialog(), "CodexOpenAI's agent"));
+    expect(dialog().querySelector('[role="note"]')?.textContent).toContain(
+      "already has a Codex account.",
     );
-    expect(providerNames()).toHaveLength(3);
-    expect(tab("Codex")).toBe(tab("Codex pool"));
-    expect(tab("Codex pool").getAttribute("aria-selected")).toBe("true");
-  });
+    await next();
+    await next();
+    expect(saved()).toMatchObject({ id: "codex-2", kind: "codex" });
 
-  test("joining a pool hides a standalone account and leaving restores it", async () => {
-    poolAccounts();
-    await renderSettings();
-    expect(tab("Backup")).toBeDefined();
-    await click(tab("Codex pool"));
-    await click(visible('[aria-label="Pool Backup"]'));
-    expect(tab("Backup")).toBeUndefined();
-    expect(listed.find((p) => p.instance.id === "pool")?.instance.members).toEqual([
-      "codex",
-      "work",
-      "backup",
-    ]);
-    await click(visible('[aria-label="Pool Codex"]'));
-    expect(tab("Codex").textContent).toMatch(/^Codex(?! pool)/);
-    expect(listed.find((p) => p.instance.id === "pool")?.instance.members).toEqual([
-      "work",
-      "backup",
+    // A row by its instance's id, since Claude's shows its email blurred.
+    const mark = (id: string) =>
+      document
+        .querySelector(`[role="tab"][aria-controls$="-${id}-pane"]`)!
+        .parentElement!.querySelector('button[aria-label="Several accounts"]');
+    expect(mark("claude")).toBeNull();
+    expect(mark("codex")).toBeNull();
+    expect(mark("codex-2")).not.toBeNull();
+    const popover = document.getElementById(mark("codex-2")!.getAttribute("popovertarget")!)!;
+    expect(popover.textContent).toContain("aren't supported");
+    expect(popover.textContent).toContain("CLIProxyAPI hub");
+    expect([...popover.querySelectorAll("a")].map((a) => a.href)).toEqual([
+      "https://help.router-for.me/",
+      "https://gist.github.com/t3dotgg/59a521d2ee8d70aaf90e280c175072af",
     ]);
   });
 

@@ -1,16 +1,8 @@
-import { ExternalLink, Plus, Search, X } from "lucide-react";
+import { ExternalLink, Plus, Search, TriangleAlert, X } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import { HOME_VARS, type RegistryAgent } from "../preload/bridge";
-import type { ProviderEnvVar, ProviderInfo } from "../protocol/generated/protocol";
-import {
-  createPool,
-  PoolAccounts,
-  poolable,
-  poolDraft,
-  poolSize,
-  type PoolDraft,
-} from "./PoolSettings";
+import type { ProviderEnvVar, ProviderInstance } from "../protocol/generated/protocol";
 import {
   keepRegistryIcon,
   kindOf,
@@ -24,6 +16,7 @@ import {
   type Preset,
 } from "./providers";
 import { field, primaryButton, quietButton } from "./settings/parts";
+import { hasAccountOf, SeveralAccountsNote } from "./SeveralAccounts";
 import { IconButton, Segmented } from "./ui";
 
 /** What a new instance starts as: a card's preset, or a registry agent's, with its icon. */
@@ -83,28 +76,22 @@ const steps = ["Provider", "Identity", "Config"];
 /**
  * Add provider, a native modal <dialog> open while it's mounted, in three steps: a provider card
  * or an ACP Registry agent; its display name and id, unique on the host; and how it runs. Add
- * saves it on the host and calls `onAdded` with its id; closing calls `onClose`. Claude Code and
- * Codex ask first whether to add one account or several: several walks through an account pool
- * (PLX-1033) in place of the last two steps, already chosen when the host has an account of the
- * kind, and Create pool saves the new accounts and the pool, and calls `onAdded` with the pool's.
+ * saves it on the host and calls `onAdded` with its id; closing calls `onClose`. Another account
+ * of a provider the host already has is allowed, with a warning (0088).
  */
 export function AddProviderDialog({
   hostId,
   hostName,
-  list,
-  accountPools = false,
+  instances,
   onAdded,
   onClose,
 }: {
   hostId: string;
   hostName: string;
-  /** The host's instances. */
-  list: ProviderInfo[];
-  accountPools?: boolean;
+  instances: ProviderInstance[];
   onAdded: (id: string) => void;
   onClose: () => void;
 }) {
-  const instances = list.map((p) => p.instance);
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [step, setStep] = useState(0);
@@ -118,8 +105,6 @@ export function AddProviderDialog({
   const [env, setEnv] = useState<ProviderEnvVar[]>([]);
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
-  // Several accounts, as a pool, while that's chosen.
-  const [pool, setPool] = useState<PoolDraft>();
   useEffect(() => dialog.current?.showModal(), []);
 
   const ids = instances.map((i) => i.id);
@@ -167,29 +152,7 @@ export function AddProviderDialog({
     setArgs((next.args ?? []).join(" "));
     setEnv(next.env ?? []);
     setError(undefined);
-    const pooled =
-      accountPools &&
-      poolable(next.kind) &&
-      instances.some((i) => i.kind === next.kind && !i.members);
-    setPool(pooled ? poolDraft(next.kind, list) : undefined);
     setStep(to);
-  };
-
-  const addPool = async () => {
-    if (!draft || !pool) return;
-    setSaving(true);
-    const made = await createPool(hostId, draft.kind, pool, list);
-    setSaving(false);
-    if ("error" in made) {
-      setPool({
-        ...pool,
-        existing: [...pool.existing, ...made.created],
-        fresh: pool.fresh.slice(made.created.length),
-      });
-      return setError(made.error);
-    }
-    onAdded(made.id);
-    dialog.current?.close();
   };
 
   const add = async () => {
@@ -226,7 +189,6 @@ export function AddProviderDialog({
         onSubmit={(e) => {
           e.preventDefault();
           if (step === 2) void add();
-          else if (step === 1 && pool) void addPool();
           else if (step === 1 && !idError && name.trim()) setStep(2);
           else if (step === 0 && draft) setStep(1);
         }}
@@ -245,7 +207,7 @@ export function AddProviderDialog({
           </IconButton>
         </div>
         <ol className="flex gap-4 border-b border-border px-5 pb-3 text-body">
-          {(pool ? ["Provider", "Accounts"] : steps).map((s, i) => (
+          {steps.map((s, i) => (
             <li
               key={s}
               aria-current={i === step ? "step" : undefined}
@@ -269,31 +231,21 @@ export function AddProviderDialog({
               onManual={() => choose({ kind: "acp", name: "ACP agent", args: [] }, 2)}
             />
           )}
-          {step === 1 && draft && accountPools && poolable(draft.kind) && (
-            <div className="mb-4 flex items-center justify-between gap-4 text-body text-muted-foreground">
-              How many {kindOf(draft.kind).name} accounts?
-              <Segmented
-                label="Accounts"
-                options={[
-                  { value: "one", name: "One account" },
-                  { value: "several", name: "Several accounts" },
-                ]}
-                value={pool ? "several" : "one"}
-                onChange={(n) => setPool(n === "several" ? poolDraft(draft.kind, list) : undefined)}
-              />
+          {step === 1 && draft && hasAccountOf(draft.kind, instances) && (
+            <div
+              role="note"
+              className="mb-4 flex gap-2.5 rounded-lg border border-border bg-hover px-3 py-2.5 text-body text-muted-foreground"
+            >
+              <TriangleAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-warning" />
+              <div>
+                <p className="font-medium text-foreground">
+                  {hostName} already has a {kindOf(draft.kind).name} account.
+                </p>
+                <SeveralAccountsNote />
+              </div>
             </div>
           )}
-          {step === 1 && pool && draft && (
-            <>
-              <PoolAccounts kind={draft.kind} list={list} draft={pool} onChange={setPool} />
-              {error && (
-                <p role="alert" className="mt-3 text-body text-danger">
-                  {error}
-                </p>
-              )}
-            </>
-          )}
-          {step === 1 && !pool && (
+          {step === 1 && (
             <div className="flex flex-col gap-4">
               <label className="text-body text-muted-foreground">
                 Display name
@@ -479,19 +431,11 @@ export function AddProviderDialog({
           <button
             type="submit"
             disabled={
-              (step === 0 && !draft) ||
-              (step === 1 && (pool ? poolSize(pool) < 2 : !!idError || !name.trim())) ||
-              saving
+              (step === 0 && !draft) || (step === 1 && (!!idError || !name.trim())) || saving
             }
             className={primaryButton}
           >
-            {step === 1 && pool
-              ? saving
-                ? "Creating…"
-                : "Create pool"
-              : step === 2
-                ? "Add provider"
-                : "Next"}
+            {step === 2 ? "Add provider" : "Next"}
           </button>
         </div>
       </form>

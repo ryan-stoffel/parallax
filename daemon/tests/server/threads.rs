@@ -9,20 +9,18 @@ use std::time::Duration;
 
 use parallax_protocol::jsonrpc::{ErrorObject, INVALID_PARAMS};
 use parallax_protocol::methods::{
-    AgentEvents, AgentList, AgentSend, EventsSubscribe, HostHealth, ProvidersSave, RepoAdd,
-    ThreadArchive, ThreadDelete, ThreadList, ThreadStart, ThreadUpdate,
+    AgentEvents, AgentList, AgentSend, EventsSubscribe, HostHealth, RepoAdd, ThreadArchive,
+    ThreadDelete, ThreadList, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AgentEffort, AgentEventsParams, AgentListParams, AgentPermission,
     AgentSendParams, AgentStatus, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    HostHealthParams, ParallaxEvent, ProjectId, Provider, ProviderInstance, ProviderKind,
-    ProvidersSaveParams, RepoAddParams, RepoId, RunId, ThreadArchiveParams, ThreadDeleteParams,
-    ThreadListParams, ThreadListResult, ThreadStartParams, ThreadUpdateParams, TurnId,
+    HostHealthParams, ParallaxEvent, ProjectId, Provider, RepoAddParams, RepoId, RunId,
+    ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams,
+    ThreadUpdateParams, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
-use plxd::backend::{
-    Backend, Capabilities, Event, LimitStatus, LimitWindow, RunRequest, StartError, Started,
-};
+use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started};
 use plxd::routing::BackendRegistry;
 use tempfile::TempDir;
 use tokio::time::Instant;
@@ -728,7 +726,6 @@ async fn a_thread_keeps_its_model_effort_permission_and_approvals() {
 /// and whether it resumed a session. Each start takes the next of `first`, where `None` refuses
 /// to start, then `fake` once `first` is empty.
 struct Other {
-    name: &'static str,
     fake: FakeBackend,
     first: Mutex<VecDeque<Option<FakeBackend>>>,
     prompts: Arc<Mutex<Vec<(String, bool)>>>,
@@ -737,7 +734,6 @@ struct Other {
 impl Other {
     fn new(fake: FakeBackend, prompts: &Arc<Mutex<Vec<(String, bool)>>>) -> Self {
         Self {
-            name: "other",
             fake,
             first: Mutex::new(VecDeque::new()),
             prompts: Arc::clone(prompts),
@@ -747,7 +743,7 @@ impl Other {
 
 impl Backend for Other {
     fn name(&self) -> &'static str {
-        self.name
+        "other"
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -763,111 +759,6 @@ impl Backend for Other {
             None => self.fake.start(request),
         }
     }
-}
-
-/// A thread started on an account pool (PLX-1033) runs on a member, and a message that names
-/// the pool again stays on that member's session instead of moving, though the other member now
-/// has more left.
-#[tokio::test]
-async fn a_pool_starts_a_thread_on_a_member_and_keeps_it_there() {
-    let prompts = Arc::new(Mutex::new(Vec::new()));
-    let mut backends = fake(editing());
-    // The built-in `claude` instance's startup backend, which a plain `claude` instance runs.
-    // Its first run reports a window 40% used.
-    let mut used = editing();
-    used.insert(
-        1,
-        Step::Emit(Event::RateLimit(LimitWindow {
-            window: "five_hour".to_owned(),
-            duration_minutes: Some(300),
-            used_percent: Some(40.0),
-            status: LimitStatus::Allowed,
-            resets_at: Some(jiff::Timestamp::now() + jiff::SignedDuration::from_hours(3)),
-        })),
-    );
-    backends.register(
-        Provider::Openai,
-        Arc::new(Other {
-            name: "claude",
-            first: Mutex::new(VecDeque::from([Some(fake_backend(used))])),
-            ..Other::new(fake_backend(editing()), &prompts)
-        }),
-    );
-    let host = Host::start(backends);
-    let mut client = host.client().await;
-    let instance = |id: &str, members: Option<Vec<String>>| ProviderInstance {
-        id: id.to_owned(),
-        kind: ProviderKind::Claude,
-        name: id.to_owned(),
-        enabled: true,
-        program: None,
-        home: None,
-        args: Vec::new(),
-        env: Vec::new(),
-        models: Vec::new(),
-        reserve: None,
-        members,
-    };
-    for saved in [
-        instance("claude", None),
-        instance("claude-work", None),
-        instance("pool", Some(vec!["claude".into(), "claude-work".into()])),
-    ] {
-        client
-            .call::<ProvidersSave>(ProvidersSaveParams { instance: saved })
-            .await
-            .unwrap();
-    }
-    let pool = AccountChoice::Subscription {
-        backend: "pool".to_owned(),
-    };
-    let params = ThreadStartParams {
-        account: Some(pool.clone()),
-        ..start_params(None, "Write the notes")
-    };
-    let started = client.call::<ThreadStart>(params.clone()).await.unwrap();
-    // Neither member has used anything, so the first one listed.
-    assert_eq!(started.run.backend, "claude");
-    assert_eq!(started.run.account_id, "claude");
-    let scope = scope(started.thread.repo);
-    client.subscribe(0, Some(scope)).await;
-    client.until(updated_to(AgentStatus::Completed)).await;
-
-    let sent = client
-        .call::<AgentSend>(AgentSendParams {
-            account: Some(pool.clone()),
-            ..message(params.run_id, "Now the tests")
-        })
-        .await
-        .unwrap()
-        .run;
-    assert_eq!(sent.backend, "claude", "no move");
-    client.until(updated_to(AgentStatus::Completed)).await;
-    let prompts = prompts.lock().unwrap().clone();
-    let resumed: Vec<bool> = prompts.iter().map(|(_, resumed)| *resumed).collect();
-    assert_eq!(
-        resumed,
-        [false, true],
-        "the second message resumed the session"
-    );
-    client
-        .call::<ProvidersSave>(ProvidersSaveParams {
-            instance: ProviderInstance {
-                enabled: false,
-                ..instance("pool", Some(vec!["claude".into(), "claude-work".into()]))
-            },
-        })
-        .await
-        .unwrap();
-    let refused = client
-        .call::<ThreadStart>(ThreadStartParams {
-            account: Some(pool),
-            ..start_params(None, "Start on a disabled pool")
-        })
-        .await
-        .unwrap_err();
-    assert!(refused.message.contains("disabled"));
-    host.server.stop().await;
 }
 
 /// A message on another backend's account moves the thread there: the same run, worktree, and

@@ -2002,20 +2002,6 @@ impl Actor {
             return Err(ErrorObject::invalid_params("text must not be empty"));
         }
         self.check_compact(&queued)?;
-        // A pool that holds the run's account is no move: the thread stays on its member
-        // (PLX-1033), as the composer keeps sending the pool the model was picked from. Any
-        // other pool moves it to the member for its model.
-        if let Some(AccountChoice::Subscription { backend }) = &queued.account
-            && let Some(members) = self.daemon.providers.members(backend).await
-        {
-            queued.account = if members.contains(&self.row.state.account_id) {
-                None
-            } else {
-                let model = queued.options.model.as_deref();
-                let model = model.or(self.row.fields.model.as_deref());
-                super::placement::pool_member(&self.daemon, queued.account.take(), model).await?
-            };
-        }
         // A run in a Project runs in its mode, so a message can't change it (0042).
         if queued.options.permission.is_some()
             && super::project_mode(&self.daemon, self.project)

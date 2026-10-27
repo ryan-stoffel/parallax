@@ -232,5 +232,5 @@ export const instanceName = (id: string): string | undefined => listedInstance(i
 export function accountLabel(info: Pick<ProviderInfo, "instance" | "account">): string {
   const { instance, account } = info;
   const automatic = /^(?:Account|Codex|Claude(?: Code)?)(?: \d+)?$/.test(instance.name);
-  return !instance.members && automatic && account?.includes("@") ? account : instance.name;
+  return automatic && account?.includes("@") ? account : instance.name;
 }

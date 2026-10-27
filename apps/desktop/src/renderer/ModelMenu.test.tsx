@@ -9,7 +9,7 @@ import { redactedPlaceholder } from "./Redacted";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
-const codex = (id: string, name: string, members?: string[]): Instance => ({
+const codex = (id: string, name: string): Instance => ({
   id,
   name,
   kind: "codex",
@@ -17,7 +17,6 @@ const codex = (id: string, name: string, members?: string[]): Instance => ({
   permissions: [],
   efforts: true,
   coordinator: false,
-  ...(members && { members }),
 });
 const model = (provider: string, id: string): Model => ({
   id,
@@ -26,20 +25,20 @@ const model = (provider: string, id: string): Model => ({
   contexts: [],
 });
 
-// Two Codex accounts and their pool, and Claude (PLX-1033).
+// Three Codex accounts, and Claude.
 const catalog: Catalog = {
   hostId: "local",
   instances: [
     { ...codex("claude", "Claude"), kind: "claude" },
     { ...codex("codex", "personal@example.test"), plan: "plus" },
     { ...codex("codex-2", "Work"), account: "work@example.test", plan: "pro" },
-    codex("pool", "Codex pool", ["codex", "codex-2"]),
+    codex("codex-3", "Home"),
   ],
   models: [
     model("claude", "opus"),
     model("codex", "gpt-a"),
     model("codex-2", "gpt-b"),
-    model("pool", "gpt-pool"),
+    model("codex-3", "gpt-c"),
   ],
 };
 
@@ -58,7 +57,7 @@ const listed = () =>
   );
 const header = () => button("Choose account")?.textContent;
 
-test("a provider's accounts and pool share one rail button, with a pool-first account menu", () => {
+test("a provider's accounts share one rail button, with an account menu", () => {
   const container = document.body.appendChild(document.createElement("div"));
   root = createRoot(container);
   act(() =>
@@ -74,13 +73,15 @@ test("a provider's accounts and pool share one rail button, with a pool-first ac
   act(() => button("Choose account")!.click());
   const bar = document.querySelector('[role="menu"][aria-label="Account"]')!;
   expect([...bar.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual([
-    "Codex pool",
     "hidden email",
     "Work",
+    "Home",
   ]);
-  // It opens on the pool, and says it's a pool and what it does.
-  expect(listed()).toEqual(["gpt-pool"]);
-  expect(header()).toBe("Codex poolPoolPicks from 2 accounts by usage left");
+  // It opens on the first account.
+  expect(listed()).toEqual(["gpt-a"]);
+  expect(header()).toBe(
+    `${redactedPlaceholder("personal@example.test")}Email hidden, hover or focus to showPlus`,
+  );
 
   // An account's header names it, its plan, and its email, and its rows only their models.
   act(() => button("Work")!.click());
@@ -134,18 +135,18 @@ test("account keyboard navigation stays in the selector and returns focus on clo
   };
   chooser.focus();
   press("ArrowDown");
-  expect(document.activeElement).toBe(button("Codex pool"));
-  press("ArrowDown");
   expect(document.activeElement).toBe(button("Work"));
   press("ArrowDown");
-  expect(document.activeElement).toBe(button("Codex pool"));
+  expect(document.activeElement).toBe(button("Home"));
+  press("ArrowDown");
+  expect(document.activeElement).toBe(button("Work"));
   press("ArrowUp");
-  expect(document.activeElement).toBe(button("Work"));
+  expect(document.activeElement).toBe(button("Home"));
   act(() => (document.activeElement as HTMLButtonElement).click());
   expect(document.activeElement).toBe(chooser);
-  expect(listed()).toEqual(["gpt-b"]);
+  expect(listed()).toEqual(["gpt-c"]);
   press("ArrowUp");
-  expect(document.activeElement).toBe(button("Work"));
+  expect(document.activeElement).toBe(button("Home"));
   press("Escape");
   expect(document.activeElement).toBe(chooser);
   expect(document.querySelector('[role="menu"][aria-label="Account"]')).toBeNull();

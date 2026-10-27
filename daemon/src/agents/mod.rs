@@ -365,8 +365,6 @@ pub(super) async fn prepare(
     role: Role,
     full_claude: bool,
 ) -> Result<(Prepared, String), ErrorObject> {
-    // A pool is never a backend: a run that still names one starts on a member (PLX-1033).
-    let requested = placement::pool_member(daemon, requested, None).await?;
     prepare_run(daemon, project, run, requested, role, full_claude, false).await
 }
 
@@ -1122,7 +1120,7 @@ pub(crate) async fn create_started(
         prompt,
         images,
         threads,
-        account,
+        mut account,
         coordinator_thread,
         notify,
         mut options,
@@ -1172,8 +1170,6 @@ pub(crate) async fn create_started(
     // The attached threads are read before anything is created, so a failure leaves nothing.
     let attached = attached::prompt(&daemon, run_id, &threads, &prompt).await?;
     let (sent, seen) = (attached.text, attached.seen);
-    // A pool's run starts on its member, which a Project's rules then place (PLX-1033).
-    let mut account = placement::pool_member(&daemon, account, options.model.as_deref()).await?;
     // A Project's child goes where its rules say, or waits (0046).
     let requested = account.clone();
     let mut waiting = None;
