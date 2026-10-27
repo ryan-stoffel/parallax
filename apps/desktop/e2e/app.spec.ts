@@ -221,7 +221,7 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
     account: { kind: "subscription", backend: "fake" },
   })`);
   expect(set).not.toHaveProperty("error");
-  // The project chat reads the default when it opens, to offer its backend's models, so reopen it.
+  // The project chat reads the default again as Settings closes, to offer its backend's models.
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Close settings" }).click();
 
