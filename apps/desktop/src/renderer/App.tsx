@@ -58,6 +58,7 @@ import { ProjectHome, waitingCount } from "./ProjectHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { NotificationsPage } from "./NotificationsPage";
 import { PullRequestsPage } from "./PullRequestsPage";
+import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
 import { SettingsDialog } from "./Settings";
 import { SidePanel } from "./SidePanel";
@@ -128,7 +129,6 @@ export interface Split {
 }
 
 export type SettingsSection =
-  | "usage"
   | "general"
   | "threads"
   | "appearance"
@@ -143,7 +143,8 @@ export type SettingsSection =
   | "connections";
 
 /**
- * The app frame: sidebar, then the chat or Settings, then the side panel.
+ * The app frame: sidebar, then the chat or a page, then the side panel, with Settings floating
+ * over them.
  * Views are plain state, not routes: there is nothing to deep-link yet.
  */
 export function App() {
@@ -178,9 +179,11 @@ export function App() {
       open: settings !== null,
       count: settings ? count : count + 1,
     }));
-  // The page shown in place of the chat, if any: Pull requests, Notifications (PLX-1015), or the
-  // sidebar's permanent browser (PLX-964). Opening a thread closes it.
-  const [mainPage, setMainPage] = useState<"pullRequests" | "notifications" | "browser">();
+  // The page shown in place of the chat, if any: Pull requests, Notifications (PLX-1015), Usage, or
+  // the sidebar's permanent browser (PLX-964). Opening a thread closes it.
+  const [mainPage, setMainPage] = useState<
+    "pullRequests" | "notifications" | "usage" | "browser"
+  >();
   const browserStyle = useBrowserTheme();
   // The permanent browser mounts the first time it opens and stays, so its pages keep running.
   const [browserPage, setBrowserPage] = useState(false);
@@ -763,7 +766,7 @@ export function App() {
     });
     addDialog.current?.open(start);
   };
-  const openMainPage = (next: "pullRequests" | "notifications" | "browser") => {
+  const openMainPage = (next: NonNullable<typeof mainPage>) => {
     setSettings(null);
     setMainPage(next);
   };
@@ -901,7 +904,7 @@ export function App() {
       keywords: "limits tokens cost",
       icon: <ChartColumn />,
       command: "usage",
-      run: () => openSettings("usage"),
+      run: () => openMainPage("usage"),
     },
     {
       id: "settings",
@@ -1013,7 +1016,7 @@ export function App() {
         if (dialog || settings) return;
         step(command === "back" ? -1 : 1);
       } else if (command === "settings") openSettings("general");
-      else if (command === "usage") openSettings("usage");
+      else if (command === "usage") openMainPage("usage");
       else if (command === "openPr") {
         // The open thread's latest linked pull request.
         const latest = prs.urls.at(-1);
@@ -1194,6 +1197,7 @@ export function App() {
           onOpenProject={openProject}
           onOpenSettings={openSettings}
           onOpenPullRequests={() => openMainPage("pullRequests")}
+          onOpenUsage={() => openMainPage("usage")}
           browserOpen={mainPage === "browser"}
           onOpenBrowser={() => openMainPage("browser")}
           onDelete={deleteThread}
@@ -1222,6 +1226,18 @@ export function App() {
                 <Breadcrumb items={[{ label: "Notifications" }]} />
               </TopBar>
               <NotificationsPage />
+            </>
+          ) : mainPage === "usage" ? (
+            <>
+              <TopBar className={topBarInset}>
+                {showSidebar}
+                <Breadcrumb items={[{ label: "Usage" }]} />
+              </TopBar>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="mx-auto max-w-5xl px-8 pt-6 pb-16">
+                  <UsagePage hosts={hosts} />
+                </div>
+              </div>
             </>
           ) : mainPage === "pullRequests" ? (
             <>
