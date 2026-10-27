@@ -347,7 +347,7 @@ export function App() {
     split?.hostId === host.id &&
     split.threadIds.includes(selection.threadId);
   const panes = selection.kind !== "thread" ? [] : paired ? split.threadIds : [selection.threadId];
-  // The open thread's group (No Repo's until plxd lists it), or the new thread's.
+  // The open thread's group (Chat's until plxd lists it), or the new thread's.
   let group = groups[0]!;
   if (selection.kind === "thread") {
     const open = threads.state.threads.find((t) => t.id === selection.threadId);

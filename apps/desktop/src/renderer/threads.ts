@@ -468,10 +468,10 @@ export function setRepoIcons(views: ThreadsView[], name: string, icon: ProjectIc
   }
 }
 
-/** Whether a group holds chats with no repository of the user's: No Repo, or a Space. */
+/** Whether a group holds chats with no repository of the user's: Chat, or a Space. */
 export const repoless = (g: { id: string; space?: boolean }) => g.id === noRepo || !!g.space;
 
-/** A repo entry that is a repository of the user's: not No Repo's scratch entry, nor a Space. */
+/** A repo entry that is a repository of the user's: not Chat's scratch entry, nor a Space. */
 export const isRepository = (r: { scratch?: boolean; space?: boolean }) => !r.scratch && !r.space;
 
 /** A thread's group id: its repository's, or `noRepo`. */

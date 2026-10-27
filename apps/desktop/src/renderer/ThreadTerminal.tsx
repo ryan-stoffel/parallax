@@ -8,7 +8,7 @@ import { IconButton } from "./ui";
 const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
 
 /**
- * A folder a terminal opens in, on a host: a repository's checkout, or a No Repo thread's own.
+ * A folder a terminal opens in, on a host: a repository's checkout, or a Chat thread's own.
  * `key` names it across hosts, and a thread's ends its terminals when the thread is deleted.
  */
 export type ThreadFolder = { key: string; hostId: string; path: string; threadId?: string };
@@ -19,9 +19,9 @@ const homePath = "~";
 /**
  * Thread `threadId`'s folder: its own worktree, or a Current checkout thread's repository
  * checkout, shared with the repository's New thread. A thread with no run yet gets its
- * repository's checkout too. A No Repo thread has its scratch repository's, once its run made
+ * repository's checkout too. A Chat thread has its scratch repository's, once its run made
  * one. Or with `repoId`, a repository's checkout, for New thread, or the host's home folder for
- * No Repo's. Undefined while a No Repo thread has none yet.
+ * Chat's. Undefined while a Chat thread has none yet.
  */
 export function folderOf(
   hostId: string,
