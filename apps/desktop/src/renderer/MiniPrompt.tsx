@@ -133,7 +133,7 @@ export function MiniPrompt({
       {model && (
         // Tucked under the box, as the composer's tab is.
         <div
-          className={`tucked -mt-4 flex items-center rounded-b-prompt border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
+          className={`tucked -mt-4 flex items-center rounded-b-xl border border-t-0 border-border bg-surface pt-4 pb-0.5 ${large ? "mx-6 px-2" : "mx-4 px-1"}`}
         >
           <ModelPick providers={providers} models={offered} value={model} onChange={setPicked} />
         </div>

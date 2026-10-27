@@ -13,8 +13,9 @@ export interface ComposerTab {
  * waits on, given back to front as one line whose foot tucks behind the composer. The first tab
  * takes the line's free room as its full row; the rest sit after it in their compact form, so
  * the line never grows past one row. The tray is a shade under the box, so it reads as behind it,
- * and each tab's hover is a rounded piece of it. `short`, over a box that stepped back, trims the
- * line's height to match the box's one row.
+ * and each tab's hover is a rounded piece of it. It's inset by the box's radius, so its sides meet
+ * the box where its top runs straight, and its corners are a step squarer than the box's. `short`,
+ * over a box that stepped back, trims the line's height to match the box's one row.
  */
 export function ComposerTabs({
   tabs,
@@ -28,7 +29,7 @@ export function ComposerTabs({
     <div
       role="group"
       aria-label="Composer tabs"
-      className="relative mx-5 -mb-4 flex min-w-0 items-center gap-0.5 overflow-hidden rounded-t-prompt border border-b-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1 pt-0.5 pb-4.5"
+      className="relative mx-4 -mb-4 flex min-w-0 items-center gap-0.5 overflow-hidden rounded-t-xl border border-b-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1 pt-0.5 pb-4.5"
     >
       {tabs.map((tab, i) => (
         <div
