@@ -696,6 +696,14 @@ export function AgentChat({
   const [away, setAway] = useState(false);
   // Whether the composer stepped back for it, which shrinks its tabs too.
   const [back, setBack] = useState(false);
+  // The height of the composer's column, which the transcript leaves free past its end.
+  const [docked, setDocked] = useState(0);
+  const dockRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    const observer = new ResizeObserver(() => setDocked(el.offsetHeight));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
   const turnChanges = useMemo<TurnChangesTarget>(() => {
     const turns = new Map<string | undefined, ThreadRun>();
     for (const r of runs) {
@@ -885,66 +893,74 @@ export function AgentChat({
   const hasRows = rows.length > 0 || !!editing;
   return (
     <SubagentsContext value={subagents}>
-      {hasRows ? (
-        <ThreadLinksContext value={threadLinks}>
-          <ForkContext value={forkTarget}>
-            <TurnChangesContext value={turnChanges}>
-              <TranscriptView
-                rows={rows}
-                sent={unsent}
-                live={running}
-                stalled={stalled}
-                turnDone={transcript.turnDone}
-                root={run?.worktreePath}
-                runId={runId}
-                backend={run?.backend}
-                // plxd logs a fork's copied history with its agent.started, at its creation (0050).
-                copiedAt={forked ? run?.createdAt : undefined}
-                onResend={resend}
-                loadImage={showImage}
-                onCite={setCite}
-                onNearTop={older ? loadOlder : undefined}
-                onScrolledUp={setAway}
-                dock={dock}
-                onEdit={
-                  live && !editing && unanswered?.row
-                    ? { key: unanswered.row.key, edit: () => void edit() }
-                    : undefined
-                }
-                end={
-                  editing ? (
-                    <EditMessage
-                      editing={editing}
-                      loadImage={showImage}
-                      disabledReason={disabledReason}
-                      onSend={(text, images) =>
-                        setEditing({ ...editing, text, images, ready: true })
-                      }
-                      onCancel={cancelEdit}
-                    />
-                  ) : (
-                    run?.status === "waiting" && (
-                      <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {hasRows ? (
+          <ThreadLinksContext value={threadLinks}>
+            <ForkContext value={forkTarget}>
+              <TurnChangesContext value={turnChanges}>
+                <TranscriptView
+                  rows={rows}
+                  sent={unsent}
+                  live={running}
+                  stalled={stalled}
+                  turnDone={transcript.turnDone}
+                  root={run?.worktreePath}
+                  runId={runId}
+                  backend={run?.backend}
+                  // plxd logs a fork's copied history with its agent.started, at its creation (0050).
+                  copiedAt={forked ? run?.createdAt : undefined}
+                  onResend={resend}
+                  loadImage={showImage}
+                  onCite={setCite}
+                  onNearTop={older ? loadOlder : undefined}
+                  onScrolledUp={setAway}
+                  docked={docked}
+                  onEdit={
+                    live && !editing && unanswered?.row
+                      ? { key: unanswered.row.key, edit: () => void edit() }
+                      : undefined
+                  }
+                  end={
+                    editing ? (
+                      <EditMessage
+                        editing={editing}
+                        loadImage={showImage}
+                        disabledReason={disabledReason}
+                        onSend={(text, images) =>
+                          setEditing({ ...editing, text, images, ready: true })
+                        }
+                        onCancel={cancelEdit}
+                      />
+                    ) : (
+                      run?.status === "waiting" && (
+                        <ResumeCard hostId={hostId} run={run} disabledReason={disabledReason} />
+                      )
                     )
-                  )
-                }
-              />
-            </TurnChangesContext>
-          </ForkContext>
-        </ThreadLinksContext>
-      ) : (
-        <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-body text-faint-foreground">
-          {error ? (
-            <>
-              <p className="font-medium text-foreground">This chat couldn't load</p>
-              <p className="text-muted-foreground">{error}</p>
-            </>
-          ) : (
-            connected && "Loading…"
-          )}
+                  }
+                />
+              </TurnChangesContext>
+            </ForkContext>
+          </ThreadLinksContext>
+        ) : (
+          <div className="flex flex-1 flex-col items-center justify-center gap-1 px-8 text-center text-body text-faint-foreground">
+            {error ? (
+              <>
+                <p className="font-medium text-foreground">This chat couldn't load</p>
+                <p className="text-muted-foreground">{error}</p>
+              </>
+            ) : (
+              connected && "Loading…"
+            )}
+          </div>
+        )}
+        {/* In one place either way, so the composer keeps its focus and choices as rows arrive. */}
+        <div
+          ref={dockRef}
+          className={`flex min-h-0 flex-col ${hasRows ? "pointer-events-none absolute inset-x-0 bottom-0 max-h-full" : ""}`}
+        >
+          {dock}
         </div>
-      )}
-      {!hasRows && dock}
+      </div>
     </SubagentsContext>
   );
 }
@@ -1112,7 +1128,7 @@ export function TranscriptView({
   onEdit,
   onCite,
   onScrolledUp,
-  dock,
+  docked = 0,
 }: {
   rows: Row[];
   sent: ReadonlyMap<string, SentMessage>;
@@ -1145,20 +1161,10 @@ export function TranscriptView({
    * `awayGap` and off at the end, so a composer that shrinks for it can't flip it back.
    */
   onScrolledUp?: (up: boolean) => void;
-  /** Floats over the list's bottom, such as the composer, with the list scrolling under it. */
-  dock?: ReactNode;
+  /** The height of what floats over the list's bottom, such as the composer, left free past its end. */
+  docked?: number;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const dockRef = useRef<HTMLDivElement>(null);
-  // The dock's height, which the list leaves free past its end so the last row clears it.
-  const [docked, setDocked] = useState(0);
-  useLayoutEffect(() => {
-    const el = dockRef.current;
-    if (!el) return setDocked(0);
-    const observer = new ResizeObserver(() => setDocked(el.offsetHeight));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [!!dock]);
   const links = useContext(ThreadLinksContext);
   const known = useKnownMentions(links?.hostId, backend, runId, rows, sent);
   const rowContext = useMemo(() => ({ root, loadImage, known }), [root, loadImage, known]);
@@ -1422,14 +1428,6 @@ export function TranscriptView({
         {scrolledUp && <ScrollToEnd onClick={scrollToEnd} bottom={docked} />}
         {findBar}
         {onCite && <CiteSelection log={scrollRef} onCite={onCite} />}
-        {dock && (
-          <div
-            ref={dockRef}
-            className="pointer-events-none absolute inset-x-0 bottom-0 flex max-h-full flex-col"
-          >
-            {dock}
-          </div>
-        )}
       </div>
     </RowContext>
   );
