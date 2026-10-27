@@ -1039,7 +1039,7 @@ impl App {
                 })
                 .unwrap_or_default(),
             Some(Row::DefaultProvider) => {
-                "The provider a new thread runs on. /provider picks another for one message.".to_owned()
+                "The provider a new thread runs on, on its subscription, in place of any default set before. /provider picks another for one message.".to_owned()
             }
             Some(Row::Github) => {
                 "Parallax opens pull requests and reads their checks with the GitHub CLI, gh.".to_owned()
@@ -1200,8 +1200,9 @@ fn open_url(url: &str) {
     let mut command = if cfg!(target_os = "macos") {
         std::process::Command::new("open")
     } else if cfg!(windows) {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/c", "start", ""]);
+        // Not `cmd /c start`, which would take an `&` in the URL for the end of the command.
+        let mut command = std::process::Command::new("rundll32");
+        command.arg("url.dll,FileProtocolHandler");
         command
     } else {
         std::process::Command::new("xdg-open")

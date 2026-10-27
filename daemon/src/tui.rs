@@ -42,6 +42,7 @@ use parallax_protocol::{
     SubscriptionId, Thread, ThreadStartParams, ThreadUpdateParams, TurnId,
 };
 use ratatui::DefaultTerminal;
+use ratatui::crossterm::cursor::Show;
 use ratatui::crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
@@ -570,6 +571,9 @@ impl App {
                         self.key(key).await;
                         if let Some(login) = self.handover.take() {
                             self.sign_in_here(terminal, reader, login).await?;
+                            // Keys pressed before the handover, such as a second Enter, would
+                            // start it again.
+                            while keys.try_recv().is_ok() {}
                         }
                         self.dirty = true;
                     }
@@ -619,6 +623,8 @@ impl App {
         reader.pause();
         leave();
         ratatui::restore();
+        // The screen hid the cursor; a sign-in that asks for typing needs it.
+        let _ = execute!(std::io::stdout(), Show);
         println!(
             "Signing in to {}. Parallax comes back when the sign-in ends.\n",
             login.name
@@ -1511,7 +1517,7 @@ impl App {
                         "← on an empty prompt opens the sidebar; n there starts a thread",
                         "Click a tool line to open it · Ctrl+O opens them all",
                         "Shift+Tab mode · Esc interrupts · \\ or Alt+Enter new line",
-                        "/settings signs in to providers and GitHub, and changes settings",
+                        "/settings signs in to providers and GitHub, and changes settings · /login signs in",
                         "↑↓ history · wheel or PgUp/PgDn scroll · Shift+drag selects text",
                         "Ctrl-C twice quits",
                     ]
