@@ -816,6 +816,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           hostId={host.id}
           hostName={host.name}
           instances={list.map((p) => p.instance)}
+          taken={providers?.providers.map((p) => p.instance.id) ?? []}
           onAdded={setSelected}
           onClose={() => setAdding(false)}
           onHubs={openHubs}

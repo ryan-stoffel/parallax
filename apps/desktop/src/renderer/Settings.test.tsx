@@ -501,5 +501,45 @@ describe("on a plxd with providers", () => {
       await click(button(popover, "Set up a hub"));
       expect(dialog().textContent).toContain("Add hub");
     });
+
+    test("a retry after one computer fails saves the same hub only to that one", async () => {
+      let tries = 0;
+      answers["hubs/save"] = (p) => {
+        // The first try's second save, the Mac mini's, fails.
+        if (++tries === 2) return { error: { code: -32000, message: "keychain locked" } };
+        hubs = [{ ...home, ...p }];
+        return { result: { hubs } };
+      };
+      await renderSettings();
+      await click(document.querySelector<HTMLElement>('[aria-label="Add hub"]')!);
+      await type(labeled("URL"), "https://hub.example:8317");
+      await type(labeled("Access key"), "hub-access");
+      await next();
+      expect(dialog().querySelector('[role="alert"]')?.textContent).toContain(
+        "Mac mini: keychain locked",
+      );
+      await next();
+      expect(calls("hubs/save").map((s) => [s.host, s.params["id"]])).toEqual([
+        ["local", "home-hub"],
+        [mini.id, "home-hub"],
+        [mini.id, "home-hub"],
+      ]);
+      expect(document.querySelector("dialog")).toBeNull();
+    });
+
+    test("Add provider won't take a hub instance's id", async () => {
+      await renderSettings();
+      await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+      await click(button(dialog(), "Claude CodeAnthropic's agent"));
+      await type(
+        [...dialog().querySelectorAll("label")]
+          .find((l) => l.textContent?.startsWith("Id"))!
+          .querySelector("input")!,
+        "home-hub-claude",
+      );
+      expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
+        "Another provider on this host has it.",
+      );
+    });
   });
 });

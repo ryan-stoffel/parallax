@@ -53,7 +53,8 @@ function useHubHosts(hosts: Host[]): Host[] {
 /**
  * Add hub, a native modal <dialog> open while it's mounted: the hub's name, URL, access key, and
  * optional management key, and the computers to add it to, each connected one with `hubs`, all
- * checked. Add saves it on each under one id and calls `onAdded` with it; closing calls
+ * checked. Add saves it on each under one id and calls `onAdded` with it; after a computer fails,
+ * Add again saves it under that id only to the computers it hasn't reached. Closing calls
  * `onClose`.
  */
 export function AddHubDialog({
@@ -79,17 +80,29 @@ export function AddHubDialog({
   const eligible = useHubHosts(hosts);
   const chosen = eligible.filter((h) => !skipped.includes(h.id));
 
+  // The id an earlier try saved the hub under, and the computers it reached, so a retry saves the
+  // same hub only to the others.
+  const [saved, setSaved] = useState<{ id: string; hosts: string[] }>();
+
   const add = async () => {
     setSaving(true);
     setError(undefined);
+    const targets = chosen.filter((h) => !saved?.hosts.includes(h.id));
     // One id on every computer, free on each.
-    const lists = await Promise.all(
-      chosen.map(async (h) => {
-        const answer = await window.parallax.request(h.id, "hubs/list", { refresh: false });
-        return "result" in answer ? answer.result.hubs.map((hub) => hub.id) : [];
-      }),
-    );
-    const id = unique(slug(name).slice(0, 40), lists.flat(), "-");
+    const id =
+      saved?.id ??
+      unique(
+        slug(name).slice(0, 40),
+        (
+          await Promise.all(
+            targets.map(async (h) => {
+              const answer = await window.parallax.request(h.id, "hubs/list", { refresh: false });
+              return "result" in answer ? answer.result.hubs.map((hub) => hub.id) : [];
+            }),
+          )
+        ).flat(),
+        "-",
+      );
     const hub = {
       id,
       name: name.trim(),
@@ -98,9 +111,12 @@ export function AddHubDialog({
       accessKey: accessKey.trim(),
       ...(managementKey.trim() && { managementKey: managementKey.trim() }),
     };
-    const failures = (await Promise.all(chosen.map((h) => saveHub(h.id, hub)))).flatMap(
-      (problem, i) => (problem ? [`${chosen[i]!.name}: ${problem}`] : []),
+    const problems = await Promise.all(targets.map((h) => saveHub(h.id, hub)));
+    const failures = problems.flatMap((problem, i) =>
+      problem ? [`${targets[i]!.name}: ${problem}`] : [],
     );
+    const reached = targets.filter((_, i) => !problems[i]).map((h) => h.id);
+    setSaved({ id, hosts: [...(saved?.hosts ?? []), ...reached] });
     setSaving(false);
     if (failures.length) return setError(failures.join("\n"));
     onAdded(id);

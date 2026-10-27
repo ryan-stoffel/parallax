@@ -78,12 +78,14 @@ const steps = ["Provider", "Identity", "Config"];
  * or an ACP Registry agent; its display name and id, unique on the host; and how it runs. Add
  * saves it on the host and calls `onAdded` with its id; closing calls `onClose`. Another account
  * of a provider the host already has is allowed, with a warning (0088), whose hub link closes the
- * dialog for `onHubs`.
+ * dialog for `onHubs`. `instances` are the user's own; `taken` is every instance id on the host,
+ * a hub's (0089) too, which a new one can't have.
  */
 export function AddProviderDialog({
   hostId,
   hostName,
   instances,
+  taken,
   onAdded,
   onClose,
   onHubs,
@@ -91,6 +93,7 @@ export function AddProviderDialog({
   hostId: string;
   hostName: string;
   instances: ProviderInstance[];
+  taken: string[];
   onAdded: (id: string) => void;
   onClose: () => void;
   onHubs?: () => void;
@@ -110,7 +113,7 @@ export function AddProviderDialog({
   const [saving, setSaving] = useState(false);
   useEffect(() => dialog.current?.showModal(), []);
 
-  const ids = instances.map((i) => i.id);
+  const ids = taken;
   // A built-in agent takes its kind's id while it's free, which plxd's startup backend, the
   // coordinator, and the host's API keys go by.
   const builtIn = draft && ["claude", "codex", "cursor"].includes(draft.kind);
