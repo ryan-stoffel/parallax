@@ -3,7 +3,6 @@ import {
   Archive,
   ArchiveRestore,
   ArrowUp,
-  Bell,
   Bot,
   CalendarClock,
   ChartNoAxesColumn,
@@ -122,7 +121,7 @@ import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
 import { ClaudeLogo, CursorLogo, OpenAILogo, ParallaxMark } from "./logos";
 import { NightSky } from "./NightSky";
-import { dismiss, notify, useNotificationLog } from "./notifications";
+import { dismiss, notify } from "./notifications";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
 import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
@@ -200,28 +199,23 @@ interface SidebarProps {
   open: boolean;
   onClose: () => void;
   onNewThread: () => void;
-  /** Opens the Notifications page, in place of the main pane (PLX-1015). */
-  onOpenNotifications: () => void;
   children: ReactNode;
 }
 
 /**
  * The left column. Its top row holds the macOS traffic lights, then the toggle at the same
  * spot the main pane shows it while this column is hidden, then the app's mark and name, which
- * open a new thread, and at the far end Notifications, with a dot for unseen ones (PLX-1015). A
- * nightly build paints a sky behind that row and the Search row under it, as the column's own
- * background (index.css), with stars and clouds (NightSky.tsx).
+ * open a new thread. A nightly build paints a sky behind that row and the Search row under it, as
+ * the column's own background (index.css), with stars and clouds (NightSky.tsx).
  */
 export function Sidebar({
   open,
   onClose,
   onNewThread,
-  onOpenNotifications,
   children,
   width = 288,
   onResize,
 }: SidebarProps) {
-  const { unseen } = useNotificationLog();
   return (
     <nav
       id="sidebar"
@@ -251,16 +245,6 @@ export function Sidebar({
           <ParallaxMark className="size-5" />
           Parallax
         </button>
-        <IconButton
-          label={unseen ? `Notifications (${unseen} new)` : "Notifications"}
-          onClick={onOpenNotifications}
-          className="relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-4"
-        >
-          <Bell />
-          {unseen > 0 && (
-            <span aria-hidden className="absolute top-1 right-1 size-1.5 rounded-full bg-accent" />
-          )}
-        </IconButton>
       </TopBar>
       {children}
     </nav>

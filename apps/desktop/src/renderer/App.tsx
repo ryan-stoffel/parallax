@@ -56,7 +56,6 @@ import { useProjectContext } from "./ContextPanel";
 import { ProjectChat } from "./ProjectChat";
 import { ProjectHome, waitingCount } from "./ProjectHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
-import { NotificationsPage } from "./NotificationsPage";
 import { PullRequestsPage } from "./PullRequestsPage";
 import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
@@ -177,9 +176,8 @@ export function App() {
       open: settings !== null,
       count: settings ? count : count + 1,
     }));
-  // The page shown in place of the chat, if any: Pull requests, Notifications (PLX-1015), or Usage.
-  // Opening a thread closes it.
-  const [mainPage, setMainPage] = useState<"pullRequests" | "notifications" | "usage">();
+  // The page shown in place of the chat, if any: Pull requests or Usage. Opening a thread closes it.
+  const [mainPage, setMainPage] = useState<"pullRequests" | "usage">();
 
   useEffect(() => setMainPage(undefined), [selection]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
@@ -1165,7 +1163,6 @@ export function App() {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onNewThread={() => newThread()}
-        onOpenNotifications={() => openMainPage("notifications")}
       >
         <ThreadList
           hosts={listed}
@@ -1194,15 +1191,7 @@ export function App() {
       {/* An expanded side panel takes the main pane's place. */}
       <OpenDocumentContext value={openDoc}>
         <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
-          {mainPage === "notifications" ? (
-            <>
-              <TopBar className={topBarInset}>
-                {showSidebar}
-                <Breadcrumb items={[{ label: "Notifications" }]} />
-              </TopBar>
-              <NotificationsPage />
-            </>
-          ) : mainPage === "usage" ? (
+          {mainPage === "usage" ? (
             <>
               <TopBar className={topBarInset}>
                 {showSidebar}
