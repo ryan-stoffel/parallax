@@ -437,7 +437,7 @@ describe("on a plxd with providers", () => {
         ...codex,
         instance: {
           ...instance("work", "codex", "Work"),
-          home: "~/.codex-work",
+          home: "/Users/ryan/.codex-work",
           env: [{ name: "OPENAI_API_KEY", secret: true }],
         },
       },
@@ -451,7 +451,7 @@ describe("on a plxd with providers", () => {
     await click(document.querySelector<HTMLElement>('[aria-label="Copy from another computer"]')!);
     await click(button(visible('[role="menu"][aria-label="Copy from"]'), "Mac mini"));
     expect(calls("providers/save")).toEqual([
-      { host: "local", params: { instance: theirs[2]!.instance } },
+      { host: "local", params: { instance: { ...theirs[2]!.instance, home: "~/.codex-work" } } },
       { host: "local", params: { instance: theirs[1]!.instance } },
     ]);
     expect(listed.find((p) => p.instance.id === "codex")?.instance.name).toBe("Codex");

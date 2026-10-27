@@ -39,6 +39,7 @@ import {
   loadProviders,
   removeProvider,
   saveProvider,
+  useCopying,
   useProviders,
   versionOf,
   versions,
@@ -685,12 +686,10 @@ const instanceTone = (info: ProviderInfo) =>
 function CopyFrom({ host, others }: { host: Host; others: Host[] }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
-  const [copying, setCopying] = useState(false);
+  const copying = useCopying(host.id);
   const copy = async (from: Host) => {
     menu.current?.hidePopover();
-    setCopying(true);
     const result = await copyProviders(from.id, host.id);
-    setCopying(false);
     const key = `copy-providers/${host.id}`;
     if (typeof result === "string")
       return notify({ key, tone: "error", title: `Couldn't copy from ${from.name}`, body: result });
