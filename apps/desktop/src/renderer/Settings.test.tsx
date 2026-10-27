@@ -624,6 +624,19 @@ describe("on a plxd with providers", () => {
         expect(page().textContent).toContain("Sign-in cancelled");
       });
 
+      test("a cancel the hub refuses while it saves the account keeps waiting", async () => {
+        answers["hubs/accounts/cancel"] = () => ({ result: { status: "waiting" } });
+        await addAccount("Claude");
+        await click(button(page(), "Cancel"));
+        expect(calls("hubs/accounts/cancel")).toHaveLength(1);
+        expect(page().textContent).toContain("Waiting for the browser");
+        expect(page().textContent).not.toContain("Sign-in cancelled");
+
+        statuses = [{ status: "done" }];
+        await poll();
+        expect(page().textContent).toContain("Signed in");
+      });
+
       test("turns an account off, and removes one after a confirm", async () => {
         answers["hubs/accounts/setEnabled"] = (p) => {
           hubs = [

@@ -454,8 +454,12 @@ function AddAccount({
     const { service, state } = waiting;
     const answer = await window.parallax.request(hostId, "hubs/accounts/cancel", { hub, state });
     if ("error" in answer) return fail(service, describeError(answer.error));
-    if (answer.result.status === "done") void loadHubs(hostId, true);
-    setStep({ step: answer.result.status === "done" ? "done" : "cancelled", service });
+    const { status, problem } = answer.result;
+    // The hub won't cancel while it saves the account, so it keeps waiting, and so does this.
+    if (status === "waiting") return;
+    if (status === "failed") return fail(service, problem ?? "The sign-in didn't finish.");
+    if (status === "done") void loadHubs(hostId, true);
+    setStep({ step: status, service });
   };
 
   // The address the browser ended on, checked here so a mistake reads plainly.
