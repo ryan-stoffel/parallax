@@ -1,4 +1,4 @@
-import { Folder, House, MessagesSquare, Plus } from "lucide-react";
+import { Folder, MessageCircle, MessagesSquare, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { PromptImage, Repo } from "../protocol/generated/protocol";
@@ -502,7 +502,8 @@ export function NewThread({
                 ...groups.map((g) => ({
                   value: g.id,
                   label: g.name,
-                  icon: g.id === noRepo ? <House /> : g.space ? <MessagesSquare /> : <Folder />,
+                  icon:
+                    g.id === noRepo ? <MessageCircle /> : g.space ? <MessagesSquare /> : <Folder />,
                 })),
                 ...elsewhere.map((o, i) => ({
                   value: elsewhereValue(o),
