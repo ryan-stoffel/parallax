@@ -54,6 +54,7 @@ When something comes up mid-work (a bug, a follow-up, a question, out-of-scope w
 - The body follows `.github/pull_request_template.md`: the problem, the fix, a `Linear: <issue URL>` line, and the acceptance criteria as a checklist. Linear's GitHub integration links the PR and marks the issue Done when it merges.
 - A separate senior engineer subagent reviews every PR against the acceptance criteria and posts it as a comment review (`gh pr review --comment`; the shared account cannot approve its own PRs). The review opens with `Verdict: ready to merge` or `Verdict: changes needed`.
 - The project manager merges a PR into `develop` once the review says ready and CI is green. Feature, bug, chore, and docs PRs are squash-merged.
+- Agents never merge a PR from a fork. Outside contributions follow [CONTRIBUTING.md](CONTRIBUTING.md), and only Ryan merges them.
 - Ryan promotes a nightly to stable by running the Release workflow with `channel=stable` ([0051](docs/decisions/0051-promote-a-nightly.md)). A hotfix merges to `develop` like any other pull request; to publish it before the next snapshot is promoted, Ryan runs that workflow with `commit` set to the hotfix commit.
 
 ## CI/CD
