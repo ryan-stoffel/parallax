@@ -150,3 +150,12 @@ test("account keyboard navigation stays in the selector and returns focus on clo
   expect(document.activeElement).toBe(chooser);
   expect(document.querySelector('[role="menu"][aria-label="Account"]')).toBeNull();
 });
+
+test("the button names only the chosen model, not its account", () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  root = createRoot(container);
+  act(() =>
+    root!.render(<ModelMenu catalog={catalog} value={catalog.models[2]!} onChange={() => {}} />),
+  );
+  expect(button("Model: gpt-b")?.textContent).toBe("gpt-b");
+});
