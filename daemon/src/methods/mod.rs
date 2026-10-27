@@ -273,6 +273,31 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
                 hubs: daemon.providers.hubs(false).await,
             })
         },
+        // A hub's accounts, through its management API (PLX-1070).
+        HubsAccountsSignIn => |p| async move { daemon.providers.hub_sign_in(&p.hub, p.service).await },
+        HubsAccountsCallback => |p| async move {
+            daemon
+                .providers
+                .hub_sign_in_callback(&p.hub, &p.state, &p.redirect_url)
+                .await
+        },
+        HubsAccountsStatus => |p| async move { daemon.providers.hub_sign_in_status(&p.hub, &p.state).await },
+        HubsAccountsCancel => |p| async move { daemon.providers.hub_sign_in_cancel(&p.hub, &p.state).await },
+        HubsAccountsSetEnabled => |p| async move {
+            daemon
+                .providers
+                .set_hub_account_enabled(&p.hub, &p.account, p.enabled)
+                .await?;
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(false).await,
+            })
+        },
+        HubsAccountsRemove => |p| async move {
+            daemon.providers.remove_hub_account(&p.hub, &p.account).await?;
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(false).await,
+            })
+        },
         ProvidersUpdates => |p| provider_updates::updates(context, p),
         ProvidersUpgrade => |p| provider_updates::upgrade(context, p),
         UsageGet => |p| usage::get(context, p),

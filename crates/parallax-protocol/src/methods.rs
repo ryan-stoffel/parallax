@@ -57,26 +57,27 @@ use crate::{
     HostFoldersParams, HostFoldersResult, HostHealthParams, HostHealthResult, HostReadUploadParams,
     HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
     HostUpdateParams, HostUpdateResult, HostUploadParams, HostUploadResult, HostVersionParams,
-    HostVersionResult, HubsListParams, HubsListResult, HubsRemoveParams, HubsSaveParams,
-    InboxListParams, InboxListResult, InboxSeenParams, InboxSeenResult, InitializeParams,
-    InitializeResult, LandApproveParams, LandQueueParams, LandResult, LandSendBackParams,
-    MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
-    MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
-    MemorySyncListParams, MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult,
-    MemoryWriteParams, MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult,
-    PrMergeWhenReadyParams, PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams,
-    PrWatchesResult, PrWriteParams, PrWriteResult, PreviewCallParams, PreviewCallResult,
-    PreviewFrameParams, PreviewFrameResult, PreviewInputParams, PreviewInputResult,
-    PreviewListParams, PreviewListResult, ProjectCreateParams, ProjectCreateResult,
-    ProjectDeleteParams, ProjectDeleteResult, ProjectFromThreadsParams, ProjectFromThreadsResult,
-    ProjectListParams, ProjectListResult, ProjectStartParams, ProjectUpdateParams,
-    ProjectUpdateResult, PromptImage, ProvidersListParams, ProvidersListResult,
-    ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams, ProvidersUpdatesResult,
-    ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest, QuestionAnswerParams,
-    QuestionAskParams, QuestionEscalateParams, QuestionListParams, QuestionListResult,
-    QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams,
-    QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult, RelayRegisterParams,
-    RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
+    HostVersionResult, HubAccountRemoveParams, HubAccountSetEnabledParams, HubSignIn,
+    HubSignInCallbackParams, HubSignInParams, HubSignInStateParams, HubSignInStatus,
+    HubsListParams, HubsListResult, HubsRemoveParams, HubsSaveParams, InboxListParams,
+    InboxListResult, InboxSeenParams, InboxSeenResult, InitializeParams, InitializeResult,
+    LandApproveParams, LandQueueParams, LandResult, LandSendBackParams, MemoryDeleteParams,
+    MemoryDeleteResult, MemoryListParams, MemoryListResult, MemoryProposeParams,
+    MemoryProposeResult, MemoryReadParams, MemoryReadResult, MemorySyncListParams,
+    MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult, MemoryWriteParams,
+    MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult, PrMergeWhenReadyParams,
+    PrStatusResult, PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PrWriteParams,
+    PrWriteResult, PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
+    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    ProjectFromThreadsParams, ProjectFromThreadsResult, ProjectListParams, ProjectListResult,
+    ProjectStartParams, ProjectUpdateParams, ProjectUpdateResult, PromptImage, ProvidersListParams,
+    ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams, ProvidersUpdatesParams,
+    ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult, PullRequest,
+    QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
+    QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
+    QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
+    RelayRegisterParams, RelayRemoveParams, RemotePairParams, RemotePairResult, RemoteRevokeParams,
     RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
     RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
     RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoMatchParams, RepoMatchResult,
@@ -240,6 +241,23 @@ method_table! {
         HubsSave = "hubs/save": HubsSaveParams => HubsListResult;
         /// `hubs/remove`: removes a hub, its keys, and its instances, and returns every hub.
         HubsRemove = "hubs/remove": HubsRemoveParams => HubsListResult;
+        /// `hubs/accounts/signIn`: asks a hub with a management key for a Claude or Codex sign-in
+        /// page to open in a browser, and has it start its callback forwarder, which catches the
+        /// browser's redirect on the hub's own computer (PLX-1070). Gated on the `hubAccounts`
+        /// capability, like every `hubs/accounts/*` method.
+        HubsAccountsSignIn = "hubs/accounts/signIn": HubSignInParams => HubSignIn;
+        /// `hubs/accounts/callback`: hands the hub the address the browser was sent to after
+        /// signing in, for a browser on another computer. Refused with `invalidParams` when the
+        /// address isn't the sign-in's.
+        HubsAccountsCallback = "hubs/accounts/callback": HubSignInCallbackParams => HubSignInStatus;
+        /// `hubs/accounts/status`: where a sign-in is, asked of the hub once.
+        HubsAccountsStatus = "hubs/accounts/status": HubSignInStateParams => HubSignInStatus;
+        /// `hubs/accounts/cancel`: ends a sign-in, so the hub keeps no account from it.
+        HubsAccountsCancel = "hubs/accounts/cancel": HubSignInStateParams => HubSignInStatus;
+        /// `hubs/accounts/setEnabled`: turns a hub's account on or off, and returns every hub.
+        HubsAccountsSetEnabled = "hubs/accounts/setEnabled": HubAccountSetEnabledParams => HubsListResult;
+        /// `hubs/accounts/remove`: deletes a hub's account, and returns every hub.
+        HubsAccountsRemove = "hubs/accounts/remove": HubAccountRemoveParams => HubsListResult;
         /// `providers/updates`: each installed Claude Code and Codex with a newer release where it
         /// came from: its Homebrew cask or formula, else its npm package. Gated on the
         /// `providerUpdates` capability (PLX-746, PLX-783).

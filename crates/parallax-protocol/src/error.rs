@@ -126,6 +126,10 @@ pub enum ErrorKind {
     /// its checksum failed, the version is older than plxd's, plxd runs from a development build,
     /// or the host's OS can't update plxd this way. The message says why, for people.
     HostUpdateFailed,
+    /// A `hubs/accounts/*` call reached the hub and it refused, or it couldn't be reached
+    /// (PLX-1070). The message names the kind of failure and an HTTP status, never what the hub
+    /// answered.
+    HubFailed,
     /// `checkpoint.rollback` refused before changing anything (0062): a turn is still running,
     /// the thread's push or Open PR is, the checkpoint isn't `ready`, the thread's provider can't
     /// rewind its conversation, or `restoreFiles` was asked of a folder that isn't the thread's

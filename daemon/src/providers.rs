@@ -29,8 +29,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountId, AgentPermission, CliKind, Hub, HubsSaveParams, ProviderEnvVar, ProviderInfo,
-    ProviderInstance, ProviderKind, ProviderModel, ProvidersListResult,
+    AccountId, AgentPermission, CliKind, Hub, HubService, HubSignIn, HubSignInStatus,
+    HubsSaveParams, ProviderEnvVar, ProviderInfo, ProviderInstance, ProviderKind, ProviderModel,
+    ProvidersListResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -482,6 +483,83 @@ impl Providers {
             self.cache.lock().await.remove(&entry.instance.id);
         }
         Ok(())
+    }
+
+    /// `hubs/accounts/signIn` (PLX-1070): a sign-in page for one of hub `hub`'s accounts.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for a hub that doesn't exist or has no management key, and `hubFailed`
+    /// when the hub refuses or can't be reached, as every `hub_*` call here.
+    pub async fn hub_sign_in(
+        &self,
+        hub: &str,
+        service: HubService,
+    ) -> Result<HubSignIn, ErrorObject> {
+        self.hubs.sign_in(hub, service).await
+    }
+
+    /// `hubs/accounts/callback`: the browser's address after a sign-in, for the hub.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hub_sign_in`], and `invalidParams` for an address that isn't the sign-in's.
+    pub async fn hub_sign_in_callback(
+        &self,
+        hub: &str,
+        state: &str,
+        redirect: &str,
+    ) -> Result<HubSignInStatus, ErrorObject> {
+        self.hubs.sign_in_callback(hub, state, redirect).await
+    }
+
+    /// `hubs/accounts/status`: where a sign-in is.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hub_sign_in`].
+    pub async fn hub_sign_in_status(
+        &self,
+        hub: &str,
+        state: &str,
+    ) -> Result<HubSignInStatus, ErrorObject> {
+        self.hubs.sign_in_status(hub, state).await
+    }
+
+    /// `hubs/accounts/cancel`: ends a sign-in.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hub_sign_in`].
+    pub async fn hub_sign_in_cancel(
+        &self,
+        hub: &str,
+        state: &str,
+    ) -> Result<HubSignInStatus, ErrorObject> {
+        self.hubs.sign_in_cancel(hub, state).await
+    }
+
+    /// `hubs/accounts/setEnabled`: turns a hub's account on or off.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hub_sign_in`].
+    pub async fn set_hub_account_enabled(
+        &self,
+        hub: &str,
+        account: &str,
+        enabled: bool,
+    ) -> Result<(), ErrorObject> {
+        self.hubs.set_account_enabled(hub, account, enabled).await
+    }
+
+    /// `hubs/accounts/remove`: deletes a hub's account.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hub_sign_in`].
+    pub async fn remove_hub_account(&self, hub: &str, account: &str) -> Result<(), ErrorObject> {
+        self.hubs.remove_account(hub, account).await
     }
 
     /// What `providers/save` and `providers/remove` answer for a hub's instance `id`.

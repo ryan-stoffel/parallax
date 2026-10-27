@@ -3,7 +3,9 @@
 //! A hub is a `CLIProxyAPI` server that keeps many Claude and Codex sign-ins and serves them as one
 //! endpoint. A host keeps its hubs, and each enabled one adds two provider instances, one that
 //! runs Claude Code through it and one that runs Codex through it, which `providers/list` lists
-//! with `hub` set. Its keys are kept in the host's keychain and never sent back.
+//! with `hub` set. Its keys are kept in the host's keychain and never sent back. With a management
+//! key, `hubs/accounts/*` signs accounts in to it, turns them on and off, and removes them
+//! (PLX-1070).
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -53,7 +55,8 @@ pub struct Hub {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct HubAccount {
-    /// The hub's id for it, its auth file's.
+    /// The hub's id for it, its auth file's name, which `hubs/accounts/setEnabled` and
+    /// `hubs/accounts/remove` take.
     pub id: String,
     /// Which service it signs in to, as the hub names it: `claude`, `codex`, or another.
     pub provider: String,
@@ -124,4 +127,106 @@ pub struct HubsSaveParams {
 pub struct HubsRemoveParams {
     /// The hub's id.
     pub id: String,
+}
+
+/// A service a hub signs accounts in to (PLX-1070).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum HubService {
+    /// Claude, through Claude Code's sign-in.
+    Claude,
+    /// Codex, through `ChatGPT`'s sign-in.
+    Codex,
+}
+
+/// Params of `hubs/accounts/signIn`: starts signing an account in to a hub.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HubSignInParams {
+    /// The hub's id.
+    pub hub: String,
+    /// Which service to sign in to.
+    pub service: HubService,
+}
+
+/// Result of `hubs/accounts/signIn`: the page to open in a browser, and the sign-in's state,
+/// which names it in the other `hubs/accounts/*` sign-in calls.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HubSignIn {
+    /// The service's `https` sign-in page.
+    pub url: String,
+    /// The sign-in's OAuth state.
+    pub state: String,
+}
+
+/// Params of `hubs/accounts/callback`: the address the browser was sent to after signing in, for
+/// a browser on another computer than the hub.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HubSignInCallbackParams {
+    /// The hub's id.
+    pub hub: String,
+    /// The sign-in's state, which the address's `state` must match.
+    pub state: String,
+    /// The `http://localhost` address, with its `code` and `state`.
+    pub redirect_url: String,
+}
+
+/// Params of `hubs/accounts/status` and `hubs/accounts/cancel`: one sign-in on a hub.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HubSignInStateParams {
+    /// The hub's id.
+    pub hub: String,
+    /// The sign-in's state.
+    pub state: String,
+}
+
+/// Where a sign-in on a hub is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum HubSignInState {
+    /// The hub waits for the browser's redirect.
+    Waiting,
+    /// The hub keeps the new account.
+    Done,
+    /// The sign-in ended without an account.
+    Failed,
+    /// The sign-in was cancelled.
+    Cancelled,
+}
+
+/// Result of `hubs/accounts/status`, `hubs/accounts/callback`, and `hubs/accounts/cancel`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HubSignInStatus {
+    /// Where the sign-in is.
+    pub status: HubSignInState,
+    /// Why it failed, for people, in plxd's words and never the hub's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<String>,
+}
+
+/// Params of `hubs/accounts/setEnabled`: turns a hub's account on or off.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HubAccountSetEnabledParams {
+    /// The hub's id.
+    pub hub: String,
+    /// The account's id, a [`HubAccount`]'s.
+    pub account: String,
+    /// Whether the hub uses it.
+    pub enabled: bool,
+}
+
+/// Params of `hubs/accounts/remove`: deletes a hub's account and its sign-in.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct HubAccountRemoveParams {
+    /// The hub's id.
+    pub hub: String,
+    /// The account's id, a [`HubAccount`]'s.
+    pub account: String,
 }

@@ -160,7 +160,11 @@ pub use host::{
     HostSettingsSetParams, HostUpdateParams, HostUpdateRestart, HostUpdateResult, HostUploadParams,
     HostUploadResult, HostVersionParams, HostVersionResult, QueueStats, StoreState, UploadId,
 };
-pub use hub::{Hub, HubAccount, HubsListParams, HubsListResult, HubsRemoveParams, HubsSaveParams};
+pub use hub::{
+    Hub, HubAccount, HubAccountRemoveParams, HubAccountSetEnabledParams, HubService, HubSignIn,
+    HubSignInCallbackParams, HubSignInParams, HubSignInState, HubSignInStateParams,
+    HubSignInStatus, HubsListParams, HubsListResult, HubsRemoveParams, HubsSaveParams,
+};
 pub use id::InvalidId;
 pub use import::{
     ChatMessage, ChatRef, ChatRole, ImportSource, ImportableSession, MAX_CHAT_MESSAGES,

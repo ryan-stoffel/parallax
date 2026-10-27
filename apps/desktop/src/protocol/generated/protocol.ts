@@ -133,6 +133,35 @@ export type ParallaxRequests = {
 	 */
 	"hubs/remove": { params: HubsRemoveParams, result: HubsListResult },
 	/**
+	 * `hubs/accounts/signIn`: asks a hub with a management key for a Claude or Codex sign-in
+	 * page to open in a browser, and has it start its callback forwarder, which catches the
+	 * browser's redirect on the hub's own computer (PLX-1070). Gated on the `hubAccounts`
+	 * capability, like every `hubs/accounts/*` method.
+	 */
+	"hubs/accounts/signIn": { params: HubSignInParams, result: HubSignIn },
+	/**
+	 * `hubs/accounts/callback`: hands the hub the address the browser was sent to after
+	 * signing in, for a browser on another computer. Refused with `invalidParams` when the
+	 * address isn't the sign-in's.
+	 */
+	"hubs/accounts/callback": { params: HubSignInCallbackParams, result: HubSignInStatus },
+	/**
+	 * `hubs/accounts/status`: where a sign-in is, asked of the hub once.
+	 */
+	"hubs/accounts/status": { params: HubSignInStateParams, result: HubSignInStatus },
+	/**
+	 * `hubs/accounts/cancel`: ends a sign-in, so the hub keeps no account from it.
+	 */
+	"hubs/accounts/cancel": { params: HubSignInStateParams, result: HubSignInStatus },
+	/**
+	 * `hubs/accounts/setEnabled`: turns a hub's account on or off, and returns every hub.
+	 */
+	"hubs/accounts/setEnabled": { params: HubAccountSetEnabledParams, result: HubsListResult },
+	/**
+	 * `hubs/accounts/remove`: deletes a hub's account, and returns every hub.
+	 */
+	"hubs/accounts/remove": { params: HubAccountRemoveParams, result: HubsListResult },
+	/**
 	 * `providers/updates`: each installed Claude Code and Codex with a newer release where it
 	 * came from: its Homebrew cask or formula, else its npm package. Gated on the
 	 * `providerUpdates` capability (PLX-746, PLX-783).
@@ -986,6 +1015,12 @@ export const REQUEST_METHODS = [
 	"hubs/list",
 	"hubs/save",
 	"hubs/remove",
+	"hubs/accounts/signIn",
+	"hubs/accounts/callback",
+	"hubs/accounts/status",
+	"hubs/accounts/cancel",
+	"hubs/accounts/setEnabled",
+	"hubs/accounts/remove",
 	"providers/updates",
 	"providers/upgrade",
 	"usage/get",
@@ -2431,7 +2466,8 @@ export type Hub = {
  */
 export type HubAccount = {
 	/**
-	 * The hub's id for it, its auth file's.
+	 * The hub's id for it, its auth file's name, which `hubs/accounts/setEnabled` and
+	 * `hubs/accounts/remove` take.
 	 */
 	id: string,
 	/**
@@ -2528,6 +2564,124 @@ export type HubsRemoveParams = {
 	 * The hub's id.
 	 */
 	id: string,
+};
+
+/**
+ * Params of `hubs/accounts/signIn`: starts signing an account in to a hub.
+ */
+export type HubSignInParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * Which service to sign in to.
+	 */
+	service: HubService,
+};
+
+/**
+ * A service a hub signs accounts in to (PLX-1070).
+ */
+export type HubService = "claude" | "codex";
+
+/**
+ * Result of `hubs/accounts/signIn`: the page to open in a browser, and the sign-in's state,
+ * which names it in the other `hubs/accounts/*` sign-in calls.
+ */
+export type HubSignIn = {
+	/**
+	 * The service's `https` sign-in page.
+	 */
+	url: string,
+	/**
+	 * The sign-in's OAuth state.
+	 */
+	state: string,
+};
+
+/**
+ * Params of `hubs/accounts/callback`: the address the browser was sent to after signing in, for
+ * a browser on another computer than the hub.
+ */
+export type HubSignInCallbackParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * The sign-in's state, which the address's `state` must match.
+	 */
+	state: string,
+	/**
+	 * The `http://localhost` address, with its `code` and `state`.
+	 */
+	redirectUrl: string,
+};
+
+/**
+ * Result of `hubs/accounts/status`, `hubs/accounts/callback`, and `hubs/accounts/cancel`.
+ */
+export type HubSignInStatus = {
+	/**
+	 * Where the sign-in is.
+	 */
+	status: HubSignInState,
+	/**
+	 * Why it failed, for people, in plxd's words and never the hub's.
+	 */
+	problem?: string,
+};
+
+/**
+ * Where a sign-in on a hub is.
+ */
+export type HubSignInState = "waiting" | "done" | "failed" | "cancelled";
+
+/**
+ * Params of `hubs/accounts/status` and `hubs/accounts/cancel`: one sign-in on a hub.
+ */
+export type HubSignInStateParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * The sign-in's state.
+	 */
+	state: string,
+};
+
+/**
+ * Params of `hubs/accounts/setEnabled`: turns a hub's account on or off.
+ */
+export type HubAccountSetEnabledParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * The account's id, a [`HubAccount`]'s.
+	 */
+	account: string,
+	/**
+	 * Whether the hub uses it.
+	 */
+	enabled: boolean,
+};
+
+/**
+ * Params of `hubs/accounts/remove`: deletes a hub's account and its sign-in.
+ */
+export type HubAccountRemoveParams = {
+	/**
+	 * The hub's id.
+	 */
+	hub: string,
+	/**
+	 * The account's id, a [`HubAccount`]'s.
+	 */
+	account: string,
 };
 
 /**
@@ -10715,7 +10869,7 @@ export type ErrorData = {
  * A newer plxd may send kinds that are not listed here. Treat those as unknown errors, so a
  * `switch` over this type must not end in an exhaustiveness assertion.
  */
-export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits";
+export type ErrorKind = "notInitialized" | "incompatibleProtocol" | "resyncRequired" | "projectNotFound" | "accountNotFound" | "keychainUnavailable" | "idConflict" | "contextNotFound" | "contextTooLarge" | "notARepository" | "runNotFound" | "runNotResumable" | "workerUnavailable" | "worktreeFailed" | "worktreeMissing" | "runAccepted" | "mergeRefused" | "mergeConflict" | "repoNotFound" | "threadNotFound" | "noDefaultAccount" | "unsupportedOption" | "prRefused" | "pushFailed" | "ghUnavailable" | "prFailed" | "imageTooLarge" | "imageNotFound" | "approvalNotFound" | "gitRefused" | "commitFailed" | "githubSetupFailed" | "queuedMessageNotFound" | "landRefused" | "hostUpdateFailed" | "hubFailed" | "revertRefused" | "cloneFailed" | "runBusy" | "bundleTooLarge" | "bundleFailed" | "bundleMissingCommits";
 
 /**
  * The `detail` of `incompatibleProtocol`. Its shape never changes, so every client can read it
