@@ -288,9 +288,6 @@ interface ThreadListProps {
   onOpenPullRequests: () => void;
   /** Opens the Usage page, in place of the main pane. */
   onOpenUsage: () => void;
-  /** Opens the permanent browser, in place of the main pane (PLX-964), and whether it's open. */
-  onOpenBrowser?: () => void;
-  browserOpen?: boolean;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   /** The add palette, for the command menu's New Project and Add repository (PLX-993). */
@@ -520,8 +517,6 @@ export function ThreadList({
   onOpenSettings,
   onOpenPullRequests,
   onOpenUsage,
-  onOpenBrowser,
-  browserOpen,
   onDelete,
   addDialog: addDialogRef,
   onNewThread,
@@ -1889,8 +1884,6 @@ export function ThreadList({
           onOpenSettings={onOpenSettings}
           onOpenPullRequests={onOpenPullRequests}
           onOpenUsage={onOpenUsage}
-          {...(onOpenBrowser && { onOpenBrowser })}
-          {...(browserOpen !== undefined && { browserOpen })}
         />
       </div>
     </>
@@ -2330,31 +2323,20 @@ function ScopeMenu({
 
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
- * (ProfileMenu.tsx), then the places that open in the main pane, Browser, the permanent one
- * (PLX-964), Pull requests, and Usage, and at the far end Settings, then Update when `updatable`
- * (Update.tsx), where it has always been.
+ * (ProfileMenu.tsx), then the places that open in the main pane, Pull requests and Usage, and at
+ * the far end Settings, then Update when `updatable` (Update.tsx), where it has always been.
  */
 function Footer({
   listed,
   onOpenSettings,
   onOpenPullRequests,
   onOpenUsage,
-  onOpenBrowser,
-  browserOpen,
-}: Pick<
-  ThreadListProps,
-  "onOpenSettings" | "onOpenPullRequests" | "onOpenUsage" | "onOpenBrowser" | "browserOpen"
-> & {
+}: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests" | "onOpenUsage"> & {
   listed: HostThreads[];
 }) {
   return (
     <div className="flex items-center gap-1">
       <ProfileButton listed={listed} />
-      {onOpenBrowser && (
-        <IconButton label="Browser" aria-pressed={!!browserOpen} onClick={onOpenBrowser}>
-          <Globe />
-        </IconButton>
-      )}
       <IconButton label="Pull requests" onClick={onOpenPullRequests}>
         <GitPullRequest />
       </IconButton>

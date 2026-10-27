@@ -208,8 +208,7 @@ export interface SavedTabs {
   current: number;
 }
 
-// The most chats' browsers whose tabs are kept, so deleted threads' don't pile up. The
-// permanent browser's are always kept.
+// The most chats' browsers whose tabs are kept, so deleted threads' don't pile up.
 const SAVED_SCOPES = 100;
 // The longest icon kept, in characters of its data URL.
 const SAVED_ICON = 16_384;
@@ -236,8 +235,8 @@ export function savedOf(tabs: readonly OwnTab[], current: number): SavedTabs | u
 }
 
 /**
- * Every browser's saved tabs with `scope`'s set to `entry`, newest last: the permanent browser's,
- * and at most `SAVED_SCOPES` chats'.
+ * Every browser's saved tabs with `scope`'s set to `entry`, newest last: at most `SAVED_SCOPES`
+ * chats'.
  */
 export function withSaved(
   all: Readonly<Record<string, SavedTabs>>,
@@ -246,9 +245,11 @@ export function withSaved(
 ): Record<string, SavedTabs> {
   const { [scope]: _old, ...rest } = all;
   const next = entry ? { ...rest, [scope]: entry } : rest;
-  const chats = Object.keys(next).filter((key) => key !== "permanent");
-  const kept = [...(next["permanent"] ? ["permanent"] : []), ...chats.slice(-SAVED_SCOPES)];
-  return Object.fromEntries(kept.map((key) => [key, next[key]!] as const));
+  return Object.fromEntries(
+    Object.keys(next)
+      .slice(-SAVED_SCOPES)
+      .map((key) => [key, next[key]!] as const),
+  );
 }
 
 const savedTabs = stored<Record<string, SavedTabs>>("parallax.browserTabs", {}, (raw, fallback) =>
@@ -272,14 +273,12 @@ function restored(scope: string | undefined): { tabs: OwnTab[]; current: number 
 }
 
 /**
- * A browser, laid out like Chrome (PLX-888): a chat's in the side panel, or the permanent one in
- * the main pane (PLX-964). Its tabs, the agent's (PLX-639) then the user's own, show in the top bar
+ * A chat's browser in the side panel, laid out like Chrome (PLX-888). Its tabs, the agent's (PLX-639) then the user's own, show in the top bar
  * over it (`browserTabs`, `BrowserTabBar`), so it has one row of tabs. Each own tab is a webview, which main keeps in its own session with no preload or Node (main.ts), and
  * whose new windows open as tabs here. Each new `page` opens in the current tab while it's blank,
  * or else in a new one. Its own tabs are saved under `scope` and come back after a restart
  * (PLX-964). `remoteHost`, the open host's name when it's an SSH host, notes that localhost is
- * this computer. Only the side panel's browser gets it: the permanent one has nothing to do with
- * the open host (PLX-1013). Closing its last tab calls `onEmpty`.
+ * this computer (PLX-1013). Closing its last tab calls `onEmpty`.
  */
 export function Browser({
   page,
@@ -291,8 +290,8 @@ export function Browser({
   page?: { url?: string; agentTab?: string };
   remoteHost?: string;
   /**
-   * The side panel scope it shows in, or `permanent` for the sidebar's own browser, under which it
-   * publishes its tabs (`browserTabs`) and saves them.
+   * The side panel scope it shows in, under which it publishes its tabs (`browserTabs`) and saves
+   * them.
    */
   scope?: string;
   /** The open thread's agent tabs (PLX-639), which show before the user's own, and its backend. */
@@ -564,7 +563,7 @@ interface BrowserTabs {
   newTab: () => void;
 }
 
-/** Each browser's tabs, by its scope: a side panel's, or `permanent`. */
+/** Each browser's tabs, by its side panel's scope. */
 const browserTabs = memory<Readonly<Record<string, BrowserTabs>>>({});
 
 /**
@@ -1257,7 +1256,7 @@ function Tab({
  * A browser's top bar, as Helium draws it (PLX-966): its tabs with New tab after them, the tabs
  * the browser under `scope` publishes (`browserTabs`). In the compact layout the shown tab's back,
  * forward, reload, and address bar come before them, and its extensions and More after. The side
- * panel and the permanent browser's page show it.
+ * panel shows it.
  */
 export function BrowserTabBar({ scope }: { scope: string }) {
   const browser = browserTabs.use()[scope];
