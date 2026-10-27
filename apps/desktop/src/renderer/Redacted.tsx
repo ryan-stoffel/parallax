@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const EMAIL = /([\w.+-]+@[\w-]+(?:\.[\w-]+)+)/;
 const ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
@@ -38,9 +38,9 @@ const focusable =
   "a[href],button,input,select,textarea,summary,[tabindex],[role^='menuitem'],[role='tab'],[role='option']";
 
 /**
- * One email as a placeholder of its shape, each letter blurred on its own (index.css's
- * .redacted-char), with the real address in the DOM only while the pointer is over it or a
- * keyboard has focused it or the control it's in. Screen readers hear "Email hidden" until then.
+ * One email as a placeholder of its shape under a blur, with the real address in the DOM only
+ * while the pointer is over it or a keyboard has focused it or the control it's in. Screen readers
+ * hear "Email hidden" until then.
  */
 function Email({ value }: { value: string }) {
   const ref = useRef<HTMLSpanElement>(null);
@@ -64,26 +64,25 @@ function Email({ value }: { value: string }) {
     };
   }, []);
   const shown = hovered || focused;
-  // Spans kept by position, so revealing swaps their letters and their blur transitions away.
-  const letters = Array.from(shown ? value : redactedPlaceholder(value), (c, i) => (
-    <span key={i} className="redacted-char" style={{ "--i": i } as CSSProperties}>
-      {c}
-    </span>
-  ));
   return (
     <span
       ref={ref}
       tabIndex={alone ? 0 : undefined}
-      data-shown={shown || undefined}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      // A long address takes no longer to sharpen than a short one.
-      style={{ "--step": `${Math.min(14, 320 / value.length)}ms` } as CSSProperties}
-      className={`rounded-sm transition-colors duration-150 focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none ${shown ? "" : "text-muted-foreground select-none"}`}
+      // As T3 Code's RedactedSensitiveText: small monospace under a light blur. It truncates
+      // itself, so the blur spreads softly past its own edges rather than being cut square by a
+      // truncating row around it.
+      className={`redacted inline-block max-w-full truncate rounded-sm align-bottom font-mono text-[0.6875rem] leading-normal transition-[filter,color] duration-200 ease-out focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none ${shown ? "" : "text-muted-foreground blur-xs select-none"}`}
     >
-      {/* The same parent either way, so React keeps the letters' spans. */}
-      <span aria-hidden={!shown || undefined}>{letters}</span>
-      {!shown && <span className="sr-only">Email hidden, hover or focus to show</span>}
+      {shown ? (
+        value
+      ) : (
+        <>
+          <span aria-hidden>{redactedPlaceholder(value)}</span>
+          <span className="sr-only">Email hidden, hover or focus to show</span>
+        </>
+      )}
     </span>
   );
 }

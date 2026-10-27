@@ -407,25 +407,11 @@
   animation: none;
 }
 
-/* A hidden email (Redacted.tsx): each letter a soft glow of its own shape, drawn by its shadow
-   under a clear fill, so nothing boxes or clips it. Revealed, the letters sharpen left to right,
-   each `--step` after the last; hidden again, all blur at once. */
-.redacted-char {
-  -webkit-text-fill-color: transparent;
-  text-shadow: 0 0 0.45em currentColor;
-  transition:
-    text-shadow 120ms ease-out,
-    -webkit-text-fill-color 120ms ease-out;
-}
-[data-shown] .redacted-char {
-  -webkit-text-fill-color: currentColor;
-  text-shadow: 0 0 0 transparent;
-  transition-duration: 320ms;
-  transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
-  transition-delay: calc(var(--i) * var(--step));
-}
-:root.reduce-motion .redacted-char {
-  transition: none;
+/* A blurred email (Redacted.tsx) spreads softly past a truncating row around it instead of being
+   cut square at the row's edges: clip, unlike hidden, takes a margin, and keeps the ellipsis. */
+.truncate:has(.redacted) {
+  overflow: clip;
+  overflow-clip-margin: 0.5em;
 }
 
 /* Long lines in code blocks, diffs, and file previews (.code-lines) wrap under .word-wrap, from
