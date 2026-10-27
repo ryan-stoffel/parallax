@@ -43,13 +43,13 @@ function render(watching: string[]) {
 const chip = (n: number) =>
   [...document.querySelectorAll<HTMLAnchorElement>("a")].find((a) => a.textContent === `#${n}`);
 
-test("a watched pull request's number is a link in its state's color, with GitHub's mark", () => {
+test("a watched pull request's number is a link in its state's color, beside GitHub's mark in the text's", () => {
   render([merged]);
   expect(document.body.textContent).toContain("Monitoring pull request#934");
   const link = chip(934)!;
   expect(link.getAttribute("href")).toBe(merged);
   expect(link.className).toContain("text-project-violet");
-  expect(link.querySelector("svg")).not.toBeNull();
+  expect(link.querySelector("svg")?.getAttribute("class")).toContain("text-foreground");
 });
 
 test("one not read yet shows neutral, and each has its own chip", () => {
