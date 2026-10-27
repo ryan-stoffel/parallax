@@ -1,4 +1,4 @@
-import { ChevronDown, Zap } from "lucide-react";
+import { ChevronDown, Gauge, Zap } from "lucide-react";
 import { useId, type CSSProperties } from "react";
 
 import type { AgentEffort } from "../protocol/generated/protocol";
@@ -23,8 +23,8 @@ const fastNames: Partial<Record<string, { label: string; on: string; off: string
 };
 
 /**
- * The reasoning picker: a button showing the effort, the context window, and a bolt in fast mode,
- * that opens a slider with a stop for each level. Stripes in the fill speed up with the level,
+ * The reasoning picker: a button showing a gauge, the effort, and a bolt in fast mode, that opens
+ * a slider with a stop for each level. Stripes in the fill speed up with the level,
  * and Max shimmers and glows (index.css). Below it, the context window is a choice when the model
  * offers more than one, and fast mode when the model has it (`fastMode`, by its instance kind's
  * name for it).
@@ -55,7 +55,6 @@ export function EffortMenu({
   const level = levels.findIndex((l) => l.value === value);
   const { name, blurb, speed } = levels[level]!;
   const full = level === last;
-  const label = context === undefined ? name : `${name} · ${tokens(context)}`;
   const names = fastMode && fastNames[fastMode];
   const row = "mt-4 flex items-center justify-between gap-2 text-body text-muted-foreground";
   return (
@@ -64,11 +63,12 @@ export function EffortMenu({
         type="button"
         popoverTarget={id}
         aria-haspopup="dialog"
-        aria-label={`Reasoning effort: ${label}${fast ? ", fast" : ""}`}
+        aria-label={`Reasoning effort: ${name}${fast ? ", fast" : ""}`}
         className={menuButton}
       >
+        <Gauge aria-hidden />
+        {name}
         {fast && <Zap aria-hidden className="fill-current text-orange-500" />}
-        {label}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <div
