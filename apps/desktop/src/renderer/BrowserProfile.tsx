@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef } from "react";
 
 import type { GoogleAccount } from "../preload/bridge";
+import { Redacted } from "./Redacted";
 import { memory } from "./stored";
 import { AccountCircle, Logout, ManageAccounts, PersonAdd } from "./symbols";
 import { IconButton, Menu, toolbarButton, toolbarMenuDivider, ToolbarMenuRow } from "./ui";
@@ -55,7 +56,7 @@ export function ProfileButton({ onOpen }: { onOpen: (url: string) => void }) {
   return (
     <>
       <IconButton
-        label={signedIn ? `Google account: ${signedIn.email}` : "Profile"}
+        label={signedIn ? "Google account" : "Profile"}
         className={toolbarButton}
         popoverTarget={id}
         aria-haspopup="menu"
@@ -75,7 +76,7 @@ export function ProfileButton({ onOpen }: { onOpen: (url: string) => void }) {
             {signedIn ? signedIn.name : "You"}
           </p>
           <p className="max-w-full truncate text-body text-muted-foreground">
-            {signedIn ? signedIn.email : "Not signed in to Google"}
+            {signedIn ? <Redacted text={signedIn.email} /> : "Not signed in to Google"}
           </p>
         </div>
         {signedIn ? (

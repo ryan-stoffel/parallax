@@ -12,6 +12,7 @@ import {
 } from "./models";
 import { isNew } from "./catalog";
 import { kindOf, logoOf } from "./providers";
+import { Redacted, withoutEmails } from "./Redacted";
 import { menuButton, menuPanel, moveFocus } from "./ui";
 
 /** A plan id as a label: `pro` as "Pro", `chatgpt_plus` as "Chatgpt Plus". */
@@ -40,14 +41,20 @@ function AccountLabel({ instance: i, name }: { instance: Instance | undefined; n
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2 text-body font-medium">
-          <span className="truncate">{name}</span>
+          <span className="truncate">
+            <Redacted text={name} />
+          </span>
           {(pool || i?.plan) && (
             <span className="shrink-0 rounded-sm bg-hover px-1.5 text-caption font-medium text-muted-foreground">
               {pool ? "Pool" : planName(i!.plan!)}
             </span>
           )}
         </span>
-        {detail && <span className="block truncate text-meta text-faint-foreground">{detail}</span>}
+        {detail && (
+          <span className="block truncate text-meta text-faint-foreground">
+            <Redacted text={detail} />
+          </span>
+        )}
       </span>
     </>
   );
@@ -173,7 +180,9 @@ export function ModelMenu({
         <Logo />
         {chosen.name.replace(/^Claude /, "")}
         {chosenAccount && (
-          <span className="max-w-32 truncate text-faint-foreground">{chosenAccount}</span>
+          <span className="max-w-32 truncate text-faint-foreground">
+            <Redacted text={chosenAccount} />
+          </span>
         )}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
@@ -211,7 +220,11 @@ export function ModelMenu({
             // A group can't be picked only when none of its instances can.
             const why = ids.every((p) => unavailable[p]) ? unavailable[first] : undefined;
             const kind = instance(first)?.kind;
-            const label = ids.length > 1 && kind ? kindOf(kind).name : nameOf(first);
+            // An account named by its email is named by its kind, so the email isn't read out.
+            const label =
+              kind && (ids.length > 1 || nameOf(first).includes("@"))
+                ? kindOf(kind).name
+                : nameOf(first);
             return (
               // A disabled button gets no pointer events, so its wrapper shows the tooltip.
               <span key={key} className="group relative flex">
@@ -300,7 +313,7 @@ export function ModelMenu({
                     <button
                       key={p}
                       type="button"
-                      aria-label={nameOf(p)}
+                      aria-label={withoutEmails(nameOf(p))}
                       role="menuitemradio"
                       aria-checked={account === p}
                       disabled={!!unavailable[p]}
@@ -353,7 +366,9 @@ export function ModelMenu({
                       {mixed && (
                         <span className="ml-auto flex min-w-0 items-center gap-1.5 text-meta text-faint-foreground">
                           <ProviderLogo className="size-3 shrink-0" />
-                          <span className="truncate">{nameOf(m.provider)}</span>
+                          <span className="truncate">
+                            <Redacted text={nameOf(m.provider)} />
+                          </span>
                         </span>
                       )}
                     </span>

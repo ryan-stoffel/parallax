@@ -30,6 +30,7 @@ import { ClerkLogo, ParallaxMark } from "./logos";
 import { models } from "./models";
 import { instanceName, kinds } from "./providers";
 import { activityOf, Avatar, dayKey, dayOf, rhythmOf, type Activity } from "./profile";
+import { Redacted } from "./Redacted";
 import { backendLogos } from "./Sidebar";
 import { isRepository, type ThreadsView } from "./threads";
 import { hourCycle } from "./prefs";
@@ -296,10 +297,12 @@ function ProfileCard({
         </div>
 
         <h2 className="mt-3 truncate text-display font-semibold tracking-tight">
-          {profile.name || profile.email}
+          {profile.name || <Redacted text={profile.email} />}
         </h2>
         {profile.name && (
-          <p className="truncate text-body text-muted-foreground">{profile.email}</p>
+          <p className="truncate text-body text-muted-foreground">
+            <Redacted text={profile.email} />
+          </p>
         )}
         {chips.length > 0 && (
           <ul className="mt-3 flex flex-wrap gap-1.5">
@@ -714,7 +717,9 @@ function AccountRows({ profile }: { profile: Profile }) {
       <div className={settingRow}>
         <div className="min-w-0">
           <span className="block text-body font-medium">Email</span>
-          <span className="block truncate text-body text-muted-foreground">{profile.email}</span>
+          <span className="block truncate text-body text-muted-foreground">
+            <Redacted text={profile.email} />
+          </span>
         </div>
       </div>
       <div className={settingRow}>

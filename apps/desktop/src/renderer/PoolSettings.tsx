@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
 import { notify } from "./notifications";
 import { accountLabel, kindOf, logoOf, saveProvider, slug, unique } from "./providers";
+import { Redacted, withoutEmails } from "./Redacted";
 import { field, quietButton, Row, Switch } from "./settings/parts";
 import { instanceStatus } from "./settings/shared";
 import { IconButton } from "./ui";
@@ -125,7 +126,7 @@ function AccountRow({ info, children }: { info: ProviderInfo; children: ReactNod
       title={
         <span className="flex items-center gap-2">
           <Logo aria-hidden className="size-4 shrink-0" />
-          {accountLabel(info)}
+          <Redacted text={accountLabel(info)} />
         </span>
       }
       description={info.instance.enabled ? instanceStatus(info) : "Off"}
@@ -194,7 +195,7 @@ export function PoolAccounts({
             return (
               <AccountRow key={id} info={info}>
                 <Switch
-                  label={`Pool ${accountLabel(info)}`}
+                  label={withoutEmails(`Pool ${accountLabel(info)}`)}
                   checked={draft.existing.includes(id)}
                   onChange={(on) =>
                     onChange({
@@ -382,7 +383,7 @@ export function PoolPane({
                 )}
                 {inPool && (
                   <IconButton
-                    label={`Settings for ${accountLabel(member)}`}
+                    label={withoutEmails(`Settings for ${accountLabel(member)}`)}
                     onClick={() => onOpen(memberId, false)}
                   >
                     <Settings2 aria-hidden />
