@@ -190,28 +190,29 @@
 :root.dark,
 .scheme-dark {
   color-scheme: dark;
-  /* Near black with no tint, as T3 Code's dark mode is: a black sidebar, the thread a step above
-     it, and raised surfaces (the composer, cards, menus) a step above that. */
-  --background: #0a0a0a;
+  /* True black with no tint, as T3 Code's dark mode is: the thread and sidebar black, a border
+     between them, and raised surfaces (the composer, cards, menus) a step above. Text is a little
+     under white, so it doesn't glare on the black. */
+  --background: #000000;
   --sidebar: #000000;
-  --surface: #141414;
-  --foreground: #ededed;
+  --surface: #0f0f0f;
+  --foreground: #e8e8e8;
   --muted-foreground: #a3a3a3;
   --faint-foreground: #8a8a8a;
-  --border: rgb(255 255 255 / 8%);
-  --hover: rgb(255 255 255 / 5%);
-  --selected: rgb(255 255 255 / 8%);
+  --border: rgb(255 255 255 / 10%);
+  --hover: rgb(255 255 255 / 6%);
+  --selected: rgb(255 255 255 / 10%);
   /* The logo's blue, lifted to read on the dark, as --danger lifts its coral. */
   --accent: #5b80ff;
   /* The accent, darkened a little: mixed toward a black with no chroma or hue, so it keeps the
      accent's, and dark enough for white text. */
   --send: color-mix(in oklch, var(--accent) 84%, oklch(0 none none));
-  --primary: #ededed;
-  --primary-foreground: #0a0a0a;
+  --primary: #e8e8e8;
+  --primary-foreground: #000000;
   --danger: #ff6b4a;
   --warning: #f59e0b;
   --added: #4ade80;
-  --code: #111111;
+  --code: #0a0a0a;
   --syntax-keyword: #7b9bff;
   --syntax-string: #ff8a65;
   --syntax-number: #c4b5fd;

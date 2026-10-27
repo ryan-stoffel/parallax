@@ -83,12 +83,13 @@ These stay as they are:
 
 ### Dark theme
 
-Parallax Dark is near black with no tint, as T3 Code's is:
-- the sidebar `#000000`
-- the thread `#0a0a0a`
-- raised surfaces such as the composer, cards, and menus `#141414`
+Parallax Dark is true black with no tint, as T3 Code's is (PLX-1056):
+- the sidebar and the thread `#000000`, with a border between them
+- raised surfaces such as the composer, cards, and menus `#0f0f0f`
+- code blocks `#0a0a0a`
+- text `#e8e8e8`, a little under white so it doesn't glare on the black
 
-Borders, hover, and selection are white at 8%, 5%, and 8%. The accent stays the logo's blue.
+Borders, hover, and selection are white at 10%, 6%, and 10%, enough to show on black. The accent stays the logo's blue.
 
 ## Consequences
 
