@@ -44,6 +44,7 @@ export function ProjectChat({
   needs,
   onOpenRun,
   threadLinks,
+  settingsClosed,
 }: {
   hostId: string;
   host?: Host;
@@ -65,6 +66,8 @@ export function ProjectChat({
   onOpenRun: (runId: string) => void;
   /** The open host's threads, as a thread's chat gets them: its pages, files, and thread chips need them. */
   threadLinks: ThreadLinks;
+  /** How many times Settings has closed. The default is read again each time, as it may have changed there. */
+  settingsClosed?: number;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -88,7 +91,7 @@ export function ProjectChat({
     return () => {
       live = false;
     };
-  }, [hostId, connected]);
+  }, [hostId, connected, settingsClosed]);
 
   // On a plxd with an integration branch, the picker sets the base branch new children's work is
   // cut from (0045). The coordinator's checkout keeps its branch: nothing switches it yet.

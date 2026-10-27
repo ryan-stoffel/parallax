@@ -77,6 +77,8 @@ interface NewThreadProps {
   threadLinks?: ThreadLinks;
   /** The draft it reopens (PLX-788), by id. Read once, as it mounts. */
   draftId?: string;
+  /** How many times Settings has closed. The default is read again each time, as it may have changed there. */
+  settingsClosed?: number;
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -115,13 +117,14 @@ export function NewThread({
   onStarted,
   disabledReason,
   threadLinks,
+  settingsClosed,
   draftId: reopened,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
   const noRepoBinding = bindingsOf("noRepoThread")[0];
-  // ponytail: read as the screen opens, since plxd has no event for a changed default. One
-  // changed elsewhere shows once New Thread opens again. Until then plxd refuses an effort or
+  // ponytail: read as the screen opens and as Settings closes, since plxd has no event for a
+  // changed default. One changed elsewhere shows once New Thread opens again. Until then plxd refuses an effort or
   // permission the new backend can't run, but not the old backend's model: that run fails in the CLI.
   // The backend shown, with the host it was read for: another host's stands in until this one's is.
   const [read, setRead] = useState(() =>
@@ -138,7 +141,7 @@ export function NewThread({
     return () => {
       live = false;
     };
-  }, [hostId, runOptions]);
+  }, [hostId, runOptions, settingsClosed]);
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   // Open while the host needs an account for the failed start.
