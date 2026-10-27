@@ -6,7 +6,7 @@ import type {
   ThreadStartParams,
 } from "../protocol/generated/protocol";
 import { instanceModels, models, type Model, type Provider } from "./catalog";
-import { accountLabel, useProviders } from "./providers";
+import { accountLabel, kindOf, useProviders } from "./providers";
 import { merged, stored } from "./stored";
 
 /**
@@ -139,6 +139,13 @@ export function arranged(list: Model[], p: ModelPrefs | undefined): Model[] {
   };
   return [...list].sort((a, b) => rank(a) - rank(b));
 }
+
+/**
+ * An instance's name for plain text, such as a tooltip or a reason it can't be picked: its kind's
+ * name in place of an email, which plain text can't blur (PLX-1067).
+ */
+export const plainName = (i: Pick<Instance, "name" | "kind">) =>
+  i.name.includes("@") ? kindOf(i.kind).name : i.name;
 
 /**
  * The model picker's catalog: each instance's models in this device's order, without those it

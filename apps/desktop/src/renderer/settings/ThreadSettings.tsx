@@ -12,7 +12,7 @@ import { EffortMenu } from "../EffortMenu";
 import { ImportButton } from "../ImportSessions";
 import { localId, useHosts } from "../hosts";
 import { ModelMenu } from "../ModelMenu";
-import { models, useCatalog, type Provider } from "../models";
+import { models, plainName, useCatalog, type Provider } from "../models";
 import { newThreadPrefs, setNewThreadPrefs } from "../prefs";
 import { RunTargetMenu, workspaces } from "../RunTargetMenu";
 import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
@@ -90,7 +90,7 @@ function NewThreads() {
   const prefs = newThreadPrefs.use();
   const blocked: Partial<Record<Provider, string>> = {};
   for (const i of catalog.instances)
-    if (!i.enabled) blocked[i.id] = `${i.name} is turned off in Settings > Providers.`;
+    if (!i.enabled) blocked[i.id] = `${plainName(i)} is turned off in Settings > Providers.`;
   const choices = catalog.models.filter((m) => !blocked[m.provider]);
   const model =
     choices.find((m) => m.provider === prefs.model?.provider && m.id === prefs.model.id) ??

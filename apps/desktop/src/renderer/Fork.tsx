@@ -4,9 +4,10 @@ import { createContext, useContext, useId, useRef, useState, type RefObject } fr
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun } from "../protocol/generated/protocol";
 import { describeError } from "./errors";
-import { useCatalog, type Model } from "./models";
+import { plainName, useCatalog, type Model } from "./models";
 import { notify } from "./notifications";
 import { kindOf, logoOf } from "./providers";
+import { Redacted } from "./Redacted";
 import type { ForkChoice } from "./threads";
 import { isRunning } from "./transcript";
 import { Menu, menuItem } from "./ui";
@@ -122,13 +123,14 @@ export function ForkMenu({
                 {others.map((m) => {
                   const Logo = logo(m.provider);
                   // Two providers can offer a model of the same name.
-                  const where = instance(m.provider)?.name ?? m.provider;
+                  const found = instance(m.provider);
+                  const where = found?.name ?? m.provider;
                   return (
                     <button
                       key={`${m.provider}/${m.id}`}
                       type="button"
                       role="menuitem"
-                      aria-label={`${m.name} (${where})`}
+                      aria-label={`${m.name} (${found ? plainName(found) : m.provider})`}
                       disabled={busy}
                       onClick={() => void pick(choiceOf(m, run))}
                       className={`${menuItem} disabled:opacity-50`}
@@ -136,7 +138,7 @@ export function ForkMenu({
                       <Logo aria-hidden />
                       <span className="truncate">{m.name}</span>
                       <span className="ml-auto shrink-0 text-meta text-faint-foreground">
-                        {where}
+                        <Redacted text={where} />
                       </span>
                     </button>
                   );
