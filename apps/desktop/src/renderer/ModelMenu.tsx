@@ -159,9 +159,6 @@ export function ModelMenu({
   const accounts = tab === null || q ? [] : (groups.get(tab) ?? []);
   // Favorites and search results mix providers, so only their rows say whose each model is.
   const mixed = tab === null || !!q;
-  // The chosen model's account, named on the button when its provider has more than one.
-  const chosenAccount =
-    (groups.get(group(chosen.provider))?.length ?? 0) > 1 ? nameOf(chosen.provider) : undefined;
 
   const pick = (m: Model) => {
     onChange(m);
@@ -179,11 +176,6 @@ export function ModelMenu({
       >
         <Logo />
         {chosen.name.replace(/^Claude /, "")}
-        {chosenAccount && (
-          <span className="max-w-32 truncate text-faint-foreground">
-            <Redacted text={chosenAccount} />
-          </span>
-        )}
         <ChevronDown aria-hidden className="opacity-70" />
       </button>
       <div
