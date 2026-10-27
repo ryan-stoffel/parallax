@@ -1795,12 +1795,7 @@ export function ThreadList({
         <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
           <FolderPlus />
         </IconButton>
-        <IconButton
-          label="New thread"
-          command="newThread"
-          aria-pressed={selection.kind === "new" && !selection.draft}
-          onClick={onNewThread}
-        >
+        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
           <SquarePen />
         </IconButton>
       </div>
