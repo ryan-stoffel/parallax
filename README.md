@@ -89,6 +89,16 @@ On macOS the app goes in /Applications. On Linux it's an AppImage in `~/.local/s
 
 Then sign in to at least one provider on the computer that runs the work. The app sets up this computer's agents on first launch, and Settings > Providers covers any computer.
 
+### Terminal only
+
+To run Parallax in a terminal without the app, on macOS (Apple silicon) and Linux (x64 and arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/install-tui.sh | sh
+```
+
+It puts `plxd` in `~/.parallax-plxd` and links `~/.local/bin/parallax` to it. Run `parallax` to start. Run the command again to update.
+
 ## Build from source
 
 `plxd` builds with Cargo. The app needs Node 24 and pnpm through corepack (`corepack enable`). Run pnpm inside `apps/desktop`, where corepack finds the pinned version.
