@@ -77,20 +77,26 @@ const steps = ["Provider", "Identity", "Config"];
  * Add provider, a native modal <dialog> open while it's mounted, in three steps: a provider card
  * or an ACP Registry agent; its display name and id, unique on the host; and how it runs. Add
  * saves it on the host and calls `onAdded` with its id; closing calls `onClose`. Another account
- * of a provider the host already has is allowed, with a warning (0088).
+ * of a provider the host already has is allowed, with a warning (0088), whose hub link closes the
+ * dialog for `onHubs`. `instances` are the user's own; `taken` is every instance id on the host,
+ * a hub's (0089) too, which a new one can't have.
  */
 export function AddProviderDialog({
   hostId,
   hostName,
   instances,
+  taken,
   onAdded,
   onClose,
+  onHubs,
 }: {
   hostId: string;
   hostName: string;
   instances: ProviderInstance[];
+  taken: string[];
   onAdded: (id: string) => void;
   onClose: () => void;
+  onHubs?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -107,7 +113,7 @@ export function AddProviderDialog({
   const [saving, setSaving] = useState(false);
   useEffect(() => dialog.current?.showModal(), []);
 
-  const ids = instances.map((i) => i.id);
+  const ids = taken;
   // A built-in agent takes its kind's id while it's free, which plxd's startup backend, the
   // coordinator, and the host's API keys go by.
   const builtIn = draft && ["claude", "codex", "cursor"].includes(draft.kind);
@@ -241,7 +247,15 @@ export function AddProviderDialog({
                 <p className="font-medium text-foreground">
                   {hostName} already has a {kindOf(draft.kind).name} account.
                 </p>
-                <SeveralAccountsNote />
+                <SeveralAccountsNote
+                  onHubs={
+                    onHubs &&
+                    (() => {
+                      dialog.current?.close();
+                      onHubs();
+                    })
+                  }
+                />
               </div>
             </div>
           )}

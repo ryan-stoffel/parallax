@@ -17,6 +17,7 @@ import {
   type AccountUsage,
   type CliKind,
   type DetectedCli,
+  type Hub,
   type KeyAccount,
   type Provider,
   type ProviderEnvVar,
@@ -28,6 +29,7 @@ import type { SettingsSection } from "./App";
 import { statusLabel, useConnection } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts, type Host } from "./hosts";
+import { loadHubs, removeHub, saveHub, settingsOf, useHubs } from "./hubs";
 import { models, setCliEnabled, useDisabledClis } from "./models";
 import { dismiss, notify } from "./notifications";
 import {
@@ -72,6 +74,7 @@ import {
   instanceStatus,
   providerNames,
 } from "./settings/shared";
+import { AddHubDialog, HubLogo, HubPane, hubStatus } from "./settings/HubSettings";
 import { ProviderModels } from "./settings/ProviderModels";
 import { ScheduleSettings } from "./settings/ScheduleSettings";
 import { ScriptSettings } from "./settings/ScriptSettings";
@@ -668,14 +671,24 @@ const installable = new Set([
 const instanceTone = (info: ProviderInfo) =>
   !info.installed || info.signedIn === false ? "error" : undefined;
 
+/** A hub's tab, among the instances' (`selected`). */
+const hubTab = (id: string) => `hub:${id}`;
+
 /**
  * One host's provider instances (`providers/list`), as T3 Code lays them out: under the host and a
  * Providers line with Refresh, +, and Remove for the chosen one (which asks first, in place), one
  * card with the instances on the left, each with a switch that turns it on or off on the host, and
- * the chosen one's pane on the right. Without instances, it offers Add provider.
+ * the chosen one's pane on the right. Without instances, it offers Add provider. On a plxd with
+ * `hubs`, its hubs (0089) follow the instances, with Add hub, and their own instances stay out of
+ * the list, since only the hub edits them.
  */
 function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const providers = useProviders(host.id);
+  const connection = useConnection(host.id);
+  const hubsOn = connection?.status === "connected" && "hubs" in connection.capabilities;
+  const hubs = useHubs(host.id);
+  const hosts = useHosts();
+  const [addingHub, setAddingHub] = useState(false);
   const [keys, setKeys] = useState<KeyAccount[]>();
   const [error, setError] = useState<string>();
   const [checking, setChecking] = useState(false);
@@ -697,16 +710,22 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   }, [host.id]);
   useEffect(() => {
     let live = true;
-    void Promise.all([loadProviders(host.id), loadKeys()]).then(
-      (errors) => live && setError(errors.find(Boolean)),
-    );
+    void Promise.all([
+      loadProviders(host.id),
+      loadKeys(),
+      hubsOn ? loadHubs(host.id) : undefined,
+    ]).then((errors) => live && setError(errors.find(Boolean)));
     return () => {
       live = false;
     };
-  }, [host.id, loadKeys]);
+  }, [host.id, loadKeys, hubsOn]);
   const refresh = async () => {
     setChecking(true);
-    const errors = await Promise.all([loadProviders(host.id, true), loadKeys()]);
+    const errors = await Promise.all([
+      loadProviders(host.id, true),
+      loadKeys(),
+      hubsOn ? loadHubs(host.id, true) : undefined,
+    ]);
     setChecking(false);
     setError(errors.find(Boolean));
   };
@@ -715,15 +734,28 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     if (failed) notify({ tone: "error", title: `Couldn't save ${instance.name}`, body: failed });
   };
 
-  const list = providers?.providers;
-  const current = list?.find((p) => p.instance.id === selected) ?? list?.[0];
+  const list = providers?.providers.filter((p) => !p.hub);
+  // A host with hubs but no instances of its own opens on its first hub.
+  const currentHub =
+    hubs?.find((h) => hubTab(h.id) === selected) ?? (list?.length ? undefined : hubs?.[0]);
+  const current = currentHub
+    ? undefined
+    : (list?.find((p) => p.instance.id === selected) ?? list?.[0]);
+  const chosenTab = currentHub ? hubTab(currentHub.id) : current?.instance.id;
+  const chosenName = currentHub?.name ?? current?.instance.name;
   // Another account of a kind the host already has, which gets a warning mark (0088).
   const extra = extraAccounts(list?.map((p) => p.instance) ?? []);
-  const asking = confirming !== undefined && confirming === current?.instance.id;
+  // The several-accounts warning's way to a hub: the first one, or Add hub.
+  const openHubs = hubsOn
+    ? () => (hubs?.[0] ? setSelected(hubTab(hubs[0].id)) : setAddingHub(true))
+    : undefined;
+  const asking = confirming !== undefined && confirming === chosenTab;
   const remove = async (id: string) => {
-    const name = list?.find((p) => p.instance.id === id)?.instance.name ?? "the provider";
+    const hub = hubs?.find((h) => hubTab(h.id) === id);
+    const name =
+      hub?.name ?? list?.find((p) => p.instance.id === id)?.instance.name ?? "the provider";
     setRemoving(true);
-    const failed = await removeProvider(host.id, id);
+    const failed = hub ? await removeHub(host.id, hub.id) : await removeProvider(host.id, id);
     // Gone from the list, its pane goes too, and the next one is chosen.
     setRemoving(false);
     setConfirming(undefined);
@@ -740,12 +772,14 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           // Remove and Cancel take the trash's place.
           <div className="flex items-center gap-2 text-body text-muted-foreground">
             <span>
-              Remove <span className="font-medium text-foreground">{current.instance.name}</span>?
-              Its settings and secrets leave this host; its threads keep their transcripts.
+              Remove <span className="font-medium text-foreground">{chosenName}</span>?{" "}
+              {currentHub
+                ? "Its keys and its Claude Code and Codex leave this host; its threads keep their transcripts."
+                : "Its settings and secrets leave this host; its threads keep their transcripts."}
             </span>
             <ConfirmRemove
               disabled={removing}
-              onRemove={() => void remove(current.instance.id)}
+              onRemove={() => void remove(chosenTab!)}
               onCancel={() => setConfirming(undefined)}
             />
           </div>
@@ -764,11 +798,8 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
             <IconButton label="Add provider" onClick={() => setAdding(true)}>
               <Plus aria-hidden />
             </IconButton>
-            {current && (
-              <IconButton
-                label={`Remove ${current.instance.name}`}
-                onClick={() => setConfirming(current.instance.id)}
-              >
+            {chosenTab && (
+              <IconButton label={`Remove ${chosenName}`} onClick={() => setConfirming(chosenTab)}>
                 <Trash2 aria-hidden />
               </IconButton>
             )}
@@ -785,11 +816,20 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           hostId={host.id}
           hostName={host.name}
           instances={list.map((p) => p.instance)}
+          taken={providers?.providers.map((p) => p.instance.id) ?? []}
           onAdded={setSelected}
           onClose={() => setAdding(false)}
+          onHubs={openHubs}
         />
       )}
-      {!list || !current ? (
+      {addingHub && (
+        <AddHubDialog
+          hosts={hosts}
+          onAdded={(id) => setSelected(hubTab(id))}
+          onClose={() => setAddingHub(false)}
+        />
+      )}
+      {!list || (!current && !currentHub) ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-border px-4 py-10 text-center text-body text-muted-foreground">
           {!list ? (
             error ? (
@@ -803,9 +843,20 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
                 No providers on {host.name} yet. Add an agent or a model service for threads to run
                 on.
               </p>
-              <button type="button" onClick={() => setAdding(true)} className={primaryButton}>
-                Add provider
-              </button>
+              <span className="flex gap-2">
+                <button type="button" onClick={() => setAdding(true)} className={primaryButton}>
+                  Add provider
+                </button>
+                {hubsOn && (
+                  <button
+                    type="button"
+                    onClick={() => setAddingHub(true)}
+                    className={outlineButton}
+                  >
+                    Add hub
+                  </button>
+                )}
+              </span>
             </>
           )}
         </div>
@@ -814,70 +865,92 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         // Settings, in which the list and the pane each scroll.
         <div className="@container overflow-hidden rounded-xl border border-border">
           <div className="grid @3xl:h-[calc(100vh-15rem)] @3xl:min-h-[28rem] @3xl:grid-cols-[17rem_minmax(0,1fr)]">
-            <div
-              role="tablist"
-              aria-label="Providers"
-              aria-orientation="vertical"
-              onKeyDown={moveTab}
-              className="flex flex-col border-b border-border @3xl:overflow-y-auto @3xl:border-r @3xl:border-b-0"
-            >
-              {list.map((info) => {
-                const { instance } = info;
-                const Logo = logoOf(instance);
-                const chosen = info === current;
-                const tone = instanceTone(info);
-                // One instance stays on, so a new thread always has one to start on.
-                const last = instance.enabled && on.length === 1;
-                return (
-                  <div
-                    key={instance.id}
-                    className="flex items-center gap-2 border-b border-border pr-4 first:rounded-tl-xl hover:bg-hover has-[[aria-selected=true]]:bg-selected"
-                  >
-                    <button
-                      id={`${tabs}-${instance.id}`}
-                      type="button"
-                      role="tab"
-                      aria-selected={chosen}
-                      aria-controls={`${tabs}-${instance.id}-pane`}
-                      tabIndex={chosen ? 0 : -1}
-                      onClick={() => setSelected(instance.id)}
-                      className={`flex min-w-0 flex-1 items-start gap-3 py-3.5 pl-4 text-left ${instance.enabled ? "" : "opacity-60"}`}
+            <div className="flex flex-col border-b border-border @3xl:overflow-y-auto @3xl:border-r @3xl:border-b-0">
+              <div
+                role="tablist"
+                aria-label="Providers"
+                aria-orientation="vertical"
+                onKeyDown={moveTab}
+                className="flex flex-col"
+              >
+                {list.map((info) => {
+                  const { instance } = info;
+                  const Logo = logoOf(instance);
+                  const chosen = info === current;
+                  const tone = instanceTone(info);
+                  // One instance stays on, so a new thread always has one to start on.
+                  const last = instance.enabled && on.length === 1;
+                  return (
+                    <div
+                      key={instance.id}
+                      className="flex items-center gap-2 border-b border-border pr-4 first:rounded-tl-xl hover:bg-hover has-[[aria-selected=true]]:bg-selected"
                     >
-                      <Logo className="mt-0.5 size-4 shrink-0" />
-                      <span className="min-w-0">
-                        <span className="flex items-baseline gap-2">
-                          <span className="truncate text-body font-medium">
-                            <Redacted text={accountLabel(info)} />
+                      <button
+                        id={`${tabs}-${instance.id}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={chosen}
+                        aria-controls={`${tabs}-${instance.id}-pane`}
+                        tabIndex={chosen ? 0 : -1}
+                        onClick={() => setSelected(instance.id)}
+                        className={`flex min-w-0 flex-1 items-start gap-3 py-3.5 pl-4 text-left ${instance.enabled ? "" : "opacity-60"}`}
+                      >
+                        <Logo className="mt-0.5 size-4 shrink-0" />
+                        <span className="min-w-0">
+                          <span className="flex items-baseline gap-2">
+                            <span className="truncate text-body font-medium">
+                              <Redacted text={accountLabel(info)} />
+                            </span>
+                            {info.version && (
+                              <span className="truncate font-mono text-meta text-faint-foreground">
+                                {info.version}
+                              </span>
+                            )}
                           </span>
-                          {info.version && (
-                            <span className="truncate font-mono text-meta text-faint-foreground">
-                              {info.version}
-                            </span>
-                          )}
+                          <span className="mt-0.5 line-clamp-2 text-body text-muted-foreground">
+                            {instance.enabled && tone && (
+                              <span className="mr-1.5 inline-flex align-middle">
+                                <StatusDot tone={tone} />
+                              </span>
+                            )}
+                            {instance.enabled ? instanceStatus(info) : "Off"}
+                          </span>
                         </span>
-                        <span className="mt-0.5 line-clamp-2 text-body text-muted-foreground">
-                          {instance.enabled && tone && (
-                            <span className="mr-1.5 inline-flex align-middle">
-                              <StatusDot tone={tone} />
-                            </span>
-                          )}
-                          {instance.enabled ? instanceStatus(info) : "Off"}
-                        </span>
+                      </button>
+                      {extra.has(instance.id) && <SeveralAccountsMark onHubs={openHubs} />}
+                      <span title={last ? "One provider stays on, for new threads." : undefined}>
+                        <Switch
+                          label={`Use ${instance.name}`}
+                          checked={instance.enabled}
+                          disabled={last}
+                          onChange={(next) => void save({ ...instance, enabled: next })}
+                        />
                       </span>
-                    </button>
-                    {extra.has(instance.id) && <SeveralAccountsMark />}
-                    <span title={last ? "One provider stays on, for new threads." : undefined}>
-                      <Switch
-                        label={`Use ${instance.name}`}
-                        checked={instance.enabled}
-                        disabled={last}
-                        onChange={(next) => void save({ ...instance, enabled: next })}
-                      />
-                    </span>
-                  </div>
-                );
-              })}
+                    </div>
+                  );
+                })}
+              </div>
+              {hubsOn && (
+                <HubTabs
+                  hostId={host.id}
+                  hubs={hubs}
+                  tabs={tabs}
+                  chosen={currentHub?.id}
+                  onChoose={(id) => setSelected(hubTab(id))}
+                  onAdd={() => setAddingHub(true)}
+                />
+              )}
             </div>
+            {hubs?.map((hub) => (
+              <HubPane
+                key={hub.id}
+                id={`${tabs}-hub-${hub.id}-pane`}
+                tabId={`${tabs}-hub-${hub.id}`}
+                hidden={hub !== currentHub}
+                hostId={host.id}
+                hub={hub}
+              />
+            ))}
             {/* Every pane stays mounted, so a sign-in outlives a switch to another tab. */}
             {list.map((info) => (
               <InstancePane
@@ -901,6 +974,93 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * A host's hubs under the instances: a Hubs heading with Add hub, then each hub as a tab with its
+ * state and a switch that turns its instances on or off on the host.
+ */
+function HubTabs({
+  hostId,
+  hubs,
+  tabs,
+  chosen,
+  onChoose,
+  onAdd,
+}: {
+  hostId: string;
+  hubs: Hub[] | undefined;
+  tabs: string;
+  chosen: string | undefined;
+  onChoose: (id: string) => void;
+  onAdd: () => void;
+}) {
+  const toggle = async (hub: Hub, enabled: boolean) => {
+    const failed = await saveHub(hostId, { ...settingsOf(hub), enabled });
+    if (failed) notify({ tone: "error", title: `Couldn't save ${hub.name}`, body: failed });
+  };
+  return (
+    <div data-setting="hubs" className="flex flex-col">
+      <div className="flex items-center justify-between gap-2 border-b border-border py-1.5 pr-3 pl-4">
+        <h2 className="text-meta font-medium text-muted-foreground">Hubs</h2>
+        <IconButton label="Add hub" onClick={onAdd}>
+          <Plus aria-hidden />
+        </IconButton>
+      </div>
+      {hubs?.length === 0 && (
+        <p className="border-b border-border px-4 py-3 text-meta text-muted-foreground">
+          Run Claude Code and Codex through one CLIProxyAPI hub that keeps every account signed in.
+        </p>
+      )}
+      <div
+        role="tablist"
+        aria-label="Hubs"
+        aria-orientation="vertical"
+        onKeyDown={moveTab}
+        className="flex flex-col"
+      >
+        {hubs?.map((hub) => {
+          const picked = hub.id === chosen;
+          const failing = hub.enabled && !hub.reachable;
+          return (
+            <div
+              key={hub.id}
+              className="flex items-center gap-2 border-b border-border pr-4 hover:bg-hover has-[[aria-selected=true]]:bg-selected"
+            >
+              <button
+                id={`${tabs}-hub-${hub.id}`}
+                type="button"
+                role="tab"
+                aria-selected={picked}
+                aria-controls={`${tabs}-hub-${hub.id}-pane`}
+                tabIndex={picked ? 0 : -1}
+                onClick={() => onChoose(hub.id)}
+                className={`flex min-w-0 flex-1 items-start gap-3 py-3.5 pl-4 text-left ${hub.enabled ? "" : "opacity-60"}`}
+              >
+                <HubLogo aria-hidden className="mt-0.5 size-4 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block truncate text-body font-medium">{hub.name}</span>
+                  <span className="mt-0.5 line-clamp-2 text-body text-muted-foreground">
+                    {failing && (
+                      <span className="mr-1.5 inline-flex align-middle">
+                        <StatusDot tone="error" />
+                      </span>
+                    )}
+                    {hubStatus(hub)}
+                  </span>
+                </span>
+              </button>
+              <Switch
+                label={`Use ${hub.name}`}
+                checked={hub.enabled}
+                onChange={(next) => void toggle(hub, next)}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

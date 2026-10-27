@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import type { ConnectionState } from "../preload/bridge";
 
@@ -36,6 +36,28 @@ export function useConnection(hostId: string): ConnectionState | undefined {
     );
   }, [hostId]);
   return state;
+}
+
+/** Each of `hostIds`' connection states, in order, kept current, as `useConnection` for several. */
+export function useConnections(hostIds: string[]): (ConnectionState | undefined)[] {
+  const last = useRef<(ConnectionState | undefined)[]>([]);
+  // The same array until a state changes, as useSyncExternalStore needs.
+  const read = () => {
+    const next = hostIds.map((id) => states.get(id));
+    const same = next.length === last.current.length && next.every((s, i) => s === last.current[i]);
+    if (!same) last.current = next;
+    return last.current;
+  };
+  const listed = useSyncExternalStore(subscribe, read);
+  const key = hostIds.join("\n");
+  useEffect(() => {
+    for (const id of key.split("\n"))
+      window.parallax.connectionState(id).then(
+        (next) => put(id, next),
+        () => {},
+      );
+  }, [key]);
+  return listed;
 }
 
 /** Why a host's chat is off while it isn't connected, or undefined once it is. */

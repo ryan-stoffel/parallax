@@ -168,6 +168,14 @@ export const models: Model[] = [
 export function instanceModels(info: ProviderInfo): Model[] {
   const { instance } = info;
   const seen = new Set<string>();
+  // A hub's instance (0089) offers only what the hub serves, named as the catalog names it.
+  if (info.hub)
+    return info.models.map((m) => ({
+      ...m,
+      contexts: [],
+      ...models.find((c) => c.provider === instance.kind && c.id === m.id),
+      provider: instance.id,
+    }));
   const listed = [
     ...models.filter((m) => m.provider === instance.kind),
     // OpenCode names its own models (ids `opencode/…`) "opencode/Big Pickle" or "OpenCode

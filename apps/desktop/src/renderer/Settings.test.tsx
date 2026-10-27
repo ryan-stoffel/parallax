@@ -4,7 +4,12 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 
 import type { ConnectionState, SshHost, ParallaxBridge } from "../preload/bridge";
-import type { ProviderInfo, ProviderInstance, ProviderKind } from "../protocol/generated/protocol";
+import type {
+  Hub,
+  ProviderInfo,
+  ProviderInstance,
+  ProviderKind,
+} from "../protocol/generated/protocol";
 import type { SettingsSection } from "./App";
 import { Notifications } from "./notifications";
 import { Settings } from "./Settings";
@@ -368,5 +373,173 @@ describe("on a plxd with providers", () => {
     });
     expect(document.querySelector("dialog")).toBeNull();
     expect(tab("OpenRouter").getAttribute("aria-selected")).toBe("true");
+  });
+  describe("with hubs", () => {
+    const capabilities = { providers: {}, hubs: {} };
+    let hubs: Hub[];
+    const home: Hub = {
+      id: "home-hub",
+      name: "Home hub",
+      url: "https://hub.example:8317",
+      enabled: true,
+      hasManagementKey: true,
+      claude: "home-hub-claude",
+      codex: "home-hub-codex",
+      reachable: true,
+      claudeModels: [{ id: "claude-opus-5-5", name: "claude-opus-5-5" }],
+      codexModels: [
+        { id: "gpt-6-sol", name: "gpt-6-sol" },
+        { id: "gemini-3-pro", name: "gemini-3-pro" },
+      ],
+      accounts: [
+        {
+          id: "claude-ada.json",
+          provider: "claude",
+          email: "ada@example.com",
+          disabled: false,
+          limits: [{ window: "five_hour", usedPercent: 42, capturedAt: "2026-09-28T12:00:00Z" }],
+        },
+        {
+          id: "codex-old.json",
+          provider: "codex",
+          plan: "pro",
+          disabled: true,
+          limits: [],
+        },
+      ],
+      checkedAt: "2026-09-28T12:00:00Z",
+    };
+    const type = async (input: HTMLInputElement, value: string) =>
+      act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+          input,
+          value,
+        );
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    const labeled = (name: string) =>
+      [...dialog().querySelectorAll("label")]
+        .find((l) => l.textContent?.startsWith(name))!
+        .querySelector("input")!;
+
+    beforeEach(() => {
+      hubs = [];
+      for (const id of ["local", mini.id])
+        states[id] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities };
+      answers["hubs/list"] = () => ({ result: { hubs } });
+      answers["hubs/save"] = (p) => {
+        hubs = [{ ...home, ...p }];
+        return { result: { hubs } };
+      };
+      // A hub's own instances, which only its page edits.
+      listed.push({
+        ...listed[0]!,
+        instance: instance("home-hub-claude", "claude", "Home hub"),
+        hub: "home-hub",
+      });
+    });
+    afterEach(() => {
+      states[mini.id] = {
+        status: "failed",
+        retrying: false,
+        error: { reason: "exited", message: "plxd exited." },
+      };
+    });
+
+    test("adds a hub to every computer with hubs at once, and shows its page", async () => {
+      await renderSettings();
+      expect(tab("Home hub")).toBeUndefined();
+      await click(document.querySelector<HTMLElement>('[aria-label="Add hub"]')!);
+      expect(dialog().textContent).toContain("Theo's setup guide");
+      await type(labeled("Name"), "Home hub");
+      await type(labeled("URL"), "https://hub.example:8317");
+      await type(labeled("Access key"), "hub-access");
+      await type(labeled("Management key"), "hub-manage");
+      const boxes = [...dialog().querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+      expect(boxes.map((b) => [b.parentElement!.textContent, b.checked])).toEqual([
+        ["This Mac", true],
+        ["Mac mini", true],
+      ]);
+      expect(button(dialog(), "Add to 2 computers")).toBeDefined();
+      await next();
+
+      const saves = calls("hubs/save");
+      expect(saves.map((s) => s.host)).toEqual(["local", mini.id]);
+      expect(saves[1]!.params).toEqual(saves[0]!.params);
+      expect(saves[0]!.params).toEqual({
+        id: "home-hub",
+        name: "Home hub",
+        url: "https://hub.example:8317",
+        enabled: true,
+        accessKey: "hub-access",
+        managementKey: "hub-manage",
+      });
+      expect(document.querySelector("dialog")).toBeNull();
+
+      expect(tab("Home hub").getAttribute("aria-selected")).toBe("true");
+      const page = visible('[role="tabpanel"]');
+      expect(page.textContent).toContain("Connected · 3 models");
+      expect(page.textContent).toContain("gemini-3-pro");
+      expect(page.textContent).toContain("5-hour limit · 42% used");
+      expect(page.textContent).toContain("Off on the hub");
+      expect(page.textContent).not.toContain("ada@example.com");
+
+      answers["hubs/remove"] = () => ({ result: { hubs: [] } });
+      await click(document.querySelector<HTMLElement>('[aria-label="Remove Home hub"]')!);
+      await click(button(document.body, "Remove"));
+      expect(calls("hubs/remove")).toEqual([{ host: "local", params: { id: "home-hub" } }]);
+      expect(tab("Home hub")).toBeUndefined();
+    });
+
+    test("the several-accounts warning opens Add hub", async () => {
+      listed.push({ ...listed[1]!, instance: instance("codex-2", "codex", "Codex 2") });
+      await renderSettings();
+      const mark = document
+        .querySelector('[role="tab"][aria-controls$="-codex-2-pane"]')!
+        .parentElement!.querySelector<HTMLElement>('button[aria-label="Several accounts"]')!;
+      const popover = document.getElementById(mark.getAttribute("popovertarget")!)!;
+      await click(button(popover, "Set up a hub"));
+      expect(dialog().textContent).toContain("Add hub");
+    });
+
+    test("a retry after one computer fails saves the same hub only to that one", async () => {
+      let tries = 0;
+      answers["hubs/save"] = (p) => {
+        // The first try's second save, the Mac mini's, fails.
+        if (++tries === 2) return { error: { code: -32000, message: "keychain locked" } };
+        hubs = [{ ...home, ...p }];
+        return { result: { hubs } };
+      };
+      await renderSettings();
+      await click(document.querySelector<HTMLElement>('[aria-label="Add hub"]')!);
+      await type(labeled("URL"), "https://hub.example:8317");
+      await type(labeled("Access key"), "hub-access");
+      await next();
+      expect(dialog().querySelector('[role="alert"]')?.textContent).toContain(
+        "Mac mini: keychain locked",
+      );
+      await next();
+      expect(calls("hubs/save").map((s) => [s.host, s.params["id"]])).toEqual([
+        ["local", "home-hub"],
+        [mini.id, "home-hub"],
+        [mini.id, "home-hub"],
+      ]);
+      expect(document.querySelector("dialog")).toBeNull();
+    });
+
+    test("Add provider won't take a hub instance's id", async () => {
+      await renderSettings();
+      await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
+      await click(button(dialog(), "Claude CodeAnthropic's agent"));
+      await type(
+        [...dialog().querySelectorAll("label")]
+          .find((l) => l.textContent?.startsWith("Id"))!
+          .querySelector("input")!,
+        "home-hub-claude",
+      );
+      expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
+        "Another provider on this host has it.",
+      );
+    });
   });
 });

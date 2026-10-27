@@ -2,6 +2,7 @@ import { TriangleAlert } from "lucide-react";
 import { useId } from "react";
 
 import type { ProviderInstance } from "../protocol/generated/protocol";
+import { HUB_DOCS, HUB_GUIDE } from "./hubs";
 import { menuPanel } from "./ui";
 
 /** Kinds that sign in to a subscription account, where several accounts on one app risk them. */
@@ -27,9 +28,10 @@ const link = "text-accent hover:underline";
 
 /**
  * Why several accounts of one provider aren't supported, and the hub to use instead (0088), with
- * links to CLIProxyAPI's docs and Theo's setup guide.
+ * links to CLIProxyAPI's docs and Theo's setup guide, and with `onHubs`, to Settings > Providers >
+ * Hubs (0089).
  */
-export function SeveralAccountsNote() {
+export function SeveralAccountsNote({ onHubs }: { onHubs?: () => void }) {
   return (
     <>
       <p>
@@ -37,15 +39,15 @@ export function SeveralAccountsNote() {
         the accounts at risk. For many accounts, use a CLIProxyAPI hub.
       </p>
       <p className="mt-2 flex gap-3">
-        <a href="https://help.router-for.me/" target="_blank" rel="noreferrer" className={link}>
+        {onHubs && (
+          <button type="button" onClick={onHubs} className={link}>
+            Set up a hub
+          </button>
+        )}
+        <a href={HUB_DOCS} target="_blank" rel="noreferrer" className={link}>
           CLIProxyAPI docs
         </a>
-        <a
-          href="https://gist.github.com/t3dotgg/59a521d2ee8d70aaf90e280c175072af"
-          target="_blank"
-          rel="noreferrer"
-          className={link}
-        >
+        <a href={HUB_GUIDE} target="_blank" rel="noreferrer" className={link}>
           Theo's setup guide
         </a>
       </p>
@@ -53,8 +55,11 @@ export function SeveralAccountsNote() {
   );
 }
 
-/** A warning mark for another account of a provider, whose popover is SeveralAccountsNote. */
-export function SeveralAccountsMark() {
+/**
+ * A warning mark for another account of a provider, whose popover is SeveralAccountsNote. Its
+ * hub link closes the popover before `onHubs`.
+ */
+export function SeveralAccountsMark({ onHubs }: { onHubs?: () => void }) {
   const id = useId();
   return (
     <>
@@ -74,7 +79,15 @@ export function SeveralAccountsMark() {
         aria-label="Several accounts"
         className={`${menuPanel()} w-72 p-3 text-body`}
       >
-        <SeveralAccountsNote />
+        <SeveralAccountsNote
+          onHubs={
+            onHubs &&
+            (() => {
+              document.getElementById(id)?.hidePopover();
+              onHubs();
+            })
+          }
+        />
       </div>
     </>
   );
