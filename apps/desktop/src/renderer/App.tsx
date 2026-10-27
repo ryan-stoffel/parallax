@@ -15,13 +15,12 @@ import {
   SquarePen,
   SunMoon,
   TextSearch,
-  X,
   PanelBottom,
   PanelLeftOpen,
   PanelRight,
   Workflow,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { flushSync } from "react-dom";
 
 import type { InboxItem, PreviewTab, Repo, RepoId, Thread } from "../protocol/generated/protocol";
@@ -102,8 +101,8 @@ import { cloneOnto, type CloneAsk } from "./clone";
 import { isRunning, kindOf } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
-import { tileCommands, useShortcutLabel } from "./keybindings";
-import { evenRatio, maxTiles, ratiosWithout, tileAt, tileLayout } from "./splitLayout";
+import { tileCommands } from "./keybindings";
+import { evenRatio, maxTiles, ratiosWithout } from "./splitLayout";
 import { SplitTiles } from "./SplitTiles";
 import { draggedThread, threadDragType } from "./threadDrag";
 
@@ -123,11 +122,14 @@ export type Selection =
 /**
  * Two to four threads on one host tiled side by side (PLX-587, PLX-1082), in their Fibonacci
  * layout's order, with each cut's share (splitLayout.ts): one fewer ratio than threads.
+ * Opening another unmaximizes it.
  */
 export interface Split {
   hostId: string;
   threadIds: string[];
   ratios: number[];
+  /** All of them in one tile, the focused one shown, as tabs. */
+  maximized?: boolean;
 }
 
 export type SettingsSection =
@@ -932,17 +934,6 @@ export function App() {
     }
     setSelection({ kind: "thread", threadId });
   };
-  // The tile a sidebar thread dragged over the open thread would open in: a new last one while
-  // there's room, else the tile under the pointer. Not over a composer, which takes it to attach
-  // (PLX-378).
-  const [dropAt, setDropAt] = useState<number>();
-  const dropAtOf = (e: DragEvent<HTMLElement>): number | undefined => {
-    if (e.defaultPrevented || !e.dataTransfer.types.includes(threadDragType)) return undefined;
-    if (panes.length < maxTiles) return panes.length;
-    const box = e.currentTarget.getBoundingClientRect();
-    const { tiles } = tileLayout(panes.length, split?.ratios ?? []);
-    return tileAt(tiles, (e.clientX - box.left) / box.width, (e.clientY - box.top) / box.height);
-  };
   // Focuses a tile of the split, reopening it if another view is open, and its composer.
   const focusPane = (tile: number) => {
     const threadId = split?.threadIds[tile];
@@ -1101,6 +1092,85 @@ export function App() {
     sidebarOpen ? "" : "traffic-light-inset",
     sidePanelOpen ? "" : "window-controls-inset",
   ].join(" ");
+
+  // Thread details for the open thread: beside the chat, or in a split floating in its tile.
+  const threadDetails = (mode: ComponentProps<typeof ThreadDetails>["mode"]) => (
+    <ThreadDetails
+      key={panelKey}
+      mode={mode}
+      host={host}
+      folder={folder?.path === "~" ? undefined : folder?.path}
+      worktree={
+        !!threadRun?.worktreePath &&
+        threadRun.worktreePath !== threads.state.repos.find((repo) => repo.id === group.id)?.path
+      }
+      actions={
+        selection.kind !== "project" && !repoless(group)
+          ? {
+              hostId: host.id,
+              repoId: group.id,
+              canRun: !!folder,
+              onRun: runAction,
+            }
+          : undefined
+      }
+      git={
+        selection.kind === "thread" ||
+        agent ||
+        (selection.kind === "new" && !repoless(group) && !group.space)
+          ? {
+              hostId: host.id,
+              // A Project's child thread has one too, as its composer's tab had.
+              run: threadRun ?? agent,
+              repo: selection.kind === "new" ? (group.id as RepoId) : undefined,
+              title:
+                selection.kind === "thread" ? threads.state.titles[selection.threadId] : agentTitle,
+              // The PR view shows a thread's own; a child's opens in the browser.
+              onPrOpened: linksPrs && threadRun ? openPr : undefined,
+              onSetUpGithub: setUpGithub,
+              onChanges: () => {
+                setPanelOpen(true);
+                setShowChanges({});
+              },
+            }
+          : undefined
+      }
+      prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
+      lineage={
+        openThread
+          ? {
+              state: threads.state,
+              includeThreads: "threadLineage" in threads.capabilities,
+              root: lineage ? rootOf(threads.state, openThread) : openThread,
+              openId: openThread.id,
+              onOpen: openThreadId,
+              subagents: subagents.filter((sub) => !sub.parent),
+              activeSubagent: subagentOpen,
+              onOpenSubagent: (callId) => openSubagent(openThread.id, callId),
+            }
+          : undefined
+      }
+    />
+  );
+  // Its key for thread `threadId`, which its children and parent share (useThreadDetails).
+  const detailsKeyOf = (threadId: string) => {
+    const thread = threads.state.threads.find((t) => t.id === threadId);
+    return JSON.stringify([
+      host.id,
+      "thread",
+      thread ? rootOf(threads.state, thread).id : threadId,
+    ]);
+  };
+  // Tile `index`'s Thread details button: shows or hides its thread's, focusing it to show it.
+  const toggleTileDetails = (index: number) => {
+    const threadId = panes[index]!;
+    const key = detailsKeyOf(threadId);
+    if (selection.kind === "thread" && selection.threadId !== threadId) {
+      openThreadId(threadId);
+      if (details.isOpen(key)) return;
+    }
+    details.toggle(key);
+  };
 
   const page = (
     <div className="flex h-full">
@@ -1266,10 +1336,10 @@ export function App() {
                 )}
                 <Breadcrumb items={crumbs} />
                 <div className="ml-auto flex shrink-0 items-center gap-2">
-                  {!group.space && (
+                  {!group.space && !tiled && (
                     <ThreadDetailsButton
                       open={details.mode !== "hidden"}
-                      onToggle={details.toggle}
+                      onToggle={() => details.toggle()}
                     />
                   )}
                   <IconButton
@@ -1308,37 +1378,38 @@ export function App() {
               <div ref={details.ref} className="relative flex min-h-0 flex-1">
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col">
                   {selection.kind === "thread" ? (
-                    <div
-                      className="relative flex min-h-0 flex-1"
-                      onDragOver={(e) => {
-                        const at = dropAtOf(e);
-                        setDropAt(at);
-                        if (at === undefined) return;
-                        e.preventDefault();
-                        e.dataTransfer.dropEffect = "copy";
-                      }}
-                      onDragLeave={(e) => {
-                        if (!e.currentTarget.contains(e.relatedTarget as Node | null))
-                          setDropAt(undefined);
-                      }}
-                      onDrop={(e) => {
-                        const at = dropAtOf(e);
-                        setDropAt(undefined);
-                        const thread = draggedThread(e.dataTransfer);
-                        if (at === undefined || !thread) return;
-                        e.preventDefault();
-                        // A split's threads are one computer's.
-                        if (thread.hostId === host.id) openBeside(thread.runId, at);
-                      }}
-                    >
+                    <div className="relative flex min-h-0 flex-1">
                       <SplitTiles
+                        tiled={tiled}
+                        focused={panes.indexOf(selection.threadId)}
                         ratios={tiled ? split.ratios : []}
                         onResize={(ratios) => split && setSplit({ ...split, ratios })}
-                        drop={
-                          dropAt === undefined
-                            ? undefined
-                            : { replace: dropAt < panes.length ? dropAt : undefined }
+                        maximized={tiled && !!split.maximized}
+                        onMaximize={(maximized) => split && setSplit({ ...split, maximized })}
+                        onFocus={(index) => openThreadId(panes[index]!)}
+                        onClose={(index) => closePane(panes[index]!)}
+                        details={
+                          tiled && !group.space
+                            ? {
+                                node: threadDetails(
+                                  details.mode === "hidden" ? "hidden" : "floating",
+                                ),
+                                open: (index) => details.isOpen(detailsKeyOf(panes[index]!)),
+                                onToggle: toggleTileDetails,
+                              }
+                            : undefined
                         }
+                        // A sidebar thread dragged over the open thread, not over a composer,
+                        // which takes it to attach (PLX-378).
+                        drop={{
+                          accepts: (e) =>
+                            !e.defaultPrevented && e.dataTransfer.types.includes(threadDragType),
+                          onDrop: (at, e) => {
+                            const thread = draggedThread(e.dataTransfer);
+                            // A split's threads are one computer's.
+                            if (thread?.hostId === host.id) openBeside(thread.runId, at);
+                          },
+                        }}
                         items={panes.map((threadId, side) => {
                           const focused = threadId === selection.threadId;
                           const paneThread = threads.state.threads.find((t) => t.id === threadId);
@@ -1353,16 +1424,19 @@ export function App() {
                           // Keyed, so another run starts from an empty transcript.
                           return {
                             key: `${host.id}/${threadId}`,
+                            title: title ?? "Thread",
+                            icon: (
+                              <RepoIcon
+                                repo={threads.state.repos.find((r) => r.id === paneThread?.repo)}
+                              />
+                            ),
                             node: (
                               <section
                                 data-pane={tiled ? side : undefined}
                                 data-focused={tiled && focused ? "" : undefined}
                                 aria-label={tiled ? (title ?? "Thread") : undefined}
-                                // Clicking or tabbing into a tile focuses it, but not its close button,
-                                // which leaves the focus where it is.
-                                onPointerDownCapture={(e) =>
-                                  !focused && !closesTile(e.target) && openThreadId(threadId)
-                                }
+                                // Clicking or tabbing into a tile focuses it.
+                                onPointerDownCapture={() => !focused && openThreadId(threadId)}
                                 // A link to a pull request the thread links opens its view, not GitHub,
                                 // unless a modifier key asks for the browser; the setting swaps the two.
                                 onClickCapture={(e) => {
@@ -1387,30 +1461,17 @@ export function App() {
                                 // Not focus the window or the app gives with nothing focused before, such as a
                                 // notification's click or an approval card's.
                                 onFocusCapture={(e) =>
-                                  !focused &&
-                                  e.relatedTarget &&
-                                  !closesTile(e.target) &&
-                                  openThreadId(threadId)
+                                  !focused && e.relatedTarget && openThreadId(threadId)
                                 }
                                 className="flex min-h-0 min-w-0 flex-1 flex-col"
                               >
-                                {tiled && (
-                                  <PaneHeader
-                                    tile={side}
-                                    title={title ?? "Thread"}
-                                    repo={threads.state.repos.find(
-                                      (r) => r.id === paneThread?.repo,
-                                    )}
-                                    focused={focused}
-                                    onClose={() => closePane(threadId)}
-                                  />
-                                )}
                                 <AgentChat
                                   hostId={host.id}
                                   runId={threadId}
                                   prompt={threads.state.runs[threadId]?.prompt}
                                   // The list's status goes stale once the run moves on, so only a start says so.
                                   going={focused && selection.started}
+                                  quiet={tiled && !focused}
                                   listed={threads.state.runs[threadId]}
                                   space={inSpace}
                                   compose={focused ? compose : undefined}
@@ -1547,65 +1608,7 @@ export function App() {
                     )
                   )}
                 </div>
-                <ThreadDetails
-                  key={panelKey}
-                  mode={group.space ? "hidden" : details.mode}
-                  host={host}
-                  folder={folder?.path === "~" ? undefined : folder?.path}
-                  worktree={
-                    !!threadRun?.worktreePath &&
-                    threadRun.worktreePath !==
-                      threads.state.repos.find((repo) => repo.id === group.id)?.path
-                  }
-                  actions={
-                    selection.kind !== "project" && !repoless(group)
-                      ? {
-                          hostId: host.id,
-                          repoId: group.id,
-                          canRun: !!folder,
-                          onRun: runAction,
-                        }
-                      : undefined
-                  }
-                  git={
-                    selection.kind === "thread" ||
-                    agent ||
-                    (selection.kind === "new" && !repoless(group) && !group.space)
-                      ? {
-                          hostId: host.id,
-                          // A Project's child thread has one too, as its composer's tab had.
-                          run: threadRun ?? agent,
-                          repo: selection.kind === "new" ? (group.id as RepoId) : undefined,
-                          title:
-                            selection.kind === "thread"
-                              ? threads.state.titles[selection.threadId]
-                              : agentTitle,
-                          // The PR view shows a thread's own; a child's opens in the browser.
-                          onPrOpened: linksPrs && threadRun ? openPr : undefined,
-                          onSetUpGithub: setUpGithub,
-                          onChanges: () => {
-                            setPanelOpen(true);
-                            setShowChanges({});
-                          },
-                        }
-                      : undefined
-                  }
-                  prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
-                  lineage={
-                    openThread
-                      ? {
-                          state: threads.state,
-                          includeThreads: "threadLineage" in threads.capabilities,
-                          root: lineage ? rootOf(threads.state, openThread) : openThread,
-                          openId: openThread.id,
-                          onOpen: openThreadId,
-                          subagents: subagents.filter((sub) => !sub.parent),
-                          activeSubagent: subagentOpen,
-                          onOpenSubagent: (callId) => openSubagent(openThread.id, callId),
-                        }
-                      : undefined
-                  }
-                />
+                {!tiled && threadDetails(group.space ? "hidden" : details.mode)}
               </div>
             </>
           )}
@@ -1786,58 +1789,8 @@ export function App() {
   return <SharedRepoIcons value={repoIcons}>{page}</SharedRepoIcons>;
 }
 
-/** Whether `target` is in a tile's close button (PaneHeader). */
-const closesTile = (target: EventTarget) =>
-  target instanceof Element && !!target.closest("[data-close-tile]");
-
 const stepButton =
   "grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-35 [&_svg]:size-4";
-
-/**
- * A tile of the split's header, like a tab: its repository's icon, its title, its Focus thread
- * key, and a close button. The focused tile's is underlined in the accent.
- */
-function PaneHeader({
-  tile,
-  title,
-  repo,
-  focused,
-  onClose,
-}: {
-  tile: number;
-  title: string;
-  repo?: Repo;
-  focused: boolean;
-  onClose: () => void;
-}) {
-  const keys = useShortcutLabel(tileCommands[tile]);
-  return (
-    <div
-      className={`relative flex h-9 shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-4 text-body transition-colors ${focused ? "text-foreground" : "text-faint-foreground"}`}
-    >
-      {focused && <span aria-hidden className="absolute inset-x-0 -bottom-px h-0.5 bg-accent" />}
-      <span className={`flex shrink-0 ${focused ? "" : "opacity-60"}`}>
-        <RepoIcon repo={repo} />
-      </span>
-      <span className="min-w-0 flex-1 truncate font-medium">{title}</span>
-      {keys && (
-        <kbd className="shrink-0 font-sans text-caption text-faint-foreground tabular-nums">
-          {keys}
-        </kbd>
-      )}
-      <button
-        type="button"
-        aria-label="Close this tile"
-        title="Close this tile"
-        data-close-tile
-        onClick={onClose}
-        className="grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
-      >
-        <X />
-      </button>
-    </div>
-  );
-}
 
 /** Loads one host's threads and Projects and hands them up, whenever they change. */
 function HostLoader({

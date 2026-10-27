@@ -1463,7 +1463,7 @@ export function Composer({
         // It grows from two rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
         // Its parent is anchored below it, so it grows upward. Stepped back, it's one row, clear
         // of the buttons at its end.
-        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${back ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(3.25em+0.875rem)] pt-3.5"}`,
+        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none @max-lg:px-4 ${back ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(3.25em+0.875rem)] pt-3.5 @max-lg:min-h-[calc(1.625em+0.875rem)]"}`,
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1951,7 +1951,7 @@ export function Composer({
           {!text && (
             <p
               aria-hidden
-              className={`pointer-events-none absolute left-5 truncate text-reading leading-relaxed text-faint-foreground ${back ? "top-3 right-28" : "top-3.5 right-5"}`}
+              className={`pointer-events-none absolute left-5 truncate @max-lg:left-4 text-reading leading-relaxed text-faint-foreground ${back ? "top-3 right-28" : "top-3.5 right-5"}`}
             >
               {placeholder}
             </p>
@@ -1962,7 +1962,7 @@ export function Composer({
           <ScrollThumb target={editorDom} />
         </div>
         <div
-          className={`flex items-center gap-0.5 px-3 ${back ? "absolute inset-y-0 right-0" : "pb-2.5"}`}
+          className={`flex items-center gap-0.5 px-3 @max-lg:px-2 ${back ? "absolute inset-y-0 right-0" : "pb-2.5 @max-lg:pb-2"}`}
         >
           {!back && pickers}
           <input

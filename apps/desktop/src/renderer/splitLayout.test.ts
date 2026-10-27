@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { ratioAt, ratiosWithout, tileAt, tileLayout } from "./splitLayout";
+import { fittingTiles, ratioAt, ratiosWithout, tileAt, tileLayout } from "./splitLayout";
 
 test("tiles dwindle: left | right, then the right splits top / bottom, then the bottom left | right", () => {
   expect(tileLayout(2, []).tiles).toEqual([
@@ -38,4 +38,19 @@ test("closing a tile drops its own cut, or the last cut for the last tile", () =
   expect(ratiosWithout([0.3, 0.4, 0.6], 4, 1)).toEqual([0.3, 0.6]);
   expect(ratiosWithout([0.3, 0.4, 0.6], 4, 3)).toEqual([0.3, 0.4]);
   expect(ratiosWithout([0.3], 2, 0)).toEqual([]);
+});
+
+test("only the tiles that keep their minimum size fit, and the rest stack in the last", () => {
+  // 1340 by 950: the fourth's quarter width is 335px, enough.
+  expect(fittingTiles(4, [], 1340, 950)).toBe(4);
+  // 1060 by 750: a quarter is 265px, so three tile and the last holds two.
+  expect(fittingTiles(4, [], 1060, 750)).toBe(3);
+  // A wider first tile leaves less for the rest; a narrower one makes room.
+  expect(fittingTiles(4, [0.65], 1340, 950)).toBe(3);
+  expect(fittingTiles(4, [0.4], 1100, 950)).toBe(4);
+  // Too short for a top and bottom, too narrow for even two.
+  expect(fittingTiles(3, [], 1000, 500)).toBe(2);
+  expect(fittingTiles(2, [], 600, 900)).toBe(1);
+  // Not measured yet.
+  expect(fittingTiles(3, [], 0, 0)).toBe(3);
 });

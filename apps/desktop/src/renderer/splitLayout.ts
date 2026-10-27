@@ -8,6 +8,12 @@ export const maxTiles = 4;
 /** The share of a cut the first tile gets until a divider is dragged. */
 export const evenRatio = 0.5;
 
+/**
+ * The smallest a tile gets, in pixels: room for its header, a few lines of transcript, and a
+ * compact composer. Threads past the tiles that fit stack as tabs in the last one.
+ */
+export const minTile = { width: 320, height: 360 };
+
 /** How far a divider can be dragged, as a share of the region it cuts. */
 const minRatio = 0.2;
 
@@ -73,6 +79,25 @@ export function tileAt(tiles: readonly Rect[], x: number, y: number): number {
     (t) => x >= t.left && x < t.left + t.width && y >= t.top && y < t.top + t.height,
   );
   return at === -1 ? tiles.length - 1 : at;
+}
+
+/**
+ * How many of `count` threads tile in a split `width` by `height` pixels, the most whose tiles all
+ * keep `minTile`, at least one. The rest stack in the last tile. Unmeasured, all of them.
+ */
+export function fittingTiles(
+  count: number,
+  ratios: readonly number[],
+  width: number,
+  height: number,
+): number {
+  if (width <= 0 || height <= 0) return count;
+  for (let k = count; k > 1; k--) {
+    const { tiles } = tileLayout(k, ratios);
+    if (tiles.every((t) => t.width * width >= minTile.width && t.height * height >= minTile.height))
+      return k;
+  }
+  return 1;
 }
 
 /** The ratios once tile `index` of `count` closes: its cut goes, or the last one for the last tile. */
