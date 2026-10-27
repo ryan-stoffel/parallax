@@ -14,8 +14,8 @@ import { presentWaiting } from "./waiting";
  * (PLX-777): one line naming its background tasks, such as a Monitor, and the pull requests plxd
  * watches for it, and Stop, which ends them all. Hidden while it waits on nothing. `compact` shows
  * only how many, opening the details and Stop above itself, for a place beside other tabs. Each
- * watched pull request shows as GitHub's mark and its number in its state's color, from
- * `pullRequests`, a link the thread's pane opens as it opens any of the thread's pull requests.
+ * watched pull request shows as GitHub's mark and its number, the number in its state's color
+ * from `pullRequests`, a link the thread's pane opens as it opens any of the thread's pull requests.
  */
 export function WaitingBar({
   hostId,
@@ -121,7 +121,7 @@ export function WaitingBar({
                 rel="noreferrer"
                 className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 font-medium tabular-nums hover:brightness-125 ${color} ${tint}`}
               >
-                <GitHubLogo className="size-3.5" />#{numberOf(url)}
+                <GitHubLogo className="size-3.5 text-foreground" />#{numberOf(url)}
               </a>
             );
           })}
