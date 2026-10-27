@@ -407,6 +407,27 @@
   animation: none;
 }
 
+/* A hidden email (Redacted.tsx): each letter a soft glow of its own shape, drawn by its shadow
+   under a clear fill, so nothing boxes or clips it. Revealed, the letters sharpen left to right,
+   each `--step` after the last; hidden again, all blur at once. */
+.redacted-char {
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 0.45em currentColor;
+  transition:
+    text-shadow 120ms ease-out,
+    -webkit-text-fill-color 120ms ease-out;
+}
+[data-shown] .redacted-char {
+  -webkit-text-fill-color: currentColor;
+  text-shadow: 0 0 0 transparent;
+  transition-duration: 320ms;
+  transition-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition-delay: calc(var(--i) * var(--step));
+}
+:root.reduce-motion .redacted-char {
+  transition: none;
+}
+
 /* Long lines in code blocks, diffs, and file previews (.code-lines) wrap under .word-wrap, from
    Settings > Appearance, or else run on and their box (.code-scroll) scrolls. Unlayered, so they
    win over the elements' own whitespace utilities. */
