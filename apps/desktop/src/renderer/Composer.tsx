@@ -117,9 +117,13 @@ export const accessOptions: Record<AgentPermission, PickerOption> = {
   bypass: access("bypass", <LockOpen />),
 };
 
-/** What the inline thread and image chips read to draw themselves: the attached images, and the
- * host's threads. */
-const RefsContext = createContext<{ images: readonly PromptImage[]; threads?: ThreadsState }>({
+/** What the inline thread and image chips read to draw themselves: the attached images, how to
+ * remove one, and the host's threads. */
+const RefsContext = createContext<{
+  images: readonly PromptImage[];
+  removeImage?: (i: number) => void;
+  threads?: ThreadsState;
+}>({
   images: [],
 });
 
@@ -224,16 +228,34 @@ const ThreadRefNode = chipNode("threadRef", { runId: "", title: "" }, ({ node })
   <ThreadRef runId={node.attrs["runId"] as string} title={node.attrs["title"] as string} />
 ));
 
-/** A pasted image where it was pasted: its thumbnail, its number among the images, and its size. */
+/** A pasted image where it was pasted: its thumbnail, its number among the images, and its size.
+ * Hovering shows an X at its end that removes the image. */
 function ImageRef({ imageKey: key }: { imageKey: string }) {
-  const { images } = useContext(RefsContext);
+  const { images, removeImage } = useContext(RefsContext);
   const i = images.findIndex((image) => imageKey(image) === key);
   const image = images[i];
   return (
     <Chip
       tone="image"
-      // Every 4 characters of base64 are 3 bytes.
-      end={image && sizeOf(Math.floor((image.data.length * 3) / 4))}
+      end={
+        image && (
+          <>
+            {/* Every 4 characters of base64 are 3 bytes. */}
+            {sizeOf(Math.floor((image.data.length * 3) / 4))}
+            {removeImage && (
+              // Its room is kept while hidden, so hovering doesn't move the text after the chip.
+              <button
+                type="button"
+                aria-label={`Remove image ${i + 1}`}
+                onClick={() => removeImage(i)}
+                className="invisible inline-flex group-hover/chip:visible hover:text-foreground"
+              >
+                <X aria-hidden />
+              </button>
+            )}
+          </>
+        )
+      }
       icon={
         image ? (
           <img src={imageUrl(image)} alt="" className="rounded-sm object-cover" />
@@ -1973,7 +1995,14 @@ export function Composer({
               {placeholder}
             </p>
           )}
-          <RefsContext.Provider value={{ images, threads: attach?.state }}>
+          <RefsContext.Provider
+            // No removing while files upload, as in the tray: what's there now is what's sent.
+            value={{
+              images,
+              removeImage: uploading ? undefined : removeImage,
+              threads: attach?.state,
+            }}
+          >
             <EditorContent editor={editor} />
           </RefsContext.Provider>
           <ScrollThumb target={editorDom} />

@@ -34,7 +34,7 @@ export function Chip({
       title={title}
       // Baseline-aligned items make the chip's baseline its text's. Icons, which have none, sit a
       // little below it, as glyphs do. Its padding stays inside the line's height.
-      className={`mx-[0.1em] inline-flex max-w-[24em] items-baseline gap-[0.3em] rounded-sm px-[0.35em] py-[0.12em] leading-none whitespace-nowrap [&_img]:relative [&_img]:top-[0.14em] [&_img]:size-3.5 [&_img]:shrink-0 [&_svg]:relative [&_svg]:top-[0.14em] [&_svg]:size-3.5 [&_svg]:shrink-0 ${tones[tone]}`}
+      className={`group/chip mx-[0.1em] inline-flex max-w-[24em] items-baseline gap-[0.3em] rounded-sm px-[0.35em] py-[0.12em] leading-none whitespace-nowrap [&_img]:relative [&_img]:top-[0.14em] [&_img]:size-3.5 [&_img]:shrink-0 [&_svg]:relative [&_svg]:top-[0.14em] [&_svg]:size-3.5 [&_svg]:shrink-0 ${tones[tone]}`}
     >
       {icon}
       <span className="min-w-0 truncate">{children}</span>
