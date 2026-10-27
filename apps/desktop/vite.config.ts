@@ -13,8 +13,9 @@ import type { PackUserConfig } from "vite-plus/pack";
 // WebAssembly, which the Device view's 3D models decode their meshes with
 // (PLX-886). The dev server's
 // HMR websocket is same-origin, so 'self'. Images may be data: URLs, which is
-// how a message's images show (PLX-193), or GitHub's, which a pull request's
-// description and comments show (PLX-517); agent Markdown loads only images in its thread's
+// how a message's images show (PLX-193), or any https one, which a pull request's
+// description and comments show wherever it's hosted (PLX-517, PLX-1060). Agent Markdown never
+// requests a remote image (AgentChat.tsx's `resolveImageSource`), only images in its thread's
 // folder (PLX-834). blob: is those, and the images and videos an agent presented (PLX-785), made
 // from bytes plxd read.
 // Open VSX, and the host its downloads redirect to, is where Settings > Appearance searches for
@@ -28,7 +29,7 @@ const csp = (dev: boolean) =>
     // KaTeX's fonts, which Vite inlines as data: URLs when small.
     "font-src 'self' data:",
     // crx: is the side panel browser's extension icons (Extensions.tsx).
-    "img-src 'self' data: blob: crx: https://github.com https://*.githubusercontent.com https://open-vsx.org https://openvsx.eclipsecontent.org",
+    "img-src 'self' data: blob: crx: https:",
     "connect-src 'self' blob: https://open-vsx.org https://openvsx.eclipsecontent.org",
     // html_render pages (PLX-639), which main serves with a policy of their own, and browser
     // recordings. plx-file: is presented videos, which main streams from their host (PLX-836).

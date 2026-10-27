@@ -108,7 +108,7 @@ import { locale } from "./locale";
 import { ClaudeLogo, GitHubLogo, ParallaxGlyph } from "./logos";
 import { codeRuns, markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { mentionsOf, withMentions } from "./Mention";
-import { onGithub, prNumber } from "./github";
+import { isHttps, prNumber } from "./github";
 import { dollarMath } from "./math";
 import { useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
@@ -2464,7 +2464,7 @@ const isWhole = (input?: JsonValue): input is JsonValue =>
 // (FileLink.tsx, PLX-834), and a web page opens in a new window, which main hands to the system
 // browser, https only. No remote image or video loads: each stays a link with its alt text.
 
-/** Which remote images Markdown loads: a pull request's GitHub-hosted ones, or none. */
+/** Which remote images Markdown loads: a pull request's https ones, or none. */
 type Images = "github" | "none";
 
 /**
@@ -2637,7 +2637,7 @@ function SiteIcon({ site }: { site: string }) {
 /** Markdown between code blocks, drawn by Enriched Markdown's web renderer. */
 const EnrichedRun = memo(function EnrichedRun({ text, images }: { text: string; images: Images }) {
   const openFile = useOpenFile();
-  const remote = (url: string) => images === "github" && onGithub(url);
+  const remote = (url: string) => images === "github" && isHttps(url);
   // A thread's own file shows, as FileImage reads it, where it's a paragraph of its own, which
   // the renderer hands to `renderers.image`; any other image is a link.
   const markdown = useMemo(
@@ -2738,8 +2738,8 @@ function Runs({ text, images = "none" }: { text: string; images?: Images }) {
 /**
  * Markdown as GitHub writes it, drawn by Enriched Markdown as the phone draws it (apps/mobile
  * ui.tsx): headings, lists and task lists, tables, quotes and GitHub's alerts, KaTeX math, and
- * links, with code blocks as CodeBlock. With `images` "github", GitHub-hosted images load, as a
- * pull request's do.
+ * links, with code blocks as CodeBlock. With `images` "github", https images load, as a pull
+ * request's do.
  */
 export const MarkdownText = memo(function MarkdownText({
   text,

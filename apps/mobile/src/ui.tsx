@@ -64,7 +64,7 @@ import Svg, {
 import { EnrichedMarkdownText, type MarkdownStyle } from "react-native-enriched-markdown";
 
 import type { Attention } from "../../desktop/src/renderer/attention";
-import { onGithub } from "../../desktop/src/renderer/github";
+import { isHttps } from "../../desktop/src/renderer/github";
 import { fileReference, filePath, unloadedImages } from "../../desktop/src/renderer/markdownLinks";
 import { dollarMath } from "../../desktop/src/renderer/math";
 import type { Kind } from "../../desktop/src/renderer/steps";
@@ -719,13 +719,13 @@ function follow(href: string, onFile?: (path: string) => void) {
   else if (/^(https?|mailto):/i.test(href)) void Linking.openURL(href);
 }
 
-/** Which remote images Markdown loads: a pull request's GitHub-hosted ones, or none. */
+/** Which remote images Markdown loads: a pull request's https ones, or none. */
 type Images = "github" | "none";
 
 /**
  * Markdown as GitHub writes it, drawn natively by Enriched Markdown as T3 Code's mobile app draws
  * it: headings, lists and task lists, tables, quotes, code highlighted by tree-sitter with a Copy
- * button, LaTeX, and images. With `images` "github", GitHub-hosted images load and open in the
+ * button, LaTeX, and images. With `images` "github", https images load and open in the
  * lightbox, as the desktop's PR panel shows them; any other image never loads, as in the desktop's
  * transcript, and a tap follows it as a link. A link to a file, or with `onFile`, inline code
  * naming one, such as `src/App.tsx`, goes to `onFile` with its path. With `selectable` off, a long
@@ -742,7 +742,7 @@ export function Markdown({
   onFile?: (path: string) => void;
   selectable?: boolean;
 }) {
-  const shown = (url: string) => images === "github" && onGithub(url);
+  const shown = (url: string) => images === "github" && isHttps(url);
   const scheme = useColorScheme();
   const style = useMemo(() => markdownStyle(scheme === "dark" ? dark : light, scheme === "dark"), [scheme]);
   const markdown = useMemo(() => unloadedImages(dollarMath(text), shown), [text, images]);
