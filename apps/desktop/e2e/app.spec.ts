@@ -159,7 +159,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
 test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", async () => {
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();
-  const codex = page.getByRole("tab", { name: /^(Codex|e2e@example\.test)/ });
+  const codex = page.getByRole("tab", { name: /^(Codex|Email hidden)/ });
   await codex.click();
   await expect(codex).toHaveText("CodexNot authenticated");
   await page.getByRole("button", { name: "Sign in to Codex" }).click();
@@ -169,8 +169,9 @@ test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", a
   await terminal.click();
   await page.keyboard.press("Enter");
   await expect(page.getByText("Codex sign-in ended.")).toBeVisible();
-  // The sign-in's end ran accounts/refresh, which found the fake signed in.
-  await expect(codex).toHaveText("e2e@example.testAuthenticated");
+  // The sign-in's end ran accounts/refresh, which found the fake signed in. Its email is blurred.
+  await expect(codex).toHaveText(/Email hidden, hover or focus to showAuthenticated$/);
+  await expect(codex).not.toContainText("e2e@example.test");
 });
 
 test("Escape closes a dialog opened in Settings, and leaves Settings open (PLX-1050)", async () => {

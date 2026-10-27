@@ -2,7 +2,7 @@ import { expect, test } from "vite-plus/test";
 
 import type { ProviderInfo, ProviderInstance } from "../protocol/generated/protocol";
 import { isNew } from "./catalog";
-import { catalogOf, instanceModels } from "./models";
+import { catalogOf, instanceModels, plainName } from "./models";
 import { knownModel } from "./Subagents";
 
 const info = (instance: Partial<ProviderInstance>, rest: Partial<ProviderInfo> = {}) =>
@@ -86,4 +86,17 @@ test("a model is New for the week after its release", () => {
   expect(isNew(m, Date.parse("2026-10-26T23:59:59Z"))).toBe(true);
   expect(isNew(m, Date.parse("2026-10-27"))).toBe(false);
   expect(isNew({ ...m, released: undefined }, Date.parse("2026-10-20"))).toBe(false);
+});
+
+test("an account named by its email keeps it in the catalog, and plain text names it by its kind", () => {
+  const listed = [
+    info({ id: "codex", kind: "codex", name: "Codex" }, { account: "ryan@example.com" }),
+    info({ id: "work", kind: "codex", name: "Work" }, { account: "work@example.com" }),
+  ];
+  const [signedIn, named] = catalogOf("local", listed, {}, []).instances;
+  // The menus show the email, blurred (PLX-1067).
+  expect(signedIn!.name).toBe("ryan@example.com");
+  // A tooltip or a reason it can't be picked can't blur, so it says the kind.
+  expect(plainName(signedIn!)).toBe("Codex");
+  expect(plainName(named!)).toBe("Work");
 });

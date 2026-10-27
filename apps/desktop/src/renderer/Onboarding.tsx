@@ -36,6 +36,7 @@ import { dismiss, notify } from "./notifications";
 import { agents, finishOnboarding, infoOf, ready, setUpAgents, type Agent } from "./firstRun";
 import { Avatar, useProfile } from "./profile";
 import { kindOf, loadProviders, useProviders } from "./providers";
+import { Redacted } from "./Redacted";
 import { ImportStepBody } from "./ImportSessions";
 import { capitalized } from "./settings/shared";
 import { IconButton } from "./ui";
@@ -282,7 +283,9 @@ function AccountStep({
             <p className="truncate text-reading font-medium">
               {profile.firstName ? `Welcome, ${profile.firstName}` : "You're signed in"}
             </p>
-            <p className="truncate text-body text-muted-foreground">{profile.email}</p>
+            <p className="truncate text-body text-muted-foreground">
+              <Redacted text={profile.email} />
+            </p>
           </div>
           <Check aria-hidden className="ml-2 size-5 text-added" />
         </div>
@@ -506,7 +509,7 @@ function AgentsStep({ titleId, hostName }: { titleId: string; hostName: string }
                   <p
                     className={`truncate text-body text-muted-foreground ${looking ? "onboard-scan" : ""}`}
                   >
-                    {line}
+                    <Redacted text={line} />
                   </p>
                 </div>
                 {action}
@@ -906,7 +909,7 @@ function DoneStep({
           )}
           <div className="min-w-0">
             <p className="truncate text-body font-medium">
-              {profile ? profile.name || profile.email : "No account yet"}
+              {profile ? profile.name || <Redacted text={profile.email} /> : "No account yet"}
             </p>
             <p className="truncate text-meta text-muted-foreground">
               {profile ? "Parallax account" : "Sign in from the profile menu"}

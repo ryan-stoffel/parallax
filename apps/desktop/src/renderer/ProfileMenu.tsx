@@ -4,6 +4,7 @@ import { useId, useRef, useState } from "react";
 import { AccountDialog, SecuredByClerk } from "./Account";
 import { ParallaxMark } from "./logos";
 import { Avatar, useProfile } from "./profile";
+import { Redacted } from "./Redacted";
 import type { HostThreads } from "./Sidebar";
 import { IconButton, Menu, menuItem } from "./ui";
 
@@ -43,11 +44,7 @@ export function ProfileButton({ listed }: { listed: HostThreads[] }) {
 
   return (
     <>
-      <IconButton
-        label={profile ? profile.name || profile.email : "Profile"}
-        popoverTarget={id}
-        aria-haspopup="menu"
-      >
+      <IconButton label={profile?.name || "Profile"} popoverTarget={id} aria-haspopup="menu">
         {profile ? <Avatar profile={profile} size={22} /> : <CircleUser />}
       </IconButton>
       <Menu ref={menu} id={id} label="Account" className="w-64 p-1">
@@ -63,11 +60,17 @@ export function ProfileButton({ listed }: { listed: HostThreads[] }) {
               )}
               <div className="min-w-0">
                 <p className="truncate text-body font-medium">
-                  {profile ? profile.name || profile.email : "Sign in to Parallax"}
+                  {profile
+                    ? profile.name || <Redacted text={profile.email} />
+                    : "Sign in to Parallax"}
                 </p>
                 {(profile?.name || !profile) && (
                   <p role="status" className="truncate text-meta text-muted-foreground">
-                    {profile ? profile.email : (note ?? "With GitHub, Google, Apple, or email.")}
+                    {profile ? (
+                      <Redacted text={profile.email} />
+                    ) : (
+                      (note ?? "With GitHub, Google, Apple, or email.")
+                    )}
                   </p>
                 )}
               </div>

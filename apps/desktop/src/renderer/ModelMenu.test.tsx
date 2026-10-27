@@ -5,6 +5,7 @@ import { afterEach, expect, test } from "vite-plus/test";
 
 import { ModelMenu } from "./ModelMenu";
 import type { Catalog, Instance, Model } from "./models";
+import { redactedPlaceholder } from "./Redacted";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -74,7 +75,7 @@ test("a provider's accounts and pool share one rail button, with a pool-first ac
   const bar = document.querySelector('[role="menu"][aria-label="Account"]')!;
   expect([...bar.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual([
     "Codex pool",
-    "personal@example.test",
+    "hidden email",
     "Work",
   ]);
   // It opens on the pool, and says it's a pool and what it does.
@@ -89,7 +90,7 @@ test("a provider's accounts and pool share one rail button, with a pool-first ac
   expect(document.querySelector('ul [role="menuitemradio"]')?.textContent).toBe("gpt-b");
 });
 
-test("a lone account still shows its email and plan, and favorites say whose a model is", () => {
+test("a lone account still shows its blurred email and plan, and favorites say whose a model is", () => {
   const container = document.body.appendChild(document.createElement("div"));
   root = createRoot(container);
   const lone: Catalog = {
@@ -99,13 +100,13 @@ test("a lone account still shows its email and plan, and favorites say whose a m
   };
   act(() => root!.render(<ModelMenu catalog={lone} value={lone.models[1]!} onChange={() => {}} />));
   expect(button("Choose account")).toBeUndefined();
-  expect(document.body.textContent).toContain("personal@example.testPlus");
+  const hidden = `${redactedPlaceholder("personal@example.test")}Email hidden, hover or focus to show`;
+  expect(document.body.textContent).toContain(`${hidden}Plus`);
+  expect(document.body.textContent).not.toContain("personal@example.test");
 
   act(() => button("Favorite gpt-a")!.click());
   act(() => button("Favorites")!.click());
-  expect(document.querySelector('ul [role="menuitemradio"]')?.textContent).toBe(
-    "gpt-apersonal@example.test",
-  );
+  expect(document.querySelector('ul [role="menuitemradio"]')?.textContent).toBe(`gpt-a${hidden}`);
   act(() => button("Unfavorite gpt-a")!.click());
 });
 

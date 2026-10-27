@@ -110,7 +110,7 @@ import { codeRuns, markdownBlocks, SPLIT_FROM } from "./markdownBlocks";
 import { mentionsOf, withMentions } from "./Mention";
 import { isHttps, prNumber } from "./github";
 import { dollarMath } from "./math";
-import { useCatalog, type Provider, type RunOptions } from "./models";
+import { plainName, useCatalog, type Provider, type RunOptions } from "./models";
 import { kinds } from "./providers";
 import { PlanStrip, PlanLine, ProposedPlan } from "./Plan";
 import { latestPlan, withPlans, type PlanRow, type ProposedPlanRow } from "./plans";
@@ -684,9 +684,9 @@ export function AgentChat({
     if (i.id === box?.backend) continue;
     else if (!moves)
       unavailable[i.id] =
-        `${i.name} is unavailable in this thread. Start a new thread to switch providers.`;
+        `${plainName(i)} is unavailable in this thread. Start a new thread to switch providers.`;
     else if (box?.policy === "noWrite" && !i.coordinator)
-      unavailable[i.id] = `${i.name} can't run a Project's coordinator yet.`;
+      unavailable[i.id] = `${plainName(i)} can't run a Project's coordinator yet.`;
   // Manual's requests come here only from a run that asked for them, on a plxd that sends them.
   let manualDenied: "host" | "run" | undefined;
   if (connected && !("approvals" in connection.capabilities)) manualDenied = "host";

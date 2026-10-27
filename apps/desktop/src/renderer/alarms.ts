@@ -303,7 +303,8 @@ export function useAccountAlarms() {
           key: "account",
           tone: "success",
           title: "Signed in to Parallax",
-          body: `As ${profile.name || profile.email}.`,
+          // A notification is plain text, so it names the account without its email (PLX-1067).
+          ...(profile.name && { body: `As ${profile.name}.` }),
         });
       else if (!profile && before)
         notify({ key: "account", tone: "info", title: "Signed out of Parallax" });
