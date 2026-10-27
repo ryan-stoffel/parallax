@@ -26,8 +26,9 @@ export function redactedPlaceholder(value: string): string {
 export const withoutEmails = (text: string) => text.replace(new RegExp(EMAIL, "g"), "hidden email");
 
 /**
- * `text` with each email in it blurred until hovered (PLX-1067), and the rest as it is. It keeps
- * the font and size around it, so `{label}` becomes `<Redacted text={label} />`.
+ * `text` with each email in it blurred until hovered (PLX-1067), and the rest as it is. An email
+ * is monospace at the size around it, so `{label}` becomes `<Redacted text={label} />` in a
+ * heading or a meta line alike.
  */
 export function Redacted({ text }: { text: string }) {
   return <>{text.split(EMAIL).map((part, i) => (i % 2 ? <Email key={i} value={part} /> : part))}</>;
@@ -70,7 +71,11 @@ function Email({ value }: { value: string }) {
       tabIndex={alone ? 0 : undefined}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      className={`rounded-sm transition-[filter,color] duration-150 focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none ${shown ? "" : "text-muted-foreground blur-xs select-none"}`}
+      // As T3 Code's RedactedSensitiveText: monospace under a light blur, in the code font but not
+      // `.font-mono`, which Appearance's code size zooms (index.css). Inline, so a
+      // truncating row around it cuts it letter by letter and it stays hoverable; that row lets
+      // the blur spread softly past its edges (index.css's .truncate:has(.redacted)).
+      className={`redacted rounded-sm font-(family-name:--font-mono) transition-[filter,color] duration-200 ease-out focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none ${shown ? "" : "text-muted-foreground blur-xs select-none"}`}
     >
       {shown ? (
         value
