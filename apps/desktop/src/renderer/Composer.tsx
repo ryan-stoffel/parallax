@@ -844,6 +844,9 @@ export interface ComposerProps {
   onBack?: (back: boolean) => void;
 }
 
+/** The box's width, in pixels, below which it's one line (Composer). */
+const lineWidth = 480;
+
 /**
  * The prompt box, the same on every screen. It formats Markdown as you type and sends it as
  * Markdown text. Enter sends and Shift+Enter starts a new line (a new item, in a list); in a code
@@ -1263,6 +1266,20 @@ export function Composer({
   const highlighted = Math.min(active, entries.length - 1);
   // Opens below the box when a tall prompt leaves no room for it above (its list, footer, and margin).
   const box = useRef<HTMLFormElement>(null);
+  // Narrow, as in a small window or a split's tile, the box is one line whatever it holds: its
+  // buttons at the line's end and its pickers in the tray under it, as when it steps back.
+  const [narrow, setNarrow] = useState(false);
+  useLayoutEffect(() => {
+    const form = box.current;
+    if (!form) return;
+    // Unlaid out, as in tests, it's 0 wide: not narrow.
+    const measure = () => setNarrow(form.offsetWidth > 0 && form.offsetWidth < lineWidth);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(form);
+    return () => observer.disconnect();
+  }, []);
+  const line = back || narrow;
   // The text's area, whose editor `ScrollThumb` scrolls.
   const textArea = useRef<HTMLDivElement>(null);
   const editorDom = useCallback(
@@ -1461,9 +1478,9 @@ export function Composer({
             "aria-activedescendant": `${menuId}-${highlighted}`,
           }),
         // It grows from two rows up to seven, then scrolls, with `ScrollThumb` for a scrollbar.
-        // Its parent is anchored below it, so it grows upward. Stepped back, it's one row, clear
-        // of the buttons at its end.
-        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none @max-lg:px-4 ${back ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(3.25em+0.875rem)] pt-3.5 @max-lg:min-h-[calc(1.625em+0.875rem)]"}`,
+        // Its parent is anchored below it, so it grows upward. As one line, it starts at one row,
+        // clear of the buttons at its end.
+        class: `composer-input markdown block max-h-[min(40vh,calc(11.375em+0.875rem))] overflow-y-auto px-5 transition-[min-height,padding] duration-200 ease-out focus-visible:outline-none motion-reduce:transition-none ${line ? "min-h-[calc(1.625em+1.5rem)] py-3 pr-28" : "min-h-[calc(3.25em+0.875rem)] pt-3.5"}`,
       },
       handleKeyDown: (view, event): boolean => {
         const plain = !event.shiftKey && !event.altKey && !event.metaKey && !event.ctrlKey;
@@ -1703,8 +1720,8 @@ export function Composer({
       disabled={!!optionsDisabled}
       title={optionsDisabled}
       // In the box's row, its buttons read brighter and heavier than other menus' (menuButton), as
-      // the box's own. In the stepped-back tray they stay menuButton's quiet gray.
-      className={`flex min-w-0 items-center gap-1 ${back ? "" : "[&>button]:font-semibold [&>button]:text-foreground/90"}`}
+      // the box's own. In the tray under a line they stay menuButton's quiet gray.
+      className={`flex min-w-0 items-center gap-1 ${line ? "" : "[&>button]:font-semibold [&>button]:text-foreground/90"}`}
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
@@ -1951,7 +1968,7 @@ export function Composer({
           {!text && (
             <p
               aria-hidden
-              className={`pointer-events-none absolute left-5 truncate @max-lg:left-4 text-reading leading-relaxed text-faint-foreground ${back ? "top-3 right-28" : "top-3.5 right-5"}`}
+              className={`pointer-events-none absolute left-5 truncate text-reading leading-relaxed text-faint-foreground ${line ? "top-3 right-28" : "top-3.5 right-5"}`}
             >
               {placeholder}
             </p>
@@ -1962,9 +1979,10 @@ export function Composer({
           <ScrollThumb target={editorDom} />
         </div>
         <div
-          className={`flex items-center gap-0.5 px-3 @max-lg:px-2 ${back ? "absolute inset-y-0 right-0" : "pb-2.5 @max-lg:pb-2"}`}
+          // As one line, its buttons sit level with the text's last row, as high as one row is.
+          className={`flex items-center gap-0.5 px-3 ${line ? "absolute right-0 bottom-0 h-[calc(1.625em+1.5rem)] text-reading" : "pb-2.5"}`}
         >
-          {!back && pickers}
+          {!line && pickers}
           <input
             ref={filePicker}
             type="file"
@@ -1975,7 +1993,7 @@ export function Composer({
               e.target.value = "";
             }}
           />
-          {usage?.summary && !back && <UsageRing data={usage} />}
+          {usage?.summary && !line && <UsageRing data={usage} />}
           <button
             type="button"
             aria-label="Attach files"
@@ -2011,11 +2029,15 @@ export function Composer({
           )}
         </div>
       </form>
-      {back && pickers ? (
-        // A thin tray tucked under the stepped-back line, in place of any tab, as low as it can be.
-        // Inset and rounded as the tabs over the box are (ComposerTabs).
-        <div className="tucked mx-4 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+      {line && pickers ? (
+        // A thin tray tucked under the line, as low as it can be, inset and rounded as the tabs over
+        // the box are (ComposerTabs). Stepped back, it's gray, as the line is, and takes any tab's
+        // place; narrow, the tab follows the pickers.
+        <div
+          className={`tucked mx-4 -mt-4 flex min-w-0 items-center gap-2 rounded-b-xl border border-t-0 border-border px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5 ${back ? "bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))]" : "bg-surface"}`}
+        >
           {pickers}
+          {!back && tab && <div className="ml-auto flex min-w-0 items-center gap-2">{tab}</div>}
         </div>
       ) : (
         tab && (
