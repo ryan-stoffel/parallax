@@ -741,12 +741,7 @@ impl App {
                 self.model = model.or(self.model.take());
                 self.take_settings();
             }
-            Loaded::Github(github) => {
-                if let Some(settings) = &mut self.settings {
-                    settings.github = Some(github);
-                }
-                self.take_settings();
-            }
+            Loaded::Github(github) => self.take_github(github),
             Loaded::Keys(keys) => {
                 if let Some(settings) = &mut self.settings {
                     settings.keys = Some(keys);

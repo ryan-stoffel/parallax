@@ -176,8 +176,13 @@ pub(super) enum Purpose {
 pub(super) enum Browser {
     /// A Cursor instance's account login page.
     Cursor { instance: String, url: String },
-    /// GitHub's device page, and the code to enter there.
-    Github { code: String, url: String },
+    /// GitHub's device page, and the code to enter there, and when it started: a status read
+    /// before then says nothing about it.
+    Github {
+        code: String,
+        url: String,
+        since: jiff::Timestamp,
+    },
 }
 
 /// A provider's own sign-in, run in this terminal while the TUI steps aside.
@@ -259,6 +264,23 @@ impl App {
         });
     }
 
+    /// A `github/status` read: an install that ended says how it went.
+    pub(super) fn take_github(&mut self, github: GithubStatus) {
+        let Some(settings) = &mut self.settings else {
+            return;
+        };
+        let was_installing = settings.github.as_ref().is_some_and(|held| held.installing);
+        if was_installing && !github.installing {
+            settings.note = Some(match (&github.setup_note, github.installed) {
+                (Some(why), _) => why.clone(),
+                (None, true) => "Installed the GitHub CLI. Press enter to sign in.".to_owned(),
+                (None, false) => "The GitHub CLI didn't install.".to_owned(),
+            });
+        }
+        settings.github = Some(github);
+        self.take_settings();
+    }
+
     /// What a read found, for the screen: a browser sign-in that's done stops waiting.
     pub(super) fn take_settings(&mut self) {
         let Some(settings) = &mut self.settings else {
@@ -281,13 +303,22 @@ impl App {
                     _ => None,
                 }
             }
-            Some(Browser::Github { .. }) => settings
+            // Done when `gh` is signed in, or when plxd stopped waiting on it: failed or expired.
+            Some(Browser::Github { since, .. }) => settings
                 .github
                 .as_ref()
-                .filter(|github| github.signed_in == Some(true))
-                .map(|github| match &github.account {
-                    Some(account) => format!("Signed in to GitHub as {account}."),
-                    None => "Signed in to GitHub.".to_owned(),
+                .filter(|github| github.checked_at > *since)
+                .and_then(|github| match (github.signed_in, &github.account) {
+                    (Some(true), Some(account)) => {
+                        Some(format!("Signed in to GitHub as {account}."))
+                    }
+                    (Some(true), None) => Some("Signed in to GitHub.".to_owned()),
+                    _ if github.signing_in.is_none() => {
+                        Some(github.setup_note.clone().unwrap_or_else(|| {
+                            "GitHub's sign-in ended without signing in.".to_owned()
+                        }))
+                    }
+                    _ => None,
                 }),
             None => None,
         };
@@ -611,6 +642,7 @@ impl App {
             .position(|info| self.default_backend.as_deref() == Some(info.instance.id.as_str()));
         let next = choices[now.map_or(0, |at| (at + 1) % choices.len())];
         let (backend, name) = (next.instance.id.clone(), next.instance.name.clone());
+        let before = self.provider().map(str::to_owned);
         let set = self
             .call::<AccountsDefaultsSet>(AccountsDefaultsSetParams {
                 role: Role::Worker,
@@ -622,6 +654,8 @@ impl App {
         match set {
             Ok(_) => {
                 self.default_backend = Some(backend);
+                // A model, mode, or effort chosen for the old provider doesn't follow.
+                self.fit_provider(before.as_deref());
                 self.note(format!("New threads run on {name}."));
             }
             Err(error) => self.note(format!("Couldn't change it: {error}")),
@@ -662,6 +696,7 @@ impl App {
                     settings.browser = Some(Browser::Github {
                         code: started.code,
                         url: started.url,
+                        since: jiff::Timestamp::now(),
                     });
                 }
             }
@@ -965,7 +1000,7 @@ impl App {
             return lines;
         }
         match &settings.browser {
-            Some(Browser::Github { code, url }) => {
+            Some(Browser::Github { code, url, .. }) => {
                 lines.push(Line::from(vec![
                     Span::from("Enter ").dark_gray(),
                     Span::from(code.clone()).bold().fg(CORAL),
@@ -1184,7 +1219,9 @@ mod tests {
     use parallax_protocol::{ClientInfo, HostSettings, ProviderInfo};
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
-    use super::{App, Purpose, Row, Settings, Toggle, login_of, next_row};
+    use parallax_protocol::GithubStatus;
+
+    use super::{App, Browser, Purpose, Row, Settings, Toggle, login_of, next_row};
     use crate::peer::Plxd;
 
     /// An app whose plxd is never reached: these keys make no calls.
@@ -1307,6 +1344,34 @@ mod tests {
             .collect();
         assert!(!shown.contains("secret"), "{shown}");
         assert!(shown.contains(&"•".repeat(13)), "{shown}");
+    }
+
+    #[test]
+    fn a_github_sign_in_plxd_gave_up_on_stops_waiting() {
+        let mut app = app();
+        let since: jiff::Timestamp = "2026-10-27T18:00:00Z".parse().unwrap();
+        app.settings = Some(Settings {
+            browser: Some(Browser::Github {
+                code: "AA17-58F5".to_owned(),
+                url: "https://github.com/login/device".to_owned(),
+                since,
+            }),
+            ..Settings::default()
+        });
+        let status = |at: &str| -> GithubStatus {
+            serde_json::from_value(serde_json::json!({
+                "installed": true, "signedIn": false,
+                "setupNote": "the code expired", "checkedAt": at,
+            }))
+            .unwrap()
+        };
+        // A read from before the sign-in started says nothing about it.
+        app.take_github(status("2026-10-27T17:59:59Z"));
+        assert!(app.settings.as_ref().unwrap().browser.is_some());
+        app.take_github(status("2026-10-27T18:00:05Z"));
+        let settings = app.settings.as_ref().unwrap();
+        assert!(settings.browser.is_none());
+        assert_eq!(settings.note.as_deref(), Some("the code expired"));
     }
 
     #[tokio::test]
