@@ -62,10 +62,8 @@ import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
 import { SettingsDialog } from "./Settings";
 import { SidePanel } from "./SidePanel";
-import { Browser, BrowserTabBar } from "./Browser";
 import { browserSettingsAsked } from "./browserSettings";
 import { anchorOf } from "./settings/search";
-import { useBrowserTheme } from "./browserTheme";
 import type { NativeSubagent } from "./Subagents";
 import { attentionOf } from "./attention";
 import {
@@ -179,15 +177,9 @@ export function App() {
       open: settings !== null,
       count: settings ? count : count + 1,
     }));
-  // The page shown in place of the chat, if any: Pull requests, Notifications (PLX-1015), Usage, or
-  // the sidebar's permanent browser (PLX-964). Opening a thread closes it.
-  const [mainPage, setMainPage] = useState<
-    "pullRequests" | "notifications" | "usage" | "browser"
-  >();
-  const browserStyle = useBrowserTheme();
-  // The permanent browser mounts the first time it opens and stays, so its pages keep running.
-  const [browserPage, setBrowserPage] = useState(false);
-  if (mainPage === "browser" && !browserPage) setBrowserPage(true);
+  // The page shown in place of the chat, if any: Pull requests, Notifications (PLX-1015), or Usage.
+  // Opening a thread closes it.
+  const [mainPage, setMainPage] = useState<"pullRequests" | "notifications" | "usage">();
 
   useEffect(() => setMainPage(undefined), [selection]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
@@ -890,14 +882,6 @@ export function App() {
       run: () => openMainPage("pullRequests"),
     },
     {
-      id: "browser",
-      label: "Browser",
-      text: "Browser",
-      keywords: "web open",
-      icon: <Globe />,
-      run: () => openMainPage("browser"),
-    },
-    {
       id: "usage",
       label: "Usage",
       text: "Usage",
@@ -1198,8 +1182,6 @@ export function App() {
           onOpenSettings={openSettings}
           onOpenPullRequests={() => openMainPage("pullRequests")}
           onOpenUsage={() => openMainPage("usage")}
-          browserOpen={mainPage === "browser"}
-          onOpenBrowser={() => openMainPage("browser")}
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.showModal()}
@@ -1212,14 +1194,7 @@ export function App() {
       {/* An expanded side panel takes the main pane's place. */}
       <OpenDocumentContext value={openDoc}>
         <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
-          {mainPage === "browser" ? (
-            // The browser's theme paints its top bar and the browser, not the terminal drawer under
-            // them (browserTheme.ts).
-            <TopBar style={browserStyle} className={`bg-pane ${topBarInset}`}>
-              {showSidebar}
-              <BrowserTabBar scope="permanent" />
-            </TopBar>
-          ) : mainPage === "notifications" ? (
+          {mainPage === "notifications" ? (
             <>
               <TopBar className={topBarInset}>
                 {showSidebar}
@@ -1615,15 +1590,6 @@ export function App() {
                 />
               </div>
             </>
-          )}
-          {browserPage && (
-            <div
-              hidden={mainPage !== "browser"}
-              style={browserStyle}
-              className="flex min-h-0 flex-1 flex-col bg-pane"
-            >
-              <Browser scope="permanent" onEmpty={() => setMainPage(undefined)} />
-            </div>
           )}
           {/* Outside the views, so the terminals live on behind the other pages. */}
           <TerminalDrawer
