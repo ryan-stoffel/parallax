@@ -8,6 +8,7 @@ import {
   ChartNoAxesColumn,
   Check,
   ChevronDown,
+  ChevronRight,
   Columns2,
   CircleAlert,
   CircleCheck,
@@ -1837,13 +1838,6 @@ export function ThreadList({
         )}
       </div>
       <Drawer
-        label="Projects"
-        items={drawerProjects}
-        row={(p) => (p.kind === "project" ? projectCard(p) : null)}
-        open={sections.projects}
-        onOpenChange={(o) => toggleSection("projects", o)}
-      />
-      <Drawer
         label="Working"
         items={workingTops}
         row={(item) => row(item)}
@@ -1866,6 +1860,17 @@ export function ThreadList({
         onOpenChange={(o) => toggleSection("archived", o)}
         onDrop={dropOn("archived")}
         pageSize={pageArchived ? archivePageSize : undefined}
+      />
+      {/* Projects aren't a thread state, so a rule sets their drawer apart (PLX-1087). */}
+      {drawerProjects.length > 0 && (
+        <div aria-hidden className="mx-4 my-1 border-t border-border" />
+      )}
+      <Drawer
+        label="Projects"
+        items={drawerProjects}
+        row={(p) => (p.kind === "project" ? projectCard(p) : null)}
+        open={sections.projects}
+        onOpenChange={(o) => toggleSection("projects", o)}
       />
       {pickedItems.length > 0 && (
         <BulkBar
@@ -2117,18 +2122,15 @@ function Drawer<T>({
           setOpened(!open);
           onOpenChange(!open);
         }}
-        className="sticky top-0 z-10 flex list-none items-center gap-3 rounded-lg bg-sidebar px-2 py-1.5 text-body text-muted-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
+        className="group/summary sticky top-0 z-10 flex cursor-default list-none items-center gap-1.5 bg-sidebar px-2 py-1.5 text-meta font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden"
       >
-        <span>
-          {label}{" "}
-          <span className="text-faint-foreground">
-            (<Tick value={items.length} />)
-          </span>
+        {label}
+        <span className="ml-auto text-faint-foreground tabular-nums group-hover/summary:text-muted-foreground">
+          <Tick value={items.length} />
         </span>
-        <span aria-hidden className="h-px flex-1 bg-border" />
-        <ChevronDown
+        <ChevronRight
           aria-hidden
-          className="size-4 shrink-0 transition-transform group-open/drawer:rotate-180"
+          className="size-3.5 shrink-0 transition-transform duration-150 group-open/drawer:rotate-90"
         />
       </summary>
       {open && <ul className={`${cardGap} ${opened ? "rise-in" : ""}`}>{visible.map(row)}</ul>}
