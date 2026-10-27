@@ -194,17 +194,41 @@ export const linkedPr = (href: string, urls: readonly string[]) => {
 };
 const repoOf = (url: string) => /github\.com\/([^/]+\/[^/]+)\/pull\//.exec(url)?.[1] ?? "";
 
-/** How a pull request's state looks: open green, draft gray, merged purple, closed red. */
-export function lookOf(pr?: PullRequest): { Icon: LucideIcon; color: string; label?: string } {
+/**
+ * How a pull request's state looks: open green, draft gray, merged purple, closed red. `tint` is
+ * the background a chip of it takes.
+ */
+export function lookOf(pr?: PullRequest): {
+  Icon: LucideIcon;
+  color: string;
+  tint: string;
+  label?: string;
+} {
   if (pr?.state === "merged")
-    return { Icon: GitMerge, color: "text-project-violet", label: "Merged" };
+    return {
+      Icon: GitMerge,
+      color: "text-project-violet",
+      tint: "bg-project-violet/12",
+      label: "Merged",
+    };
   if (pr?.state === "closed")
-    return { Icon: GitPullRequestClosed, color: "text-danger", label: "Closed" };
+    return {
+      Icon: GitPullRequestClosed,
+      color: "text-danger",
+      tint: "bg-danger/12",
+      label: "Closed",
+    };
   if (pr?.state === "open" && pr.draft)
-    return { Icon: GitPullRequestDraft, color: "text-faint-foreground", label: "Draft" };
-  if (pr?.state === "open") return { Icon: GitPullRequest, color: "text-added", label: "Open" };
+    return {
+      Icon: GitPullRequestDraft,
+      color: "text-faint-foreground",
+      tint: "bg-hover",
+      label: "Draft",
+    };
+  if (pr?.state === "open")
+    return { Icon: GitPullRequest, color: "text-added", tint: "bg-added/12", label: "Open" };
   // Not read yet, or a state this version doesn't know.
-  return { Icon: GitPullRequest, color: "text-muted-foreground" };
+  return { Icon: GitPullRequest, color: "text-muted-foreground", tint: "bg-hover" };
 }
 
 const ago = (time: string) => (age(time) === "now" ? "just now" : `${age(time)} ago`);

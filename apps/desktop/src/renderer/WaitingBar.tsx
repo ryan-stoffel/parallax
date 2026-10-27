@@ -2,7 +2,10 @@ import { Info } from "lucide-react";
 import { useId, useState } from "react";
 
 import type { AgentBackgroundTask } from "../protocol/generated/protocol";
+import { numberOf } from "./github";
+import { GitHubLogo } from "./logos";
 import { notify } from "./notifications";
+import { lookOf, type PullRequests } from "./PullRequests";
 import { menuPanel, popoverBeside } from "./ui";
 import { presentWaiting } from "./waiting";
 
@@ -10,7 +13,9 @@ import { presentWaiting } from "./waiting";
  * What a thread's settled agent still waits on, tucked over its composer as T3 Code's strip is
  * (PLX-777): one line naming its background tasks, such as a Monitor, and the pull requests plxd
  * watches for it, and Stop, which ends them all. Hidden while it waits on nothing. `compact` shows
- * only how many, opening the details and Stop above itself, for a place beside other tabs.
+ * only how many, opening the details and Stop above itself, for a place beside other tabs. Each
+ * watched pull request shows as GitHub's mark and its number in its state's color, from
+ * `pullRequests`, a link the thread's pane opens as it opens any of the thread's pull requests.
  */
 export function WaitingBar({
   hostId,
@@ -19,6 +24,7 @@ export function WaitingBar({
   watching,
   agentsShown,
   compact,
+  pullRequests,
 }: {
   hostId: string;
   runId: string;
@@ -27,6 +33,8 @@ export function WaitingBar({
   /** Whether the subagents tab shows over it, naming its subagents. */
   agentsShown?: boolean;
   compact?: boolean;
+  /** The thread's pull requests as the app reads them, for each watched one's state. */
+  pullRequests?: PullRequests;
 }) {
   const [stopping, setStopping] = useState(false);
   const id = useId();
@@ -69,9 +77,18 @@ export function WaitingBar({
       : kindsShown.size === 1 && kindsShown.has("pull request")
         ? "Monitoring"
         : "Waiting";
+  // The pull requests' numbers show as their chips, not in the title or labels.
+  const title =
+    counted.length === 1 && watching.length === 1 ? "Monitoring pull request" : shown.title;
+  const labels =
+    shown.labels &&
+    others
+      .filter((item) => item.kind !== "pull request")
+      .map((item) => item.label)
+      .join(", ");
 
   return (
-    <section aria-label="Waiting on" className="text-body">
+    <section aria-label="Waiting on" className="min-w-0 text-body">
       {compact ? (
         <button
           type="button"
@@ -92,14 +109,28 @@ export function WaitingBar({
             aria-hidden
             className="size-1.5 shrink-0 animate-pulse rounded-full bg-foreground"
           />
-          <span className="min-w-0 truncate font-medium">{shown.title}</span>
-          <span className="min-w-0 flex-1 truncate text-muted-foreground">{shown.labels}</span>
+          <span className="min-w-0 truncate font-medium">{title}</span>
+          {labels && <span className="min-w-0 truncate text-muted-foreground">{labels}</span>}
+          {watching.map((url) => {
+            const { color, tint } = lookOf(pullRequests?.get(url)?.pr);
+            return (
+              <a
+                key={url}
+                href={url}
+                target="_blank"
+                rel="noreferrer"
+                className={`flex shrink-0 items-center gap-1 rounded-md px-1.5 font-medium tabular-nums hover:brightness-125 ${color} ${tint}`}
+              >
+                <GitHubLogo className="size-3.5" />#{numberOf(url)}
+              </a>
+            );
+          })}
           <button
             type="button"
             popoverTarget={`${id}-details`}
             aria-label="What it waits on"
             aria-haspopup="dialog"
-            className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+            className="ml-auto grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
           >
             <Info aria-hidden />
           </button>

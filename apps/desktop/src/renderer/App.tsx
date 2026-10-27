@@ -1413,6 +1413,8 @@ export function App() {
                                   : undefined
                               }
                               forked={!!paneThread?.forkedFrom}
+                              // The open thread's, the one App reads; another pane's chips stay neutral.
+                              pullRequests={threadRun?.id === threadId ? prs : undefined}
                               onOpenChanges={(turn, path) => {
                                 setPanelOpen(true);
                                 setShowChanges({ runId: threadId, turn, path });
