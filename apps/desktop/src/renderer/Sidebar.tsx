@@ -128,7 +128,7 @@ import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
 import { stored } from "./stored";
 
 import { useFlip } from "./flip";
-import { dragThread } from "./threadDrag";
+import { draggedThread, dragThread } from "./threadDrag";
 import {
   asksOf,
   groupOf,
@@ -1035,6 +1035,24 @@ export function ThreadList({
       void viewOf(h.id)?.update(t.id, { snoozedUntil: was ?? new Date().toISOString() });
     });
   };
+  // A thread row dragged onto another section (PLX-1095): Today takes it out of Archived or
+  // Snoozed, Snoozed snoozes it for an hour, and Archived archives it.
+  const takes = (to: "today" | "snoozed" | "archived", item: Item) =>
+    to === "today"
+      ? isArchived(item) || isSnoozed(item)
+      : to === "snoozed"
+        ? "threadAttention" in item.view.capabilities && (isArchived(item) || !isSnoozed(item))
+        : !isArchived(item);
+  const moveTo = async (to: "today" | "snoozed" | "archived", item: Item) => {
+    setMovingKey(undefined);
+    if (to === "archived") return archive(item);
+    if (isArchived(item)) await archive(item);
+    if (to === "snoozed") await snoozeUntil(item, new Date(Date.now() + 36e5));
+    else if (isSnoozed(item)) await snoozeUntil(item, new Date());
+  };
+  // The section a dragged row would land in, if it takes the row.
+  const dropOn = (to: "snoozed" | "archived") =>
+    moving && takes(to, moving) ? () => void moveTo(to, moving) : undefined;
   const markUnread = (item: Item) => {
     pinUnread.set([...pinUnread.get().filter((k) => k !== item.key), item.key]);
     toast(`Marked “${short(item.title)}” unread`, () =>
@@ -1306,7 +1324,23 @@ export function ThreadList({
 
   // Each favorite's icon, chosen for it, else its repo's.
   const pinIconsNow = pinIcons.use();
-  const [unpinOver, setUnpinOver] = useState(false);
+  const [listOver, setListOver] = useState(false);
+  // The thread row being dragged, for the sections it could move to (PLX-1095).
+  const [movingKey, setMovingKey] = useState<string>();
+  useEffect(() => {
+    const start = (e: DragEvent) => {
+      const t = e.dataTransfer ? draggedThread(e.dataTransfer) : undefined;
+      setMovingKey(t && `${t.hostId}/${t.runId}`);
+    };
+    const end = () => setMovingKey(undefined);
+    window.addEventListener("dragstart", start);
+    window.addEventListener("dragend", end);
+    return () => {
+      window.removeEventListener("dragstart", start);
+      window.removeEventListener("dragend", end);
+    };
+  }, []);
+  const moving = movingKey === undefined ? undefined : byKey.get(movingKey);
   // A thread's own actions where it shows out of Today, pinned or a favorite, as on its row.
   const threadActions = (i: Item & { kind: "thread" }): FavoriteAction[] => [
     ...(i.host.id === host.id && selection.kind === "thread" && i.key !== openKey
@@ -1388,34 +1422,42 @@ export function ThreadList({
       }}
       onPinThread={(hostId, threadId) => {
         const item = byKey.get(`${hostId}/${threadId}`);
-        if (item?.kind === "thread" && !item.thread.pinned && !item.thread.parent) void pin(item);
+        if (item?.kind !== "thread") return;
+        // An archived or snoozed row dropped on the pins comes back too (PLX-1095).
+        if (takes("today", item)) void moveTo("today", item);
+        if (!item.thread.pinned && !item.thread.parent) void pin(item);
       }}
       onPlaced={unfavorite}
     />
   );
-  // A pinned thread dragged onto the thread list unpins.
-  const unpinZone = {
+  // A pinned thread dragged onto the thread list unpins, and an archived or snoozed one comes back.
+  const unpinning = (e: ReactDragEvent<HTMLElement>) =>
+    e.dataTransfer.types.includes(pinDragType) && draggedPin()?.kind === "thread";
+  const listZone = {
     onDragOver: (e: ReactDragEvent<HTMLElement>) => {
-      if (!e.dataTransfer.types.includes(pinDragType)) return;
-      if (draggedPin()?.kind !== "thread") return;
+      if (!unpinning(e) && !(moving && takes("today", moving))) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = "move";
-      setUnpinOver(true);
+      setListOver(true);
     },
     onDragLeave: (e: ReactDragEvent<HTMLElement>) => {
-      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setUnpinOver(false);
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setListOver(false);
     },
     onDrop: (e: ReactDragEvent<HTMLElement>) => {
-      setUnpinOver(false);
+      setListOver(false);
       const dragged = draggedPin();
-      if (dragged?.kind !== "thread") return;
-      e.preventDefault();
-      forgetPin(dragged.key);
-      unfavorite(dragged.key);
-      unpinKey(dragged.key);
+      if (dragged?.kind === "thread") {
+        e.preventDefault();
+        forgetPin(dragged.key);
+        unfavorite(dragged.key);
+        unpinKey(dragged.key);
+      } else if (moving && takes("today", moving)) {
+        e.preventDefault();
+        void moveTo("today", moving);
+      }
     },
   };
-  const unpinLook = unpinOver ? "bg-hover outline-1 outline-border outline-dashed" : "";
+  const listLook = listOver ? dropLook : "";
   const newsDot: Partial<Record<Attention, string>> = {
     failed: "bg-danger",
     done: "bg-added",
@@ -1503,8 +1545,8 @@ export function ThreadList({
   const threadList = (rows: Item[]) => {
     const empty = draftRows.length === 0 && rows.length === 0;
     return (
-      // It fills the space left, so a pinned thread can drop anywhere under the divider to unpin.
-      <div {...unpinZone} className={`flex-1 rounded-lg transition-colors ${unpinLook}`}>
+      // It fills the space left, so a pinned, archived, or snoozed thread can drop anywhere in it.
+      <div {...listZone} className={`flex-1 rounded-lg transition-colors ${listLook}`}>
         <ul aria-label="Threads" className={cardGap}>
           {draftRows.map(({ draft, repo }) => (
             <DraftRow
@@ -1813,6 +1855,7 @@ export function ThreadList({
         row={(i) => row(i)}
         open={sections.snoozed}
         onOpenChange={(o) => toggleSection("snoozed", o)}
+        onDrop={dropOn("snoozed")}
       />
       <Drawer
         label="Archived"
@@ -1820,6 +1863,7 @@ export function ThreadList({
         row={(i) => row(i)}
         open={sections.archived}
         onOpenChange={(o) => toggleSection("archived", o)}
+        onDrop={dropOn("archived")}
         pageSize={pageArchived ? archivePageSize : undefined}
       />
       {pickedItems.length > 0 && (
@@ -1873,6 +1917,9 @@ export function ThreadList({
     </>
   );
 }
+
+/** A section a dragged row is over and would drop into. */
+const dropLook = "bg-hover outline-1 outline-border outline-dashed";
 
 const cardButton =
   "mx-auto mt-3 flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1 text-body font-medium text-foreground hover:bg-hover";
@@ -2008,7 +2055,8 @@ function useMinute() {
  * A drawer pinned under the list, such as Working, Snoozed, or Archived, shown while it holds any
  * rows, which render only while it's open. It scrolls under a cap, and its summary sticks to the
  * top, so collapsing stays reachable. With `pageSize`, the first page shows and each click reveals
- * that many more. Whether it's open is the scope's (PLX-789).
+ * that many more. Whether it's open is the scope's (PLX-789). With `onDrop`, a row it would take is
+ * dragging: it shows even while empty, and a drop on it moves the row in (PLX-1095).
  */
 function Drawer<T>({
   label,
@@ -2017,6 +2065,7 @@ function Drawer<T>({
   pageSize,
   open,
   onOpenChange,
+  onDrop,
 }: {
   label: string;
   items: T[];
@@ -2024,11 +2073,14 @@ function Drawer<T>({
   pageSize?: number;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onDrop?: () => void;
 }) {
   const [pages, setPages] = useState(1);
   // Its rows rise in as the user opens it, but not when it mounts open.
   const [opened, setOpened] = useState(false);
-  if (items.length === 0) return null;
+  const [over, setOver] = useState(false);
+  if (over && !onDrop) setOver(false);
+  if (items.length === 0 && !onDrop) return null;
   const visible = pageSize ? items.slice(0, pageSize * pages) : items;
   const remaining = items.length - visible.length;
   const more = pageSize && remaining > 0 ? Math.min(pageSize, remaining) : 0;
@@ -2036,8 +2088,27 @@ function Drawer<T>({
     <details
       open={open}
       onToggle={(e) => e.currentTarget.open !== open && onOpenChange(e.currentTarget.open)}
+      onDragOver={
+        onDrop &&
+        ((e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          setOver(true);
+        })
+      }
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+      }}
+      onDrop={
+        onDrop &&
+        ((e) => {
+          e.preventDefault();
+          setOver(false);
+          onDrop();
+        })
+      }
       data-flip-scroll
-      className="group/drawer max-h-[40%] min-h-0 shrink-0 overflow-y-auto px-2 pb-1"
+      className={`group/drawer max-h-[40%] min-h-0 shrink-0 overflow-y-auto rounded-lg px-2 pb-1 transition-colors ${over ? dropLook : ""}`}
     >
       <summary
         onClick={(e) => {

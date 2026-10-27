@@ -1,6 +1,5 @@
 // The sidebar's pinned threads (pins.ts, 0075): full thread rows atop Today, in the order the user
 // drags them into, each marked by its pin (PLX-1043).
-import { Pin } from "lucide-react";
 import { useState, type DragEvent, type ReactNode } from "react";
 
 import {
@@ -8,7 +7,6 @@ import {
   moveToEnd,
   orderOf,
   pinDragType,
-  pinHintHidden,
   pinLayout,
   placeAt,
   setDraggedPin,
@@ -51,7 +49,6 @@ export function PinList({
   const [dropAt, setDropAt] = useState<{ key: string; edge: "before" | "after" }>();
   const [dragKey, setDragKey] = useState<string>();
   const [rowOver, setRowOver] = useState(false);
-  const hintHidden = pinHintHidden.use();
 
   const endDrag = () => {
     setDraggedPin(undefined);
@@ -131,7 +128,7 @@ export function PinList({
         } else pinRow(e);
         endDrag();
       }}
-      // A strip to drop on, even with nothing pinned and the hint hidden.
+      // A strip to drop on, even with nothing pinned.
       className="flex min-h-1 flex-col"
     >
       <ul aria-label="Pinned" className="flex flex-col gap-1 not-empty:mb-1">
@@ -140,28 +137,6 @@ export function PinList({
       {rowOver && (
         <div className="grow-in mt-0.5 grid h-8 place-items-center rounded-md border border-dashed border-accent/50 bg-accent/5 text-meta font-medium text-accent">
           Drop to pin
-        </div>
-      )}
-      {keys.length === 0 && !rowOver && !searching && !hintHidden && (
-        <div className="mb-1 flex flex-col items-center rounded-xl border border-dashed border-border px-4 pt-4 pb-2.5 text-center">
-          <span className="grid size-7 place-items-center rounded-lg bg-surface text-muted-foreground ring-1 ring-border [&_svg]:size-3.5">
-            <Pin aria-hidden />
-          </span>
-          <p className="mt-2.5 text-body font-medium text-muted-foreground">Keep threads close</p>
-          <p className="mt-0.5 text-meta leading-snug text-faint-foreground">
-            Drag one here, or press{" "}
-            <kbd className="rounded-sm border border-border bg-surface px-1 font-sans text-caption leading-4 text-muted-foreground">
-              P
-            </kbd>{" "}
-            on it.
-          </p>
-          <button
-            type="button"
-            onClick={() => pinHintHidden.set(true)}
-            className="mt-3 h-6 rounded-md px-2.5 text-meta font-medium text-faint-foreground transition-colors hover:bg-hover hover:text-foreground"
-          >
-            Dismiss
-          </button>
         </div>
       )}
     </div>

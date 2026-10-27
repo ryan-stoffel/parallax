@@ -79,9 +79,6 @@ export const autoClear = stored<number | null>("parallax:autoClear", null, (raw,
 /** Today as one-line rows: icon, title, and status, as T3 Code users ask (#6085). */
 export const compactRows = stored("parallax:compactRows", false, bool);
 
-/** Whether the empty pins' "drag a thread here" hint was closed, so it stays away. */
-export const pinHintHidden = stored("parallax:pinHintHidden", false, bool);
-
 /** A pin being dragged, read while dragging, when the drag's data can't be. */
 export const pinDragType = "application/x-parallax-pin";
 let dragging: { key: string; kind: "thread" } | undefined;

@@ -184,3 +184,61 @@ test("auto-archive leaves a thread one it started is still working for, or waiti
   await settle();
   expect(archived()).toEqual(["plain"]);
 });
+
+// Drags thread row `id` onto `target`, as the sidebar's rows drag (PLX-1095).
+const dragRow = async (id: string, target: () => Element) => {
+  const data = new DataTransfer();
+  // happy-dom's DragEvent takes no dataTransfer.
+  const event = (type: string) =>
+    Object.defineProperty(new Event(type, { bubbles: true }), "dataTransfer", { value: data });
+  const row = document.querySelector(`[data-row="local/${id}"]`)!;
+  act(() => void row.dispatchEvent(event("dragstart")));
+  act(() => {
+    target().dispatchEvent(event("dragover"));
+    target().dispatchEvent(event("drop"));
+  });
+  act(() => void row.dispatchEvent(event("dragend")));
+  await settle();
+};
+const drawer = (label: string) =>
+  [...document.querySelectorAll("details")].find((d) =>
+    d.querySelector("summary")?.textContent?.startsWith(label),
+  )!;
+const list = () => document.querySelector('[aria-label="Threads"]')!.parentElement!;
+
+test("a row dragged onto another section moves there: Archived archives, Snoozed snoozes, and the list brings it back (PLX-1095)", async () => {
+  capabilities = { threadAttention: {} } as Capabilities;
+  threads = [
+    thread("later", 10),
+    thread("finished", 10),
+    thread("old", 10, { archived: true }),
+    thread("keep", 10, { archived: true }),
+  ];
+  runs = [run("later", "completed", 10), run("finished", "completed", 10)];
+  await renderApp();
+  // Nothing is snoozed, so Snoozed shows only while a row drags.
+  expect(drawer("Snoozed")).toBeUndefined();
+
+  await dragRow("later", () => drawer("Snoozed"));
+  const snoozed = request.mock.calls.find(([, m]) => m === "thread/update")?.[2];
+  expect(snoozed).toMatchObject({ runId: "later" });
+  expect(Date.parse(snoozed!["snoozedUntil"] as string)).toBeGreaterThan(Date.now() + 59 * 60_000);
+
+  await dragRow("finished", () => drawer("Archived"));
+  await waitForArchives(1);
+  expect(archived()).toEqual(["finished"]);
+
+  if (!drawer("Archived").open) act(() => drawer("Archived").querySelector("summary")!.click());
+  await dragRow("old", list);
+  expect(request).toHaveBeenCalledWith("local", "thread/archive", {
+    runId: "old",
+    archived: false,
+  });
+  // Dropped on the pins, it comes back pinned.
+  await dragRow("keep", () => document.querySelector('[aria-label="Pinned"]')!.parentElement!);
+  expect(request).toHaveBeenCalledWith("local", "thread/archive", {
+    runId: "keep",
+    archived: false,
+  });
+  expect(request).toHaveBeenCalledWith("local", "thread/update", { runId: "keep", pinned: true });
+});
