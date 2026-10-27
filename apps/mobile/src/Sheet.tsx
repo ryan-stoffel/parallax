@@ -33,8 +33,9 @@ export function Sheet({
   children: ReactNode;
 }) {
   const c = useColors();
-  // A step off the page: the sidebar's gray on light, a lifted surface on dark, where the page is black.
-  const fill = useColorScheme() === "dark" ? c.surface : c.sidebar;
+  // On dark the page and the sheet are both black, so a hairline marks the sheet's edge. Its cards
+  // keep the lifted surface they sit on.
+  const edge = useColorScheme() === "dark" && { borderWidth: StyleSheet.hairlineWidth, borderColor: c.border };
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const y = useSharedValue(height);
@@ -74,7 +75,8 @@ export function Sheet({
           style={[
             styles.sheet,
             // It runs past the screen's bottom edge, so its bottom never shows, even as it springs.
-            { backgroundColor: fill, marginBottom: -BELOW, paddingBottom: insets.bottom + 12 + BELOW },
+            { backgroundColor: c.sidebar, marginBottom: -BELOW, paddingBottom: insets.bottom + 12 + BELOW },
+            edge,
             sheetStyle,
           ]}
         >
