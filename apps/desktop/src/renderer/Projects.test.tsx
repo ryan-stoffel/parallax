@@ -253,7 +253,9 @@ test("Projects live in a drawer, folded until opened, and a search shows its mat
   sectionsStore.set({});
   await renderApp();
   expect(projectRows()).toEqual([]);
-  expect(document.querySelector("#sidebar summary")!.textContent).toContain("Projects (2)");
+  // The drawer sits last under the list, after the thread drawers (PLX-1087).
+  const summaries = [...document.querySelectorAll("#sidebar summary")];
+  expect(summaries.at(-1)!.textContent).toBe("Projects2");
   const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
   typeInto(search, "emb");
   await settle();
