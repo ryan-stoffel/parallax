@@ -43,7 +43,7 @@ function SchemePreview({ mode, theme }: { mode: Mode; theme: string }) {
   );
   return (
     <span className={`scheme-${mode} theme-${theme} flex h-full bg-background`}>
-      <span className="flex w-1/5 flex-col gap-1.5 bg-sidebar p-2">
+      <span className="flex w-1/5 flex-col gap-1.5 border-r border-border bg-sidebar p-2">
         {bar("100%")}
         {bar("80%")}
         {bar("90%")}

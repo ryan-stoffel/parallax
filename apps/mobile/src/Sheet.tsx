@@ -4,7 +4,7 @@
 // outside does.
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { Modal, Pressable, StyleSheet, useColorScheme, useWindowDimensions, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -33,6 +33,9 @@ export function Sheet({
   children: ReactNode;
 }) {
   const c = useColors();
+  // On dark the page and the sheet are both black, so a hairline marks the sheet's edge. Its cards
+  // keep the lifted surface they sit on.
+  const edge = useColorScheme() === "dark" && { borderWidth: StyleSheet.hairlineWidth, borderColor: c.border };
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const y = useSharedValue(height);
@@ -73,6 +76,7 @@ export function Sheet({
             styles.sheet,
             // It runs past the screen's bottom edge, so its bottom never shows, even as it springs.
             { backgroundColor: c.sidebar, marginBottom: -BELOW, paddingBottom: insets.bottom + 12 + BELOW },
+            edge,
             sheetStyle,
           ]}
         >
