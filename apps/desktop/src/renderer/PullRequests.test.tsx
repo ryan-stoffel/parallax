@@ -103,6 +103,22 @@ test("Thread details counts a pull request's passed checks of those that count, 
   expect(document.querySelector(".line-clamp-2")!.textContent).toBe(read[url(1)]!.title);
 });
 
+test("Thread details shows 3 linked pull requests, 10 after Show more, and past those View all", async () => {
+  const urls = Array.from({ length: 12 }, (_, i) => url(i + 1));
+  read = Object.fromEntries(urls.map((u, i) => [u, prOf(i + 1)]));
+  const onOpen = vi.fn();
+  await render(urls, (prs) => <LinkedPullRequests prs={prs} onOpen={onOpen} />);
+  const titles = () => [...document.querySelectorAll(".line-clamp-2")].map((t) => t.textContent);
+  const button = (name: string) =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === name);
+  expect(titles()).toEqual(["Change 12", "Change 11", "Change 10"]);
+  expect(button("View all 12")).toBeUndefined();
+  act(() => button("Show 7 more")!.click());
+  expect(titles()).toHaveLength(10);
+  act(() => button("View all 12")!.click());
+  expect(onOpen).toHaveBeenCalledWith();
+});
+
 test("githubText makes HTML images Markdown, and linkedPr finds a linked one from any of its tabs", () => {
   expect(githubText('<img alt="A [b]" src="https://x/y.png" />')).toBe("![A b](https://x/y.png)");
   // Code shows the tag as written.

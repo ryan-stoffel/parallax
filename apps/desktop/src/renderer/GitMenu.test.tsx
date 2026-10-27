@@ -6,7 +6,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
 import type { ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, GitStatus, LoggedEvent } from "../protocol/generated/protocol";
-import { gitActions, GitMenu, syncText } from "./GitMenu";
+import { gitActions, GitMenu, syncBrief, syncText } from "./GitMenu";
 import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -65,6 +65,11 @@ test("says where the branch stands in words", () => {
   expect(syncText({ ...clean, origin: false, changes: 1 })).toBe(
     "1 uncommitted file · No origin remote",
   );
+  // Beside the branch, in fewer words.
+  expect(syncBrief(clean)).toBe("Synced");
+  expect(syncBrief({ ...clean, changes: 3, ahead: 1 })).toBe("3 uncommitted · 1 to push");
+  expect(syncBrief({ ...clean, upstream: null })).toBe("Not pushed");
+  expect(syncBrief({ ...clean, branch: null })).toBe("Clean");
 });
 
 /** A bridge whose plxd has `capabilities` and answers the Git methods with `answers`. */
