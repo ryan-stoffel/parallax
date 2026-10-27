@@ -26,8 +26,9 @@ export function redactedPlaceholder(value: string): string {
 export const withoutEmails = (text: string) => text.replace(new RegExp(EMAIL, "g"), "hidden email");
 
 /**
- * `text` with each email in it blurred until hovered (PLX-1067), and the rest as it is. It keeps
- * the font and size around it, so `{label}` becomes `<Redacted text={label} />`.
+ * `text` with each email in it blurred until hovered (PLX-1067), and the rest as it is. An email
+ * is monospace at 0.85em of the text around it, so `{label}` becomes `<Redacted text={label} />`
+ * in a heading or a meta line alike.
  */
 export function Redacted({ text }: { text: string }) {
   return <>{text.split(EMAIL).map((part, i) => (i % 2 ? <Email key={i} value={part} /> : part))}</>;
@@ -70,10 +71,10 @@ function Email({ value }: { value: string }) {
       tabIndex={alone ? 0 : undefined}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      // As T3 Code's RedactedSensitiveText: small monospace under a light blur. It truncates
-      // itself, so the blur spreads softly past its own edges rather than being cut square by a
-      // truncating row around it.
-      className={`redacted inline-block max-w-full truncate rounded-sm align-bottom font-mono text-[0.6875rem] leading-normal transition-[filter,color] duration-200 ease-out focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none ${shown ? "" : "text-muted-foreground blur-xs select-none"}`}
+      // As T3 Code's RedactedSensitiveText: smaller monospace under a light blur. Inline, so a
+      // truncating row around it cuts it letter by letter and it stays hoverable; that row lets
+      // the blur spread softly past its edges (index.css's .truncate:has(.redacted)).
+      className={`redacted rounded-sm font-mono text-[0.85em] transition-[filter,color] duration-200 ease-out focus-visible:outline-2 focus-visible:outline-ring motion-reduce:transition-none ${shown ? "" : "text-muted-foreground blur-xs select-none"}`}
     >
       {shown ? (
         value
