@@ -59,7 +59,6 @@ export function useUsage(
  */
 export function UsageLines({ usage, period }: { usage?: AccountUsage; period: Period }) {
   const spent = usage?.[period];
-  const now = Date.now();
   return (
     <>
       <span
@@ -68,7 +67,17 @@ export function UsageLines({ usage, period }: { usage?: AccountUsage; period: Pe
       >
         {describeUsage(spent, period)}
       </span>
-      {usage?.limits.map((limit) => {
+      <LimitLines limits={usage?.limits ?? []} />
+    </>
+  );
+}
+
+/** A line per limit window, each with a bar of how much is used, in red once it's reached. */
+export function LimitLines({ limits }: { limits: UsageLimitWindow[] }) {
+  const now = Date.now();
+  return (
+    <>
+      {limits.map((limit) => {
         const { text, used } = describeLimit(limit, now);
         const full = used !== undefined && used >= 100;
         return (

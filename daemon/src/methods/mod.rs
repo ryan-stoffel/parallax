@@ -53,8 +53,8 @@ use parallax_protocol::methods::{
     OrchestrationSubscribeThread, RequestMethod,
 };
 use parallax_protocol::{
-    EventsSubscribeResult, EventsUnsubscribeResult, ProvidersListResult, SubscriptionId,
-    TerminalListResult, TerminalResult,
+    EventsSubscribeResult, EventsUnsubscribeResult, HubsListResult, ProvidersListResult,
+    SubscriptionId, TerminalListResult, TerminalResult,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -253,6 +253,25 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ProvidersRemove => |p| async move {
             daemon.providers.remove(&p.id).await?;
             Ok(providers(daemon, false).await)
+        },
+        // Each `hubs/*` answers with every hub after it (0089).
+        HubsList => |p| async move {
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(p.refresh).await,
+            })
+        },
+        HubsSave => |p| async move {
+            daemon.providers.save_hub(p).await?;
+            daemon.agents.placement.notify_one();
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(false).await,
+            })
+        },
+        HubsRemove => |p| async move {
+            daemon.providers.remove_hub(&p.id).await?;
+            Ok(HubsListResult {
+                hubs: daemon.providers.hubs(false).await,
+            })
         },
         ProvidersUpdates => |p| provider_updates::updates(context, p),
         ProvidersUpgrade => |p| provider_updates::upgrade(context, p),

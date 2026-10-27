@@ -57,9 +57,10 @@ use crate::{
     HostFoldersParams, HostFoldersResult, HostHealthParams, HostHealthResult, HostReadUploadParams,
     HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
     HostUpdateParams, HostUpdateResult, HostUploadParams, HostUploadResult, HostVersionParams,
-    HostVersionResult, InboxListParams, InboxListResult, InboxSeenParams, InboxSeenResult,
-    InitializeParams, InitializeResult, LandApproveParams, LandQueueParams, LandResult,
-    LandSendBackParams, MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
+    HostVersionResult, HubsListParams, HubsListResult, HubsRemoveParams, HubsSaveParams,
+    InboxListParams, InboxListResult, InboxSeenParams, InboxSeenResult, InitializeParams,
+    InitializeResult, LandApproveParams, LandQueueParams, LandResult, LandSendBackParams,
+    MemoryDeleteParams, MemoryDeleteResult, MemoryListParams, MemoryListResult,
     MemoryProposeParams, MemoryProposeResult, MemoryReadParams, MemoryReadResult,
     MemorySyncListParams, MemorySyncListResult, MemorySyncReadParams, MemorySyncReadResult,
     MemoryWriteParams, MemoryWriteResult, OrchestrationCommand, PrActParams, PrDiffResult,
@@ -230,6 +231,15 @@ method_table! {
         /// `providers/remove`: removes an instance the user added, and its secrets, and returns
         /// every instance. Fails with `invalidParams` for a built-in one.
         ProvidersRemove = "providers/remove": ProvidersRemoveParams => ProvidersListResult;
+        /// `hubs/list`: this host's `CLIProxyAPI` hubs (0089), each with whether it answers, its
+        /// models, and with a management key its accounts and their limits. May answer from a
+        /// short-lived cache unless `refresh` is set. Gated on the `hubs` capability.
+        HubsList = "hubs/list": HubsListParams => HubsListResult;
+        /// `hubs/save`: adds a hub, or replaces the one with its id, and its two provider
+        /// instances, and returns every hub. A key left out keeps the stored one.
+        HubsSave = "hubs/save": HubsSaveParams => HubsListResult;
+        /// `hubs/remove`: removes a hub, its keys, and its instances, and returns every hub.
+        HubsRemove = "hubs/remove": HubsRemoveParams => HubsListResult;
         /// `providers/updates`: each installed Claude Code and Codex with a newer release where it
         /// came from: its Homebrew cask or formula, else its npm package. Gated on the
         /// `providerUpdates` capability (PLX-746, PLX-783).

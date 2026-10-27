@@ -269,6 +269,7 @@ export const settingsIndex: SettingEntry[] = [
       "env variables api key base url secret",
     ],
     ["Models", "The models a provider offers", "custom model add model"],
+    ["Hubs", "Run Claude Code and Codex through a CLIProxyAPI hub", "cliproxyapi proxy accounts"],
   ]),
   {
     section: "providers",

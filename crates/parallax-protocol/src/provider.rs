@@ -171,6 +171,11 @@ pub struct ProviderInfo {
     /// instance's, and for an ACP agent its home folder's.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub login_env: Vec<ProviderEnvVar>,
+    /// The hub this instance runs through (0089), whose settings it takes: `hubs/save` edits it,
+    /// and `providers/save` and `providers/remove` refuse it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub hub: Option<String>,
     /// Why the last Cursor browser sign-in failed (0053), until the next one starts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

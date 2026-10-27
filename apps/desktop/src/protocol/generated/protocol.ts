@@ -118,6 +118,21 @@ export type ParallaxRequests = {
 	 */
 	"providers/remove": { params: ProvidersRemoveParams, result: ProvidersListResult },
 	/**
+	 * `hubs/list`: this host's `CLIProxyAPI` hubs (0089), each with whether it answers, its
+	 * models, and with a management key its accounts and their limits. May answer from a
+	 * short-lived cache unless `refresh` is set. Gated on the `hubs` capability.
+	 */
+	"hubs/list": { params: HubsListParams, result: HubsListResult },
+	/**
+	 * `hubs/save`: adds a hub, or replaces the one with its id, and its two provider
+	 * instances, and returns every hub. A key left out keeps the stored one.
+	 */
+	"hubs/save": { params: HubsSaveParams, result: HubsListResult },
+	/**
+	 * `hubs/remove`: removes a hub, its keys, and its instances, and returns every hub.
+	 */
+	"hubs/remove": { params: HubsRemoveParams, result: HubsListResult },
+	/**
 	 * `providers/updates`: each installed Claude Code and Codex with a newer release where it
 	 * came from: its Homebrew cask or formula, else its npm package. Gated on the
 	 * `providerUpdates` capability (PLX-746, PLX-783).
@@ -968,6 +983,9 @@ export const REQUEST_METHODS = [
 	"providers/list",
 	"providers/save",
 	"providers/remove",
+	"hubs/list",
+	"hubs/save",
+	"hubs/remove",
 	"providers/updates",
 	"providers/upgrade",
 	"usage/get",
@@ -2198,6 +2216,11 @@ export type ProviderInfo = {
 	 */
 	loginEnv?: Array<ProviderEnvVar>,
 	/**
+	 * The hub this instance runs through (0089), whose settings it takes: `hubs/save` edits it,
+	 * and `providers/save` and `providers/remove` refuse it.
+	 */
+	hub?: string,
+	/**
 	 * Why the last Cursor browser sign-in failed (0053), until the next one starts.
 	 */
 	signInError?: string,
@@ -2322,6 +2345,192 @@ export type ProvidersRemoveParams = {
 };
 
 /**
+ * Params of `hubs/list`.
+ */
+export type HubsListParams = {
+	/**
+	 * Ask every hub again instead of answering from plxd's cache.
+	 */
+	refresh: boolean,
+};
+
+/**
+ * Result of `hubs/list`, and of `hubs/save` and `hubs/remove`.
+ */
+export type HubsListResult = {
+	/**
+	 * Every hub, in the order they were added.
+	 */
+	hubs: Array<Hub>,
+};
+
+/**
+ * A hub as `hubs/list` reports it: its settings, without its keys, and what it last answered.
+ */
+export type Hub = {
+	/**
+	 * A stable id: 1 to 48 lowercase letters, digits, and `-`.
+	 */
+	id: string,
+	/**
+	 * What people see. Its two instances are named after it.
+	 */
+	name: string,
+	/**
+	 * The hub's address, such as `https://hub.tailnet.ts.net:8317`, without a trailing `/`.
+	 */
+	url: string,
+	/**
+	 * Whether its instances run threads. A disabled hub keeps its settings and keys.
+	 */
+	enabled: boolean,
+	/**
+	 * Whether a management key is kept, which lists its accounts.
+	 */
+	hasManagementKey: boolean,
+	/**
+	 * The id of the instance that runs Claude Code through it.
+	 */
+	claude: string,
+	/**
+	 * The id of the instance that runs Codex through it.
+	 */
+	codex: string,
+	/**
+	 * Whether `/v1/models` answered with the access key.
+	 */
+	reachable: boolean,
+	/**
+	 * Why it didn't, for people: the kind of failure and an HTTP status, never a response body.
+	 */
+	problem?: string,
+	/**
+	 * The Claude models it serves, which run through Claude Code.
+	 */
+	claudeModels: Array<ProviderModel>,
+	/**
+	 * Every other model it serves, which runs through Codex.
+	 */
+	codexModels: Array<ProviderModel>,
+	/**
+	 * Its accounts, from its management API. Empty without a management key.
+	 */
+	accounts: Array<HubAccount>,
+	/**
+	 * Why its accounts couldn't be listed, for people.
+	 */
+	accountsProblem?: string,
+	/**
+	 * When plxd last asked it.
+	 */
+	checkedAt: string,
+};
+
+/**
+ * One account a hub keeps signed in: one of its auth files.
+ */
+export type HubAccount = {
+	/**
+	 * The hub's id for it, its auth file's.
+	 */
+	id: string,
+	/**
+	 * Which service it signs in to, as the hub names it: `claude`, `codex`, or another.
+	 */
+	provider: string,
+	/**
+	 * The account's email, when the hub knows it.
+	 */
+	email?: string,
+	/**
+	 * Its plan, such as `pro`, when the service says.
+	 */
+	plan?: string,
+	/**
+	 * Whether the hub keeps it out of rotation.
+	 */
+	disabled: boolean,
+	/**
+	 * Its limit windows, read through the hub: `five_hour`, `seven_day`, and
+	 * `seven_day_<model>`, as `usage/limits` names them. Empty for a disabled account and for a
+	 * service plxd doesn't read limits for.
+	 */
+	limits: Array<UsageLimitWindow>,
+	/**
+	 * Why its limits couldn't be read, for people.
+	 */
+	problem?: string,
+};
+
+/**
+ * One of an account's limit windows, as a vendor reported it (0004's `rate_limit_event` and
+ * Codex's `account/rateLimits/updated` in `usage/get`, Claude Code's `get_usage` and Codex's
+ * `account/rateLimits/read` in `usage/limits`).
+ */
+export type UsageLimitWindow = {
+	/**
+	 * The vendor's name for the window, such as `five_hour`, `seven_day`, `seven_day_opus`,
+	 * `primary`, or `secondary`. `usage/limits` names Codex's five-hour and weekly windows
+	 * `five_hour` and `seven_day`, as Claude's are.
+	 */
+	window: string,
+	/**
+	 * How much of the window is used, from 0 to 100, when the vendor says.
+	 */
+	usedPercent?: number,
+	/**
+	 * When the window resets, when the vendor says.
+	 */
+	resetsAt?: string,
+	/**
+	 * When plxd captured this snapshot.
+	 */
+	capturedAt: string,
+};
+
+/**
+ * Params of `hubs/save`: adds a hub, or replaces the one with its id.
+ */
+export type HubsSaveParams = {
+	/**
+	 * The hub's id.
+	 */
+	id: string,
+	/**
+	 * What people see.
+	 */
+	name: string,
+	/**
+	 * The hub's `http` or `https` address.
+	 */
+	url: string,
+	/**
+	 * Whether its instances run threads.
+	 */
+	enabled: boolean,
+	/**
+	 * One of the hub's `api-keys`, which its instances run with. Required for a new hub;
+	 * absent keeps the stored one.
+	 */
+	accessKey?: string,
+	/**
+	 * Its management key, which lists its accounts. Absent keeps the stored one; empty removes
+	 * it.
+	 */
+	managementKey?: string,
+};
+
+/**
+ * Params of `hubs/remove`: removes a hub, its keys, and its two instances.
+ */
+export type HubsRemoveParams = {
+	/**
+	 * The hub's id.
+	 */
+	id: string,
+};
+
+/**
  * Params of `providers/updates`.
  */
 export type ProvidersUpdatesParams = Record<symbol, never>;
@@ -2414,32 +2623,6 @@ export type AccountUsage = {
 	 * Cursor's headless output has no usage API).
 	 */
 	limits: Array<UsageLimitWindow>,
-};
-
-/**
- * One of an account's limit windows, as a vendor reported it (0004's `rate_limit_event` and
- * Codex's `account/rateLimits/updated` in `usage/get`, Claude Code's `get_usage` and Codex's
- * `account/rateLimits/read` in `usage/limits`).
- */
-export type UsageLimitWindow = {
-	/**
-	 * The vendor's name for the window, such as `five_hour`, `seven_day`, `seven_day_opus`,
-	 * `primary`, or `secondary`. `usage/limits` names Codex's five-hour and weekly windows
-	 * `five_hour` and `seven_day`, as Claude's are.
-	 */
-	window: string,
-	/**
-	 * How much of the window is used, from 0 to 100, when the vendor says.
-	 */
-	usedPercent?: number,
-	/**
-	 * When the window resets, when the vendor says.
-	 */
-	resetsAt?: string,
-	/**
-	 * When plxd captured this snapshot.
-	 */
-	capturedAt: string,
 };
 
 /**

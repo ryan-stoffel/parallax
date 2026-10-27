@@ -77,7 +77,8 @@ const steps = ["Provider", "Identity", "Config"];
  * Add provider, a native modal <dialog> open while it's mounted, in three steps: a provider card
  * or an ACP Registry agent; its display name and id, unique on the host; and how it runs. Add
  * saves it on the host and calls `onAdded` with its id; closing calls `onClose`. Another account
- * of a provider the host already has is allowed, with a warning (0088).
+ * of a provider the host already has is allowed, with a warning (0088), whose hub link closes the
+ * dialog for `onHubs`.
  */
 export function AddProviderDialog({
   hostId,
@@ -85,12 +86,14 @@ export function AddProviderDialog({
   instances,
   onAdded,
   onClose,
+  onHubs,
 }: {
   hostId: string;
   hostName: string;
   instances: ProviderInstance[];
   onAdded: (id: string) => void;
   onClose: () => void;
+  onHubs?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
@@ -241,7 +244,15 @@ export function AddProviderDialog({
                 <p className="font-medium text-foreground">
                   {hostName} already has a {kindOf(draft.kind).name} account.
                 </p>
-                <SeveralAccountsNote />
+                <SeveralAccountsNote
+                  onHubs={
+                    onHubs &&
+                    (() => {
+                      dialog.current?.close();
+                      onHubs();
+                    })
+                  }
+                />
               </div>
             </div>
           )}

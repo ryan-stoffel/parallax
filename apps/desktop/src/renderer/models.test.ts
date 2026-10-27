@@ -56,6 +56,28 @@ test("a host's catalog is its instances' models, in this device's order, without
   ]);
 });
 
+test("a hub's instances offer only the hub's models, named as the catalog names them", () => {
+  const hub = (id: string, kind: string, models: string[]) =>
+    info(
+      { id, kind: kind as ProviderInstance["kind"], name: "Home hub" },
+      { hub: "home", models: models.map((m) => ({ id: m, name: m })) },
+    );
+  const catalog = catalogOf(
+    "local",
+    [
+      hub("home-claude", "claude", ["claude-opus-5-5"]),
+      hub("home-codex", "codex", ["gpt-6-sol", "gemini-3-pro"]),
+    ],
+    {},
+    [],
+  );
+  expect(catalog.models.map((m) => [m.provider, m.id, m.name])).toEqual([
+    ["home-claude", "claude-opus-5-5", "Claude Opus 5.5"],
+    ["home-codex", "gpt-6-sol", "GPT-6 Sol"],
+    ["home-codex", "gemini-3-pro", "gemini-3-pro"],
+  ]);
+});
+
 test("an older plxd's catalog is the built-in one, turned off as this computer says", () => {
   const catalog = catalogOf("local", undefined, {}, ["cursor"]);
   expect(catalog.instances.map((i) => [i.id, i.enabled])).toEqual([

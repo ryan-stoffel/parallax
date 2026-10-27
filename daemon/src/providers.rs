@@ -13,7 +13,11 @@
 //!
 //! Several accounts of one kind are separate instances, each with its own home (0088). Account
 //! pools (PLX-1033) are gone: [`Providers::load`] drops one it finds in `providers.json`.
+//!
+//! A `CLIProxyAPI` hub (0089) adds two instances of its own, which are listed and routed to like
+//! any other but kept in `hubs.json` and edited only through `hubs/*` ([`hubs`]).
 
+mod hubs;
 mod identity;
 
 use std::collections::HashMap;
@@ -25,8 +29,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountId, AgentPermission, CliKind, ProviderEnvVar, ProviderInfo, ProviderInstance,
-    ProviderKind, ProviderModel, ProvidersListResult,
+    AccountId, AgentPermission, CliKind, Hub, HubsSaveParams, ProviderEnvVar, ProviderInfo,
+    ProviderInstance, ProviderKind, ProviderModel, ProvidersListResult,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -283,9 +287,13 @@ fn detected_cli(id: &str) -> Option<CliKind> {
 struct Stored {
     #[serde(flatten)]
     instance: ProviderInstance,
-    /// Where its secret variables are in the keychain, once it has any.
+    /// Where its secret variables are in the keychain, once it has any. A hub's instance's are
+    /// its hub's keys, whose access key every secret variable takes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     secrets: Option<AccountId>,
+    /// The hub it runs through, for one of a hub's instances, which `providers.json` never holds.
+    #[serde(skip)]
+    hub: Option<String>,
 }
 
 /// What a probe of an instance depends on: its settings but `enabled`, and where its secrets are.
@@ -334,6 +342,8 @@ pub struct Providers {
     /// The backends plxd registered at startup under the built-in instances' ids, which a
     /// built-in instance with no settings runs.
     defaults: HashMap<String, Arc<dyn Backend>>,
+    /// This host's hubs, each of which adds two instances.
+    hubs: hubs::Hubs,
 }
 
 impl std::fmt::Debug for Providers {
@@ -380,6 +390,7 @@ impl Providers {
                 stored.push(Stored {
                     instance,
                     secrets: None,
+                    hub: None,
                 });
             }
         }
@@ -387,9 +398,11 @@ impl Providers {
             .iter()
             .filter_map(|(id, ..)| Some(((*id).to_owned(), registry.by_backend_name(id)?.1)))
             .collect();
+        let hubs = hubs::Hubs::load(data_dir, Arc::clone(&keys), launcher);
         let mut providers = Self {
             file,
             keys,
+            hubs,
             launcher: launcher.clone(),
             registry: registry.clone(),
             defaults,
@@ -405,8 +418,80 @@ impl Providers {
         for entry in &stored {
             providers.register(entry);
         }
+        for entry in providers.hubs.loaded() {
+            providers.register(&entry);
+        }
         *providers.stored.get_mut() = stored;
         providers
+    }
+
+    /// Every instance: the ones the user added, then each enabled hub's.
+    async fn entries(&self) -> Vec<Stored> {
+        let mut entries = self.stored.lock().await.clone();
+        entries.extend(self.hubs.instances().await);
+        entries
+    }
+
+    /// Every hub, with what it answers (0089).
+    pub async fn hubs(&self, refresh: bool) -> Vec<Hub> {
+        self.hubs.list(refresh).await
+    }
+
+    /// Adds a hub, or replaces the one with its id, and puts its instances in the registry, or
+    /// takes them out while it's off.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for settings plxd can't use, and an internal error if the file or the
+    /// keychain can't be written.
+    pub async fn save_hub(&self, params: HubsSaveParams) -> Result<(), ErrorObject> {
+        let ids: Vec<String> = self
+            .stored
+            .lock()
+            .await
+            .iter()
+            .map(|entry| entry.instance.id.clone())
+            .collect();
+        let (old, hub) = self
+            .hubs
+            .save(params, |id| ids.iter().any(|taken| taken == id))
+            .await?;
+        if let Some(old) = old {
+            for entry in hubs::instances_of(&old) {
+                self.registry.remove(&entry.instance.id);
+            }
+        }
+        for entry in hubs::instances_of(&hub) {
+            self.cache.lock().await.remove(&entry.instance.id);
+            if hub.enabled {
+                self.register(&entry);
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes the hub `id`, its keys, and its instances.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for a hub that doesn't exist.
+    pub async fn remove_hub(&self, id: &str) -> Result<(), ErrorObject> {
+        let hub = self.hubs.remove(id).await?;
+        for entry in hubs::instances_of(&hub) {
+            self.registry.remove(&entry.instance.id);
+            self.cache.lock().await.remove(&entry.instance.id);
+        }
+        Ok(())
+    }
+
+    /// What `providers/save` and `providers/remove` answer for a hub's instance `id`.
+    async fn refuse_hub(&self, id: &str) -> Result<(), ErrorObject> {
+        match self.hubs.owner(id).await {
+            Some(hub) => Err(ErrorObject::invalid_params(format!(
+                "{id} belongs to the hub {hub}; change it with hubs/save"
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// Drops a cached probe so the next list reads the sidecar again.
@@ -416,8 +501,7 @@ impl Providers {
 
     /// The kind of the instance `id`, if the host has it.
     pub async fn kind(&self, id: &str) -> Option<ProviderKind> {
-        self.stored
-            .lock()
+        self.entries()
             .await
             .iter()
             .find(|entry| entry.instance.id == id)
@@ -426,8 +510,7 @@ impl Providers {
 
     /// Whether the instance `id` sets the variable `name`, secret or not.
     pub async fn sets(&self, id: &str, name: &str) -> bool {
-        self.stored
-            .lock()
+        self.entries()
             .await
             .iter()
             .filter(|entry| entry.instance.id == id)
@@ -437,7 +520,7 @@ impl Providers {
     /// Every instance with its state, probing those whose cached state is older than
     /// [`CACHE_TTL`], or all of them with `refresh`.
     pub async fn list(&self, detector: &CliDetector, refresh: bool) -> ProvidersListResult {
-        let stored = self.stored.lock().await.clone();
+        let stored = self.entries().await;
         let probes = stored
             .iter()
             .map(|entry| self.found(detector, entry, refresh));
@@ -445,7 +528,7 @@ impl Providers {
         let providers = stored
             .into_iter()
             .zip(found)
-            .map(|(entry, found)| info(entry.instance, found))
+            .map(|(entry, found)| info(entry, found))
             .collect();
         ProvidersListResult {
             providers,
@@ -458,7 +541,7 @@ impl Providers {
     /// old, or for a built-in agent the detector's fresh answer. One never probed has no sign-in
     /// or models.
     pub async fn known(&self, detector: &CliDetector) -> Vec<ProviderInfo> {
-        let stored = self.stored.lock().await.clone();
+        let stored = self.entries().await;
         let mut known = Vec::with_capacity(stored.len());
         for entry in stored {
             let cached = self
@@ -481,7 +564,7 @@ impl Providers {
                     _ => Found::default(),
                 },
             };
-            known.push(info(entry.instance, found));
+            known.push(info(entry, found));
         }
         known
     }
@@ -495,6 +578,7 @@ impl Providers {
     /// file or the keychain can't be written.
     pub async fn save(&self, mut instance: ProviderInstance) -> Result<(), ErrorObject> {
         check(&instance)?;
+        self.refuse_hub(&instance.id).await?;
         // The list isn't locked while the keychain may wait on the user.
         let old = self
             .stored
@@ -523,6 +607,7 @@ impl Providers {
         let entry = Stored {
             instance,
             secrets: secret_id,
+            hub: None,
         };
         let mut stored = self.stored.lock().await;
         match stored
@@ -624,6 +709,7 @@ impl Providers {
     ///
     /// `invalidParams` for an id that doesn't exist.
     pub async fn remove(&self, id: &str) -> Result<(), ErrorObject> {
+        self.refuse_hub(id).await?;
         let mut stored = self.stored.lock().await;
         let Some(i) = stored.iter().position(|s| s.instance.id == id) else {
             return Err(ErrorObject::invalid_params(format!("no provider {id}")));
@@ -737,6 +823,9 @@ impl Providers {
                 ..Found::default()
             };
         };
+        if let Some(hub) = &entry.hub {
+            return self.probe_hub(entry, hub, &preset, refresh).await;
+        }
         let default_program = detected_cli(&instance.id).filter(|_| instance.program.is_none());
         // An `OpenCode` server at a URL needs no `opencode` on this host.
         let mut found = if matches!(preset.driver, Driver::Opencode) && opencode_at_url(instance) {
@@ -808,8 +897,13 @@ impl Providers {
                 model.name = ollama_model_name(&model.id);
             }
         }
-        // Claude runs through the Agent SDK sidecar (0061), which needs Node and installs the
-        // SDK on first use.
+        self.sdk_note(&preset, &mut found).await;
+        found
+    }
+
+    /// Claude runs through the Agent SDK sidecar (0061), which needs Node and installs the SDK on
+    /// first use: a note says so meanwhile.
+    async fn sdk_note(&self, preset: &Preset, found: &mut Found) {
         if matches!(preset.driver, Driver::Claude)
             && let Some(note) = crate::backend::claude::sdk::status(&self.launcher).await
         {
@@ -818,6 +912,23 @@ impl Providers {
                 .0;
             found.note = Some(note);
         }
+    }
+
+    /// A hub's instance: its agent on this host, signed in while the hub answers, with the hub's
+    /// models for its agent. No account of the user's own is probed, since it runs on the hub's.
+    async fn probe_hub(&self, entry: &Stored, hub: &str, preset: &Preset, refresh: bool) -> Found {
+        let mut found = self.locate(&entry.instance, preset).await;
+        if !found.installed {
+            return found;
+        }
+        let reach = self.hubs.reach_of(hub, refresh).await;
+        found.signed_in = Some(reach.reachable);
+        found.note = reach.problem;
+        found.models = match entry.instance.kind {
+            ProviderKind::Claude => reach.claude,
+            _ => reach.codex,
+        };
+        self.sdk_note(preset, &mut found).await;
         found
     }
 
@@ -1051,7 +1162,9 @@ fn full_env(keys: &dyn KeyStore, entry: &Stored) -> Vec<(OsString, OsString)> {
         .env
         .iter()
         .filter_map(|var| {
-            let value = if var.secret {
+            let value = if var.secret && entry.hub.is_some() {
+                secrets.get(hubs::ACCESS).cloned()
+            } else if var.secret {
                 secrets.get(&var.name).cloned()
             } else {
                 var.value.clone()
@@ -1621,7 +1734,8 @@ fn own_home(home: &str) -> Result<String, ErrorObject> {
 }
 
 /// What `providers/list` says about one instance.
-fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
+fn info(entry: Stored, found: Found) -> ProviderInfo {
+    let Stored { instance, hub, .. } = entry;
     let preset = preset_for(&instance);
     let (permissions, efforts) = match preset.as_ref().map(|p| &p.driver) {
         Some(Driver::Claude) => (
@@ -1715,6 +1829,7 @@ fn info(instance: ProviderInstance, found: Found) -> ProviderInfo {
         coordinator,
         login,
         login_env,
+        hub,
         sign_in_error: None,
     }
 }
@@ -1749,7 +1864,7 @@ mod tests {
     }
 
     /// An enabled instance with no settings.
-    fn instance(id: &str, kind: ProviderKind, name: &str) -> ProviderInstance {
+    pub(super) fn instance(id: &str, kind: ProviderKind, name: &str) -> ProviderInstance {
         ProviderInstance {
             id: id.into(),
             kind,

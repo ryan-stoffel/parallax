@@ -1,0 +1,116 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "hubs/list",
+    "params": {
+      "refresh": true
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "hubs": [
+        {
+          "id": "home",
+          "name": "Home hub",
+          "url": "https://hub.example.ts.net:8317",
+          "enabled": true,
+          "hasManagementKey": true,
+          "claude": "home-claude",
+          "codex": "home-codex",
+          "reachable": true,
+          "claudeModels": [
+            {
+              "id": "claude-opus-5-5",
+              "name": "claude-opus-5-5"
+            }
+          ],
+          "codexModels": [
+            {
+              "id": "gpt-6-sol",
+              "name": "gpt-6-sol"
+            }
+          ],
+          "accounts": [
+            {
+              "id": "claude-ada@example.com.json",
+              "provider": "claude",
+              "email": "ada@example.com",
+              "disabled": false,
+              "limits": [
+                {
+                  "window": "five_hour",
+                  "usedPercent": 42.0,
+                  "resetsAt": "2026-10-27T03:00:00Z",
+                  "capturedAt": "2026-10-27T00:00:00Z"
+                }
+              ]
+            },
+            {
+              "id": "codex-ada@example.com.json",
+              "provider": "codex",
+              "email": "ada@example.com",
+              "plan": "pro",
+              "disabled": true,
+              "limits": [],
+              "problem": "The hub answered HTTP 502."
+            }
+          ],
+          "checkedAt": "2026-10-27T00:00:00Z"
+        },
+        {
+          "id": "office",
+          "name": "Office hub",
+          "url": "http://10.0.0.2:8317",
+          "enabled": false,
+          "hasManagementKey": false,
+          "claude": "office-claude",
+          "codex": "office-codex",
+          "reachable": false,
+          "problem": "Couldn't connect to the hub.",
+          "claudeModels": [],
+          "codexModels": [],
+          "accounts": [],
+          "checkedAt": "2026-10-27T00:00:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "hubs/save",
+    "params": {
+      "id": "home",
+      "name": "Home hub",
+      "url": "https://hub.example.ts.net:8317",
+      "enabled": true,
+      "accessKey": "an-access-key",
+      "managementKey": "a-management-key"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "hubs": []
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "hubs/remove",
+    "params": {
+      "id": "office"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "hubs": []
+    }
+  }
+]
