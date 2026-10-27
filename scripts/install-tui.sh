@@ -70,11 +70,17 @@ main() {
     exit 1
   fi
 
-  mv -f "$tmp/plxd.version" "$dir/plxd.version"
+  # The binary first, as self_update does: a version file that moved alone would name a version
+  # the old binary isn't, and updates to it would be skipped.
   mv -f "$tmp/plxd" "$dir/plxd"
+  mv -f "$tmp/plxd.version" "$dir/plxd.version"
   ln -sfn "$dir/plxd" "$link"
 
   echo "Installed Parallax $version in $dir"
+  # A plxd already running from here keeps its version until it restarts.
+  if command -v pgrep > /dev/null 2>&1 && pgrep -f "$dir/plxd serve" > /dev/null 2>&1; then
+    echo "plxd is already running. It runs this version once it restarts."
+  fi
   case ":$PATH:" in
     *":$bin:"*) echo "Run parallax to start." ;;
     *)
