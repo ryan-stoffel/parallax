@@ -171,8 +171,8 @@ export function App() {
   const [settingsHost, setSettingsHost] = useState<string>();
   // The setting Settings' search picked last, to scroll to; a new object each pick.
   const [settingsFocus, setSettingsFocus] = useState<{ anchor: string }>();
-  // How many times Settings has closed. New thread and a Project's chat read the defaults it sets
-  // when they mount, so they mount again each time it closes.
+  // How many times Settings has closed. New thread and a Project's chat read the default account
+  // again each time, since it may have changed there.
   const [settingsClosed, setSettingsClosed] = useState({ open: false, count: 0 });
   if (settingsClosed.open !== (settings !== null))
     setSettingsClosed(({ count }) => ({
@@ -1466,7 +1466,7 @@ export function App() {
                   ) : selection.kind === "new" ? (
                     <NewThread
                       // Opening a draft opens a new screen, which leaves the one open as a draft.
-                      key={`${draft}/${settingsClosed.count}`}
+                      key={draft}
                       draftId={draft}
                       hostId={host.id}
                       hosts={hosts}
@@ -1499,6 +1499,7 @@ export function App() {
                       }}
                       disabledReason={offline}
                       threadLinks={threadLinks}
+                      settingsClosed={settingsClosed.count}
                     />
                   ) : agentId ? (
                     <AgentChat
@@ -1532,7 +1533,7 @@ export function App() {
                   ) : (
                     project && (
                       <ProjectChat
-                        key={`${host.id}/${project.id}/${settingsClosed.count}`}
+                        key={`${host.id}/${project.id}`}
                         hostId={host.id}
                         project={project}
                         prompt={
@@ -1548,6 +1549,7 @@ export function App() {
                         needs={needs}
                         onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
                         threadLinks={threadLinks}
+                        settingsClosed={settingsClosed.count}
                       />
                     )
                   )}

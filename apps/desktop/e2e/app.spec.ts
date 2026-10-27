@@ -96,11 +96,12 @@ test("starts a thread and shows the agent's output", async () => {
     account: { kind: "subscription", backend: "fake" },
   })`);
   expect(set).not.toHaveProperty("error");
-  // New Thread reads the default when it opens, to offer that backend's models, so reopen it.
+  // New Thread reads the default again as Settings closes, and keeps what was typed behind it.
+  const message = page.getByRole("textbox", { name: "Message" });
+  await message.fill("Tidy up the README");
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Close settings" }).click();
-
-  await page.getByRole("textbox", { name: "Message" }).fill("Tidy up the README");
+  await expect(message).toHaveText("Tidy up the README");
   await page.getByRole("button", { name: "Send", exact: true }).click();
 
   const transcript = page.getByRole("log", { name: "Transcript" });
