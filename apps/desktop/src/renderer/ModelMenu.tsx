@@ -36,7 +36,7 @@ function AccountLabel({ instance: i, name }: { instance: Instance | undefined; n
   const detail = emailOf(i, name);
   return (
     <span className="flex min-w-0 flex-1 items-center gap-2">
-      <span className="truncate">
+      <span className="min-w-0 truncate">
         <Redacted text={name} />
       </span>
       {detail && (
