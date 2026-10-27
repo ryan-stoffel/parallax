@@ -12,7 +12,7 @@ import {
   ChartColumn,
   Palette,
   Settings as SettingsIcon,
-  SquareDashed,
+  MessageCircle,
   SquarePen,
   SunMoon,
   TextSearch,
@@ -729,7 +729,7 @@ export function App() {
   };
 
   // A New thread. It opens on the computer new threads start on, in the repository of the same
-  // name there, or No Repo when it has none.
+  // name there, or Chat when it has none.
   const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
     if (start.id !== host.id) {
       const name = groups.find((g) => g.id === groupId)?.name;
@@ -815,9 +815,9 @@ export function App() {
     },
     {
       id: "noRepoThread",
-      label: "New thread without a repository",
-      text: "New thread without a repository",
-      icon: <SquareDashed />,
+      label: "New chat",
+      text: "New chat",
+      icon: <MessageCircle />,
       command: "noRepoThread",
       run: () => newThread(noRepo),
     },

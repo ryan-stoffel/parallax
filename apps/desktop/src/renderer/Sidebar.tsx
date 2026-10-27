@@ -43,7 +43,7 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  SquareDashed,
+  MessageCircle,
   SquarePen,
   SquareTerminal,
   Trash2,
@@ -342,14 +342,14 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
 
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
- * another computer, or else its initials on a tile in a color picked from its name. No Repo is a
- * dashed square.
+ * another computer, or else its initials on a tile in a color picked from its name. Chat is a
+ * chat bubble.
  */
 export function RepoIcon({ repo }: { repo?: Repo }) {
   const shared = useContext(SharedRepoIcons);
   const size = "size-4";
   if (!repo || repo.scratch)
-    return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
+    return <MessageCircle aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);
   if (icon) return <ProjectIcon icon={icon} className={`${size} shrink-0`} />;
   return (
@@ -566,7 +566,7 @@ export function ThreadList({
   const scopeLabel = scopeRepo
     ? { name: scopeRepo.name, color: repoColor(scopeRepo, repoIconOf(scopeRepo, sharedIcons)) }
     : scope === "none"
-      ? { name: "No repo", color: "var(--faint-foreground)" }
+      ? { name: "Chat", color: "var(--faint-foreground)" }
       : undefined;
   const sections = { ...sectionDefaults, ...sectionsStore.use()[scope] };
   const toggleSection = (name: keyof Sections, value = !sections[name]) => {
@@ -616,7 +616,7 @@ export function ThreadList({
           title,
           text: [
             title,
-            repo && !repo.scratch ? repo.name : "No repo",
+            repo && !repo.scratch ? repo.name : "Chat",
             run?.branch,
             ...(run?.pullRequests ?? []).map((url) => `#${numberOf(url)}`),
           ].join(" "),
@@ -677,10 +677,10 @@ export function ThreadList({
   }
   // What a row shows, and where: its own status, or its family's news.
   const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
-  // Where a thread is, for its card: its repo, or No repo.
+  // Where a thread is, for its card: its repo, or Chat.
   const placeOf = (item: Item) => {
     return {
-      name: item.repo && !item.repo.scratch ? item.repo.name : "No Repo",
+      name: item.repo && !item.repo.scratch ? item.repo.name : "Chat",
       icon: <RepoIcon repo={item.repo} />,
     };
   };
@@ -1438,7 +1438,7 @@ export function ThreadList({
         groupBy === "repo" ? (
           <>
             <RepoIcon repo={repo} />
-            <span className="min-w-0 truncate">{repo?.name ?? "No repo"}</span>
+            <span className="min-w-0 truncate">{repo?.name ?? "Chat"}</span>
             {/* Repos on two computers can share a name. */}
             {many && (
               <span className="min-w-0 truncate font-normal text-faint-foreground">
@@ -2075,7 +2075,7 @@ function Drawer<T>({
 }
 
 /**
- * The repo filter (PLX-789, 0033): a searchable menu of All threads, every repo, and No repo, each
+ * The repo filter (PLX-789, 0033): a searchable menu of All threads, every repo, and Chat, each
  * row with how many of its threads need the user, then the sidebar's View options (PLX-1043).
  * Where the repo's plxd keeps icons, its gear opens the icon picker. Its button stays pressed while
  * a repo is chosen, with a dot in its color, and counts what needs the user elsewhere.
@@ -2189,7 +2189,7 @@ function ScopeMenu({
     );
   };
 
-  // The All threads and No repo rows, around the repos.
+  // The All threads and Chat rows, around the repos.
   const fixedRow = (key: "all" | "none", icon: ReactNode, name: string) => (
     <button
       type="button"
@@ -2275,7 +2275,7 @@ function ScopeMenu({
           {!q && fixedRow("all", <Layers aria-hidden />, "All threads")}
           {(repos.length > 0 || !q) && heading("Repos")}
           {repos.map(row)}
-          {!q && fixedRow("none", <SquareDashed aria-hidden />, "No repo")}
+          {!q && fixedRow("none", <MessageCircle aria-hidden />, "Chat")}
           {q && repos.length === 0 && (
             <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
           )}
@@ -2582,13 +2582,13 @@ function RowHead({
   );
 }
 
-/** Where a row's thread is, at the start of its second line: its repo's icon and name, or No repo. */
+/** Where a row's thread is, at the start of its second line: its repo's icon and name, or Chat. */
 function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[] }) {
   return (
     <span className="flex min-w-0 items-center gap-1.5">
       <RepoIcon repo={repo} />
       <span className="min-w-0 truncate">
-        <Marked text={repo && !repo.scratch ? repo.name : "No repo"} words={words} />
+        <Marked text={repo && !repo.scratch ? repo.name : "Chat"} words={words} />
       </span>
     </span>
   );

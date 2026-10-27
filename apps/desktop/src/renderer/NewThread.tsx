@@ -52,7 +52,7 @@ interface NewThreadProps {
     hostId: string,
     how?: { at?: string; onProgress?: (line: string) => void },
   ) => Promise<string | CloneAsk | Repo | undefined>;
-  /** Repositories and No Repo, as the sidebar groups them. */
+  /** Repositories and Chat, as the sidebar groups them. */
   groups: ThreadGroup[];
   groupId: string;
   onGroupChange: (groupId: string) => void;
@@ -440,7 +440,7 @@ export function NewThread({
           <>
             <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
               {group.id === noRepo
-                ? "What should we work on "
+                ? "What should we "
                 : group.space
                   ? "What should we talk about in "
                   : "What should we build in "}
@@ -451,7 +451,7 @@ export function NewThread({
                 title={group.id === noRepo ? undefined : group.name}
                 className="min-w-0 truncate rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
               >
-                {group.id === noRepo ? "without a repo" : group.name}
+                {group.id === noRepo ? "chat about" : group.name}
               </button>
               {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
               ?
@@ -473,7 +473,7 @@ export function NewThread({
                   aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
                   className="group relative rounded-md text-reading text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
                 >
-                  or start without a repo
+                  or just chat
                   {noRepoKeys && (
                     <kbd
                       aria-hidden

@@ -36,7 +36,7 @@ export const commands: { id: Command; name: string; defaults: string[]; elsewher
   { id: "goToFile", name: "Go to file", defaults: ["Mod+KeyP"] },
   { id: "searchContents", name: "Search project contents", defaults: ["Mod+Shift+KeyF"] },
   { id: "newThread", name: "New thread", defaults: ["Mod+KeyN"] },
-  { id: "noRepoThread", name: "New thread without a repository", defaults: ["Mod+Shift+KeyN"] },
+  { id: "noRepoThread", name: "New chat", defaults: ["Mod+Shift+KeyN"] },
   { id: "sidebar", name: "Toggle sidebar", defaults: ["Mod+KeyS"] },
   { id: "panel", name: "Toggle side panel", defaults: ["Mod+Alt+KeyB"] },
   { id: "browser", name: "Open browser", defaults: ["Mod+Shift+KeyB"] },

@@ -375,7 +375,7 @@ function forgetTitle(runId: string) {
   }
 }
 
-/** The sidebar's id for "No Repo", which holds plxd's scratch entry's threads, made on first use. */
+/** The sidebar's id for "Chat", which holds plxd's scratch entry's threads, made on first use. */
 export const noRepo = "no-repo";
 
 export interface ThreadGroup {
@@ -386,11 +386,11 @@ export interface ThreadGroup {
   space?: boolean;
 }
 
-/** The sidebar's groups: each repository, oldest first, then No Repo, always there. */
+/** The sidebar's groups: each repository, oldest first, then Chat, always there. */
 export function groupThreads({ repos }: ThreadsState): ThreadGroup[] {
   return [
     ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, space: r.space })),
-    { id: noRepo, name: "No Repo" },
+    { id: noRepo, name: "Chat" },
   ];
 }
 

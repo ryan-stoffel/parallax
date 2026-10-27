@@ -43,7 +43,7 @@ export function NewThreadPicker({
   const rows = [
     ...groups.map((g) => ({
       value: g.id,
-      name: g.id === noRepo ? "No repo" : g.name,
+      name: g.id === noRepo ? "Chat" : g.name,
       repo: repos.find((r) => r.id === g.id),
       space: g.space,
       hostName,
