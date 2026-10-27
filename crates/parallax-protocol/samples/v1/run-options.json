@@ -123,5 +123,33 @@
         "kind": "unsupportedOption"
       }
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "agent/setPermission",
+    "params": { "runId": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01", "permission": "bypass" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "run": {
+        "id": "01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "prompt": "Plan how to split the settings page.",
+        "policy": "workspaceWrite",
+        "status": "running",
+        "backend": "claude",
+        "accountId": "claude",
+        "branch": "parallax/1a2b3c4d",
+        "worktreePath": "/Users/me/Library/Application Support/parallax/worktrees/parallax-5e6f7a8b/01a0e2a0-1a2b-7c3d-8e4f-5a6b7c8d9e01",
+        "model": "opus",
+        "effort": "low",
+        "permission": "bypass",
+        "createdAt": "2026-09-28T12:00:00Z",
+        "updatedAt": "2026-09-28T12:06:00Z"
+      }
+    }
   }
 ]

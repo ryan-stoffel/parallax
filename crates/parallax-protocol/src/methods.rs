@@ -38,21 +38,21 @@ use crate::{
     AgentFileRenameParams, AgentFileResult, AgentFilesParams, AgentFilesResult,
     AgentGitStatusParams, AgentImageParams, AgentListParams, AgentListResult, AgentOpenPrParams,
     AgentOpenPrResult, AgentPushParams, AgentRequestChangesParams, AgentResumeNowParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, AgentStopTaskParams, AgentStopTaskResult,
-    AgentWaitParams, AgentWaitResult, BoardAddParams, BoardItemResult, BoardListParams,
-    BoardListResult, BoardRemoveParams, BoardRemoveResult, BoardUpdateParams, ComputerAskParams,
-    ComputerAskResult, ComputerForgetParams, ComputerStatus, ComputerStatusParams,
-    ConnectDevicesParams, ConnectDevicesResult, ContextListParams, ContextListResult,
-    ContextReadBytesParams, ContextReadBytesResult, ContextReadParams, ContextReadResult,
-    ContextSaveArtifactParams, ContextWriteParams, ContextWriteResult, CoordinatorFreshParams,
-    CursorInstallParams, CursorInstallResult, CursorSignInCancelParams, CursorSignInCancelResult,
-    CursorSignInParams, CursorSignInResult, CursorSignOutParams, CursorSignOutResult,
-    DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams, DeviceDataParams,
-    DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult, DeviceSetupParams,
-    DeviceStateParams, DeviceStateResult, DeviceStreamParams, DeviceStreamResult, DeviceTarget,
-    DispatchResult, EventsEventParams, EventsResyncParams, EventsSubscribeParams,
-    EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult, FullThreadDiffParams,
-    GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
+    AgentRunResult, AgentSendParams, AgentSetPermissionParams, AgentStartParams,
+    AgentStopTaskParams, AgentStopTaskResult, AgentWaitParams, AgentWaitResult, BoardAddParams,
+    BoardItemResult, BoardListParams, BoardListResult, BoardRemoveParams, BoardRemoveResult,
+    BoardUpdateParams, ComputerAskParams, ComputerAskResult, ComputerForgetParams, ComputerStatus,
+    ComputerStatusParams, ConnectDevicesParams, ConnectDevicesResult, ContextListParams,
+    ContextListResult, ContextReadBytesParams, ContextReadBytesResult, ContextReadParams,
+    ContextReadResult, ContextSaveArtifactParams, ContextWriteParams, ContextWriteResult,
+    CoordinatorFreshParams, CursorInstallParams, CursorInstallResult, CursorSignInCancelParams,
+    CursorSignInCancelResult, CursorSignInParams, CursorSignInResult, CursorSignOutParams,
+    CursorSignOutResult, DelegatedTask, DeviceChromeResult, DeviceCloseParams, DeviceCreateParams,
+    DeviceDataParams, DeviceEndParams, DeviceOkResult, DeviceResult, DeviceScreenshotResult,
+    DeviceSetupParams, DeviceStateParams, DeviceStateResult, DeviceStreamParams,
+    DeviceStreamResult, DeviceTarget, DispatchResult, EventsEventParams, EventsResyncParams,
+    EventsSubscribeParams, EventsSubscribeResult, EventsUnsubscribeParams, EventsUnsubscribeResult,
+    FullThreadDiffParams, GitStatus, GithubInstallParams, GithubSignIn, GithubSignInCancelParams,
     GithubSignInCancelResult, GithubSignInParams, GithubStatus, GithubStatusParams,
     HostFoldersParams, HostFoldersResult, HostHealthParams, HostHealthResult, HostReadUploadParams,
     HostReadUploadResult, HostSettings, HostSettingsGetParams, HostSettingsSetParams,
@@ -522,6 +522,11 @@ method_table! {
         /// Monitor, through the CLI. Fails with `invalidParams` when the run has no live CLI or
         /// its backend can't stop one.
         AgentStopTask = "agent/stopTask": AgentStopTaskParams => AgentStopTaskResult;
+        /// `agent/setPermission`: moves a run's live CLI to another permission mode now, and
+        /// stores it as the run's. Fails with `invalidParams` when the run has no live CLI, is in
+        /// a Project, or its backend can't switch mid-turn; send the mode with the next message
+        /// instead.
+        AgentSetPermission = "agent/setPermission": AgentSetPermissionParams => AgentRunResult;
         /// `agent/autoResume`: sets or clears a run's auto-resume override.
         AgentAutoResume = "agent/autoResume": AgentAutoResumeParams => AgentRunResult;
         /// `host/settings/get`: this host's settings.

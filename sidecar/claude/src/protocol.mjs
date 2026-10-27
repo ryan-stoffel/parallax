@@ -38,7 +38,9 @@ const LIST_OPTIONS = {
  * `claude::arguments` builds (0061), and whether plxd answers permission requests
  * (`--permission-prompt-tool stdio`, which the SDK adds itself for `canUseTool`). Permission
  * modes map as T3 Code maps them: Full access is `bypassPermissions` with
- * `allowDangerouslySkipPermissions`. Any other flag goes in `extraArgs`, which the SDK passes on.
+ * `allowDangerouslySkipPermissions`, which `--allow-dangerously-skip-permissions` also sets, so a
+ * thread can switch to Full access while it runs. Any other flag goes in `extraArgs`, which the
+ * SDK passes on.
  *
  * @param {string[]} args
  * @param {string} cwd
@@ -67,6 +69,8 @@ export function optionsFromArgs(args, cwd = process.cwd()) {
       options[LIST_OPTIONS[flag]] = list ? list.split(",") : [];
     } else if (flag === "--fork-session") {
       options.forkSession = true;
+    } else if (flag === "--allow-dangerously-skip-permissions") {
+      options.allowDangerouslySkipPermissions = true;
     } else if (flag === "--strict-mcp-config") {
       options.strictMcpConfig = true;
     } else if (flag === "--add-dir") {

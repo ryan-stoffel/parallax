@@ -13,8 +13,9 @@ use parallax_protocol::{
     AgentApproveResult, AgentAutoResumeParams, AgentCancelParams, AgentCommitParams,
     AgentEventsParams, AgentEventsResult, AgentListParams, AgentListResult, AgentOpenPrParams,
     AgentOpenPrResult, AgentPolicy, AgentRequestChangesParams, AgentResumeNowParams,
-    AgentRunResult, AgentSendParams, AgentStartParams, AgentStopTaskParams, AgentStopTaskResult,
-    ErrorKind, GitStatus, LoggedEvent, PromptImage, RunId, TurnId,
+    AgentRunResult, AgentSendParams, AgentSetPermissionParams, AgentStartParams,
+    AgentStopTaskParams, AgentStopTaskResult, ErrorKind, GitStatus, LoggedEvent, PromptImage,
+    RunId, TurnId,
 };
 
 use super::Context;
@@ -136,6 +137,15 @@ pub(crate) async fn resume_now(
     let run = context
         .detached(|daemon| agents::resume_now(daemon, params.run_id))
         .await?;
+    Ok(AgentRunResult { run })
+}
+
+/// `agent/setPermission`: through the run's actor, to its live CLI.
+pub(crate) async fn set_permission(
+    context: &Context,
+    params: AgentSetPermissionParams,
+) -> Result<AgentRunResult, ErrorObject> {
+    let run = agents::set_permission(&context.daemon, params.run_id, params.permission).await?;
     Ok(AgentRunResult { run })
 }
 

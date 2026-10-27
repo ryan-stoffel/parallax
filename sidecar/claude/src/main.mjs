@@ -9,6 +9,7 @@
  *       which joins the query's prompt, or a `control_response` that answers `canUseTool`
  *   {"id", "type": "interrupt" | "end" | "kill"}  ends the turn, ends the prompt, or kills the CLI
  *   {"id", "type": "stopTask", "taskId"}  stops one of the CLI's background tasks
+ *   {"id", "type": "setPermissionMode", "mode"}  moves the session to another permission mode
  *
  * Out, one line each:
  *   `<id> <line>`  a line of the CLI's stdout, except the control traffic the SDK answers
@@ -60,6 +61,8 @@ input.on("line", (line) => {
   else if (message.type === "kill") live.kill();
   else if (message.type === "stopTask" && typeof message.taskId === "string")
     live.stopTask(message.taskId);
+  else if (message.type === "setPermissionMode" && typeof message.mode === "string")
+    live.setPermissionMode(message.mode);
 });
 input.on("close", () => {
   for (const live of queries.values()) live.kill();
@@ -146,6 +149,10 @@ function open(id, { executable, args, cwd, env, supervisor }) {
     },
     stopTask(taskId) {
       run?.stopTask(taskId).catch(() => {});
+    },
+    // The CLI reports a switch it made in `system/status`; plxd reads that, not this promise.
+    setPermissionMode(mode) {
+      run?.setPermissionMode(mode).catch(() => {});
     },
     kill() {
       prompt.end();

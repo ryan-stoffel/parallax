@@ -11,8 +11,8 @@ use tempfile::TempDir;
 
 use super::stream::{Ask, Step, Translator};
 use super::{
-    ClaudeBackend, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST, PROMPT_TOOL_ARGS, WORKER_TOOL_LIST,
-    WORKER_TOOLS, WORKSPACE_WRITE_ARGS, no_write_settings,
+    ClaudeBackend, LIVE_MODE_ARGS, NO_WRITE_ARGS, PLAN_WORKER_TOOL_LIST, PROMPT_TOOL_ARGS,
+    WORKER_TOOL_LIST, WORKER_TOOLS, WORKSPACE_WRITE_ARGS, no_write_settings,
 };
 use crate::backend::event::{MAX_ALWAYS_ALLOW_RULE_BYTES, MAX_ALWAYS_ALLOW_RULES};
 use crate::backend::process::{Environment, Launcher, SpawnError};
@@ -1481,9 +1481,11 @@ fn violation_kind(steps: &[Step]) -> Option<FailureKind> {
 
 /// PLX-276, 0034: a thread is full Claude Code in every mode, as a bypass worker is: no
 /// `--restricted`, `--tools`, `--strict-mcp-config`, or sandbox settings, so the user's settings,
-/// skills, and MCP servers load. It asks plxd in Accept Edits too, since nothing sandboxes its
-/// commands, and in Plan it has `ExitPlanMode` without a `--tools` list. Its init may list any
-/// tool. A worker keeps its sandbox, and so does a thread whose client can't answer requests.
+/// skills, and MCP servers load. It asks plxd in every mode, Accept Edits since nothing sandboxes
+/// its commands and Bypass for a mode it may switch to while it runs, which
+/// `--allow-dangerously-skip-permissions` allows, and in Plan it has `ExitPlanMode` without a
+/// `--tools` list. Its init may list any tool. A worker keeps its sandbox, and so does a thread
+/// whose client can't answer requests.
 #[test]
 fn a_thread_is_full_claude_code_in_every_mode() {
     let cwd = Path::new("/Users/u/wt");
@@ -1520,19 +1522,17 @@ fn a_thread_is_full_claude_code_in_every_mode() {
             args[settings + 1],
             r#"{"env":{"CLAUDE_CODE_TASK_LIST_ID":""},"showThinkingSummaries":true}"#
         );
-        let asks = permission != Some(AgentPermission::Bypass);
-        assert_eq!(super::prompts(&request), asks, "{permission:?}");
+        assert!(super::prompts(&request), "{permission:?}");
+        assert!(args.contains(&LIVE_MODE_ARGS[0].to_owned()), "{args:?}");
         assert!(!super::hands_over_plans(&request));
     }
     let unanswered = RunRequest {
         approvals: false,
         ..thread.clone()
     };
-    assert!(
-        super::arguments(&unanswered)
-            .unwrap()
-            .contains(&"--restricted".into())
-    );
+    let args = super::arguments(&unanswered).unwrap();
+    assert!(args.contains(&"--restricted".into()));
+    assert!(!args.contains(&LIVE_MODE_ARGS[0].into()));
     let worker = RunRequest {
         thread: false,
         ..thread
@@ -2096,6 +2096,57 @@ fn leaving_plan_mode_allows_only_modes_that_ask_as_much() {
             );
         }
     }
+}
+
+/// `agent/setPermission`: a thread's later `system/init`s must report the mode its CLI reported
+/// switching to in `system/status`, and a switch it never reported still fails the check. A
+/// worker's mode doesn't follow a status line.
+#[test]
+fn a_threads_mode_check_follows_the_switch_its_cli_reports() {
+    let tools = r#"["Bash","Read"]"#;
+    let switched = br#"{"type":"system","subtype":"status","status":null,"permissionMode":"bypassPermissions"}"#;
+    let thread = || {
+        Translator::new(ToolPolicy::WorkspaceWrite, "none")
+            .with_thread(true)
+            .with_permission_mode("default")
+            .with_prompts(true)
+    };
+    let mut translator = thread();
+    assert_eq!(
+        violation_kind(&translator.line(&worker_init("default", tools))),
+        None
+    );
+    assert_eq!(violation_kind(&translator.line(switched)), None);
+    assert_eq!(
+        violation_kind(&translator.line(&worker_init("bypassPermissions", tools))),
+        None
+    );
+    let mut translator = thread();
+    translator.line(&worker_init("default", tools));
+    assert_eq!(
+        violation_kind(&translator.line(&worker_init("bypassPermissions", tools))),
+        Some(FailureKind::PolicyViolation)
+    );
+    let mut worker = Translator::new(ToolPolicy::WorkspaceWrite, "none")
+        .with_permission_mode("default")
+        .with_prompts(true);
+    let worker_tools = format!(
+        "[{}]",
+        WORKER_TOOLS
+            .iter()
+            .map(|t| format!("{t:?}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    assert_eq!(
+        violation_kind(&worker.line(&worker_init("default", &worker_tools))),
+        None
+    );
+    worker.line(switched);
+    assert_eq!(
+        violation_kind(&worker.line(&worker_init("bypassPermissions", &worker_tools))),
+        Some(FailureKind::PolicyViolation)
+    );
 }
 
 /// An init line of a worker on Claude Code 2.1.283 in `mode`, listing `tools`.

@@ -75,6 +75,25 @@ test("modes map as T3 Code's, and a thread's plxd server and sessions carry over
   });
 });
 
+test("a thread in any mode can switch to Full access while it runs", () => {
+  const { options, asks } = optionsFromArgs([
+    ...BASE,
+    "--permission-mode",
+    "default",
+    "--permission-prompt-tool",
+    "stdio",
+    "--allow-dangerously-skip-permissions",
+    "--model",
+    "opus",
+  ]);
+  assert.equal(asks, true);
+  assert.deepEqual(options, {
+    permissionMode: "default",
+    allowDangerouslySkipPermissions: true,
+    model: "opus",
+  });
+});
+
 test("only the control traffic the SDK answers stays in the sidecar", () => {
   const line = (value) => JSON.stringify(value);
   assert.equal(forwards(line({ type: "assistant", message: {} })), true);

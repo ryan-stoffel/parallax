@@ -73,6 +73,16 @@ const MAX_MESSAGE_CHARS: usize = 2000;
 /// fails the run.
 const LEFT_PLAN_MODES: &[&str] = &["default", DEFAULT_PERMISSION_MODE];
 
+/// The modes plxd starts Claude Code in ([`super::permission_mode`]), which a thread's
+/// `system/status` may report switching to.
+const PERMISSION_MODES: &[&str] = &[
+    "default",
+    DEFAULT_PERMISSION_MODE,
+    "auto",
+    "plan",
+    BYPASS_PERMISSION_MODE,
+];
+
 /// What one line of output asks the driver to do.
 #[derive(Debug, PartialEq)]
 pub(super) enum Step {
@@ -151,7 +161,7 @@ pub(super) struct Translator {
     /// any tool, as a bypass worker's may.
     thread: bool,
     /// The permission mode a worker or a coordinator asked for, which its `system/init` must
-    /// report.
+    /// report. A thread's follows the mode its CLI reports switching to ([`Translator::system`]).
     permission_mode: &'static str,
     /// The CLI asks plxd before a tool call that would prompt (PLX-222), so its control
     /// requests are plxd's to answer.
@@ -398,6 +408,15 @@ impl Translator {
     }
 
     fn system(&mut self, message: &Map<String, Value>) -> Vec<Step> {
+        // A thread's mode can change while it runs (`agent/setPermission`). Claude Code reports
+        // the switch it made in `system/status`, and the next `system/init` then reports it.
+        if self.thread
+            && text(message, "subtype") == Some("status")
+            && let Some(mode) = text(message, "permissionMode")
+            && let Some(mode) = PERMISSION_MODES.iter().find(|known| **known == mode)
+        {
+            self.permission_mode = mode;
+        }
         match text(message, "subtype") {
             Some("init") => self.init(message),
             Some("permission_denied") => {

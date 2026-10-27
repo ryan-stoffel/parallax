@@ -602,6 +602,33 @@ test("an open thread's composer picks within its provider and sends only what ch
   );
 });
 
+test("an open thread's new Access goes to the running run at once", async () => {
+  const onPermission = vi.fn();
+  render(
+    <Composer
+      backend="claude"
+      started={{ model: "claude-opus-5-5", effort: "xhigh", permission: "manual" }}
+      onSend={async () => undefined}
+      onPermission={onPermission}
+    />,
+  );
+  const pick = async (label: string, option: string) => {
+    const control = document.querySelector(`[aria-label="${label}"]`)!;
+    const menu = document.getElementById(control.getAttribute("popovertarget")!)!;
+    const item = [...menu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')].find((m) =>
+      m.textContent?.startsWith(option),
+    )!;
+    await act(async () => item.click());
+  };
+  await pick("Access: Supervised", "Supervised");
+  expect(onPermission).not.toHaveBeenCalled();
+  await pick("Access: Supervised", "Full access");
+  expect(onPermission).toHaveBeenCalledExactlyOnceWith("bypass");
+  // Back again before the run reports the switch: the run must hear it too.
+  await pick("Access: Full access", "Supervised");
+  expect(onPermission).toHaveBeenLastCalledWith("manual");
+});
+
 test("another provider's model moves an open thread there, with every option and the account", async () => {
   const onSend = vi.fn(async () => undefined);
   render(
