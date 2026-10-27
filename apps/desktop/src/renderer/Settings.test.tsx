@@ -446,10 +446,15 @@ describe("on a plxd with providers", () => {
       };
     });
 
+    // Hubs have their own section under the providers card: a row per hub, whose Manage opens
+    // its page under it.
+    const manage = () => document.querySelector<HTMLElement>('[aria-label="Manage Home hub"]');
+    const hubPage = () => visible('[role="region"][aria-label="Home hub"]');
+
     test("adds a hub to every computer with hubs at once, and shows its page", async () => {
       await renderSettings();
-      expect(tab("Home hub")).toBeUndefined();
-      await click(document.querySelector<HTMLElement>('[aria-label="Add hub"]')!);
+      expect(manage()).toBeNull();
+      await click(button(document.body, "Add hub"));
       expect(dialog().textContent).toContain("Theo's setup guide");
       await type(labeled("Name"), "Home hub");
       await type(labeled("URL"), "https://hub.example:8317");
@@ -476,8 +481,9 @@ describe("on a plxd with providers", () => {
       });
       expect(document.querySelector("dialog")).toBeNull();
 
-      expect(tab("Home hub").getAttribute("aria-selected")).toBe("true");
-      const page = visible('[role="tabpanel"]');
+      // A hub just added opens its page under its row.
+      expect(manage()!.getAttribute("aria-expanded")).toBe("true");
+      const page = hubPage();
       expect(page.textContent).toContain("Connected · 3 models");
       expect(page.textContent).toContain("gemini-3-pro");
       expect(page.textContent).toContain("5-hour limit · 42% used");
@@ -486,9 +492,10 @@ describe("on a plxd with providers", () => {
 
       answers["hubs/remove"] = () => ({ result: { hubs: [] } });
       await click(document.querySelector<HTMLElement>('[aria-label="Remove Home hub"]')!);
-      await click(button(document.body, "Remove"));
+      // It asks in its row.
+      await click(button(document.querySelector('[data-setting="hubs"]')!, "Remove"));
       expect(calls("hubs/remove")).toEqual([{ host: "local", params: { id: "home-hub" } }]);
-      expect(tab("Home hub")).toBeUndefined();
+      expect(manage()).toBeNull();
     });
 
     test("the several-accounts warning opens Add hub", async () => {
@@ -511,7 +518,7 @@ describe("on a plxd with providers", () => {
         return { result: { hubs } };
       };
       await renderSettings();
-      await click(document.querySelector<HTMLElement>('[aria-label="Add hub"]')!);
+      await click(button(document.body, "Add hub"));
       await type(labeled("URL"), "https://hub.example:8317");
       await type(labeled("Access key"), "hub-access");
       await next();
@@ -528,7 +535,7 @@ describe("on a plxd with providers", () => {
     });
 
     describe("with hubAccounts", () => {
-      const page = () => visible('[role="tabpanel"]');
+      const page = hubPage;
       const open = vi.fn();
       // The status answers in order, then the last one again.
       let statuses: { status: string; problem?: string }[];
@@ -557,7 +564,7 @@ describe("on a plxd with providers", () => {
       };
       const addAccount = async (service: "Claude" | "Codex") => {
         await renderSettings();
-        await click(tab("Home hub"));
+        await click(manage()!);
         await click(button(page(), "Add account"));
         expect(page().textContent).toContain("not a VPS");
         await click(button(page(), service));
@@ -654,7 +661,7 @@ describe("on a plxd with providers", () => {
           return { result: { hubs } };
         };
         await renderSettings();
-        await click(tab("Home hub"));
+        await click(manage()!);
         expect(page().textContent).not.toContain("Off on the hub");
         const use = () => page().querySelector<HTMLElement>('[aria-label="Use ada@example.com"]')!;
         expect(use().getAttribute("aria-checked")).toBe("true");

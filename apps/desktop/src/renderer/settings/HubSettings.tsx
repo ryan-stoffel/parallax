@@ -8,6 +8,7 @@ import {
   HUB_DOCS,
   HUB_GUIDE,
   loadHubs,
+  removeHub,
   removeHubAccount,
   saveHub,
   setHubAccountEnabled,
@@ -18,6 +19,7 @@ import { ClaudeLogo, OpenAILogo } from "../logos";
 import { slug, unique } from "../providers";
 import { Redacted } from "../Redacted";
 import { IconButton } from "../ui";
+import { notify } from "../notifications";
 import { LimitLines } from "../Usage";
 import {
   ConfirmRemove,
@@ -31,7 +33,7 @@ import {
   Switch,
 } from "./parts";
 
-// Settings > Providers > Hubs (0089): the Add hub dialog, and a hub's page.
+// Settings > Providers > Hubs (0089): the Add hub dialog, the Hubs section, and a hub's page.
 
 const link = "text-accent hover:underline";
 
@@ -624,24 +626,12 @@ function ModelRow({ title, models }: { title: string; models: Hub["claudeModels"
 }
 
 /**
- * A hub's page, `hidden` unless its tab is chosen: its status and URL, the models it serves to
+ * A hub's page, under its row in HubsSection: its status, the models it serves to
  * Claude Code and Codex, and with a management key its accounts with their plan and limits.
  * Without one, it takes the key. On a plxd with `hubAccounts`, Add account signs one in, and
  * each account can be turned off and on or removed.
  */
-export function HubPane({
-  id,
-  tabId,
-  hidden,
-  hostId,
-  hub,
-}: {
-  id: string;
-  tabId: string;
-  hidden: boolean;
-  hostId: string;
-  hub: Hub;
-}) {
+export function HubPane({ id, hostId, hub }: { id: string; hostId: string; hub: Hub }) {
   const [managementKey, setManagementKey] = useState("");
   const [problem, setProblem] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -664,22 +654,8 @@ export function HubPane({
     if (!failed) setManagementKey("");
   };
   return (
-    <div
-      id={id}
-      role="tabpanel"
-      aria-labelledby={tabId}
-      hidden={hidden}
-      className="min-w-0 p-5 @3xl:overflow-y-auto"
-    >
-      <div className="mb-6 flex items-center gap-3 px-1">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-border bg-surface">
-          <HubLogo className="size-5" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="truncate text-reading font-semibold">{hub.name}</h2>
-          <p className="truncate font-mono text-body text-muted-foreground">{hub.url}</p>
-        </div>
-      </div>
+    <div id={id} role="region" aria-label={hub.name} className="min-w-0 border-t border-border p-5">
+      {/* Its row above names it and its address. */}
       <Section title="Hub">
         <Row
           title="Status"
@@ -772,5 +748,133 @@ export function HubPane({
         Claude Code. <HubHelp />
       </p>
     </div>
+  );
+}
+
+/**
+ * Settings > Providers' Hubs, under the providers card as T3 Code lists its usage providers: a
+ * heading with Add hub, then a card with a row per hub that turns it on or off, opens its page
+ * (HubPane) under the row, or removes it after asking in place. `open` is the hub whose page shows.
+ */
+export function HubsSection({
+  id,
+  hostId,
+  hubs,
+  open,
+  onOpen,
+  onAdd,
+}: {
+  id: string;
+  hostId: string;
+  hubs: Hub[] | undefined;
+  open: string | undefined;
+  onOpen: (hub: string | undefined) => void;
+  onAdd: () => void;
+}) {
+  const pages = useId();
+  // The hub Remove is asking about, until it's removed or Cancel.
+  const [confirming, setConfirming] = useState<string>();
+  const [removing, setRemoving] = useState(false);
+  const toggle = async (hub: Hub, enabled: boolean) => {
+    const failed = await saveHub(hostId, { ...settingsOf(hub), enabled });
+    if (failed) notify({ tone: "error", title: `Couldn't save ${hub.name}`, body: failed });
+  };
+  const remove = async (hub: Hub) => {
+    setRemoving(true);
+    const failed = await removeHub(hostId, hub.id);
+    setRemoving(false);
+    setConfirming(undefined);
+    if (failed) notify({ tone: "error", title: `Couldn't remove ${hub.name}`, body: failed });
+  };
+  return (
+    <section id={id} data-setting="hubs" aria-labelledby={`${id}-title`} className="mt-10">
+      <div className="mb-2 flex min-h-7 items-center justify-between gap-4 px-1">
+        <h2 id={`${id}-title`} className="text-reading font-semibold">
+          Hubs
+        </h2>
+        <button
+          type="button"
+          onClick={onAdd}
+          className={`${quietButton} flex items-center gap-1.5 border border-border [&_svg]:size-3.5`}
+        >
+          <Plus aria-hidden />
+          Add hub
+        </button>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-border">
+        {!hubs?.length ? (
+          <p className="px-4 py-3.5 text-body text-muted-foreground">
+            {hubs
+              ? "Run Claude Code and Codex through one CLIProxyAPI hub that keeps every account signed in. "
+              : "Checking… "}
+            {hubs && <HubHelp />}
+          </p>
+        ) : (
+          hubs.map((hub) => {
+            const shown = hub.id === open;
+            const failing = hub.enabled && !hub.reachable;
+            return (
+              <div key={hub.id} className="not-last:border-b not-last:border-border">
+                <div className="flex items-center gap-3 px-4 py-3.5">
+                  <HubLogo
+                    aria-hidden
+                    className={`size-4 shrink-0 ${hub.enabled ? "" : "opacity-60"}`}
+                  />
+                  <div className={`min-w-0 flex-1 ${hub.enabled ? "" : "opacity-60"}`}>
+                    <p className="flex items-baseline gap-2">
+                      <span className="truncate text-body font-medium">{hub.name}</span>
+                      <span className="flex shrink-0 items-center gap-1.5 text-meta text-muted-foreground">
+                        {failing && <StatusDot tone="error" />}
+                        {hubStatus(hub)}
+                      </span>
+                    </p>
+                    <p className="truncate font-mono text-meta text-muted-foreground">{hub.url}</p>
+                  </div>
+                  {confirming === hub.id ? (
+                    <div className="flex shrink-0 items-center gap-2 text-body text-muted-foreground">
+                      <span>Remove {hub.name}?</span>
+                      <ConfirmRemove
+                        disabled={removing}
+                        onRemove={() => void remove(hub)}
+                        onCancel={() => setConfirming(undefined)}
+                      />
+                    </div>
+                  ) : (
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        type="button"
+                        aria-expanded={shown}
+                        aria-controls={`${pages}-${hub.id}`}
+                        aria-label={`Manage ${hub.name}`}
+                        onClick={() => onOpen(shown ? undefined : hub.id)}
+                        className={quietButton}
+                      >
+                        {shown ? "Done" : "Manage"}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${hub.name}`}
+                        onClick={() => setConfirming(hub.id)}
+                        className={quietButton}
+                      >
+                        Remove
+                      </button>
+                      <span className="ml-2">
+                        <Switch
+                          label={`Use ${hub.name}`}
+                          checked={hub.enabled}
+                          onChange={(next) => void toggle(hub, next)}
+                        />
+                      </span>
+                    </div>
+                  )}
+                </div>
+                {shown && <HubPane id={`${pages}-${hub.id}`} hostId={hostId} hub={hub} />}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </section>
   );
 }
