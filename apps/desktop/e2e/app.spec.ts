@@ -172,6 +172,17 @@ test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", a
   await expect(codex).toHaveText("e2e@example.testAuthenticated");
 });
 
+test("Escape closes a dialog opened in Settings, and leaves Settings open (PLX-1050)", async () => {
+  // The sign-in test left Settings open on Providers.
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Add provider" }).click();
+  const add = page.getByRole("dialog", { name: "Add provider" });
+  await expect(add).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(add).toBeHidden();
+  await expect(settings).toBeVisible();
+});
+
 test("creates a project on a repository it adds, and opens it (PLX-166)", async () => {
   const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "ember");
   mkdirSync(repo);

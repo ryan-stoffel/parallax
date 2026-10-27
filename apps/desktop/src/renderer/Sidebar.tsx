@@ -954,8 +954,8 @@ export function ThreadList({
     setTimeout(() => setFlashing((f) => new Set([...f].filter((k) => !keys.includes(k)))), 1800);
   });
 
-  // Held-back deletes go through once the list closes, as when Settings opens, or the window does,
-  // so nothing is left half done; their Undo ends then.
+  // Held-back deletes go through once the list closes, or the window does, so nothing is left
+  // half done; their Undo ends then.
   useEffect(() => {
     window.addEventListener("beforeunload", flushToasts);
     return () => {

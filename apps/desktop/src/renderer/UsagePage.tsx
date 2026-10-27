@@ -692,6 +692,8 @@ function Bars({
     if (active === undefined) return;
     const hide = (e: globalThis.KeyboardEvent) => {
       if (e.key !== "Escape") return;
+      // Not Settings' too.
+      e.preventDefault();
       focused.current = undefined;
       setActive(undefined);
     };

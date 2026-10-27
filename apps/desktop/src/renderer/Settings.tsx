@@ -152,6 +152,9 @@ export function SettingsDialog({
       aria-label="Settings"
       tabIndex={-1}
       onCancel={(e) => {
+        // React passes a dialog's cancel up to the dialogs around it: Escape in one opened from
+        // Settings closes only that one.
+        if (e.target !== e.currentTarget) return;
         e.preventDefault();
         onClose();
       }}
