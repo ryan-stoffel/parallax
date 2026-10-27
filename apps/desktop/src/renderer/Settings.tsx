@@ -160,7 +160,7 @@ export function SettingsDialog({
         e.preventDefault();
         onClose();
       }}
-      className="settings-dialog m-auto h-[calc(100vh-4rem)] max-h-none w-[calc(100vw-8rem)] max-w-[90rem] overflow-hidden rounded-xl border border-border bg-background p-0 text-foreground shadow-composer outline-none backdrop:bg-black/40 open:flex"
+      className="settings-dialog m-auto h-[calc(100vh-6rem)] max-h-none w-[calc(100vw-12rem)] max-w-[90rem] overflow-hidden rounded-xl border border-border bg-background p-0 text-foreground shadow-composer outline-none backdrop:bg-black/40 open:flex"
     >
       <nav
         aria-label="Settings sections"
