@@ -185,6 +185,14 @@ test("Escape closes a dialog opened in Settings, and leaves Settings open (PLX-1
   await expect(settings).toBeVisible();
 });
 
+test("choosing a window background leaves Settings in view (PLX-1078)", async () => {
+  // Settings is still open. The radio sits below the dialog's fold, positioned against the dialog.
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Appearance" }).click();
+  await settings.getByRole("radio", { name: "Opaque" }).focus();
+  expect(await settings.evaluate((dialog) => dialog.scrollTop)).toBe(0);
+});
+
 test("creates a project on a repository it adds, and opens it (PLX-166)", async () => {
   const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "ember");
   mkdirSync(repo);
