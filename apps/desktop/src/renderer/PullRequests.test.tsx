@@ -7,7 +7,13 @@ import samples from "../../../../crates/parallax-protocol/samples/v1/pull-reques
 import type { ParallaxBridge } from "../preload/bridge";
 import type { PullRequest } from "../protocol/generated/protocol";
 import { githubText } from "./github";
-import { linkedPr, parseDiff, PullRequestView, usePullRequests } from "./PullRequests";
+import {
+  LinkedPullRequests,
+  linkedPr,
+  parseDiff,
+  PullRequestView,
+  usePullRequests,
+} from "./PullRequests";
 import "./markdownTest";
 import { Notifications } from "./notifications";
 
@@ -81,6 +87,21 @@ async function render(
   act(() => root!.render(<Harness />));
   await settle();
 }
+
+test("Thread details counts a pull request's passed checks of those that count, spinning while one runs", async () => {
+  read = {
+    [url(1)]: prOf(1, {
+      title: "A long title that wraps onto a second line in Thread details",
+      checks: [...sample.checks, { name: "docs", state: "skipped" }],
+    }),
+  };
+  await render([url(1)], (prs) => <LinkedPullRequests prs={prs} onOpen={() => {}} />);
+  const checks = document.querySelector('[role="img"]')!;
+  expect(checks.textContent).toBe("1/2");
+  expect(checks.getAttribute("aria-label")).toBe("1 of 2 checks passed, 1 running");
+  expect(checks.querySelector("svg")!.getAttribute("class")).toContain("animate-spin");
+  expect(document.querySelector(".line-clamp-2")!.textContent).toBe(read[url(1)]!.title);
+});
 
 test("githubText makes HTML images Markdown, and linkedPr finds a linked one from any of its tabs", () => {
   expect(githubText('<img alt="A [b]" src="https://x/y.png" />')).toBe("![A b](https://x/y.png)");

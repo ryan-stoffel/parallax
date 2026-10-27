@@ -14,14 +14,17 @@ import { IconButton } from "./ui";
 export const THREAD_DETAILS_KEY = "parallax.threadDetails.open";
 const THREAD_DETAILS_ID = "thread-details";
 
-/** The docked card's width, `w-64`, with its right gap. */
-const DOCKED_WIDTH = 268;
-/** The least of its row the thread keeps beside the docked card; below it the card floats. */
-const THREAD_MIN_SHARE = 0.6;
+/** The docked card's width, `w-72`, with its right gap. */
+const DOCKED_WIDTH = 300;
+/** The transcript's column, `max-w-3xl`, which a docked card must leave whole. */
+const TRANSCRIPT_WIDTH = 768;
 
-/** Whether docking Thread details in a row `width` wide would leave the thread too little room. */
+/**
+ * Whether docking Thread details in a row `width` wide would squeeze the transcript's column, so
+ * the card floats over the thread instead.
+ */
 export const tooNarrowToDock = (width: number) =>
-  width > 0 && width - DOCKED_WIDTH < width * THREAD_MIN_SHARE;
+  width > 0 && width - DOCKED_WIDTH < TRANSCRIPT_WIDTH;
 
 type ThreadDetailsMode = "docked" | "floating" | "hidden";
 
@@ -38,23 +41,14 @@ function readOpen(): string[] {
 /**
  * Where Thread details shows for the thread `key` names, in the thread row `ref` is set on, which
  * may unmount and return (behind the Pull requests page) and is measured again each time. Each
- * thread keeps its own choice, hidden until shown there. With room it docks while that choice says
- * shown. Without room (the thread would keep less than `THREAD_MIN_SHARE` of the row) it starts
- * hidden, and the button floats it over the thread until pressed again; the kept choice is left
- * alone. Crossing the line either way, or switching threads, closes a floating card.
+ * thread keeps its own choice, hidden until shown there. Shown, it docks beside the thread while
+ * the transcript keeps its whole column, and floats over the thread's right when docking would
+ * squeeze it.
  */
 export function useThreadDetails(key: string) {
   const [element, ref] = useState<HTMLElement | null>(null);
   const [open, setOpen] = useState(readOpen);
-  const [floating, setFloating] = useState(false);
   const [narrow, setNarrow] = useState(false);
-  // Crossing the line or switching threads closes a floating card, adjusted while rendering
-  // rather than in an updater.
-  const [measured, setMeasured] = useState({ narrow, key });
-  if (measured.narrow !== narrow || measured.key !== key) {
-    setMeasured({ narrow, key });
-    setFloating(false);
-  }
   useLayoutEffect(() => {
     if (!element) return;
     const measure = () => setNarrow(tooNarrowToDock(element.getBoundingClientRect().width));
@@ -64,22 +58,13 @@ export function useThreadDetails(key: string) {
     observer.observe(element);
     return () => observer.disconnect();
   }, [element]);
-  const toggle = () => {
-    if (narrow) return setFloating((was) => !was);
+  const toggle = () =>
     setOpen((was) => {
       const next = was.includes(key) ? was.filter((other) => other !== key) : [...was, key];
       localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(next));
       return next;
     });
-  };
-  const docked = open.includes(key);
-  const mode: ThreadDetailsMode = narrow
-    ? floating
-      ? "floating"
-      : "hidden"
-    : docked
-      ? "docked"
-      : "hidden";
+  const mode: ThreadDetailsMode = !open.includes(key) ? "hidden" : narrow ? "floating" : "docked";
   return { mode, toggle, ref };
 }
 
@@ -98,9 +83,9 @@ export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggl
 }
 
 /**
- * The thread's host, launchers, repository actions, Git status, linked pull requests, and
- * lineage, docked at the thread's right, left of the side panel. Mounted while hidden, so the
- * Open and action shortcuts keep working.
+ * The thread's host, Open in, repository actions, Git status, linked pull requests, and lineage,
+ * docked at the thread's right, left of the side panel, or floating over the thread. Mounted while
+ * hidden, so the Open and action shortcuts keep working.
  */
 export function ThreadDetails({
   mode,
@@ -121,17 +106,20 @@ export function ThreadDetails({
   prs?: ComponentProps<typeof LinkedPullRequests>;
   lineage?: Omit<ComponentProps<typeof LineageSection>, "visible">;
 }) {
+  const linked = prs?.prs.urls.length ?? 0;
+  const prOpen = !!prs?.prs.urls.some((url) => prs.prs.get(url)?.pr?.state === "open");
   return (
     <aside
       id={THREAD_DETAILS_ID}
       aria-label="Thread details"
       hidden={mode === "hidden"}
       data-mode={mode}
-      // Docked, it takes room in the thread's row; floating, it hovers over the thread's right.
-      // Either way it's an opaque card sized to its rows, scrolling at the row's height.
-      className={`flex w-64 flex-col py-2 pr-3 ${
+      // Docked, it takes room in the thread's row; floating, it hovers over the thread's right,
+      // short of the composer. Either way it's an opaque card sized to its rows, scrolling past
+      // its room.
+      className={`flex w-72 flex-col py-2 pr-3 ${
         mode === "floating"
-          ? "pointer-events-none absolute inset-y-0 right-0 z-30 max-w-[calc(100%-1rem)]"
+          ? "pointer-events-none absolute top-0 right-0 bottom-36 z-30 max-w-[calc(100%-1rem)]"
           : "shrink-0"
       }`}
     >
@@ -156,7 +144,15 @@ export function ThreadDetails({
         </section>
         {git && (
           <section aria-label="Git" className="border-t border-border p-2">
-            <GitMenu {...git}>{prs && <LinkedPullRequests {...prs} />}</GitMenu>
+            <GitMenu {...git} hasPr={prOpen} />
+          </section>
+        )}
+        {prs && linked > 0 && (
+          <section aria-label="Pull requests" className="border-t border-border p-2">
+            <h3 className="px-2 pt-1 pb-1 text-meta text-muted-foreground">
+              {linked === 1 ? "Pull request" : `Pull requests (${linked})`}
+            </h3>
+            <LinkedPullRequests {...prs} />
           </section>
         )}
         {lineage && <LineageSection {...lineage} visible={mode !== "hidden"} />}

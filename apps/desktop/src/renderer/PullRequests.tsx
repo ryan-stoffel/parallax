@@ -305,8 +305,34 @@ export function PullRequestList({
 }
 
 /**
- * Thread details' list of a thread's linked pull requests, newest first: each one's state, title,
- * number, and checks, opening its view. Past the newest, they wait behind Show N more.
+ * How far a pull request's checks are: how many passed of those that count (skipped ones don't),
+ * and how they look together, spinning while any runs. Undefined with no checks.
+ */
+export function checksSummary(pr: PullRequest) {
+  if (!pr.checks.length) return undefined;
+  const counted = pr.checks.filter((c) => c.state !== "skipped");
+  const count = (state: PrCheck["state"]) => counted.filter((c) => c.state === state).length;
+  const [passed, failed, running] = [count("passed"), count("failed"), count("pending")];
+  const words = [
+    `${passed} of ${counted.length} checks passed`,
+    failed && `${failed} failed`,
+    running && `${running} running`,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  return {
+    ...(checkIcons[pr.checksState ?? ""] ?? noCheck),
+    passed,
+    total: counted.length,
+    failed,
+    words,
+  };
+}
+
+/**
+ * Thread details' list of a thread's linked pull requests, newest first: each one's state, its
+ * title on up to two lines, its number, and its checks as passed of total, spinning while they
+ * run, opening its view. Past the newest, they wait behind Show N more.
  */
 export function LinkedPullRequests({
   prs,
@@ -321,33 +347,42 @@ export function LinkedPullRequests({
   if (!newest.length) return null;
   return (
     <>
-      <ul aria-label="Linked pull requests">
+      <ul aria-label="Linked pull requests" className="flex flex-col gap-px">
         {(all ? newest : newest.slice(0, 1)).map((url) => {
           const { pr, error } = prs.get(url) ?? {};
-          const { Icon, color } = lookOf(pr);
-          const checks =
-            pr && (checkIcons[pr.checksState ?? ""] ?? (pr.checks.length ? noCheck : undefined));
+          const { Icon, color, label } = lookOf(pr);
+          const checks = pr && checksSummary(pr);
           return (
             <li key={url}>
               <button
                 type="button"
                 onClick={() => onOpen(url)}
                 title={pr ? `#${pr.number} ${pr.title}` : url}
-                className={`${menuItem} items-start`}
+                className="flex w-full gap-2 rounded-md px-2 py-1.5 text-left hover:bg-hover"
               >
-                <Icon aria-hidden className={color} />
+                <Icon aria-hidden className={`mt-0.5 size-4 shrink-0 ${color}`} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">{pr?.title ?? repoOf(url)}</span>
-                  <span className="mt-0.5 flex items-center gap-2 text-meta text-faint-foreground">
-                    #{numberOf(url)}
+                  <span className="line-clamp-2 text-body leading-snug wrap-break-word">
+                    {pr?.title ?? repoOf(url)}
+                  </span>
+                  <span className="mt-1 flex items-center gap-1.5 text-meta text-faint-foreground">
+                    <span className="shrink-0 tabular-nums">#{numberOf(url)}</span>
+                    {label && <span className="shrink-0">· {label}</span>}
                     {checks && (
-                      <checks.Icon
-                        aria-label={`Checks ${pr.checksState === "pending" ? "running" : (pr.checksState ?? "skipped")}`}
-                        className={checks.color}
-                      />
+                      <span
+                        role="img"
+                        aria-label={checks.words}
+                        title={checks.words}
+                        className="ml-auto flex shrink-0 items-center gap-1 tabular-nums"
+                      >
+                        <checks.Icon aria-hidden className={`size-3.5! ${checks.color}`} />
+                        <span className={checks.failed ? "text-danger" : ""}>
+                          {checks.passed}/{checks.total}
+                        </span>
+                      </span>
                     )}
                     {!pr && (
-                      <span className={error ? "truncate text-danger" : ""}>
+                      <span className={`min-w-0 truncate ${error ? "text-danger" : ""}`}>
                         {error ? describeError(error) : "Loading…"}
                       </span>
                     )}

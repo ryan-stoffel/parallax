@@ -25,8 +25,10 @@ import {
   type BrowserAction,
   type CommandStatus,
   needsTransparentWindow,
+  type OpenApp,
   type OpenTarget,
   type RegistryAgent,
+  type TerminalApp,
   type UpdateState,
   validLocale,
 } from "../preload/bridge";
@@ -48,10 +50,12 @@ import {
   appBundle,
   detectEditors,
   editorCommand,
+  editorName,
   isDirectory,
   isFolderPath,
   launch,
   type Editor,
+  type FoundEditor,
 } from "./editors";
 import { frameOptions, titleBarOverlay, windowBackground } from "./frame";
 import { renderPage, savedHost, startHosts, streamFile } from "./hosts";
@@ -515,9 +519,9 @@ ipcMain.handle("parallax:copyPicture", async (event, rect: unknown) => {
   await clipboard.write([new ClipboardItem({ "image/png": png })]);
 });
 
-// The top bar's Open button (editors.ts). The renderer names the host, target, and folder; main
+// Thread details' Open in (editors.ts). The renderer names the host, target, and folder; main
 // checks each and runs only a program it found, never through a shell. Editors are found once.
-let editors: Partial<Record<Editor, string>> | undefined;
+let editors: Partial<Record<Editor, FoundEditor>> | undefined;
 const installedEditors = () => (editors ??= detectEditors(process.platform, process.env));
 // The terminal app chosen in Settings > General (terminalApp.ts), read once.
 const terminalFile = () => path.join(app.getPath("userData"), "terminal.json");
@@ -526,21 +530,84 @@ const installedTerminals = () => detectTerminalApps(process.platform, process.en
 let terminal =
   installedTerminals().find((app) => app.path === savedTerminal)?.path ??
   installedTerminals()[0]?.path;
-// Every editor opens an SSH host's folder over its Remote SSH. The file manager and terminal are
-// this computer's.
+const fileManager = process.platform === "darwin" ? "/System/Library/CoreServices/Finder.app" : "";
+const fileManagerName =
+  process.platform === "darwin"
+    ? "Finder"
+    : process.platform === "win32"
+      ? "File Explorer"
+      : "Files";
+// Editors open an SSH host's folder over their Remote SSH, so only those with it are listed for
+// one. The file manager and terminal are this computer's.
 function openTargets(hostId: unknown): OpenTarget[] {
   const local = hostId === "local";
   if (!local && (typeof hostId !== "string" || !savedHost(hostId))) return [];
-  const found = Object.keys(installedEditors()) as Editor[];
-  if (!local) return found;
-  return terminal ? [...found, "files", "terminal"] : [...found, "files"];
+  const found = Object.entries(installedEditors()) as [Editor, FoundEditor][];
+  const editorTargets = found.filter(([, e]) => local || e.remote).map(([editor]) => editor);
+  if (!local) return editorTargets;
+  return terminal ? [...editorTargets, "files", "terminal"] : [...editorTargets, "files"];
 }
-ipcMain.handle("parallax:openTargets", (_event, hostId: unknown) => openTargets(hostId));
+// Apps' own icons as data URLs, read once each: Quick Look on macOS, since `app.getFileIcon`
+// gives a `.app` bundle a placeholder icon, and the exe's icon on Windows. Linux has none, and
+// one that can't be read is left out, so the renderer shows its fallback mark.
+const icons = new Map<string, Promise<string | undefined>>();
+function appIcon(program: string): Promise<string | undefined> {
+  let icon = icons.get(program);
+  if (!icon) {
+    icon = (async () => {
+      try {
+        if (process.platform === "darwin") {
+          const bundle = appBundle(program);
+          if (!bundle) return undefined;
+          const image = await nativeImage.createThumbnailFromPath(bundle, {
+            width: 64,
+            height: 64,
+          });
+          return image.toDataURL();
+        }
+        if (process.platform === "win32")
+          return (await app.getFileIcon(program, { size: "normal" })).toDataURL();
+      } catch {
+        // No icon: the renderer's mark.
+      }
+      return undefined;
+    })();
+    icons.set(program, icon);
+  }
+  return icon;
+}
+async function openApps(hostId: unknown): Promise<OpenApp[]> {
+  const program = (target: OpenTarget) =>
+    target === "files"
+      ? fileManager
+      : target === "terminal"
+        ? terminal!
+        : installedEditors()[target]!.program;
+  const name = (target: OpenTarget) =>
+    target === "files"
+      ? fileManagerName
+      : target === "terminal"
+        ? (installedTerminals().find((app) => app.path === terminal)?.name ??
+          terminalName(terminal!))
+        : editorName(target);
+  return Promise.all(
+    openTargets(hostId).map(async (target) => {
+      const from = program(target);
+      return { target, name: name(target), icon: from ? await appIcon(from) : undefined };
+    }),
+  );
+}
+async function terminalApps(): Promise<TerminalApp[]> {
+  return Promise.all(
+    installedTerminals().map(async (app) => ({ ...app, icon: await appIcon(app.path) })),
+  );
+}
+ipcMain.handle("parallax:openTargets", (_event, hostId: unknown) => openApps(hostId));
 ipcMain.handle(
   "parallax:terminalApp",
   () => installedTerminals().find((app) => app.path === terminal)?.name ?? null,
 );
-ipcMain.handle("parallax:terminalApps", () => installedTerminals());
+ipcMain.handle("parallax:terminalApps", terminalApps);
 ipcMain.handle("parallax:selectTerminalApp", async (event, selected: unknown) => {
   const chosen = installedTerminals().find((app) => app.path === selected);
   if (!chosen) return null;
@@ -552,7 +619,6 @@ ipcMain.handle("parallax:selectTerminalApp", async (event, selected: unknown) =>
     return null;
   }
   terminal = chosen.path;
-  targetIcons = undefined;
   return chosen.name;
 });
 // The `parallax` command (PLX-750, command.ts).
@@ -639,35 +705,14 @@ async function setUpCommand(win: BrowserWindow): Promise<void> {
 const warn = (win: BrowserWindow, message: string, detail: string) =>
   dialog.showMessageBox(win, { type: "warning", message, detail });
 
-// The Open targets' own app icons on macOS, as data URLs, found once. Quick Look, since
-// `app.getFileIcon` gives a `.app` bundle a placeholder icon. A target without one keeps its mark.
-let targetIcons: Promise<Partial<Record<OpenTarget, string>>> | undefined;
-async function openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>> {
-  if (process.platform !== "darwin") return {};
-  const apps = {
-    ...installedEditors(),
-    files: "/System/Library/CoreServices/Finder.app",
-    ...(terminal ? { terminal } : {}),
-  };
-  const icons = await Promise.all(
-    Object.entries(apps).map(async ([target, program]) => {
-      try {
-        const bundle = appBundle(program);
-        if (!bundle) return [];
-        const icon = await nativeImage.createThumbnailFromPath(bundle, { width: 64, height: 64 });
-        return [[target, icon.toDataURL()]];
-      } catch {
-        return [];
-      }
-    }),
-  );
-  return Object.fromEntries(icons.flat());
-}
-ipcMain.handle("parallax:openTargetIcons", () => (targetIcons ??= openTargetIcons()));
 ipcMain.handle(
   "parallax:openFolder",
-  async (event, hostId: unknown, target: unknown, folder: unknown) => {
+  async (event, hostId: unknown, target: unknown, folder: unknown, chosen: unknown) => {
     if (!isFolderPath(folder) || !openTargets(hostId).some((t) => t === target)) return;
+    // A listed terminal other than the chosen one, or the chosen one.
+    const shellApp =
+      installedTerminals().find((app) => chosen !== undefined && app.path === chosen)?.path ??
+      terminal!;
     const destination = savedHost(hostId as string)?.destination;
     let error: string | undefined;
     // A local folder must be one: `shell.openPath` would run an executable file.
@@ -675,12 +720,12 @@ ipcMain.handle(
     else if (target === "files") error = (await shell.openPath(folder)) || undefined;
     // `open -a` starts without complaint when the app is gone, so check it's still there.
     else if (target === "terminal")
-      error = existsSync(terminal!)
-        ? await launch(terminalCommand(process.platform, terminal!, folder))
-        : `${terminalName(terminal!)} isn't there anymore. Choose your terminal again in Settings.`;
+      error = existsSync(shellApp)
+        ? await launch(terminalCommand(process.platform, shellApp, folder))
+        : `${terminalName(shellApp)} isn't there anymore. Choose your terminal again in Settings.`;
     else {
-      const program = installedEditors()[target as Editor]!;
-      error = await launch(editorCommand(program, folder, destination));
+      const editor = installedEditors()[target as Editor]!;
+      error = await launch(editorCommand(process.platform, editor, folder, destination));
     }
     const win = BrowserWindow.fromWebContents(event.sender);
     if (error && win) await warn(win, "Parallax couldn't open the folder.", error);

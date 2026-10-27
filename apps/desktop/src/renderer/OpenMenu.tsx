@@ -1,221 +1,168 @@
-import { Check, ChevronDown, FolderOpen, SquareTerminal } from "lucide-react";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { Code, FolderOpen, SquareTerminal } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 
-import type { OpenTarget, TerminalApp } from "../preload/bridge";
+import type { OpenApp, OpenTarget, TerminalApp } from "../preload/bridge";
 import cursorIcon from "./assets/cursor.svg";
 import vscodeIcon from "./assets/vscode.svg";
 import ghosttyIcon from "./assets/ghostty.svg";
 import alacrittyIcon from "./assets/alacritty.svg";
 import { useShortcutLabel } from "./keybindings";
-import { appShortcut, Menu, menuItem, splitChevron } from "./ui";
+import { appShortcut } from "./ui";
 
 /** Where the last target chosen is kept; Settings > General sets it too. */
 export const OPEN_TARGET_KEY = "parallax.openTarget";
 /** The window event Settings fires after choosing a terminal app, so Open lists it. */
 export const TERMINAL_CHOSEN = "parallax:terminalChosen";
 
-// Supplied editor artwork, with fallback marks for native file managers and terminals.
-const marks: Record<OpenTarget, ReactNode> = {
-  cursor: <img src={cursorIcon} alt="" className="size-4 shrink-0" />,
-  vscode: <img src={vscodeIcon} alt="" className="size-4 shrink-0" />,
-  files: <FolderOpen />,
-  terminal: <SquareTerminal />,
+// Supplied artwork for apps main has no icon for, such as on Linux.
+const artwork: Partial<Record<OpenTarget, string>> = { cursor: cursorIcon, vscode: vscodeIcon };
+const terminalArtwork: Record<string, string> = { Ghostty: ghosttyIcon, Alacritty: alacrittyIcon };
+
+const image = (src: string) => <img src={src} alt="" className="size-4 shrink-0" />;
+
+/** An Open target's app icon: main's, else supplied artwork, else a mark for its kind. */
+export const appIcon = (app: OpenApp): ReactNode => {
+  const src = app.icon ?? artwork[app.target];
+  if (src) return image(src);
+  return app.target === "files" ? (
+    <FolderOpen />
+  ) : app.target === "terminal" ? (
+    <SquareTerminal />
+  ) : (
+    <Code />
+  );
 };
 
-/** Supplied editor artwork, or a native app icon from main with a fallback mark. */
-export const targetIcon = (target: OpenTarget, appIcons: Partial<Record<OpenTarget, string>>) => {
-  if (target === "cursor" || target === "vscode") return marks[target];
-  const src = appIcons[target];
-  return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks[target];
+/** A terminal app's icon: main's, else Ghostty's or Alacritty's artwork, else the terminal mark. */
+export const terminalIcon = (app?: TerminalApp): ReactNode => {
+  const src = app && (app.icon ?? terminalArtwork[app.name]);
+  return src ? image(src) : <SquareTerminal />;
 };
 
 /**
- * A terminal app's icon: Ghostty's and Alacritty's own artwork, else `appIcon` (main's icon for the
- * chosen terminal) or the terminal mark.
+ * One app of Open in: its icon, gray until hovered or focused, opening the folder in it. `current`
+ * marks the one the Open shortcut uses.
  */
-export const terminalIcon = (name: string | null, appIcon?: string) => {
-  const src = name === "Ghostty" ? ghosttyIcon : name === "Alacritty" ? alacrittyIcon : appIcon;
-  return src ? <img src={src} alt="" className="size-4 shrink-0" /> : marks.terminal;
-};
-
-/** A target's name for people; the terminal's is the chosen app's, `terminal`. */
-export const nameOf = (target: OpenTarget, terminal?: string | null) => {
-  if (target === "cursor") return "Cursor";
-  if (target === "vscode") return "VS Code";
-  if (target === "terminal") return terminal ?? "Terminal";
-  const platform = window.parallax.platform;
-  return platform === "darwin" ? "Finder" : platform === "win32" ? "File Explorer" : "Files";
-};
+function AppButton({
+  name,
+  icon,
+  current,
+  shortcut,
+  disabled,
+  onClick,
+}: {
+  name: string;
+  icon: ReactNode;
+  current?: boolean;
+  shortcut?: string;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      aria-label={`Open in ${name}`}
+      title={
+        disabled
+          ? "No folder to open yet"
+          : `Open in ${name}${current && shortcut ? ` (${shortcut})` : ""}`
+      }
+      className="group/app relative grid size-8 shrink-0 place-items-center rounded-md hover:bg-hover focus-visible:bg-hover disabled:pointer-events-none disabled:opacity-40"
+    >
+      <span className="opacity-55 grayscale transition-[filter,opacity] duration-150 group-hover/app:opacity-100 group-hover/app:grayscale-0 group-focus-visible/app:opacity-100 group-focus-visible/app:grayscale-0 [&_img]:size-5! [&_svg]:size-4.5!">
+        {icon}
+      </span>
+      {current && (
+        <span
+          aria-hidden
+          className="absolute bottom-0.5 size-1 rounded-full bg-faint-foreground group-hover/app:bg-muted-foreground"
+        />
+      )}
+    </button>
+  );
+}
 
 /**
- * Folder launch rows in Thread details. The main part opens `folder` on the host with the last target
- * chosen, also on its shortcut (keybindings.ts); the chevron lists the targets main found, and choosing one opens with it
- * and keeps it. Disabled while there's no folder, and absent while nothing can open one.
+ * Thread details' Open in: every editor and IDE main found, the file manager, and, for this
+ * computer's folders, every installed terminal, each as its app's icon that opens `folder` on the
+ * host. The editor or file manager last used is what the Open shortcut (keybindings.ts) uses, and
+ * it's kept. Disabled while there's no folder, and absent while nothing can open one.
  */
 export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }) {
-  const id = useId();
-  const menu = useRef<HTMLDivElement>(null);
-  const [targets, setTargets] = useState<OpenTarget[]>([]);
-  const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
-  const [appIcons, setAppIcons] = useState<Partial<Record<OpenTarget, string>>>({});
-  const [terminal, setTerminal] = useState<string | null>(null);
+  const [apps, setApps] = useState<OpenApp[]>([]);
   const [terminals, setTerminals] = useState<TerminalApp[]>([]);
-  const terminalId = useId();
-  const terminalMenu = useRef<HTMLDivElement>(null);
-  // Bumped when Settings chooses a terminal app, to list it and fetch its name and icon.
+  const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
+  // Bumped when Settings chooses a terminal app, which changes the targets.
   const [terminalChosen, setTerminalChosen] = useState(0);
   useEffect(() => {
     const onChosen = () => setTerminalChosen((n) => n + 1);
     window.addEventListener(TERMINAL_CHOSEN, onChosen);
     return () => window.removeEventListener(TERMINAL_CHOSEN, onChosen);
   }, []);
-  useEffect(() => {
-    void window.parallax.openTargetIcons().then(setAppIcons);
-    void window.parallax.terminalApps().then(setTerminals);
-  }, [terminalChosen]);
-  const iconOf = (name: string | null) =>
-    terminalIcon(name, name === terminal ? appIcons.terminal : undefined);
-  const icon = (target: OpenTarget) =>
-    target === "terminal" ? iconOf(terminal) : targetIcon(target, appIcons);
+  const local = hostId === "local";
   useEffect(() => {
     let live = true;
-    void window.parallax.openTargets(hostId).then((found) => {
-      if (!live) return;
-      setTargets(found.filter((target) => target !== "terminal"));
-      void window.parallax.terminalApp().then((name) => live && setTerminal(name));
-    });
+    void window.parallax.openTargets(hostId).then((found) => live && setApps(found));
+    if (local) void window.parallax.terminalApps().then((found) => live && setTerminals(found));
+    else setTerminals([]);
     return () => {
       live = false;
     };
-  }, [hostId, terminalChosen]);
-  const current = targets.find((t) => t === chosen) ?? targets[0];
+  }, [hostId, local, terminalChosen]);
+  // The chosen terminal opens from the terminals, so it isn't listed twice.
+  const editors = apps.filter((app) => app.target !== "terminal");
+  const current = editors.find((app) => app.target === chosen) ?? editors[0];
   const keys = useShortcutLabel("open");
 
-  const open = (target: OpenTarget) => {
-    if (folder) void window.parallax.openFolder(hostId, target, folder);
+  const open = (target: OpenTarget, terminal?: string) => {
+    if (folder) void window.parallax.openFolder(hostId, target, folder, terminal);
   };
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (appShortcut(e) !== "open" || !current) return;
       e.preventDefault();
-      open(current);
+      open(current.target);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   });
 
   const choose = (target: OpenTarget) => {
-    menu.current?.hidePopover();
     localStorage.setItem(OPEN_TARGET_KEY, target);
     setChosen(target);
     open(target);
   };
-  const chooseTerminal = async (app: TerminalApp) => {
-    terminalMenu.current?.hidePopover();
-    const selected = await window.parallax.selectTerminalApp(app.path);
-    if (selected) window.dispatchEvent(new Event(TERMINAL_CHOSEN));
-  };
-  const local = hostId === "local";
-  const terminalWhy = !local
-    ? "Terminals open folders on this computer only"
-    : !folder
-      ? "No folder to open yet"
-      : !terminal
-        ? "No installed terminal found"
-        : undefined;
+  if (!editors.length && !terminals.length) return null;
   return (
-    <>
-      {current && (
-        <div className="flex items-center">
-          <button
-            type="button"
+    <div className="px-2 pt-1 pb-1">
+      <h3 className="pb-1 text-meta text-muted-foreground">Open in</h3>
+      <div role="group" aria-label="Open in" className="-mx-1 flex flex-wrap items-center gap-0.5">
+        {editors.map((app) => (
+          <AppButton
+            key={app.target}
+            name={app.name}
+            icon={appIcon(app)}
+            current={app === current}
+            shortcut={keys}
             disabled={!folder}
-            onClick={() => open(current)}
-            aria-label={`Open in ${nameOf(current)}`}
-            title={
-              folder
-                ? `Open in ${nameOf(current)}${keys ? ` (${keys})` : ""}`
-                : "No folder to open yet"
-            }
-            className={`${menuItem} min-w-0 flex-1 disabled:opacity-50`}
-          >
-            {icon(current)}
-            <span className="truncate">Open in {nameOf(current)}</span>
-          </button>
-          <button
-            type="button"
-            popoverTarget={id}
-            aria-haspopup="menu"
-            aria-label="Choose editor or file manager"
-            className={splitChevron}
-          >
-            <ChevronDown aria-hidden />
-          </button>
-        </div>
-      )}
-      <Menu ref={menu} id={id} label="Open in" align="end" className="min-w-44 p-1" focus="button">
-        {targets.map((t) => (
-          <button
-            key={t}
-            type="button"
-            role="menuitem"
-            onClick={() => choose(t)}
-            className={`${menuItem} [&_svg]:size-4`}
-          >
-            {icon(t)}
-            <span className="flex-1">{nameOf(t)}</span>
-            {t === current && keys && (
-              <span className="text-meta text-faint-foreground">{keys}</span>
-            )}
-          </button>
+            onClick={() => choose(app.target)}
+          />
         ))}
-      </Menu>
-      <div className="flex items-center">
-        <button
-          type="button"
-          disabled={!!terminalWhy}
-          title={terminalWhy}
-          onClick={() => open("terminal")}
-          className={`${menuItem} min-w-0 flex-1 disabled:opacity-50`}
-        >
-          {icon("terminal")}
-          <span className="truncate">Open in {terminal ?? "terminal"}</span>
-        </button>
-        <button
-          type="button"
-          popoverTarget={terminalId}
-          aria-haspopup="menu"
-          aria-label="Choose terminal"
-          disabled={!local || terminals.length === 0}
-          title={!local ? terminalWhy : undefined}
-          className={splitChevron}
-        >
-          <ChevronDown aria-hidden />
-        </button>
-      </div>
-      <Menu
-        ref={terminalMenu}
-        id={terminalId}
-        label="Terminals"
-        align="end"
-        className="min-w-44 p-1"
-        focus="button"
-      >
+        {editors.length > 0 && terminals.length > 0 && (
+          <span aria-hidden className="mx-1 h-5 w-px bg-border" />
+        )}
         {terminals.map((app) => (
-          <button
+          <AppButton
             key={app.path}
-            type="button"
-            role="menuitemradio"
-            aria-checked={app.name === terminal}
-            onClick={() => void chooseTerminal(app)}
-            className={menuItem}
-          >
-            {iconOf(app.name)}
-            <span className="flex-1">{app.name}</span>
-            {app.name === terminal && <Check aria-hidden className="text-muted-foreground" />}
-          </button>
+            name={app.name}
+            icon={terminalIcon(app)}
+            disabled={!folder}
+            onClick={() => open("terminal", app.path)}
+          />
         ))}
-      </Menu>
-    </>
+      </div>
+    </div>
   );
 }
