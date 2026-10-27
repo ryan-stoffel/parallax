@@ -633,6 +633,14 @@ body {
   }
 }
 
+/* A modal dialog blurs the app behind it. In the base layer, so a dialog's own
+   backdrop:backdrop-blur-* still wins. */
+@layer base {
+  dialog::backdrop {
+    backdrop-filter: blur(8px);
+  }
+}
+
 /* Cursors, the same on every OS. The body leaves Chromium's `cursor: auto`, which shows the I-beam
    over fields and over text that can be selected (select-text) and the arrow over the rest. What
    can be clicked shows the hand, unless it's disabled. In the base layer, so cursor-* utilities
@@ -696,6 +704,15 @@ body {
     browser-action-list
   ) {
   -webkit-app-region: no-drag;
+}
+/* Settings floats over the top row, so it doesn't drag, and on Windows starts under the window
+   buttons, which draw over the page. */
+.settings-dialog {
+  -webkit-app-region: no-drag;
+}
+[data-platform="win32"]:not([data-full-screen]) .settings-dialog {
+  margin-top: 3.5rem;
+  height: calc(100vh - 5.5rem);
 }
 /* Room for the traffic lights, where a row starts at the window's left edge. */
 [data-platform="darwin"] .traffic-light-inset {

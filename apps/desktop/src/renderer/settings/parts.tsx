@@ -223,7 +223,12 @@ export function RenameForm({
         defaultValue={value}
         autoFocus
         maxLength={64}
-        onKeyDown={(e) => e.key === "Escape" && onCancel()}
+        onKeyDown={(e) => {
+          if (e.key !== "Escape") return;
+          // Not Settings' too.
+          e.preventDefault();
+          onCancel();
+        }}
         className="w-48 rounded-md border border-border bg-background px-2 py-0.5 text-body text-foreground"
       />
       <button type="submit" className={primaryButton}>

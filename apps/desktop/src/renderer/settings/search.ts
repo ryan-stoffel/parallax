@@ -9,7 +9,6 @@ export const settingsSections: { id: SettingsSection; name: string; keywords?: s
   { id: "browser", name: "Browser", keywords: "web chrome helium tabs pages internet" },
   { id: "keybinds", name: "Keybinds", keywords: "shortcuts hotkeys keyboard" },
   { id: "providers", name: "Providers", keywords: "agents models accounts ai" },
-  { id: "usage", name: "Usage", keywords: "tokens cost spend limits stats" },
   { id: "schedules", name: "Schedules", keywords: "cron timers automation" },
   { id: "sourceControl", name: "Source control", keywords: "git github" },
   { id: "computerUse", name: "Computer use", keywords: "desktop apps mac control accessibility" },

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { TerminalTarget } from "../preload/bridge";
 import { notify } from "./notifications";
@@ -24,10 +24,15 @@ export function SignInTerminal({
   onClose: () => void;
 }) {
   const [ended, setEnded] = useState(false);
+  // It opens under the button that asked for it, which can be at the bottom of a scrolled page.
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    box.current?.scrollIntoView?.({ block: "nearest" });
+  }, []);
 
   const install = "install" in target;
   return (
-    <div className="flex flex-col gap-2 border-border px-4 py-3 not-last:border-b">
+    <div ref={box} className="flex flex-col gap-2 border-border px-4 py-3 not-last:border-b">
       <div className="flex items-center justify-between gap-4">
         <span className="text-body text-muted-foreground">
           {install

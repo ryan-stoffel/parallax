@@ -96,11 +96,12 @@ test("starts a thread and shows the agent's output", async () => {
     account: { kind: "subscription", backend: "fake" },
   })`);
   expect(set).not.toHaveProperty("error");
-  // New Thread reads the default when it opens, to offer that backend's models, so reopen it.
+  // New Thread reads the default again as Settings closes, and keeps what was typed behind it.
+  const message = page.getByRole("textbox", { name: "Message" });
+  await message.fill("Tidy up the README");
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Back to app" }).click();
-
-  await page.getByRole("textbox", { name: "Message" }).fill("Tidy up the README");
+  await page.getByRole("button", { name: "Close settings" }).click();
+  await expect(message).toHaveText("Tidy up the README");
   await page.getByRole("button", { name: "Send", exact: true }).click();
 
   const transcript = page.getByRole("log", { name: "Transcript" });
@@ -172,6 +173,17 @@ test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", a
   await expect(codex).toHaveText("e2e@example.testAuthenticated");
 });
 
+test("Escape closes a dialog opened in Settings, and leaves Settings open (PLX-1050)", async () => {
+  // The sign-in test left Settings open on Providers.
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Add provider" }).click();
+  const add = page.getByRole("dialog", { name: "Add provider" });
+  await expect(add).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(add).toBeHidden();
+  await expect(settings).toBeVisible();
+});
+
 test("creates a project on a repository it adds, and opens it (PLX-166)", async () => {
   const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "ember");
   mkdirSync(repo);
@@ -180,7 +192,7 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   const identity = ["-c", "user.name=parallax", "-c", "user.email=parallax@localhost"];
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The sign-in test left Settings open.
-  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("button", { name: "New project or repository" }).click();
   const dialog = page.getByRole("dialog", { name: "New project or repository" });
   await dialog.getByRole("option", { name: /^New Project/ }).click();
@@ -209,9 +221,9 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
     account: { kind: "subscription", backend: "fake" },
   })`);
   expect(set).not.toHaveProperty("error");
-  // The project chat reads the default when it opens, to offer its backend's models, so reopen it.
+  // The project chat reads the default again as Settings closes, to offer its backend's models.
   await page.getByRole("button", { name: "Settings" }).click();
-  await page.getByRole("button", { name: "Back to app" }).click();
+  await page.getByRole("button", { name: "Close settings" }).click();
 
   // The last test left the ember project open. Every message goes to its coordinator.
   const message = page.getByRole("textbox", { name: "Message" });
