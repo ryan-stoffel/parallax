@@ -2,7 +2,9 @@
 //! with the latest release of where it came from, and `providers/upgrade` runs the CLI's own
 //! `update`, which knows whether npm or its native installer put it there, or `brew upgrade` for a
 //! Homebrew install, since `claude update` only prints that command (PLX-762). A Homebrew install
-//! is compared with its cask or formula, not npm, whose releases Homebrew's lag (PLX-783).
+//! is compared with its cask or formula, not npm, whose releases Homebrew's lag (PLX-783), as
+//! `brew outdated` sees it: Homebrew's per-package API pages can be ahead of the data
+//! `brew upgrade` reads (PLX-1053).
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -15,6 +17,7 @@ use parallax_protocol::{
 use serde_json::Value;
 
 use super::Context;
+use crate::backend::process::ProcessSpec;
 use crate::detect::{self, probe_spec};
 use crate::self_update::{compare, parse_version};
 
@@ -43,14 +46,25 @@ pub(crate) async fn updates(
     let checks = PACKAGES.map(|(cli, package)| async move {
         let found = context.daemon.cli_detector.get(cli).await;
         let version = found.version.filter(|_| found.installed)?;
-        let (url, pointer) = match found.path.as_deref().and_then(installed_by_brew) {
-            Some(brew) => (brew.api_url(), brew.version_at()),
-            None => (
-                format!("https://registry.npmjs.org/{package}/latest"),
-                "/version",
-            ),
+        let (spec, pointer) = if let Some(brew) = found.path.as_deref().and_then(installed_by_brew)
+        {
+            let (program, args) = brew.outdated();
+            let mut spec = probe_spec(&program);
+            spec.args = args.into_iter().map(Into::into).collect();
+            // No `brew update`, but brew still rereads its API once it's 450 s old, as
+            // `brew upgrade` does.
+            spec.inject.set("HOMEBREW_NO_AUTO_UPDATE", "1");
+            spec.inject.set("HOMEBREW_FORCE_API_AUTO_UPDATE", "1");
+            (spec, brew.version_at())
+        } else {
+            let url = format!("https://registry.npmjs.org/{package}/latest");
+            let mut spec = probe_spec("curl");
+            spec.args = ["-fsS", "--proto", "=https", "--max-time", "15", &url]
+                .map(Into::into)
+                .into();
+            (spec, "/version")
         };
-        let latest = latest(context, &url, pointer).await?;
+        let latest = latest(context, &spec, pointer).await?;
         newer(&version, &latest).then_some(ProviderUpdate {
             cli,
             version,
@@ -99,8 +113,8 @@ pub(crate) async fn upgrade(
     let mut spec = probe_spec(&program);
     spec.args = args.into_iter().map(Into::into).collect();
     if brew.is_some() {
-        // brew rereads its API every 450 s by default, so it may not know the release
-        // `providers/updates` read from the live API yet. A full `brew update` isn't needed.
+        // brew rereads its API every 450 s by default, so it may be older than the API
+        // `providers/updates` read. A full `brew update` isn't needed.
         spec.scrub.push("HOMEBREW_NO_AUTO_UPDATE".into());
         spec.inject.set("HOMEBREW_API_AUTO_UPDATE_SECS", "0");
     }
@@ -135,23 +149,28 @@ struct Homebrew {
 }
 
 impl Homebrew {
-    /// Its page in Homebrew's JSON API, which `brew upgrade` reads too.
-    fn api_url(&self) -> String {
-        let kind = if self.cask { "cask" } else { "formula" };
-        format!("https://formulae.brew.sh/api/{kind}/{}.json", self.package)
-    }
-
-    /// Where the API page has the version `brew upgrade` installs.
+    /// Where `brew outdated --json=v2` has the version `brew upgrade` installs. It lists nothing
+    /// when that's the installed version.
     fn version_at(&self) -> &'static str {
         if self.cask {
-            "/version"
+            "/casks/0/current_version"
         } else {
-            "/versions/stable"
+            "/formulae/0/current_version"
         }
     }
 
     /// The `brew upgrade` command for it.
     fn upgrade(&self) -> (String, Vec<String>) {
+        self.command(&["upgrade"])
+    }
+
+    /// The `brew outdated` command for it, which reads the same API as `brew upgrade`.
+    fn outdated(&self) -> (String, Vec<String>) {
+        self.command(&["outdated", "--json=v2"])
+    }
+
+    /// `brew <verb> <kind> <package>`.
+    fn command(&self, verb: &[&str]) -> (String, Vec<String>) {
         // Homebrew skips `version :latest` and auto-updating casks (`claude-code@latest`) without
         // `--greedy`, reporting a warning and exit 0.
         let kind: &[&str] = if self.cask {
@@ -159,9 +178,10 @@ impl Homebrew {
         } else {
             &["--formula"]
         };
-        let args = ["upgrade"]
-            .into_iter()
-            .chain(kind.iter().copied())
+        let args = verb
+            .iter()
+            .chain(kind)
+            .copied()
             .chain([self.package.as_str()])
             .map(str::to_owned)
             .collect();
@@ -198,17 +218,15 @@ fn output(ran: &detect::Ran) -> &str {
     }
 }
 
-/// The version at JSON `pointer` in the document at `url`, an npm or Homebrew package's latest
-/// release, read with `curl` so plxd needs no HTTP client.
-async fn latest(context: &Context, url: &str, pointer: &str) -> Option<String> {
-    let args = ["-fsS", "--proto", "=https", "--max-time", "15", url];
+/// The version at JSON `pointer` in what `spec` prints: npm's latest release, read with `curl` so
+/// plxd needs no HTTP client, or `brew outdated`'s. The exit code isn't checked, since
+/// `brew outdated` exits 1 when it lists the package, and a failed `curl -f` prints nothing.
+async fn latest(context: &Context, spec: &ProcessSpec, pointer: &str) -> Option<String> {
     let launcher = context.daemon.cli_detector.launcher();
-    let ran = detect::run(launcher, "curl", &args, REGISTRY_TIMEOUT)
+    let ran = detect::run_spec(launcher, spec, b"", REGISTRY_TIMEOUT)
         .await
         .ok()?;
-    (ran.exit_code == Some(0))
-        .then(|| version_in(&ran.stdout, pointer))
-        .flatten()
+    version_in(&ran.stdout, pointer)
 }
 
 /// The version at `pointer` in a JSON document. A cask's may carry a build after a comma.
@@ -230,7 +248,7 @@ fn newer(version: &str, latest: &str) -> bool {
 mod tests {
     use std::path::Path;
 
-    use super::{Homebrew, homebrew};
+    use super::{Homebrew, homebrew, version_in};
 
     #[test]
     fn a_homebrew_install_upgrades_and_checks_through_its_brew() {
@@ -253,10 +271,16 @@ mod tests {
             ["upgrade", "--cask", "--greedy", "claude-code@latest"]
         );
         assert_eq!(
-            cask.api_url(),
-            "https://formulae.brew.sh/api/cask/claude-code@latest.json"
+            cask.outdated().1,
+            [
+                "outdated",
+                "--json=v2",
+                "--cask",
+                "--greedy",
+                "claude-code@latest"
+            ]
         );
-        assert_eq!(cask.version_at(), "/version");
+        assert_eq!(cask.version_at(), "/casks/0/current_version");
 
         let formula = homebrew(Path::new(
             "/home/linuxbrew/.linuxbrew/Cellar/codex/0.162.1/bin/codex",
@@ -269,11 +293,23 @@ mod tests {
         );
         assert_eq!(args, ["upgrade", "--formula", "codex"]);
         assert_eq!(
-            formula.api_url(),
-            "https://formulae.brew.sh/api/formula/codex.json"
+            formula.outdated().1,
+            ["outdated", "--json=v2", "--formula", "codex"]
         );
-        assert_eq!(formula.version_at(), "/versions/stable");
+        assert_eq!(formula.version_at(), "/formulae/0/current_version");
 
         assert!(homebrew(Path::new("/Users/r/.local/share/claude/versions/2.1.295")).is_none());
+    }
+
+    #[test]
+    fn brew_outdated_gives_the_version_brew_upgrade_installs() {
+        let current = r#"{"formulae": [], "casks": []}"#;
+        assert_eq!(version_in(current, "/casks/0/current_version"), None);
+        let outdated = r#"{"formulae": [], "casks": [{"name": "claude-code@latest",
+            "installed_versions": ["2.1.310"], "current_version": "2.1.311"}]}"#;
+        assert_eq!(
+            version_in(outdated, "/casks/0/current_version").as_deref(),
+            Some("2.1.311")
+        );
     }
 }
