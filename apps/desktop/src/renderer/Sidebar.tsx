@@ -2903,11 +2903,11 @@ function ProjectRow({
 
 /**
  * A thread's card (0033, 0075, PLX-1043): its repo's icon and name with its status at the end (what
- * it asks of the user, or how long ago it was last active), its title in bold, then its branch, cut
- * in the middle (`shortBranch`), its git status, a pin, linked pull requests (the number of one, or
- * +N for more) and their checks, its computer, and its provider, in color while it's open.
- * Under a search, the words found are marked, and a match only in its messages shows a line of
- * them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
+ * it asks of the user, or how long ago it was last active), its title in bold, then its branch (not
+ * a Chat's), cut in the middle (`shortBranch`), its git status, a pin, linked pull requests (the
+ * number of one, or +N for more) and their checks, its computer, and its provider, in color while
+ * it's open. Under a search, the words found are marked, and a match only in its messages shows a
+ * line of them. Resting on it shows its card; hovering or focusing it swaps the status for Snooze,
  * Archive, and more actions, which also open by right-clicking the row: native popovers, so
  * Escape and clicking away close them. Double-clicking the title renames it in place.
  */
@@ -3074,6 +3074,8 @@ function ThreadRow({
       : checks.length && checks.every((c) => c === "passed")
         ? "passed"
         : undefined;
+  // A Chat thread's card leaves out its scratch branch.
+  const branch = repo && !repo.scratch ? run?.branch : undefined;
   const hasDetails = !!(
     (git && (git.ahead || git.changes)) ||
     prs.urls.length ||
@@ -3218,13 +3220,13 @@ function ThreadRow({
               status={shownStatus}
             />
             <RowTitle title={titleText} color={titleColor} />
-            {(run?.branch || hasDetails) && (
+            {(branch || hasDetails) && (
               <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
                 <span className="flex min-w-0 flex-1 items-center gap-1">
-                  {run?.branch && (
+                  {branch && (
                     <>
                       <GitBranch aria-hidden className="size-3 shrink-0" />
-                      <BranchName branch={run.branch} words={words} />
+                      <BranchName branch={branch} words={words} />
                     </>
                   )}
                   {git && <GitCounts git={git} />}
