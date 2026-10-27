@@ -117,8 +117,6 @@ export const accessOptions: Record<AgentPermission, PickerOption> = {
   bypass: access("bypass", <LockOpen />),
 };
 
-const divider = <span aria-hidden className="mx-1 h-5 w-px bg-border" />;
-
 /** What the inline thread and image chips read to draw themselves: the attached images, and the
  * host's threads. */
 const RefsContext = createContext<{ images: readonly PromptImage[]; threads?: ThreadsState }>({
@@ -1704,7 +1702,8 @@ export function Composer({
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      className="flex min-w-0 items-center gap-0.5"
+      // Its buttons read brighter and heavier than other menus' (menuButton), as the box's own.
+      className="flex min-w-0 items-center gap-1 [&>button]:font-medium [&>button]:text-foreground/90"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
@@ -1717,36 +1716,30 @@ export function Composer({
         />
       )}
       {efforts && (
-        <>
-          {divider}
-          <EffortMenu
-            value={effort}
-            onChange={setEffort}
-            contexts={contexts}
-            context={context}
-            onContext={setContext}
-            fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
-            fast={fast}
-            onFast={setFast}
-          />
-        </>
+        <EffortMenu
+          value={effort}
+          onChange={setEffort}
+          contexts={contexts}
+          context={context}
+          onContext={setContext}
+          fastMode={hasFast ? instanceOf(model!.provider)?.kind : undefined}
+          fast={fast}
+          onFast={setFast}
+        />
       )}
       {/* One permission is no choice, so there's nothing to show. */}
       {permissions.length > 1 && (
-        <>
-          {divider}
-          <Picker
-            label="Access"
-            value={permission}
-            onChange={(value) => setPermission(value as AgentPermission)}
-            options={permissions.map((p) =>
-              p === "manual" && manualDenied
-                ? { ...accessOptions[p], description: manualDenials[manualDenied] }
-                : accessOptions[p],
-            )}
-            panelClassName="w-[25rem]"
-          />
-        </>
+        <Picker
+          label="Access"
+          value={permission}
+          onChange={(value) => setPermission(value as AgentPermission)}
+          options={permissions.map((p) =>
+            p === "manual" && manualDenied
+              ? { ...accessOptions[p], description: manualDenials[manualDenied] }
+              : accessOptions[p],
+          )}
+          panelClassName="w-[25rem]"
+        />
       )}
     </fieldset>
   );
