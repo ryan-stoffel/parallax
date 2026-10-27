@@ -271,11 +271,7 @@ impl App {
         };
         let was_installing = settings.github.as_ref().is_some_and(|held| held.installing);
         if was_installing && !github.installing {
-            settings.note = Some(match (&github.setup_note, github.installed) {
-                (Some(why), _) => why.clone(),
-                (None, true) => "Installed the GitHub CLI. Press enter to sign in.".to_owned(),
-                (None, false) => "The GitHub CLI didn't install.".to_owned(),
-            });
+            settings.note = Some(install_note(&github));
         }
         settings.github = Some(github);
         self.take_settings();
@@ -676,10 +672,11 @@ impl App {
         }
         if !github.installed {
             return match self.call::<GithubInstall>(GithubInstallParams {}).await {
+                // An install that already ended, or failed to start, says so now: nothing polls.
                 Ok(status) => {
                     if let Some(settings) = &mut self.settings {
+                        settings.note = Some(install_note(&status));
                         settings.github = Some(status);
-                        settings.note = Some("Installing the GitHub CLI…".to_owned());
                     }
                 }
                 Err(error) => self.note(format!("Couldn't install the GitHub CLI: {error}")),
@@ -1120,6 +1117,16 @@ fn github_status(github: &GithubStatus) -> (String, Tone) {
         (Some(true), None) => (format!("signed in{version}"), Tone::Good),
         (Some(false), _) => (format!("not signed in{version}"), Tone::Bad),
         (None, _) => (format!("sign-in unknown{version}"), Tone::Off),
+    }
+}
+
+/// How a `github/install` stands, by the status it or a later read returned.
+fn install_note(github: &GithubStatus) -> String {
+    match (&github.setup_note, github.installing, github.installed) {
+        (_, true, _) => "Installing the GitHub CLI…".to_owned(),
+        (Some(why), ..) => why.clone(),
+        (None, _, true) => "Installed the GitHub CLI. Press enter to sign in.".to_owned(),
+        (None, _, false) => "The GitHub CLI didn't install.".to_owned(),
     }
 }
 
