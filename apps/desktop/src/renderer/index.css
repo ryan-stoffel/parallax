@@ -722,7 +722,7 @@ body {
 }
 [data-platform="win32"]:not([data-full-screen]) .settings-dialog {
   margin-top: 3.5rem;
-  height: calc(100vh - 5.5rem);
+  height: calc(100vh - 6.5rem);
 }
 /* Room for the traffic lights, where a row starts at the window's left edge. */
 [data-platform="darwin"] .traffic-light-inset {
