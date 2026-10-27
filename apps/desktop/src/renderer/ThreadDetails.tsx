@@ -14,8 +14,8 @@ import { IconButton } from "./ui";
 export const THREAD_DETAILS_KEY = "parallax.threadDetails.open";
 const THREAD_DETAILS_ID = "thread-details";
 
-/** The docked card's width, `w-72`, with its right gap. */
-const DOCKED_WIDTH = 300;
+/** The docked card's width, `w-72`, its right gap included. */
+const DOCKED_WIDTH = 288;
 /** The transcript's column, `max-w-3xl`, which a docked card must leave whole. */
 const TRANSCRIPT_WIDTH = 768;
 
