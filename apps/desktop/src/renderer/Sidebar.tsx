@@ -286,6 +286,8 @@ interface ThreadListProps {
   onOpenSettings: (section: SettingsSection) => void;
   /** Opens the Pull requests page, in place of the main pane. */
   onOpenPullRequests: () => void;
+  /** Opens the Usage page, in place of the main pane. */
+  onOpenUsage: () => void;
   /** Opens the permanent browser, in place of the main pane (PLX-964), and whether it's open. */
   onOpenBrowser?: () => void;
   browserOpen?: boolean;
@@ -517,6 +519,7 @@ export function ThreadList({
   onOpenProject,
   onOpenSettings,
   onOpenPullRequests,
+  onOpenUsage,
   onOpenBrowser,
   browserOpen,
   onDelete,
@@ -1885,6 +1888,7 @@ export function ThreadList({
           listed={hosts}
           onOpenSettings={onOpenSettings}
           onOpenPullRequests={onOpenPullRequests}
+          onOpenUsage={onOpenUsage}
           {...(onOpenBrowser && { onOpenBrowser })}
           {...(browserOpen !== undefined && { browserOpen })}
         />
@@ -2334,11 +2338,12 @@ function Footer({
   listed,
   onOpenSettings,
   onOpenPullRequests,
+  onOpenUsage,
   onOpenBrowser,
   browserOpen,
 }: Pick<
   ThreadListProps,
-  "onOpenSettings" | "onOpenPullRequests" | "onOpenBrowser" | "browserOpen"
+  "onOpenSettings" | "onOpenPullRequests" | "onOpenUsage" | "onOpenBrowser" | "browserOpen"
 > & {
   listed: HostThreads[];
 }) {
@@ -2353,7 +2358,7 @@ function Footer({
       <IconButton label="Pull requests" onClick={onOpenPullRequests}>
         <GitPullRequest />
       </IconButton>
-      <IconButton label="Usage" onClick={() => onOpenSettings("usage")}>
+      <IconButton label="Usage" onClick={onOpenUsage}>
         <ChartNoAxesColumn />
       </IconButton>
       <span className="flex-1" />
@@ -3835,7 +3840,6 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   browser: Globe,
   keybinds: Keyboard,
   providers: Bot,
-  usage: ChartNoAxesColumn,
   schedules: CalendarClock,
   sourceControl: GitBranch,
   computerUse: MousePointerClick,
