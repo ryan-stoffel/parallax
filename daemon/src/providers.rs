@@ -1492,6 +1492,12 @@ fn home_var(instance: &ProviderInstance, preset: &Preset) -> Option<(OsString, O
     Some((preset.home_env?.into(), instance.home.as_ref()?.into()))
 }
 
+/// [`home_var`] by `instance`'s kind: what `plxd tui`'s sign-in sets, so a second Codex signs in
+/// to its own `CODEX_HOME`, as the app's sign-in terminal does.
+pub(crate) fn instance_home_var(instance: &ProviderInstance) -> Option<(OsString, OsString)> {
+    home_var(instance, &preset(instance.kind)?)
+}
+
 /// `instance`'s `OpenCode`, with the variables in `overrides` and its home folder.
 fn opencode_for(instance: &ProviderInstance, preset: &Preset, overrides: Overrides) -> Opencode {
     let mut env = overrides.env;

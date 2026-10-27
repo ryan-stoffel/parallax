@@ -18,12 +18,14 @@
 
 mod draw;
 mod markdown;
+mod settings;
 mod transcript;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use parallax_protocol::methods::{
@@ -34,10 +36,10 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     AccountChoice, AccountsDefaultsGetParams, AgentApprovalAnswer, AgentApproveParams, AgentEffort,
     AgentPermission, AgentRun, AgentStatus, ApprovalId, DispatchMode, EventsEventParams,
-    EventsUnsubscribeParams, HostHealthParams, LoggedEvent, OrchestrationCommand, ParallaxEvent,
-    Project, ProviderInfo, ProviderKind, ProvidersListParams, Repo, RepoAddParams, RepoId, RunId,
-    SubscribeShellParams, SubscribeThreadParams, SubscriptionId, Thread, ThreadStartParams,
-    ThreadUpdateParams, TurnId,
+    EventsUnsubscribeParams, GithubStatus, HostHealthParams, HostSettings, KeyAccount, LoggedEvent,
+    OrchestrationCommand, ParallaxEvent, Project, ProviderInfo, ProviderKind, ProvidersListParams,
+    Repo, RepoAddParams, RepoId, RunId, SubscribeShellParams, SubscribeThreadParams,
+    SubscriptionId, Thread, ThreadStartParams, ThreadUpdateParams, TurnId,
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
@@ -45,10 +47,12 @@ use ratatui::crossterm::event::{
     KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode};
 use ratatui::layout::{Position, Rect};
 use ratatui::text::Span;
 use tokio::sync::mpsc;
 
+use self::settings::{Login, Settings};
 use self::transcript::{Pending, Transcript};
 use crate::peer::{Incoming, Plxd};
 
@@ -75,13 +79,16 @@ const MAX_FILES: usize = 50_000;
 /// Lines a wheel step scrolls.
 const WHEEL: u16 = 3;
 
+/// The longest the key reader waits for a key before it checks whether to pause.
+const KEY_POLL: Duration = Duration::from_millis(50);
+
 /// The terminal's progress bar, `OSC 9;4`: moving while a turn runs, as Ghostty, Windows
 /// Terminal, and others show it for Claude Code, and cleared after. Others ignore it.
 const PROGRESS_ON: &str = "\x1b]9;4;3\x07";
 const PROGRESS_OFF: &str = "\x1b]9;4;0\x07";
 
 /// The slash commands, with what each does.
-const COMMANDS: [(&str, &str); 9] = [
+const COMMANDS: [(&str, &str); 11] = [
     (
         "/new",
         "start a new thread here, or in the repo or Space named",
@@ -101,6 +108,11 @@ const COMMANDS: [(&str, &str); 9] = [
         "choose what it may do without asking (also Shift+Tab)",
     ),
     ("/stop", "stop the turn under way (also Esc)"),
+    (
+        "/settings",
+        "sign in to providers and GitHub, add API keys, change settings",
+    ),
+    ("/login", "sign in to a provider"),
     ("/help", "show the keys"),
     ("/quit", "leave (also Ctrl-C twice, or Ctrl-D)"),
 ];
@@ -183,14 +195,7 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
     // In the background: the screen shows before plxd has probed every provider's CLI.
     app.refresh_providers();
     let (sender, mut keys) = mpsc::unbounded_channel();
-    // crossterm reads keys blocking; the thread ends with the process.
-    std::thread::spawn(move || {
-        while let Ok(event) = event::read() {
-            if sender.send(event).is_err() {
-                break;
-            }
-        }
-    });
+    let reader = Reader::start(sender);
     let mut terminal = ratatui::init();
     // ratatui's hook restores the screen on a panic; the mouse and the progress bar go first.
     let restore = std::panic::take_hook();
@@ -201,10 +206,81 @@ pub async fn run(plxd: Plxd) -> Result<(), String> {
     // Clicks open tool calls and threads, and the wheel scrolls. Shift+drag still selects text.
     // crossterm's capture, which on Windows is a console mode rather than escape codes.
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
-    let result = app.run(&mut terminal, &mut keys, &mut incoming).await;
+    let result = app
+        .run(&mut terminal, &reader, &mut keys, &mut incoming)
+        .await;
     leave();
     ratatui::restore();
     result
+}
+
+/// Reads keys on a thread of its own, since crossterm reads them blocking, except while another
+/// program has the terminal ([`Reader::pause`]). The thread ends with the process.
+#[derive(Clone)]
+struct Reader(Arc<(Mutex<Reading>, Condvar)>);
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    On,
+    /// Asked to pause: the thread pauses before it next waits for a key.
+    Pausing,
+    Paused,
+}
+
+impl Reader {
+    fn start(sender: mpsc::UnboundedSender<Event>) -> Self {
+        let reader = Self(Arc::new((Mutex::new(Reading::On), Condvar::new())));
+        let held = reader.clone();
+        std::thread::spawn(move || held.read(&sender));
+        reader
+    }
+
+    fn read(&self, sender: &mpsc::UnboundedSender<Event>) {
+        let (state, changed) = &*self.0;
+        loop {
+            let mut held = lock(state);
+            if *held == Reading::Pausing {
+                *held = Reading::Paused;
+                changed.notify_all();
+            }
+            while *held == Reading::Paused {
+                held = changed.wait(held).unwrap_or_else(PoisonError::into_inner);
+            }
+            drop(held);
+            // Polled, not read outright, so a pause waits no longer than [`KEY_POLL`].
+            match event::poll(KEY_POLL) {
+                Ok(false) => {}
+                Ok(true) => {
+                    let Ok(event) = event::read() else { return };
+                    if sender.send(event).is_err() {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Stops reading keys, so another program gets them all, and returns once it has.
+    fn pause(&self) {
+        let (state, changed) = &*self.0;
+        let mut held = lock(state);
+        *held = Reading::Pausing;
+        // A thread that ended never answers.
+        let _ = changed.wait_timeout_while(held, Duration::from_secs(1), |held| {
+            *held != Reading::Paused
+        });
+    }
+
+    fn resume(&self) {
+        let (state, changed) = &*self.0;
+        *lock(state) = Reading::On;
+        changed.notify_all();
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Hands the terminal back: no mouse reports, and no progress bar.
@@ -330,6 +406,10 @@ enum Loaded {
     },
     /// The paths `@` offers in a folder.
     Files(PathBuf, Vec<String>),
+    /// For `/settings`: the GitHub CLI, the API keys, and the host's settings.
+    Github(GithubStatus),
+    Keys(Vec<KeyAccount>),
+    Host(HostSettings),
 }
 
 #[expect(
@@ -362,6 +442,10 @@ struct App {
     not_here: Option<String>,
     /// The list showing, if one is.
     menu: Option<Menu>,
+    /// `/settings`, while it's open.
+    settings: Option<Settings>,
+    /// A sign-in to run in this terminal, which the loop runs after the key that asked for it.
+    handover: Option<Login>,
     /// The runs of tool calls opened by a click, by their first entry, and whether Ctrl+O
     /// opened them all.
     expanded: HashSet<usize>,
@@ -425,6 +509,8 @@ impl App {
             here: None,
             not_here: None,
             menu: None,
+            settings: None,
+            handover: None,
             expanded: HashSet::new(),
             expand_all: false,
             hits: RefCell::default(),
@@ -457,6 +543,7 @@ impl App {
     async fn run(
         &mut self,
         terminal: &mut DefaultTerminal,
+        reader: &Reader,
         keys: &mut mpsc::UnboundedReceiver<Event>,
         incoming: &mut mpsc::UnboundedReceiver<Incoming>,
     ) -> Result<(), String> {
@@ -481,6 +568,9 @@ impl App {
                 Some(event) = keys.recv() => match event {
                     Event::Key(key) if key.kind == KeyEventKind::Press => {
                         self.key(key).await;
+                        if let Some(login) = self.handover.take() {
+                            self.sign_in_here(terminal, reader, login).await?;
+                        }
                         self.dirty = true;
                     }
                     // Capture reports every move too; only a click or the wheel changes anything.
@@ -517,6 +607,63 @@ impl App {
         Ok(())
     }
 
+    /// Runs a provider's own sign-in in this terminal: the screen and the key reader step aside
+    /// until it exits, then come back and read the providers again. Ctrl-C ends the sign-in, not
+    /// `plxd tui`.
+    async fn sign_in_here(
+        &mut self,
+        terminal: &mut DefaultTerminal,
+        reader: &Reader,
+        login: Login,
+    ) -> Result<(), String> {
+        reader.pause();
+        leave();
+        ratatui::restore();
+        println!(
+            "Signing in to {}. Parallax comes back when the sign-in ends.\n",
+            login.name
+        );
+        let spawned = tokio::process::Command::new(&login.program)
+            .args(&login.args)
+            .envs(login.env)
+            .spawn();
+        let note = match spawned {
+            Ok(mut child) => {
+                let status = loop {
+                    tokio::select! {
+                        status = child.wait() => break status,
+                        // The sign-in gets it too, and ends.
+                        _ = tokio::signal::ctrl_c() => {}
+                    }
+                };
+                match status {
+                    Ok(status) if status.success() => format!("{}'s sign-in finished.", login.name),
+                    Ok(status) => format!("{}'s sign-in ended: {status}.", login.name),
+                    Err(error) => format!("{}'s sign-in failed: {error}", login.name),
+                }
+            }
+            Err(error) => format!("Couldn't run {}: {error}", login.program),
+        };
+        enable_raw_mode().map_err(|error| format!("could not take the terminal back: {error}"))?;
+        let _ = execute!(
+            std::io::stdout(),
+            EnterAlternateScreen,
+            Clear(ClearType::All),
+            EnableMouseCapture
+        );
+        // An empty frame, so the next draws every cell. Not `Terminal::clear`, which asks the
+        // terminal where its cursor is, and fails where the terminal doesn't say.
+        terminal
+            .draw(|_| {})
+            .map_err(|error| format!("could not draw: {error}"))?;
+        reader.resume();
+        if let Some(settings) = &mut self.settings {
+            settings.note = Some(note);
+        }
+        self.refresh_settings(true);
+        Ok(())
+    }
+
     /// Sends one request, giving up after [`CALL_TIMEOUT`], which cancels it.
     async fn call<M: RequestMethod>(&self, params: M::Params) -> Result<M::Result, String> {
         tokio::time::timeout(CALL_TIMEOUT, self.plxd.call::<M>(params))
@@ -542,6 +689,7 @@ impl App {
             self.frame += 1;
             self.dirty = true;
         }
+        self.tick_settings();
     }
 
     async fn subscribe_shell(&mut self) -> Result<(), String> {
@@ -561,7 +709,7 @@ impl App {
     /// Reads the host's default provider and its providers, waiting for them: for the first
     /// list, when there's nothing to show yet.
     async fn load_providers(&mut self) {
-        match read_providers(&self.plxd).await {
+        match read_providers(&self.plxd, false).await {
             Ok(load) => self.take(load),
             Err(error) => self.error = Some(error),
         }
@@ -571,7 +719,7 @@ impl App {
     fn refresh_providers(&self) {
         let (plxd, loads) = (self.plxd.clone(), self.loads.clone());
         tokio::spawn(async move {
-            if let Ok(load) = read_providers(&plxd).await {
+            if let Ok(load) = read_providers(&plxd, false).await {
                 let _ = loads.send(load);
             }
         });
@@ -591,6 +739,23 @@ impl App {
                 let model = before.is_none().then(|| self.model.take()).flatten();
                 self.fit_provider(before.as_deref());
                 self.model = model.or(self.model.take());
+                self.take_settings();
+            }
+            Loaded::Github(github) => {
+                if let Some(settings) = &mut self.settings {
+                    settings.github = Some(github);
+                }
+                self.take_settings();
+            }
+            Loaded::Keys(keys) => {
+                if let Some(settings) = &mut self.settings {
+                    settings.keys = Some(keys);
+                }
+            }
+            Loaded::Host(host) => {
+                if let Some(settings) = &mut self.settings {
+                    settings.host = Some(host);
+                }
             }
             Loaded::Files(folder, paths) => {
                 if self.reading.as_ref() == Some(&folder) {
@@ -764,6 +929,9 @@ impl App {
         }
         self.quitting = false;
         self.error = None;
+        if self.settings.is_some() {
+            return self.settings_key(key).await;
+        }
         // Opens or closes every run of tool calls, as Claude Code's Ctrl+O shows the details.
         if control && key.code == KeyCode::Char('o') {
             self.expand_all = !self.expand_all;
@@ -861,6 +1029,14 @@ impl App {
     /// beside the sidebar closes it. The wheel scrolls the transcript.
     async fn mouse(&mut self, mouse: MouseEvent) {
         let at = Position::new(mouse.column, mouse.row);
+        if self.settings.is_some() {
+            let code = match mouse.kind {
+                MouseEventKind::ScrollUp => KeyCode::Up,
+                MouseEventKind::ScrollDown => KeyCode::Down,
+                _ => return,
+            };
+            return self.settings_key(KeyEvent::from(code)).await;
+        }
         match mouse.kind {
             // Over the sidebar, the wheel moves through it.
             MouseEventKind::ScrollUp if self.sidebar_open() => self.menu_key(KeyCode::Up).await,
@@ -1331,6 +1507,8 @@ impl App {
                 self.choose(menu, argument).await;
             }
             "/stop" => self.stop().await,
+            "/settings" => self.open_settings(false),
+            "/login" => self.open_settings(true),
             "/help" => {
                 self.notice = Some(
                     [
@@ -1338,6 +1516,7 @@ impl App {
                         "← on an empty prompt opens the sidebar; n there starts a thread",
                         "Click a tool line to open it · Ctrl+O opens them all",
                         "Shift+Tab mode · Esc interrupts · \\ or Alt+Enter new line",
+                        "/settings signs in to providers and GitHub, and changes settings",
                         "↑↓ history · wheel or PgUp/PgDn scroll · Shift+drag selects text",
                         "Ctrl-C twice quits",
                     ]
@@ -1760,8 +1939,8 @@ impl App {
     }
 }
 
-/// The host's default provider and its providers, as plxd lists them.
-async fn read_providers(plxd: &Plxd) -> Result<Loaded, String> {
+/// The host's default provider and its providers, as plxd lists them, probed again when `refresh`.
+async fn read_providers(plxd: &Plxd, refresh: bool) -> Result<Loaded, String> {
     let defaults = tokio::time::timeout(
         CALL_TIMEOUT,
         plxd.call::<AccountsDefaultsGet>(AccountsDefaultsGetParams {}),
@@ -1776,7 +1955,7 @@ async fn read_providers(plxd: &Plxd) -> Result<Loaded, String> {
     };
     let listed = tokio::time::timeout(
         CALL_TIMEOUT,
-        plxd.call::<ProvidersList>(ProvidersListParams { refresh: false }),
+        plxd.call::<ProvidersList>(ProvidersListParams { refresh }),
     )
     .await
     .map_err(|_| format!("plxd didn't answer providers/list within {CALL_TIMEOUT:?}"))??;

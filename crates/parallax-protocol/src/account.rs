@@ -50,6 +50,13 @@ impl RawKey {
     }
 }
 
+/// A key typed in a client, such as `plxd tui`'s Settings, to send with `accounts/keys/add`.
+impl From<String> for RawKey {
+    fn from(key: String) -> Self {
+        Self(key)
+    }
+}
+
 impl fmt::Debug for RawKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("RawKey(<redacted>)")
