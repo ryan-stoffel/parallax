@@ -2013,13 +2013,14 @@ export function Composer({
       </form>
       {back && pickers ? (
         // A thin tray tucked under the stepped-back line, in place of any tab, as low as it can be.
-        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-prompt border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+        // Inset and rounded as the tabs over the box are (ComposerTabs).
+        <div className="tucked mx-4 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
           {pickers}
         </div>
       ) : (
         tab && (
           // Tucked under the box, so what it shows reads as part of it.
-          <div className="tucked mx-5 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-prompt border border-t-0 border-border bg-surface px-3 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+          <div className="tucked mx-4 -mt-4 flex min-w-0 items-center justify-between gap-2 rounded-b-xl border border-t-0 border-border bg-surface px-3 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
             {tab}
           </div>
         )

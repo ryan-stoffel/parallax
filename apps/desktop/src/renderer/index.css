@@ -462,14 +462,14 @@ svg.lucide[stroke-width="2"] * {
   --text-heading: 18px;
   --text-display: 24px;
   --text-hero: 40px;
-  /* The radius scale: marks, controls, rows and menus, surfaces (panels, dialogs), and prompt
-     boxes with the bars tucked over and under them. */
+  /* The radius scale: marks, controls, rows and menus, surfaces (panels, dialogs, and the bars
+     tucked over and under a prompt box), and prompt boxes. */
   --radius-*: initial;
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
-  --radius-prompt: 24px;
+  --radius-prompt: 16px;
 }
 
 @theme inline {
