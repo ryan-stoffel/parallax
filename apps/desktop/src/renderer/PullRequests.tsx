@@ -306,11 +306,11 @@ export function PullRequestList({
 
 /**
  * How far a pull request's checks are: how many passed of those that count (skipped ones don't),
- * and how they look together, spinning while any runs. Undefined with no checks.
+ * and how they look together, spinning while any runs. Undefined with none that count.
  */
 export function checksSummary(pr: PullRequest) {
-  if (!pr.checks.length) return undefined;
   const counted = pr.checks.filter((c) => c.state !== "skipped");
+  if (!counted.length) return undefined;
   const count = (state: PrCheck["state"]) => counted.filter((c) => c.state === state).length;
   const [passed, failed, running] = [count("passed"), count("failed"), count("pending")];
   const words = [
