@@ -168,6 +168,7 @@ import {
   toolKind,
   type Kind,
 } from "./steps";
+import type { PullRequests } from "./PullRequests";
 import { useAgentRun, type SentMessage } from "./useAgentRun";
 import { presentWaiting } from "./waiting";
 import { WaitingBar } from "./WaitingBar";
@@ -264,6 +265,7 @@ export function AgentChat({
   forked,
   onFork,
   onOpenChanges,
+  pullRequests,
 }: {
   hostId: string;
   runId: string;
@@ -324,6 +326,8 @@ export function AgentChat({
   onDevice?: (runId: string, deviceId?: string) => void;
   /** Whether the thread is a fork (0050), whose history copied from the original shows muted. */
   forked?: boolean;
+  /** The thread's linked pull requests as the app reads them, for the waiting bar's chips. */
+  pullRequests?: PullRequests;
   /**
    * Forks the thread at a turn, or at its latest with none, and opens the fork (0050). Its
    * messages offer Fork only with it. Resolves to plxd's error, if it refused.
@@ -791,6 +795,7 @@ export function AgentChat({
         watching={watching}
         agentsShown={subagentsShown}
         compact={compact}
+        pullRequests={pullRequests}
       />
     );
     tabs.push({ key: "waiting", node: bar(false), compact: bar(true) });
