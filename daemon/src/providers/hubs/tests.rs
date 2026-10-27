@@ -148,11 +148,32 @@ fn cliproxy(request: &Request) -> (u16, Value) {
     }
 }
 
-/// Providers in `dir`, on a launcher whose `PATH` is `path`.
-fn load(dir: &std::path::Path, path: &str) -> (Providers, BackendRegistry, Arc<MemoryKeyStore>) {
+/// The folder on this process's `PATH` that has `curl`: `/usr/bin` on macOS and Linux, and
+/// `System32` on Windows.
+fn curl_folder() -> std::path::PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&path)
+        .find(|dir| dir.join("curl").is_file() || dir.join("curl.exe").is_file())
+        .expect("curl on PATH")
+}
+
+/// Providers in `dir`, on a launcher whose `PATH` is only [`curl_folder`], so no agent is found
+/// there, and that runs no Claude Agent SDK install.
+fn load(dir: &std::path::Path) -> (Providers, BackendRegistry, Arc<MemoryKeyStore>) {
     // No built-in instances, which a first run would add and probe.
     std::fs::write(dir.join("providers.json"), "[]").unwrap();
-    let base: Environment = [("PATH", path.to_owned())].into_iter().collect();
+    // Windows' curl can't open a socket without SYSTEMROOT.
+    let root = std::env::var("SYSTEMROOT").ok();
+    let base: Environment = [
+        ("PATH", curl_folder().display().to_string()),
+        (
+            crate::backend::claude::sdk::OVERRIDE_ENV,
+            "unused".to_owned(),
+        ),
+    ]
+    .into_iter()
+    .chain(root.map(|root| ("SYSTEMROOT", root)))
+    .collect();
     let launcher = Launcher::new(DataDir::new(dir.join("data")).unwrap(), base);
     let registry = BackendRegistry::new();
     let keys = Arc::new(MemoryKeyStore::new());
@@ -183,7 +204,7 @@ async fn entry(providers: &Providers, id: &str) -> Stored {
 #[tokio::test]
 async fn a_hub_keeps_its_keys_in_the_keychain_and_runs_two_instances_through_it() {
     let dir = tempfile::tempdir().unwrap();
-    let (providers, registry, keys) = load(dir.path(), "/usr/bin:/bin");
+    let (providers, registry, keys) = load(dir.path());
     providers
         .save_hub(hub("https://hub.example:8317"))
         .await
@@ -241,7 +262,7 @@ async fn a_hub_keeps_its_keys_in_the_keychain_and_runs_two_instances_through_it(
 #[tokio::test]
 async fn a_hub_instance_id_cant_be_another_providers() {
     let dir = tempfile::tempdir().unwrap();
-    let (providers, _, _) = load(dir.path(), "/usr/bin:/bin");
+    let (providers, _, _) = load(dir.path());
     let mut taken = instance("home-codex", ProviderKind::Codex, "Codex");
     providers.save(taken.clone()).await.unwrap();
     assert!(
@@ -273,12 +294,11 @@ async fn a_hub_instance_id_cant_be_another_providers() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_hub_lists_its_models_accounts_and_limits_through_curl() {
     let stand_in = Hub::start(cliproxy).await;
     let dir = tempfile::tempdir().unwrap();
-    let (providers, _, _) = load(dir.path(), "/usr/bin:/bin");
+    let (providers, _, _) = load(dir.path());
     providers.save_hub(hub(&stand_in.url)).await.unwrap();
 
     let listed = providers.hubs(true).await;
@@ -368,12 +388,11 @@ async fn a_hub_lists_its_models_accounts_and_limits_through_curl() {
     assert_eq!(hub_claude.hub.as_deref(), Some("home"));
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_hubs_failures_name_the_kind_and_status_but_never_the_body() {
     let stand_in = Hub::start(cliproxy).await;
     let dir = tempfile::tempdir().unwrap();
-    let (providers, _, _) = load(dir.path(), "/usr/bin:/bin");
+    let (providers, _, _) = load(dir.path());
     let mut wrong = hub(&stand_in.url);
     wrong.access_key = Some("wrong".into());
     wrong.management_key = Some("wrong".into());
