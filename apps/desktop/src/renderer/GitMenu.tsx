@@ -78,9 +78,25 @@ export function syncText(status: GitStatus): string {
     .join(" · ");
 }
 
+/** `syncText` short enough to sit beside the branch on its row. */
+export function syncBrief(status: GitStatus): string {
+  const remote = !status.origin
+    ? "No origin"
+    : !status.branch
+      ? undefined
+      : status.ahead
+        ? `${status.ahead} to push`
+        : !status.upstream
+          ? "Not pushed"
+          : undefined;
+  const brief = [status.changes && `${status.changes} uncommitted`, remote].filter(Boolean);
+  // A detached HEAD has nothing to be in sync with.
+  return brief.length ? brief.join(" · ") : status.branch ? "Synced" : "Clean";
+}
+
 /**
- * Git rows in Thread details (PLX-298): the branch, copyable, over where it stands in words, the
- * Changes row, and the next useful action as a button, its reason shown when it can't run. The
+ * Git rows in Thread details (PLX-298): the branch, copyable, on one line with where it stands in
+ * a few words (PLX-1086), the full words in its tooltip, the Changes row, and the next useful action as a button, its reason shown when it can't run. The
  * chevron lists Commit, Push, and Create PR, each disabled with its reason. Commit
  * asks for a message, prefilled with the thread's title. Create PR pushes and opens the pull
  * request through `agent/openPr`, in the browser, or with `onPrOpened`, in the PR view. The status
@@ -255,18 +271,18 @@ export function GitMenu({
       <h3 className="px-2 pt-1 pb-1 text-meta text-muted-foreground">Git</h3>
       <div
         role={status || !error ? undefined : "alert"}
-        title={status?.branch ?? diagnostic}
-        className="group/branch flex items-start gap-2 rounded-md px-2 py-1.5"
+        title={status ? `${status.branch ?? "Detached HEAD"}\n${syncText(status)}` : diagnostic}
+        className="group/branch flex items-center gap-2 rounded-md px-2 py-1.5"
       >
-        <GitBranch aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1">
-          <span className={`block truncate text-body ${!status && error ? "text-danger" : ""}`}>
-            {status ? (status.branch ?? "Detached HEAD") : (error ?? "Loading branch…")}
-          </span>
-          {status && (
-            <span className="mt-0.5 block text-meta text-faint-foreground">{syncText(status)}</span>
-          )}
+        <GitBranch aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <span
+          className={`min-w-0 flex-1 truncate text-body ${!status && error ? "text-danger" : ""}`}
+        >
+          {status ? (status.branch ?? "Detached HEAD") : (error ?? "Loading branch…")}
         </span>
+        {status && (
+          <span className="shrink-0 text-meta text-faint-foreground">{syncBrief(status)}</span>
+        )}
         {status?.branch && (
           <button
             type="button"

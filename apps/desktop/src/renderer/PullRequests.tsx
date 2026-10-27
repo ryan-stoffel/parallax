@@ -329,26 +329,33 @@ export function checksSummary(pr: PullRequest) {
   };
 }
 
+/** How many linked pull requests Thread details shows, and how many after Show more. */
+const SHOWN = 3;
+const EXPANDED = 10;
+
 /**
  * Thread details' list of a thread's linked pull requests, newest first: each one's state, its
  * title on up to two lines, its number, and its checks as passed of total, spinning while they
- * run, opening its view. Past the newest, they wait behind Show N more.
+ * run, opening its view. Past the newest `SHOWN`, they wait behind Show N more, which shows up to
+ * `EXPANDED`, and past those View all opens the Pull requests view through `onOpen()` (PLX-1086).
  */
 export function LinkedPullRequests({
   prs,
   onOpen,
 }: {
   prs: PullRequests;
-  onOpen: (url: string) => void;
+  /** Opens `url`'s view, or without one the Pull requests view. */
+  onOpen: (url?: string) => void;
 }) {
   const [all, setAll] = useState(false);
   const newest = [...prs.urls].reverse();
-  const more = newest.length - 1;
+  const shown = newest.slice(0, all ? EXPANDED : SHOWN);
+  const more = Math.min(newest.length, EXPANDED) - SHOWN;
   if (!newest.length) return null;
   return (
     <>
       <ul aria-label="Linked pull requests" className="flex flex-col gap-px">
-        {(all ? newest : newest.slice(0, 1)).map((url) => {
+        {shown.map((url) => {
           const { pr, error } = prs.get(url) ?? {};
           const { Icon, color, label } = lookOf(pr);
           const checks = pr && checksSummary(pr);
@@ -402,6 +409,16 @@ export function LinkedPullRequests({
         >
           <Plus aria-hidden className={all ? "rotate-45" : ""} />
           {all ? "Show less" : `Show ${more} more`}
+        </button>
+      )}
+      {all && newest.length > EXPANDED && (
+        <button
+          type="button"
+          onClick={() => onOpen()}
+          className={`${menuItem} text-faint-foreground hover:text-foreground`}
+        >
+          <ArrowUpRight aria-hidden />
+          View all {newest.length}
         </button>
       )}
     </>
