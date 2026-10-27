@@ -69,6 +69,14 @@ In Settings > Connections, turn on Pair computers on this network, then choose P
   <img src="docs/images/readme/mobile-thread.png" alt="A thread open in the iOS app" width="130">
 </p>
 
+## In a terminal
+
+`parallax` runs Parallax in your terminal, laid out like Claude Code, with the same threads, Spaces, and Projects as the app, live in both. Run it in a git checkout and new threads work there in place. `/settings` signs in to providers and GitHub, adds API keys, and changes this computer's settings, so the terminal works without the app. `/login` jumps to the first provider that isn't signed in. It comes with the app, or installs on its own (see [Terminal only](#terminal-only)).
+
+<p align="center">
+  <img src="docs/images/readme/tui.png" alt="Parallax in a terminal: a Claude Code thread that added an imperial option to a forecast formatter, its tool calls folded into one line" width="720">
+</p>
+
 ## Install
 
 These commands install the latest nightly. The app updates itself after that.
