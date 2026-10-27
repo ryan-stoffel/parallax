@@ -175,7 +175,9 @@ export function CiteSelection({
               setPicked(undefined);
             }}
             style={{ top: end.bottom + 6, left: Math.max(8, end.right - 24) }}
-            className="fixed z-50 flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-body text-foreground shadow-composer hover:bg-hover [&_svg]:size-4"
+            // The hover tint is translucent, so it goes over the surface, not in its place, or the
+            // text under Cite shows through.
+            className="fixed z-50 flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2.5 py-1 text-body text-foreground shadow-composer hover:bg-[image:linear-gradient(var(--color-hover),var(--color-hover))] [&_svg]:size-4"
           >
             <Quote aria-hidden />
             Cite
