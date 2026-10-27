@@ -224,6 +224,15 @@ test("an image plxd can't take isn't added, past 10 images included", async () =
   expect(thumbnails()).toHaveLength(10);
 });
 
+test("an image chip's X removes the image and its chip", async () => {
+  const { box, paste } = render(vi.fn(async () => undefined));
+  await paste([pngFile(), pngFile()]);
+  expect(chipsIn(box)).toEqual(["Image 172 bytes", "Image 272 bytes"]);
+  act(() => box.querySelector<HTMLButtonElement>('button[aria-label="Remove image 1"]')!.click());
+  expect(thumbnails()).toEqual(["Image 1"]);
+  expect(chipsIn(box)).toEqual(["Image 172 bytes"]);
+});
+
 test("with fileUploads, a file goes to the host and the message lists its path (PLX-779)", async () => {
   const upload = vi.fn(async (_host: string, _method: string, params: { name: string }) => ({
     logId: "log-1",
@@ -296,6 +305,30 @@ test("with fileChunks, a file goes in pieces, each answered before the next (PLX
     [2, false],
     [4, true],
   ]);
+});
+
+test("an image chip has no X while files upload: what's there is what's sent", async () => {
+  // The upload never answers, so the message stays mid-upload.
+  const upload = vi.fn(() => new Promise(() => {}));
+  window.parallax = {
+    platform: "darwin",
+    request: upload,
+    onConnectionState: () => () => {},
+    connectionState: () => new Promise(() => {}),
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const { box, paste, press } = render(
+    vi.fn(async () => undefined),
+    caps,
+    {
+      hostId: "local",
+      uploadBytes: { maxBytes: 1024 },
+    },
+  );
+  await paste([pngFile()]);
+  expect(box.querySelector('button[aria-label="Remove image 1"]')).not.toBeNull();
+  await press("Enter");
+  await vi.waitFor(() => expect(upload).toHaveBeenCalled());
+  expect(box.querySelector('button[aria-label="Remove image 1"]')).toBeNull();
 });
 
 test("a piece that fails three times keeps the message unsent (PLX-835)", async () => {
