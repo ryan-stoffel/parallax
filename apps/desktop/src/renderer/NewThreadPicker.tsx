@@ -8,7 +8,7 @@ import { noRepo, type OtherRepo, type ThreadGroup } from "./threads";
 import { RowBadge, rowShortcut } from "./ui";
 
 /**
- * Mod+N's picker: which repository, or No Repo, a new thread goes in, laid out as Add Repository
+ * Mod+N's picker: which repository, or Chat, a new thread goes in, laid out as Add Repository
  * is. Up and Down move, Enter picks, Mod+1 to Mod+9 pick that row, Escape closes. Open it with
  * `ref.current.showModal()`; picking closes it and calls `onPick` with the group's id, or for one
  * of the other computers' repositories, `onPickElsewhere` with its computer and entry.
@@ -23,7 +23,7 @@ export function NewThreadPicker({
   onPickElsewhere,
 }: {
   ref: Ref<HTMLDialogElement>;
-  /** Repositories and No Repo, as the sidebar groups them. */
+  /** Repositories and Chat, as the sidebar groups them. */
   groups: ThreadGroup[];
   /** The host's repo entries, for each group's icon and path. */
   repos: Repo[];
@@ -43,7 +43,7 @@ export function NewThreadPicker({
   const rows = [
     ...groups.map((g) => ({
       value: g.id,
-      name: g.id === noRepo ? "No repo" : g.name,
+      name: g.id === noRepo ? "Chat" : g.name,
       repo: repos.find((r) => r.id === g.id),
       space: g.space,
       hostName,

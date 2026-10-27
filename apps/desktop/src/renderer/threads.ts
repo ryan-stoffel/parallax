@@ -375,7 +375,7 @@ function forgetTitle(runId: string) {
   }
 }
 
-/** The sidebar's id for "No Repo", which holds plxd's scratch entry's threads, made on first use. */
+/** The sidebar's id for "Chat", which holds plxd's scratch entry's threads, made on first use. */
 export const noRepo = "no-repo";
 
 export interface ThreadGroup {
@@ -386,11 +386,11 @@ export interface ThreadGroup {
   space?: boolean;
 }
 
-/** The sidebar's groups: each repository, oldest first, then No Repo, always there. */
+/** The sidebar's groups: each repository, oldest first, then Chat, always there. */
 export function groupThreads({ repos }: ThreadsState): ThreadGroup[] {
   return [
     ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, space: r.space })),
-    { id: noRepo, name: "No Repo" },
+    { id: noRepo, name: "Chat" },
   ];
 }
 
@@ -468,10 +468,10 @@ export function setRepoIcons(views: ThreadsView[], name: string, icon: ProjectIc
   }
 }
 
-/** Whether a group holds chats with no repository of the user's: No Repo, or a Space. */
+/** Whether a group holds chats with no repository of the user's: Chat, or a Space. */
 export const repoless = (g: { id: string; space?: boolean }) => g.id === noRepo || !!g.space;
 
-/** A repo entry that is a repository of the user's: not No Repo's scratch entry, nor a Space. */
+/** A repo entry that is a repository of the user's: not Chat's scratch entry, nor a Space. */
 export const isRepository = (r: { scratch?: boolean; space?: boolean }) => !r.scratch && !r.space;
 
 /** A thread's group id: its repository's, or `noRepo`. */

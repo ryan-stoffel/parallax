@@ -40,7 +40,7 @@ test("a terminal opens in a thread's worktree, else its repository's checkout, e
   // Its scratch repository doesn't exist yet.
   expect(folderOf("mini", state, { threadId: "t4" })).toBeUndefined();
   expect(folderOf("mini", state, { repoId: "s" })).toBeUndefined();
-  // No Repo's New thread opens in the host's home folder.
+  // Chat's New thread opens in the host's home folder.
   expect(folderOf("mini", state, { repoId: "no-repo" })).toEqual({
     key: "mini/home",
     hostId: "mini",
