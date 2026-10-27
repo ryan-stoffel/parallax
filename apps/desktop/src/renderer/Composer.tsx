@@ -229,7 +229,7 @@ const ThreadRefNode = chipNode("threadRef", { runId: "", title: "" }, ({ node })
 ));
 
 /** A pasted image where it was pasted: its thumbnail, its number among the images, and its size.
- * Hovering swaps the thumbnail for an X that removes the image. */
+ * Hovering shows an X at its end that removes the image. */
 function ImageRef({ imageKey: key }: { imageKey: string }) {
   const { images, removeImage } = useContext(RefsContext);
   const i = images.findIndex((image) => imageKey(image) === key);
@@ -237,27 +237,28 @@ function ImageRef({ imageKey: key }: { imageKey: string }) {
   return (
     <Chip
       tone="image"
-      // Every 4 characters of base64 are 3 bytes.
-      end={image && sizeOf(Math.floor((image.data.length * 3) / 4))}
-      icon={
-        image ? (
+      end={
+        image && (
           <>
-            <img
-              src={imageUrl(image)}
-              alt=""
-              className={`rounded-sm object-cover ${removeImage ? "group-hover/chip:hidden" : ""}`}
-            />
+            {/* Every 4 characters of base64 are 3 bytes. */}
+            {sizeOf(Math.floor((image.data.length * 3) / 4))}
             {removeImage && (
+              // Its room is kept while hidden, so hovering doesn't move the text after the chip.
               <button
                 type="button"
                 aria-label={`Remove image ${i + 1}`}
                 onClick={() => removeImage(i)}
-                className="hidden text-muted-foreground group-hover/chip:inline-flex hover:text-foreground"
+                className="invisible inline-flex group-hover/chip:visible hover:text-foreground"
               >
                 <X aria-hidden />
               </button>
             )}
           </>
+        )
+      }
+      icon={
+        image ? (
+          <img src={imageUrl(image)} alt="" className="rounded-sm object-cover" />
         ) : (
           <ImageIcon />
         )
