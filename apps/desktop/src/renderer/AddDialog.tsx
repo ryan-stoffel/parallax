@@ -15,6 +15,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
   type Ref,
 } from "react";
@@ -122,6 +123,7 @@ export function AddDialog({
         setWorkspace(undefined);
         setSession((n) => n + 1);
       }}
+      onMouseDown={closeOnBackdrop}
       className={palette}
     >
       {step.kind === "menu" && (
@@ -186,6 +188,11 @@ export function AddDialog({
   );
 }
 
+/** Closes the palette's dialog on a press on its backdrop, outside the panel. */
+const closeOnBackdrop = (e: MouseEvent<HTMLDialogElement>) => {
+  if (e.target === e.currentTarget) e.currentTarget.close();
+};
+
 /** The palette's dialog. */
 const palette =
   "mx-auto mt-[14vh] w-[36rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-surface p-0 text-foreground shadow-composer backdrop:bg-black/50";
@@ -220,6 +227,7 @@ export function CloneDialog({
       ref={dialog}
       aria-label={`Clone ${ask.name} on ${hostName}`}
       onClose={() => finish()}
+      onMouseDown={closeOnBackdrop}
       className={palette}
     >
       <FolderStep
