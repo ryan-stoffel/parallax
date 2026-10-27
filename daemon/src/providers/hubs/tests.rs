@@ -31,14 +31,15 @@ struct Request {
     body: Value,
 }
 
-/// A stand-in hub on a free local port, answering with `answer`.
+/// A stand-in hub on a free local port, answering with `answer`, which also sees the requests
+/// before it.
 struct Hub {
     url: String,
     requests: Arc<Mutex<Vec<Request>>>,
 }
 
 impl Hub {
-    async fn start(answer: fn(&Request) -> (u16, Value)) -> Self {
+    async fn start(answer: fn(&Request, &[Request]) -> (u16, Value)) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -75,8 +76,12 @@ impl Hub {
                         auth: headers.get("authorization").cloned(),
                         body: serde_json::from_slice(&body).unwrap_or(Value::Null),
                     };
-                    let (status, answer) = answer(&request);
-                    kept.lock().unwrap().push(request);
+                    let (status, answer) = {
+                        let mut kept = kept.lock().unwrap();
+                        let answered = answer(&request, &kept);
+                        kept.push(request);
+                        answered
+                    };
                     let text = answer.to_string();
                     let head = format!(
                         "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\n\
@@ -98,7 +103,7 @@ impl Hub {
 
 /// `CLIProxyAPI`'s answers, in the shapes it sends: two Claude models and two others, a Claude, a
 /// Codex, a disabled Codex, and a Gemini account, and each account's usage through `api-call`.
-fn cliproxy(request: &Request) -> (u16, Value) {
+fn cliproxy(request: &Request, _: &[Request]) -> (u16, Value) {
     let management = request.auth.as_deref() == Some(&format!("Bearer {MANAGEMENT_KEY}"));
     match request.path.as_str() {
         "/v1/models" if request.auth.as_deref() == Some(&format!("Bearer {ACCESS_KEY}")) => (
@@ -418,6 +423,238 @@ async fn a_hubs_failures_name_the_kind_and_status_but_never_the_body() {
         listed.problem.as_deref(),
         Some("Couldn't connect to the hub.")
     );
+}
+
+/// `CLIProxyAPI`'s sign-in and account routes, as its handlers answer, then [`cliproxy`]'s.
+/// Sign-in `local` finishes on the second status ask, as the hub's own forwarder would catch the
+/// browser; `paste` finishes once its callback is posted; `slow` times out; `cancel` is pending.
+fn accounts_api(request: &Request, before: &[Request]) -> (u16, Value) {
+    let management = request.auth.as_deref() == Some(&format!("Bearer {MANAGEMENT_KEY}"));
+    let (route, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
+    let state = query.strip_prefix("state=").unwrap_or_default();
+    let asked = |path: &str| before.iter().filter(|r| r.path == path).count();
+    match (request.method.as_str(), route) {
+        (_, route) if route.starts_with("/v0/management") && !management => {
+            (401, json!({"error": LEAKED}))
+        }
+        ("GET", "/v0/management/anthropic-auth-url" | "/v0/management/codex-auth-url") => {
+            let state = if route.contains("anthropic") {
+                "local"
+            } else {
+                "paste"
+            };
+            let url = format!("https://claude.ai/oauth/authorize?code=true&state={state}");
+            (200, json!({"status": "ok", "url": url, "state": state}))
+        }
+        ("POST", "/v0/management/oauth-callback") => match request.body["state"].as_str() {
+            Some("paste") => (200, json!({"status": "ok"})),
+            _ => (404, json!({"status": "error", "error": LEAKED})),
+        },
+        ("GET", "/v0/management/get-auth-status") => match state {
+            "local" if asked(&request.path) == 0 => (200, json!({"status": "wait"})),
+            "paste" if asked("/v0/management/oauth-callback") == 0 => {
+                (200, json!({"status": "wait"}))
+            }
+            "local" | "paste" => (200, json!({"status": "ok"})),
+            "slow" => (
+                200,
+                json!({"status": "error", "error": format!("Timeout waiting for OAuth callback {LEAKED}")}),
+            ),
+            _ => (
+                200,
+                json!({"status": "error", "error": "unknown or expired state"}),
+            ),
+        },
+        ("DELETE", "/v0/management/oauth-session") => {
+            (200, json!({"status": "ok", "cancelled": state == "cancel"}))
+        }
+        ("PATCH", "/v0/management/auth-files/status") | ("DELETE", "/v0/management/auth-files")
+            if request.body["name"] == "claude-ada.json" =>
+        {
+            (200, json!({"status": "ok"}))
+        }
+        ("PATCH" | "DELETE", _) => (404, json!({"error": LEAKED})),
+        _ => cliproxy(request, before),
+    }
+}
+
+/// The kind of a Parallax error.
+fn kind(error: &parallax_protocol::jsonrpc::ErrorObject) -> Value {
+    error
+        .data
+        .as_ref()
+        .map_or(Value::Null, |data| data["kind"].clone())
+}
+
+#[tokio::test]
+async fn a_hub_signs_accounts_in_when_its_forwarder_catches_the_browser_or_the_address_is_pasted() {
+    use parallax_protocol::{HubService, HubSignInState};
+    let stand_in = Hub::start(accounts_api).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (providers, _, _) = load(dir.path());
+    providers.save_hub(hub(&stand_in.url)).await.unwrap();
+
+    // On the hub's computer, its forwarder catches the redirect, and plxd only asks.
+    let local = providers
+        .hub_sign_in("home", HubService::Claude)
+        .await
+        .unwrap();
+    assert_eq!(local.state, "local");
+    assert!(local.url.starts_with("https://claude.ai/"));
+    let status = |state: &'static str| providers.hub_sign_in_status("home", state);
+    assert_eq!(
+        status("local").await.unwrap().status,
+        HubSignInState::Waiting
+    );
+    assert_eq!(status("local").await.unwrap().status, HubSignInState::Done);
+
+    // Elsewhere, the address the browser landed on is pasted, and must be this sign-in's.
+    let paste = providers
+        .hub_sign_in("home", HubService::Codex)
+        .await
+        .unwrap();
+    let callback =
+        |address: &'static str| providers.hub_sign_in_callback("home", &paste.state, address);
+    for wrong in [
+        "http://localhost:1455/auth/callback?code=c&state=local",
+        "http://localhost:1455/auth/callback?state=paste",
+        "not an address",
+    ] {
+        let error = callback(wrong).await.unwrap_err();
+        assert_eq!(
+            error.code,
+            parallax_protocol::jsonrpc::INVALID_PARAMS,
+            "{wrong}"
+        );
+    }
+    assert_eq!(
+        status("paste").await.unwrap().status,
+        HubSignInState::Waiting
+    );
+    let address = "http://localhost:1455/auth/callback?code=a-code&scope=x&state=paste";
+    assert_eq!(
+        callback(address).await.unwrap().status,
+        HubSignInState::Waiting
+    );
+    assert_eq!(status("paste").await.unwrap().status, HubSignInState::Done);
+
+    // A failure is in plxd's words, never the hub's.
+    let slow = status("slow").await.unwrap();
+    assert_eq!(slow.status, HubSignInState::Failed);
+    assert_eq!(
+        slow.problem.as_deref(),
+        Some("The sign-in timed out. Start it again.")
+    );
+    let expired = providers
+        .hub_sign_in_callback(
+            "home",
+            "gone",
+            "http://localhost:54545/callback?code=c&state=gone",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&expired), "hubFailed");
+    assert!(!expired.message.contains(LEAKED), "{}", expired.message);
+
+    // Cancel ends a pending sign-in, and says where one that already ended is.
+    let cancel = |state: &'static str| providers.hub_sign_in_cancel("home", state);
+    assert_eq!(
+        cancel("cancel").await.unwrap().status,
+        HubSignInState::Cancelled
+    );
+    assert_eq!(cancel("local").await.unwrap().status, HubSignInState::Done);
+    assert!(
+        status("../auth-files").await.is_err(),
+        "a state goes in a URL as it is"
+    );
+
+    let requests = stand_in.requests();
+    let paths: Vec<(&str, &str)> = requests
+        .iter()
+        .map(|r| (r.method.as_str(), r.path.as_str()))
+        .collect();
+    assert!(paths.contains(&("GET", "/v0/management/anthropic-auth-url?is_webui=true")));
+    assert!(paths.contains(&("GET", "/v0/management/codex-auth-url?is_webui=true")));
+    assert!(paths.contains(&("DELETE", "/v0/management/oauth-session?state=cancel")));
+    let posted = requests
+        .iter()
+        .find(|r| r.path == "/v0/management/oauth-callback" && r.body["state"] == "paste")
+        .unwrap();
+    assert_eq!(posted.body["redirect_url"], address);
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.auth.as_deref() == Some(&format!("Bearer {MANAGEMENT_KEY}"))),
+        "every call carries the management key"
+    );
+}
+
+#[tokio::test]
+async fn a_hubs_accounts_turn_off_and_on_and_are_removed() {
+    let stand_in = Hub::start(accounts_api).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (providers, _, _) = load(dir.path());
+    providers.save_hub(hub(&stand_in.url)).await.unwrap();
+    let listed = providers.hubs(false).await;
+    assert_eq!(listed[0].accounts[0].id, "claude-ada.json");
+
+    providers
+        .set_hub_account_enabled("home", "claude-ada.json", false)
+        .await
+        .unwrap();
+    providers
+        .set_hub_account_enabled("home", "claude-ada.json", true)
+        .await
+        .unwrap();
+    providers
+        .remove_hub_account("home", "claude-ada.json")
+        .await
+        .unwrap();
+    let missing = providers
+        .remove_hub_account("home", "gone.json")
+        .await
+        .unwrap_err();
+    assert_eq!(kind(&missing), "hubFailed");
+    assert!(missing.message.contains("HTTP 404") && !missing.message.contains(LEAKED));
+
+    // Each change drops the cached accounts, so the next list asks again.
+    providers.hubs(false).await;
+    let requests = stand_in.requests();
+    let sent: Vec<(&str, &Value)> = requests
+        .iter()
+        .filter(|r| r.path.starts_with("/v0/management/auth-files") && r.method != "GET")
+        .map(|r| (r.method.as_str(), &r.body))
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            (
+                "PATCH",
+                &json!({"name": "claude-ada.json", "disabled": true})
+            ),
+            (
+                "PATCH",
+                &json!({"name": "claude-ada.json", "disabled": false})
+            ),
+            ("DELETE", &json!({"name": "claude-ada.json"})),
+            ("DELETE", &json!({"name": "gone.json"})),
+        ]
+    );
+    let lists = requests
+        .iter()
+        .filter(|r| r.method == "GET" && r.path == "/v0/management/auth-files")
+        .count();
+    assert_eq!(lists, 2);
+
+    // Without a management key, nothing is sent.
+    let mut keyless = hub(&stand_in.url);
+    keyless.management_key = Some(String::new());
+    providers.save_hub(keyless).await.unwrap();
+    let error = providers
+        .set_hub_account_enabled("home", "claude-ada.json", false)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code, parallax_protocol::jsonrpc::INVALID_PARAMS);
 }
 
 #[cfg(unix)]

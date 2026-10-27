@@ -11,9 +11,12 @@
 //!
 //! Whether a hub answers, and its models, come from `GET <url>/v1/models` with the access key.
 //! With a management key, its accounts come from `GET /v0/management/auth-files`, and each Claude
-//! and Codex account's limits from `POST /v0/management/api-call`, as T3 Code reads them. Every
-//! request goes through `curl` with its key on stdin. A hub's answers can hold credentials, so no
-//! body is ever logged or returned: a failure names only its kind and HTTP status.
+//! and Codex account's limits from `POST /v0/management/api-call`, as T3 Code reads them. The
+//! same API signs accounts in through the browser (`*-auth-url`, `oauth-callback`,
+//! `get-auth-status`, and `oauth-session`), and turns them on, off, or removes them
+//! (`auth-files/status` and `auth-files`), for `hubs/accounts/*` (PLX-1070). Every request goes
+//! through `curl` with its key on stdin. A hub's answers can hold credentials, so no body is ever
+//! logged or returned: a failure names only its kind and HTTP status.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,8 +26,9 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountId, Hub, HubAccount, HubsSaveParams, ProviderEnvVar, ProviderInstance, ProviderKind,
-    ProviderModel, UsageLimitWindow,
+    AccountId, ErrorKind, Hub, HubAccount, HubService, HubSignIn, HubSignInState, HubSignInStatus,
+    HubsSaveParams, ProviderEnvVar, ProviderInstance, ProviderKind, ProviderModel,
+    UsageLimitWindow,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -291,17 +295,222 @@ impl Hubs {
 
     /// What hub `id`'s `/v1/models` answers, for its instances' probes.
     pub(super) async fn reach_of(&self, id: &str, refresh: bool) -> Reach {
-        let entry = self
-            .stored
+        match self.entry(id).await {
+            Some(entry) => self.reach(&entry, refresh).await,
+            None => Reach::default(),
+        }
+    }
+
+    /// Hub `id`'s settings.
+    async fn entry(&self, id: &str) -> Option<Entry> {
+        self.stored
             .lock()
             .await
             .iter()
             .find(|hub| hub.id == id)
-            .cloned();
-        match entry {
-            Some(entry) => self.reach(&entry, refresh).await,
-            None => Reach::default(),
+            .cloned()
+    }
+
+    /// Asks hub `id` for a `service` sign-in page, and has it start its callback forwarder, which
+    /// catches the browser's redirect when the browser runs on the hub's computer.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for a hub that doesn't exist or has no management key, and `hubFailed`
+    /// when the hub refuses or can't be reached.
+    pub(super) async fn sign_in(
+        &self,
+        id: &str,
+        service: HubService,
+    ) -> Result<HubSignIn, ErrorObject> {
+        let (url, key) = self.manager(id).await?;
+        let route = match service {
+            HubService::Claude => "anthropic-auth-url",
+            HubService::Codex => "codex-auth-url",
+        };
+        let path = format!("{route}?is_webui=true");
+        let body = management(&self.launcher, &url, &key, "GET", &path, None)
+            .await
+            .map_err(failed)?;
+        let page = body["url"]
+            .as_str()
+            .filter(|page| page.starts_with("https://"));
+        let state = body["state"].as_str().filter(|state| plain_state(state));
+        match (page, state) {
+            (Some(page), Some(state)) => Ok(HubSignIn {
+                url: page.to_owned(),
+                state: state.to_owned(),
+            }),
+            _ => Err(failed("The hub didn't answer with a sign-in page.".into())),
         }
+    }
+
+    /// Hands hub `id` the address the browser was sent to after sign-in `state`, for a browser on
+    /// another computer.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for an address that isn't the sign-in's, and `hubFailed` when the hub
+    /// refuses it.
+    pub(super) async fn sign_in_callback(
+        &self,
+        id: &str,
+        state: &str,
+        redirect: &str,
+    ) -> Result<HubSignInStatus, ErrorObject> {
+        checked_state(state)?;
+        let redirect = redirect.trim();
+        let query = redirect
+            .split_once('?')
+            .map_or("", |(_, query)| query.split('#').next().unwrap_or(""));
+        let value = |name: &str| {
+            query
+                .split('&')
+                .find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='))
+                .filter(|value| !value.is_empty())
+        };
+        if redirect.len() > 8192 || value("state") != Some(state) {
+            return Err(ErrorObject::invalid_params(
+                "that address isn't this sign-in's. Paste the address the browser opened after you signed in",
+            ));
+        }
+        if value("code").is_none() && value("error").is_none() {
+            return Err(ErrorObject::invalid_params(
+                "that address has no sign-in code. Paste the whole address from the browser",
+            ));
+        }
+        let (url, key) = self.manager(id).await?;
+        let body = json!({"redirect_url": redirect, "state": state});
+        let callback = format!("{url}/v0/management/oauth-callback");
+        let (status, _) = send(&self.launcher, &callback, &key, "POST", Some(&body))
+            .await
+            .map_err(failed)?;
+        match status {
+            200 => Ok(HubSignInStatus {
+                status: HubSignInState::Waiting,
+                problem: None,
+            }),
+            400 => Err(failed("The hub couldn't use that address.".into())),
+            404 => Err(failed(EXPIRED.into())),
+            409 => Err(failed("This sign-in already ended.".into())),
+            status => Err(failed(refused(status))),
+        }
+    }
+
+    /// Where sign-in `state` on hub `id` is. A finished one drops the hub's cached accounts.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for a hub without a management key or a state the hub wouldn't take, and
+    /// `hubFailed` when the hub can't be asked.
+    pub(super) async fn sign_in_status(
+        &self,
+        id: &str,
+        state: &str,
+    ) -> Result<HubSignInStatus, ErrorObject> {
+        checked_state(state)?;
+        let (url, key) = self.manager(id).await?;
+        let path = format!("get-auth-status?state={state}");
+        let body = management(&self.launcher, &url, &key, "GET", &path, None)
+            .await
+            .map_err(failed)?;
+        let (status, problem) = match body["status"].as_str() {
+            Some("wait") => (HubSignInState::Waiting, None),
+            Some("ok") => {
+                self.accounts.lock().await.remove(id);
+                (HubSignInState::Done, None)
+            }
+            Some("error") => (
+                HubSignInState::Failed,
+                Some(sign_in_problem(body["error"].as_str().unwrap_or_default())),
+            ),
+            _ => return Err(failed("The hub answered in a way plxd can't read.".into())),
+        };
+        Ok(HubSignInStatus { status, problem })
+    }
+
+    /// Ends sign-in `state` on hub `id`, so the hub keeps no account from it. One that already
+    /// ended answers where it is instead.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::sign_in_status`].
+    pub(super) async fn sign_in_cancel(
+        &self,
+        id: &str,
+        state: &str,
+    ) -> Result<HubSignInStatus, ErrorObject> {
+        checked_state(state)?;
+        let (url, key) = self.manager(id).await?;
+        let path = format!("oauth-session?state={state}");
+        let body = management(&self.launcher, &url, &key, "DELETE", &path, None)
+            .await
+            .map_err(failed)?;
+        if body["cancelled"] == true {
+            return Ok(HubSignInStatus {
+                status: HubSignInState::Cancelled,
+                problem: None,
+            });
+        }
+        self.sign_in_status(id, state).await
+    }
+
+    /// Turns hub `id`'s account `account` on or off.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::remove_account`].
+    pub(super) async fn set_account_enabled(
+        &self,
+        id: &str,
+        account: &str,
+        enabled: bool,
+    ) -> Result<(), ErrorObject> {
+        let body = json!({"name": checked_account(account)?, "disabled": !enabled});
+        self.change_account(id, "PATCH", "auth-files/status", &body)
+            .await
+    }
+
+    /// Deletes hub `id`'s account `account` and its sign-in.
+    ///
+    /// # Errors
+    ///
+    /// `invalidParams` for an account id plxd won't send, or a hub that doesn't exist or has no
+    /// management key, and `hubFailed` when the hub refuses or can't be reached.
+    pub(super) async fn remove_account(&self, id: &str, account: &str) -> Result<(), ErrorObject> {
+        let body = json!({"name": checked_account(account)?});
+        self.change_account(id, "DELETE", "auth-files", &body).await
+    }
+
+    /// Sends `body` to hub `id`'s management `path` with `method`, then drops its cached
+    /// accounts.
+    async fn change_account(
+        &self,
+        id: &str,
+        method: &str,
+        path: &str,
+        body: &Value,
+    ) -> Result<(), ErrorObject> {
+        let (url, key) = self.manager(id).await?;
+        let changed = management(&self.launcher, &url, &key, method, path, Some(body)).await;
+        self.accounts.lock().await.remove(id);
+        changed.map(drop).map_err(failed)
+    }
+
+    /// Hub `id`'s URL and management key, which every `hubs/accounts/*` call needs.
+    async fn manager(&self, id: &str) -> Result<(String, String), ErrorObject> {
+        let entry = self
+            .entry(id)
+            .await
+            .ok_or_else(|| ErrorObject::invalid_params(format!("no hub {id}")))?;
+        let key = self
+            .keys_of(&entry)
+            .await
+            .remove(MANAGEMENT)
+            .ok_or_else(|| {
+                ErrorObject::invalid_params("add the hub's management key on its page first")
+            })?;
+        Ok((entry.url, key))
     }
 
     /// `entry`'s `/v1/models`, cached.
@@ -340,6 +549,7 @@ impl Hubs {
                 &self.launcher,
                 &format!("{}/v1/models", entry.url),
                 key,
+                "GET",
                 None,
             )
             .await
@@ -478,6 +688,56 @@ fn checked(id: &str, name: &str, url: &str) -> Result<String, ErrorObject> {
     Ok(url.to_owned())
 }
 
+/// A `hubs/accounts/*` failure at the hub, for people.
+fn failed(message: String) -> ErrorObject {
+    ErrorObject::parallax(ErrorKind::HubFailed, message)
+}
+
+/// What a sign-in the hub no longer knows says.
+const EXPIRED: &str = "The sign-in expired. Start it again.";
+
+/// Whether `state` is one the hub would take, as its `ValidateOAuthState` checks, so it goes in a
+/// URL as it is.
+fn plain_state(state: &str) -> bool {
+    (1..=128).contains(&state.len())
+        && !state.contains("..")
+        && state
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+fn checked_state(state: &str) -> Result<(), ErrorObject> {
+    if plain_state(state) {
+        Ok(())
+    } else {
+        Err(ErrorObject::invalid_params(
+            "that isn't a hub sign-in's state",
+        ))
+    }
+}
+
+/// `account`, when it's an id plxd sends: an auth file's name.
+fn checked_account(account: &str) -> Result<&str, ErrorObject> {
+    if account.is_empty() || account.len() > 512 || account.chars().any(char::is_control) {
+        return Err(ErrorObject::invalid_params("that isn't a hub account's id"));
+    }
+    Ok(account)
+}
+
+/// A failed sign-in's reason in plxd's words, picked by the hub's `error`, which isn't repeated.
+fn sign_in_problem(error: &str) -> String {
+    let error = error.to_ascii_lowercase();
+    if error.contains("timeout") {
+        "The sign-in timed out. Start it again.".into()
+    } else if error.contains("unknown or expired") {
+        EXPIRED.into()
+    } else if error.contains("exchange") {
+        "The service didn't accept the sign-in. Start it again.".into()
+    } else {
+        "The hub couldn't finish the sign-in. Start it again.".into()
+    }
+}
+
 /// Hub `entry`'s two instances, named after it: Claude Code and Codex through it.
 pub(super) fn instances_of(entry: &Entry) -> [Stored; 2] {
     let instance = |id: String, kind, args, env| ProviderInstance {
@@ -582,7 +842,7 @@ fn models(body: &Value) -> Reach {
 /// once.
 async fn read_accounts(launcher: &Launcher, url: &str, key: &str) -> Accounts {
     use futures_util::StreamExt;
-    let body = management(launcher, url, key, "auth-files", None).await?;
+    let body = management(launcher, url, key, "GET", "auth-files", None).await?;
     let files = body
         .get("files")
         .and_then(Value::as_array)
@@ -610,7 +870,8 @@ async fn read_accounts(launcher: &Launcher, url: &str, key: &str) -> Accounts {
 /// Claude or Codex account.
 fn account_of(file: &Value) -> Option<(HubAccount, Option<Index>)> {
     let text = |name: &str| file.get(name).and_then(Value::as_str).map(str::to_owned);
-    let id = text("id").or_else(|| text("name"))?;
+    // Its file's name, which the hub's status and delete routes take.
+    let id = text("name").or_else(|| text("id"))?;
     let provider = text("provider")
         .or_else(|| text("type"))
         .unwrap_or_default();
@@ -683,7 +944,7 @@ async fn limits(
         "url": if codex { CODEX_USAGE } else { CLAUDE_USAGE },
         "header": header,
     });
-    let answer = management(launcher, url, key, "api-call", Some(&call)).await?;
+    let answer = management(launcher, url, key, "POST", "api-call", Some(&call)).await?;
     let status = answer["status_code"].as_u64().unwrap_or(0);
     if !(200..300).contains(&status) {
         return Err(format!(
@@ -771,36 +1032,72 @@ fn codex_windows(usage: &Value) -> Vec<UsageLimitWindow> {
 }
 
 /// A call to the hub at `url`'s management API, `/v0/management/<path>`, with its management
-/// key: a GET, or a POST of `body`. PLX-1070's account sign-ins go through this too.
+/// key: `method` with `body` as JSON, or none.
 pub(super) async fn management(
     launcher: &Launcher,
     url: &str,
     key: &str,
+    method: &str,
     path: &str,
     body: Option<&Value>,
 ) -> Result<Value, String> {
-    request(launcher, &format!("{url}/v0/management/{path}"), key, body).await
+    request(
+        launcher,
+        &format!("{url}/v0/management/{path}"),
+        key,
+        method,
+        body,
+    )
+    .await
 }
 
-/// `url`'s JSON answer, through `curl` with `key` as a bearer token: a GET, or a POST of `body`.
-/// The key and body go on stdin as curl config, so `ps` never shows them. An error says only what
-/// kind of failure it was and the HTTP status, never what the hub answered.
+/// `url`'s JSON answer to `method`, with `body` as JSON or none, through [`send`]. An error says
+/// only what kind of failure it was and the HTTP status, never what the hub answered.
 async fn request(
     launcher: &Launcher,
     url: &str,
     key: &str,
+    method: &str,
     body: Option<&Value>,
 ) -> Result<Value, String> {
+    let (status, text) = send(launcher, url, key, method, body).await?;
+    if status != 200 {
+        return Err(refused(status));
+    }
+    serde_json::from_str(&text).map_err(|_| "The hub answered in a way plxd can't read.".to_owned())
+}
+
+/// An HTTP status other than 200, for people.
+fn refused(status: u16) -> String {
+    match status {
+        401 | 403 => {
+            format!("The hub refused the key (HTTP {status}). Check it in the hub's settings.")
+        }
+        status => format!("The hub answered HTTP {status}."),
+    }
+}
+
+/// `url`'s HTTP status and body for `method`, through `curl` with `key` as a bearer token and
+/// `body` as JSON. The key and body go on stdin as curl config, so `ps` never shows them. An
+/// error says only why curl failed.
+async fn send(
+    launcher: &Launcher,
+    url: &str,
+    key: &str,
+    method: &str,
+    body: Option<&Value>,
+) -> Result<(u16, String), String> {
     // curl's config syntax: a quoted value takes backslash escapes.
     let quoted = |value: &str| format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
     let mut config = Zeroizing::new(format!(
-        "url = {}\nheader = {}\nsilent\nshow-error\nmax-time = {REQUEST_SECONDS}\n\
+        "url = {}\nheader = {}\nrequest = {}\nsilent\nshow-error\nmax-time = {REQUEST_SECONDS}\n\
          write-out = \"\\n%{{http_code}}\"\n",
         quoted(url),
         quoted(&format!("Authorization: Bearer {key}")),
+        quoted(method),
     ));
     if let Some(body) = body {
-        config.push_str("request = \"POST\"\nheader = \"Content-Type: application/json\"\n");
+        config.push_str("header = \"Content-Type: application/json\"\n");
         config.push_str("data-raw = ");
         config.push_str(&quoted(&body.to_string()));
         config.push('\n');
@@ -822,14 +1119,10 @@ async fn request(
         .trim_end()
         .rsplit_once('\n')
         .unwrap_or(("", ran.stdout.trim()));
-    match status {
-        "200" => serde_json::from_str(text)
-            .map_err(|_| "The hub answered in a way plxd can't read.".to_owned()),
-        "401" | "403" => Err(format!(
-            "The hub refused the key (HTTP {status}). Check it in the hub's settings."
-        )),
-        status => Err(format!("The hub answered HTTP {status}.")),
-    }
+    let status = status
+        .parse()
+        .map_err(|_| "The hub answered in a way plxd can't read.".to_owned())?;
+    Ok((status, text.to_owned()))
 }
 
 /// What curl's exit `code` means, for people.

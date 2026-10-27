@@ -245,6 +245,8 @@ pub(crate) fn initialize(
 /// `hostUpdate` (PLX-700, 0066): `host/update`, which installs a newer plxd and restarts into it.
 /// `hubs` (0089): `hubs/list`, `hubs/save`, and `hubs/remove`, the two provider instances each
 /// enabled hub adds, and `hub` on `ProviderInfo`, which an older plxd never fills.
+/// `hubAccounts` (PLX-1070): `hubs/accounts/*`, which signs a hub's accounts in through the
+/// browser and turns them on, off, or removes them.
 /// `providerUpdates` (PLX-746): `providers/updates` and `providers/upgrade`, and `host/update`'s
 /// `now`.
 /// `checkpoints` (0062): `orchestration/threadRuns`, `orchestration/getTurnDiff`,
@@ -350,6 +352,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "githubStatus",
     "hostFolders",
     "hostUpdate",
+    "hubAccounts",
     "hubs",
     "inbox",
     "integrationBranch",

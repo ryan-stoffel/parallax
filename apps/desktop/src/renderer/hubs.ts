@@ -46,6 +46,31 @@ export async function removeHub(hostId: string, id: string): Promise<string | un
   return kept(hostId, await window.parallax.request(hostId, "hubs/remove", { id }), true);
 }
 
+/** Turns a hub's account on or off (PLX-1070). Resolves to an error for people. */
+export async function setHubAccountEnabled(
+  hostId: string,
+  hub: string,
+  account: string,
+  enabled: boolean,
+): Promise<string | undefined> {
+  return kept(
+    hostId,
+    await window.parallax.request(hostId, "hubs/accounts/setEnabled", { hub, account, enabled }),
+  );
+}
+
+/** Deletes a hub's account. Resolves to an error for people. */
+export async function removeHubAccount(
+  hostId: string,
+  hub: string,
+  account: string,
+): Promise<string | undefined> {
+  return kept(
+    hostId,
+    await window.parallax.request(hostId, "hubs/accounts/remove", { hub, account }),
+  );
+}
+
 /** `hostId`'s last listed hubs, kept current, or undefined before its first list. */
 export const useHubs = (hostId: string): Hub[] | undefined =>
   useSyncExternalStore(subscribe, () => lists.get(hostId));

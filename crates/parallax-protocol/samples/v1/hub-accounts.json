@@ -1,0 +1,138 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "hubs/accounts/signIn",
+    "params": {
+      "hub": "home",
+      "service": "claude"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "url": "https://claude.ai/oauth/authorize?code=true&state=abc123",
+      "state": "abc123"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "hubs/accounts/callback",
+    "params": {
+      "hub": "home",
+      "state": "abc123",
+      "redirectUrl": "http://localhost:54545/callback?code=a-code&state=abc123"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "status": "waiting"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "hubs/accounts/status",
+    "params": {
+      "hub": "home",
+      "state": "abc123"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "status": "done"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "hubs/accounts/status",
+    "params": {
+      "hub": "home",
+      "state": "def456"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "status": "failed",
+      "problem": "The sign-in timed out. Start it again."
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "hubs/accounts/cancel",
+    "params": {
+      "hub": "home",
+      "state": "abc123"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "status": "cancelled"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "hubs/accounts/setEnabled",
+    "params": {
+      "hub": "home",
+      "account": "claude-ada@example.com.json",
+      "enabled": false
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {
+      "hubs": []
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "hubs/accounts/remove",
+    "params": {
+      "hub": "home",
+      "account": "codex-ada@example.com.json"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {
+      "hubs": []
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "hubs/accounts/signIn",
+    "params": {
+      "hub": "home",
+      "service": "codex"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "error": {
+      "code": -32000,
+      "message": "The hub refused the key (HTTP 401). Check it in the hub's settings.",
+      "data": {
+        "kind": "hubFailed"
+      }
+    }
+  }
+]

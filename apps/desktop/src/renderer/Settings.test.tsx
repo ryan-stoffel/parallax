@@ -527,6 +527,157 @@ describe("on a plxd with providers", () => {
       expect(document.querySelector("dialog")).toBeNull();
     });
 
+    describe("with hubAccounts", () => {
+      const page = () => visible('[role="tabpanel"]');
+      const open = vi.fn();
+      // The status answers in order, then the last one again.
+      let statuses: { status: string; problem?: string }[];
+      beforeEach(() => {
+        states["local"] = {
+          status: "connected",
+          plxd: "0.1.0",
+          protocol: 1,
+          capabilities: { ...capabilities, hubAccounts: {} },
+        };
+        hubs = [home];
+        open.mockClear();
+        window.open = open;
+        vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+        answers["hubs/accounts/signIn"] = (p) => ({
+          result: { url: `https://example.com/oauth/${String(p["service"])}`, state: "s1" },
+        });
+        statuses = [{ status: "waiting" }];
+        answers["hubs/accounts/status"] = () => ({
+          result: statuses.length > 1 ? statuses.shift() : statuses[0],
+        });
+      });
+      const poll = async () => {
+        await act(async () => void (await vi.advanceTimersByTimeAsync(2000)));
+        await settle();
+      };
+      const addAccount = async (service: "Claude" | "Codex") => {
+        await renderSettings();
+        await click(tab("Home hub"));
+        await click(button(page(), "Add account"));
+        expect(page().textContent).toContain("not a VPS");
+        await click(button(page(), service));
+      };
+
+      test("adds an account whose browser the hub's forwarder catches", async () => {
+        statuses = [{ status: "waiting" }, { status: "done" }];
+        await addAccount("Claude");
+        expect(calls("hubs/accounts/signIn")[0]!.params).toEqual({
+          hub: "home-hub",
+          service: "claude",
+        });
+        expect(open).toHaveBeenCalledWith("https://example.com/oauth/claude", "_blank");
+        expect(page().textContent).toContain("Waiting for the browser");
+        await poll();
+        expect(page().textContent).toContain("Waiting for the browser");
+        const lists = calls("hubs/list").length;
+        await poll();
+        expect(page().textContent).toContain("Signed in");
+        expect(calls("hubs/accounts/status")).toHaveLength(2);
+        expect(calls("hubs/list").slice(lists)).toEqual([
+          { host: "local", params: { refresh: true } },
+        ]);
+      });
+
+      test("adds an account from the pasted address after checking it's this sign-in's", async () => {
+        answers["hubs/accounts/callback"] = () => ({ result: { status: "waiting" } });
+        await addAccount("Codex");
+        const address = page().querySelector<HTMLInputElement>(
+          '[aria-label="Address after signing in"]',
+        )!;
+        await type(address, "http://localhost:1455/auth/callback?code=c&state=other");
+        await click(button(page(), "Send"));
+        expect(page().querySelector('[role="alert"]')?.textContent).toBe(
+          "That address is from another sign-in.",
+        );
+        expect(calls("hubs/accounts/callback")).toEqual([]);
+
+        const pasted = "http://localhost:1455/auth/callback?code=c&state=s1";
+        await type(address, pasted);
+        await click(button(page(), "Send"));
+        expect(calls("hubs/accounts/callback")[0]!.params).toEqual({
+          hub: "home-hub",
+          state: "s1",
+          redirectUrl: pasted,
+        });
+        statuses = [{ status: "done" }];
+        await poll();
+        expect(page().textContent).toContain("The hub added the ChatGPT account.");
+      });
+
+      test("shows a failed sign-in, and cancels one", async () => {
+        statuses = [{ status: "failed", problem: "The sign-in timed out. Start it again." }];
+        await addAccount("Claude");
+        await poll();
+        expect(page().textContent).toContain("Sign-in failed");
+        expect(page().textContent).toContain("The sign-in timed out.");
+
+        statuses = [{ status: "waiting" }];
+        answers["hubs/accounts/cancel"] = () => ({ result: { status: "cancelled" } });
+        await click(button(page(), "Try again"));
+        await click(button(page(), "Cancel"));
+        expect(calls("hubs/accounts/cancel")[0]!.params).toEqual({ hub: "home-hub", state: "s1" });
+        expect(page().textContent).toContain("Sign-in cancelled");
+      });
+
+      test("a cancel the hub refuses while it saves the account keeps waiting", async () => {
+        answers["hubs/accounts/cancel"] = () => ({ result: { status: "waiting" } });
+        await addAccount("Claude");
+        await click(button(page(), "Cancel"));
+        expect(calls("hubs/accounts/cancel")).toHaveLength(1);
+        expect(page().textContent).toContain("Waiting for the browser");
+        expect(page().textContent).not.toContain("Sign-in cancelled");
+
+        statuses = [{ status: "done" }];
+        await poll();
+        expect(page().textContent).toContain("Signed in");
+      });
+
+      test("turns an account off, and removes one after a confirm", async () => {
+        answers["hubs/accounts/setEnabled"] = (p) => {
+          hubs = [
+            {
+              ...home,
+              accounts: home.accounts.map((a) =>
+                a.id === p["account"] ? { ...a, disabled: !p["enabled"] } : a,
+              ),
+            },
+          ];
+          return { result: { hubs } };
+        };
+        answers["hubs/accounts/remove"] = (p) => {
+          hubs = [{ ...home, accounts: home.accounts.filter((a) => a.id !== p["account"]) }];
+          return { result: { hubs } };
+        };
+        await renderSettings();
+        await click(tab("Home hub"));
+        expect(page().textContent).not.toContain("Off on the hub");
+        const use = () => page().querySelector<HTMLElement>('[aria-label="Use ada@example.com"]')!;
+        expect(use().getAttribute("aria-checked")).toBe("true");
+        await click(use());
+        expect(calls("hubs/accounts/setEnabled")[0]!.params).toEqual({
+          hub: "home-hub",
+          account: "claude-ada.json",
+          enabled: false,
+        });
+        expect(use().getAttribute("aria-checked")).toBe("false");
+
+        await click(page().querySelector<HTMLElement>('[aria-label="Remove ada@example.com"]')!);
+        expect(page().textContent).toContain("Remove it from the hub?");
+        expect(calls("hubs/accounts/remove")).toEqual([]);
+        await click(button(page(), "Remove"));
+        expect(calls("hubs/accounts/remove")[0]!.params).toEqual({
+          hub: "home-hub",
+          account: "claude-ada.json",
+        });
+        expect(page().querySelector('[aria-label="Use ada@example.com"]')).toBeNull();
+      });
+    });
+
     test("Add provider won't take a hub instance's id", async () => {
       await renderSettings();
       await click(document.querySelector<HTMLElement>('[aria-label="Add provider"]')!);
