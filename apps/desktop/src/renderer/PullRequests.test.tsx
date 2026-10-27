@@ -114,10 +114,10 @@ test("a read sent before a merge doesn't overwrite the merge's answer", async ()
   expect(prs.get(url(42))?.pr?.state).toBe("merged");
 });
 
-test("GitHub's images in the description and comments load, and others stay links", async () => {
+test("https images in the description and comments load wherever they're hosted, and others stay links", async () => {
   read = {
     [url(42)]: prOf(42, {
-      body: "![The toast](https://raw.githubusercontent.com/me/app/1/toast.gif) ![Badge](https://example.com/a.png)",
+      body: "![The toast](https://raw.githubusercontent.com/me/app/1/toast.gif) ![Badge](https://files.example.com/a.png) ![Plain](http://example.com/b.png)",
       comments: [
         {
           author: "rev",
@@ -131,12 +131,13 @@ test("GitHub's images in the description and comments load, and others stay link
   const images = [...document.querySelectorAll("img")].map((img) => [img.alt, img.src]);
   expect(images).toEqual([
     ["The toast", "https://raw.githubusercontent.com/me/app/1/toast.gif"],
+    ["Badge", "https://files.example.com/a.png"],
     ["Shot", "https://github.com/user-attachments/assets/1"],
   ]);
-  const badge = [...document.querySelectorAll(".enriched a")].find(
-    (a) => a.textContent === "Badge",
+  const plain = [...document.querySelectorAll(".enriched a")].find(
+    (a) => a.textContent === "Plain",
   );
-  expect(badge?.getAttribute("href")).toBe("https://example.com/a.png");
+  expect(plain?.getAttribute("href")).toBe("http://example.com/b.png");
 });
 
 test("parseDiff numbers each side, and keeps renames and binary files", () => {

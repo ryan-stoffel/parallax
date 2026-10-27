@@ -655,11 +655,10 @@ function Section({
   );
 }
 
-// A pull request's description and comments are GitHub's, not the agent's, so their GitHub-hosted
-// images load (MarkdownText's `images`), unlike a transcript's remote ones, and open in the
-// Lightbox when clicked. Any other image stays a link with its alt text. ponytail: a private
-// repository's attachments need GitHub's sign-in and show broken; proxy them through `gh` if that
-// matters.
+// A pull request's description and comments are already public on GitHub, so their https images
+// load wherever they're hosted (MarkdownText's `images`), unlike a transcript's remote ones, and
+// open in the Lightbox when clicked. ponytail: a private repository's attachments need GitHub's
+// sign-in and show broken; proxy them through `gh` if that matters.
 
 // ponytail: "long" by length, not rendered height; measure it if this cuts the wrong ones.
 const isLong = (c: PrComment) => c.body.length > 600 || c.body.split("\n").length > 12;
@@ -1013,7 +1012,7 @@ export function PullRequestView({
   };
   // A screenshot opens with the others in its description or comment.
   const showShot = (target: EventTarget) => {
-    // GitHub's images, the only ones a pull request's Markdown loads.
+    // The https images a pull request's Markdown loads.
     const shot = (target as Element).closest?.(".enriched img[src^='https://']");
     if (!(shot instanceof HTMLImageElement)) return;
     const all = [
