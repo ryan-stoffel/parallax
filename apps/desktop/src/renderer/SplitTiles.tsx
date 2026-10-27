@@ -129,10 +129,12 @@ export function SplitTiles({
   const tileOf = (i: number) => Math.min(i, last);
   const activeIn = (tile: number) => (tile === last ? stackActive : tile);
 
+  // `shown` with cut `cut` at `ratio`, or undefined when that would stack a tile that shows now,
+  // taking away the divider that could bring it back.
   const resize = (cut: number, ratio: number) => {
     const next = [...shown];
     next[cut] = ratio;
-    return next;
+    return fit(n, next) < visible ? undefined : next;
   };
 
   const [target, setTarget] = useState<DropTarget>();
@@ -238,7 +240,8 @@ export function SplitTiles({
           const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[e.key];
           if (step === undefined) return;
           e.preventDefault();
-          onResize(resize(i, clampRatio((shown[i] ?? evenRatio) + step * keyStep)));
+          const next = resize(i, clampRatio((shown[i] ?? evenRatio) + step * keyStep));
+          if (next) onResize(next);
         };
         return (
           <div
@@ -264,12 +267,17 @@ export function SplitTiles({
               const r = box.current!.getBoundingClientRect();
               const x = (e.clientX - r.left) / r.width;
               const y = (e.clientY - r.top) / r.height;
-              drag.current.ratios = resize(i, ratioAt(cut, x, y));
-              setLive(drag.current.ratios);
+              const next = resize(i, ratioAt(cut, x, y));
+              if (!next) return;
+              drag.current.ratios = next;
+              setLive(next);
             }}
             onPointerUp={endDrag}
             onLostPointerCapture={endDrag}
-            onDoubleClick={() => onResize(resize(i, evenRatio))}
+            onDoubleClick={() => {
+              const next = resize(i, evenRatio);
+              if (next) onResize(next);
+            }}
             onKeyDown={keyed}
             className={`group/cut absolute z-10 flex items-center justify-center outline-none ${vertical ? "cursor-col-resize" : "cursor-row-resize"}`}
           >
