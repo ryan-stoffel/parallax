@@ -160,7 +160,9 @@ export function SettingsDialog({
         e.preventDefault();
         onClose();
       }}
-      className="settings-dialog m-auto h-[calc(100vh-6rem)] max-h-none w-[calc(100vw-12rem)] max-w-[90rem] overflow-hidden rounded-xl border border-border bg-background p-0 text-foreground shadow-composer outline-none backdrop:bg-black/40 open:flex"
+      // Clipped, not hidden, so it can't scroll: a focused control positioned against it, such as
+      // a segmented control's sr-only radio, would scroll it and slide its contents out of view.
+      className="settings-dialog m-auto h-[calc(100vh-6rem)] max-h-none w-[calc(100vw-12rem)] max-w-[90rem] overflow-clip rounded-xl border border-border bg-background p-0 text-foreground shadow-composer outline-none backdrop:bg-black/40 open:flex"
     >
       <nav
         aria-label="Settings sections"
