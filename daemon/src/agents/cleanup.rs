@@ -5,7 +5,7 @@
 //! A sweep runs at start, every [`SWEEP_PERIOD`], and right after `pr/act` merges a pull request
 //! (PLX-839). It looks at each thread whose run isn't running or waiting and whose linked pull
 //! requests are all merged or closed, with at least one merged. An unarchived thread is archived
-//! when the newest merge came after its last message and its last unarchive, so a thread brought
+//! when the newest merge came after the user's last message or unarchive, so a thread brought
 //! back stays out. A settled or archived thread's worktree and local branch go too, when the
 //! setting is on. The worktree must be on its stored branch or a merged pull request's head branch,
 //! which agents often rename it to, and hold nothing the merge didn't keep: no uncommitted changes,
@@ -73,10 +73,10 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     }
 }
 
-/// Archives every thread whose pull requests merged since its last message, and removes every
-/// merged worktree when the host's setting is on, stopping early for `stop`. `known` holds the
-/// merged and closed pull requests read so far, by URL. Without `recheck`, a worktree whose pull
-/// requests were all known merged before this sweep stays unless its thread archives now.
+/// Archives every thread whose pull requests merged since the user's last message, and removes
+/// every merged worktree when the host's setting is on, stopping early for `stop`. `known` holds
+/// the merged and closed pull requests read so far, by URL. Without `recheck`, a worktree whose
+/// pull requests were all known merged before this sweep stays unless its thread archives now.
 async fn sweep(
     daemon: &Arc<Daemon>,
     stop: &CancellationToken,
@@ -254,8 +254,8 @@ async fn read_one(daemon: &Daemon, url: &str) -> Result<Pull, PrError> {
 }
 
 /// Archives thread `id` the way the app's Archive does, when the newest of its merged `pulls`
-/// came after its last message or unarchive and its run is idle, read again here so a message
-/// sent mid-sweep counts. Whether it did.
+/// came after the user's last message or unarchive and its run is idle, read again here so a
+/// message sent mid-sweep counts. Whether it did.
 async fn archive(daemon: &Arc<Daemon>, id: Uuid, pulls: &[Pull]) -> bool {
     let thread = store(daemon, move |db| {
         let run = db.get_run(id).map_err(|e| store_error(&e))?;
@@ -288,11 +288,14 @@ async fn archive(daemon: &Arc<Daemon>, id: Uuid, pulls: &[Pull]) -> bool {
     }
 }
 
-/// When `thread` last took a message or was unarchived.
+/// When the user last sent `thread` a message or unarchived it. Wake-ups don't count, since the
+/// one `merge_when_ready` sends lands after the merge it reports.
 fn last_activity(thread: &Thread) -> Timestamp {
     thread
         .unarchived_at
-        .map_or(thread.last_prompt_at, |at| at.max(thread.last_prompt_at))
+        .map_or(thread.last_user_prompt_at, |at| {
+            at.max(thread.last_user_prompt_at)
+        })
 }
 
 /// The branch to delete with `run`'s `worktree`, when the worktree can go: it is on its own branch
@@ -397,9 +400,12 @@ fn branch_to_delete(pulls: &[Pull], stored: &str, current: Option<&str>) -> Opti
 #[cfg(test)]
 mod tests {
 
+    use jiff::Timestamp;
     use parallax_protocol::PrState;
+    use parallax_store::{Thread, ThreadFields};
+    use uuid::Uuid;
 
-    use super::{Pull, branch_to_delete};
+    use super::{Pull, branch_to_delete, last_activity, merged_since};
 
     fn pull(state: PrState, commits: &[&str]) -> Pull {
         Pull {
@@ -438,5 +444,36 @@ mod tests {
         );
         assert_eq!(branch_to_delete(&pulls, stored, Some("main")), None);
         assert_eq!(branch_to_delete(&pulls, stored, None), None);
+    }
+
+    /// PR #960: the user said "rebase and then merge", `merge_when_ready` merged it, and its wake
+    /// turn landed after the merge. The thread still counts as unused since the merge.
+    #[test]
+    fn a_wake_after_the_merge_is_not_activity() {
+        let at = |s: &str| s.parse::<Timestamp>().unwrap();
+        let mut thread = Thread {
+            id: Uuid::now_v7(),
+            repo_id: Uuid::now_v7(),
+            archived: false,
+            created_at: at("2026-10-27T17:00:00Z"),
+            seen_at: None,
+            snoozed_until: None,
+            last_prompt_at: at("2026-10-27T20:56:37Z"),
+            last_user_prompt_at: at("2026-10-27T20:47:48Z"),
+            parent: None,
+            fields: ThreadFields::default(),
+            settled: false,
+            unarchived_at: None,
+            pinned: false,
+        };
+        let pulls = [Pull {
+            merged_at: Some(at("2026-10-27T20:56:36Z")),
+            ..pull(PrState::Merged, &[])
+        }];
+        assert!(merged_since(&pulls, last_activity(&thread)));
+
+        // Unarchiving after the merge still keeps it out.
+        thread.unarchived_at = Some(at("2026-10-27T21:00:00Z"));
+        assert!(!merged_since(&pulls, last_activity(&thread)));
     }
 }
