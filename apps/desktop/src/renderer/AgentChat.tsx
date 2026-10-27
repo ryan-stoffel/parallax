@@ -212,7 +212,7 @@ const RowContext = createContext<{
 
 /**
  * Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it: the
- * focused side's, while two threads are side by side.
+ * focused tile's, while threads are tiled side by side.
  */
 const focusComposer = () =>
   (

@@ -2,7 +2,6 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
-  Columns2,
   FileSearch,
   FolderGit2,
   FolderPlus,
@@ -103,7 +102,9 @@ import { cloneOnto, type CloneAsk } from "./clone";
 import { isRunning, kindOf } from "./transcript";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
-import { useShortcutLabel } from "./keybindings";
+import { tileCommands, useShortcutLabel } from "./keybindings";
+import { evenRatio, maxTiles, ratiosWithout, tileAt, tileLayout } from "./splitLayout";
+import { SplitTiles } from "./SplitTiles";
 import { draggedThread, threadDragType } from "./threadDrag";
 
 /**
@@ -119,10 +120,14 @@ export type Selection =
   | { kind: "thread"; threadId: string; started?: boolean; subagent?: string; pr?: string }
   | { kind: "new"; groupId?: string; draft?: string };
 
-/** Two threads on one host open side by side (PLX-587), left then right. */
+/**
+ * Two to four threads on one host tiled side by side (PLX-587, PLX-1082), in their Fibonacci
+ * layout's order, with each cut's share (splitLayout.ts): one fewer ratio than threads.
+ */
 export interface Split {
   hostId: string;
-  threadIds: [string, string];
+  threadIds: string[];
+  ratios: number[];
 }
 
 export type SettingsSection =
@@ -319,21 +324,24 @@ export function App() {
   const known = useRef(new Set<string>());
   for (const t of threads.state.threads) known.current.add(t.id);
   for (const p of threads.state.projects) known.current.add(p.id);
-  // Closes one side of the split, leaving the other open alone if the split was showing.
+  // Closes a thread's tile. The rest stay tiled, or the last one stays open alone, and a closed
+  // focused tile hands focus to the one before it.
   const closePane = (threadId: string) => {
     if (!split) return;
-    const other = split.threadIds.find((id) => id !== threadId)!;
-    setSplit(undefined);
-    if (
-      split.hostId === host.id &&
-      selection.kind === "thread" &&
-      split.threadIds.includes(selection.threadId)
-    )
-      setSelection({ kind: "thread", threadId: other });
+    const at = split.threadIds.indexOf(threadId);
+    if (at === -1) return;
+    const rest = split.threadIds.filter((id) => id !== threadId);
+    setSplit(
+      rest.length > 1
+        ? { ...split, threadIds: rest, ratios: ratiosWithout(split.ratios, rest.length + 1, at) }
+        : undefined,
+    );
+    if (split.hostId === host.id && selection.kind === "thread" && selection.threadId === threadId)
+      setSelection({ kind: "thread", threadId: rest[Math.max(0, at - 1)]! });
   };
   // A split whose computer is removed goes with it.
   if (split && !hosts.some((h) => h.id === split.hostId)) setSplit(undefined);
-  // A thread in the split that's deleted, maybe by another client, closes its side.
+  // A thread in the split that's deleted, maybe by another client, closes its tile.
   const splitGone =
     split?.hostId === host.id
       ? split.threadIds.find(
@@ -342,11 +350,11 @@ export function App() {
       : undefined;
   if (splitGone) closePane(splitGone);
   // The threads the main pane shows: the split's while one of them is open.
-  const paired =
+  const tiled =
     selection.kind === "thread" &&
     split?.hostId === host.id &&
     split.threadIds.includes(selection.threadId);
-  const panes = selection.kind !== "thread" ? [] : paired ? split.threadIds : [selection.threadId];
+  const panes = selection.kind !== "thread" ? [] : tiled ? split.threadIds : [selection.threadId];
   // The open thread's group (Chat's until plxd lists it), or the new thread's.
   let group = groups[0]!;
   if (selection.kind === "thread") {
@@ -907,35 +915,41 @@ export function App() {
       setSelection({ kind: "new", groupId: groupOf(view.state, thread) });
     return undefined;
   };
-  // Opens `threadId` beside the open thread on `side`: by default the right, or in a split the side
-  // that isn't focused, which it replaces.
-  const openBeside = (threadId: string, side?: 0 | 1) => {
+  // Opens `threadId` in the split beside the open thread, at tile `at`: by default a new last tile
+  // while there's room, else the last tile that isn't focused, which it replaces. A thread already
+  // tiled is focused instead.
+  const openBeside = (threadId: string, at?: number) => {
     if (selection.kind !== "thread" || selection.threadId === threadId) return;
-    const ids: [string, string] = paired
-      ? [...split.threadIds]
-      : [selection.threadId, selection.threadId];
-    const at = side ?? (paired ? (ids[0] === selection.threadId ? 1 : 0) : 1);
-    ids[at] = threadId;
-    // The other side's thread, dropped on this one.
-    if (ids[0] === ids[1]) return;
-    setSplit({ hostId: host.id, threadIds: ids });
+    const ids = tiled ? [...split.threadIds] : [selection.threadId];
+    const ratios = tiled ? [...split.ratios] : [];
+    if (!ids.includes(threadId)) {
+      const tile =
+        at ??
+        (ids.length < maxTiles ? ids.length : ids.findLastIndex((id) => id !== selection.threadId));
+      if (tile === ids.length) ratios.push(evenRatio);
+      ids[tile] = threadId;
+      setSplit({ hostId: host.id, threadIds: ids, ratios });
+    }
     setSelection({ kind: "thread", threadId });
   };
-  // The side a sidebar thread dragged over the open thread would open on: the right, or in a
-  // split the side under the pointer. Not over a composer, which takes it to attach (PLX-378).
-  const [dropSide, setDropSide] = useState<0 | 1>();
-  const dropSideOf = (e: DragEvent<HTMLElement>): 0 | 1 | undefined => {
+  // The tile a sidebar thread dragged over the open thread would open in: a new last one while
+  // there's room, else the tile under the pointer. Not over a composer, which takes it to attach
+  // (PLX-378).
+  const [dropAt, setDropAt] = useState<number>();
+  const dropAtOf = (e: DragEvent<HTMLElement>): number | undefined => {
     if (e.defaultPrevented || !e.dataTransfer.types.includes(threadDragType)) return undefined;
-    if (!paired) return 1;
+    if (panes.length < maxTiles) return panes.length;
     const box = e.currentTarget.getBoundingClientRect();
-    return e.clientX < box.left + box.width / 2 ? 0 : 1;
+    const { tiles } = tileLayout(panes.length, split?.ratios ?? []);
+    return tileAt(tiles, (e.clientX - box.left) / box.width, (e.clientY - box.top) / box.height);
   };
-  // Focuses a side of the split, reopening it if another view is open, and its composer.
-  const focusPane = (side: 0 | 1) => {
-    if (!split) return;
-    openOnHost(split.hostId, { kind: "thread", threadId: split.threadIds[side] });
+  // Focuses a tile of the split, reopening it if another view is open, and its composer.
+  const focusPane = (tile: number) => {
+    const threadId = split?.threadIds[tile];
+    if (!threadId) return;
+    openOnHost(split.hostId, { kind: "thread", threadId });
     requestAnimationFrame(() =>
-      document.querySelector<HTMLElement>(`[data-pane="${side}"] .composer-input`)?.focus(),
+      document.querySelector<HTMLElement>(`[data-pane="${tile}"] .composer-input`)?.focus(),
     );
   };
 
@@ -991,9 +1005,9 @@ export function App() {
         if (!dialog) picker.current?.showModal();
       } else if (command === "noRepoThread") {
         if (!dialog) newThread(noRepo);
-      } else if (command === "leftThread" || command === "rightThread") {
+      } else if (command && (tileCommands as readonly string[]).includes(command)) {
         if (dialog || !split) return;
-        focusPane(command === "leftThread" ? 0 : 1);
+        focusPane((tileCommands as readonly string[]).indexOf(command));
       } else if (command === "back" || command === "forward") {
         if (dialog || settings) return;
         step(command === "back" ? -1 : 1);
@@ -1297,137 +1311,150 @@ export function App() {
                     <div
                       className="relative flex min-h-0 flex-1"
                       onDragOver={(e) => {
-                        const side = dropSideOf(e);
-                        setDropSide(side);
-                        if (side === undefined) return;
+                        const at = dropAtOf(e);
+                        setDropAt(at);
+                        if (at === undefined) return;
                         e.preventDefault();
                         e.dataTransfer.dropEffect = "copy";
                       }}
                       onDragLeave={(e) => {
                         if (!e.currentTarget.contains(e.relatedTarget as Node | null))
-                          setDropSide(undefined);
+                          setDropAt(undefined);
                       }}
                       onDrop={(e) => {
-                        const side = dropSideOf(e);
-                        setDropSide(undefined);
+                        const at = dropAtOf(e);
+                        setDropAt(undefined);
                         const thread = draggedThread(e.dataTransfer);
-                        if (side === undefined || !thread) return;
+                        if (at === undefined || !thread) return;
                         e.preventDefault();
                         // A split's threads are one computer's.
-                        if (thread.hostId === host.id) openBeside(thread.runId, side);
+                        if (thread.hostId === host.id) openBeside(thread.runId, at);
                       }}
                     >
-                      {dropSide !== undefined && (
-                        <div
-                          aria-hidden
-                          className={`pointer-events-none absolute inset-y-2 z-20 grid w-[calc(50%-1rem)] place-items-center rounded-xl border-2 border-dashed border-accent bg-background/85 backdrop-blur-sm ${dropSide === 0 ? "left-2" : "right-2"}`}
-                        >
-                          <span className="flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-body font-medium text-accent-foreground [&_svg]:size-4">
-                            <Columns2 />
-                            {paired ? "Open here" : "Open side by side"}
-                          </span>
-                        </div>
-                      )}
-                      {panes.map((threadId, side) => {
-                        const focused = threadId === selection.threadId;
-                        const paneThread = threads.state.threads.find((t) => t.id === threadId);
-                        const paneParent =
-                          "threadLineage" in threads.capabilities && paneThread
-                            ? lineageOf(threads.state, paneThread)?.parent?.id
-                            : undefined;
-                        const title = threads.state.titles[threadId];
-                        const inSpace = threads.state.repos.some(
-                          (r) => r.id === paneThread?.repo && r.space,
-                        );
-                        // Keyed, so another run starts from an empty transcript.
-                        return (
-                          <section
-                            key={`${host.id}/${threadId}`}
-                            data-pane={paired ? side : undefined}
-                            data-focused={paired && focused ? "" : undefined}
-                            aria-label={paired ? (title ?? "Thread") : undefined}
-                            // Clicking or tabbing into a side focuses it.
-                            onPointerDownCapture={() => !focused && openThreadId(threadId)}
-                            // A link to a pull request the thread links opens its view, not GitHub,
-                            // unless a modifier key asks for the browser; the setting swaps the two.
-                            onClickCapture={(e) => {
-                              const href = (e.target as Element)
-                                .closest?.("a[href]")
-                                ?.getAttribute("href");
-                              const pr =
-                                linksPrs &&
-                                href &&
-                                linkedPr(href, threads.state.runs[threadId]?.pullRequests ?? []);
-                              const modified = e.metaKey || e.ctrlKey || e.shiftKey;
-                              const inApp = behaviorPrefs.get().prLinkClick === "parallax";
-                              if (!pr || modified === inApp) return;
-                              // Never reaching the link's own handler, which opens the browser.
-                              e.preventDefault();
-                              e.stopPropagation();
-                              openPr(pr);
-                            }}
-                            // Not focus the window or the app gives with nothing focused before, such as a
-                            // notification's click or an approval card's.
-                            onFocusCapture={(e) =>
-                              !focused && e.relatedTarget && openThreadId(threadId)
-                            }
-                            className={`flex min-w-0 flex-1 flex-col ${side > 0 ? "border-l border-border" : ""}`}
-                          >
-                            {paired && (
-                              <PaneHeader
-                                side={side as 0 | 1}
-                                title={title ?? "Thread"}
-                                repo={threads.state.repos.find((r) => r.id === paneThread?.repo)}
-                                focused={focused}
-                                onClose={() => closePane(threadId)}
-                              />
-                            )}
-                            <AgentChat
-                              hostId={host.id}
-                              runId={threadId}
-                              prompt={threads.state.runs[threadId]?.prompt}
-                              // The list's status goes stale once the run moves on, so only a start says so.
-                              going={focused && selection.started}
-                              listed={threads.state.runs[threadId]}
-                              space={inSpace}
-                              compose={focused ? compose : undefined}
-                              onComposed={composed}
-                              threadLinks={threadLinks}
-                              subagent={focused ? selection.subagent : undefined}
-                              onOpenSubagent={openSubagent}
-                              onSubagents={reportNative}
-                              onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
-                              onDevice={(runId, deviceId) => void showAgentDevice(runId, deviceId)}
-                              strip={
-                                paneParent
-                                  ? {
-                                      key: "parent",
-                                      node: (
-                                        <ChildStrip
-                                          name={threads.state.titles[paneParent] ?? "Thread"}
-                                          onOpenName={() => openThreadId(paneParent)}
-                                          onBack={() => openThreadId(paneParent)}
-                                        />
-                                      ),
-                                    }
-                                  : undefined
-                              }
-                              forked={!!paneThread?.forkedFrom}
-                              // The open thread's, the one App reads; another pane's chips stay neutral.
-                              pullRequests={threadRun?.id === threadId ? prs : undefined}
-                              onOpenChanges={(turn, path) => {
-                                setPanelOpen(true);
-                                setShowChanges({ runId: threadId, turn, path });
-                              }}
-                              onFork={
-                                "threadFork" in threads.capabilities
-                                  ? (turnId, choice) => forkThread(threadId, turnId, choice)
-                                  : undefined
-                              }
-                            />
-                          </section>
-                        );
-                      })}
+                      <SplitTiles
+                        ratios={tiled ? split.ratios : []}
+                        onResize={(ratios) => split && setSplit({ ...split, ratios })}
+                        drop={
+                          dropAt === undefined
+                            ? undefined
+                            : { replace: dropAt < panes.length ? dropAt : undefined }
+                        }
+                        items={panes.map((threadId, side) => {
+                          const focused = threadId === selection.threadId;
+                          const paneThread = threads.state.threads.find((t) => t.id === threadId);
+                          const paneParent =
+                            "threadLineage" in threads.capabilities && paneThread
+                              ? lineageOf(threads.state, paneThread)?.parent?.id
+                              : undefined;
+                          const title = threads.state.titles[threadId];
+                          const inSpace = threads.state.repos.some(
+                            (r) => r.id === paneThread?.repo && r.space,
+                          );
+                          // Keyed, so another run starts from an empty transcript.
+                          return {
+                            key: `${host.id}/${threadId}`,
+                            node: (
+                              <section
+                                data-pane={tiled ? side : undefined}
+                                data-focused={tiled && focused ? "" : undefined}
+                                aria-label={tiled ? (title ?? "Thread") : undefined}
+                                // Clicking or tabbing into a tile focuses it, but not its close button,
+                                // which leaves the focus where it is.
+                                onPointerDownCapture={(e) =>
+                                  !focused && !closesTile(e.target) && openThreadId(threadId)
+                                }
+                                // A link to a pull request the thread links opens its view, not GitHub,
+                                // unless a modifier key asks for the browser; the setting swaps the two.
+                                onClickCapture={(e) => {
+                                  const href = (e.target as Element)
+                                    .closest?.("a[href]")
+                                    ?.getAttribute("href");
+                                  const pr =
+                                    linksPrs &&
+                                    href &&
+                                    linkedPr(
+                                      href,
+                                      threads.state.runs[threadId]?.pullRequests ?? [],
+                                    );
+                                  const modified = e.metaKey || e.ctrlKey || e.shiftKey;
+                                  const inApp = behaviorPrefs.get().prLinkClick === "parallax";
+                                  if (!pr || modified === inApp) return;
+                                  // Never reaching the link's own handler, which opens the browser.
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  openPr(pr);
+                                }}
+                                // Not focus the window or the app gives with nothing focused before, such as a
+                                // notification's click or an approval card's.
+                                onFocusCapture={(e) =>
+                                  !focused &&
+                                  e.relatedTarget &&
+                                  !closesTile(e.target) &&
+                                  openThreadId(threadId)
+                                }
+                                className="flex min-h-0 min-w-0 flex-1 flex-col"
+                              >
+                                {tiled && (
+                                  <PaneHeader
+                                    tile={side}
+                                    title={title ?? "Thread"}
+                                    repo={threads.state.repos.find(
+                                      (r) => r.id === paneThread?.repo,
+                                    )}
+                                    focused={focused}
+                                    onClose={() => closePane(threadId)}
+                                  />
+                                )}
+                                <AgentChat
+                                  hostId={host.id}
+                                  runId={threadId}
+                                  prompt={threads.state.runs[threadId]?.prompt}
+                                  // The list's status goes stale once the run moves on, so only a start says so.
+                                  going={focused && selection.started}
+                                  listed={threads.state.runs[threadId]}
+                                  space={inSpace}
+                                  compose={focused ? compose : undefined}
+                                  onComposed={composed}
+                                  threadLinks={threadLinks}
+                                  subagent={focused ? selection.subagent : undefined}
+                                  onOpenSubagent={openSubagent}
+                                  onSubagents={reportNative}
+                                  onPreview={(runId, reveal) => void showPreviews(runId, reveal)}
+                                  onDevice={(runId, deviceId) =>
+                                    void showAgentDevice(runId, deviceId)
+                                  }
+                                  strip={
+                                    paneParent
+                                      ? {
+                                          key: "parent",
+                                          node: (
+                                            <ChildStrip
+                                              name={threads.state.titles[paneParent] ?? "Thread"}
+                                              onOpenName={() => openThreadId(paneParent)}
+                                              onBack={() => openThreadId(paneParent)}
+                                            />
+                                          ),
+                                        }
+                                      : undefined
+                                  }
+                                  forked={!!paneThread?.forkedFrom}
+                                  // The open thread's, the one App reads; another pane's chips stay neutral.
+                                  pullRequests={threadRun?.id === threadId ? prs : undefined}
+                                  onOpenChanges={(turn, path) => {
+                                    setPanelOpen(true);
+                                    setShowChanges({ runId: threadId, turn, path });
+                                  }}
+                                  onFork={
+                                    "threadFork" in threads.capabilities
+                                      ? (turnId, choice) => forkThread(threadId, turnId, choice)
+                                      : undefined
+                                  }
+                                />
+                              </section>
+                            ),
+                          };
+                        })}
+                      />
                     </div>
                   ) : selection.kind === "new" ? (
                     <NewThread
@@ -1759,27 +1786,31 @@ export function App() {
   return <SharedRepoIcons value={repoIcons}>{page}</SharedRepoIcons>;
 }
 
+/** Whether `target` is in a tile's close button (PaneHeader). */
+const closesTile = (target: EventTarget) =>
+  target instanceof Element && !!target.closest("[data-close-tile]");
+
 const stepButton =
   "grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-35 [&_svg]:size-4";
 
 /**
- * A side of the split's header, like a tab: its repository's icon, its title, its Focus left or
- * right thread key, and a close button. The focused side's is underlined in the accent.
+ * A tile of the split's header, like a tab: its repository's icon, its title, its Focus thread
+ * key, and a close button. The focused tile's is underlined in the accent.
  */
 function PaneHeader({
-  side,
+  tile,
   title,
   repo,
   focused,
   onClose,
 }: {
-  side: 0 | 1;
+  tile: number;
   title: string;
   repo?: Repo;
   focused: boolean;
   onClose: () => void;
 }) {
-  const keys = useShortcutLabel(side === 0 ? "leftThread" : "rightThread");
+  const keys = useShortcutLabel(tileCommands[tile]);
   return (
     <div
       className={`relative flex h-9 shrink-0 items-center gap-2 border-b border-border pr-1.5 pl-4 text-body transition-colors ${focused ? "text-foreground" : "text-faint-foreground"}`}
@@ -1796,8 +1827,9 @@ function PaneHeader({
       )}
       <button
         type="button"
-        aria-label="Close this side"
-        title="Close this side"
+        aria-label="Close this tile"
+        title="Close this tile"
+        data-close-tile
         onClick={onClose}
         className="grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
       >

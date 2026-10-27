@@ -22,6 +22,8 @@ export type Command =
   | "previousThread"
   | "leftThread"
   | "rightThread"
+  | "thirdThread"
+  | "fourthThread"
   | "back"
   | "forward";
 
@@ -50,23 +52,39 @@ export const commands: { id: Command; name: string; defaults: string[]; elsewher
   { id: "parentThread", name: "Go to parent thread", defaults: ["Mod+Alt+ArrowUp"] },
   { id: "nextThread", name: "Next sibling thread", defaults: ["Mod+Alt+ArrowRight"] },
   { id: "previousThread", name: "Previous sibling thread", defaults: ["Mod+Alt+ArrowLeft"] },
-  // Two threads side by side (PLX-587). Off macOS, Ctrl+1 and Ctrl+2 open sidebar rows.
+  // The split's threads (PLX-587, PLX-1082), each by its place. The first two keep their old ids so
+  // a saved rebinding still applies. Off macOS, Ctrl+1 to Ctrl+4 open sidebar rows.
   {
     id: "leftThread",
-    name: "Focus left thread",
+    name: "Focus thread 1",
     defaults: ["Ctrl+Digit1"],
     elsewhere: ["Ctrl+Shift+Digit1"],
   },
   {
     id: "rightThread",
-    name: "Focus right thread",
+    name: "Focus thread 2",
     defaults: ["Ctrl+Digit2"],
     elsewhere: ["Ctrl+Shift+Digit2"],
+  },
+  {
+    id: "thirdThread",
+    name: "Focus thread 3",
+    defaults: ["Ctrl+Digit3"],
+    elsewhere: ["Ctrl+Shift+Digit3"],
+  },
+  {
+    id: "fourthThread",
+    name: "Focus thread 4",
+    defaults: ["Ctrl+Digit4"],
+    elsewhere: ["Ctrl+Shift+Digit4"],
   },
   // The threads opened in this window, as a browser's history (PLX-789).
   { id: "back", name: "Back", defaults: ["Mod+BracketLeft"] },
   { id: "forward", name: "Forward", defaults: ["Mod+BracketRight"] },
 ];
+
+/** The commands that focus the split's threads, by their place in it. */
+export const tileCommands = ["leftThread", "rightThread", "thirdThread", "fourthThread"] as const;
 
 const order = ["Ctrl", "Alt", "Shift", "Meta"];
 export const modifiers = ["Control", "Alt", "Shift", "Meta", "AltGraph"];

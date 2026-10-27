@@ -162,7 +162,8 @@ import { lookOf, usePullRequests, type PullRequests } from "./PullRequests";
 import { instanceLogo, instanceName } from "./providers";
 import { UpdateButton } from "./Update";
 import { clockOptions } from "./prefs";
-import { useShortcutLabel } from "./keybindings";
+import { bindingsOf, formatKeybinding, tileCommands, useKeybindings } from "./keybindings";
+import { TileGlyph } from "./SplitTiles";
 import { flushToasts, toast, undo, useToasts } from "./undo";
 
 import {
@@ -3639,8 +3640,9 @@ export function MenuKey({ children }: { children: string }) {
 }
 
 /**
- * The two threads open side by side (PLX-587), joined in one box above the list: each with its
- * Focus left or right thread key and a button that closes its side. Choosing one focuses it.
+ * The threads tiled side by side (PLX-587, PLX-1082), joined in one box above the list: each with
+ * a map of its tile, its Focus thread key, and a button that closes its tile. Choosing one
+ * focuses it.
  */
 function SplitGroup({
   split,
@@ -3657,8 +3659,8 @@ function SplitGroup({
   onOpen: (threadId: string) => void;
   onClose: (threadId: string) => void;
 }) {
-  const left = useShortcutLabel("leftThread");
-  const right = useShortcutLabel("rightThread");
+  useKeybindings();
+  const keys = tileCommands.map((c) => bindingsOf(c)[0] && formatKeybinding(bindingsOf(c)[0]!));
   const titles = hosts.find((h) => h.host.id === split.hostId)?.view.state.titles ?? {};
   return (
     <div className="mb-2">
@@ -3682,15 +3684,20 @@ function SplitGroup({
                 onClick={() => onOpen(id)}
                 className={`${row} pr-8 ${focused ? current : ""}`}
               >
-                <kbd className="shrink-0 rounded-sm border border-border bg-surface px-1 font-sans text-caption leading-4 text-muted-foreground">
-                  {side === 0 ? left : right}
-                </kbd>
+                <span className={focused ? "text-accent" : "text-muted-foreground"}>
+                  <TileGlyph count={split.threadIds.length} index={side} />
+                </span>
                 <span className="min-w-0 flex-1 truncate">{title}</span>
+                {keys[side] && (
+                  <kbd className="shrink-0 font-sans text-caption text-faint-foreground tabular-nums">
+                    {keys[side]}
+                  </kbd>
+                )}
               </button>
               <button
                 type="button"
                 aria-label={`Close ${title}`}
-                title="Close this side"
+                title="Close this tile"
                 onClick={() => onClose(id)}
                 className="absolute top-1/2 right-1 grid size-5.5 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
               >

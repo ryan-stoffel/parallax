@@ -925,7 +925,7 @@ body {
   font-style: italic;
 }
 
-/* Two threads side by side (App.tsx): no scrollbar between them. The prompt rail shows where a
+/* Threads tiled side by side (App.tsx): no scrollbar between them. The prompt rail shows where a
    transcript is. */
 [data-pane] [role="log"] {
   scrollbar-width: none;
