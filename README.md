@@ -69,6 +69,14 @@ In Settings > Connections, turn on Pair computers on this network, then choose P
   <img src="docs/images/readme/mobile-thread.png" alt="A thread open in the iOS app" width="130">
 </p>
 
+## In a terminal
+
+`parallax` runs Parallax in your terminal, laid out like Claude Code, with the same threads, Spaces, and Projects as the app, live in both. Run it in a git checkout and new threads work there in place. `/settings` signs in to providers and GitHub, adds API keys, and changes this computer's settings, so the terminal works without the app. `/login` jumps to the first provider that isn't signed in. It comes with the app, or installs on its own (see [Terminal only](#terminal-only)).
+
+<p align="center">
+  <img src="docs/images/readme/tui.png" alt="Parallax in a terminal: a Claude Code thread that added an imperial option to a forecast formatter, its tool calls folded into one line" width="720">
+</p>
+
 ## Install
 
 These commands install the latest nightly. The app updates itself after that.
@@ -88,6 +96,16 @@ irm https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/inst
 On macOS the app goes in /Applications. On Linux it's an AppImage in `~/.local/share/parallax-nightly`, with a launcher entry and a `parallax-nightly` command. On Windows it installs for your user, with no admin prompt. Every installer is also on the [releases page](https://github.com/ryan-stoffel/parallax/releases).
 
 Then sign in to at least one provider on the computer that runs the work. The app sets up this computer's agents on first launch, and Settings > Providers covers any computer.
+
+### Terminal only
+
+To run Parallax in a terminal without the app, on macOS (Apple silicon) and Linux (x64 and arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/scripts/install-tui.sh | sh
+```
+
+It puts `plxd` in `~/.parallax-plxd` and links `~/.local/bin/parallax` to it. Run `parallax` to start. Run the command again to update.
 
 ## Build from source
 
