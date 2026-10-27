@@ -52,8 +52,6 @@ export interface Instance {
   permissions: AgentPermission[];
   efforts: boolean;
   coordinator: boolean;
-  /** Set for an account pool (PLX-1033): the instances of its kind it starts threads on. */
-  members?: string[];
 }
 
 /** A host's instances, and the models it offers on them, in the order the model picker lists them. */
@@ -170,7 +168,6 @@ export function catalogOf(
           permissions: info.permissions,
           efforts: info.efforts,
           coordinator: info.coordinator,
-          ...(info.instance.members && { members: info.instance.members }),
         },
         models: instanceModels(info),
       }))

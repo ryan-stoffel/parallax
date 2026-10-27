@@ -2277,13 +2277,6 @@ export type ProviderInstance = {
 	 * 100 (0046). At or past its limit minus this, it takes no new children. Absent means none.
 	 */
 	reserve?: number,
-	/**
-	 * Set for an account pool (PLX-1033): the ids of the instances of its kind it spreads
-	 * threads across. A thread started on a pool runs on its member with the most headroom, and
-	 * stays on it. A pool runs nothing itself, so its program, home, arguments, and environment
-	 * are unused.
-	 */
-	members?: Array<string>,
 };
 
 /**

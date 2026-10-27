@@ -52,8 +52,8 @@ const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
 /** What plxd's `capabilities_advertised` lists (daemon/src/methods/host.rs), with the same caps. */
 const capabilities: Capabilities = Object.fromEntries(
   [
+    "accountHomes",
     "accounts",
-    "accountPools",
     "agentClis",
     "agentReview",
     "agentWait",
@@ -1206,22 +1206,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "providers/upgrade": () => ({ version: "0.163.0" }),
   "providers/save": (p) => {
     const i = db.providers.findIndex((x) => x.instance.id === p.instance.id);
-    const members = p.instance.members;
-    // An account pool (PLX-1033) reports its members' state, as plxd does.
-    const pooled = members && db.providers.filter((x) => members.includes(x.instance.id));
-    if (pooled) {
-      const pool: ProviderInfo = {
-        instance: p.instance,
-        installed: pooled.some((x) => x.installed),
-        signedIn: pooled.some((x) => x.signedIn === true) || undefined,
-        models: pooled.flatMap((x) => x.models),
-        permissions: pooled[0]?.permissions ?? [],
-        efforts: pooled[0]?.efforts ?? false,
-        coordinator: pooled[0]?.coordinator ?? false,
-      };
-      if (i >= 0) db.providers[i] = pool;
-      else db.providers.push(pool);
-    } else if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
+    if (i >= 0) db.providers[i] = { ...db.providers[i]!, instance: p.instance };
     else {
       // Another account of an agent on this Mac, such as a second Codex with its own home: the
       // same CLI, signed out until its sign-in.

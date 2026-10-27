@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Layers, Search, Star, UserRound } from "lucide-react";
+import { Check, ChevronDown, Search, Star, UserRound } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
 import {
@@ -25,28 +25,24 @@ const emailOf = (i: Instance | undefined, name: string) =>
 
 /** Whether an account header would say more than the provider's name. */
 const hasAccountDetail = (i: Instance | undefined, name: string) =>
-  !!(i?.members || i?.plan || emailOf(i, name) || name.includes("@"));
+  !!(i?.plan || emailOf(i, name) || name.includes("@"));
 
-/**
- * An instance as the account header and its menu show it: its name with its plan, or Pool for a
- * pool, and under it its email, or how many accounts a pool picks from.
- */
+/** An instance as the account header and its menu show it: its name with its plan, and its email. */
 function AccountLabel({ instance: i, name }: { instance: Instance | undefined; name: string }) {
-  const pool = i?.members;
-  const detail = pool ? `Picks from ${pool.length} accounts by usage left` : emailOf(i, name);
+  const detail = emailOf(i, name);
   return (
     <>
       <span className="grid size-5 shrink-0 place-items-center text-muted-foreground [&_svg]:size-4">
-        {pool ? <Layers aria-hidden className="text-accent" /> : <UserRound aria-hidden />}
+        <UserRound aria-hidden />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2 text-body font-medium">
           <span className="truncate">
             <Redacted text={name} />
           </span>
-          {(pool || i?.plan) && (
+          {i?.plan && (
             <span className="shrink-0 rounded-sm bg-hover px-1.5 text-caption font-medium text-muted-foreground">
-              {pool ? "Pool" : planName(i!.plan!)}
+              {planName(i.plan)}
             </span>
           )}
         </span>
@@ -64,8 +60,8 @@ function AccountLabel({ instance: i, name }: { instance: Instance | undefined; n
 const keyOf = (m: Model) => `${m.provider}/${m.id}`;
 
 /**
- * The rail's group for an instance: its kind, so a provider's accounts and pools share one
- * button, except an ACP agent, which is its own.
+ * The rail's group for an instance: its kind, so a provider's accounts share one button, except
+ * an ACP agent, which is its own.
  */
 const groupOf = (i: Pick<Instance, "id" | "kind">) => (i.kind === "acp" ? i.id : i.kind);
 
@@ -75,9 +71,8 @@ const railButton =
 /**
  * The model picker: a button showing the chosen model that opens a searchable list of the
  * `catalog`'s models, with a rail to filter by favorites or provider. A provider with more than
- * one account or an account pool (PLX-1033) has one rail button. A header over a provider's models
- * names its account with its email and plan, and picks which pool or account runs the thread when
- * there's more than one. Its rows name only their models; Favorites and search, which mix
+ * one account has one rail button. A header over a provider's models names its account with its
+ * email and plan, and picks which account runs the thread when there's more than one. Its rows name only their models; Favorites and search, which mix
  * providers, also say whose each is. A native popover, so Escape and clicking away close it, and it
  * flips above the button when there's no room below. The models of instances in `unavailable`
  * aren't listed, and the rail and the account menu show those instances disabled, saying why on
@@ -110,17 +105,11 @@ export function ModelMenu({
     const found = instance(id);
     return found ? groupOf(found) : id;
   };
-  // Each group's instances that offer models: its pools first, then its accounts.
+  // Each group's instances that offer models.
   const listed = [...new Set(all.map((m) => m.provider))];
   const groups = new Map<string, Provider[]>();
   for (const p of listed) groups.set(group(p), [...(groups.get(group(p)) ?? []), p]);
-  for (const [key, ids] of groups)
-    groups.set(key, [
-      ...ids.filter((p) => instance(p)?.members),
-      ...ids.filter((p) => !instance(p)?.members),
-    ]);
-  // The instance a group opens on: the chosen model's, else its first pool or account that can
-  // be picked.
+  // The instance a group opens on: the chosen model's, else its first account that can be picked.
   const opening = (key: string) => {
     const ids = groups.get(key) ?? [];
     return ids.includes(chosen.provider)
@@ -301,7 +290,7 @@ export function ModelMenu({
                   }}
                   className="absolute top-full right-2 left-2 z-10 max-h-48 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-composer"
                 >
-                  {accounts.map((p, index) => (
+                  {accounts.map((p) => (
                     <button
                       key={p}
                       type="button"
@@ -314,7 +303,7 @@ export function ModelMenu({
                         setAccount(p);
                         closeAccounts();
                       }}
-                      className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left enabled:hover:bg-hover aria-checked:bg-selected disabled:opacity-40 ${!instance(p)?.members && index > 0 && instance(accounts[index - 1]!)?.members ? "mt-1 border-t border-border pt-2.5" : ""}`}
+                      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left enabled:hover:bg-hover aria-checked:bg-selected disabled:opacity-40"
                     >
                       <AccountLabel instance={instance(p)} name={nameOf(p)} />
                       <Check

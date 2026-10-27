@@ -111,13 +111,6 @@ pub struct ProviderInstance {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub reserve: Option<u8>,
-    /// Set for an account pool (PLX-1033): the ids of the instances of its kind it spreads
-    /// threads across. A thread started on a pool runs on its member with the most headroom, and
-    /// stays on it. A pool runs nothing itself, so its program, home, arguments, and environment
-    /// are unused.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional)]
-    pub members: Option<Vec<String>>,
 }
 
 /// An instance's detected state, and what it offers.

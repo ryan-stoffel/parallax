@@ -315,9 +315,10 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
 }
 
 /// The capabilities [`capabilities_advertised`] always advertises with no options.
-/// `accountPools` includes pool members and host-expanded, separate account homes (PLX-1033).
+/// `accountHomes`: plxd expands `~/` in an account's home, makes the folder, and probes each
+/// account in its own home, so several accounts of one kind run apart (0088).
 const PLAIN_CAPABILITIES: &[&str] = &[
-    "accountPools",
+    "accountHomes",
     "accounts",
     "agentClis",
     "agentReview",
