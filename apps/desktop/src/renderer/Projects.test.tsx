@@ -379,6 +379,19 @@ const modeChoice = (within: Element) =>
     ["auto", "bypass"].includes(r.value),
   );
 
+test("a press on the add palette's backdrop closes it, and one inside it doesn't", async () => {
+  await renderApp();
+  await openPalette();
+  const press = (target: Element) =>
+    act(() => {
+      target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+    });
+  press(paletteOption("Clone from GitHub")!);
+  expect(dialog().open).toBe(true);
+  press(dialog());
+  expect(dialog().open).toBe(false);
+});
+
 test("with projectPermission and projectAutonomy, Create Project asks for full access, on by default, and autonomy, the same on a retry", async () => {
   capabilities = { projectPermission: {}, projectAutonomy: {} };
   let fails = 1;
