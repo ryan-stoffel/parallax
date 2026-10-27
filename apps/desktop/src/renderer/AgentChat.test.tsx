@@ -366,6 +366,19 @@ test("opens from the thread's snapshot, appends its events, and a fresh snapshot
   expect(watch).toHaveBeenCalledTimes(1);
 });
 
+test("the box keeps its focus as the transcript arrives under it (PLX-1051)", async () => {
+  const { snapshot } = watchedBridge();
+  await renderChat();
+  expect(document.body.textContent).toContain("Loading…");
+  const box = composer();
+  act(() => box.focus());
+
+  await snapshot(logged.slice(0, 2));
+  expect(transcriptText()).toContain("Add a README");
+  expect(composer()).toBe(box);
+  expect(document.activeElement).toBe(box);
+});
+
 test("a thread's subscription that ended in an error opens again on the host's next connection", async () => {
   const { watch, emitError, snapshot, connect } = watchedBridge();
   await renderChat();
