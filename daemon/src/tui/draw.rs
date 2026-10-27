@@ -20,7 +20,7 @@ const MARK_BLUE: [u8; 3] = [0x2b, 0x5c, 0xff];
 const MARK_CORAL: [u8; 3] = [0xff, 0x4a, 0x1f];
 const MARK_OVERLAP: [u8; 3] = [0xe4, 0xe4, 0xe7];
 pub(super) const BLUE: Color = Color::Rgb(MARK_BLUE[0], MARK_BLUE[1], MARK_BLUE[2]);
-const CORAL: Color = Color::Rgb(MARK_CORAL[0], MARK_CORAL[1], MARK_CORAL[2]);
+pub(super) const CORAL: Color = Color::Rgb(MARK_CORAL[0], MARK_CORAL[1], MARK_CORAL[2]);
 
 /// The logo's width and height in pixels: 18 columns, and 9 rows of two pixels each, enough for
 /// its circles to read as circles.
@@ -37,6 +37,9 @@ const SIDEBAR_WIDTH: u16 = 48;
 
 impl App {
     pub(super) fn draw(&self, frame: &mut Frame) {
+        if self.settings.is_some() {
+            return self.draw_settings(frame);
+        }
         let area = frame.area().inner(Margin::new(1, 0));
         let notice = self
             .notice
@@ -703,7 +706,7 @@ fn clock(at: Timestamp) -> String {
 }
 
 /// `text` cut to `room` columns, with `…` when it was wider.
-fn clip(text: &str, room: usize) -> String {
+pub(super) fn clip(text: &str, room: usize) -> String {
     if text.width() <= room {
         return text.to_owned();
     }
