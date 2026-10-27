@@ -229,11 +229,12 @@ async fn latest(context: &Context, spec: &ProcessSpec, pointer: &str) -> Option<
     version_in(&ran.stdout, pointer)
 }
 
-/// The version at `pointer` in a JSON document. A cask's may carry a build after a comma.
+/// The version at `pointer` in a JSON document. A cask's may carry a build after a comma, and a
+/// formula's a revision after an underscore.
 fn version_in(body: &str, pointer: &str) -> Option<String> {
     let body: Value = serde_json::from_str(body).ok()?;
     let version = body.pointer(pointer)?.as_str()?;
-    Some(version.split(',').next()?.to_owned())
+    Some(version.split([',', '_']).next()?.to_owned())
 }
 
 /// Whether `latest` is a newer release than `version`.
@@ -310,6 +311,12 @@ mod tests {
         assert_eq!(
             version_in(outdated, "/casks/0/current_version").as_deref(),
             Some("2.1.311")
+        );
+        let revised = r#"{"formulae": [{"name": "codex", "installed_versions": ["0.162.1"],
+            "current_version": "0.163.0_1"}], "casks": []}"#;
+        assert_eq!(
+            version_in(revised, "/formulae/0/current_version").as_deref(),
+            Some("0.163.0")
         );
     }
 }
