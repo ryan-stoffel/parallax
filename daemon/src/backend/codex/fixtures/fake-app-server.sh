@@ -8,8 +8,10 @@
 # once plxd closes stdin, as app-server does.
 
 dir=$FAKE_CODEX_DIR
-printf '%s\n' "$@" > "$dir/argv"
-env > "$dir/env"
+# Each written whole, then renamed into place, so a test that waits for the file never reads
+# half of it (PLX-1096).
+printf '%s\n' "$@" > "$dir/argv.tmp" && mv "$dir/argv.tmp" "$dir/argv"
+env > "$dir/env.tmp" && mv "$dir/env.tmp" "$dir/env"
 exec 3< "$FAKE_CODEX_FIXTURE"
 while IFS= read -r line <&3; do
   case $line in
