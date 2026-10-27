@@ -34,9 +34,11 @@ test("the tile under a point, or the last one off every tile", () => {
   expect(tileAt(tiles, 1, 1)).toBe(3);
 });
 
-test("closing a tile drops its own cut, or the last cut for the last tile", () => {
-  expect(ratiosWithout([0.3, 0.4, 0.6], 4, 1)).toEqual([0.3, 0.6]);
+test("closing a tile keeps the cuts before it, and the ones after it, turned, start even", () => {
+  expect(ratiosWithout([0.3, 0.4, 0.6], 4, 1)).toEqual([0.3, 0.5]);
   expect(ratiosWithout([0.3, 0.4, 0.6], 4, 3)).toEqual([0.3, 0.4]);
+  // The first of three closing: the 30% top share doesn't become a 30% left share.
+  expect(ratiosWithout([0.65, 0.3], 3, 0)).toEqual([0.5]);
   expect(ratiosWithout([0.3], 2, 0)).toEqual([]);
 });
 

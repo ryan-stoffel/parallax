@@ -100,8 +100,10 @@ export function fittingTiles(
   return 1;
 }
 
-/** The ratios once tile `index` of `count` closes: its cut goes, or the last one for the last tile. */
+/**
+ * The ratios once tile `index` of `count` closes. The cuts before it keep theirs. Each one after it
+ * moves up a place, which turns it from side by side to top and bottom or back, so it starts even.
+ */
 export function ratiosWithout(ratios: readonly number[], count: number, index: number): number[] {
-  const gone = Math.min(index, count - 2);
-  return ratios.filter((_, i) => i !== gone);
+  return Array.from({ length: count - 2 }, (_, i) => (i < index ? ratios[i]! : evenRatio));
 }
