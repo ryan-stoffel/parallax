@@ -83,11 +83,11 @@ test("a provider's accounts share one rail button, with an account menu", () => 
     `${redactedPlaceholder("personal@example.test")}Email hidden, hover or focus to showPlus`,
   );
 
-  // An account's header names it, its plan, and its email, and its rows only their models.
+  // An account's header names it, its email, and its plan, and its rows only their models.
   act(() => button("Work")!.click());
   expect(document.querySelector('[role="menu"][aria-label="Account"]')).toBeNull();
   expect(listed()).toEqual(["gpt-b"]);
-  expect(header()).toBe("WorkProwork@example.test");
+  expect(header()).toBe("Workwork@example.testPro");
   expect(document.querySelector('ul [role="menuitemradio"]')?.textContent).toBe("gpt-b");
 });
 

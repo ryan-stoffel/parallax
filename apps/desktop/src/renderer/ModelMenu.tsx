@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Search, Star, UserRound } from "lucide-react";
+import { Check, ChevronDown, Search, SearchX, Star } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ToggleEvent } from "react";
 
 import {
@@ -27,32 +27,29 @@ const emailOf = (i: Instance | undefined, name: string) =>
 const hasAccountDetail = (i: Instance | undefined, name: string) =>
   !!(i?.plan || emailOf(i, name) || name.includes("@"));
 
-/** An instance as the account header and its menu show it: its name with its plan, and its email. */
+/**
+ * An instance on one line, as the account header and its menu show it: its name, its email muted
+ * beside it, and its plan. Each email sits right inside a `.truncate`, so its blur spreads softly
+ * past the cut (index.css's `.truncate:has(.redacted)`).
+ */
 function AccountLabel({ instance: i, name }: { instance: Instance | undefined; name: string }) {
   const detail = emailOf(i, name);
   return (
-    <>
-      <span className="grid size-5 shrink-0 place-items-center text-muted-foreground [&_svg]:size-4">
-        <UserRound aria-hidden />
+    <span className="flex min-w-0 flex-1 items-center gap-2">
+      <span className="min-w-0 truncate">
+        <Redacted text={name} />
       </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2 text-body font-medium">
-          <span className="truncate">
-            <Redacted text={name} />
-          </span>
-          {i?.plan && (
-            <span className="shrink-0 rounded-sm bg-hover px-1.5 text-caption font-medium text-muted-foreground">
-              {planName(i.plan)}
-            </span>
-          )}
+      {detail && (
+        <span className="min-w-0 truncate font-normal text-faint-foreground">
+          <Redacted text={detail} />
         </span>
-        {detail && (
-          <span className="block truncate text-meta text-faint-foreground">
-            <Redacted text={detail} />
-          </span>
-        )}
-      </span>
-    </>
+      )}
+      {i?.plan && (
+        <span className="shrink-0 rounded-sm bg-hover px-1 text-caption leading-4 font-medium text-muted-foreground">
+          {planName(i.plan)}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -65,8 +62,9 @@ const keyOf = (m: Model) => `${m.provider}/${m.id}`;
  */
 const groupOf = (i: Pick<Instance, "id" | "kind">) => (i.kind === "acp" ? i.id : i.kind);
 
+// A rail button's pressed look, a raised tile, is in index.css's `.model-menu-rail`.
 const railButton =
-  "grid size-8 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover aria-pressed:bg-selected aria-pressed:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-4";
+  "grid size-8 place-items-center rounded-md text-muted-foreground transition-colors duration-150 enabled:hover:bg-hover aria-pressed:text-foreground disabled:pointer-events-none disabled:opacity-40 [&_svg]:size-4";
 
 /**
  * The model picker: a button showing the chosen model that opens a searchable list of the
@@ -179,9 +177,9 @@ export function ModelMenu({
           }
         }}
         onKeyDown={moveFocus}
-        className={`${menuPanel()} h-96 w-[28rem] overflow-hidden p-0 [&:popover-open]:flex`}
+        className={`${menuPanel()} model-menu pop-in h-96 w-[28rem] overflow-hidden p-0 [&:popover-open]:flex`}
       >
-        <div className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border py-2">
+        <div className="model-menu-rail flex w-12 shrink-0 flex-col items-center gap-1 border-r border-border py-2">
           <button
             type="button"
             aria-label="Favorites"
@@ -190,11 +188,11 @@ export function ModelMenu({
               setTab(null);
               setChoosingAccount(false);
             }}
-            className={railButton}
+            className={`${railButton} aria-pressed:[&_svg]:fill-current aria-pressed:[&_svg]:text-amber-500`}
           >
             <Star />
           </button>
-          <span aria-hidden className="my-1 h-px w-6 bg-border" />
+          <span aria-hidden className="my-1 h-px w-5 bg-border" />
           {[...groups].map(([key, ids]) => {
             const first = ids[0]!;
             const ProviderLogo = logo(first);
@@ -238,7 +236,8 @@ export function ModelMenu({
           })}
         </div>
         <div className="flex min-w-0 flex-1 flex-col">
-          <label className="flex items-center gap-2 border-b border-border px-3 py-2.5 focus-within:border-ring">
+          {/* Focus turns its rule the accent, the field's focus ring. */}
+          <label className="flex h-11 shrink-0 items-center gap-2.5 border-b border-border px-4 transition-colors duration-150 focus-within:border-ring">
             <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
             <input
               ref={search}
@@ -254,7 +253,7 @@ export function ModelMenu({
             />
           </label>
           {accounts.length > 1 ? (
-            <div className="relative border-b border-border p-1.5">
+            <div className="relative shrink-0 px-1.5 pt-1.5">
               <button
                 type="button"
                 ref={accountChooser}
@@ -268,12 +267,12 @@ export function ModelMenu({
                   e.stopPropagation();
                   setChoosingAccount(true);
                 }}
-                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left hover:bg-hover"
+                className="flex h-7 w-full items-center gap-2 rounded-md px-2.5 text-left text-meta font-medium text-muted-foreground transition-colors duration-150 hover:bg-hover hover:text-foreground aria-expanded:text-foreground"
               >
                 <AccountLabel instance={instance(account)} name={nameOf(account)} />
                 <ChevronDown
                   aria-hidden
-                  className={`size-3.5 shrink-0 text-muted-foreground ${choosingAccount ? "rotate-180" : ""}`}
+                  className={`size-3.5 shrink-0 text-faint-foreground transition-transform duration-150 ${choosingAccount ? "rotate-180" : ""}`}
                 />
               </button>
               {choosingAccount && (
@@ -288,7 +287,7 @@ export function ModelMenu({
                       closeAccounts();
                     } else moveFocus(e);
                   }}
-                  className="absolute top-full right-2 left-2 z-10 max-h-48 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-composer"
+                  className="rise-in absolute top-full right-1.5 left-1.5 z-10 mt-1 max-h-56 overflow-y-auto rounded-lg border border-border bg-surface p-1 shadow-composer"
                 >
                   {accounts.map((p) => (
                     <button
@@ -303,7 +302,7 @@ export function ModelMenu({
                         setAccount(p);
                         closeAccounts();
                       }}
-                      className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left enabled:hover:bg-hover aria-checked:bg-selected disabled:opacity-40"
+                      className="flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-left text-body enabled:hover:bg-hover aria-checked:font-medium disabled:opacity-40"
                     >
                       <AccountLabel instance={instance(p)} name={nameOf(p)} />
                       <Check
@@ -318,34 +317,41 @@ export function ModelMenu({
           ) : (
             accounts.length === 1 &&
             hasAccountDetail(instance(account), nameOf(account)) && (
-              <div className="flex items-center gap-2.5 border-b border-border px-4 py-3">
+              <div className="mt-1.5 flex h-7 shrink-0 items-center px-4 text-meta font-medium text-muted-foreground">
                 <AccountLabel instance={instance(account)} name={nameOf(account)} />
               </div>
             )
           )}
-          <ul className="min-h-0 flex-1 overflow-y-auto p-1.5">
+          <ul className="min-h-0 flex-1 scroll-py-1.5 overflow-y-auto p-1.5">
             {shown.map((m) => {
               const ProviderLogo = logo(m.provider);
               const key = keyOf(m);
               const favorite = starred(m);
+              const current = key === keyOf(chosen);
               return (
-                <li key={key} className="flex items-center rounded-md hover:bg-hover">
+                // Keyboard focus rings the whole row, star included, in the app's focus ring.
+                <li
+                  key={key}
+                  className="group/row flex h-8 items-center rounded-md transition-colors duration-100 hover:bg-hover has-[[role=menuitemradio]:focus-visible]:outline-2 has-[[role=menuitemradio]:focus-visible]:-outline-offset-2 has-[[role=menuitemradio]:focus-visible]:outline-ring"
+                >
                   <button
                     type="button"
                     role="menuitemradio"
-                    aria-checked={key === keyOf(chosen)}
+                    aria-checked={current}
                     onClick={() => pick(m)}
-                    className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-1.5 text-left"
+                    className="flex h-full min-w-0 flex-1 items-center gap-2 pr-1 pl-2.5 text-left focus-visible:outline-none"
                   >
-                    <span className="flex min-w-0 flex-1 items-center gap-2 text-body">
+                    <span
+                      className={`flex min-w-0 flex-1 items-center gap-2 text-body ${current ? "font-medium" : ""}`}
+                    >
                       <span className="truncate">{m.name}</span>
                       {isNew(m) && (
-                        <span className="rounded-sm border border-accent px-1 text-caption font-semibold text-accent">
-                          NEW
+                        <span className="shrink-0 rounded-full bg-accent/12 px-1.5 text-caption leading-4 font-medium text-accent">
+                          New
                         </span>
                       )}
                       {mixed && (
-                        <span className="ml-auto flex min-w-0 items-center gap-1.5 text-meta text-faint-foreground">
+                        <span className="ml-auto flex min-w-0 items-center gap-1.5 text-meta font-normal text-faint-foreground">
                           <ProviderLogo className="size-3 shrink-0" />
                           <span className="truncate">
                             <Redacted text={nameOf(m.provider)} />
@@ -355,15 +361,16 @@ export function ModelMenu({
                     </span>
                     <Check
                       aria-hidden
-                      className={`size-4 shrink-0 text-accent ${key === keyOf(chosen) ? "" : "invisible"}`}
+                      className={`size-3.5 shrink-0 text-accent ${current ? "" : "invisible"}`}
                     />
                   </button>
+                  {/* Shown while its row is hovered or focused, or once it's a favorite. */}
                   <button
                     type="button"
                     aria-label={favorite ? `Unfavorite ${m.name}` : `Favorite ${m.name}`}
                     aria-pressed={favorite}
                     onClick={() => toggleFavorite(catalog.hostId, m.provider, m.id)}
-                    className="mr-1.5 grid size-7 place-items-center rounded-sm text-faint-foreground hover:text-foreground aria-pressed:text-amber-500 [&_svg]:size-4 aria-pressed:[&_svg]:fill-current"
+                    className="mr-1 grid size-6 shrink-0 place-items-center rounded-sm text-faint-foreground opacity-0 transition-opacity duration-150 group-hover/row:opacity-100 group-has-[:focus-visible]/row:opacity-100 hover:text-foreground aria-pressed:text-amber-500 aria-pressed:opacity-100 [&_svg]:size-3.5 aria-pressed:[&_svg]:fill-current"
                   >
                     <Star />
                   </button>
@@ -371,8 +378,16 @@ export function ModelMenu({
               );
             })}
             {shown.length === 0 && (
-              <li className="px-2.5 py-3 text-body text-faint-foreground">
-                {q ? "No matching models" : "No favorites yet"}
+              <li className="flex h-full flex-col items-center justify-center gap-1 px-6 pb-4 text-center">
+                <span className="mb-2 grid size-11 place-items-center rounded-full bg-hover text-faint-foreground ring-1 ring-border ring-inset [&_svg]:size-6">
+                  {q ? <SearchX aria-hidden /> : <Star aria-hidden />}
+                </span>
+                <span className="text-body font-medium">
+                  {q ? "No matching models" : "No favorites yet"}
+                </span>
+                <span className="text-meta text-faint-foreground">
+                  {q ? "Try another name." : "Star a model to keep it here."}
+                </span>
               </li>
             )}
           </ul>
