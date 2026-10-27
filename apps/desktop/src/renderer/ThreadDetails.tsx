@@ -58,14 +58,16 @@ export function useThreadDetails(key: string) {
     observer.observe(element);
     return () => observer.disconnect();
   }, [element]);
-  const toggle = () =>
+  // Shows or hides it for `key`'s thread, by default the open one's: a split's tile names its own.
+  const toggle = (which = key) =>
     setOpen((was) => {
-      const next = was.includes(key) ? was.filter((other) => other !== key) : [...was, key];
+      const next = was.includes(which) ? was.filter((other) => other !== which) : [...was, which];
       localStorage.setItem(THREAD_DETAILS_KEY, JSON.stringify(next));
       return next;
     });
+  const isOpen = (which: string) => open.includes(which);
   const mode: ThreadDetailsMode = !open.includes(key) ? "hidden" : narrow ? "floating" : "docked";
-  return { mode, toggle, ref };
+  return { mode, toggle, isOpen, ref };
 }
 
 /** The top bar's button that shows and hides Thread details. */

@@ -212,7 +212,7 @@ const RowContext = createContext<{
 
 /**
  * Focuses the composer's editor (Composer.tsx), as when the plan strip goes with focus in it: the
- * focused side's, while two threads are side by side.
+ * focused tile's, while threads are tiled side by side.
  */
 const focusComposer = () =>
   (
@@ -266,6 +266,7 @@ export function AgentChat({
   onFork,
   onOpenChanges,
   pullRequests,
+  quiet,
 }: {
   hostId: string;
   runId: string;
@@ -335,6 +336,8 @@ export function AgentChat({
   onFork?: (turnId: string | undefined, choice: ForkChoice) => Promise<RpcError | undefined>;
   /** Opens the side panel's Changes view on a turn, by its ordinal, scrolled to `path` if given. */
   onOpenChanges?: (ordinal: number, path?: string) => void;
+  /** In a split's tile that isn't focused: its composer steps back to one line, as scrolled up. */
+  quiet?: boolean;
 }) {
   const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
@@ -837,12 +840,12 @@ export function AgentChat({
   const dock = (
     // A column the window bounds, so a pinned card's preview gives way to a grown composer. Only
     // what's in it takes the pointer, so the transcript under its margins still scrolls.
-    <div className="pointer-events-none mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5 *:pointer-events-auto">
+    <div className="pointer-events-none mx-auto flex min-h-0 w-full max-w-3xl flex-col px-6 pb-5 *:pointer-events-auto @max-lg:px-3 @max-lg:pb-3">
       {/* Requests waiting on the user, pinned so they can't scroll away. */}
       {pinned}
       {/* Narrows with a composer that steps back, its tabs with it. */}
       <div
-        className={`transition-[margin] duration-200 ease-out motion-reduce:transition-none ${back ? "mx-10" : ""}`}
+        className={`transition-[margin] duration-200 ease-out motion-reduce:transition-none ${back ? "mx-10 @max-lg:mx-2" : ""}`}
       >
         <ComposerTabs tabs={tabs} short={back} />
         <Composer
@@ -887,7 +890,7 @@ export function AgentChat({
           // What the box last held, where a subagent's view took it away, else the saved draft.
           initial={contents.current ?? draft}
           contents={contents}
-          away={away}
+          away={away || quiet}
           onBack={setBack}
         />
       </div>
@@ -898,7 +901,8 @@ export function AgentChat({
   const hasRows = rows.length > 0 || !!editing;
   return (
     <SubagentsContext value={subagents}>
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* A container, so in a narrow window or split tile the column and composer compact. */}
+      <div className="@container relative flex min-h-0 flex-1 flex-col">
         {hasRows ? (
           <ThreadLinksContext value={threadLinks}>
             <ForkContext value={forkTarget}>
@@ -1401,7 +1405,7 @@ export function TranscriptView({
                 >
                   <div
                     data-copied={muted || undefined}
-                    className={`mx-auto max-w-3xl px-10 ${listKinds.has(row.kind) ? "py-1" : "py-2"} ${muted ? "opacity-60" : ""}`}
+                    className={`mx-auto max-w-3xl px-10 @max-lg:px-5 ${listKinds.has(row.kind) ? "py-1" : "py-2"} ${muted ? "opacity-60" : ""}`}
                   >
                     <RowView
                       row={row}
@@ -1425,7 +1429,7 @@ export function TranscriptView({
               );
             })}
           </div>
-          {end && <div className="mx-auto max-w-3xl px-10 pb-6">{end}</div>}
+          {end && <div className="mx-auto max-w-3xl px-10 pb-6 @max-lg:px-5">{end}</div>}
           <div aria-hidden style={{ height: docked }} />
         </div>
         {/* One prompt is no choice of where to go, so there's no rail for it. */}
