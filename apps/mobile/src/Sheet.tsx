@@ -4,7 +4,7 @@
 // outside does.
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { Modal, Pressable, StyleSheet, useWindowDimensions, View } from "react-native";
+import { Modal, Pressable, StyleSheet, useColorScheme, useWindowDimensions, View } from "react-native";
 import { Gesture, GestureDetector, GestureHandlerRootView } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -33,6 +33,8 @@ export function Sheet({
   children: ReactNode;
 }) {
   const c = useColors();
+  // A step off the page: the sidebar's gray on light, a lifted surface on dark, where the page is black.
+  const fill = useColorScheme() === "dark" ? c.surface : c.sidebar;
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const y = useSharedValue(height);
@@ -72,7 +74,7 @@ export function Sheet({
           style={[
             styles.sheet,
             // It runs past the screen's bottom edge, so its bottom never shows, even as it springs.
-            { backgroundColor: c.sidebar, marginBottom: -BELOW, paddingBottom: insets.bottom + 12 + BELOW },
+            { backgroundColor: fill, marginBottom: -BELOW, paddingBottom: insets.bottom + 12 + BELOW },
             sheetStyle,
           ]}
         >
