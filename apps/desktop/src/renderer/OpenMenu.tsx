@@ -1,5 +1,5 @@
-import { Code, FolderOpen, SquareTerminal } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { Check, ChevronDown, Code, FolderOpen, SquareTerminal } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { OpenApp, OpenTarget, TerminalApp } from "../preload/bridge";
 import cursorIcon from "./assets/cursor.svg";
@@ -7,7 +7,7 @@ import vscodeIcon from "./assets/vscode.svg";
 import ghosttyIcon from "./assets/ghostty.svg";
 import alacrittyIcon from "./assets/alacritty.svg";
 import { useShortcutLabel } from "./keybindings";
-import { appShortcut } from "./ui";
+import { appShortcut, Menu, menuItem, splitChevron } from "./ui";
 
 /** Where the last target chosen is kept; Settings > General sets it too. */
 export const OPEN_TARGET_KEY = "parallax.openTarget";
@@ -39,62 +39,31 @@ export const terminalIcon = (app?: TerminalApp): ReactNode => {
   return src ? image(src) : <SquareTerminal />;
 };
 
-/**
- * One app of Open in: its icon, gray until hovered or focused, opening the folder in it. `current`
- * marks the one the Open shortcut uses.
- */
-function AppButton({
-  name,
-  icon,
-  current,
-  shortcut,
-  disabled,
-  onClick,
-}: {
-  name: string;
-  icon: ReactNode;
-  current?: boolean;
-  shortcut?: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      aria-label={`Open in ${name}`}
-      title={
-        disabled
-          ? "No folder to open yet"
-          : `Open in ${name}${current && shortcut ? ` (${shortcut})` : ""}`
-      }
-      className="group/app relative grid size-8 shrink-0 place-items-center rounded-md hover:bg-hover focus-visible:bg-hover disabled:pointer-events-none disabled:opacity-40"
-    >
-      <span className="opacity-55 grayscale transition-[filter,opacity] duration-150 group-hover/app:opacity-100 group-hover/app:grayscale-0 group-focus-visible/app:opacity-100 group-focus-visible/app:grayscale-0 [&_img]:size-5! [&_svg]:size-4.5!">
-        {icon}
-      </span>
-      {current && (
-        <span
-          aria-hidden
-          className="absolute bottom-0.5 size-1 rounded-full bg-faint-foreground group-hover/app:bg-muted-foreground"
-        />
-      )}
-    </button>
-  );
-}
+/** An app icon, gray until its row is hovered or focused. Rows set `group/app`. */
+const muted = (icon: ReactNode) => (
+  <span className="flex shrink-0 opacity-55 grayscale transition-[filter,opacity] duration-150 group-hover/app:opacity-100 group-hover/app:grayscale-0 group-focus-visible/app:opacity-100 group-focus-visible/app:grayscale-0">
+    {icon}
+  </span>
+);
 
 /**
- * Thread details' Open in: every editor and IDE main found, the file manager, and, for this
- * computer's folders, every installed terminal, each as its app's icon that opens `folder` on the
- * host. The editor or file manager last used is what the Open shortcut (keybindings.ts) uses, and
- * it's kept. Disabled while there's no folder, and absent while nothing can open one.
+ * Thread details' Open in rows. The first opens `folder` on the host in the editor or file
+ * manager last chosen, also on its shortcut (keybindings.ts); its chevron lists every editor and
+ * IDE main found and the file manager, and choosing one opens with it and keeps it. The second,
+ * for this computer's folders, opens it in the terminal chosen in Settings; its chevron lists
+ * every installed terminal, and choosing one makes it the terminal and opens with it. Each app
+ * shows its own icon, gray until hovered. Disabled while there's no folder, and absent while
+ * nothing can open one.
  */
 export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }) {
+  const id = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const terminalId = useId();
+  const terminalMenu = useRef<HTMLDivElement>(null);
   const [apps, setApps] = useState<OpenApp[]>([]);
   const [terminals, setTerminals] = useState<TerminalApp[]>([]);
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
-  // Bumped when Settings chooses a terminal app, which changes the targets.
+  // Bumped when a terminal app is chosen, here or in Settings, which changes the targets.
   const [terminalChosen, setTerminalChosen] = useState(0);
   useEffect(() => {
     const onChosen = () => setTerminalChosen((n) => n + 1);
@@ -105,19 +74,20 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
   useEffect(() => {
     let live = true;
     void window.parallax.openTargets(hostId).then((found) => live && setApps(found));
-    if (local) void window.parallax.terminalApps().then((found) => live && setTerminals(found));
-    else setTerminals([]);
+    void window.parallax.terminalApps().then((found) => live && setTerminals(found));
     return () => {
       live = false;
     };
-  }, [hostId, local, terminalChosen]);
-  // The chosen terminal opens from the terminals, so it isn't listed twice.
+  }, [hostId, terminalChosen]);
   const editors = apps.filter((app) => app.target !== "terminal");
   const current = editors.find((app) => app.target === chosen) ?? editors[0];
+  // The terminal the second row opens: the chosen one, which only this computer's folders list.
+  const terminal = apps.find((app) => app.target === "terminal");
+  const terminalApp = terminals.find((app) => app.name === terminal?.name);
   const keys = useShortcutLabel("open");
 
-  const open = (target: OpenTarget, terminal?: string) => {
-    if (folder) void window.parallax.openFolder(hostId, target, folder, terminal);
+  const open = (target: OpenTarget) => {
+    if (folder) void window.parallax.openFolder(hostId, target, folder);
   };
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -130,39 +100,118 @@ export function OpenMenu({ hostId, folder }: { hostId: string; folder?: string }
   });
 
   const choose = (target: OpenTarget) => {
+    menu.current?.hidePopover();
     localStorage.setItem(OPEN_TARGET_KEY, target);
     setChosen(target);
     open(target);
   };
-  if (!editors.length && !terminals.length) return null;
+  const chooseTerminal = async (app: TerminalApp) => {
+    terminalMenu.current?.hidePopover();
+    if (!(await window.parallax.selectTerminalApp(app.path))) return;
+    window.dispatchEvent(new Event(TERMINAL_CHOSEN));
+    if (folder) void window.parallax.openFolder(hostId, "terminal", folder, app.path);
+  };
+  const terminalWhy = !local
+    ? "Terminals open folders on this computer only"
+    : !folder
+      ? "No folder to open yet"
+      : !terminal
+        ? "No installed terminal found"
+        : undefined;
   return (
-    <div className="px-2 pt-1 pb-1">
-      <h3 className="pb-1 text-meta text-muted-foreground">Open in</h3>
-      <div role="group" aria-label="Open in" className="-mx-1 flex flex-wrap items-center gap-0.5">
+    <>
+      {current && (
+        <div className="flex items-center">
+          <button
+            type="button"
+            disabled={!folder}
+            onClick={() => open(current.target)}
+            aria-label={`Open in ${current.name}`}
+            title={
+              folder
+                ? `Open in ${current.name}${keys ? ` (${keys})` : ""}`
+                : "No folder to open yet"
+            }
+            className={`${menuItem} group/app min-w-0 flex-1 disabled:opacity-50`}
+          >
+            {muted(appIcon(current))}
+            <span className="truncate">Open in {current.name}</span>
+          </button>
+          <button
+            type="button"
+            popoverTarget={id}
+            aria-haspopup="menu"
+            aria-label="Choose editor or file manager"
+            className={splitChevron}
+          >
+            <ChevronDown aria-hidden />
+          </button>
+        </div>
+      )}
+      <Menu ref={menu} id={id} label="Open in" align="end" className="min-w-52 p-1" focus="button">
         {editors.map((app) => (
-          <AppButton
+          <button
             key={app.target}
-            name={app.name}
-            icon={appIcon(app)}
-            current={app === current}
-            shortcut={keys}
+            type="button"
+            role="menuitem"
             disabled={!folder}
             onClick={() => choose(app.target)}
-          />
+            className={`${menuItem} group/app disabled:opacity-50 [&_img]:size-4 [&_svg]:size-4`}
+          >
+            {muted(appIcon(app))}
+            <span className="flex-1">{app.name}</span>
+            {app === current && keys && (
+              <span className="text-meta text-faint-foreground">{keys}</span>
+            )}
+          </button>
         ))}
-        {editors.length > 0 && terminals.length > 0 && (
-          <span aria-hidden className="mx-1 h-5 w-px bg-border" />
-        )}
-        {terminals.map((app) => (
-          <AppButton
-            key={app.path}
-            name={app.name}
-            icon={terminalIcon(app)}
-            disabled={!folder}
-            onClick={() => open("terminal", app.path)}
-          />
-        ))}
+      </Menu>
+      <div className="flex items-center">
+        <button
+          type="button"
+          disabled={!!terminalWhy}
+          title={terminalWhy}
+          onClick={() => open("terminal")}
+          className={`${menuItem} group/app min-w-0 flex-1 disabled:opacity-50`}
+        >
+          {muted(terminalApp ? terminalIcon(terminalApp) : terminalIcon())}
+          <span className="truncate">Open in {terminal?.name ?? "terminal"}</span>
+        </button>
+        <button
+          type="button"
+          popoverTarget={terminalId}
+          aria-haspopup="menu"
+          aria-label="Choose terminal"
+          disabled={!local || terminals.length === 0}
+          title={!local ? terminalWhy : undefined}
+          className={splitChevron}
+        >
+          <ChevronDown aria-hidden />
+        </button>
       </div>
-    </div>
+      <Menu
+        ref={terminalMenu}
+        id={terminalId}
+        label="Terminals"
+        align="end"
+        className="min-w-52 p-1"
+        focus="button"
+      >
+        {terminals.map((app) => (
+          <button
+            key={app.path}
+            type="button"
+            role="menuitemradio"
+            aria-checked={app.name === terminal?.name}
+            onClick={() => void chooseTerminal(app)}
+            className={`${menuItem} group/app [&_img]:size-4 [&_svg]:size-4`}
+          >
+            {muted(terminalIcon(app))}
+            <span className="flex-1">{app.name}</span>
+            {app.name === terminal?.name && <Check aria-hidden className="text-muted-foreground" />}
+          </button>
+        ))}
+      </Menu>
+    </>
   );
 }
