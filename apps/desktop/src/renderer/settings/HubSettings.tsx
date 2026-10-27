@@ -631,7 +631,17 @@ function ModelRow({ title, models }: { title: string; models: Hub["claudeModels"
  * Without one, it takes the key. On a plxd with `hubAccounts`, Add account signs one in, and
  * each account can be turned off and on or removed.
  */
-export function HubPane({ id, hostId, hub }: { id: string; hostId: string; hub: Hub }) {
+export function HubPane({
+  id,
+  hidden,
+  hostId,
+  hub,
+}: {
+  id: string;
+  hidden: boolean;
+  hostId: string;
+  hub: Hub;
+}) {
   const [managementKey, setManagementKey] = useState("");
   const [problem, setProblem] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -654,7 +664,13 @@ export function HubPane({ id, hostId, hub }: { id: string; hostId: string; hub: 
     if (!failed) setManagementKey("");
   };
   return (
-    <div id={id} role="region" aria-label={hub.name} className="min-w-0 border-t border-border p-5">
+    <div
+      id={id}
+      role="region"
+      aria-label={hub.name}
+      hidden={hidden}
+      className="min-w-0 border-t border-border p-5"
+    >
       {/* Its row above names it and its address. */}
       <Section title="Hub">
         <Row
@@ -754,12 +770,15 @@ export function HubPane({ id, hostId, hub }: { id: string; hostId: string; hub: 
 /**
  * Settings > Providers' Hubs, under the providers card as T3 Code lists its usage providers: a
  * heading with Add hub, then a card with a row per hub that turns it on or off, opens its page
- * (HubPane) under the row, or removes it after asking in place. `open` is the hub whose page shows.
+ * (HubPane) under the row, or removes it after asking in place. `open` is the hub whose page shows;
+ * the others stay mounted but hidden, so a sign-in on one outlives opening another. `error` is
+ * why the hubs couldn't be listed.
  */
 export function HubsSection({
   id,
   hostId,
   hubs,
+  error,
   open,
   onOpen,
   onAdd,
@@ -767,6 +786,7 @@ export function HubsSection({
   id: string;
   hostId: string;
   hubs: Hub[] | undefined;
+  error?: string;
   open: string | undefined;
   onOpen: (hub: string | undefined) => void;
   onAdd: () => void;
@@ -806,7 +826,9 @@ export function HubsSection({
           <p className="px-4 py-3.5 text-body text-muted-foreground">
             {hubs
               ? "Run Claude Code and Codex through one CLIProxyAPI hub that keeps every account signed in. "
-              : "Checking… "}
+              : error
+                ? `Couldn't list this host's hubs. ${error}`
+                : "Checking…"}
             {hubs && <HubHelp />}
           </p>
         ) : (
@@ -845,11 +867,11 @@ export function HubsSection({
                         type="button"
                         aria-expanded={shown}
                         aria-controls={`${pages}-${hub.id}`}
-                        aria-label={`Manage ${hub.name}`}
+                        aria-label={`${shown ? "Close" : "Manage"} ${hub.name}`}
                         onClick={() => onOpen(shown ? undefined : hub.id)}
                         className={quietButton}
                       >
-                        {shown ? "Done" : "Manage"}
+                        {shown ? "Close" : "Manage"}
                       </button>
                       <button
                         type="button"
@@ -869,7 +891,7 @@ export function HubsSection({
                     </div>
                   )}
                 </div>
-                {shown && <HubPane id={`${pages}-${hub.id}`} hostId={hostId} hub={hub} />}
+                <HubPane id={`${pages}-${hub.id}`} hidden={!shown} hostId={hostId} hub={hub} />
               </div>
             );
           })

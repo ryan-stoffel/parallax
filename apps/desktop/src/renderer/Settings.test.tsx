@@ -448,7 +448,10 @@ describe("on a plxd with providers", () => {
 
     // Hubs have their own section under the providers card: a row per hub, whose Manage opens
     // its page under it.
-    const manage = () => document.querySelector<HTMLElement>('[aria-label="Manage Home hub"]');
+    const manage = () =>
+      document.querySelector<HTMLElement>(
+        '[aria-label="Manage Home hub"], [aria-label="Close Home hub"]',
+      );
     const hubPage = () => visible('[role="region"][aria-label="Home hub"]');
 
     test("adds a hub to every computer with hubs at once, and shows its page", async () => {
@@ -588,6 +591,16 @@ describe("on a plxd with providers", () => {
         expect(calls("hubs/list").slice(lists)).toEqual([
           { host: "local", params: { refresh: true } },
         ]);
+      });
+
+      test("a sign-in under way outlives closing its hub's page", async () => {
+        statuses = [{ status: "waiting" }];
+        await addAccount("Claude");
+        expect(page().textContent).toContain("Waiting for the browser");
+        await click(manage()!);
+        expect(manage()!.getAttribute("aria-expanded")).toBe("false");
+        await click(manage()!);
+        expect(page().textContent).toContain("Waiting for the browser");
       });
 
       test("adds an account from the pasted address after checking it's this sign-in's", async () => {

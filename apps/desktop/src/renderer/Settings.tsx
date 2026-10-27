@@ -685,6 +685,8 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
   const hubs = useHubs(host.id);
   const hosts = useHosts();
   const [addingHub, setAddingHub] = useState(false);
+  // Why the host's hubs couldn't be listed, which the Hubs card says.
+  const [hubsError, setHubsError] = useState<string>();
   // The hub whose page shows under its row.
   const [openHub, setOpenHub] = useState<string>();
   const [keys, setKeys] = useState<KeyAccount[]>();
@@ -713,7 +715,11 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
       loadProviders(host.id),
       loadKeys(),
       hubsOn ? loadHubs(host.id) : undefined,
-    ]).then((errors) => live && setError(errors.find(Boolean)));
+    ]).then((errors) => {
+      if (!live) return;
+      setError(errors.find(Boolean));
+      setHubsError(errors[2]);
+    });
     return () => {
       live = false;
     };
@@ -727,6 +733,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
     ]);
     setChecking(false);
     setError(errors.find(Boolean));
+    setHubsError(errors[2]);
   };
   const save = async (instance: ProviderInstance) => {
     const failed = await saveProvider(host.id, instance);
@@ -830,8 +837,9 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           ) : (
             <>
               <p>
-                No providers on {host.name} yet. Add an agent or a model service for threads to run
-                on.
+                {hubs?.length
+                  ? `${host.name} runs threads on its hubs below. Add an agent or a model service to run them on it directly too.`
+                  : `No providers on ${host.name} yet. Add an agent or a model service for threads to run on.`}
               </p>
               <button type="button" onClick={() => setAdding(true)} className={primaryButton}>
                 Add provider
@@ -937,6 +945,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
           id={hubsSection}
           hostId={host.id}
           hubs={hubs}
+          error={hubsError}
           open={openHub}
           onOpen={setOpenHub}
           onAdd={() => setAddingHub(true)}
