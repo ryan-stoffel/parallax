@@ -1041,7 +1041,7 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "pr/view": (p) => {
     const number = Number(p.url.split("/").pop());
     const titles: Record<number, string> = {
-      588: "Follow nightlies from a nightly build",
+      588: "Follow nightlies from a nightly build, and keep the channel in the build's own metadata",
       591: "Plainer copy on the first-run screens",
     };
     return {
@@ -1074,7 +1074,28 @@ const handlers: { [M in Method]?: Handler<M> } = {
       comments: [],
       reviewRequests: [],
       labels: number === 591 ? ["docs"] : ["feature", "app"],
-      checks: [],
+      // Seven CI jobs: all passed, one failed, or three still running.
+      checks: [
+        "lint",
+        "types",
+        "test (macos)",
+        "test (linux)",
+        "test (windows)",
+        "e2e",
+        "bench",
+      ].map((name, i) => {
+        const state =
+          number === 591 || number === 612
+            ? "passed"
+            : number === 41
+              ? i === 2
+                ? "failed"
+                : "passed"
+              : i < 4
+                ? "passed"
+                : "pending";
+        return { name, state, workflow: "CI" } as const;
+      }),
       checksState:
         number === 591 || number === 612 ? "passed" : number === 41 ? "failed" : "pending",
     };
@@ -2051,11 +2072,15 @@ export const mockBridge: ParallaxBridge = {
     delay(
       hostId !== LOCAL
         ? []
-        : mockTerminal
-          ? ["cursor", "vscode", "files", "terminal"]
-          : ["cursor", "vscode", "files"],
+        : [
+            { target: "vscode" as const, name: "VS Code" },
+            { target: "cursor" as const, name: "Cursor" },
+            { target: "zed" as const, name: "Zed" },
+            { target: "xcode" as const, name: "Xcode" },
+            { target: "files" as const, name: "Finder" },
+            ...(mockTerminal ? [{ target: "terminal" as const, name: mockTerminal }] : []),
+          ],
     ),
-  openTargetIcons: () => delay({}),
   openFolder: () => delay(undefined),
   terminalApp: () => delay(mockTerminal),
   terminalApps: () =>

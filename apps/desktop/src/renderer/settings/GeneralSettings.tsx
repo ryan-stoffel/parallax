@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 
-import type { CommandStatus, OpenTarget, TerminalApp } from "../../preload/bridge";
+import type { CommandStatus, OpenApp, TerminalApp } from "../../preload/bridge";
 import { localId } from "../hosts";
-import { nameOf, OPEN_TARGET_KEY, TERMINAL_CHOSEN, targetIcon, terminalIcon } from "../OpenMenu";
+import { appIcon, OPEN_TARGET_KEY, TERMINAL_CHOSEN, terminalIcon } from "../OpenMenu";
 import { behaviorPrefs, setBehaviorPrefs, type BehaviorPrefs } from "../prefs";
 import { Picker } from "../ui";
 import { updatePrefs, type UpdatePrefs } from "../updateEverything";
@@ -110,30 +110,26 @@ function Updates() {
 export function GeneralSettings() {
   const [showNotices, setShowNotices] = useState(false);
   // Undefined until main answers, so the row doesn't flash "No apps found".
-  const [targets, setTargets] = useState<OpenTarget[]>();
+  const [targets, setTargets] = useState<OpenApp[]>();
   const [chosen, setChosen] = useState(() => localStorage.getItem(OPEN_TARGET_KEY));
   const [terminal, setTerminal] = useState<string | null>(null);
   const [terminals, setTerminals] = useState<TerminalApp[]>([]);
-  const [icons, setIcons] = useState<Partial<Record<OpenTarget, string>>>({});
   const [version, setVersion] = useState<string>();
   useEffect(() => {
     void window.parallax
       .openTargets(localId)
-      .then((found) => setTargets(found.filter((t) => t !== "terminal")));
+      .then((found) => setTargets(found.filter((t) => t.target !== "terminal")));
     void window.parallax.terminalApps().then(setTerminals);
     void window.parallax.terminalApp().then(setTerminal);
-    void window.parallax.openTargetIcons().then(setIcons);
     void window.parallax.version().then(setVersion);
   }, []);
   const chooseTerminal = async (path: string) => {
     const name = await window.parallax.selectTerminalApp(path);
     if (!name) return;
     setTerminal(name);
-    setIcons(await window.parallax.openTargetIcons());
-    setTargets((await window.parallax.openTargets(localId)).filter((t) => t !== "terminal"));
     window.dispatchEvent(new Event(TERMINAL_CHOSEN));
   };
-  const current = targets?.find((t) => t === chosen) ?? targets?.[0];
+  const current = targets?.find((t) => t.target === chosen) ?? targets?.[0];
 
   return (
     <>
@@ -149,15 +145,15 @@ export function GeneralSettings() {
             <Picker
               field
               label="Open folders in"
-              value={current}
+              value={current.target}
               onChange={(value) => {
                 localStorage.setItem(OPEN_TARGET_KEY, value);
                 setChosen(value);
               }}
               options={(targets ?? []).map((t) => ({
-                value: t,
-                label: nameOf(t, terminal),
-                icon: targetIcon(t, icons),
+                value: t.target,
+                label: t.name,
+                icon: appIcon(t),
               }))}
               align="end"
               className="w-56"
@@ -177,12 +173,9 @@ export function GeneralSettings() {
                 ? terminals.map((app) => ({
                     value: app.path,
                     label: app.name,
-                    icon: terminalIcon(
-                      app.name,
-                      app.name === terminal ? icons.terminal : undefined,
-                    ),
+                    icon: terminalIcon(app),
                   }))
-                : [{ value: "none", label: "No terminals found", icon: terminalIcon(null) }]
+                : [{ value: "none", label: "No terminals found", icon: terminalIcon() }]
             }
             align="end"
             className="w-56"

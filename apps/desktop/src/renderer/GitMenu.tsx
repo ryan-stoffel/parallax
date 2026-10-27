@@ -1,13 +1,17 @@
 import {
+  Check,
   ChevronDown,
+  ChevronRight,
+  CircleCheck,
   CloudUpload,
+  Copy,
   FileDiff,
   GitBranch,
   GitCommitHorizontal,
   GitPullRequestArrow,
   type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import type { RpcError } from "../preload/bridge";
 import type { AgentRun, GitStatus, RepoId } from "../protocol/generated/protocol";
@@ -16,7 +20,7 @@ import { describeError, githubProblem } from "./errors";
 import { titleOf } from "./threads";
 import { isRunning } from "./transcript";
 import { notify, type Notice } from "./notifications";
-import { Menu, menuItem, splitChevron } from "./ui";
+import { Menu, menuItem } from "./ui";
 
 type GitAction = "commit" | "push" | "pr";
 
@@ -29,12 +33,13 @@ const actions: { action: GitAction; label: string; busy: string; Icon: LucideIco
 /**
  * What the Git menu offers a run whose folder is in `status`: why each action can't run (absent
  * when it can) and the main one (Commit with changes, else Push with unpushed commits, else Create
- * PR).
+ * PR). `hasPr` is whether the thread already has an open pull request, which Create PR would repeat.
  */
 export function gitActions(
   run: AgentRun,
   status: GitStatus | undefined,
   canOpenPr: boolean,
+  hasPr = false,
 ): { why: Partial<Record<GitAction, string>>; main: GitAction } {
   const all = (reason: string) => ({ commit: reason, push: reason, pr: reason });
   if (isRunning(run.status)) return { why: all("Wait for the turn to end"), main: "commit" };
@@ -46,7 +51,8 @@ export function gitActions(
   else if (!status.branch) why.push = why.pr = "Check out a branch";
   else {
     if (status.ahead === 0) why.push = "Nothing to push";
-    if (!canOpenPr) why.pr = "This host's plxd can't open pull requests";
+    if (hasPr) why.pr = "A pull request is already open";
+    else if (!canOpenPr) why.pr = "This host's plxd can't open pull requests";
     // A worktree's pull request is of the run's commits.
     else if (!run.checkout && !run.diff) why.pr = "No commits yet";
   }
@@ -54,17 +60,36 @@ export function gitActions(
   return { why, main };
 }
 
+/** Where `status` stands, in a few words: uncommitted files, commits to push, and the upstream. */
+export function syncText(status: GitStatus): string {
+  const files = status.changes === 1 ? "1 uncommitted file" : `${status.changes} uncommitted files`;
+  const commits = status.ahead === 1 ? "1 commit to push" : `${status.ahead} commits to push`;
+  const remote = !status.origin
+    ? "No origin remote"
+    : !status.branch
+      ? undefined
+      : status.ahead
+        ? commits
+        : !status.upstream
+          ? "Not pushed yet"
+          : `Up to date with ${status.upstream}`;
+  return [status.changes ? files : !status.ahead && "No uncommitted changes", remote]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /**
- * Git rows in Thread details (PLX-298). The main part runs the next useful
- * action; the chevron lists Commit, Push, and Create PR, each disabled with its reason. Commit
+ * Git rows in Thread details (PLX-298): the branch, copyable, over where it stands in words, the
+ * Changes row, and the next useful action as a button, its reason shown when it can't run. The
+ * chevron lists Commit, Push, and Create PR, each disabled with its reason. Commit
  * asks for a message, prefilled with the thread's title. Create PR pushes and opens the pull
  * request through `agent/openPr`, in the browser, or with `onPrOpened`, in the PR view. The status
  * is read again after each action and whenever the run's status or commit changes, as when a turn
  * ends. Each action's result is a notification (PLX-507), except a failed commit, which stays in
  * its dialog; a push or Create PR that fails for `gh` offers `onSetUpGithub` (PLX-423). Absent
  * until the host's plxd has the `git` capability. A new repository thread reads its checkout
- * behind `repoGitStatus` and offers no writes until the thread starts. `children`, such as the
- * thread's linked pull requests, show between the branch and Commit.
+ * behind `repoGitStatus` and offers no writes until the thread starts. `hasPr` turns Create PR
+ * off while the thread has an open pull request.
  */
 export function GitMenu({
   hostId,
@@ -74,7 +99,7 @@ export function GitMenu({
   onPrOpened,
   onSetUpGithub,
   onChanges,
-  children,
+  hasPr,
 }: {
   hostId: string;
   run?: AgentRun;
@@ -84,7 +109,7 @@ export function GitMenu({
   onPrOpened?: (url: string) => void;
   onSetUpGithub?: () => void;
   onChanges?: () => void;
-  children?: ReactNode;
+  hasPr?: boolean;
 }) {
   const id = useId();
   const menu = useRef<HTMLDivElement>(null);
@@ -99,6 +124,7 @@ export function GitMenu({
   const [diagnostic, setDiagnostic] = useState<string>();
   const [busy, setBusy] = useState<GitAction>();
   const [message, setMessage] = useState("");
+  const [copied, setCopied] = useState(false);
   const runId = run?.id;
 
   const load = useCallback(
@@ -140,7 +166,7 @@ export function GitMenu({
 
   if (!able) return null;
   const { why, main } = run
-    ? gitActions(run, status, "openPr" in capabilities!)
+    ? gitActions(run, status, "openPr" in capabilities!, hasPr)
     : {
         why: {
           commit: "Start the thread to commit",
@@ -215,43 +241,100 @@ export function GitMenu({
     dialog.current?.showModal();
   };
 
+  const copyBranch = () => {
+    if (!status?.branch) return;
+    void navigator.clipboard.writeText(status.branch);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
+  const lines = (status?.insertions ?? 0) + (status?.deletions ?? 0);
+  // Nothing to commit or push: the button says so rather than naming an action that can't run.
+  const settled = !busy && !!why[main] && !!status && !status.changes && !status.ahead;
   return (
     <>
+      <h3 className="px-2 pt-1 pb-1 text-meta text-muted-foreground">Git</h3>
       <div
         role={status || !error ? undefined : "alert"}
-        className={menuItem}
         title={status?.branch ?? diagnostic}
+        className="group/branch flex items-start gap-2 rounded-md px-2 py-1.5"
       >
-        <GitBranch aria-hidden className="text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate">
-          {status ? (status.branch ?? "Detached HEAD") : (error ?? "Loading branch…")}
+        <GitBranch aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1">
+          <span className={`block truncate text-body ${!status && error ? "text-danger" : ""}`}>
+            {status ? (status.branch ?? "Detached HEAD") : (error ?? "Loading branch…")}
+          </span>
+          {status && (
+            <span className="mt-0.5 block text-meta text-faint-foreground">{syncText(status)}</span>
+          )}
         </span>
-        {!!status?.ahead && (
-          <span className="shrink-0 text-meta text-faint-foreground">{status.ahead} ahead</span>
+        {status?.branch && (
+          <button
+            type="button"
+            onClick={copyBranch}
+            aria-label={copied ? "Copied" : "Copy branch name"}
+            title={copied ? "Copied" : "Copy branch name"}
+            className="-my-0.5 grid size-6 shrink-0 place-items-center rounded-md text-faint-foreground opacity-0 group-hover/branch:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 [&_svg]:size-3.5!"
+          >
+            {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+          </button>
         )}
       </div>
-      {children}
-      <div className="flex items-center">
+      <button
+        type="button"
+        onClick={onChanges}
+        disabled={!status || !onChanges}
+        className={`${menuItem} disabled:opacity-50 [&_svg]:size-4`}
+      >
+        <FileDiff aria-hidden className="text-muted-foreground" />
+        <span className="flex-1">Changes</span>
+        <span className="text-meta text-muted-foreground">
+          {status
+            ? lines > 0 && (
+                <span className="font-mono">
+                  <span className="text-added">+{status.insertions ?? 0}</span>{" "}
+                  <span className="text-danger">−{status.deletions ?? 0}</span>
+                </span>
+              )
+            : error
+              ? "Unavailable"
+              : "Loading…"}
+        </span>
+        <ChevronRight aria-hidden className="text-faint-foreground" />
+      </button>
+      <div className="mx-2 mt-1.5 mb-1 flex h-8 items-stretch rounded-lg border border-border">
         <button
           type="button"
           disabled={!!why[main] || !!busy}
           onClick={() => start(main)}
           title={why[main]}
-          className={`${menuItem} min-w-0 flex-1 disabled:opacity-50`}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-l-lg px-2.5 text-body font-medium enabled:hover:bg-hover disabled:font-normal disabled:text-muted-foreground [&_svg]:size-4"
         >
-          <primary.Icon aria-hidden />
-          {busy ? actions.find((a) => a.action === busy)!.busy : primary.label}
+          {settled ? (
+            <CircleCheck aria-hidden className="text-added" />
+          ) : (
+            <primary.Icon aria-hidden />
+          )}
+          <span className="truncate">
+            {busy
+              ? actions.find((a) => a.action === busy)!.busy
+              : settled
+                ? "Nothing to commit or push"
+                : primary.label}
+          </span>
         </button>
         <button
           type="button"
           popoverTarget={id}
           aria-haspopup="menu"
           aria-label="Git actions"
-          className={splitChevron}
+          className="grid w-8 shrink-0 place-items-center rounded-r-lg border-l border-border text-muted-foreground hover:bg-hover [&_svg]:size-4"
         >
           <ChevronDown aria-hidden />
         </button>
       </div>
+      {!busy && !settled && why[main] && (
+        <p className="px-2 pb-1 text-meta text-faint-foreground">{why[main]}</p>
+      )}
       <Menu ref={menu} id={id} label="Git" align="end" className="w-80 p-1" focus="button:enabled">
         {actions.map(({ action, label, Icon }) => (
           <button
@@ -268,27 +351,6 @@ export function GitMenu({
           </button>
         ))}
       </Menu>
-      <button
-        type="button"
-        onClick={onChanges}
-        disabled={!status || !onChanges}
-        className={`${menuItem} disabled:opacity-50`}
-      >
-        <FileDiff aria-hidden />
-        <span className="flex-1">Changes</span>
-        <span className="text-meta text-muted-foreground">
-          {status ? (
-            <span className="font-mono">
-              <span className="text-added">+{status.insertions ?? 0}</span>{" "}
-              <span className="text-danger">−{status.deletions ?? 0}</span>
-            </span>
-          ) : error ? (
-            "Unavailable"
-          ) : (
-            "Loading…"
-          )}
-        </span>
-      </button>
       <dialog
         ref={dialog}
         aria-labelledby={`${id}-commit`}

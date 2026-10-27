@@ -30,7 +30,6 @@ const bridge: Partial<ParallaxBridge> = {
   openTargets: async () => [],
   terminalApps: async () => [],
   terminalApp: async () => null,
-  openTargetIcons: async () => ({}),
   onProfile: () => () => {},
 };
 window.parallax = bridge as ParallaxBridge;

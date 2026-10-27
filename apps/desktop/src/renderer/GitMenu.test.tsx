@@ -6,7 +6,7 @@ import { afterEach, expect, test, vi } from "vite-plus/test";
 import samples from "../../../../crates/parallax-protocol/samples/v1/agents.json";
 import type { ParallaxBridge } from "../preload/bridge";
 import type { AgentRun, GitStatus, LoggedEvent } from "../protocol/generated/protocol";
-import { gitActions, GitMenu } from "./GitMenu";
+import { gitActions, GitMenu, syncText } from "./GitMenu";
 import { Notifications } from "./notifications";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -48,10 +48,23 @@ test("the main action is the next useful one, and the others are off when they c
   expect(plan({ ...finished, diff: undefined }, clean).off).toContain("pr");
   expect(plan(finished, clean, false).off).toContain("pr");
   expect(plan(finished, { ...clean, origin: false }).off).toEqual(["commit", "pr", "push"]);
+  // An open pull request already covers the branch.
+  expect(gitActions(finished, clean, true, true).why.pr).toBe("A pull request is already open");
   expect(plan(finished, { ...clean, branch: null, changes: 1 })).toEqual({
     off: ["pr", "push"],
     main: "commit",
   });
+});
+
+test("says where the branch stands in words", () => {
+  expect(syncText(clean)).toBe("No uncommitted changes · Up to date with origin/parallax/readme");
+  expect(syncText({ ...clean, changes: 3, ahead: 1 })).toBe(
+    "3 uncommitted files · 1 commit to push",
+  );
+  expect(syncText({ ...clean, upstream: null })).toBe("No uncommitted changes · Not pushed yet");
+  expect(syncText({ ...clean, origin: false, changes: 1 })).toBe(
+    "1 uncommitted file · No origin remote",
+  );
 });
 
 /** A bridge whose plxd has `capabilities` and answers the Git methods with `answers`. */

@@ -75,6 +75,9 @@ export function detectTerminalApps(
           "Alacritty.app",
           "kitty.app",
           "Warp.app",
+          "Hyper.app",
+          "Tabby.app",
+          "Rio.app",
         ]
       : platform === "win32"
         ? ["wt.exe", "wezterm-gui.exe", "alacritty.exe", "WindowsTerminal.exe"]

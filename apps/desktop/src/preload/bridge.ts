@@ -19,11 +19,35 @@ import type {
 export const THEME_PREFERENCES = ["system", "dark", "light"] as const;
 export type ThemePreference = (typeof THEME_PREFERENCES)[number];
 
+/** An editor or IDE that Open can find on this computer (editors.ts). */
+export type Editor =
+  | "vscode"
+  | "vscodeInsiders"
+  | "vscodium"
+  | "cursor"
+  | "windsurf"
+  | "zed"
+  | "sublime"
+  | "nova"
+  | "xcode"
+  | "intellij"
+  | "webstorm"
+  | "pycharm"
+  | "goland"
+  | "rustrover"
+  | "clion"
+  | "phpstorm"
+  | "rider"
+  | "rubymine"
+  | "androidStudio"
+  | "fleet";
 /**
- * Where the top bar's Open button opens a folder: an editor, the OS's file manager, or the
- * terminal app chosen in Settings.
+ * Where Open opens a folder: an editor, the OS's file manager, or the terminal app chosen in
+ * Settings.
  */
-export type OpenTarget = "cursor" | "vscode" | "files" | "terminal";
+export type OpenTarget = Editor | "files" | "terminal";
+/** An Open target found on this computer, its name for people, and its app icon as a data URL. */
+export type OpenApp = { target: OpenTarget; name: string; icon?: string };
 /**
  * The `parallax` command at `path`: this app's (`installed`), one for a plxd that moved or changed
  * (`stale`), none (`missing`), something else named `parallax` (`other`), or none to offer from
@@ -36,7 +60,8 @@ export type CommandStatus = {
   onPath: boolean;
 };
 
-export type TerminalApp = { path: string; name: string };
+/** An installed terminal app, its name for people, and its app icon as a data URL. */
+export type TerminalApp = { path: string; name: string; icon?: string };
 
 /**
  * The variable a provider instance's `home` sets, for the kinds that have one: Settings labels the
@@ -445,17 +470,19 @@ export interface ParallaxBridge {
   closeDeviceStream(streamId: string): void;
 
   /**
-   * Where `openFolder` can open a folder on a host: the editors this computer has, and the file
+   * Where `openFolder` can open a folder on a host, with their icons where main could read them:
+   * the editors this computer has (only those with Remote SSH for an SSH host), and the file
    * manager and chosen terminal for this computer's own folders. Empty for an unknown host.
    */
-  openTargets(hostId: string): Promise<OpenTarget[]>;
-  /** The Open targets' own app icons as data URLs: macOS only, and only those it could read. */
-  openTargetIcons(): Promise<Partial<Record<OpenTarget, string>>>;
-  /** Opens a host's folder with `target`. Main shows a dialog when it can't. */
-  openFolder(hostId: string, target: OpenTarget, folder: string): Promise<void>;
+  openTargets(hostId: string): Promise<OpenApp[]>;
+  /**
+   * Opens a host's folder with `target`. For `terminal`, `terminal` names one of `terminalApps`
+   * to use instead of the chosen one. Main shows a dialog when it can't.
+   */
+  openFolder(hostId: string, target: OpenTarget, folder: string, terminal?: string): Promise<void>;
   /** The name of the terminal app Open uses, or null until one is chosen. */
   terminalApp(): Promise<string | null>;
-  /** Installed known terminal apps on this computer. */
+  /** Installed known terminal apps on this computer, with their icons where main could read them. */
   terminalApps(): Promise<TerminalApp[]>;
   /** Selects an installed terminal. Unknown paths are rejected. */
   selectTerminalApp(path: string): Promise<string | null>;
