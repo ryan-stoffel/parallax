@@ -1702,8 +1702,9 @@ export function Composer({
       ref={controls}
       disabled={!!optionsDisabled}
       title={optionsDisabled}
-      // Its buttons read brighter and heavier than other menus' (menuButton), as the box's own.
-      className="flex min-w-0 items-center gap-1 [&>button]:font-semibold [&>button]:text-foreground/90"
+      // In the box's row, its buttons read brighter and heavier than other menus' (menuButton), as
+      // the box's own. In the stepped-back tray they stay menuButton's quiet gray.
+      className={`flex min-w-0 items-center gap-1 ${back ? "" : "[&>button]:font-semibold [&>button]:text-foreground/90"}`}
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
@@ -1790,7 +1791,7 @@ export function Composer({
           if (!e.currentTarget.contains(e.relatedTarget)) setFocused(false);
         }}
         data-back={back || undefined}
-        className={`relative z-10 rounded-prompt border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text bg-[color-mix(in_oklab,var(--foreground)_7%,var(--background))] hover:bg-[color-mix(in_oklab,var(--foreground)_10%,var(--background))]" : "bg-surface shadow-composer"}`}
+        className={`relative z-10 border transition-[background-color,box-shadow] duration-200 ease-out focus-within:border-ring motion-reduce:transition-none ${threadOver ? "border-ring" : "border-border"} ${back ? "cursor-text rounded-[16px] bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] hover:bg-[color-mix(in_oklab,var(--foreground)_7%,var(--surface))]" : "rounded-prompt bg-surface shadow-composer"}`}
       >
         {menuOpen && (
           <div
@@ -2012,7 +2013,8 @@ export function Composer({
       </form>
       {back && pickers ? (
         // A thin tray tucked under the stepped-back line, in place of any tab, as low as it can be.
-        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-prompt border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
+        // Its corners are squarer than the open box's, as the line's are.
+        <div className="tucked mx-5 -mt-4 flex min-w-0 items-center rounded-b-xl border border-t-0 border-border bg-[color-mix(in_oklab,var(--foreground)_3%,var(--surface))] px-1.5 pt-4.5 pb-0.5 [&_button[aria-haspopup]]:py-0.5">
           {pickers}
         </div>
       ) : (
