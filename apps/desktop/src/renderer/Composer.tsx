@@ -1703,7 +1703,7 @@ export function Composer({
       disabled={!!optionsDisabled}
       title={optionsDisabled}
       // Its buttons read brighter and heavier than other menus' (menuButton), as the box's own.
-      className="flex min-w-0 items-center gap-1 [&>button]:font-medium [&>button]:text-foreground/90"
+      className="flex min-w-0 items-center gap-1 [&>button]:font-semibold [&>button]:text-foreground/90"
     >
       {/* Every provider, and an open run can't pick those it can't move to. */}
       {model && (
