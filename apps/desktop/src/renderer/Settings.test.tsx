@@ -32,9 +32,14 @@ const states: Record<string, ConnectionState> = {
 const secret = "sk-proj-THE-SECRET-0123456789abcdef";
 
 type Answer = { result: unknown } | { error: { code: number; message: string; data?: object } };
-let answers: Record<string, (params: Record<string, unknown>) => Answer | Promise<Answer>>;
-const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
-  const answer = (await answers[method]?.(params)) ?? { error: { code: -32601, message: "no" } };
+let answers: Record<
+  string,
+  (params: Record<string, unknown>, host: string) => Answer | Promise<Answer>
+>;
+const request = vi.fn(async (host: string, method: string, params: Record<string, unknown>) => {
+  const answer = (await answers[method]?.(params, host)) ?? {
+    error: { code: -32601, message: "no" },
+  };
   return "result" in answer ? { ...answer, logId: "log" } : answer;
 });
 const calls = (method: string) =>
@@ -298,6 +303,11 @@ describe("on a plxd with providers", () => {
   });
   afterEach(() => {
     states["local"] = { status: "connected", plxd: "0.1.0", protocol: 1, capabilities: {} };
+    states[mini.id] = {
+      status: "failed",
+      retrying: false,
+      error: { reason: "exited", message: "plxd exited." },
+    };
   });
 
   const dialog = () => document.querySelector("dialog")!;
@@ -412,6 +422,40 @@ describe("on a plxd with providers", () => {
       "work",
       "backup",
     ]);
+  });
+
+  test("copies another computer's missing accounts, then its pools, and keeps its own", async () => {
+    states[mini.id] = { ...states["local"]!, capabilities: { providers: {} } } as ConnectionState;
+    const codex = listed[1]!;
+    const theirs = [
+      { ...codex, instance: { ...codex.instance, name: "Mini's Codex" } },
+      {
+        ...codex,
+        instance: { ...instance("pool", "codex", "Codex pool"), members: ["codex", "work"] },
+      },
+      {
+        ...codex,
+        instance: {
+          ...instance("work", "codex", "Work"),
+          home: "~/.codex-work",
+          env: [{ name: "OPENAI_API_KEY", secret: true }],
+        },
+      },
+    ];
+    const ours = answers["providers/list"]!;
+    answers["providers/list"] = (params, host) =>
+      host === mini.id
+        ? { result: { providers: theirs, checkedAt: "2026-09-28T12:00:00Z" } }
+        : ours(params, host);
+    await renderSettings();
+    await click(document.querySelector<HTMLElement>('[aria-label="Copy from another computer"]')!);
+    await click(button(visible('[role="menu"][aria-label="Copy from"]'), "Mac mini"));
+    expect(calls("providers/save")).toEqual([
+      { host: "local", params: { instance: theirs[2]!.instance } },
+      { host: "local", params: { instance: theirs[1]!.instance } },
+    ]);
+    expect(listed.find((p) => p.instance.id === "codex")?.instance.name).toBe("Codex");
+    expect(notice()).toContain("Copied 2 from Mac mini");
   });
 
   test("adds a model service with its key as a secret", async () => {

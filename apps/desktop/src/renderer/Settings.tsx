@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowUpRight, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Copy, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import {
   lazy,
   Suspense,
@@ -33,6 +33,7 @@ import { dismiss, notify } from "./notifications";
 import { PoolPane, poolStatus } from "./PoolSettings";
 import {
   accountLabel,
+  copyProviders,
   kindOf,
   logoOf,
   loadProviders,
@@ -78,7 +79,7 @@ import { SourceControlSettings } from "./settings/SourceControlSettings";
 import { StorageSettings } from "./settings/StorageSettings";
 import { ThreadSettings } from "./settings/ThreadSettings";
 import type { ThreadsView } from "./threads";
-import { Breadcrumb, IconButton, Segmented } from "./ui";
+import { Breadcrumb, IconButton, Menu, menuHeading, menuItem, Segmented } from "./ui";
 import { periods, UsageLines, useUsage, type Period } from "./Usage";
 import { uuidv7 } from "./uuidv7";
 
@@ -254,17 +255,26 @@ function ProvidersSettings() {
   const [hostId, setHostId] = useState(localId);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const picker = <HostPicker hosts={hosts} value={host.id} onChange={setHostId} always />;
-  return <HostProviders key={host.id} host={host} picker={picker} />;
+  const others = hosts.filter((h) => h.id !== host.id);
+  return <HostProviders key={host.id} host={host} others={others} picker={picker} />;
 }
 
 /**
  * One host's providers: its provider instances on a plxd with `providers`, else the CLIs an older
  * one detects.
  */
-function HostProviders({ host, picker }: { host: Host; picker: ReactNode }) {
+function HostProviders({
+  host,
+  others,
+  picker,
+}: {
+  host: Host;
+  others: Host[];
+  picker: ReactNode;
+}) {
   const connection = useConnection(host.id);
   return connection?.status === "connected" && "providers" in connection.capabilities ? (
-    <HostInstances host={host} picker={picker} />
+    <HostInstances host={host} others={others} picker={picker} />
   ) : (
     <HostClis host={host} picker={picker} />
   );
@@ -668,12 +678,99 @@ const instanceTone = (info: ProviderInfo) =>
   !info.installed || info.signedIn === false ? "error" : undefined;
 
 /**
+ * Copy from (PLX-1065): a menu of the other computers, and picking one saves here each of its
+ * provider instances and account pools this host lacks. Sign-ins don't copy, so a copied account
+ * signs in here.
+ */
+function CopyFrom({ host, others }: { host: Host; others: Host[] }) {
+  const id = useId();
+  const menu = useRef<HTMLDivElement>(null);
+  const [copying, setCopying] = useState(false);
+  const copy = async (from: Host) => {
+    menu.current?.hidePopover();
+    setCopying(true);
+    const result = await copyProviders(from.id, host.id);
+    setCopying(false);
+    const key = `copy-providers/${host.id}`;
+    if (typeof result === "string")
+      return notify({ key, tone: "error", title: `Couldn't copy from ${from.name}`, body: result });
+    const { copied, failed } = result;
+    if (failed.length > 0)
+      return notify({
+        key,
+        tone: "error",
+        title: `Couldn't copy ${failed.length} of ${copied.length + failed.length} from ${from.name}`,
+        body: failed.map((f) => `${f.name}: ${f.error}`).join(" · "),
+      });
+    notify({
+      key,
+      tone: "success",
+      title:
+        copied.length === 0
+          ? `${host.name} already has ${from.name}'s providers`
+          : `Copied ${copied.length} from ${from.name}`,
+      body: copied.length === 0 ? undefined : "Sign in to each copied account on this computer.",
+    });
+  };
+  return (
+    <>
+      <IconButton
+        label="Copy from another computer"
+        popoverTarget={id}
+        aria-haspopup="menu"
+        disabled={copying}
+      >
+        <Copy aria-hidden />
+      </IconButton>
+      <Menu ref={menu} id={id} label="Copy from" align="end" className="w-64 p-1">
+        <p className={menuHeading}>Copy providers from</p>
+        {others.map((h) => (
+          <CopyFromRow key={h.id} host={h} onCopy={() => void copy(h)} />
+        ))}
+      </Menu>
+    </>
+  );
+}
+
+/** One computer in Copy from, off while it isn't connected or its plxd has no `providers`. */
+function CopyFromRow({ host, onCopy }: { host: Host; onCopy: () => void }) {
+  const connection = useConnection(host.id);
+  const why =
+    connection?.status !== "connected"
+      ? "Not connected"
+      : "providers" in connection.capabilities
+        ? undefined
+        : "Needs a newer plxd";
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      disabled={why !== undefined}
+      onClick={onCopy}
+      className={`${menuItem} disabled:opacity-50 disabled:hover:bg-transparent`}
+    >
+      <span className="min-w-0 flex-1 truncate">{host.name}</span>
+      {why && <span className="shrink-0 text-meta text-faint-foreground">{why}</span>}
+    </button>
+  );
+}
+
+/**
  * One host's provider instances (`providers/list`), as T3 Code lays them out: under the host and a
- * Providers line with Refresh, +, and Remove for the chosen one (which asks first, in place), one
+ * Providers line with Refresh, Copy from, +, and Remove for the chosen one (which asks first, in place), one
  * card with the instances on the left, each with a switch that turns it on or off on the host, and
  * the chosen one's pane on the right. Without instances, it offers Add provider.
  */
-function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
+function HostInstances({
+  host,
+  others,
+  picker,
+}: {
+  host: Host;
+  /** The other computers, whose instances Copy from brings here (PLX-1065). */
+  others: Host[];
+  picker: ReactNode;
+}) {
   const providers = useProviders(host.id);
   const connection = useConnection(host.id);
   const accountPools =
@@ -784,6 +881,7 @@ function HostInstances({ host, picker }: { host: Host; picker: ReactNode }) {
               <RefreshCw aria-hidden className={checking ? "animate-spin" : undefined} />
               {checking ? "Checking…" : providers && checkedLabel(providers.checkedAt)}
             </button>
+            {others.length > 0 && <CopyFrom host={host} others={others} />}
             <IconButton label="Add provider" onClick={() => setAdding(true)}>
               <Plus aria-hidden />
             </IconButton>

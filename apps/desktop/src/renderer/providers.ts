@@ -117,6 +117,44 @@ export async function removeProvider(hostId: string, id: string): Promise<string
 }
 
 /**
+ * What copying `from`'s instances to a host listing `to` saves there, in order (PLX-1065): each
+ * one whose id it lacks, accounts before the pools that need them. Sign-ins and secret values stay
+ * behind, since plxd never lists them.
+ */
+export function instancesToCopy(
+  from: ProvidersListResult,
+  to: ProvidersListResult,
+): ProviderInstance[] {
+  const have = new Set(to.providers.map((p) => p.instance.id));
+  const missing = from.providers.map((p) => p.instance).filter((i) => !have.has(i.id));
+  return [...missing.filter((i) => !i.members), ...missing.filter((i) => i.members)];
+}
+
+/**
+ * Copies `fromId`'s instances that `toId` lacks onto `toId` (instancesToCopy). Resolves to the
+ * names copied and the ones that failed with why, or to an error for people when either list
+ * can't be read.
+ */
+export async function copyProviders(
+  fromId: string,
+  toId: string,
+): Promise<{ copied: string[]; failed: { name: string; error: string }[] } | string> {
+  const [fromError, toError] = await Promise.all([loadProviders(fromId), loadProviders(toId)]);
+  const from = lists.get(fromId);
+  const to = lists.get(toId);
+  if (!from || !to) return fromError ?? toError ?? "The providers couldn't be listed.";
+  const copied: string[] = [];
+  const failed: { name: string; error: string }[] = [];
+  // One at a time, so each pool's members are saved before it.
+  for (const instance of instancesToCopy(from, to)) {
+    const error = await saveProvider(toId, instance);
+    if (error) failed.push({ name: instance.name, error });
+    else copied.push(instance.name);
+  }
+  return { copied, failed };
+}
+
+/**
  * `hostId`'s instances, kept current: listed whenever it connects to a plxd with `providers`, and
  * undefined until then, for no host, and for an older plxd.
  */
