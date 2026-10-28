@@ -1,5 +1,5 @@
-// A Space's page, New thread laid out as two columns (0090): its header, the composer, and its
-// threads on the left; on the right, the instructions and files plxd gives every thread in it.
+// A Space's page, New thread laid out as a page (0090): its header, the composer, then its threads
+// beside the instructions and files plxd gives every thread in it.
 import { ArrowLeft, MessagesSquare, Pin, PinOff, Plus, Upload, X } from "lucide-react";
 import { useId, useRef, useState, type DragEvent } from "react";
 
@@ -41,7 +41,7 @@ export function SpaceHeader({
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   return (
-    <header className="mb-8 lg:col-span-2">
+    <header className="mb-6">
       <button
         type="button"
         onClick={onBack}
@@ -94,7 +94,7 @@ export function SpaceThreads({
     })
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   return (
-    <section aria-label="Threads" className="mt-10">
+    <section aria-label="Threads">
       <h2 className="mb-2 text-reading font-medium">Threads</h2>
       {threads.length === 0 ? (
         <div className="flex flex-col items-center border-t border-border px-6 py-14 text-center">
@@ -134,7 +134,7 @@ export function SpaceThreads({
   );
 }
 
-/** A Space's instructions and files, beside the composer, in one panel that stays in view. */
+/** A Space's instructions and files, beside its threads, in one panel that stays in view. */
 export function SpaceContext({
   hostId,
   space,

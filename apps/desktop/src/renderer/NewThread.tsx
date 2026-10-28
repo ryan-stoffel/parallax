@@ -84,9 +84,9 @@ interface NewThreadProps {
   /** Shown over the composer in place of its question, as a Space's header (0090). */
   header?: ReactNode;
   /**
-   * A column beside the composer, as a Space's instructions and files (0090). With it, New thread
-   * lays out as a page: the header across the top, then the composer and `below` on the left and
-   * this on the right. The header spans both columns itself.
+   * A column beside `below`, as a Space's instructions and files beside its threads (0090). With
+   * it, New thread lays out as a page: the header, the composer at full width, then `below` and
+   * this side by side.
    */
   aside?: ReactNode;
 }
@@ -417,8 +417,8 @@ export function NewThread({
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.
   // Before it starts, it's centered a little above the middle, so as the Composer grows to its
   // seven lines the heading rises by only half as much, never toward the top. With a page under
-  // it, it sits at a fixed height instead, and the page scrolls; with a column beside it, it's a
-  // page of two columns.
+  // it, it sits at a fixed height instead, and the page scrolls; with a column beside what's under
+  // it, it's a page.
   const page = starting === undefined && !!aside;
   return (
     <div
@@ -454,7 +454,7 @@ export function NewThread({
       <div
         className={
           page
-            ? "mx-auto grid w-full max-w-5xl items-start gap-x-8 px-10 pt-12 pb-16 lg:grid-cols-[minmax(0,1fr)_20rem] lg:grid-rows-[auto_auto_1fr]"
+            ? "mx-auto w-full max-w-5xl px-10 pt-12 pb-16"
             : starting === undefined
               ? "w-full max-w-3xl"
               : "mx-auto w-full max-w-3xl px-6 pb-5"
@@ -682,11 +682,13 @@ export function NewThread({
             </div>
           }
         />
-        {starting === undefined && below}
-        {page && (
-          <aside className="mt-10 lg:col-start-2 lg:row-span-2 lg:row-start-2 lg:mt-0">
-            {aside}
-          </aside>
+        {page ? (
+          <div className="mt-10 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+            <div className="min-w-0">{below}</div>
+            <aside>{aside}</aside>
+          </div>
+        ) : (
+          starting === undefined && below
         )}
       </div>
     </div>
