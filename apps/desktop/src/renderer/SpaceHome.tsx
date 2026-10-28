@@ -25,7 +25,7 @@ const panelHead = "mb-3 flex items-center justify-between gap-2";
 
 /**
  * A Space's header, in place of New thread's question: a way back to Projects, then its icon and
- * name on one line, Pin, and its menu. Where its plxd keeps icons, the icon shows a pencil on hover
+ * name on one line, Pin, and its menu. Where its plxd keeps icons, the icon turns to a pencil on hover
  * and opens the icon picker.
  */
 export function SpaceHeader({
@@ -61,10 +61,10 @@ export function SpaceHeader({
             aria-label="Change icon"
             title="Change icon"
             onClick={(e) => changeIcon.run(e.currentTarget)}
-            className="group relative -m-1 shrink-0 rounded-md p-1 hover:bg-hover"
+            className="group relative -m-1 shrink-0 rounded-md p-1"
           >
             <ProjectTile entry={entry} size="mark" />
-            <span className="absolute -right-1 -bottom-1 grid size-4.5 place-items-center rounded-full border border-border bg-background text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 [&_svg]:size-2.5">
+            <span className="absolute inset-0 grid place-items-center rounded-md bg-surface text-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 [&_svg]:size-4">
               <Pencil aria-hidden />
             </span>
           </button>
