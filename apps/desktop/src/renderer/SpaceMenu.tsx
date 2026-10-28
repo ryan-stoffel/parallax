@@ -10,7 +10,7 @@ import type { ThreadsView } from "./threads";
 import { Menu, menuItem, ToolbarMenuRow, toolbarMenuDivider } from "./ui";
 
 /**
- * The thread's Space, or Add to Space, opening a menu of this computer's Spaces. A thread started in
+ * The thread's Space, or Add to a Space, opening a menu of this computer's Spaces. A thread started in
  * a Space lives there, so its row only names it. Nothing shows for a Project's thread, or where
  * plxd can't add threads to Spaces or has none.
  */
@@ -37,7 +37,7 @@ export function SpaceMenu({ thread, view }: { thread: Thread; view: ThreadsView 
       ) : (
         <MessagesSquare aria-hidden className="text-muted-foreground" />
       )}
-      <span className="min-w-0 flex-1 truncate">{current ? current.name : "Add to Space"}</span>
+      <span className="min-w-0 flex-1 truncate">{current ? current.name : "Add to a Space"}</span>
     </>
   );
   if (startedIn)
@@ -52,7 +52,7 @@ export function SpaceMenu({ thread, view }: { thread: Thread; view: ThreadsView 
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        aria-label={current ? `Space: ${current.name}` : "Add to Space"}
+        aria-label={current ? `Space: ${current.name}` : "Add to a Space"}
         className={menuItem}
       >
         {label}

@@ -1069,7 +1069,7 @@ test("Thread details adds the open thread to a Space, which its crumbs then name
   expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
 
   const details = document.getElementById("thread-details")!;
-  await click(details.querySelector('button[aria-label="Add to Space"]'));
+  await click(details.querySelector('button[aria-label="Add to a Space"]'));
   const spaces = () => [
     ...document.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Spaces"] button'),
   ];
