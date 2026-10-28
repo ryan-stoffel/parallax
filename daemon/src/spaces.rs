@@ -4,7 +4,7 @@
 //! `<data folder>/spaces/<id>`. A chat in it is an ordinary thread started with that entry as its
 //! `repo`, so it runs in a worktree of the Space's repository and shares the Space's context
 //! folder. `repo/update` renames a Space and sets its instructions and files
-//! ([`crate::threads::update_repo`]), which every chat in it gets in its system prompt (0090).
+//! ([`crate::threads::update_repo`]), which every thread in it gets in its system prompt (0090).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -64,7 +64,7 @@ pub(crate) fn check_instructions(instructions: &str) -> Result<String, ErrorObje
 }
 
 /// A Space's files as `repo/update` takes them: at most [`MAX_SPACE_FILES`], each a file inside
-/// `uploads` once links are followed, so a chat's sandbox can read it (0071). Returns their
+/// `uploads` once links are followed, so a thread's sandbox can read it (0071). Returns their
 /// canonical paths, in order, without repeats.
 pub(crate) fn check_files(uploads: &Path, files: &[String]) -> Result<Vec<String>, ErrorObject> {
     if files.len() > MAX_SPACE_FILES {
@@ -92,24 +92,24 @@ pub(crate) fn check_files(uploads: &Path, files: &[String]) -> Result<Vec<String
     Ok(checked)
 }
 
-/// The system prompt a chat in a Space gets for the Space's instructions and files (0090), or
+/// The system prompt a thread in a Space gets for the Space's instructions and files (0090), or
 /// `None` when it has neither.
-pub(crate) fn chat_instructions(space: &parallax_store::Repo) -> Option<String> {
+pub(crate) fn thread_instructions(space: &parallax_store::Repo) -> Option<String> {
     if !space.fields.space || (space.instructions.is_none() && space.files.is_empty()) {
         return None;
     }
     let mut text = format!(
-        "This chat is in the project \"{}\". The user set what follows for every chat in it.",
+        "This thread is in the Space \"{}\". The user set what follows for every thread in it.",
         space.fields.name
     );
     if let Some(instructions) = &space.instructions {
-        text.push_str("\n\n<project_instructions>\n");
+        text.push_str("\n\n<space_instructions>\n");
         text.push_str(instructions);
-        text.push_str("\n</project_instructions>");
+        text.push_str("\n</space_instructions>");
     }
     if !space.files.is_empty() {
         text.push_str(
-            "\n\nThe project's files, which you can read when they help with the user's request:",
+            "\n\nThe Space's files, which you can read when they help with the user's request:",
         );
         for file in &space.files {
             text.push_str("\n- ");
@@ -243,7 +243,7 @@ mod tests {
     use parallax_store::{Repo, RepoFields};
     use uuid::Uuid;
 
-    use super::{chat_instructions, check_files};
+    use super::{check_files, thread_instructions};
 
     #[test]
     fn a_space_takes_only_files_uploaded_to_this_host() {
@@ -272,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_in_a_space_gets_its_instructions_and_files() {
+    fn a_thread_in_a_space_gets_its_instructions_and_files() {
         let mut space = Repo {
             id: Uuid::now_v7(),
             fields: RepoFields {
@@ -286,21 +286,21 @@ mod tests {
             instructions: None,
             files: Vec::new(),
         };
-        assert_eq!(chat_instructions(&space), None, "nothing to add");
+        assert_eq!(thread_instructions(&space), None, "nothing to add");
 
         space.instructions = Some("Answer in British English.".to_owned());
         space.files = vec!["/data/uploads/a/brief.pdf".to_owned()];
-        let text = chat_instructions(&space).unwrap();
+        let text = thread_instructions(&space).unwrap();
         assert!(text.contains("\"Thesis\""), "{text}");
         assert!(
             text.contains(
-                "<project_instructions>\nAnswer in British English.\n</project_instructions>"
+                "<space_instructions>\nAnswer in British English.\n</space_instructions>"
             ),
             "{text}"
         );
         assert!(text.contains("\n- /data/uploads/a/brief.pdf"), "{text}");
 
         space.fields.space = false;
-        assert_eq!(chat_instructions(&space), None, "only a Space's chats");
+        assert_eq!(thread_instructions(&space), None, "only a Space's threads");
     }
 }

@@ -899,7 +899,7 @@ test("Edit sidebar hides a page's row, which then waits under More, and pinned p
   expect(crumbs()).toEqual(["This Mac", "ember"]);
 });
 
-test("a chat project is made from the Projects page, opens to New thread in it, and keeps its instructions and files", async () => {
+test("a Space is made from the Projects page, opens to New thread in it, and keeps its instructions and files", async () => {
   capabilities = { spaces: {}, spaceContext: {} };
   const space: Repo = {
     id: "s-essays",
@@ -916,11 +916,11 @@ test("a chat project is made from the Projects page, opens to New thread in it, 
   await renderApp();
   openProjectsPage();
   const create = [...document.querySelectorAll("dialog")].find(
-    (d) => d.querySelector("h2")?.textContent === "Create chat project",
+    (d) => d.querySelector("h2")?.textContent === "Create Space",
   )!;
   await click(
     [...document.querySelectorAll('main [role="menuitem"]')].find((b) =>
-      b.textContent?.startsWith("Chat project"),
+      b.textContent?.startsWith("Space"),
     ),
   );
   typeInto(create.querySelector<HTMLInputElement>('input[aria-label="Name"]')!, " Essays ");
@@ -930,7 +930,7 @@ test("a chat project is made from the Projects page, opens to New thread in it, 
   expect(made).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: "Essays" });
   expect(crumbs()).toEqual(["This Mac", "Essays", "New thread"]);
 
-  // Its page, under the composer: Instructions, Files, and Chats.
+  // Its page, under the composer: Instructions, Files, and Threads.
   const instructions = document.querySelector('main section[aria-label="Instructions"]')!;
   await click(instructions.querySelector('button[aria-label="Add instructions"]'));
   const editor = instructions.querySelector("dialog")!;

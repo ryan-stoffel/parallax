@@ -376,22 +376,22 @@ function forgetTitle(runId: string) {
   }
 }
 
-/** The sidebar's id for "Chat", which holds plxd's scratch entry's threads, made on first use. */
+/** The sidebar's id for "No repo", which holds plxd's scratch entry's threads, made on first use. */
 export const noRepo = "no-repo";
 
 export interface ThreadGroup {
   /** A repo entry's id, or `noRepo`. */
   id: string;
   name: string;
-  /** A Space (0069): chats with no repository of the user's. */
+  /** A Space (0069): threads with no repository of the user's. */
   space?: boolean;
 }
 
-/** The sidebar's groups: each repository, oldest first, then Chat, always there. */
+/** The sidebar's groups: each repository, oldest first, then No repo, always there. */
 export function groupThreads({ repos }: ThreadsState): ThreadGroup[] {
   return [
     ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, space: r.space })),
-    { id: noRepo, name: "Chat" },
+    { id: noRepo, name: "No repo" },
   ];
 }
 
@@ -651,7 +651,7 @@ export interface ThreadsView {
    * error message, or undefined.
    */
   updateRepo: (repo: string, change: RepoChange) => Promise<string | undefined>;
-  /** Makes a Space, a chat project (0069, 0090). Resolves to its entry or an error message. */
+  /** Makes a Space, a project of threads with no repository (0069, 0090). Resolves to its entry or an error message. */
   createSpace: (name: string, icon?: ProjectIconValue) => Promise<Repo | string>;
   /** Deletes a Space and every chat in it. Resolves to an error message, or undefined. */
   removeSpace: (space: string) => Promise<string | undefined>;

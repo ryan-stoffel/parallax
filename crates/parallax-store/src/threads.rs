@@ -28,9 +28,9 @@ pub struct Repo {
     /// Its icon, in a project's shape (decision record 0033), stored as the client sent it.
     pub icon: Option<ProjectIcon>,
     pub created_at: Timestamp,
-    /// A Space's instructions for every chat in it (decision record 0090).
+    /// A Space's instructions for every thread in it (decision record 0090).
     pub instructions: Option<String>,
-    /// The files a Space gives every chat in it, as absolute paths (decision record 0090).
+    /// The files a Space gives every thread in it, as absolute paths (decision record 0090).
     pub files: Vec<String>,
 }
 

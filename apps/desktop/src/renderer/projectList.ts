@@ -1,6 +1,6 @@
 // Every host's projects as one list, for the sidebar's Pinned and the Projects page (0090): a
-// Project, which a coordinator runs on a repository, or a Space, a chat project that groups chats
-// and gives each its instructions and files.
+// Project, which a coordinator runs on a repository, or a Space, which groups threads with no
+// repository and gives each its instructions and files.
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
 import { activeAt, attentionOf, projectAttention } from "./attention";
 import type { Host } from "./hosts";
@@ -15,7 +15,7 @@ export interface ProjectEntry {
   id: string;
   name: string;
   icon?: ProjectIconValue;
-  /** Its threads: a Project's runs, or a Space's top-level chats. */
+  /** Its threads: a Project's runs, or a Space's top-level threads. */
   threads: number;
   createdAt: string;
   /** Its last change, or its latest thread's. */
@@ -49,10 +49,10 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
     const spaces = state.repos
       .filter((r) => r.space)
       .map((r): ProjectEntry => {
-        const chats = state.threads.filter((t) => t.repo === r.id && !t.parent);
+        const spaceThreads = state.threads.filter((t) => t.repo === r.id && !t.parent);
         let latest = r.createdAt;
         let needsYou = false;
-        for (const t of chats) {
+        for (const t of spaceThreads) {
           const run = state.runs[t.id];
           const at = activeAt(t, run, state.stoppedAt[t.id]);
           if (Date.parse(at) > Date.parse(latest)) latest = at;
@@ -70,7 +70,7 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
           id: r.id,
           name: r.name,
           icon: r.icon,
-          threads: chats.length,
+          threads: spaceThreads.length,
           createdAt: r.createdAt,
           activeAt: latest,
           needsYou,

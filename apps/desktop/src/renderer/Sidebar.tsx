@@ -41,8 +41,8 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  MessageCircle,
   MessagesSquare,
+  Laptop,
   SquareTerminal,
   Trash2,
   X,
@@ -273,7 +273,7 @@ interface ThreadListProps {
   page?: NavRow;
   /** Opens Projects, Pull requests, or Usage in place of the main pane. */
   onOpenPage: (page: NavRow) => void;
-  /** The open chat project (Space), as `<host>/<id>`, whose pinned row reads as selected. */
+  /** The open Space, as `<host>/<id>`, whose pinned row reads as selected. */
   openSpace?: string;
   /** A project's menu, for the Projects page's cards (0090). */
   projectMenu?: Ref<ProjectMenuHandle>;
@@ -347,17 +347,17 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
 
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
- * another computer, or else its initials on a tile in a color picked from its name. Chat is a
- * chat bubble, and a chat project with no icon of its own is two (0090).
+ * another computer, or else its initials on a tile in a color picked from its name. No repo is a
+ * laptop, and a Space with no icon of its own two speech bubbles (0090).
  */
 export function RepoIcon({ repo }: { repo?: Repo }) {
   const shared = useContext(SharedRepoIcons);
   const size = "size-4";
   if (!repo || repo.scratch)
-    return <MessageCircle aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
+    return <Laptop aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);
   if (icon) return <ProjectIcon icon={icon} className={`${size} shrink-0`} />;
-  // A chat project with no icon draws the chat-project glyph, as on the Projects page (0090).
+  // A Space with no icon draws the Space glyph, as on the Projects page (0090).
   if (repo.space)
     return <MessagesSquare aria-hidden className={`${size} shrink-0 text-project-gray`} />;
   return (
@@ -523,7 +523,7 @@ export function ThreadList({
   const search = useRef<HTMLInputElement>(null);
   const projectDialogs = useRef<ProjectDialogsHandle>(null);
   const spaceDelete = useRef<HTMLDialogElement>(null);
-  // The chat project the delete dialog asks about, and its host's view.
+  // The Space the delete dialog asks about, and its host's view.
   const [spaceToDelete, setSpaceToDelete] = useState<ProjectEntry>();
   const pins = pinnedProjects.use();
   // The thread or Project the delete dialog asks about.
@@ -579,7 +579,7 @@ export function ThreadList({
   const scopeLabel = scopeRepo
     ? { name: scopeRepo.name, color: repoColor(scopeRepo, repoIconOf(scopeRepo, sharedIcons)) }
     : scope === "none"
-      ? { name: "Chat", color: "var(--faint-foreground)" }
+      ? { name: "No repo", color: "var(--faint-foreground)" }
       : undefined;
   const sections = { ...sectionDefaults, ...sectionsStore.use()[scope] };
   const toggleSection = (name: keyof Sections, value = !sections[name]) => {
@@ -629,7 +629,7 @@ export function ThreadList({
           title,
           text: [
             title,
-            repo && !repo.scratch ? repo.name : "Chat",
+            repo && !repo.scratch ? repo.name : `${h.name} No repo`,
             run?.branch,
             ...(run?.pullRequests ?? []).map((url) => `#${numberOf(url)}`),
           ].join(" "),
@@ -690,13 +690,11 @@ export function ThreadList({
   }
   // What a row shows, and where: its own status, or its family's news.
   const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
-  // Where a thread is, for its card: its repo, or Chat.
-  const placeOf = (item: Item) => {
-    return {
-      name: item.repo && !item.repo.scratch ? item.repo.name : "Chat",
-      icon: <RepoIcon repo={item.repo} />,
-    };
-  };
+  // Where a thread is, for its card: its repo, or with none the computer it runs on.
+  const placeOf = (item: Item) =>
+    item.repo && !item.repo.scratch
+      ? { name: item.repo.name, icon: <RepoIcon repo={item.repo} /> }
+      : { name: item.host.name, icon: <ComputerIcon host={item.host} /> };
 
   const inScope = (item: Item, s: Scope) => {
     const p = parseScope(s);
@@ -1219,6 +1217,7 @@ export function ThreadList({
         rowKey={item.key}
         thread={t}
         hostId={item.host.id}
+        computer={item.host}
         device={many && item.host.icon ? item.host : undefined}
         title={item.title}
         run={item.run}
@@ -1504,7 +1503,7 @@ export function ThreadList({
         groupBy === "repo" ? (
           <>
             <RepoIcon repo={repo} />
-            <span className="min-w-0 truncate">{repo?.name ?? "Chat"}</span>
+            <span className="min-w-0 truncate">{repo?.name ?? "No repo"}</span>
             {/* Repos on two computers can share a name. */}
             {many && (
               <span className="min-w-0 truncate font-normal text-faint-foreground">
@@ -1577,6 +1576,7 @@ export function ThreadList({
               key={draft.id}
               draft={draft}
               repo={repo}
+              computer={hosts.find((h) => h.host.id === draft.hostId)?.host}
               onOpen={() =>
                 onSelect(draft.hostId, { kind: "new", groupId: draft.groupId, draft: draft.id })
               }
@@ -1673,7 +1673,7 @@ export function ThreadList({
         : []),
     ];
   };
-  // A chat project's menu items (0090): Rename and Change icon where its plxd keeps icons, and
+  // A Space's menu items (0090): Rename and Change icon where its plxd keeps icons, and
   // Delete.
   const spaceActions = (entry: ProjectEntry): FavoriteAction[] => {
     const space = entry.view.state.repos.find((r) => r.id === entry.id);
@@ -1966,15 +1966,15 @@ export function ThreadList({
       </ConfirmDialog>
       <ConfirmDialog
         ref={spaceDelete}
-        title="Delete this chat project?"
+        title="Delete this Space?"
         action="Delete"
         busy={deleting ? "Deleting…" : undefined}
         error={deleteError}
         onConfirm={() => void confirmSpaceDelete()}
       >
         “{spaceToDelete?.name}” goes for good, with{" "}
-        {spaceToDelete?.threads === 1 ? "its chat" : `its ${spaceToDelete?.threads ?? 0} chats`},
-        instructions, and files.
+        {spaceToDelete?.threads === 1 ? "its thread" : `its ${spaceToDelete?.threads ?? 0} threads`}
+        , instructions, and files.
       </ConfirmDialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
@@ -2409,7 +2409,7 @@ function ScopeMenu({
           {!q && fixedRow("all", <Layers aria-hidden />, "All threads")}
           {(repos.length > 0 || !q) && heading("Repos")}
           {repos.map(row)}
-          {!q && fixedRow("none", <MessageCircle aria-hidden />, "Chat")}
+          {!q && fixedRow("none", <Laptop aria-hidden />, "No repo")}
           {q && repos.length === 0 && (
             <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
           )}
@@ -2488,7 +2488,7 @@ function actionFailed(error: string | undefined, title: string) {
 }
 
 type ProjectDialogsHandle = {
-  /** Opens `what` for a Project, or for a chat project's entry (0090), which renames and recolors only. */
+  /** Opens `what` for a Project, or for a Space's entry (0090), which renames and recolors only. */
   open: (
     what: ProjectDialog,
     project: Project | Repo,
@@ -2562,11 +2562,7 @@ function ProjectDialogs({
       {opened?.what === "rename" && (
         <SettingDialog
           ref={dialog}
-          label={
-            opened.project && "repoPath" in opened.project
-              ? "Rename Project"
-              : "Rename chat project"
-          }
+          label={opened.project && "repoPath" in opened.project ? "Rename Project" : "Rename Space"}
           action="Rename"
           onClose={close}
           onSave={() => {
@@ -2730,15 +2726,38 @@ function RowHead({
   );
 }
 
-/** Where a row's thread is, at the start of its second line: its repo's icon and name, or Chat. */
-function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[] }) {
+/**
+ * Where a row's thread is, at the start of its second line: its repo's icon and name, or with no
+ * repo the computer it runs on, since it works on that computer (0090).
+ */
+function RowPlace({
+  repo,
+  computer,
+  words = [],
+}: {
+  repo?: Repo;
+  computer?: Host;
+  words?: readonly string[];
+}) {
+  const repoless = !repo || repo.scratch;
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <RepoIcon repo={repo} />
+      {repoless ? <ComputerIcon host={computer} /> : <RepoIcon repo={repo} />}
       <span className="min-w-0 truncate">
-        <Marked text={repo && !repo.scratch ? repo.name : "Chat"} words={words} />
+        <Marked text={repoless ? (computer?.name ?? "No repo") : repo.name} words={words} />
       </span>
     </span>
+  );
+}
+
+/** A computer's icon, as it chose one (0056), else a laptop. */
+function ComputerIcon({ host }: { host?: Host }) {
+  return (
+    <DeviceIcon
+      icon={host?.icon ?? "laptop"}
+      aria-hidden
+      className="size-4 shrink-0 text-faint-foreground"
+    />
   );
 }
 
@@ -2857,7 +2876,18 @@ function DraftStatus() {
  * outlined in the warning color and spaced off its neighbors (PLX-932). Opening it reopens New
  * Thread with it, which takes it off the list.
  */
-function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: () => void }) {
+function DraftRow({
+  draft,
+  repo,
+  computer,
+  onOpen,
+}: {
+  draft: Draft;
+  repo?: Repo;
+  /** The computer it would run on, which its place names when it has no repo. */
+  computer?: Host;
+  onOpen: () => void;
+}) {
   const attached = draft.images.length + draft.files.length + draft.threads.length;
   const title =
     draft.text.trim().split("\n")[0] ||
@@ -2869,7 +2899,11 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
         onClick={onOpen}
         className="group/row flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2.5 py-2 text-left hover:bg-hover"
       >
-        <RowTop place={<RowPlace repo={repo} />} status={<DraftStatus />} oneAction />
+        <RowTop
+          place={<RowPlace repo={repo} computer={computer} />}
+          status={<DraftStatus />}
+          oneAction
+        />
         <RowTitle title={title} color="text-foreground" />
       </button>
     </li>
@@ -3065,6 +3099,7 @@ function ThreadRow({
   rowKey,
   thread,
   hostId,
+  computer,
   device,
   title,
   run,
@@ -3109,6 +3144,8 @@ function ThreadRow({
   thread: Thread;
   /** Its host, which a drag onto the composer names (PLX-378). */
   hostId: string;
+  /** The computer it runs on, which its place names when it has no repo (0090). */
+  computer: Host;
   /** Its computer, whose icon shows beside the provider's while there are several (0056). */
   device?: Host;
   title: string;
@@ -3222,8 +3259,8 @@ function ThreadRow({
       : checks.length && checks.every((c) => c === "passed")
         ? "passed"
         : undefined;
-  // A Chat thread's card leaves out its scratch branch, and a chat project's chat the branch plxd
-  // made in its repository.
+  // A thread with no repo leaves out its scratch branch, and a Space's thread the branch plxd made
+  // in its repository.
   const branch = repo && !repo.scratch && !repo.space ? run?.branch : undefined;
   const hasDetails = !!(
     (git && (git.ahead || git.changes)) ||
@@ -3365,7 +3402,7 @@ function ThreadRow({
           // details. Under its repo's heading, it leaves out the repo.
           <>
             <RowTop
-              place={!nested && <RowPlace repo={repo} words={words} />}
+              place={!nested && <RowPlace repo={repo} computer={computer} words={words} />}
               status={shownStatus}
             />
             <RowTitle title={titleText} color={titleColor} />

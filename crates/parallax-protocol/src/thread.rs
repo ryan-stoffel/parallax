@@ -63,13 +63,13 @@ pub struct Repo {
     pub icon: Option<ProjectIcon>,
     /// When the entry was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
-    /// A Space's instructions, which plxd pins to the system prompt of every chat in it (0090),
+    /// A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
     /// behind the `spaceContext` capability. Absent when it has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub instructions: Option<String>,
-    /// The files a Space gives every chat in it (0090), as absolute paths on the host, such as
-    /// `host/upload` answers, behind `spaceContext`. Each chat's system prompt lists them.
+    /// The files a Space gives every thread in it (0090), as absolute paths on the host, such as
+    /// `host/upload` answers, behind `spaceContext`. Each thread's system prompt lists them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub files: Vec<String>,

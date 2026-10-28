@@ -1,4 +1,4 @@
-// The Projects page (0090): every host's Projects and chat projects (Spaces) as cards, pinned ones
+// The Projects page (0090): every host's Projects and Spaces as cards, pinned ones
 // first, with a search, a sort, and New project for either kind.
 import {
   Check,
@@ -40,7 +40,7 @@ const projectSort = stored<ProjectSort>("parallax.projectSort", "activity", (raw
   sorts.some((s) => s.value === raw) ? (raw as ProjectSort) : fallback,
 );
 
-/** A project's color, as a CSS value: its icon's, else the accent, or gray for a chat project. */
+/** A project's color, as a CSS value: its icon's, else the accent, or gray for a Space. */
 function tint(entry: Pick<ProjectEntry, "icon" | "kind">) {
   if (entry.icon?.color) return `var(--project-${entry.icon.color})`;
   return entry.kind === "space" && !entry.icon ? "var(--project-gray)" : "var(--accent)";
@@ -91,9 +91,7 @@ function day(time: string) {
 /** What a card's second line says of its kind and size. */
 function summary(entry: ProjectEntry) {
   const n = entry.threads;
-  return entry.kind === "space"
-    ? `Chat project · ${n} ${n === 1 ? "chat" : "chats"}`
-    : `Project · ${n} ${n === 1 ? "thread" : "threads"}`;
+  return `${entry.kind === "space" ? "Space" : "Project"} · ${n} ${n === 1 ? "thread" : "threads"}`;
 }
 
 export function ProjectsPage({
@@ -114,7 +112,7 @@ export function ProjectsPage({
   actionsFor: (entry: ProjectEntry) => FavoriteAction[];
   /** Opens Create Project, a coordinator on a repository. */
   onNewProject: () => void;
-  /** Opens Create chat project, or undefined where no host makes Spaces. */
+  /** Opens Create Space, or undefined where no host makes Spaces. */
   onNewChatProject?: () => void;
 }) {
   const sort = projectSort.use();
@@ -227,8 +225,8 @@ export function ProjectsPage({
               <NewChoice
                 menu={newMenu}
                 kind="space"
-                title="Chat project"
-                detail="Chats that share your instructions and files."
+                title="Space"
+                detail="Threads that share your instructions and files, with no repository."
                 onClick={onNewChatProject}
               />
             )}
@@ -243,8 +241,8 @@ export function ProjectsPage({
             </div>
             <h2 className="mt-5 text-reading font-semibold">No projects yet</h2>
             <p className="mt-1 max-w-sm text-body text-muted-foreground">
-              A Project runs work in a repository with a coordinator. A chat project keeps chats
-              together with the instructions and files they share.
+              A Project runs work in a repository with a coordinator. A Space keeps threads together
+              with the instructions and files they share.
             </p>
           </div>
         ) : shown.length === 0 ? (
@@ -441,7 +439,7 @@ export function ProjectMenu({
 }
 
 /**
- * Create chat project: a name and an icon, then `space/create` on the open host. Resolves through
+ * Create Space: a name and an icon, then `space/create` on the open host. Resolves through
  * `onCreated` with the new Space.
  */
 export function NewChatProject({
@@ -488,7 +486,7 @@ export function NewChatProject({
       >
         <div className="flex items-center justify-between px-5 pt-4">
           <h2 id={titleId} className="text-reading font-semibold">
-            Create chat project
+            Create Space
           </h2>
           <button
             type="button"
@@ -500,7 +498,7 @@ export function NewChatProject({
           </button>
         </div>
         <p className="px-5 pt-1 text-body text-muted-foreground">
-          Its chats share the instructions and files you give it.
+          Its threads share the instructions and files you give it.
         </p>
         <div className="flex flex-col items-center gap-3 px-5 pt-6 pb-5">
           <button

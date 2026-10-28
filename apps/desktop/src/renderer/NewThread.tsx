@@ -1,4 +1,4 @@
-import { Folder, MessageCircle, MessagesSquare, Plus } from "lucide-react";
+import { Folder, Laptop, MessagesSquare, Plus } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { PromptImage, Repo } from "../protocol/generated/protocol";
@@ -79,7 +79,7 @@ interface NewThreadProps {
   draftId?: string;
   /** How many times Settings has closed. The default is read again each time, as it may have changed there. */
   settingsClosed?: number;
-  /** Shown under the composer until a thread starts, as a chat project's page (0090). */
+  /** Shown under the composer until a thread starts, as a Space's page (0090). */
   below?: ReactNode;
 }
 
@@ -446,9 +446,9 @@ export function NewThread({
           <>
             <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
               {group.id === noRepo
-                ? "What should we "
+                ? "What should we do on "
                 : group.space
-                  ? "What should we talk about in "
+                  ? "What should we work on in "
                   : "What should we build in "}
               <button
                 type="button"
@@ -457,7 +457,7 @@ export function NewThread({
                 title={group.id === noRepo ? undefined : group.name}
                 className="min-w-0 truncate rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
               >
-                {group.id === noRepo ? "chat about" : group.name}
+                {group.id === noRepo ? hosts.find((h) => h.id === shownHostId)?.name : group.name}
               </button>
               {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
               ?
@@ -479,7 +479,7 @@ export function NewThread({
                   aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
                   className="group relative rounded-md text-reading text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
                 >
-                  or just chat
+                  or work without a repo
                   {noRepoKeys && (
                     <kbd
                       aria-hidden
@@ -508,8 +508,7 @@ export function NewThread({
                 ...groups.map((g) => ({
                   value: g.id,
                   label: g.name,
-                  icon:
-                    g.id === noRepo ? <MessageCircle /> : g.space ? <MessagesSquare /> : <Folder />,
+                  icon: g.id === noRepo ? <Laptop /> : g.space ? <MessagesSquare /> : <Folder />,
                 })),
                 ...elsewhere.map((o, i) => ({
                   value: elsewhereValue(o),

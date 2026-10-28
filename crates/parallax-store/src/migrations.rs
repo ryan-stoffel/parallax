@@ -854,7 +854,7 @@ const MIGRATIONS: &[Migration] = &[
         DROP TABLE area_projects;
         DROP TABLE areas;",
     },
-    // A Space's instructions and files, which every chat in it gets (0090, PLX-1108). `files`
+    // A Space's instructions and files, which every thread in it gets (0090, PLX-1108). `files`
     // holds absolute paths, one per line.
     Migration {
         version: 54,

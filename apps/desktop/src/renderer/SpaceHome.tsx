@@ -1,6 +1,6 @@
-// A chat project's page under New thread's composer (0090): its instructions and files, which
-// plxd gives every chat in it, and its chats.
-import { MessageCircle, PencilLine, Plus, X } from "lucide-react";
+// A Space's page under New thread's composer (0090): its instructions and files, which plxd
+// gives every thread in it, and its threads.
+import { PencilLine, Plus, X } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
@@ -41,12 +41,10 @@ export function SpaceHome({
           <Files hostId={hostId} space={space} view={view} />
         </div>
       )}
-      <section aria-label="Chats">
-        <h2 className="mb-2 px-1 text-body font-medium text-muted-foreground">Chats</h2>
+      <section aria-label="Threads">
+        <h2 className="mb-2 px-1 text-body font-medium text-muted-foreground">Threads</h2>
         {chats.length === 0 ? (
-          <p className="px-1 text-body text-faint-foreground">
-            No chats yet. Ask anything above to start one.
-          </p>
+          <p className="px-1 text-body text-faint-foreground">No threads yet. Start one above.</p>
         ) : (
           <ul className="flex flex-col">
             {chats.map(({ thread, at }) => (
@@ -56,9 +54,8 @@ export function SpaceHome({
                   onClick={() => onOpenThread(thread.id)}
                   className="flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left hover:bg-hover"
                 >
-                  <MessageCircle aria-hidden className="size-4 shrink-0 text-faint-foreground" />
                   <span className="min-w-0 flex-1 truncate text-body">
-                    {state.titles[thread.id] ?? "Chat"}
+                    {state.titles[thread.id] ?? "Thread"}
                   </span>
                   <span className="shrink-0 text-meta text-faint-foreground">{age(at)}</span>
                 </button>
@@ -106,7 +103,7 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
         </button>
       ) : (
         <p className="mt-2 text-meta text-faint-foreground">
-          Tell every chat here how to respond: a tone, a format, or what it should know.
+          Tell every thread here how to work: a tone, a format, or what it should know.
         </p>
       )}
       <dialog
@@ -129,7 +126,7 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
             Instructions for {space.name}
           </h2>
           <p className="mt-1 text-body text-muted-foreground">
-            New chats in this project follow them.
+            New threads in this Space follow them.
           </p>
           <textarea
             aria-label="Instructions"
@@ -225,7 +222,7 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
       </div>
       {files.length === 0 ? (
         <p className="mt-2 text-meta text-faint-foreground">
-          {adding ? "Adding…" : "Add PDFs, notes, or code for every chat here to read."}
+          {adding ? "Adding…" : "Add PDFs, notes, or code for every thread here to read."}
         </p>
       ) : (
         <ul className="mt-2 flex max-h-40 flex-col overflow-y-auto">

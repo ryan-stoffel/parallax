@@ -4680,13 +4680,13 @@ export type Repo = {
 	 */
 	createdAt: string,
 	/**
-	 * A Space's instructions, which plxd pins to the system prompt of every chat in it (0090),
+	 * A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
 	 * behind the `spaceContext` capability. Absent when it has none.
 	 */
 	instructions?: string,
 	/**
-	 * The files a Space gives every chat in it (0090), as absolute paths on the host, such as
-	 * `host/upload` answers, behind `spaceContext`. Each chat's system prompt lists them.
+	 * The files a Space gives every thread in it (0090), as absolute paths on the host, such as
+	 * `host/upload` answers, behind `spaceContext`. Each thread's system prompt lists them.
 	 */
 	files?: Array<string>,
 };
