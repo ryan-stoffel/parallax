@@ -18,6 +18,7 @@ import type {
   ProjectUpdateParams,
   PromptImage,
   Repo,
+  RepoUpdateParams,
   RunWaiting,
   Thread,
   ParallaxEvent,
@@ -464,7 +465,7 @@ export function setRepoIcons(views: ThreadsView[], name: string, icon: ProjectIc
     if (!("threadAttention" in view.capabilities)) continue;
     if (icon.image && icon.image.data.length > (view.iconImageBytes ?? -1)) continue;
     for (const repo of view.state.repos)
-      if (isRepository(repo) && repo.name === name) void view.updateRepo(repo.id, icon);
+      if (isRepository(repo) && repo.name === name) void view.updateRepo(repo.id, { icon });
   }
 }
 
@@ -645,9 +646,18 @@ export interface ThreadsView {
    * error message, or undefined.
    */
   update: (runId: string, change: ThreadChange) => Promise<string | undefined>;
-  /** Sets a repo entry's icon. Resolves to an error message, or undefined. */
-  updateRepo: (repo: string, icon: ProjectIconValue) => Promise<string | undefined>;
+  /**
+   * Sets a repo entry's icon, or a Space's name, instructions, or files (0090). Resolves to an
+   * error message, or undefined.
+   */
+  updateRepo: (repo: string, change: RepoChange) => Promise<string | undefined>;
+  /** Makes a Space, a chat project (0069, 0090). Resolves to its entry or an error message. */
+  createSpace: (name: string, icon?: ProjectIconValue) => Promise<Repo | string>;
+  /** Deletes a Space and every chat in it. Resolves to an error message, or undefined. */
+  removeSpace: (space: string) => Promise<string | undefined>;
 }
+
+export type RepoChange = Omit<RepoUpdateParams, "repo">;
 
 /** What a fork runs on: absent keeps the thread's model and account. */
 export type ForkChoice = { model?: string; account?: AccountChoice };
@@ -930,10 +940,28 @@ export function useThreads(
         return undefined;
       },
 
-      async updateRepo(repo: string, icon: ProjectIconValue) {
-        const answer = await window.parallax.request(hostId, "repo/update", { repo, icon });
+      async updateRepo(repo: string, change: RepoChange) {
+        const answer = await window.parallax.request(hostId, "repo/update", { repo, ...change });
         if ("error" in answer) return describeError(answer.error);
         dispatch({ type: "event", event: { kind: "repo.updated", repo: answer.result.repo } });
+        return undefined;
+      },
+
+      async createSpace(name: string, icon?: ProjectIconValue) {
+        const answer = await window.parallax.request(hostId, "space/create", {
+          id: uuidv7(),
+          name,
+          ...(icon && { icon }),
+        });
+        if ("error" in answer) return describeError(answer.error);
+        dispatch({ type: "event", event: { kind: "repo.added", repo: answer.result.repo } });
+        return answer.result.repo;
+      },
+
+      async removeSpace(space: string) {
+        const answer = await window.parallax.request(hostId, "space/delete", { space });
+        if ("error" in answer) return describeError(answer.error);
+        dispatch({ type: "event", event: { kind: "repo.removed", repo: space } });
         return undefined;
       },
     }),
@@ -974,4 +1002,6 @@ export const idleThreads: ThreadsView = {
   startCoordinator: async () => ({ code: -32000, message: notConnected }),
   update: async () => notConnected,
   updateRepo: async () => notConnected,
+  createSpace: async () => notConnected,
+  removeSpace: async () => notConnected,
 };

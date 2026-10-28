@@ -4679,6 +4679,16 @@ export type Repo = {
 	 * When the entry was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
+	/**
+	 * A Space's instructions, which plxd pins to the system prompt of every chat in it (0090),
+	 * behind the `spaceContext` capability. Absent when it has none.
+	 */
+	instructions?: string,
+	/**
+	 * The files a Space gives every chat in it (0090), as absolute paths on the host, such as
+	 * `host/upload` answers, behind `spaceContext`. Each chat's system prompt lists them.
+	 */
+	files?: Array<string>,
 };
 
 /**
@@ -6612,9 +6622,10 @@ export type ThreadUpdateResult = {
 
 /**
  * Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
- * behind the `threadAttention` capability, or renames a Space (0069), behind `spaces`. A change
- * appends `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams`
- * for `name` on an entry that isn't a Space.
+ * behind the `threadAttention` capability, renames a Space (0069), behind `spaces`, or sets a
+ * Space's instructions and files (0090), behind `spaceContext`. A change appends
+ * `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
+ * `name`, `instructions`, or `files` on an entry that isn't a Space.
  */
 export type RepoUpdateParams = {
 	/**
@@ -6629,6 +6640,16 @@ export type RepoUpdateParams = {
 	 * A Space's new name, trimmed, 1 to 128 bytes.
 	 */
 	name?: string,
+	/**
+	 * A Space's new instructions, up to [`MAX_SPACE_INSTRUCTIONS_BYTES`] once trimmed. Empty
+	 * clears them.
+	 */
+	instructions?: string,
+	/**
+	 * A Space's files in full, replacing the list: at most [`MAX_SPACE_FILES`] absolute paths
+	 * inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
+	 */
+	files?: Array<string>,
 };
 
 /**

@@ -544,3 +544,36 @@ fn deleting_a_parent_leaves_its_children_with_no_parent() {
     assert_eq!(store.get_run(child).unwrap().unwrap().fields.parent, None);
     assert_eq!(store.get_thread(other).unwrap(), Some(untouched));
 }
+
+#[test]
+fn a_space_keeps_its_instructions_and_files_until_cleared() {
+    let (_dir, mut store) = open();
+    let id = Uuid::now_v7();
+    let fields = RepoFields {
+        space: true,
+        ..repo_fields("/data/spaces/essays")
+    };
+    store.add_repo(id, &fields).unwrap();
+    let files = vec![
+        "/data/uploads/a/brief.pdf".to_owned(),
+        "/data/uploads/b/notes.md".to_owned(),
+    ];
+
+    let (repo, changed) = store
+        .set_space_context(id, Some("Cite every source."), Some(&files))
+        .unwrap();
+    assert!(changed);
+    assert_eq!(repo.instructions.as_deref(), Some("Cite every source."));
+    assert_eq!(repo.files, files);
+    // Only what's given changes, and the same values again change nothing.
+    let (_, changed) = store.set_space_context(id, None, Some(&files)).unwrap();
+    assert!(!changed);
+    let reopened = store.get_repo(id).unwrap().unwrap();
+    assert_eq!(reopened.instructions.as_deref(), Some("Cite every source."));
+    assert_eq!(reopened.files, files);
+
+    let (repo, changed) = store.set_space_context(id, Some(""), Some(&[])).unwrap();
+    assert!(changed);
+    assert_eq!(repo.instructions, None);
+    assert!(repo.files.is_empty());
+}

@@ -5,7 +5,6 @@ import {
   ArrowUp,
   Bot,
   CalendarClock,
-  ChartNoAxesColumn,
   Check,
   ChevronDown,
   ChevronRight,
@@ -21,11 +20,9 @@ import {
   FileDiff,
   Folder,
   FolderGit2,
-  FolderPlus,
   GitBranch,
   GitFork,
   GitMerge,
-  GitPullRequest,
   Globe,
   HardDrive,
   Keyboard,
@@ -45,7 +42,7 @@ import {
   Settings,
   ShieldCheck,
   MessageCircle,
-  SquarePen,
+  MessagesSquare,
   SquareTerminal,
   Trash2,
   X,
@@ -125,7 +122,9 @@ import { NightSky } from "./NightSky";
 import { dismiss, notify } from "./notifications";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
-import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
+import { archivePageSize, pinnedProjects, sidebarPrefs, type NavRow } from "./sidebarPrefs";
+import { SidebarNav, navRow } from "./SidebarNav";
+import { projectEntries, type ProjectEntry } from "./projectList";
 import { stored } from "./stored";
 
 import { useFlip } from "./flip";
@@ -270,10 +269,14 @@ interface ThreadListProps {
   /** Opens a Project, on another host by opening that host first. */
   onOpenProject: (hostId: string, projectId: string) => void;
   onOpenSettings: (section: SettingsSection) => void;
-  /** Opens the Pull requests page, in place of the main pane. */
-  onOpenPullRequests: () => void;
-  /** Opens the Usage page, in place of the main pane. */
-  onOpenUsage: () => void;
+  /** The page open in place of the main pane, whose nav row reads as selected (0090). */
+  page?: NavRow;
+  /** Opens Projects, Pull requests, or Usage in place of the main pane. */
+  onOpenPage: (page: NavRow) => void;
+  /** The open chat project (Space), as `<host>/<id>`, whose pinned row reads as selected. */
+  openSpace?: string;
+  /** A project's menu, for the Projects page's cards (0090). */
+  projectMenu?: Ref<ProjectMenuHandle>;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   /** The add palette, for the command menu's New Project and Add repository (PLX-993). */
@@ -345,7 +348,7 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
  * another computer, or else its initials on a tile in a color picked from its name. Chat is a
- * chat bubble.
+ * chat bubble, and a chat project with no icon of its own is two (0090).
  */
 export function RepoIcon({ repo }: { repo?: Repo }) {
   const shared = useContext(SharedRepoIcons);
@@ -354,6 +357,9 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
     return <MessageCircle aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);
   if (icon) return <ProjectIcon icon={icon} className={`${size} shrink-0`} />;
+  // A chat project with no icon draws the chat-project glyph, as on the Projects page (0090).
+  if (repo.space)
+    return <MessagesSquare aria-hidden className={`${size} shrink-0 text-project-gray`} />;
   return (
     <span
       aria-hidden
@@ -371,9 +377,8 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
 const cardDelay = 450;
 
 /** A scope's drawers, by whether each is open. Working stays tucked away until asked for. */
-type Sections = Record<"projects" | "working" | "snoozed" | "archived", boolean>;
+type Sections = Record<"working" | "snoozed" | "archived", boolean>;
 const sectionDefaults: Sections = {
-  projects: false,
   working: false,
   snoozed: false,
   archived: false,
@@ -501,8 +506,10 @@ export function ThreadList({
   onSelect,
   onOpenProject,
   onOpenSettings,
-  onOpenPullRequests,
-  onOpenUsage,
+  page,
+  onOpenPage,
+  openSpace,
+  projectMenu,
   onDelete,
   addDialog: addDialogRef,
   onNewThread,
@@ -515,6 +522,10 @@ export function ThreadList({
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const projectDialogs = useRef<ProjectDialogsHandle>(null);
+  const spaceDelete = useRef<HTMLDialogElement>(null);
+  // The chat project the delete dialog asks about, and its host's view.
+  const [spaceToDelete, setSpaceToDelete] = useState<ProjectEntry>();
+  const pins = pinnedProjects.use();
   // The thread or Project the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
@@ -761,11 +772,11 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // Projects, most recently active first, as threads are (PLX-1043). They live in their drawer,
-  // except one that needs the user, or matches a search, which shows atop the list.
+  // Projects, most recently active first, as threads are (PLX-1043). They live on the Projects
+  // page and under Pinned (0090), except one that needs the user, or matches a search, which
+  // shows atop the list.
   const allProjects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
   const projects = allProjects.filter((p) => p.attention === "needsYou" || words.length > 0);
-  const drawerProjects = allProjects.filter((p) => !projects.includes(p));
   // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
   const favRank = (key: string) => {
@@ -1324,6 +1335,17 @@ export function ThreadList({
     else deleteDialog.current?.close();
   };
 
+  const confirmSpaceDelete = async () => {
+    if (!spaceToDelete) return;
+    setDeleting(true);
+    const error = await spaceToDelete.view.removeSpace(spaceToDelete.id);
+    setDeleting(false);
+    if (error) return setDeleteError(error);
+    spaceDelete.current?.close();
+    pinnedProjects.set(pinnedProjects.get().filter((k) => k !== spaceToDelete.key));
+    if (openSpace === spaceToDelete.key) onSelect(spaceToDelete.host.id, { kind: "new" });
+  };
+
   // Each favorite's icon, chosen for it, else its repo's.
   const pinIconsNow = pinIcons.use();
   const [listOver, setListOver] = useState(false);
@@ -1651,6 +1673,49 @@ export function ThreadList({
         : []),
     ];
   };
+  // A chat project's menu items (0090): Rename and Change icon where its plxd keeps icons, and
+  // Delete.
+  const spaceActions = (entry: ProjectEntry): FavoriteAction[] => {
+    const space = entry.view.state.repos.find((r) => r.id === entry.id);
+    if (!space) return [];
+    const open = (what: ProjectDialog) => (square: HTMLElement) =>
+      projectDialogs.current?.open(what, space, entry.view, square);
+    return [
+      { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
+      ...("threadAttention" in entry.view.capabilities
+        ? [{ label: "Change icon…", icon: <Palette aria-hidden />, run: open("icon") }]
+        : []),
+      {
+        label: "Delete…",
+        icon: <Trash2 aria-hidden />,
+        danger: true,
+        run: () => {
+          setSpaceToDelete(entry);
+          setDeleteError(undefined);
+          spaceDelete.current?.showModal();
+        },
+      },
+    ];
+  };
+  const entryActions = (entry: ProjectEntry): FavoriteAction[] => {
+    if (entry.kind === "space") return spaceActions(entry);
+    const item = byKey.get(entry.key);
+    return item?.kind === "project" ? projectActions(item) : [];
+  };
+  useImperativeHandle(projectMenu, () => ({ actionsFor: entryActions }));
+  // Every project, Projects and Spaces, for Pinned, in the order pinned.
+  const entries = projectEntries(hosts);
+  const pinnedEntries = pins.flatMap((key) => entries.filter((e) => e.key === key));
+  const openEntry = (entry: ProjectEntry) => {
+    hideCard();
+    onSelect(
+      entry.host.id,
+      entry.kind === "project"
+        ? { kind: "project", projectId: entry.id }
+        : { kind: "new", groupId: entry.id },
+    );
+  };
+
   // The pinned threads moved up into the favorites, in the order moved into.
   const favorites = favoriteThreads
     .map((i) => {
@@ -1744,61 +1809,65 @@ export function ThreadList({
 
   return (
     <>
-      <div className="flex items-center gap-1 px-2">
-        <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
-          <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-          <input
-            ref={search}
-            type="search"
-            aria-label={scopeLabel ? `Search ${scopeLabel.name}` : "Search threads and Projects"}
-            placeholder={scopeLabel ? `Search ${scopeLabel.name}` : "Search"}
-            value={query}
-            onChange={(e) => {
-              quiet();
-              setQuery(e.target.value);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                if (query) setQuery("");
-                else e.currentTarget.blur();
-              } else if (e.key === "Enter" || e.key === "ArrowDown") {
-                // Into the list: Enter opens the first row, Down focuses it.
-                const first = shownRows()[0];
-                if (!first) return;
-                e.preventDefault();
-                if (e.key === "Enter") first.click();
-                else first.focus();
-              }
-            }}
-            className="min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
-          />
-        </label>
-        <ScopeMenu
-          hosts={hosts}
-          scope={scope}
-          current={scopeLabel}
-          onScope={(next) => setScope(next)}
-          many={many}
-          needs={needsIn}
-          outside={outside}
-          view={
-            <ViewOptions
-              autoHours={autoHours}
-              onAutoHours={(hours) => autoClear.set(hours)}
-              compact={compact}
-              onCompact={(on) => compactRows.set(on)}
-              group={groupBy}
-              onGroup={(next) => todayGroup.set(next)}
+      <SidebarNav
+        current={page}
+        pinned={pinnedEntries}
+        openKey={openSpace ?? (selection.kind === "project" ? openKey : undefined)}
+        onNewThread={onNewThread}
+        onOpen={onOpenPage}
+        onOpenProject={openEntry}
+        onAdd={() => addDialog.current?.open()}
+        pinActions={(entry) => entryActions(entry)}
+        search={
+          <label className={`sky-search ${navRow} focus-within:bg-hover`}>
+            <Search aria-hidden />
+            <input
+              ref={search}
+              type="search"
+              aria-label={scopeLabel ? `Search ${scopeLabel.name}` : "Search threads and Projects"}
+              placeholder={scopeLabel ? `Search ${scopeLabel.name}` : "Search"}
+              value={query}
+              onChange={(e) => {
+                quiet();
+                setQuery(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  if (query) setQuery("");
+                  else e.currentTarget.blur();
+                } else if (e.key === "Enter" || e.key === "ArrowDown") {
+                  // Into the list: Enter opens the first row, Down focuses it.
+                  const first = shownRows()[0];
+                  if (!first) return;
+                  e.preventDefault();
+                  if (e.key === "Enter") first.click();
+                  else first.focus();
+                }
+              }}
+              className="min-w-0 flex-1 truncate bg-transparent text-body text-foreground placeholder:text-foreground/90 focus:placeholder:text-faint-foreground focus-visible:outline-none"
             />
-          }
-        />
-        <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
-          <FolderPlus />
-        </IconButton>
-        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
-          <SquarePen />
-        </IconButton>
-      </div>
+            <ScopeMenu
+              hosts={hosts}
+              scope={scope}
+              current={scopeLabel}
+              onScope={(next) => setScope(next)}
+              many={many}
+              needs={needsIn}
+              outside={outside}
+              view={
+                <ViewOptions
+                  autoHours={autoHours}
+                  onAutoHours={(hours) => autoClear.set(hours)}
+                  compact={compact}
+                  onCompact={(on) => compactRows.set(on)}
+                  group={groupBy}
+                  onGroup={(next) => todayGroup.set(next)}
+                />
+              }
+            />
+          </label>
+        }
+      />
       <div
         onScroll={hideCard}
         data-flip-scroll
@@ -1856,17 +1925,6 @@ export function ThreadList({
         onDrop={dropOn("archived")}
         pageSize={pageArchived ? archivePageSize : undefined}
       />
-      {/* Projects aren't a thread state, so a rule sets their drawer apart (PLX-1087). */}
-      {drawerProjects.length > 0 && (
-        <div aria-hidden className="mx-4 my-1 border-t border-border" />
-      )}
-      <Drawer
-        label="Projects"
-        items={drawerProjects}
-        row={(p) => (p.kind === "project" ? projectCard(p) : null)}
-        open={sections.projects}
-        onOpenChange={(o) => toggleSection("projects", o)}
-      />
       {pickedItems.length > 0 && (
         <BulkBar
           count={pickedItems.length}
@@ -1906,14 +1964,21 @@ export function ThreadList({
           ? projectLoss(toDelete.runs.length)
           : ", with its transcript, worktree, and branch."}
       </ConfirmDialog>
+      <ConfirmDialog
+        ref={spaceDelete}
+        title="Delete this chat project?"
+        action="Delete"
+        busy={deleting ? "Deleting…" : undefined}
+        error={deleteError}
+        onConfirm={() => void confirmSpaceDelete()}
+      >
+        “{spaceToDelete?.name}” goes for good, with{" "}
+        {spaceToDelete?.threads === 1 ? "its chat" : `its ${spaceToDelete?.threads ?? 0} chats`},
+        instructions, and files.
+      </ConfirmDialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
-        <Footer
-          listed={hosts}
-          onOpenSettings={onOpenSettings}
-          onOpenPullRequests={onOpenPullRequests}
-          onOpenUsage={onOpenUsage}
-        />
+        <Footer listed={hosts} onOpenSettings={onOpenSettings} />
       </div>
     </>
   );
@@ -2382,20 +2447,12 @@ function ScopeMenu({
 function Footer({
   listed,
   onOpenSettings,
-  onOpenPullRequests,
-  onOpenUsage,
-}: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests" | "onOpenUsage"> & {
+}: Pick<ThreadListProps, "onOpenSettings"> & {
   listed: HostThreads[];
 }) {
   return (
     <div className="flex items-center gap-1">
       <ProfileButton listed={listed} />
-      <IconButton label="Pull requests" onClick={onOpenPullRequests}>
-        <GitPullRequest />
-      </IconButton>
-      <IconButton label="Usage" onClick={onOpenUsage}>
-        <ChartNoAxesColumn />
-      </IconButton>
       <span className="flex-1" />
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
@@ -2431,8 +2488,17 @@ function actionFailed(error: string | undefined, title: string) {
 }
 
 type ProjectDialogsHandle = {
-  open: (what: ProjectDialog, project: Project, view: ThreadsView, square: HTMLElement) => void;
+  /** Opens `what` for a Project, or for a chat project's entry (0090), which renames and recolors only. */
+  open: (
+    what: ProjectDialog,
+    project: Project | Repo,
+    view: ThreadsView,
+    square: HTMLElement,
+  ) => void;
 };
+
+/** Project handle the Projects page reads a project's menu through (0090). */
+export type ProjectMenuHandle = { actionsFor: (entry: ProjectEntry) => FavoriteAction[] };
 
 /**
  * A Project's dialogs, opened from its row's menu: Rename, the icon picker beside its row,
@@ -2448,7 +2514,7 @@ function ProjectDialogs({
 }) {
   const [opened, setOpened] = useState<{
     what: ProjectDialog;
-    project: Project;
+    project: Project | Repo;
     view: ThreadsView;
     square: HTMLElement;
   }>();
@@ -2460,7 +2526,7 @@ function ProjectDialogs({
   useImperativeHandle(ref, () => ({
     open(what, project, view, square) {
       setName(project.name);
-      setAutonomy(project.autonomy ?? "routine");
+      setAutonomy(("autonomy" in project && project.autonomy) || "routine");
       setOpened({ what, project, view, square });
     },
   }));
@@ -2470,7 +2536,16 @@ function ProjectDialogs({
     else if (opened) dialog.current?.showModal();
   }, [opened]);
   const update = async (change: ProjectChange) => {
-    if (opened) onError(await opened.view.updateProject(opened.project.id, change));
+    if (!opened) return;
+    const { project, view } = opened;
+    onError(
+      "repoPath" in project
+        ? await view.updateProject(project.id, change)
+        : await view.updateRepo(project.id, {
+            ...(change.name && { name: change.name }),
+            ...(change.icon && { icon: change.icon }),
+          }),
+    );
   };
   const project = opened?.project;
   const close = () => setOpened(undefined);
@@ -2487,7 +2562,11 @@ function ProjectDialogs({
       {opened?.what === "rename" && (
         <SettingDialog
           ref={dialog}
-          label="Rename Project"
+          label={
+            opened.project && "repoPath" in opened.project
+              ? "Rename Project"
+              : "Rename chat project"
+          }
           action="Rename"
           onClose={close}
           onSave={() => {
@@ -3143,8 +3222,9 @@ function ThreadRow({
       : checks.length && checks.every((c) => c === "passed")
         ? "passed"
         : undefined;
-  // A Chat thread's card leaves out its scratch branch.
-  const branch = repo && !repo.scratch ? run?.branch : undefined;
+  // A Chat thread's card leaves out its scratch branch, and a chat project's chat the branch plxd
+  // made in its repository.
+  const branch = repo && !repo.scratch && !repo.space ? run?.branch : undefined;
   const hasDetails = !!(
     (git && (git.ahead || git.changes)) ||
     prs.urls.length ||

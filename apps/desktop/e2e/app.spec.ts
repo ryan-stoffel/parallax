@@ -202,7 +202,9 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Close settings" }).click();
-  await page.getByRole("button", { name: "New project or repository" }).click();
+  // Under More, with Edit sidebar (0090).
+  await page.locator("#sidebar").getByRole("button", { name: "More" }).click();
+  await page.getByRole("menuitem", { name: "New project or repository" }).click();
   const dialog = page.getByRole("dialog", { name: "New project or repository" });
   await dialog.getByRole("option", { name: /^New Project/ }).click();
   await dialog.getByRole("button", { name: /^Workspace/ }).click();
@@ -216,9 +218,10 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  // One card for the Project, in the Projects drawer (0087).
-  await page.locator("#sidebar summary", { hasText: "Projects" }).click();
-  await expect(page.locator('#sidebar li[data-kind="project"] [data-title]')).toHaveText(["ember"]);
+  // One card for the Project, on the Projects page (0090).
+  await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
+  await expect(page.locator("main li[data-project] [data-title]")).toHaveText(["ember"]);
+  await page.locator("main li[data-project] > button").click();
 });
 
 test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (PLX-46)", async () => {
@@ -251,8 +254,8 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
 
   await page.reload();
-  // The Projects drawer stays open across the reload.
-  await page.locator('#sidebar li[data-kind="project"] button[data-row]').first().click();
+  await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
+  await page.locator("main li[data-project] > button").first().click();
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 
   // Stop plxd with the coordinator running. The app reconnects through a new `serve`, which

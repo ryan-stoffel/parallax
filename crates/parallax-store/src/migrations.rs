@@ -854,6 +854,13 @@ const MIGRATIONS: &[Migration] = &[
         DROP TABLE area_projects;
         DROP TABLE areas;",
     },
+    // A Space's instructions and files, which every chat in it gets (0090, PLX-1108). `files`
+    // holds absolute paths, one per line.
+    Migration {
+        version: 54,
+        sql: "ALTER TABLE repos ADD COLUMN instructions TEXT;
+        ALTER TABLE repos ADD COLUMN files TEXT;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

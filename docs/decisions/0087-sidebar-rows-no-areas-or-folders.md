@@ -1,6 +1,6 @@
 # 0087: Projects list as rows, finished work rises, and areas and folders are gone
 
-- Status: accepted; amends [0075](0075-arc-sidebar.md) and supersedes [0073](0073-areas.md)'s areas
+- Status: accepted; amends [0075](0075-arc-sidebar.md) and supersedes [0073](0073-areas.md)'s areas; its Projects drawer is replaced by the Projects page and Pinned in [0090](0090-projects-page-and-chat-projects.md)
 - Date: 2026-10-25
 - Issue: PLX-1043
 

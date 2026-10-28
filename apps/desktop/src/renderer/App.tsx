@@ -56,6 +56,10 @@ import { ProjectChat } from "./ProjectChat";
 import { ProjectHome, waitingCount } from "./ProjectHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { PullRequestsPage } from "./PullRequestsPage";
+import { NewChatProject, ProjectsPage } from "./ProjectsPage";
+import { projectEntries } from "./projectList";
+import { pinnedProjects, togglePinnedProject } from "./sidebarPrefs";
+import { SpaceHome } from "./SpaceHome";
 import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
 import { SettingsDialog } from "./Settings";
@@ -73,7 +77,14 @@ import {
   useSnoozeAlarms,
   useThreadAlarms,
 } from "./alarms";
-import { ProjectIcon, RepoIcon, SharedRepoIcons, Sidebar, ThreadList } from "./Sidebar";
+import {
+  ProjectIcon,
+  RepoIcon,
+  SharedRepoIcons,
+  Sidebar,
+  ThreadList,
+  type ProjectMenuHandle,
+} from "./Sidebar";
 import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
@@ -185,8 +196,13 @@ export function App() {
       open: settings !== null,
       count: settings ? count : count + 1,
     }));
-  // The page shown in place of the chat, if any: Pull requests or Usage. Opening a thread closes it.
-  const [mainPage, setMainPage] = useState<"pullRequests" | "usage">();
+  // The page shown in place of the chat, if any: Projects, Pull requests, or Usage. Opening a
+  // thread closes it.
+  const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "usage">();
+  // The sidebar's project menus, which the Projects page's cards open (0090).
+  const projectMenu = useRef<ProjectMenuHandle>(null);
+  const newChatProject = useRef<HTMLDialogElement>(null);
+  const pins = pinnedProjects.use();
 
   useEffect(() => setMainPage(undefined), [selection]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
@@ -369,6 +385,11 @@ export function App() {
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
     group = groups.find((g) => g.id === selection.groupId) ?? group;
+  // A chat project's entry, while New thread is open in it (0090).
+  const spaceRepo =
+    selection.kind === "new" && group.space
+      ? threads.state.repos.find((r) => r.id === group.id)
+      : undefined;
 
   if (
     opening?.hostId === host.id &&
@@ -1272,8 +1293,14 @@ export function App() {
           }}
           onOpenProject={openProject}
           onOpenSettings={openSettings}
-          onOpenPullRequests={() => openMainPage("pullRequests")}
-          onOpenUsage={() => openMainPage("usage")}
+          page={mainPage}
+          onOpenPage={openMainPage}
+          openSpace={
+            selection.kind === "new" && group.space && !mainPage
+              ? `${host.id}/${group.id}`
+              : undefined
+          }
+          projectMenu={projectMenu}
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.showModal()}
@@ -1286,7 +1313,40 @@ export function App() {
       {/* An expanded side panel takes the main pane's place. */}
       <OpenDocumentContext value={openDoc}>
         <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
-          {mainPage === "usage" ? (
+          {mainPage === "projects" ? (
+            <>
+              <TopBar className={topBarInset}>
+                {showSidebar}
+                <Breadcrumb items={[{ label: "Projects" }]} />
+              </TopBar>
+              <ProjectsPage
+                entries={projectEntries(listed)}
+                pins={pins}
+                onOpen={(entry) => {
+                  setMainPage(undefined);
+                  if (entry.kind === "project") openProject(entry.host.id, entry.id);
+                  else openOnHost(entry.host.id, { kind: "new", groupId: entry.id });
+                }}
+                onTogglePin={togglePinnedProject}
+                actionsFor={(entry) => projectMenu.current?.actionsFor(entry) ?? []}
+                onNewProject={() => openAdd("project")}
+                onNewChatProject={
+                  connected && "spaces" in connection.capabilities
+                    ? () => newChatProject.current?.showModal()
+                    : undefined
+                }
+              />
+              <NewChatProject
+                ref={newChatProject}
+                create={threads.createSpace}
+                maxImageBytes={threads.iconImageBytes}
+                onCreated={(space) => {
+                  setMainPage(undefined);
+                  setSelection({ kind: "new", groupId: space.id });
+                }}
+              />
+            </>
+          ) : mainPage === "usage" ? (
             <>
               <TopBar className={topBarInset}>
                 {showSidebar}
@@ -1565,6 +1625,16 @@ export function App() {
                       disabledReason={offline}
                       threadLinks={threadLinks}
                       settingsClosed={settingsClosed.count}
+                      below={
+                        spaceRepo && (
+                          <SpaceHome
+                            hostId={host.id}
+                            space={spaceRepo}
+                            view={threads}
+                            onOpenThread={(threadId) => setSelection({ kind: "thread", threadId })}
+                          />
+                        )
+                      }
                     />
                   ) : agentId ? (
                     <AgentChat

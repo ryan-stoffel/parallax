@@ -63,6 +63,16 @@ pub struct Repo {
     pub icon: Option<ProjectIcon>,
     /// When the entry was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
+    /// A Space's instructions, which plxd pins to the system prompt of every chat in it (0090),
+    /// behind the `spaceContext` capability. Absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instructions: Option<String>,
+    /// The files a Space gives every chat in it (0090), as absolute paths on the host, such as
+    /// `host/upload` answers, behind `spaceContext`. Each chat's system prompt lists them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub files: Vec<String>,
 }
 
 /// A normal thread: what threads add to its run.
@@ -174,9 +184,10 @@ pub struct ThreadUpdateResult {
 }
 
 /// Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
-/// behind the `threadAttention` capability, or renames a Space (0069), behind `spaces`. A change
-/// appends `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams`
-/// for `name` on an entry that isn't a Space.
+/// behind the `threadAttention` capability, renames a Space (0069), behind `spaces`, or sets a
+/// Space's instructions and files (0090), behind `spaceContext`. A change appends
+/// `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
+/// `name`, `instructions`, or `files` on an entry that isn't a Space.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoUpdateParams {
@@ -190,10 +201,26 @@ pub struct RepoUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub name: Option<String>,
+    /// A Space's new instructions, up to [`MAX_SPACE_INSTRUCTIONS_BYTES`] once trimmed. Empty
+    /// clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instructions: Option<String>,
+    /// A Space's files in full, replacing the list: at most [`MAX_SPACE_FILES`] absolute paths
+    /// inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub files: Option<Vec<String>>,
 }
 
 /// The longest Space name `space/create` and `repo/update` take, in bytes once trimmed.
 pub const MAX_SPACE_NAME_BYTES: usize = 128;
+
+/// The longest instructions a Space keeps (0090), in bytes once trimmed.
+pub const MAX_SPACE_INSTRUCTIONS_BYTES: usize = 32 * 1024;
+
+/// The most files a Space keeps (0090).
+pub const MAX_SPACE_FILES: usize = 50;
 
 /// Params of `space/create` (0069), behind the `spaces` capability: makes a Space, a named group
 /// for chats with no repository, backed by a repository plxd makes. Idempotent on `id`: a retry

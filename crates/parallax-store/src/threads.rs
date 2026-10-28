@@ -28,6 +28,10 @@ pub struct Repo {
     /// Its icon, in a project's shape (decision record 0033), stored as the client sent it.
     pub icon: Option<ProjectIcon>,
     pub created_at: Timestamp,
+    /// A Space's instructions for every chat in it (decision record 0090).
+    pub instructions: Option<String>,
+    /// The files a Space gives every chat in it, as absolute paths (decision record 0090).
+    pub files: Vec<String>,
 }
 
 /// A normal thread row, keyed by its run's id.
@@ -89,7 +93,7 @@ pub struct ThreadUpdate {
 }
 
 const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
-    icon_name, icon_color, icon_image_type, icon_image_data, space";
+    icon_name, icon_color, icon_image_type, icon_image_data, space, instructions, files";
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
     AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
@@ -106,6 +110,8 @@ type RawRepo = (
     String,
     Option<ProjectIcon>,
     bool,
+    Option<String>,
+    Option<String>,
 );
 
 fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
@@ -117,11 +123,13 @@ fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
         row.get(4)?,
         icon_from_row(row, 5)?,
         row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
     ))
 }
 
 fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
-    let (id, name, path, scratch, created_at, icon, space) = raw;
+    let (id, name, path, scratch, created_at, icon, space, instructions, files) = raw;
     Ok(Repo {
         id: Uuid::parse_str(&id)?,
         fields: RepoFields {
@@ -132,6 +140,10 @@ fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
         },
         icon,
         created_at: timestamp::parse(&created_at)?,
+        instructions,
+        files: files
+            .map(|files| files.lines().map(str::to_owned).collect())
+            .unwrap_or_default(),
     })
 }
 
@@ -648,6 +660,43 @@ impl Store {
             "UPDATE repos SET name = ?2 WHERE id = ?1",
             params![id.to_string(), name],
         )?;
+        Ok((existing_repo(&self.conn, id)?, true))
+    }
+
+    /// Sets a Space's instructions and files, each when given, `None` or empty instructions and
+    /// an empty list clearing them. A file path holds no newline, since the paths are stored one
+    /// per line. Returns the entry and whether it changed.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
+    pub fn set_space_context(
+        &self,
+        id: Uuid,
+        instructions: Option<&str>,
+        files: Option<&[String]>,
+    ) -> Result<(Repo, bool), StoreError> {
+        let before = existing_repo(&self.conn, id)?;
+        let instructions = instructions.map(|text| (!text.is_empty()).then_some(text));
+        let same_instructions =
+            instructions.is_none_or(|text| text == before.instructions.as_deref());
+        let same_files = files.is_none_or(|files| files == before.files.as_slice());
+        if same_instructions && same_files {
+            return Ok((before, false));
+        }
+        if let Some(text) = instructions {
+            self.conn.execute(
+                "UPDATE repos SET instructions = ?2 WHERE id = ?1",
+                params![id.to_string(), text],
+            )?;
+        }
+        if let Some(files) = files {
+            let joined = (!files.is_empty()).then(|| files.join("\n"));
+            self.conn.execute(
+                "UPDATE repos SET files = ?2 WHERE id = ?1",
+                params![id.to_string(), joined],
+            )?;
+        }
         Ok((existing_repo(&self.conn, id)?, true))
     }
 

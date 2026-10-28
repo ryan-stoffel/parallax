@@ -1,5 +1,5 @@
 import { Folder, MessageCircle, MessagesSquare, Plus } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { PromptImage, Repo } from "../protocol/generated/protocol";
 import { CloneDialog } from "./AddDialog";
@@ -79,6 +79,8 @@ interface NewThreadProps {
   draftId?: string;
   /** How many times Settings has closed. The default is read again each time, as it may have changed there. */
   settingsClosed?: number;
+  /** Shown under the composer until a thread starts, as a chat project's page (0090). */
+  below?: ReactNode;
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -119,6 +121,7 @@ export function NewThread({
   threadLinks,
   settingsClosed,
   draftId: reopened,
+  below,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
@@ -403,13 +406,16 @@ export function NewThread({
   // While starting, laid out as AgentChat is, so opening the thread doesn't move anything. The
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.
   // Before it starts, it's centered a little above the middle, so as the Composer grows to its
-  // seven lines the heading rises by only half as much, never toward the top.
+  // seven lines the heading rises by only half as much, never toward the top. With a page under
+  // it, it sits at a fixed height instead, and the page scrolls.
   return (
     <div
       className={
-        starting === undefined
-          ? "flex flex-1 flex-col items-center justify-center-safe px-6 pb-[16vh]"
-          : "flex min-h-0 flex-1 flex-col"
+        starting !== undefined
+          ? "flex min-h-0 flex-1 flex-col"
+          : below
+            ? "flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-[14vh] pb-16"
+            : "flex flex-1 flex-col items-center justify-center-safe px-6 pb-[16vh]"
       }
     >
       {starting !== undefined && (
@@ -656,6 +662,7 @@ export function NewThread({
             </div>
           }
         />
+        {starting === undefined && below}
       </div>
     </div>
   );

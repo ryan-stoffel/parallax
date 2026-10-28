@@ -118,6 +118,9 @@ export const ids = {
   physics: uuid(123),
   essay: uuid(124),
   names: uuid(125),
+  spaceCoursework: uuid(130),
+  spaceEssays: uuid(131),
+  spaceApartment: uuid(132),
 } as const;
 
 const OPUS = "claude-opus-5-5";
@@ -162,6 +165,37 @@ export function createFixtures(now = Date.now()): Fixtures {
       path: `${HOME}/.parallax/scratch`,
       scratch: true,
       createdAt: ago(60 * 24 * 40),
+    },
+    // Chat projects (0090).
+    {
+      id: ids.spaceCoursework,
+      name: "CSCI4230 · Data Mining",
+      path: `${HOME}/.parallax/spaces/${ids.spaceCoursework}`,
+      space: true,
+      icon: { name: "graduation-cap", color: "sky" },
+      createdAt: ago(60 * 24 * 30),
+      instructions:
+        "I'm a senior CS student. Explain with the math first, then a small worked example in Python. Keep answers under 300 words unless I ask for more.",
+      files: [
+        `${HOME}/.parallax/uploads/0199a6f0-a001/syllabus.pdf`,
+        `${HOME}/.parallax/uploads/0199a6f0-a002/lecture-07-clustering.pdf`,
+        `${HOME}/.parallax/uploads/0199a6f0-a003/homework-3.md`,
+      ],
+    },
+    {
+      id: ids.spaceEssays,
+      name: "Essays",
+      path: `${HOME}/.parallax/spaces/${ids.spaceEssays}`,
+      space: true,
+      icon: { name: "feather", color: "orange" },
+      createdAt: ago(60 * 24 * 20),
+    },
+    {
+      id: ids.spaceApartment,
+      name: "Moving into my own apartment",
+      path: `${HOME}/.parallax/spaces/${ids.spaceApartment}`,
+      space: true,
+      createdAt: ago(60 * 24 * 14),
     },
   ];
 
@@ -1409,8 +1443,10 @@ export function createFixtures(now = Date.now()): Fixtures {
     started: number;
     updated: number;
     seen?: number;
+    /** A chat project's id, for a chat in one. */
+    repo?: string;
   }) => {
-    const run = thread({ ...c, repo: ids.repoScratch, status: "completed" });
+    const run = thread({ ...c, repo: c.repo ?? ids.repoScratch, status: "completed" });
     log(run)
       .out(
         ago(c.started),
@@ -1450,6 +1486,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     .finish(ago(12), { status: "completed" });
   chat({
     id: ids.homework,
+    repo: ids.spaceCoursework,
     title: "Linear algebra: eigenvalues walkthrough",
     slug: "eigenvalues",
     prompt:
@@ -1460,6 +1497,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   chat({
     id: ids.physics,
+    repo: ids.spaceCoursework,
     title: "Physics: torque and angular momentum",
     slug: "torque",
     prompt: "Explain torque and angular momentum like I'm studying for Thursday's exam.",
@@ -1470,6 +1508,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   chat({
     id: ids.essay,
+    repo: ids.spaceEssays,
     title: "Essay outline: AI tutors and academic honesty",
     slug: "essay-outline",
     prompt: "Help me outline a 1,500 word essay on AI tutors and academic honesty.",
