@@ -129,7 +129,7 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
     const [width, height] = [2400, 12];
     const pixels = Buffer.alloc(width * height * 4, 0x80);
     const png = nativeImage.createFromBitmap(pixels, { width, height }).toPNG();
-    await clipboard.write([new ClipboardItem({ "image/png": new Blob([png]) })]);
+    await clipboard.write([new ClipboardItem({ "image/png": new Blob([new Uint8Array(png)]) })]);
   });
   const message = page.getByRole("textbox", { name: "Message" });
   await message.click();
