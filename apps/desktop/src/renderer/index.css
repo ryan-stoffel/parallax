@@ -988,80 +988,54 @@ body {
   outline: none;
 }
 
-/* The fill is the nightly send button's sky (.send-sky) in either mode: a deep indigo night with a
-   violet glow, puffy lavender clouds along its bottom, and a few stars drifting through it, faster
-   the harder it thinks (--effort-speed). */
+/* The fill is a quiet tint of the text color, and a soft sheen sweeps through it, faster the harder
+   it thinks (--effort-speed). */
 .effort-fill {
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 16'%3E%3Cg fill='%236e6ac8'%3E%3Ccircle cx='0' cy='14' r='6'/%3E%3Ccircle cx='12' cy='10' r='7.5'/%3E%3Ccircle cx='25' cy='13' r='6'/%3E%3Ccircle cx='38' cy='9' r='8'/%3E%3Ccircle cx='50' cy='13' r='6'/%3E%3Ccircle cx='60' cy='14' r='6'/%3E%3C/g%3E%3Cg fill='%23a5a1ef'%3E%3Ccircle cx='6' cy='19' r='6'/%3E%3Ccircle cx='19' cy='18' r='6.5'/%3E%3Ccircle cx='32' cy='19' r='6'/%3E%3Ccircle cx='45' cy='18' r='6.5'/%3E%3Ccircle cx='57' cy='19' r='6'/%3E%3C/g%3E%3C/svg%3E")
-      left bottom / 60px 16px repeat-x,
-    radial-gradient(ellipse 60% 120% at 85% 0%, rgb(124 58 237 / 45%), transparent),
-    linear-gradient(#070923, #17184f 60%, #2a2470);
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 25%),
-    inset 0 0 0 1px rgb(165 180 252 / 25%);
+  background-color: color-mix(in oklab, var(--foreground) 14%, transparent);
 }
 .effort-fill::after {
   content: "";
   position: absolute;
-  inset: 0 0 14px;
+  inset: 0;
   border-radius: inherit;
-  background:
-    radial-gradient(0.9px 0.9px at 9px 7px, #fff 50%, transparent),
-    radial-gradient(0.6px 0.6px at 27px 15px, rgb(255 255 255 / 80%) 50%, transparent),
-    radial-gradient(0.8px 0.8px at 44px 5px, rgb(255 255 255 / 70%) 50%, transparent),
-    radial-gradient(0.5px 0.5px at 54px 17px, rgb(255 255 255 / 60%) 50%, transparent);
-  background-size: 60px 22px;
-  animation: effort-stars var(--effort-speed) linear infinite;
+  background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in oklab, var(--foreground) 12%, transparent),
+      transparent
+    )
+    no-repeat;
+  background-size: 50% 100%;
+  animation: effort-sheen calc(var(--effort-speed) * 2.5) ease-in-out infinite;
 }
-@keyframes effort-stars {
+@keyframes effort-sheen {
+  from {
+    background-position: -100% 0;
+  }
   to {
-    background-position: 60px 0;
+    background-position: 200% 0;
   }
 }
 
-/* At Max (.effort-full) the night fills with twinkling stars, its violet glow brightens, and a soft
-   indigo glow pulses around the track, as the send button glows. The thumb pops once, and the
-   gauge on the button turns the night's colors (.effort-galaxy). */
-@keyframes effort-twinkle {
-  50% {
-    opacity: 0.45;
-  }
-}
+/* At Max (.effort-full) the track breathes, a soft ring swelling and fading around it, and the
+   thumb pops once. */
 @keyframes effort-glow {
   0%,
   100% {
-    box-shadow: 0 4px 14px -4px rgb(79 70 229 / 60%);
+    box-shadow:
+      inset 0 0 0 1px var(--border),
+      0 0 0 0 color-mix(in oklab, var(--foreground) 12%, transparent);
   }
   50% {
-    box-shadow: 0 4px 22px -2px rgb(124 58 237 / 80%);
+    box-shadow:
+      inset 0 0 0 1px var(--border),
+      0 0 0 4px color-mix(in oklab, var(--foreground) 6%, transparent);
   }
 }
 @keyframes effort-pop {
   40% {
     transform: scale(1.2);
   }
-}
-.effort-full .effort-fill {
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 60 16'%3E%3Cg fill='%236e6ac8'%3E%3Ccircle cx='0' cy='14' r='6'/%3E%3Ccircle cx='12' cy='10' r='7.5'/%3E%3Ccircle cx='25' cy='13' r='6'/%3E%3Ccircle cx='38' cy='9' r='8'/%3E%3Ccircle cx='50' cy='13' r='6'/%3E%3Ccircle cx='60' cy='14' r='6'/%3E%3C/g%3E%3Cg fill='%23a5a1ef'%3E%3Ccircle cx='6' cy='19' r='6'/%3E%3Ccircle cx='19' cy='18' r='6.5'/%3E%3Ccircle cx='32' cy='19' r='6'/%3E%3Ccircle cx='45' cy='18' r='6.5'/%3E%3Ccircle cx='57' cy='19' r='6'/%3E%3C/g%3E%3C/svg%3E")
-      left bottom / 60px 16px repeat-x,
-    radial-gradient(ellipse 70% 130% at 80% 0%, rgb(124 58 237 / 65%), transparent),
-    linear-gradient(#070923, #17184f 60%, #2a2470);
-}
-.effort-full .effort-fill::after {
-  background:
-    radial-gradient(0.9px 0.9px at 4px 6px, #fff 50%, transparent),
-    radial-gradient(0.6px 0.6px at 13px 16px, rgb(255 255 255 / 80%) 50%, transparent),
-    radial-gradient(1px 1px at 22px 9px, #fff 50%, transparent),
-    radial-gradient(0.5px 0.5px at 30px 3px, rgb(255 255 255 / 70%) 50%, transparent),
-    radial-gradient(0.8px 0.8px at 39px 14px, rgb(255 255 255 / 90%) 50%, transparent),
-    radial-gradient(0.6px 0.6px at 47px 5px, rgb(255 255 255 / 70%) 50%, transparent),
-    radial-gradient(0.9px 0.9px at 55px 18px, #fff 50%, transparent);
-  background-size: 60px 22px;
-  animation:
-    effort-stars var(--effort-speed) linear infinite,
-    effort-twinkle 2.4s ease-in-out infinite;
 }
 .effort-full .effort-track {
   animation: effort-glow 2.4s ease-in-out infinite;
@@ -1070,9 +1044,8 @@ body {
   animation: effort-pop 0.45s ease-out;
 }
 /* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
-   --needle. At Max (.effort-galaxy) its lines take the night sky's indigo and violet, lighter in
-   dark mode, and stars twinkle in the dial. Turned up to Max (.effort-lit), once the needle has swung over, it
-   rattles against the end of the arc; then it's still. */
+   --needle. Turned up to Max (.effort-lit), once the needle has swung over, it rattles against the
+   end of the arc; then it's still. */
 .effort-needle {
   transform-box: view-box;
   transform-origin: 12px 14px;
@@ -1090,47 +1063,12 @@ body {
 .effort-lit .effort-needle {
   animation: effort-rattle 0.1s linear 0.3s 3;
 }
-.effort-galaxy {
-  --galaxy-from: #2a2470;
-  --galaxy-via: #4f46e5;
-  --galaxy-to: #7c3aed;
-  --galaxy-star: #6e6ac8;
-}
-:root.dark .effort-galaxy {
-  --galaxy-from: #8a86e4;
-  --galaxy-via: #a5a1ef;
-  --galaxy-to: #c4b5fd;
-  --galaxy-star: #ffffff;
-}
-.effort-galaxy-from {
-  stop-color: var(--galaxy-from);
-}
-.effort-galaxy-via {
-  stop-color: var(--galaxy-via);
-}
-.effort-galaxy-to {
-  stop-color: var(--galaxy-to);
-}
-.effort-stars {
-  fill: var(--galaxy-star);
-}
-.effort-stars circle {
-  animation: effort-twinkle 2.4s ease-in-out infinite;
-}
-.effort-stars circle:nth-child(2) {
-  animation-delay: 0.8s;
-}
-.effort-stars circle:nth-child(3) {
-  animation-delay: 1.6s;
-}
 :root.reduce-motion {
   .effort-fill::after,
   .effort-full .effort-fill,
   .effort-full .effort-track,
   .effort-full .effort-thumb,
-  .effort-full .effort-fill::after,
-  .effort-lit .effort-needle,
-  .effort-stars circle {
+  .effort-lit .effort-needle {
     animation: none;
   }
   .effort-needle {
