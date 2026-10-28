@@ -35,7 +35,7 @@ import { NewThreadScreen, StartThreadScreen } from "./NewThread";
 import { Loading, Onboarding } from "./Onboarding";
 import { PullRequestList, PullRequestScreen } from "./PullRequests";
 import { alertFor, phaseOf, type Phase } from "./alerts";
-import { notify, onOpened } from "./push";
+import { notify, onOpened, registerWithRelay } from "./push";
 import { LightboxHost } from "./Lightbox";
 import { getPrefs } from "./prefs";
 import { SearchScreen } from "./Search";
@@ -135,10 +135,12 @@ const back = ({ navigation }: { navigation: { goBack: () => void } }): NativeSta
 
 /**
  * Notifies when a thread on any computer starts needing the user, or finishes or fails, and
- * opens the thread a tapped notification is about.
+ * opens the thread a tapped notification is about. At launch it gives Parallax Relay this
+ * phone's push token, so it's notified while the app is closed too.
  */
 function Alerts() {
   const { computers } = useFleet();
+  const { accessToken } = useAccount();
   const phases = useRef(new Map<string, Phase>());
   const latest = useRef(computers);
   latest.current = computers;
@@ -158,6 +160,7 @@ function Alerts() {
     }
   }
 
+  useEffect(() => void registerWithRelay(accessToken), []);
   useEffect(
     () =>
       onOpened(({ hostId, runId }) => {

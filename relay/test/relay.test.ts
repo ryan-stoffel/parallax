@@ -10,7 +10,8 @@ import {
   MAX_HOOK_BYTES,
   MIN_FRAME_BYTES,
 } from "../src/host";
-import { network } from "../src/index";
+import { type Env, network } from "../src/index";
+import { sendApns } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
 import {
   call,
@@ -478,5 +479,51 @@ describe("push", () => {
     expect(sent!.device).toBe(mine);
     expect(sent!.notification).toMatchObject({ run: "run-1", state: "needsYou" });
     expect(await outbox("user_b")).toEqual([]);
+  });
+
+  it("signs with the APNs key and falls back to sandbox for a development build's token", async () => {
+    const pair = (await crypto.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, [
+      "sign",
+      "verify",
+    ])) as CryptoKeyPair;
+    const der = (await crypto.subtle.exportKey("pkcs8", pair.privateKey)) as ArrayBuffer;
+    const pem = `-----BEGIN PRIVATE KEY-----\n${btoa(String.fromCharCode(...new Uint8Array(der)))}\n-----END PRIVATE KEY-----`;
+    const env = { APNS_KEY: pem, APNS_KEY_ID: "KEYID12345", APNS_TEAM_ID: "TEAM123456" } as Env;
+    const device = "c".repeat(64);
+    const notification = { hostId: "host-1", run: "run-1", state: "done" } as const;
+
+    // Production refuses a sandbox token, then sandbox takes it.
+    const seen: Request[] = [];
+    const sandboxOnly = async (url: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(url, init);
+      seen.push(request);
+      return request.url.includes("sandbox")
+        ? new Response(null, { status: 200 })
+        : Response.json({ reason: "BadDeviceToken" }, { status: 400 });
+    };
+    expect(await sendApns(env, device, notification, sandboxOnly as typeof fetch)).toBe("sent");
+    expect(seen.map((r) => new URL(r.url).host)).toEqual(["api.push.apple.com", "api.sandbox.push.apple.com"]);
+    const [request] = seen;
+    expect(new URL(request!.url).pathname).toBe(`/3/device/${device}`);
+    expect(request!.headers.get("apns-topic")).toBe("dev.parallax.mobile");
+    // The app reads a remote push's data from `body`.
+    expect((await request!.json<{ body: unknown }>()).body).toEqual(notification);
+
+    const [head, claims, signature] = request!.headers.get("authorization")!.replace("bearer ", "").split(".");
+    expect(JSON.parse(atob(head!))).toEqual({ alg: "ES256", kid: "KEYID12345" });
+    expect(JSON.parse(atob(claims!))).toMatchObject({ iss: "TEAM123456" });
+    const raw = Uint8Array.from(atob(signature!.replace(/-/g, "+").replace(/_/g, "/")), (c) => c.charCodeAt(0));
+    expect(
+      await crypto.subtle.verify(
+        { name: "ECDSA", hash: "SHA-256" },
+        pair.publicKey,
+        raw,
+        new TextEncoder().encode(`${head}.${claims}`),
+      ),
+    ).toBe(true);
+
+    // A token both servers refuse is gone.
+    const neither = async () => Response.json({ reason: "BadDeviceToken" }, { status: 400 });
+    expect(await sendApns(env, device, notification, neither as typeof fetch)).toBe("gone");
   });
 });

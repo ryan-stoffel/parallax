@@ -4,7 +4,7 @@ A Cloudflare Worker with Durable Objects that lets a user's devices reach their 
 
 - `src/index.ts` routes requests and checks Clerk tokens (`src/clerk.ts`, on `packages/clerk-verify`).
 - `src/host.ts` is one host: its registration, plxd's connection, client streams, and held webhooks.
-- `src/user.ts` is one user: their hosts, push devices, and request budget. `src/push.ts` is the APNs stub.
+- `src/user.ts` is one user: their hosts, push devices, and request budget. `src/push.ts` sends pushes through APNs.
 - `wrangler.toml` is the deploy config.
 
 ## Local
@@ -44,4 +44,12 @@ curl -s -o /dev/null -w '%{http_code}\n' https://relay.parallx.dev/v1/hosts   # 
 
 The first deploy creates both Durable Object classes from the `v1` migration. A later change to a class's storage adds a migration rather than editing `v1`.
 
-Push needs an APNs key (`.p8`), its key id, and the team id (PLX-653). They will be Worker secrets (`wrangler secret put`), and `src/push.ts`'s stub gets replaced with a real send.
+Push needs the APNs auth key (`.p8`, Sandbox & Production), its key id, and the team id, as Worker secrets. Without them pushes only log. After the first deploy:
+
+```sh
+corepack pnpm exec wrangler secret put APNS_KEY --env="" < AuthKey_<key id>.p8
+corepack pnpm exec wrangler secret put APNS_KEY_ID --env=""
+corepack pnpm exec wrangler secret put APNS_TEAM_ID --env=""
+```
+
+Workers reach APNs over HTTP/2 in production, but not under `wrangler dev` on macOS (cloudflare/workerd#4841), so test a real push against the deployed relay.
