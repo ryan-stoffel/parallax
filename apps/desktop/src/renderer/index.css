@@ -1064,7 +1064,6 @@ body {
   animation: effort-rattle 0.1s linear 0.3s 3;
 }
 :root.reduce-motion {
-  .effort-fill::after,
   .effort-full .effort-track,
   .effort-full .effort-thumb,
   .effort-lit .effort-needle {
@@ -1072,6 +1071,10 @@ body {
   }
   .effort-needle {
     transition: none;
+  }
+  /* Stopped, the sheen would sit as a band over the fill. */
+  .effort-fill::after {
+    display: none;
   }
 }
 

@@ -8,18 +8,18 @@ import { EffortMenu } from "./EffortMenu";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
-test("the gauge flushes when turned up to Max, not when it opens there", () => {
+test("the needle rattles when turned up to Max, not when it opens there", () => {
   const host = document.createElement("div");
   const root = createRoot(host);
   const show = (value: AgentEffort) =>
     act(() => root.render(<EffortMenu value={value} onChange={() => {}} />));
-  const flush = () => host.querySelector(".effort-lit");
+  const rattle = () => host.querySelector(".effort-lit");
 
   show("max");
-  expect(flush()).toBeNull();
+  expect(rattle()).toBeNull();
   show("xhigh");
-  expect(flush()).toBeNull();
+  expect(rattle()).toBeNull();
   show("max");
-  expect(flush()).not.toBeNull();
+  expect(rattle()).not.toBeNull();
   act(() => root.unmount());
 });
