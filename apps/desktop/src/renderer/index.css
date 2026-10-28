@@ -616,6 +616,14 @@ body {
   :is([popover], dialog):is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
   background-color: color-mix(in srgb, var(--raised) 92%, transparent);
 }
+/* xterm.js paints its viewport black under the rows, which are clear over glass (Terminal.tsx). */
+:root.translucent .xterm .xterm-viewport {
+  background-color: transparent;
+}
+/* A modal's backdrop tints the glass lightly rather than blacking the window out. */
+:root.translucent dialog::backdrop {
+  background-color: color-mix(in srgb, var(--background) 25%, transparent);
+}
 /* A tray tucked 1rem under a prompt box (.tucked, -mt-4) would show its top through the box's
    glass: its side borders and a second layer of fill. Through glass it starts where the box ends. */
 :root.translucent .tucked {
