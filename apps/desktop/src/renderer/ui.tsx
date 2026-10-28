@@ -640,9 +640,9 @@ export interface Crumb {
 }
 
 /**
- * Where the user is: host, workspace, then the current page, split by slashes. Only the last crumb
- * shrinks, down to a few letters, so the ones before it keep their names. In a narrow
- * `@container`, a trail of three or more drops its host.
+ * Where the user is: host, workspace, then the current page, split by slashes. The host and the
+ * workspace keep their names. Crumbs after them, such as a parent thread and the page, shrink down
+ * to a few letters. In a narrow `@container`, a trail of three or more drops its host.
  */
 export function Breadcrumb({ items }: { items: Crumb[] }) {
   return (
@@ -651,10 +651,11 @@ export function Breadcrumb({ items }: { items: Crumb[] }) {
         {items.map(({ label, icon, onClick }, i) => {
           const current = i === items.length - 1 && !onClick;
           const Tag = onClick ? "button" : "span";
+          const kept = i < Math.min(2, items.length - 1);
           return (
             <li
               key={i}
-              className={`flex items-center gap-0.5 ${i < items.length - 1 ? "max-w-48 shrink-0" : "min-w-16"} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""} ${items.length > 2 ? (i === 0 ? "@max-lg:hidden" : i === 1 ? "@max-lg:before:hidden" : "") : ""}`}
+              className={`flex items-center gap-0.5 ${kept ? "max-w-48 shrink-0" : `min-w-16 ${i < items.length - 1 ? "max-w-48" : ""}`} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""} ${items.length > 2 ? (i === 0 ? "@max-lg:hidden" : i === 1 ? "@max-lg:before:hidden" : "") : ""}`}
             >
               <Tag
                 {...(onClick && { type: "button", onClick })}
