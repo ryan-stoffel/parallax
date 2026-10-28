@@ -22,8 +22,9 @@ const textTypes = new Set(
 async function previewOf(
   type: string,
   bytes: Promise<ArrayBuffer | Uint8Array>,
+  width: number,
 ): Promise<Preview | undefined> {
-  if (type === "PDF") return { url: await firstPage(bytes), page: true };
+  if (type === "PDF") return { url: await firstPage(bytes, width), page: true };
   if (imageTypes.has(type)) {
     const mime = type === "JPG" ? "image/jpeg" : `image/${type.toLowerCase()}`;
     return { url: URL.createObjectURL(new Blob([new Uint8Array(await bytes)], { type: mime })) };
@@ -34,11 +35,11 @@ async function previewOf(
   return undefined;
 }
 
-/** The first page of the PDF `bytes` gives, as a data URL. */
-async function firstPage(bytes: Promise<ArrayBuffer | Uint8Array>): Promise<string> {
+/** The first page of the PDF `bytes` gives, `width` CSS pixels wide, as a data URL. */
+async function firstPage(bytes: Promise<ArrayBuffer | Uint8Array>, width: number): Promise<string> {
   const pdf = await openPdf(new Uint8Array(await bytes));
   try {
-    return (await drawPdfPage(pdf, 1, 84)).toDataURL();
+    return (await drawPdfPage(pdf, 1, width)).toDataURL();
   } finally {
     // Frees its worker and memory: the card keeps only the picture.
     void pdf.loadingTask.destroy();
@@ -65,7 +66,10 @@ export function FileCard({
   onRemove?: () => void;
   progress?: number;
   failed?: boolean;
-  /** Square to its column's width, as in a Space's Files, rather than a fixed size. */
+  /**
+   * As a page in a frame, its column's width, as in a Space's Files (0090): a PDF's first page or a
+   * text file's first lines on a sheet that runs off the bottom, rather than a small square.
+   */
   fill?: boolean;
 }) {
   const name = typeof file === "string" ? (file.split(/[\\/]/).pop() ?? file) : file.name;
@@ -76,23 +80,38 @@ export function FileCard({
     if (!shows || (typeof file === "string" && !hostId)) return;
     let live = true;
     let drawing: Promise<Preview | undefined>;
+    // A page in a frame is drawn wide enough to read its headings.
+    const width = fill ? 240 : 84;
     if (typeof file === "string") {
-      const key = `${hostId}\n${file}`;
-      drawing = drawn.get(key) ?? previewOf(type, readUpload(hostId!, file));
+      const key = `${hostId}\n${file}\n${width}`;
+      drawing = drawn.get(key) ?? previewOf(type, readUpload(hostId!, file), width);
       drawn.set(key, drawing);
       // A host that's away now may answer later.
       drawing.catch(() => drawn.delete(key));
-    } else drawing = previewOf(type, file.arrayBuffer());
+    } else drawing = previewOf(type, file.arrayBuffer(), width);
     drawing.then((made) => live && setPreview(made)).catch(() => {});
     return () => {
       live = false;
     };
-  }, [file, hostId, type]);
+  }, [file, hostId, type, fill]);
   return (
     <span
-      className={`group relative shrink-0 overflow-hidden rounded-xl border border-border bg-surface ${fill ? "aspect-square w-full" : "size-28"}`}
+      className={`group relative shrink-0 overflow-hidden rounded-xl border border-border bg-surface ${fill ? "aspect-[4/5] w-full" : "size-28"}`}
     >
-      {preview && "url" in preview ? (
+      {fill && !(preview && "url" in preview && !preview.page) ? (
+        // A sheet of paper in a frame, cut off at the bottom as if it runs on.
+        <span className="flex h-full bg-[color-mix(in_srgb,var(--foreground)_5%,transparent)] px-4 pt-4">
+          <span className="block w-full overflow-hidden rounded-t-sm bg-white shadow-[0_2px_10px_rgb(0_0_0/0.35)] ring-1 ring-black/10">
+            {preview && "url" in preview ? (
+              <img src={preview.url} alt="" className="block w-full" />
+            ) : (
+              <span className="block p-3 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-[#3d3d3d]">
+                {preview ? preview.text : name}
+              </span>
+            )}
+          </span>
+        </span>
+      ) : preview && "url" in preview ? (
         <img
           src={preview.url}
           alt=""

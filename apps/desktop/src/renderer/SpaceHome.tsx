@@ -13,7 +13,7 @@ import { notify } from "./notifications";
 import type { ProjectEntry } from "./projectList";
 import { ProjectMenu, ProjectTile } from "./ProjectsPage";
 import { quietButton } from "./settings/parts";
-import { age } from "./Sidebar";
+import { age, backendLogo, RepoIcon } from "./Sidebar";
 import { asksOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
 import { uploadBytes, uploadFiles } from "./uploads";
@@ -71,7 +71,7 @@ export function SpaceHeader({
   );
 }
 
-/** A Space's threads under the composer, newest first: each title, when it was last active, and its status. */
+/** A Space's threads under the composer, newest first, as the sidebar's thread cards show them. */
 export function SpaceThreads({
   space,
   view,
@@ -88,6 +88,7 @@ export function SpaceThreads({
       const run = state.runs[t.id];
       return {
         thread: t,
+        run,
         at: activeAt(t, run, state.stoppedAt[t.id]),
         attention: attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
       };
@@ -97,7 +98,7 @@ export function SpaceThreads({
     <section aria-label="Threads">
       <h2 className="mb-2 text-reading font-medium">Threads</h2>
       {threads.length === 0 ? (
-        <div className="flex flex-col items-center border-t border-border px-6 py-14 text-center">
+        <div className="flex flex-col items-center px-6 py-12 text-center">
           <span className="grid size-10 place-items-center rounded-xl bg-hover text-muted-foreground">
             <MessagesSquare aria-hidden className="size-5" />
           </span>
@@ -108,26 +109,35 @@ export function SpaceThreads({
           </p>
         </div>
       ) : (
-        <ul className="border-t border-border">
-          {threads.map(({ thread, at, attention }) => (
-            <li key={thread.id} className="border-b border-border">
-              <button
-                type="button"
-                onClick={() => onOpenThread(thread.id)}
-                className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-4 rounded-lg px-3 py-3 text-left hover:bg-hover"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-body font-medium">
-                    {state.titles[thread.id] ?? "Thread"}
+        <ul className="-mx-2 flex flex-col gap-1">
+          {threads.map(({ thread, run, at, attention }) => {
+            const Logo = run?.backend ? backendLogo(run.backend) : undefined;
+            return (
+              <li key={thread.id} className="group/row rounded-lg hover:bg-hover">
+                <button
+                  type="button"
+                  onClick={() => onOpenThread(thread.id)}
+                  className="flex w-full flex-col gap-0.5 rounded-lg px-2 py-2 text-left transition-transform duration-100 active:scale-[0.985]"
+                >
+                  <span className="flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground">
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                      <RepoIcon repo={space} />
+                      <span className="truncate">{space.name}</span>
+                    </span>
+                    <span className="shrink-0">
+                      {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
+                    </span>
                   </span>
-                  <span className="mt-0.5 block text-meta text-faint-foreground">
-                    {age(at) === "now" ? "Active just now" : `Last active ${age(at)} ago`}
+                  <span className="flex w-full items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-body font-semibold transition-colors group-hover/row:font-bold">
+                      {state.titles[thread.id] ?? "Thread"}
+                    </span>
+                    {Logo && <Logo className="size-3.5 shrink-0 opacity-80 grayscale" />}
                   </span>
-                </span>
-                {attention !== "settled" && <AttentionBadge attention={attention} />}
-              </button>
-            </li>
-          ))}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
