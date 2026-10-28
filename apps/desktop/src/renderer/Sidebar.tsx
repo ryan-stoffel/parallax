@@ -2522,8 +2522,8 @@ function ScopeMenu({
 
 /**
  * The footer's buttons: Profile, which shows the account's picture or initials and opens its menu
- * (ProfileMenu.tsx), then the places that open in the main pane, Pull requests and Usage, and at
- * the far end Settings, then Update when `updatable` (Update.tsx), where it has always been.
+ * with Settings (ProfileMenu.tsx), then the places that open in the main pane, Pull requests and
+ * Usage, and at the far end Update when `updatable` (Update.tsx), where it has always been.
  */
 function Footer({
   listed,
@@ -2536,7 +2536,7 @@ function Footer({
 }) {
   return (
     <div className="flex items-center gap-1">
-      <ProfileButton listed={listed} />
+      <ProfileButton listed={listed} onOpenSettings={onOpenSettings} />
       {onOpenPage && (
         <>
           <IconButton label="Pull requests" onClick={() => onOpenPage("pullRequests")}>
@@ -2548,9 +2548,6 @@ function Footer({
         </>
       )}
       <span className="flex-1" />
-      <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
-        <Settings />
-      </IconButton>
       {window.parallax.updatable && <UpdateButton />}
     </div>
   );

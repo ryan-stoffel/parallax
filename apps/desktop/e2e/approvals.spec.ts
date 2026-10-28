@@ -33,7 +33,8 @@ test("answers a thread's permission requests from the card over the composer, an
     account: { kind: "subscription", backend: "fake" },
   })`);
   expect(set).not.toHaveProperty("error");
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Close settings" }).click();
 
   await page.getByRole("textbox", { name: "Message" }).fill("Run the tests, then plan the release");
