@@ -45,6 +45,7 @@ import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import { NewThreadPicker } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
 import { Onboarding } from "./Onboarding";
+import { Splash } from "./Splash";
 import { useOnboarding } from "./firstRun";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
@@ -82,6 +83,7 @@ import {
   asksOf,
   groupOf,
   groupThreads,
+  emptyThreads,
   idleThreads,
   lacksRepo,
   isRepository,
@@ -1179,6 +1181,15 @@ export function App() {
       ))}
       <Notifications />
       {onboarding && <Onboarding onStart={() => picker.current?.showModal()} />}
+      <Splash
+        ready={
+          onboarding ||
+          threads.state !== emptyThreads ||
+          !!threads.error ||
+          !!threads.outdated ||
+          connection?.status === "failed"
+        }
+      />
       <CommandMenu
         ref={commandMenu}
         hosts={listed}
