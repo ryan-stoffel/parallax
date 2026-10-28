@@ -1,20 +1,85 @@
-// A Space's page under New thread's composer (0090): its instructions and files, which plxd
-// gives every thread in it, and its threads.
-import { PencilLine, Plus, X } from "lucide-react";
-import { useId, useRef, useState } from "react";
+// A Space's page in New thread (0090): its header over the composer, then its threads beside its
+// instructions and files, which plxd gives every thread in it.
+import { Pin, PinOff, PencilLine, Plus, X } from "lucide-react";
+import { useId, useRef, useState, type CSSProperties, type DragEvent } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
-import { activeAt } from "./attention";
+import { activeAt, attentionOf } from "./attention";
+import { AttentionBadge } from "./AttentionMark";
 import { useConnection } from "./ConnectionStatus";
+import type { FavoriteAction } from "./Favorites";
 import { fileIcon } from "./Mention";
 import { notify } from "./notifications";
+import type { ProjectEntry } from "./projectList";
+import { ProjectMenu, ProjectTile, tint, useImageTint } from "./ProjectsPage";
 import { age } from "./Sidebar";
-import type { ThreadsView } from "./threads";
+import { asksOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
 import { uploadBytes, uploadFiles } from "./uploads";
 
 const card = "flex min-h-0 flex-col rounded-xl border border-border/70 bg-surface p-4";
 
+/** A Space header's light: its color, from behind its tile, fading out. */
+const headerGlow =
+  "radial-gradient(closest-side at 30% 50%, color-mix(in srgb, var(--tint) 16%, transparent), transparent)";
+
+/**
+ * A Space's header, in place of New thread's question: its tile, name, and size, with Pin and its
+ * menu, over a soft light in its color when it has one.
+ */
+export function SpaceHeader({
+  entry,
+  pinned,
+  onTogglePin,
+  actionsFor,
+}: {
+  entry: ProjectEntry;
+  pinned: boolean;
+  onTogglePin: () => void;
+  actionsFor: () => FavoriteAction[];
+}) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const color = tint(entry, useImageTint(entry.icon));
+  const n = entry.threads;
+  const files = entry.files;
+  return (
+    <header style={{ "--tint": color } as CSSProperties} className="relative mb-8">
+      {/* A Space with no color of its own has no light to cast. */}
+      {(entry.icon?.color || entry.icon?.image) && (
+        <span
+          aria-hidden
+          style={{ background: headerGlow }}
+          className="pointer-events-none absolute -top-28 -left-24 h-72 w-[40rem]"
+        />
+      )}
+      <div className="relative flex items-center gap-4">
+        <ProjectTile entry={entry} size="lg" />
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-display font-semibold tracking-tight">{entry.name}</h1>
+          <p className="mt-0.5 text-body text-muted-foreground">
+            Space · {n} {n === 1 ? "thread" : "threads"}
+            {files > 0 && ` · ${files} ${files === 1 ? "file" : "files"}`}
+          </p>
+        </div>
+        <div className="flex items-center gap-0.5">
+          <IconButton label={pinned ? "Unpin" : "Pin"} onClick={onTogglePin}>
+            {pinned ? <PinOff /> : <Pin />}
+          </IconButton>
+          <ProjectMenu
+            entry={entry}
+            pinned={pinned}
+            onTogglePin={onTogglePin}
+            actionsFor={actionsFor}
+            trigger={trigger}
+            className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
+          />
+        </div>
+      </div>
+    </header>
+  );
+}
+
+/** A Space's threads, newest first, beside its instructions and files. */
 export function SpaceHome({
   hostId,
   space,
@@ -27,42 +92,53 @@ export function SpaceHome({
   onOpenThread: (threadId: string) => void;
 }) {
   const { state } = view;
-  const chats = state.threads
-    .filter((t) => t.repo === space.id && !t.parent)
-    .map((t) => ({ thread: t, at: activeAt(t, state.runs[t.id], state.stoppedAt[t.id]) }))
+  const threads = state.threads
+    .filter((t) => t.repo === space.id && !t.parent && !t.archived)
+    .map((t) => {
+      const run = state.runs[t.id];
+      return {
+        thread: t,
+        at: activeAt(t, run, state.stoppedAt[t.id]),
+        attention: attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)),
+      };
+    })
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   const editable = "spaceContext" in view.capabilities;
   return (
-    <div className="mt-12 flex flex-col gap-8">
-      {editable && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Instructions space={space} view={view} />
-          <Files hostId={hostId} space={space} view={view} />
-        </div>
-      )}
-      <section aria-label="Threads">
-        <h2 className="mb-2 px-1 text-body font-medium text-muted-foreground">Threads</h2>
-        {chats.length === 0 ? (
-          <p className="px-1 text-body text-faint-foreground">No threads yet. Start one above.</p>
+    <div className={`mt-10 grid gap-6 ${editable ? "md:grid-cols-[minmax(0,1fr)_16rem]" : ""}`}>
+      <section aria-label="Threads" className="min-w-0">
+        <h2 className="mb-2 text-reading font-medium">Threads</h2>
+        {threads.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-border px-4 py-6 text-center text-body text-faint-foreground">
+            No threads yet. Ask anything above to start one.
+          </p>
         ) : (
-          <ul className="flex flex-col">
-            {chats.map(({ thread, at }) => (
-              <li key={thread.id} className="border-t border-border/60 first:border-t-0">
+          <ul className="-mx-2 flex flex-col">
+            {threads.map(({ thread, at, attention }) => (
+              <li key={thread.id}>
                 <button
                   type="button"
                   onClick={() => onOpenThread(thread.id)}
                   className="flex w-full items-center gap-3 rounded-lg px-2 py-2.5 text-left hover:bg-hover"
                 >
-                  <span className="min-w-0 flex-1 truncate text-body">
+                  <span className="min-w-0 flex-1 truncate text-body font-medium">
                     {state.titles[thread.id] ?? "Thread"}
                   </span>
-                  <span className="shrink-0 text-meta text-faint-foreground">{age(at)}</span>
+                  <span className="shrink-0 text-meta text-faint-foreground">
+                    {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
+                  </span>
                 </button>
               </li>
             ))}
           </ul>
         )}
       </section>
+      {editable && (
+        <aside className="flex flex-col gap-3">
+          <Instructions space={space} view={view} />
+          <Files hostId={hostId} space={space} view={view} />
+        </aside>
+      )}
     </div>
   );
 }
@@ -94,7 +170,7 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
         <button
           type="button"
           onClick={open}
-          className="mt-2 line-clamp-4 text-left text-meta whitespace-pre-wrap text-muted-foreground hover:text-foreground"
+          className="mt-2 line-clamp-6 text-left text-meta whitespace-pre-wrap text-muted-foreground hover:text-foreground"
         >
           {space.instructions}
         </button>
@@ -160,10 +236,11 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
   );
 }
 
-/** The files card: each file with Remove, and Add, which uploads to the host. */
+/** The files card: each file with Remove, and Add or a drop, which uploads to the host. */
 function Files({ hostId, space, view }: { hostId: string; space: Repo; view: ThreadsView }) {
   const input = useRef<HTMLInputElement>(null);
   const [adding, setAdding] = useState(false);
+  const [over, setOver] = useState(false);
   const caps = uploadBytes(useConnection(hostId));
   const files = space.files ?? [];
   const save = async (next: string[]) => {
@@ -186,8 +263,27 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
     else await save([...files, ...paths]);
     setAdding(false);
   };
+  const takesFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
   return (
-    <section aria-label="Files" className={card}>
+    <section
+      aria-label="Files"
+      onDragOver={(e) => {
+        if (!caps || adding || !takesFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+      }}
+      onDrop={(e) => {
+        if (!takesFiles(e)) return;
+        e.preventDefault();
+        setOver(false);
+        void add([...e.dataTransfer.files]);
+      }}
+      className={`${card} transition-colors ${over ? "border-accent bg-accent/5" : ""}`}
+    >
       <div className="flex items-center justify-between">
         <h2 className="text-body font-medium">
           Files
@@ -217,7 +313,7 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
       </div>
       {files.length === 0 ? (
         <p className="mt-2 text-meta text-faint-foreground">
-          {adding ? "Adding…" : "Add PDFs, notes, or code for every thread here to read."}
+          {adding ? "Adding…" : "Add or drop PDFs, notes, or code for every thread here to read."}
         </p>
       ) : (
         <ul className="mt-2 flex max-h-40 flex-col overflow-y-auto">

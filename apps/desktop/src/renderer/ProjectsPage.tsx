@@ -53,7 +53,7 @@ const projectSort = stored<ProjectSort>("parallax.projectSort", "activity", (raw
  * A project's color, as a CSS value: an uploaded image's own (`imageTint`), its icon's, else the
  * accent, or gray for a Space.
  */
-function tint(entry: Pick<ProjectEntry, "icon" | "kind">, imageTint?: string) {
+export function tint(entry: Pick<ProjectEntry, "icon" | "kind">, imageTint?: string) {
   if (entry.icon?.image) return imageTint ?? "var(--faint-foreground)";
   if (entry.icon?.color) return `var(--project-${entry.icon.color})`;
   return entry.kind === "space" && !entry.icon ? "var(--project-gray)" : "var(--accent)";
@@ -119,7 +119,7 @@ const imageTints = new Map<string, string>();
  * vivid it is, so a logo's color wins over its white or black. Undefined until it's read, or for
  * no image.
  */
-function useImageTint(icon?: ProjectIconValue): string | undefined {
+export function useImageTint(icon?: ProjectIconValue): string | undefined {
   const url = icon?.image ? imageUrl(icon.image) : undefined;
   const [read, setRead] = useState<{ url: string; color: string }>();
   useEffect(() => {
