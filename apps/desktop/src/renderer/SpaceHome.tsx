@@ -1,6 +1,6 @@
 // A Space's page, New thread laid out as a page (0090): its header, the composer, then its threads
 // beside the instructions and files plxd gives every thread in it.
-import { ArrowLeft, MessagesSquare, Pin, PinOff, Plus, Upload } from "lucide-react";
+import { ArrowLeft, MessagesSquare, Pencil, Pin, PinOff, Plus, Upload } from "lucide-react";
 import { useId, useRef, useState, type DragEvent } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
@@ -25,7 +25,8 @@ const panelHead = "mb-3 flex items-center justify-between gap-2";
 
 /**
  * A Space's header, in place of New thread's question: a way back to Projects, then its icon and
- * name on one line, Pin, and its menu.
+ * name on one line, Pin, and its menu. Where its plxd keeps icons, the icon shows a pencil on hover
+ * and opens the icon picker.
  */
 export function SpaceHeader({
   entry,
@@ -42,6 +43,7 @@ export function SpaceHeader({
   onBack: () => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
+  const changeIcon = actionsFor().find((a) => a.label === "Change icon…");
   return (
     <header className="mb-6">
       <button
@@ -53,7 +55,22 @@ export function SpaceHeader({
         Projects
       </button>
       <div className="flex items-center gap-3">
-        <ProjectTile entry={entry} size="mark" />
+        {changeIcon ? (
+          <button
+            type="button"
+            aria-label="Change icon"
+            title="Change icon"
+            onClick={(e) => changeIcon.run(e.currentTarget)}
+            className="group relative -m-1 shrink-0 rounded-md p-1 hover:bg-hover"
+          >
+            <ProjectTile entry={entry} size="mark" />
+            <span className="absolute -right-1 -bottom-1 grid size-4.5 place-items-center rounded-full border border-border bg-background text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100 [&_svg]:size-2.5">
+              <Pencil aria-hidden />
+            </span>
+          </button>
+        ) : (
+          <ProjectTile entry={entry} size="mark" />
+        )}
         <h1 className="min-w-0 flex-1 truncate text-display leading-none font-semibold tracking-tight">
           {entry.name}
         </h1>

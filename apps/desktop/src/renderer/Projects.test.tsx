@@ -899,8 +899,8 @@ test("Usage waits under More until Settings shows it in the head, and pinned pro
   expect(crumbs()).toEqual(["This Mac", "ember"]);
 });
 
-test("a Space is made from the Projects page, opens to New thread in it, and keeps its instructions and files", async () => {
-  capabilities = { spaces: {}, spaceContext: {} };
+test("a Space is made from the Projects page, opens to New thread in it, and keeps its icon, instructions, and files", async () => {
+  capabilities = { spaces: {}, spaceContext: {}, threadAttention: {} };
   const space: Repo = {
     id: "s-essays",
     name: "Essays",
@@ -930,6 +930,10 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
   expect(made).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: "Essays" });
   // A Space's page is the Space, so its crumbs end there.
   expect(crumbs()).toEqual(["This Mac", "Essays"]);
+  // Its icon in the header opens the icon picker under it.
+  const icon = document.querySelector<HTMLElement>('main button[aria-label="Change icon"]')!;
+  await click(icon);
+  expect(popoverSources.at(-1)).toBe(icon);
 
   // Its instructions and files, in the tray under the composer.
   await click(document.querySelector('main button[aria-label="Add instructions"]'));
