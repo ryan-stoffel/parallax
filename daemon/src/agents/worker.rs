@@ -58,6 +58,12 @@ const EXTRA_PATH: &[&str] = &[
 #[cfg(windows)]
 const EXTRA_PATH: &[&str] = &[];
 
+/// Folders under a variable of plxd's own environment, appended on Windows like
+/// [`EXTRA_PATH`] (PLX-1112): npm's default global prefix `%APPDATA%\npm`, where Install's
+/// `npm install -g` puts `codex.cmd`, and `%ProgramFiles%\nodejs`, where Node.js installs, which
+/// that shim runs. A plxd started before Node.js was installed has neither on its `PATH`.
+const EXTRA_PATH_IN_VARS: &[(&str, &str)] = &[("APPDATA", "npm"), ("PROGRAMFILES", "nodejs")];
+
 /// The variables of plxd's own environment that agent CLIs, CLI probes, and worktree git
 /// commands inherit; everything else stays with plxd (0013, decision 0014). A worker has network
 /// access and reads prompt-injectable content, so a token plxd happened to start with, such as
@@ -207,8 +213,8 @@ pub(crate) fn allowlisted(env: &Environment) -> Environment {
 }
 
 /// `env` with the folders of `login`, the login shell's `PATH`, then [`EXTRA_PATH_IN_HOME`], the
-/// user's nix-darwin profile (`/etc/profiles/per-user/$USER/bin`, on Unix), and [`EXTRA_PATH`],
-/// appended to its `PATH` where missing.
+/// user's nix-darwin profile (`/etc/profiles/per-user/$USER/bin`, on Unix), [`EXTRA_PATH`], and
+/// on Windows [`EXTRA_PATH_IN_VARS`], appended to its `PATH` where missing.
 pub(crate) fn with_extra_path(
     mut env: Environment,
     home: Option<&Path>,
@@ -231,10 +237,17 @@ pub(crate) fn with_extra_path(
         .get("USER")
         .filter(|_| cfg!(unix))
         .map(|user| Path::new("/etc/profiles/per-user").join(user).join("bin"));
+    let in_vars: Vec<PathBuf> = EXTRA_PATH_IN_VARS
+        .iter()
+        .filter(|_| cfg!(windows))
+        .filter_map(|(name, dir)| Some(Path::new(env.get(name)?).join(dir)))
+        .filter(|dir| dir.is_absolute())
+        .collect();
     for dir in login
         .chain(in_home)
         .chain(per_user)
         .chain(EXTRA_PATH.iter().map(PathBuf::from))
+        .chain(in_vars)
     {
         if !dirs.contains(&dir) {
             dirs.push(dir);
@@ -507,6 +520,37 @@ mod tests {
         let fine = sandbox_path(dir.path(), "the repository").unwrap();
         assert!(fine.is_absolute());
         assert!(sandbox_path(&dir.path().join("missing"), "x").is_err());
+    }
+
+    /// A plxd started before Node.js was installed finds an agent that `npm install -g` put in
+    /// `%APPDATA%\npm`, and the Node.js it runs, though neither was on its `PATH` (PLX-1112).
+    #[cfg(windows)]
+    #[test]
+    fn an_npm_global_install_is_found_on_windows() {
+        use crate::backend::process::{Environment, find_program};
+
+        let dir = tempfile::tempdir().unwrap();
+        let (appdata, programs) = (dir.path().join("Roaming"), dir.path().join("Program Files"));
+        std::fs::create_dir_all(appdata.join("npm")).unwrap();
+        std::fs::write(appdata.join("npm").join("codex.cmd"), "").unwrap();
+        std::fs::create_dir_all(programs.join("nodejs")).unwrap();
+        std::fs::write(programs.join("nodejs").join("node.exe"), "").unwrap();
+        let mut plxd_env = Environment::empty();
+        plxd_env.set("PATH", r"C:\Windows\System32");
+        plxd_env.set("APPDATA", &appdata);
+        plxd_env.set("PROGRAMFILES", &programs);
+
+        let env = super::with_extra_path(plxd_env, None, None);
+        let path = env.get("PATH");
+        // By folder: the extension comes back as `PATHEXT` spells it, such as `.CMD`.
+        let found = |program: &str| find_program(program.as_ref(), path).unwrap();
+        assert_eq!(found("codex").parent(), Some(appdata.join("npm").as_path()));
+        assert_eq!(
+            found("node").parent(),
+            Some(programs.join("nodejs").as_path())
+        );
+        let first = std::env::split_paths(path.unwrap()).next().unwrap();
+        assert_eq!(first, std::path::Path::new(r"C:\Windows\System32"));
     }
 
     /// Canonicalizing on Windows adds `\\?\`, whose `?` refused every path (PLX-109). The path
