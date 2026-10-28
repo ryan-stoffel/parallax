@@ -928,7 +928,8 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
   await settle();
   const [made] = calls("space/create");
   expect(made).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: "Essays" });
-  expect(crumbs()).toEqual(["This Mac", "Essays", "New thread"]);
+  // A Space's page is the Space, so its crumbs end there.
+  expect(crumbs()).toEqual(["This Mac", "Essays"]);
 
   // Its instructions and files, in the tray under the composer.
   await click(document.querySelector('main button[aria-label="Add instructions"]'));

@@ -575,8 +575,10 @@ export function NewThread({
               ? { hostId, repo: group.id === noRepo || group.space ? undefined : group.id }
               : undefined
           }
+          placeholder={
+            group.space ? "Ask anything, paste an image, use /skills or @threads" : undefined
+          }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
-          noAccess={group.space}
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
           // Chat picks only its computer here, and a Space nothing, since its entry is on this
           // computer alone. While a start is under way it stays as it was, but inert, so the thread

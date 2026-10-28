@@ -829,8 +829,8 @@ export interface ComposerProps {
    * `approvals`, or the open run started without them. Absent: they come as approval cards.
    */
   manualDenied?: keyof typeof manualDenials;
-  /** No Access picker, and no permission sent: plxd's default applies (a Space's chats). */
-  noAccess?: boolean;
+  /** What the empty box says, in place of New thread's or a reply's hint. */
+  placeholder?: string;
   /**
    * The Project's permission mode, where plxd keeps one (0042): every run in the Project runs in
    * it, so it shows in place of Access, and no permission is sent.
@@ -918,7 +918,7 @@ export function Composer({
   imageCaps,
   uploadBytes,
   manualDenied,
-  noAccess,
+  placeholder: hint,
   projectMode,
   insert,
   cite,
@@ -1005,12 +1005,11 @@ export function Composer({
   // Plan is legacy: listed only when Settings turns it on, or the thread already started in it.
   const legacyPlan = accessPrefs.use().legacyPlan;
   // A Project's mode isn't a choice here.
-  const permissions =
-    projectMode || noAccess
-      ? []
-      : (targetBackend?.permissions ?? []).filter(
-          (p) => p !== "plan" || legacyPlan || started?.permission === "plan",
-        );
+  const permissions = projectMode
+    ? []
+    : (targetBackend?.permissions ?? []).filter(
+        (p) => p !== "plan" || legacyPlan || started?.permission === "plan",
+      );
   // A backend that maps no efforts (Cursor) gets none, and shows no effort menu.
   const efforts = targetBackend?.efforts !== false;
   const startedEffort = started?.effort ?? (fresh ? defaults.effort : "high");
@@ -1062,7 +1061,7 @@ export function Composer({
       ...(hasFast && { fast }),
       ...(target !== backend && { account }),
     };
-  if (projectMode || noAccess) delete options.permission;
+  if (projectMode) delete options.permission;
   // The `/` and `@` menus: what's typed, the lists, and the highlighted row. Esc closes the menu
   // until its `/` or `@` goes.
   const [trigger, setTrigger] = useState<Trigger>();
@@ -1460,6 +1459,7 @@ export function Composer({
 
   const placeholder =
     disabledReason ??
+    hint ??
     (newThread
       ? "Build a feature, fix a bug, paste an image, use /skills, @files or threads"
       : "Reply, add detail, or steer what it does next");

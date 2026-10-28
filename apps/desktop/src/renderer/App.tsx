@@ -650,7 +650,11 @@ export function App() {
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
-    crumbs = [{ label: host.name }, repo, { label: page }];
+    // A Space's page is the Space itself (0090), so its crumbs end there.
+    crumbs =
+      selection.kind === "new" && group.space
+        ? [{ label: host.name }, repo]
+        : [{ label: host.name }, repo, { label: page }];
 
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.
@@ -1494,9 +1498,6 @@ export function App() {
                               ? lineageOf(threads.state, paneThread)?.parent?.id
                               : undefined;
                           const title = threads.state.titles[threadId];
-                          const inSpace = threads.state.repos.some(
-                            (r) => r.id === paneThread?.repo && r.space,
-                          );
                           // Keyed, so another run starts from an empty transcript.
                           return {
                             key: `${host.id}/${threadId}`,
@@ -1549,7 +1550,6 @@ export function App() {
                                   going={focused && selection.started}
                                   quiet={tiled && !focused}
                                   listed={threads.state.runs[threadId]}
-                                  space={inSpace}
                                   compose={focused ? compose : undefined}
                                   onComposed={composed}
                                   threadLinks={threadLinks}
@@ -1634,6 +1634,7 @@ export function App() {
                         spaceEntry && (
                           <SpaceHeader
                             entry={spaceEntry}
+                            onBack={() => openMainPage("projects")}
                             pinned={pins.includes(spaceEntry.key)}
                             onTogglePin={() => togglePinnedProject(spaceEntry.key)}
                             actionsFor={() => projectMenu.current?.actionsFor(spaceEntry) ?? []}

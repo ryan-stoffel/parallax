@@ -13,6 +13,7 @@ import { useId, useRef, type ReactNode } from "react";
 
 import { useShortcutLabel } from "./keybindings";
 import type { ProjectEntry } from "./projectList";
+import { AttentionBadge } from "./AttentionMark";
 import type { FavoriteAction } from "./Favorites";
 import { ProjectMenu, ProjectTile } from "./ProjectsPage";
 import { navDefaults, sidebarNav, togglePinnedProject, type NavRow } from "./sidebarPrefs";
@@ -171,7 +172,7 @@ export function SidebarNav({
   );
 }
 
-/** A pinned project's row: its tile and name, a dot while it needs the user, and its menu. */
+/** A pinned project's row: its glyph and name, its status (Needs you, Working, Done), and its menu. */
 function PinnedRow({
   entry,
   open,
@@ -190,16 +191,15 @@ function PinnedRow({
         type="button"
         aria-current={open ? "page" : undefined}
         onClick={onOpen}
-        className={`${pinRow} pr-8`}
+        className={`${pinRow} group-focus-within/pin:pr-8 group-hover/pin:pr-8`}
       >
         <ProjectTile entry={entry} size="glyph" />
         <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-        {entry.needsYou && (
-          <span
-            role="img"
-            aria-label="Needs you"
-            className="size-1.5 shrink-0 rounded-full bg-warning group-hover/pin:hidden"
-          />
+        {/* Its status as the sidebar's cards show it, giving way to its menu on hover. */}
+        {entry.attention !== "settled" && (
+          <span className="shrink-0 group-focus-within/pin:hidden group-hover/pin:hidden">
+            <AttentionBadge attention={entry.attention} count={entry.working} />
+          </span>
         )}
       </button>
       <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-focus-within/pin:opacity-100 group-hover/pin:opacity-100 has-[[aria-expanded=true]]:opacity-100">

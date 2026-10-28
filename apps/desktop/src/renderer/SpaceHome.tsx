@@ -1,6 +1,6 @@
 // A Space's page, New thread laid out as two columns (0090): its header, the composer, and its
 // threads on the left; on the right, the instructions and files plxd gives every thread in it.
-import { MessagesSquare, Pin, PinOff, Plus, Upload, X } from "lucide-react";
+import { ArrowLeft, MessagesSquare, Pin, PinOff, Plus, Upload, X } from "lucide-react";
 import { useId, useRef, useState, type DragEvent } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
@@ -21,40 +21,56 @@ import { uploadBytes, uploadFiles } from "./uploads";
 const panelPart = "p-5";
 const panelHead = "mb-3 flex items-center justify-between gap-2";
 
-/** A Space's header, in place of New thread's question: its tile, name, and size, Pin, and its menu. */
+/**
+ * A Space's header, in place of New thread's question: a way back to Projects, then its tile, name,
+ * and size, Pin, and its menu.
+ */
 export function SpaceHeader({
   entry,
   pinned,
   onTogglePin,
   actionsFor,
+  onBack,
 }: {
   entry: ProjectEntry;
   pinned: boolean;
   onTogglePin: () => void;
   actionsFor: () => FavoriteAction[];
+  /** Opens the Projects page. */
+  onBack: () => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const n = entry.threads;
   return (
-    <header className="mb-8 flex items-center gap-4 lg:col-span-2">
-      <ProjectTile entry={entry} size="lg" />
-      <div className="min-w-0 flex-1">
-        <h1 className="truncate text-display font-semibold tracking-tight">{entry.name}</h1>
-        <p className="mt-0.5 text-body text-muted-foreground">
-          Space · {n} {n === 1 ? "thread" : "threads"}
-        </p>
+    <header className="mb-8 lg:col-span-2">
+      <button
+        type="button"
+        onClick={onBack}
+        className="-ml-1 mb-4 flex items-center gap-1 rounded-md px-1 text-body text-muted-foreground hover:text-foreground [&_svg]:size-4"
+      >
+        <ArrowLeft aria-hidden />
+        Projects
+      </button>
+      <div className="flex items-center gap-3.5">
+        <ProjectTile entry={entry} size="md" />
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-display font-semibold tracking-tight">{entry.name}</h1>
+          <p className="mt-0.5 text-body text-muted-foreground">
+            Space · {n} {n === 1 ? "thread" : "threads"}
+          </p>
+        </div>
+        <IconButton label={pinned ? "Unpin" : "Pin"} onClick={onTogglePin}>
+          {pinned ? <PinOff /> : <Pin />}
+        </IconButton>
+        <ProjectMenu
+          entry={entry}
+          pinned={pinned}
+          onTogglePin={onTogglePin}
+          actionsFor={actionsFor}
+          trigger={trigger}
+          className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
+        />
       </div>
-      <IconButton label={pinned ? "Unpin" : "Pin"} onClick={onTogglePin}>
-        {pinned ? <PinOff /> : <Pin />}
-      </IconButton>
-      <ProjectMenu
-        entry={entry}
-        pinned={pinned}
-        onTogglePin={onTogglePin}
-        actionsFor={actionsFor}
-        trigger={trigger}
-        className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
-      />
     </header>
   );
 }
