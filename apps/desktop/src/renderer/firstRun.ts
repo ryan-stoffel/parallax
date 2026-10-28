@@ -124,9 +124,11 @@ async function setUp(hostId: string, refresh: boolean): Promise<string | undefin
   );
   const failedAdd = added.find(Boolean);
   if (failedAdd) return failedAdd;
-  // Saves answer in any order, so the last may predate another's add. Every probe is cached now.
+  // Saves answer in any order, so the last may predate another's add. Every probe is cached now,
+  // unless `refresh`: an agent just installed was removed as missing and added again here, and
+  // plxd's cache still has it as not installed from before the install (PLX-1112).
   if (missing.length > 0) {
-    const reloaded = await loadProviders(hostId);
+    const reloaded = await loadProviders(hostId, refresh);
     if (reloaded) return reloaded;
   }
   const { remove, save } = plan(listedProviders(hostId)?.providers ?? []);
