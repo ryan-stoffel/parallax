@@ -1,6 +1,6 @@
 // A Space's page, New thread laid out as a page (0090): its header, the composer, then its threads
 // beside the instructions and files plxd gives every thread in it.
-import { ArrowLeft, MessagesSquare, Pin, PinOff, Plus, Upload, X } from "lucide-react";
+import { ArrowLeft, MessagesSquare, Pin, PinOff, Plus, Upload } from "lucide-react";
 import { useId, useRef, useState, type DragEvent } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
@@ -8,7 +8,7 @@ import { activeAt, attentionOf } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
 import { useConnection } from "./ConnectionStatus";
 import type { FavoriteAction } from "./Favorites";
-import { fileIcon } from "./Mention";
+import { FileCard } from "./FileCard";
 import { notify } from "./notifications";
 import type { ProjectEntry } from "./projectList";
 import { ProjectMenu, ProjectTile } from "./ProjectsPage";
@@ -249,8 +249,8 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
 }
 
 /**
- * The panel's Files: each file as a row with Remove, then Add or a drop anywhere on it, which
- * uploads to the host.
+ * The panel's Files: each file as a card with its preview and Remove, then an Add card, or a drop
+ * anywhere on it, which uploads to the host.
  */
 function Files({ hostId, space, view }: { hostId: string; space: Repo; view: ThreadsView }) {
   const input = useRef<HTMLInputElement>(null);
@@ -309,18 +309,6 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
             </span>
           )}
         </h2>
-        {files.length > 0 && (
-          <button
-            type="button"
-            aria-label="Add files"
-            disabled={!caps || adding}
-            onClick={pick}
-            className={`${quietButton} flex items-center gap-1 disabled:opacity-50 [&_svg]:size-3.5`}
-          >
-            <Plus aria-hidden />
-            Add
-          </button>
-        )}
       </div>
       {files.length === 0 ? (
         <button
@@ -339,40 +327,33 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
           </span>
         </button>
       ) : (
-        <ul className="-mx-2 flex flex-col">
-          {files.map((path) => {
-            const name = path.split(/[\\/]/).at(-1) ?? path;
-            const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
-            return (
-              <li
-                key={path}
-                className="group/file flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-hover"
-              >
-                <span aria-hidden className="shrink-0 [&_img]:size-4">
-                  {fileIcon(name)}
-                </span>
-                <span title={name} className="min-w-0 flex-1 truncate text-body">
-                  {name}
-                </span>
-                {ext && (
-                  <span className="shrink-0 text-micro tracking-wide text-faint-foreground uppercase group-focus-within/file:hidden group-hover/file:hidden">
-                    {ext}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  aria-label={`Remove ${name}`}
-                  // An add in flight saves the list as it began, which would undo a remove.
-                  disabled={adding}
-                  onClick={() => void save(files.filter((f) => f !== path))}
-                  className="hidden size-5 shrink-0 place-items-center rounded-sm text-faint-foreground group-focus-within/file:grid group-hover/file:grid hover:text-foreground disabled:opacity-40"
-                >
-                  <X className="size-3" />
-                </button>
-              </li>
-            );
-          })}
-          {adding && <li className="px-2 py-1.5 text-meta text-faint-foreground">Adding…</li>}
+        <ul className="grid grid-cols-2 gap-2">
+          {files.map((path) => (
+            <li key={path} className="flex min-w-0 flex-col gap-1.5">
+              <FileCard
+                file={path}
+                hostId={hostId}
+                fill
+                // An add in flight saves the list as it began, which would undo a remove.
+                onRemove={adding ? undefined : () => void save(files.filter((f) => f !== path))}
+              />
+              <span className="truncate px-0.5 text-meta text-muted-foreground">
+                {path.split(/[\\/]/).at(-1)}
+              </span>
+            </li>
+          ))}
+          <li className="flex flex-col">
+            <button
+              type="button"
+              aria-label="Add files"
+              disabled={!caps || adding}
+              onClick={pick}
+              className="flex aspect-square w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-border text-meta text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-4"
+            >
+              <Plus aria-hidden />
+              {adding ? "Adding…" : "Add"}
+            </button>
+          </li>
         </ul>
       )}
       <input

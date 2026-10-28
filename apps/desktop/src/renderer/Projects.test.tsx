@@ -952,10 +952,11 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
   ]);
 
   const files = document.querySelector('main section[aria-label="Files"]')!;
-  expect([...files.querySelectorAll("li [title]")].map((name) => name.textContent)).toEqual([
-    "brief.pdf",
-    "notes.md",
-  ]);
+  expect(
+    [...files.querySelectorAll('button[aria-label^="Remove "]')].map((b) =>
+      b.getAttribute("aria-label"),
+    ),
+  ).toEqual(["Remove brief.pdf", "Remove notes.md"]);
   await click(files.querySelector('button[aria-label="Remove brief.pdf"]'));
   expect(calls("repo/update").at(-1)).toEqual({
     repo: made!["id"],

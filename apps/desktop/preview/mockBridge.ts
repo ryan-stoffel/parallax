@@ -44,7 +44,7 @@ import {
   type ThreadRun,
   type ThreadSnapshot,
 } from "../src/protocol/generated/protocol";
-import { createFixtures, HOME, ids, PARALLAX_PATH, type RunEvent } from "./fixtures";
+import { createFixtures, HOME, ids, PARALLAX_PATH, uploadSeeds, type RunEvent } from "./fixtures";
 
 const LOCAL = "local";
 const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
@@ -599,7 +599,7 @@ const fileScripts: RepoScript[] = [
 ];
 
 // Files `host/upload` took, by path, for `host/readUpload`.
-const uploads = new Map<string, string>();
+const uploads = new Map<string, string>(Object.entries(uploadSeeds));
 
 const handlers: { [M in Method]?: Handler<M> } = {
   "repo/scripts": (p) => ({

@@ -4,9 +4,35 @@ import { useEffect, useState } from "react";
 import { drawPdfPage, openPdf } from "./documents";
 import { readUpload } from "./uploads";
 
-// The first pages drawn for sent files, by host and path, so a card scrolled back into view
-// doesn't fetch and draw its file again.
-const drawn = new Map<string, Promise<string>>();
+/** What a card shows of its file: a PDF's first page or an image, as a URL, or a text file's start. */
+type Preview = { url: string; page?: boolean } | { text: string };
+
+// The previews made for sent files, by host and path, so a card scrolled back into view doesn't
+// fetch and draw its file again.
+const drawn = new Map<string, Promise<Preview | undefined>>();
+
+const imageTypes = new Set(["PNG", "JPG", "JPEG", "GIF", "WEBP"]);
+const textTypes = new Set(
+  "MD TXT CSV TSV JSON YAML YML TOML XML HTML CSS JS JSX TS TSX PY RS GO RB JAVA KT SWIFT C H CPP SH SQL TEX".split(
+    " ",
+  ),
+);
+
+/** A preview of a file of `type` from its `bytes`, or none for a type it can't show. */
+async function previewOf(
+  type: string,
+  bytes: Promise<ArrayBuffer | Uint8Array>,
+): Promise<Preview | undefined> {
+  if (type === "PDF") return { url: await firstPage(bytes), page: true };
+  if (imageTypes.has(type)) {
+    const mime = type === "JPG" ? "image/jpeg" : `image/${type.toLowerCase()}`;
+    return { url: URL.createObjectURL(new Blob([new Uint8Array(await bytes)], { type: mime })) };
+  }
+  // Its first lines; a card shows only a few.
+  if (textTypes.has(type))
+    return { text: new TextDecoder().decode(new Uint8Array(await bytes).slice(0, 800)) };
+  return undefined;
+}
 
 /** The first page of the PDF `bytes` gives, as a data URL. */
 async function firstPage(bytes: Promise<ArrayBuffer | Uint8Array>): Promise<string> {
@@ -20,8 +46,8 @@ async function firstPage(bytes: Promise<ArrayBuffer | Uint8Array>): Promise<stri
 }
 
 /**
- * A file that isn't an image, as a card (PLX-779): a PDF's first page, or else its name, with its
- * type in a badge. `file` is one attached in the composer, or the path on `hostId` of one sent,
+ * A file that isn't an image, as a card (PLX-779): a PDF's first page, an image, or a text file's
+ * first lines (0090), or else its name, with its type in a badge. `file` is one attached in the composer, or the path on `hostId` of one sent,
  * which `host/readUpload` reads. With `onRemove`, hovering shows a remove button. With
  * `progress`, the share of it sent so far shows as a bar along its bottom (PLX-835), red once
  * `failed`.
@@ -32,36 +58,52 @@ export function FileCard({
   onRemove,
   progress,
   failed,
+  fill,
 }: {
   file: File | string;
   hostId?: string;
   onRemove?: () => void;
   progress?: number;
   failed?: boolean;
+  /** Square to its column's width, as in a Space's Files, rather than a fixed size. */
+  fill?: boolean;
 }) {
   const name = typeof file === "string" ? (file.split(/[\\/]/).pop() ?? file) : file.name;
   const type = /\.([a-z0-9]{1,5})$/i.exec(name)?.[1]?.toUpperCase() ?? "FILE";
-  const [page, setPage] = useState<string>();
+  const [preview, setPreview] = useState<Preview>();
   useEffect(() => {
-    if (type !== "PDF" || (typeof file === "string" && !hostId)) return;
+    const shows = type === "PDF" || imageTypes.has(type) || textTypes.has(type);
+    if (!shows || (typeof file === "string" && !hostId)) return;
     let live = true;
-    let drawing: Promise<string>;
+    let drawing: Promise<Preview | undefined>;
     if (typeof file === "string") {
       const key = `${hostId}\n${file}`;
-      drawing = drawn.get(key) ?? firstPage(readUpload(hostId!, file));
+      drawing = drawn.get(key) ?? previewOf(type, readUpload(hostId!, file));
       drawn.set(key, drawing);
       // A host that's away now may answer later.
       drawing.catch(() => drawn.delete(key));
-    } else drawing = firstPage(file.arrayBuffer());
-    drawing.then((url) => live && setPage(url)).catch(() => {});
+    } else drawing = previewOf(type, file.arrayBuffer());
+    drawing.then((made) => live && setPreview(made)).catch(() => {});
     return () => {
       live = false;
     };
   }, [file, hostId, type]);
   return (
-    <span className="group relative size-28 shrink-0 overflow-hidden rounded-xl border border-border bg-surface">
-      {page ? (
-        <img src={page} alt="" className="mx-auto h-full w-3/4 object-cover object-top" />
+    <span
+      className={`group relative shrink-0 overflow-hidden rounded-xl border border-border bg-surface ${fill ? "aspect-square w-full" : "size-28"}`}
+    >
+      {preview && "url" in preview ? (
+        <img
+          src={preview.url}
+          alt=""
+          className={
+            preview.page ? "mx-auto h-full w-3/4 object-cover object-top" : "size-full object-cover"
+          }
+        />
+      ) : preview ? (
+        <span className="block h-full overflow-hidden p-2.5 font-mono text-micro leading-snug break-words whitespace-pre-wrap text-muted-foreground [mask-image:linear-gradient(to_bottom,black_60%,transparent)]">
+          {preview.text}
+        </span>
       ) : (
         <span className="line-clamp-4 p-2.5 text-meta leading-snug break-all text-muted-foreground">
           {name}
