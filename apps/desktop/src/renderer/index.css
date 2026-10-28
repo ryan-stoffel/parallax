@@ -1044,8 +1044,7 @@ body {
   animation: effort-pop 0.45s ease-out;
 }
 /* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
-   --needle. At Max it quivers against the end of the arc, once it has swung there, and the gauge
-   glows. */
+   --needle. Once it has swung to Max, it quivers against the end of the arc and the gauge glows. */
 .effort-needle {
   transform-box: view-box;
   transform-origin: 12px 14px;
@@ -1074,7 +1073,7 @@ body {
 }
 .effort-gauge-max {
   color: var(--accent);
-  animation: effort-gauge-glow 1.8s ease-in-out infinite;
+  animation: effort-gauge-glow 1.8s ease-in-out 0.3s infinite;
 }
 .effort-gauge-max .effort-needle {
   animation: effort-quiver 0.18s linear 0.3s infinite;
@@ -1087,6 +1086,9 @@ body {
   .effort-gauge-max,
   .effort-gauge-max .effort-needle {
     animation: none;
+  }
+  .effort-needle {
+    transition: none;
   }
 }
 
