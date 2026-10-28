@@ -2476,8 +2476,8 @@ const isWhole = (input?: JsonValue): input is JsonValue =>
 
 // Agent output is untrusted. Enriched Markdown draws raw HTML as its text, never as elements, and
 // every link goes through `follow`: a file in the thread's folder opens in the side panel
-// (FileLink.tsx, PLX-834), and a web page opens in a new window, which main hands to the system
-// browser, https only. No remote image or video loads: each stays a link with its alt text.
+// (FileLink.tsx, PLX-834), a file elsewhere on this computer shows in Finder or Explorer, and a
+// web page opens in a new window, which main hands to the system browser, https only. No remote image or video loads: each stays a link with its alt text.
 
 /** Which remote images Markdown loads: a pull request's https ones, or none. */
 type Images = "github" | "none";

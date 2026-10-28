@@ -702,6 +702,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
 
     openTargets: async () => [],
     openFolder: async () => {},
+    showFile: async () => NOT_HERE,
     terminalApp: async () => null,
     terminalApps: async () => [],
     selectTerminalApp: async () => null,

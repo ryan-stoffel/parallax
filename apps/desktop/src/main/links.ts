@@ -1,6 +1,20 @@
+import path from "node:path";
+
 /** Whether a link the renderer tried to open may go to the system browser: only https. */
 export function isOpenableExternally(url: string): boolean {
   return URL.parse(url)?.protocol === "https:";
+}
+
+/**
+ * The file on this computer a transcript's link names outside its thread's folder, which main
+ * shows in Finder or Explorer: an absolute path, or one in the home folder `home` as `~/`.
+ * Undefined for anything else, such as a UNC path, which Windows would reach over the network.
+ */
+export function shownFilePath(value: unknown, home: string): string | undefined {
+  if (typeof value !== "string" || /\p{Cc}/u.test(value) || /^[\\/]{2}/.test(value))
+    return undefined;
+  const file = value.startsWith("~/") ? path.join(home, value.slice(2)) : value;
+  return path.isAbsolute(file) ? path.normalize(file) : undefined;
 }
 
 /**

@@ -10,6 +10,7 @@ import { createPortal } from "react-dom";
 
 import { download, failure, useDocument, useObjectUrl, type DocRef } from "./documents";
 import { OpenDocumentContext } from "./FileCards";
+import { localId } from "./hosts";
 import { Lightbox } from "./Lightbox";
 import { notify } from "./notifications";
 import { isMedia, isVideo, kindOf } from "./transcript";
@@ -18,6 +19,7 @@ import { isMedia, isVideo, kindOf } from "./transcript";
  * Files an agent links in its messages (PLX-834). The hrefs are its output, so they're untrusted:
  * one names a file only as a relative path, an absolute path inside the thread's folder, or a
  * `file:` URL to one, and is read only through `agent/file`, whose worktree rules plxd enforces.
+ * A file on this computer outside the folder is only selected in Finder or Explorer, never opened.
  * Any other scheme is a web link, which main opens in the browser only when it's https.
  */
 
@@ -117,8 +119,9 @@ const outsideFolder = "This file is outside the thread's folder, so it can't be 
 /**
  * In a transcript, what opens a file the agent named: in the side panel, as a presented file's
  * card does, where it shows as a document, an image or video, or a file to download. A file outside
- * the thread's folder, or a folder that can't be read, says so in a notification. Outside a
- * transcript, undefined.
+ * the thread's folder on this computer, by absolute path or from `~/`, shows in Finder or Explorer
+ * instead. Any other file outside the folder, or a folder that can't be read, says so in a
+ * notification. Outside a transcript, undefined.
  */
 export function useOpenFile(): ((path: string) => void) | undefined {
   const run = useContext(FileRunContext);
@@ -127,10 +130,15 @@ export function useOpenFile(): ((path: string) => void) | undefined {
   return (path) => {
     const fail = (body: string) =>
       notify({ key: `file/${path}`, tone: "error", title: "Couldn't open the file", body });
-    linkedFile(run.hostId, run.runId, path).then(
-      (doc) => (doc ? open(doc) : fail(outsideFolder)),
-      (error: unknown) => fail(error instanceof Error ? error.message : String(error)),
-    );
+    const outside = async () => {
+      if (run.hostId !== localId || !(isAbsolute(path) || path.startsWith("~/")))
+        return fail(outsideFolder);
+      const error = await window.parallax.showFile(path);
+      if (error) fail(error);
+    };
+    linkedFile(run.hostId, run.runId, path)
+      .then((doc) => (doc ? open(doc) : outside()))
+      .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
   };
 }
 

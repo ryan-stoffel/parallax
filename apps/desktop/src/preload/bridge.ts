@@ -480,6 +480,11 @@ export interface ParallaxBridge {
    * to use instead of the chosen one. Main shows a dialog when it can't.
    */
   openFolder(hostId: string, target: OpenTarget, folder: string, terminal?: string): Promise<void>;
+  /**
+   * Selects a file on this computer in Finder or Explorer, given as an absolute path or one from
+   * the home folder (`~/`). Resolves to why it couldn't, or undefined.
+   */
+  showFile(path: string): Promise<string | undefined>;
   /** The name of the terminal app Open uses, or null until one is chosen. */
   terminalApp(): Promise<string | null>;
   /** Installed known terminal apps on this computer, with their icons where main could read them. */

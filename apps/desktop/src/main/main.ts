@@ -80,6 +80,7 @@ import {
   isExtensionPage,
   isOpenableExternally,
   mayNavigate,
+  shownFilePath,
 } from "./links";
 import { appDataDir, dataDir } from "./plxd";
 import { createRepo, listFolders } from "./repos";
@@ -731,6 +732,15 @@ ipcMain.handle(
     if (error && win) await warn(win, "Parallax couldn't open the folder.", error);
   },
 );
+
+// A file a local thread's agent linked from outside the thread's folder, selected in Finder or
+// Explorer. Showing never opens or runs it. Resolves to why it couldn't, or undefined.
+ipcMain.handle("parallax:showFile", (_event, file: unknown) => {
+  const shown = shownFilePath(file, homedir());
+  if (!shown || !existsSync(shown)) return "That file isn't on this computer.";
+  shell.showItemInFolder(shown);
+  return undefined;
+});
 
 // Settings > Providers' Add provider: the ACP Registry's agents, fetched once while the app runs,
 // or again after a failure. Only entries with an id and a name pass, and only https links.
