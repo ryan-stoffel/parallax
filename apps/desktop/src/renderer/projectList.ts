@@ -2,9 +2,10 @@
 // Project, which a coordinator runs on a repository, or a Space, which groups threads with no
 // repository and gives each its instructions and files.
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
-import { activeAt, attentionOf, projectAttention } from "./attention";
+import { activeAt, attentionOf, mostUrgent, projectAttention, type Attention } from "./attention";
 import type { Host } from "./hosts";
 import { asksOf, projectRuns, threadProjects, waitingOf, type ThreadsView } from "./threads";
+import { isRunning } from "./transcript";
 
 export interface ProjectEntry {
   /** `<host>/<id>`, as pins keep it. */
@@ -20,7 +21,15 @@ export interface ProjectEntry {
   createdAt: string;
   /** Its last change, or its latest thread's. */
   activeAt: string;
+  /** Its most urgent state across its threads, as the sidebar's cards show it. */
+  attention: Attention;
+  /** How many of its threads work now. */
+  working: number;
   needsYou: boolean;
+  /** A Project's branch: its integration branch, else its checkout's. */
+  branch?: string;
+  /** How many files a Space gives its threads. */
+  files: number;
 }
 
 export type ProjectSort = "activity" | "name" | "created";
@@ -32,6 +41,7 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
     const inProject = threadProjects(state);
     const projects = state.projects.map((p): ProjectEntry => {
       const runs = projectRuns(state, p.id, inProject);
+      const attention = projectAttention(runs, (id) => asksOf(state, id));
       return {
         key: `${host.id}/${p.id}`,
         host,
@@ -43,7 +53,11 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
         threads: runs.length,
         createdAt: p.createdAt,
         activeAt: p.updatedAt,
-        needsYou: projectAttention(runs, (id) => asksOf(state, id)) === "needsYou",
+        attention,
+        working: runs.filter((r) => isRunning(r.status)).length,
+        needsYou: attention === "needsYou",
+        branch: p.integrationBranch ?? p.branch,
+        files: 0,
       };
     });
     const spaces = state.repos
@@ -51,17 +65,14 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
       .map((r): ProjectEntry => {
         const spaceThreads = state.threads.filter((t) => t.repo === r.id && !t.parent);
         let latest = r.createdAt;
-        let needsYou = false;
+        const attentions: Attention[] = [];
         for (const t of spaceThreads) {
           const run = state.runs[t.id];
           const at = activeAt(t, run, state.stoppedAt[t.id]);
           if (Date.parse(at) > Date.parse(latest)) latest = at;
-          if (
-            !t.archived &&
-            attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)) === "needsYou"
-          )
-            needsYou = true;
+          attentions.push(attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)));
         }
+        const attention = mostUrgent(attentions);
         return {
           key: `${host.id}/${r.id}`,
           host,
@@ -73,7 +84,10 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
           threads: spaceThreads.length,
           createdAt: r.createdAt,
           activeAt: latest,
-          needsYou,
+          attention,
+          working: attentions.filter((a) => a === "working").length,
+          needsYou: attention === "needsYou",
+          files: r.files?.length ?? 0,
         };
       });
     return [...projects, ...spaces];

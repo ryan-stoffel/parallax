@@ -8,6 +8,7 @@ import {
   MessagesSquare,
   Pin,
   PinOff,
+  Plus,
   Search,
   X,
 } from "lucide-react";
@@ -28,10 +29,12 @@ import { imageUrl } from "./images";
 import { iconLook } from "./projectIcons";
 import { sortProjects, type ProjectEntry, type ProjectSort } from "./projectList";
 import { stored } from "./stored";
-import { Menu, menuItem, openOnContextMenu } from "./ui";
+import { AttentionBadge } from "./AttentionMark";
+import { age } from "./Sidebar";
+import { Menu, menuItem, openOnContextMenu, Segmented } from "./ui";
 
 const sorts: { value: ProjectSort; label: string }[] = [
-  { value: "activity", label: "Activity" },
+  { value: "activity", label: "Recent" },
   { value: "name", label: "Name" },
   { value: "created", label: "Created" },
 ];
@@ -94,22 +97,26 @@ export function ProjectTile({
   );
 }
 
-/** "Oct 1", or "Oct 4, 2025" outside this year. */
-function day(time: string) {
-  const date = new Date(time);
-  const thisYear = date.getFullYear() === new Date().getFullYear();
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    ...(!thisYear && { year: "numeric" }),
-  });
+/** What a card's last line says: its size, and a Project's branch or a Space's files. */
+function details(entry: ProjectEntry) {
+  const n = entry.threads;
+  const parts = [`${n} ${n === 1 ? "thread" : "threads"}`];
+  if (entry.kind === "project" && entry.branch) parts.push(entry.branch);
+  if (entry.kind === "space" && entry.files > 0)
+    parts.push(`${entry.files} ${entry.files === 1 ? "file" : "files"}`);
+  return parts.join(" · ");
 }
 
-/** What a card's second line says of its kind and size. */
-function summary(entry: ProjectEntry) {
-  const n = entry.threads;
-  return `${entry.kind === "space" ? "Space" : "Project"} · ${n} ${n === 1 ? "thread" : "threads"}`;
-}
+/** A card's hover light: its color from the top left corner, fading out across it. */
+const glow =
+  "radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--tint) 14%, transparent), transparent 70%)";
+
+type KindFilter = "all" | ProjectEntry["kind"];
+const kinds: { value: KindFilter; name: string }[] = [
+  { value: "all", name: "All" },
+  { value: "project", name: "Projects" },
+  { value: "space", name: "Spaces" },
+];
 
 export function ProjectsPage({
   entries,
@@ -134,16 +141,22 @@ export function ProjectsPage({
 }) {
   const sort = projectSort.use();
   const [query, setQuery] = useState("");
-  const [searching, setSearching] = useState(false);
+  const [kind, setKind] = useState<KindFilter>("all");
   const sortMenu = useId();
   const newMenu = useId();
   const words = query.trim().toLowerCase();
   const shown = sortProjects(
-    words ? entries.filter((e) => e.name.toLowerCase().includes(words)) : entries,
+    entries.filter(
+      (e) =>
+        (kind === "all" || e.kind === kind) && (!words || e.name.toLowerCase().includes(words)),
+    ),
     sort,
   );
   const pinned = pins.flatMap((key) => shown.filter((e) => e.key === key));
   const others = shown.filter((e) => !pins.includes(e.key));
+  const waiting = entries.filter((e) => e.needsYou).length;
+  const bothKinds =
+    entries.some((e) => e.kind === "space") && entries.some((e) => e.kind === "project");
   const card = (e: ProjectEntry) => (
     <ProjectCard
       key={e.key}
@@ -156,79 +169,29 @@ export function ProjectsPage({
   );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-8 pt-10 pb-16">
-        <header className="flex items-center gap-2">
-          <h1 className="mr-auto text-heading font-semibold tracking-tight">Projects</h1>
-          {searching ? (
-            <label className="flex h-8 w-56 items-center gap-2 rounded-md border border-border px-2.5 focus-within:border-transparent focus-within:outline-2 focus-within:outline-ring">
-              <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-              <input
-                type="search"
-                aria-label="Search projects"
-                placeholder="Search projects"
-                autoFocus
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onBlur={() => !query && setSearching(false)}
-                onKeyDown={(e) => {
-                  if (e.key !== "Escape") return;
-                  setQuery("");
-                  setSearching(false);
-                }}
-                className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
-              />
-            </label>
-          ) : (
-            <button
-              type="button"
-              aria-label="Search projects"
-              onClick={() => setSearching(true)}
-              className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
-            >
-              <Search className="size-4" />
-            </button>
-          )}
-          <button
-            type="button"
-            popoverTarget={sortMenu}
-            aria-haspopup="menu"
-            className="flex h-8 items-center gap-1.5 rounded-md border border-border px-2.5 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
-          >
-            Sort by
-            <span className="text-foreground">{sorts.find((s) => s.value === sort)?.label}</span>
-            <ChevronDown aria-hidden className="size-3.5" />
-          </button>
-          <Menu
-            id={sortMenu}
-            label="Sort by"
-            align="end"
-            focus='[role="menuitemradio"]'
-            className="w-40 p-1"
-          >
-            {sorts.map((s) => (
-              <button
-                key={s.value}
-                type="button"
-                role="menuitemradio"
-                aria-checked={s.value === sort}
-                popoverTarget={sortMenu}
-                popoverTargetAction="hide"
-                onClick={() => projectSort.set(s.value)}
-                className={menuItem}
-              >
-                <span className="flex-1">{s.label}</span>
-                {s.value === sort && <Check aria-hidden className="text-accent" />}
-              </button>
-            ))}
-          </Menu>
+      <div className="mx-auto max-w-5xl px-8 pt-12 pb-16">
+        <header className="flex items-center gap-4">
+          <div className="mr-auto">
+            <h1 className="text-display font-semibold tracking-tight">Projects</h1>
+            <p className="mt-1 text-body text-muted-foreground">
+              {entries.length} {entries.length === 1 ? "project" : "projects"}
+              {waiting > 0 && (
+                <span className="text-warning">
+                  {" "}
+                  · {waiting} {waiting === 1 ? "needs" : "need"} you
+                </span>
+              )}
+            </p>
+          </div>
           <button
             type="button"
             popoverTarget={newMenu}
             aria-haspopup="menu"
-            className="flex h-8 items-center gap-1.5 rounded-md bg-primary pr-2 pl-3 text-body font-medium text-primary-foreground hover:opacity-90"
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-primary pr-2.5 pl-3 text-body font-medium text-primary-foreground hover:opacity-90"
           >
+            <Plus aria-hidden className="size-4" />
             New project
-            <ChevronDown aria-hidden className="size-3.5" />
+            <ChevronDown aria-hidden className="size-3.5 opacity-60" />
           </button>
           <Menu id={newMenu} label="New project" align="end" className="w-72 p-1">
             <NewChoice
@@ -250,6 +213,58 @@ export function ProjectsPage({
           </Menu>
         </header>
 
+        {entries.length > 0 && (
+          <div className="mt-8 flex items-center gap-2">
+            <label className="flex h-8 w-64 items-center gap-2 rounded-lg bg-hover px-2.5 focus-within:outline-2 focus-within:outline-ring">
+              <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+              <input
+                type="search"
+                aria-label="Search projects"
+                placeholder="Search projects"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && setQuery("")}
+                className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
+              />
+            </label>
+            {bothKinds && (
+              <Segmented label="Kind" options={kinds} value={kind} onChange={setKind} />
+            )}
+            <button
+              type="button"
+              popoverTarget={sortMenu}
+              aria-haspopup="menu"
+              className="ml-auto flex h-8 items-center gap-1 rounded-lg px-2 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
+            >
+              {sorts.find((s) => s.value === sort)?.label}
+              <ChevronDown aria-hidden className="size-3.5" />
+            </button>
+            <Menu
+              id={sortMenu}
+              label="Sort by"
+              align="end"
+              focus='[role="menuitemradio"]'
+              className="w-40 p-1"
+            >
+              {sorts.map((s) => (
+                <button
+                  key={s.value}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={s.value === sort}
+                  popoverTarget={sortMenu}
+                  popoverTargetAction="hide"
+                  onClick={() => projectSort.set(s.value)}
+                  className={menuItem}
+                >
+                  <span className="flex-1">{s.label}</span>
+                  {s.value === sort && <Check aria-hidden className="text-accent" />}
+                </button>
+              ))}
+            </Menu>
+          </div>
+        )}
+
         {entries.length === 0 ? (
           <div className="mt-24 flex flex-col items-center text-center">
             <div className="flex -space-x-2">
@@ -264,7 +279,7 @@ export function ProjectsPage({
           </div>
         ) : shown.length === 0 ? (
           <p className="mt-16 text-center text-body text-muted-foreground">
-            No projects match “{query.trim()}”.
+            {words ? `No projects match “${query.trim()}”.` : "None of this kind yet."}
           </p>
         ) : (
           <>
@@ -303,8 +318,8 @@ function NewChoice({
       onClick={onClick}
       className="flex w-full items-start gap-3 rounded-md p-2 text-left hover:bg-hover"
     >
-      <ProjectTile entry={{ kind }} size="sm" />
-      <span className="min-w-0">
+      <ProjectTile entry={{ kind }} size="md" />
+      <span className="min-w-0 pt-0.5">
         <span className="block text-body font-medium">{title}</span>
         <span className="block text-meta text-muted-foreground">{detail}</span>
       </span>
@@ -314,14 +329,20 @@ function NewChoice({
 
 function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <section aria-label={title ?? "Projects"} className="mt-8">
-      {title && <h2 className="mb-3 text-body font-medium text-muted-foreground">{title}</h2>}
-      <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">{children}</ul>
+    <section aria-label={title ?? "Projects"} className="mt-6">
+      {title && (
+        <h2 className="mb-2.5 px-1 text-meta font-medium text-faint-foreground">{title}</h2>
+      )}
+      <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">{children}</ul>
     </section>
   );
 }
 
-/** A project's card: its tile, name, kind, and date, with Pin and its menu on hover. */
+/**
+ * A project's card, laid out as the sidebar's thread cards are: its tile and its status or age,
+ * its name, then its size and branch or files. Hovering lights it in its own color and shows Pin
+ * and its menu.
+ */
 function ProjectCard({
   entry,
   pinned,
@@ -336,34 +357,45 @@ function ProjectCard({
   actionsFor: () => FavoriteAction[];
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
+  const status = entry.attention === "settled" ? undefined : entry.attention;
   return (
     <li
       data-project={entry.key}
       onContextMenu={(e) => openOnContextMenu(e, trigger.current)}
+      style={{ "--tint": tint(entry) } as CSSProperties}
       className="group/card relative"
     >
       <button
         type="button"
         onClick={onOpen}
-        className="flex w-full items-center gap-3.5 rounded-xl border border-border/70 bg-surface p-3.5 text-left transition-colors hover:border-border hover:bg-[color-mix(in_srgb,var(--surface),var(--foreground)_4%)]"
+        className="relative flex h-full w-full flex-col gap-3 overflow-hidden rounded-xl bg-surface p-4 text-left ring-1 ring-border/60 transition-[box-shadow,background-color] duration-200 hover:ring-[color-mix(in_srgb,var(--tint)_45%,transparent)]"
       >
-        <ProjectTile entry={entry} />
-        <span className="min-w-0 flex-1 pr-16">
-          <span data-title className="block truncate text-body font-medium">
+        {/* Its color, glowing from the tile's corner while hovered. */}
+        <span
+          aria-hidden
+          style={{ background: glow }}
+          className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover/card:opacity-100"
+        />
+        <span className="relative flex items-center justify-between gap-2">
+          <ProjectTile entry={entry} size="md" />
+          <span className="text-meta text-faint-foreground transition-opacity group-focus-within/card:opacity-0 group-hover/card:opacity-0">
+            {status ? (
+              <AttentionBadge attention={status} count={entry.working} />
+            ) : (
+              age(entry.activeAt)
+            )}
+          </span>
+        </span>
+        <span className="relative min-w-0">
+          <span data-title className="block truncate text-reading font-medium">
             {entry.name}
           </span>
-          <span className="mt-0.5 flex items-center gap-1.5 truncate text-meta text-muted-foreground">
-            {entry.needsYou && (
-              <span className="flex items-center gap-1 text-warning">
-                <span aria-hidden className="size-1.5 rounded-full bg-warning" />
-                Needs you ·
-              </span>
-            )}
-            {summary(entry)} · {day(entry.activeAt)}
+          <span className="mt-0.5 block truncate text-meta text-muted-foreground">
+            {entry.kind === "space" ? "Space" : "Project"} · {details(entry)}
           </span>
         </span>
       </button>
-      <div className="absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity group-focus-within/card:opacity-100 group-hover/card:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+      <div className="absolute top-4 right-3 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/card:opacity-100 group-hover/card:opacity-100 has-[[aria-expanded=true]]:opacity-100">
         <button
           type="button"
           aria-label={pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
