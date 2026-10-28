@@ -1045,8 +1045,7 @@ body {
 }
 /* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
    --needle. Turned up to Max (.effort-lit), once the needle has swung over, it rattles against the
-   end of the arc while the arc runs orange and tongues of flame flicker up off it and die back into
-   it; then it's still. */
+   end of the arc while the gauge flushes orange; then it cools and is still. */
 .effort-needle {
   transform-box: view-box;
   transform-origin: 12px 14px;
@@ -1067,31 +1066,11 @@ body {
     color: #f97316;
   }
 }
-@keyframes effort-flame {
-  0%,
-  100% {
-    scale: 0;
-  }
-  25% {
-    scale: 1.1;
-  }
-  45% {
-    scale: 0.85 1.15;
-  }
-  65% {
-    scale: 1.05 0.85;
-  }
-}
 .effort-lit {
   animation: effort-heat 1.2s ease-out;
 }
 .effort-lit .effort-needle {
   animation: effort-rattle 0.1s linear 0.3s 3;
-}
-.effort-flame {
-  transform-box: fill-box;
-  transform-origin: 50% 100%;
-  animation: effort-flame 0.75s ease-in-out both;
 }
 :root.reduce-motion {
   .effort-fill::after,
@@ -1104,9 +1083,6 @@ body {
   }
   .effort-needle {
     transition: none;
-  }
-  .effort-fire {
-    display: none;
   }
 }
 

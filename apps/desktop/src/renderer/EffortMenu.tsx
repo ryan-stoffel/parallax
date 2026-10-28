@@ -23,22 +23,11 @@ const needle: Record<AgentEffort, number> = {
   max: 120,
 };
 
-// The tongues of flame along the arc at Max: where each stands, in degrees clockwise from straight
-// up, how tall it is (negative leans it the other way), and how late it starts.
-const tongues = [
-  { at: -64, size: -0.85, delay: 0.28 },
-  { at: -32, size: 1, delay: 0.24 },
-  { at: 0, size: -1.1, delay: 0.22 },
-  { at: 32, size: 1, delay: 0.25 },
-  { at: 64, size: -0.85, delay: 0.3 },
-];
-
 /**
  * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
- * The needle springs to each level. Turned up to Max, the arc catches fire: it runs orange and
- * tongues of flame, drawn in its own lines, flicker up off it while the needle rattles against its
- * end; then they die back into the arc and the needle settles there (index.css). Opening a thread
- * already at Max shows it settled, without the fire.
+ * The needle springs to each level. Turned up to Max, the gauge flushes orange while the needle
+ * rattles against the end of the arc, then it cools and the needle settles there (index.css).
+ * Opening a thread already at Max shows it settled.
  */
 function EffortGauge({ value }: { value: AgentEffort }) {
   const [from] = useState(value);
@@ -49,7 +38,6 @@ function EffortGauge({ value }: { value: AgentEffort }) {
     <svg
       aria-hidden
       viewBox="0 0 24 24"
-      overflow="visible"
       fill="none"
       stroke="currentColor"
       strokeWidth={2}
@@ -60,23 +48,6 @@ function EffortGauge({ value }: { value: AgentEffort }) {
     >
       <path d="M3.34 19a10 10 0 1 1 17.32 0" />
       <path d="M12 14V8.34" className={`effort-needle transition-[rotate] ${spring}`} />
-      {lit && (
-        <g className="effort-fire">
-          {tongues.map((t) => (
-            // Each stands on the arc's top, turned about the gauge's center to its place.
-            <g
-              key={t.at}
-              transform={`rotate(${t.at} 12 14) translate(12 4) scale(${t.size} ${Math.abs(t.size)})`}
-            >
-              <path
-                className="effort-flame"
-                style={{ animationDelay: `${t.delay}s` }}
-                d="M-1.4 0C-1.5-1.8.1-2.5.4-4.8 1.6-3.2 1.8-1.6 1.4 0"
-              />
-            </g>
-          ))}
-        </g>
-      )}
     </svg>
   );
 }

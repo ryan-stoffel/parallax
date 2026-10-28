@@ -8,18 +8,18 @@ import { EffortMenu } from "./EffortMenu";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
-test("the gauge catches fire when turned up to Max, not when it opens there", () => {
+test("the gauge flushes when turned up to Max, not when it opens there", () => {
   const host = document.createElement("div");
   const root = createRoot(host);
   const show = (value: AgentEffort) =>
     act(() => root.render(<EffortMenu value={value} onChange={() => {}} />));
-  const fire = () => host.querySelector(".effort-fire");
+  const flush = () => host.querySelector(".effort-lit");
 
   show("max");
-  expect(fire()).toBeNull();
+  expect(flush()).toBeNull();
   show("xhigh");
-  expect(fire()).toBeNull();
+  expect(flush()).toBeNull();
   show("max");
-  expect(fire()).not.toBeNull();
+  expect(flush()).not.toBeNull();
   act(() => root.unmount());
 });
