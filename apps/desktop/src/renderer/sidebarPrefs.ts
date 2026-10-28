@@ -46,3 +46,12 @@ export function togglePinnedProject(key: string) {
   const pins = pinnedProjects.get();
   pinnedProjects.set(pins.includes(key) ? pins.filter((k) => k !== key) : [...pins, key]);
 }
+
+/**
+ * Whether the sidebar is the new one (0090): New thread, Search, and Projects as rows, Pinned
+ * projects, and the Projects page. Off, the default, it's the classic sidebar. Settings › Beta
+ * switches it.
+ */
+export const newSidebar = stored<boolean>("parallax.beta.newSidebar", false, (raw, fallback) =>
+  typeof raw === "boolean" ? raw : fallback,
+);

@@ -48,6 +48,7 @@ import { extraAccounts, SeveralAccountsMark } from "./SeveralAccounts";
 import { age, backendLogos, SettingsNav, settingsNames } from "./Sidebar";
 import { BrowserSettings } from "./settings/BrowserSettings";
 import { AppearanceSettings } from "./settings/AppearanceSettings";
+import { BetaSettings } from "./settings/BetaSettings";
 import { ConnectionSettings } from "./settings/ConnectionSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
 import { KeybindSettings } from "./settings/KeybindSettings";
@@ -223,6 +224,8 @@ export function Settings({
           <ScriptSettings listed={listed} />
         ) : section === "storage" ? (
           <StorageSettings />
+        ) : section === "beta" ? (
+          <BetaSettings />
         ) : (
           <ConnectionSettings />
         )}

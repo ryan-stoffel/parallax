@@ -25,6 +25,7 @@ import { sectionsStore } from "./Sidebar";
 import { moreShown } from "./SidebarNav";
 import {
   navDefaults,
+  newSidebar,
   pinnedProjects,
   sidebarDefaults,
   sidebarNav,
@@ -95,6 +96,8 @@ beforeEach(() => {
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
   sidebarNav.set(navDefaults);
+  // These tests are the new sidebar's (0090); one below covers the classic one.
+  newSidebar.set(true);
   pinnedProjects.set([]);
   moreShown.set(false);
   sectionsStore.set({});
@@ -1082,6 +1085,27 @@ test("Thread details adds the open thread to a Space, which its crumbs then name
   await click(spaces().find((b) => b.textContent === "Remove from Space"));
   expect(calls("thread/setSpace").at(-1)).toEqual({ threads: ["t-draft"] });
   expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
+});
+
+test("the classic sidebar keeps Projects in a drawer and Pull requests in the footer until Beta turns on the new one", async () => {
+  newSidebar.set(false);
+  sectionsStore.set({ all: { projects: true } });
+  await renderApp();
+  const sidebar = document.getElementById("sidebar")!;
+  const drawer = [...sidebar.querySelectorAll("details")].find((d) =>
+    d.querySelector("summary")?.textContent?.startsWith("Projects"),
+  )!;
+  expect(
+    [...drawer.querySelectorAll('li[data-kind="project"] [data-title]')].map((t) => t.textContent),
+  ).toEqual(["photon", "ember"]);
+  expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
+  expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
+  expect(sidebarButton("Projects")).toBeUndefined();
+
+  await act(async () => newSidebar.set(true));
+  expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
+  expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
+  expect(sidebarButton("Projects")).toBeDefined();
 });
 
 test("the add palette offers New Space after New Project where the host makes Spaces, and it opens Create Space", async () => {
