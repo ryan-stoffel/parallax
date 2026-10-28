@@ -199,7 +199,10 @@ export function instanceModels(info: ProviderInfo): Model[] {
     }));
 }
 
-/** Each reasoning effort plxd takes, a line about it, and how fast EffortMenu's stripe moves. */
+/**
+ * Each reasoning effort plxd takes, a line about it, and how fast EffortMenu's sheen sweeps: the
+ * smaller, the faster.
+ */
 export const effortLevels: { value: AgentEffort; name: string; blurb: string; speed: number }[] = [
   { value: "low", name: "Low", blurb: "A little thought first", speed: 3 },
   { value: "medium", name: "Medium", blurb: "Thinks it over", speed: 2 },

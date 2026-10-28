@@ -988,38 +988,42 @@ body {
   outline: none;
 }
 
-/* Stripes drift through the fill, faster the harder it thinks (--effort-speed). */
+/* The fill is the accent, flat, and a soft sheen sweeps through it, faster the harder it thinks
+   (--effort-speed). */
+.effort-fill {
+  background-color: var(--accent);
+}
 .effort-fill::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: repeating-linear-gradient(-45deg, rgb(255 255 255 / 13%) 0 8px, transparent 8px 16px);
-  background-size: 22.627px 100%;
-  animation: effort-stripes var(--effort-speed) linear infinite;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 22%), transparent) no-repeat;
+  background-size: 50% 100%;
+  animation: effort-sheen calc(var(--effort-speed) * 2.5) ease-in-out infinite;
 }
-@keyframes effort-stripes {
+@keyframes effort-sheen {
+  from {
+    background-position: -100% 0;
+  }
   to {
-    background-position: 22.627px 0;
+    background-position: 200% 0;
   }
 }
 
-/* At Max: the thumb pops once, the fill shimmers, and the track glows. */
-@keyframes effort-shimmer {
-  from {
-    background-position: 200% 0;
-  }
-  to {
-    background-position: -200% 0;
-  }
-}
+/* At Max (.effort-full) the track breathes, a soft accent ring swelling and fading around it, and
+   the thumb pops once. */
 @keyframes effort-glow {
   0%,
   100% {
-    box-shadow: 0 0 6px 0 color-mix(in srgb, var(--accent) 40%, transparent);
+    box-shadow:
+      inset 0 0 0 1px var(--border),
+      0 0 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
   }
   50% {
-    box-shadow: 0 0 22px 5px color-mix(in srgb, var(--accent) 70%, transparent);
+    box-shadow:
+      inset 0 0 0 1px var(--border),
+      0 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent);
   }
 }
 @keyframes effort-pop {
@@ -1027,28 +1031,44 @@ body {
     transform: scale(1.2);
   }
 }
-.effort-full .effort-fill {
-  background-image: linear-gradient(
-    90deg,
-    var(--accent),
-    color-mix(in srgb, var(--accent) 45%, white),
-    var(--accent)
-  );
-  background-size: 200% 100%;
-  animation: effort-shimmer 1.8s linear infinite;
-}
 .effort-full .effort-track {
-  animation: effort-glow 1.8s ease-in-out infinite;
+  animation: effort-glow 2.4s ease-in-out infinite;
 }
 .effort-full .effort-thumb {
   animation: effort-pop 0.45s ease-out;
 }
+/* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
+   --needle. Turned up to Max (.effort-lit), once the needle has swung over, it rattles against the
+   end of the arc; then it's still. */
+.effort-needle {
+  transform-box: view-box;
+  transform-origin: 12px 14px;
+  rotate: var(--needle);
+}
+@keyframes effort-rattle {
+  0%,
+  100% {
+    rotate: var(--needle);
+  }
+  40% {
+    rotate: calc(var(--needle) - 5deg);
+  }
+}
+.effort-lit .effort-needle {
+  animation: effort-rattle 0.1s linear 0.3s 3;
+}
 :root.reduce-motion {
-  .effort-fill::after,
-  .effort-full .effort-fill,
   .effort-full .effort-track,
-  .effort-full .effort-thumb {
+  .effort-full .effort-thumb,
+  .effort-lit .effort-needle {
     animation: none;
+  }
+  .effort-needle {
+    transition: none;
+  }
+  /* Stopped, the sheen would sit as a band over the fill. */
+  .effort-fill::after {
+    display: none;
   }
 }
 

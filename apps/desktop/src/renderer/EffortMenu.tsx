@@ -1,5 +1,5 @@
-import { ChevronDown, Gauge, Zap } from "lucide-react";
-import { useId, type CSSProperties } from "react";
+import { ChevronDown, Zap } from "lucide-react";
+import { useId, useState, type CSSProperties } from "react";
 
 import type { AgentEffort } from "../protocol/generated/protocol";
 import { effortLevels as levels } from "./catalog";
@@ -13,6 +13,44 @@ const at = (i: number) => `calc(${thumb} / 2 + (100% - ${thumb}) * ${i / last})`
 // A little overshoot, so the thumb and fill spring into place together.
 const spring = "duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]";
 
+// Where the gauge's needle points at each level, in degrees clockwise from straight up. High is
+// lucide's own Gauge, and Max is the end of the arc.
+const needle: Record<AgentEffort, number> = {
+  low: -80,
+  medium: -20,
+  high: 45,
+  xhigh: 80,
+  max: 120,
+};
+
+/**
+ * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
+ * The needle springs to each level, and turned up to Max it rattles against the end of the arc
+ * before it settles (index.css). Opening a thread already at Max shows it settled.
+ */
+function EffortGauge({ value }: { value: AgentEffort }) {
+  const [from] = useState(value);
+  const [moved, setMoved] = useState(false);
+  if (!moved && value !== from) setMoved(true);
+  const lit = moved && value === "max";
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={lit ? "lucide effort-lit" : "lucide"}
+      style={{ "--needle": `${needle[value]}deg` } as CSSProperties}
+    >
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+      <path d="M12 14V8.34" className={`effort-needle transition-[rotate] ${spring}`} />
+    </svg>
+  );
+}
+
 /** A context window's size, such as `200K` or `1M`. */
 const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
 
@@ -23,11 +61,11 @@ const fastNames: Partial<Record<string, { label: string; on: string; off: string
 };
 
 /**
- * The reasoning picker: a button showing a gauge, the effort, and a bolt in fast mode, that opens
- * a slider with a stop for each level. Stripes in the fill speed up with the level,
- * and Max shimmers and glows (index.css). Below it, the context window is a choice when the model
- * offers more than one, and fast mode when the model has it (`fastMode`, by its instance kind's
- * name for it).
+ * The reasoning picker: a button showing a gauge that points at the effort, the effort, and a bolt
+ * in fast mode, that opens a slider with a stop for each level. A soft sheen sweeps through the
+ * fill, faster the harder it thinks, and at Max the track breathes (index.css). Below it, the
+ * context window is a choice when the model offers more than one, and fast mode when the model has
+ * it (`fastMode`, by its instance kind's name for it).
  */
 export function EffortMenu({
   value,
@@ -66,7 +104,7 @@ export function EffortMenu({
         aria-label={`Reasoning effort: ${name}${fast ? ", fast" : ""}`}
         className={menuButton}
       >
-        <Gauge aria-hidden />
+        <EffortGauge value={value} />
         {name}
         {fast && <Zap aria-hidden className="fill-current text-orange-500" />}
         <ChevronDown aria-hidden className="opacity-70" />
@@ -90,7 +128,7 @@ export function EffortMenu({
             {/* Square on the right, where the thumb covers it. */}
             <div
               aria-hidden
-              className={`effort-fill absolute inset-y-0 left-0 rounded-l-full bg-linear-to-r from-accent to-[color-mix(in_srgb,var(--accent)_65%,white)] transition-[width] ${spring}`}
+              className={`effort-fill absolute inset-y-0 left-0 rounded-l-full transition-[width] ${spring}`}
               style={{ width: at(level) }}
             />
             {levels.map((l, i) => (
