@@ -58,9 +58,9 @@ const fastNames: Partial<Record<string, { label: string; on: string; off: string
 /**
  * The reasoning picker: a button showing a gauge that points at the effort, the effort, and a bolt
  * in fast mode, that opens a slider with a stop for each level. Stripes in the fill speed up with
- * the level, and Max shimmers and glows (index.css). Below it, the context window is a choice when the model
- * offers more than one, and fast mode when the model has it (`fastMode`, by its instance kind's
- * name for it).
+ * the level, and Max shimmers and glows (index.css). Below it, the context window is a choice when
+ * the model offers more than one, and fast mode when the model has it (`fastMode`, by its instance
+ * kind's name for it).
  */
 export function EffortMenu({
   value,
