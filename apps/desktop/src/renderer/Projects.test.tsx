@@ -182,11 +182,6 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-// The Projects atop the list, which need the user or match a search, by name (PLX-1043).
-const topProjects = () =>
-  [...document.querySelectorAll('#sidebar ul[aria-label="Projects"] [data-title]')].map(
-    (t) => t.textContent,
-  );
 /** Opens the Projects page from its sidebar row (0090). */
 const openProjectsPage = () =>
   act(() =>
@@ -273,7 +268,7 @@ test("lists plxd's Projects as rows, most recently active first, and adds one fr
   expect(projectRows()).toEqual(["parallax", "photon", "ember"]);
 });
 
-test("Projects live on the Projects page, not in the sidebar, and a search shows its matches atop the list", async () => {
+test("Projects live on the Projects page, not in the sidebar's list, even when one matches a search or needs the user", async () => {
   await renderApp();
   expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
   expect(
@@ -282,7 +277,7 @@ test("Projects live on the Projects page, not in the sidebar, and a search shows
   const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
   typeInto(search, "emb");
   await settle();
-  expect(topProjects()).toEqual(["ember"]);
+  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
 });
 
 test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
@@ -751,8 +746,8 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
   });
   expect(pinned()!.textContent).toContain("Subagent: Write the docs");
   expect(pinned()!.textContent).toContain("git tag v1.2.0");
-  // Waiting on the user, ember leaves its drawer for the top of the list (PLX-1043).
-  expect(topProjects()).toEqual(["ember"]);
+  // Waiting on the user, ember still stays out of the list unless pinned (0090).
+  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
   await openView("Agents");
   expect(agentRow("Write the docs")!.textContent).toContain("Needs approval");
 
@@ -782,7 +777,6 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
     }),
   );
   expect(agentRow("Write the docs")!.textContent).not.toContain("Needs approval");
-  expect(topProjects()).toEqual([]);
 });
 
 // The sidebar's Projects section (PLX-340).

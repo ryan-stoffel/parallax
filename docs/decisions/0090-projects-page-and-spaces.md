@@ -18,7 +18,7 @@ Projects sat folded in a drawer at the bottom of the sidebar, so they were hard 
 - **The Projects page.** A large heading with how many projects there are and how many need the user, New project, then a search, an All, Projects, and Spaces filter when there are both, and a sort (Recent, Name, Created), then Pinned and Other projects as a grid of cards, up to three across. A card reads as the sidebar's thread cards do: its icon on a tile of its color and its status (the sidebar's Needs you, Working, Done) or its age, then its name, then its kind, how many threads it has, and a Project's branch or a Space's file count. Hovering lights it in its own color. Its menu holds Pin, then the Project menu 0087 put on its row (Rename, Change icon, Full access, Autonomy, Fresh session, Delete), or for a Space Rename, Change icon, and Delete.
 - **A Space's page** is New thread in it: the composer, then its Instructions and Files and its threads.
 - **Pins** are kept on this computer, as the sidebar's other view choices are.
-- **The Projects drawer is gone.** A Project that needs the user, or matches a search, still shows atop the list (0087).
+- **Projects leave the sidebar's list.** The drawer is gone, and a Project shows in the sidebar only under Pinned, even when it needs the user or matches a search, unlike 0087. Pinned's dot, the Projects page, and ⌥↓ still lead to one that needs the user.
 
 ## Rejected
 
@@ -27,7 +27,7 @@ Projects sat folded in a drawer at the bottom of the sidebar, so they were hard 
 | A new kind of project in plxd | A Space already is a named group of threads with its own entry, and 0069 rejected a parallel table. |
 | Writing the instructions as `CLAUDE.md` and `AGENTS.md` in the Space's repository | Each backend reads a different file, a thread's worktree is cut before a later change, and the files would show in its diff. |
 | Copying files into the shared context folder | A thread's sandbox can't read it (0044), and it holds Markdown only. |
-| Keeping the Projects drawer | The page and Pinned show every project, and three Projects places in one sidebar is clutter. |
+| Keeping the Projects drawer, or Projects that need the user atop the list | The page and Pinned show every project, and Projects in the thread list crowd it. |
 | Pins in plxd | Thread pins moved there for mobile; project pins are a view choice until another client needs them. |
 
 ## Consequences

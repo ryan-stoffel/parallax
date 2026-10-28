@@ -50,7 +50,6 @@ import {
 } from "lucide-react";
 import {
   createContext,
-  Fragment,
   useContext,
   useEffect,
   useId,
@@ -182,7 +181,7 @@ import {
   todayFolded,
 } from "./pins";
 import { Favorites, type FavoriteAction } from "./Favorites";
-import { close, Fold, quietFor, shownRows, Tick, ViewOptions } from "./SidebarParts";
+import { Fold, quietFor, shownRows, Tick, ViewOptions } from "./SidebarParts";
 import { DropLine, PinList, type PinDrag } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 import { cancelPrefetch, prefetchThread } from "./threadWatches";
@@ -770,11 +769,6 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // Projects, most recently active first, as threads are (PLX-1043). They live on the Projects
-  // page and under Pinned (0090), except one that needs the user, or matches a search, which
-  // shows atop the list.
-  const allProjects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
-  const projects = allProjects.filter((p) => p.attention === "needsYou" || words.length > 0);
   // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
   const favRank = (key: string) => {
@@ -872,13 +866,8 @@ export function ThreadList({
           .filter((i) => !isFolded(groupKey(i)))
           .sort((a, b) => groupPlace.get(groupKey(a))! - groupPlace.get(groupKey(b))!);
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // Projects' and pinned threads' rows, then Today's threads, then Working's, while it's open.
-  const listed = [
-    ...projects,
-    ...pinnedRows,
-    ...todayRows,
-    ...(sections.working ? workingTops : []),
-  ];
+  // pinned threads' rows, then Today's threads, then Working's, while it's open.
+  const listed = [...pinnedRows, ...todayRows, ...(sections.working ? workingTops : [])];
   const modHeld = useModHeld();
   // Opening a row hides its card, which would cover what it opens.
   const openItem = (item: Item) => {
@@ -1730,41 +1719,9 @@ export function ThreadList({
       };
     })
     .sort((a, b) => favRank(a.key) - favRank(b.key));
-  // A Project's card (PLX-1043).
-  const projectCard = (p: Item & { kind: "project" }) => {
-    const n = modHeld ? listed.indexOf(p) : -1;
-    return (
-      <ProjectRow
-        key={p.key}
-        rowKey={p.key}
-        look={compact ? "compact" : undefined}
-        project={p.project}
-        runs={p.runs}
-        device={many && p.host.icon ? p.host : undefined}
-        at={p.at}
-        attention={p.attention}
-        selected={p.key === openKey}
-        badge={n >= 0 && n < 9 ? <RowBadge index={n} /> : undefined}
-        words={words}
-        actions={projectActions(p)}
-        onOpen={() => {
-          setPicked(new Set());
-          openItem(p);
-        }}
-        onKeys={(e) => rowKeys(e, p)}
-      />
-    );
-  };
-  // The Projects that need the user, or match a search, atop the list.
-  const projectList = projects.length > 0 && (
-    <ul aria-label="Projects" className={`mb-1 ${cardGap}`}>
-      {projects.map(projectCard)}
-    </ul>
-  );
   // No line or Clear between what's kept and Today (PLX-1043); View lives in the filter menu.
   const list = (
     <>
-      {projectList}
       <Favorites
         items={favorites}
         onReorder={
@@ -1799,11 +1756,7 @@ export function ThreadList({
   // Why a host's list couldn't load or stopped updating, which is the list's own state.
   const errors = [...new Set(hosts.map((h) => h.view.error).filter(Boolean))];
   const nothingShown =
-    !allProjects.length &&
-    !pool.length &&
-    !snoozedItems.length &&
-    !archived.length &&
-    !draftRows.length;
+    !pool.length && !snoozedItems.length && !archived.length && !draftRows.length;
 
   return (
     <>
@@ -2868,179 +2821,6 @@ function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: 
         <RowTop place={<RowPlace repo={repo} />} status={<DraftStatus />} oneAction />
         <RowTitle title={title} color="text-foreground" />
       </button>
-    </li>
-  );
-}
-
-/**
- * A Project's card (PLX-1043), shaped like a thread's: its icon, "Project", and how many threads it
- * holds, with its status at the end (what it asks of the user, how many of its runs work, or how
- * long ago it was last active), then its name in bold, then its branch, its computer, and its
- * coordinator's provider, in color while it's open. Hovering or focusing it shows its actions button, whose menu also opens by
- * right-clicking the row, or with A: Rename, Change icon, and the rest its plxd allows.
- */
-function ProjectRow({
-  rowKey,
-  look,
-  project,
-  runs,
-  device,
-  at,
-  attention,
-  selected,
-  badge,
-  words,
-  actions,
-  onOpen,
-  onKeys,
-}: {
-  /** Its key in the list, for keyboard moves and sliding when the list moves. */
-  rowKey: string;
-  /** Today's one-line look (pins.ts): its icon, name, and status. */
-  look?: "compact";
-  project: Project;
-  /** Its coordinator's and children's runs (0042). */
-  runs: readonly AgentRun[];
-  /** Its computer, whose icon shows beside the provider's while there are several (0056). */
-  device?: Host;
-  /** When it was last active, for its age. */
-  at: string;
-  attention: Attention;
-  selected: boolean;
-  /** Its Mod+number badge, shown in place of its status while Mod is held. */
-  badge?: ReactNode;
-  /** A search's words, marked where they're found. */
-  words: readonly string[];
-  /** Its menu's items, each run with the row, which the icon picker opens beside. */
-  actions: FavoriteAction[];
-  onOpen: () => void;
-  /** Keyboard moves on the focused row. */
-  onKeys: (e: ReactKeyboardEvent<HTMLElement>) => void;
-}) {
-  const menuId = useId();
-  const row = useRef<HTMLLIElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const working = runs.filter((r) => isRunning(r.status)).length;
-  const status =
-    badge ??
-    (attention === "settled" ? age(at) : <AttentionBadge attention={attention} count={working} />);
-  const icon = <ProjectIcon icon={project.icon} className="size-4 shrink-0" />;
-  const oneLine = look === "compact";
-  // Its branch (0045), and its coordinator's provider.
-  const branch = project.integrationBranch ?? project.branch;
-  const coordinator = runs.find((r) => r.id === project.coordinator);
-  const Logo = coordinator?.backend ? backendLogo(coordinator.backend) : undefined;
-  const titleColor =
-    selected || attention !== "settled"
-      ? "text-foreground"
-      : "text-foreground/70 group-hover/row:text-foreground";
-  return (
-    <li
-      ref={row}
-      data-kind="project"
-      data-flip={rowKey}
-      className={`group/row relative rounded-lg transition-colors duration-100 ${selected ? current : "group-hover/row:bg-hover"}`}
-    >
-      <button
-        type="button"
-        aria-current={selected ? "page" : undefined}
-        data-row={rowKey}
-        data-kind="project"
-        onClick={onOpen}
-        onKeyDown={onKeys}
-        onContextMenu={actions.length ? (e) => openOnContextMenu(e, trigger.current) : undefined}
-        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2.5 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${oneLine ? "py-[5px]" : "py-2"}`}
-      >
-        {oneLine ? (
-          <RowHead
-            icon={icon}
-            title={<Marked text={project.name} words={words} />}
-            titleColor={titleColor}
-            status={status}
-            oneAction
-          />
-        ) : (
-          <>
-            <RowTop
-              place={
-                <span className="flex min-w-0 items-center gap-1.5">
-                  {icon}
-                  <span className="min-w-0 truncate">
-                    Project
-                    {runs.length > 0 &&
-                      ` · ${runs.length} ${runs.length === 1 ? "thread" : "threads"}`}
-                  </span>
-                </span>
-              }
-              status={status}
-              oneAction
-            />
-            <RowTitle title={<Marked text={project.name} words={words} />} color={titleColor} />
-            {(branch || device?.icon || Logo) && (
-              <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
-                <span className="flex min-w-0 flex-1 items-center gap-1">
-                  {branch && (
-                    <>
-                      <GitBranch aria-hidden className="size-3 shrink-0" />
-                      <BranchName branch={branch} words={words} />
-                    </>
-                  )}
-                </span>
-                {device?.icon && (
-                  <span
-                    title={device.name}
-                    role="img"
-                    aria-label={device.name}
-                    className="flex shrink-0"
-                  >
-                    <DeviceIcon icon={device.icon} className="size-3.5" />
-                  </span>
-                )}
-                {Logo && (
-                  <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />
-                )}
-              </span>
-            )}
-          </>
-        )}
-      </button>
-      {actions.length > 0 && (
-        <>
-          <button
-            ref={trigger}
-            type="button"
-            aria-label="Project actions"
-            title="More (or right-click)"
-            popoverTarget={menuId}
-            className="absolute top-1 right-1 grid size-5.5 cursor-pointer place-items-center rounded-md text-muted-foreground opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-4"
-          >
-            <Ellipsis />
-          </button>
-          <Menu
-            id={menuId}
-            label="Project actions"
-            align="end"
-            focus='[role^="menuitem"]'
-            className="min-w-56 p-1"
-          >
-            {actions.map((a, n) => (
-              <Fragment key={a.label}>
-                {/* Delete sits apart, as in a thread's menu. */}
-                {a.danger && n > 0 && <div role="separator" className="my-1 h-px bg-border" />}
-                <button
-                  type="button"
-                  role="menuitem"
-                  className={`${menuItem} ${a.danger ? "text-danger" : ""}`}
-                  onClick={close(() => row.current && a.run(row.current))}
-                >
-                  {a.icon}
-                  {a.label}
-                </button>
-              </Fragment>
-            ))}
-          </Menu>
-        </>
-      )}
     </li>
   );
 }
