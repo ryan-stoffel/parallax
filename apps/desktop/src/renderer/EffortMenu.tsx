@@ -23,16 +23,12 @@ const needle: Record<AgentEffort, number> = {
   max: 120,
 };
 
-/** A cartoon flame's outline standing on (0, 0): a round base of radius `r`, and its tip `h` up. */
-const drop = (h: number, r: number) =>
-  `M0 ${-h}C${r / 2} ${-h * 0.66} ${r} ${-r * 1.6} ${r} ${-r}A${r} ${r} 0 0 1 ${-r} ${-r}C${-r} ${-r * 1.6} ${-r / 2} ${-h * 0.66} 0 ${-h}Z`;
-
 /**
  * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
- * The needle springs to each level. Turned up to Max, the gauge runs orange and a flame flares up
- * off its arc while the needle rattles against the end, then it settles there (index.css). The
- * flame is drawn like the nightly sky's clouds (NightSky.tsx): flat layers, each one lighter
- * and smaller than the last. Opening a thread already at Max shows it settled, without the fire.
+ * The needle springs to each level. Turned up to Max, the gauge runs orange and lucide's Flame,
+ * drawn in the gauge's own lines, flares up from the needle's hub while the needle rattles against
+ * the end of the arc, then it settles there (index.css). Opening a thread already at Max shows it
+ * settled, without the fire.
  */
 function EffortGauge({ value }: { value: AgentEffort }) {
   const [from] = useState(value);
@@ -43,7 +39,6 @@ function EffortGauge({ value }: { value: AgentEffort }) {
     <svg
       aria-hidden
       viewBox="0 0 24 24"
-      overflow="visible"
       fill="none"
       stroke="currentColor"
       strokeWidth={2}
@@ -55,12 +50,11 @@ function EffortGauge({ value }: { value: AgentEffort }) {
       <path d="M3.34 19a10 10 0 1 1 17.32 0" />
       <path d="M12 14V8.34" className={`effort-needle transition-[rotate] ${spring}`} />
       {lit && (
-        <g transform="translate(17.5 6.5) scale(0.6)" stroke="none" className="effort-fire">
-          <g className="effort-flame">
-            <path fill="#ea580c" d={drop(12, 4.5)} />
-            <path fill="#fb923c" d={drop(9, 3.4)} />
-            <path fill="#fde68a" d={drop(5.5, 2)} />
-          </g>
+        <g transform="translate(12 14) scale(0.34) translate(-12 -22)" className="effort-fire">
+          <path
+            className="effort-flame"
+            d="M12 3q1 4 4 6.5t3 5.5a1 1 0 0 1-14 0 5 5 0 0 1 1-3 1 1 0 0 0 5 0c0-2-1.5-3-1.5-5q0-2 2.5-4"
+          />
         </g>
       )}
     </svg>
