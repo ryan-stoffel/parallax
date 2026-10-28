@@ -1,0 +1,98 @@
+# Weekly dependency updates. Minor and patch updates come grouped in one PR per entry, and each
+# major update comes alone. The cooldown keeps proposals older than pnpm 11's minimumReleaseAge,
+# so a bump doesn't pick a version the lockfile install refuses.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      cargo:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /apps/desktop
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: chore(deps)
+    # A patch in pnpm-workspace.yaml names its exact version, so it moves by hand with the patch.
+    ignore:
+      - dependency-name: react-native-enriched-markdown
+    groups:
+      desktop:
+        update-types: [minor, patch]
+
+  # Expo pins these to its SDK (typescript and @types/react to a minor). Move them with
+  # `npx expo install --fix` when the SDK changes.
+  - package-ecosystem: npm
+    directory: /apps/mobile
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: chore(deps)
+    ignore:
+      - dependency-name: expo
+      - dependency-name: expo-*
+      - dependency-name: "@expo/*"
+      - dependency-name: react
+      - dependency-name: react-native
+      - dependency-name: react-native-*
+      - dependency-name: typescript
+        update-types: [version-update:semver-minor, version-update:semver-major]
+      - dependency-name: "@types/react"
+        update-types: [version-update:semver-minor, version-update:semver-major]
+    groups:
+      mobile:
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /relay
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      relay:
+        update-types: [minor, patch]
+
+  # The npm packages and sidecars, each with its own package-lock.json.
+  - package-ecosystem: npm
+    directories:
+      - /packages/clerk-verify
+      - /packages/plx-connect
+      - /sidecar/claude
+      - /sidecar/cursor
+      - /sidecar/device-hub
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      packages:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      actions:
+        update-types: [minor, patch]
