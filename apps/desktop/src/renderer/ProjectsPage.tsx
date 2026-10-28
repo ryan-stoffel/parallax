@@ -154,7 +154,6 @@ export function ProjectsPage({
   );
   const pinned = pins.flatMap((key) => shown.filter((e) => e.key === key));
   const others = shown.filter((e) => !pins.includes(e.key));
-  const waiting = entries.filter((e) => e.needsYou).length;
   const bothKinds =
     entries.some((e) => e.kind === "space") && entries.some((e) => e.kind === "project");
   const card = (e: ProjectEntry) => (
@@ -175,12 +174,6 @@ export function ProjectsPage({
             <h1 className="text-display font-semibold tracking-tight">Projects</h1>
             <p className="mt-1 text-body text-muted-foreground">
               {entries.length} {entries.length === 1 ? "project" : "projects"}
-              {waiting > 0 && (
-                <span className="text-warning">
-                  {" "}
-                  · {waiting} {waiting === 1 ? "needs" : "need"} you
-                </span>
-              )}
             </p>
           </div>
           <button
