@@ -190,8 +190,9 @@ export function shownThemes(appearance: Appearance, added: AddedExtension[]): Re
 }
 
 /**
- * Whether this window shows what's behind it with `material`: blurred where the OS can blur, and
- * clear where the window was created see-through.
+ * Whether this window shows what's behind it with `material`: where the material needs a window
+ * created see-through (needsTransparentWindow), only if this one was, and else blurred where the
+ * OS can blur.
  */
 export function seesThrough(material: WindowMaterial) {
   const bridge = window.parallax;
@@ -208,7 +209,7 @@ export function seesThrough(material: WindowMaterial) {
  * does.
  */
 export function tint(material: WindowMaterial, opacity: number, platform: string): number {
-  return needsTransparentWindow(material, platform) ? opacity : opacity * 0.4;
+  return material === "blur" && platform !== "linux" ? opacity * 0.4 : opacity;
 }
 
 // A font name the user typed, kept to what a CSS family name can hold.

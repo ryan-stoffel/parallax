@@ -162,10 +162,11 @@ export function blurSupported(platform: string, version: string): boolean {
 
 /**
  * Whether `material` needs the window created see-through: clear everywhere, and blurred on
- * Linux, where the compositor blurs what a see-through window shows.
+ * Linux, where the compositor blurs what a see-through window shows, and on macOS, where vibrancy
+ * behind a window created opaque leaves old frames showing under the page (PLX-1117).
  */
 export const needsTransparentWindow = (material: WindowMaterial, platform: string) =>
-  material === "clear" || (material === "blur" && platform === "linux");
+  material === "clear" || (material === "blur" && platform !== "win32");
 
 /** A window's background: Settings > Appearance's Window. */
 export type WindowMaterial = "opaque" | "clear" | "blur";
