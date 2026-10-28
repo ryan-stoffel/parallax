@@ -1043,11 +1043,49 @@ body {
 .effort-full .effort-thumb {
   animation: effort-pop 0.45s ease-out;
 }
+/* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
+   --needle. At Max it quivers against the end of the arc, once it has swung there, and the gauge
+   glows. */
+.effort-needle {
+  transform-box: view-box;
+  transform-origin: 12px 14px;
+  rotate: var(--needle);
+}
+@keyframes effort-quiver {
+  0%,
+  100% {
+    rotate: var(--needle);
+  }
+  25% {
+    rotate: calc(var(--needle) + 6deg);
+  }
+  60% {
+    rotate: calc(var(--needle) - 7deg);
+  }
+}
+@keyframes effort-gauge-glow {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 1px color-mix(in srgb, var(--accent) 50%, transparent));
+  }
+  50% {
+    filter: drop-shadow(0 0 4px var(--accent));
+  }
+}
+.effort-gauge-max {
+  color: var(--accent);
+  animation: effort-gauge-glow 1.8s ease-in-out infinite;
+}
+.effort-gauge-max .effort-needle {
+  animation: effort-quiver 0.18s linear 0.3s infinite;
+}
 :root.reduce-motion {
   .effort-fill::after,
   .effort-full .effort-fill,
   .effort-full .effort-track,
-  .effort-full .effort-thumb {
+  .effort-full .effort-thumb,
+  .effort-gauge-max,
+  .effort-gauge-max .effort-needle {
     animation: none;
   }
 }

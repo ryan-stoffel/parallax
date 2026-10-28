@@ -1,4 +1,4 @@
-import { ChevronDown, Gauge, Zap } from "lucide-react";
+import { ChevronDown, Zap } from "lucide-react";
 import { useId, type CSSProperties } from "react";
 
 import type { AgentEffort } from "../protocol/generated/protocol";
@@ -13,6 +13,39 @@ const at = (i: number) => `calc(${thumb} / 2 + (100% - ${thumb}) * ${i / last})`
 // A little overshoot, so the thumb and fill spring into place together.
 const spring = "duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]";
 
+// Where the gauge's needle points at each level, in degrees clockwise from straight up. High is
+// lucide's own Gauge; the arc ends at 120.
+const needle: Record<AgentEffort, number> = {
+  low: -80,
+  medium: -20,
+  high: 45,
+  xhigh: 80,
+  max: 110,
+};
+
+/**
+ * lucide's Gauge, with its needle turned to the effort. The needle springs to each level, and at
+ * Max it quivers against the end of the arc while the gauge glows (index.css).
+ */
+function EffortGauge({ value }: { value: AgentEffort }) {
+  return (
+    <svg
+      aria-hidden
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={value === "max" ? "effort-gauge-max" : undefined}
+      style={{ "--needle": `${needle[value]}deg` } as CSSProperties}
+    >
+      <path d="M3.34 19a10 10 0 1 1 17.32 0" />
+      <path d="M12 14V8.34" className={`effort-needle transition-[rotate] ${spring}`} />
+    </svg>
+  );
+}
+
 /** A context window's size, such as `200K` or `1M`. */
 const tokens = (n: number) => (n >= 1_000_000 ? `${n / 1_000_000}M` : `${n / 1000}K`);
 
@@ -23,9 +56,9 @@ const fastNames: Partial<Record<string, { label: string; on: string; off: string
 };
 
 /**
- * The reasoning picker: a button showing a gauge, the effort, and a bolt in fast mode, that opens
- * a slider with a stop for each level. Stripes in the fill speed up with the level,
- * and Max shimmers and glows (index.css). Below it, the context window is a choice when the model
+ * The reasoning picker: a button showing a gauge that points at the effort, the effort, and a bolt
+ * in fast mode, that opens a slider with a stop for each level. Stripes in the fill speed up with
+ * the level, and Max shimmers and glows (index.css). Below it, the context window is a choice when the model
  * offers more than one, and fast mode when the model has it (`fastMode`, by its instance kind's
  * name for it).
  */
@@ -66,7 +99,7 @@ export function EffortMenu({
         aria-label={`Reasoning effort: ${name}${fast ? ", fast" : ""}`}
         className={menuButton}
       >
-        <Gauge aria-hidden />
+        <EffortGauge value={value} />
         {name}
         {fast && <Zap aria-hidden className="fill-current text-orange-500" />}
         <ChevronDown aria-hidden className="opacity-70" />
