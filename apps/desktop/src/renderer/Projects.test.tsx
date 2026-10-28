@@ -1043,6 +1043,47 @@ test("Add puts this computer's other threads in a Space, and each archives from 
   expect(threads()).toEqual(["Outline"]);
 });
 
+test("Thread details adds the open thread to a Space, which its crumbs then name, and takes it out", async () => {
+  capabilities = { spaces: {}, spaceThreads: {} };
+  const space: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    space: true,
+    createdAt: "2026-09-29T10:00:00Z",
+  };
+  const draft: Thread = {
+    id: "t-draft",
+    repo: parallax.id,
+    createdAt: "2026-09-29T11:30:00Z",
+    title: "Draft the intro",
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, space], threads: [draft], seq: 7 },
+  });
+  answers["thread/setSpace"] = (p) => ({
+    result: { threads: [{ ...draft, ...(p["space"] ? { space: p["space"] as string } : {}) }] },
+  });
+  await renderApp();
+  await click(document.querySelector('#sidebar li[data-kind="thread"] button'));
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
+
+  const details = document.getElementById("thread-details")!;
+  await click(details.querySelector('button[aria-label="Add to Space"]'));
+  const spaces = () => [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Spaces"] button'),
+  ];
+  expect(spaces().map((b) => b.textContent)).toEqual(["Essays"]);
+  await click(spaces()[0]);
+  expect(calls("thread/setSpace")).toEqual([{ threads: ["t-draft"], space: "s-essays" }]);
+  expect(crumbs()).toEqual(["This Mac", "Essays", "Draft the intro"]);
+  expect(details.querySelector('button[aria-label="Space: Essays"]')).not.toBeNull();
+
+  await click(spaces().find((b) => b.textContent === "Remove from Space"));
+  expect(calls("thread/setSpace").at(-1)).toEqual({ threads: ["t-draft"] });
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
+});
+
 test("the add palette offers New Space after New Project where the host makes Spaces, and it opens Create Space", async () => {
   await renderApp();
   await openPalette();

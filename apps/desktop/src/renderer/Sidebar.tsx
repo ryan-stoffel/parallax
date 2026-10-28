@@ -1223,6 +1223,7 @@ export function ThreadList({
         title={item.title}
         run={item.run}
         repo={item.repo}
+        space={t.space ? view.state.repos.find((r) => r.id === t.space) : undefined}
         attention={rowAttention(item)}
         selected={selected}
         picked={picked.has(item.key)}
@@ -2859,6 +2860,7 @@ function ThreadRow({
   title,
   run,
   repo,
+  space,
   attention,
   selected,
   picked,
@@ -2904,6 +2906,8 @@ function ThreadRow({
   title: string;
   run?: AgentRun;
   repo?: Repo;
+  /** The Space it was added to (0090), which it shows as its place over `repo`. */
+  space?: Repo;
   attention: Attention;
   selected: boolean;
   /** Whether it's one of the threads picked for a bulk action. */
@@ -3155,7 +3159,7 @@ function ThreadRow({
           // details. Under its repo's heading, it leaves out the repo.
           <>
             <RowTop
-              place={!nested && <RowPlace repo={repo} words={words} />}
+              place={!nested && <RowPlace repo={space ?? repo} words={words} />}
               status={shownStatus}
             />
             <RowTitle title={titleText} color={titleColor} />

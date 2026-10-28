@@ -7,6 +7,7 @@ import { LineageSection } from "./Lineage";
 import { OpenMenu } from "./OpenMenu";
 import { LinkedPullRequests } from "./PullRequests";
 import { hostIcon } from "./RunTargetMenu";
+import { SpaceMenu } from "./SpaceMenu";
 import type { Host } from "./hosts";
 import { IconButton } from "./ui";
 
@@ -85,9 +86,9 @@ export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggl
 }
 
 /**
- * The thread's host, Open in, repository actions, Git status, linked pull requests, and lineage,
- * docked at the thread's right, left of the side panel, or floating over the thread. Mounted while
- * hidden, so the Open and action shortcuts keep working.
+ * The thread's host, Open in, repository actions, its Space, Git status, linked pull requests, and
+ * lineage, docked at the thread's right, left of the side panel, or floating over the thread.
+ * Mounted while hidden, so the Open and action shortcuts keep working.
  */
 export function ThreadDetails({
   mode,
@@ -98,6 +99,7 @@ export function ThreadDetails({
   git,
   prs,
   lineage,
+  space,
 }: {
   mode: ThreadDetailsMode;
   host: Host;
@@ -107,6 +109,7 @@ export function ThreadDetails({
   git?: ComponentProps<typeof GitMenu>;
   prs?: ComponentProps<typeof LinkedPullRequests>;
   lineage?: Omit<ComponentProps<typeof LineageSection>, "visible">;
+  space?: ComponentProps<typeof SpaceMenu>;
 }) {
   const linked = prs?.prs.urls.length ?? 0;
   const prOpen = !!prs?.prs.urls.some((url) => prs.prs.get(url)?.pr?.state === "open");
@@ -143,6 +146,7 @@ export function ThreadDetails({
           </div>
           <OpenMenu hostId={host.id} folder={folder} />
           {actions && <Actions {...actions} />}
+          {space && <SpaceMenu {...space} />}
         </section>
         {git && (
           <section aria-label="Git" className="border-t border-border p-2">

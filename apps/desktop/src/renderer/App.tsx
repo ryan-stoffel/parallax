@@ -646,13 +646,18 @@ export function App() {
     ];
     if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
-    const groupRepo = threads.state.repos.find((r) => r.id === group.id);
+    // A thread added to a Space names the Space, and opens its page (0090).
+    const addedTo =
+      selection.kind === "thread" && openThread?.space
+        ? threads.state.repos.find((r) => r.id === openThread.space)
+        : undefined;
+    const groupRepo = addedTo ?? threads.state.repos.find((r) => r.id === group.id);
     const repo = {
-      label: group.name,
+      label: addedTo?.name ?? group.name,
       icon: <RepoIcon repo={groupRepo} />,
       onClick:
         selection.kind === "thread"
-          ? () => setSelection({ kind: "new", groupId: group.id })
+          ? () => setSelection({ kind: "new", groupId: addedTo?.id ?? group.id })
           : undefined,
     };
     const page =
@@ -1180,6 +1185,11 @@ export function App() {
           : undefined
       }
       prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
+      space={
+        selection.kind === "thread" && openThread && !openThread.parent
+          ? { thread: openThread, view: threads }
+          : undefined
+      }
       lineage={
         openThread
           ? {
