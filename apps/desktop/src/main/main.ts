@@ -517,7 +517,7 @@ ipcMain.handle("parallax:copyPicture", async (event, rect: unknown) => {
   // An empty rect would capture the whole window.
   if (!w || !h) throw new Error("copyPicture needs a rect");
   const picture = await event.sender.capturePage({ x: left, y: top, width: w, height: h });
-  const png = new Blob([picture.toPNG()], { type: "image/png" });
+  const png = new Blob([new Uint8Array(picture.toPNG())], { type: "image/png" });
   await clipboard.write([new ClipboardItem({ "image/png": png })]);
 });
 
