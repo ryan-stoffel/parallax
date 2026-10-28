@@ -35,8 +35,9 @@ export function ComposerTabs({
         <div
           key={tab.key}
           // Clipped, so a tab sliding in rises from its own place, not over the one beside it, and
-          // a short line cuts only its rows' padding.
-          className={`overflow-hidden rounded-lg ${short ? "h-6" : ""} ${i === 0 ? "grid min-w-0 flex-1 content-center" : "flex shrink-0 items-center gap-0.5 before:h-3.5 before:w-px before:bg-border"}`}
+          // a short line cuts only its rows' padding. The first tab's column may shrink below its
+          // content, so a long title truncates instead of widening the row past the line.
+          className={`overflow-hidden rounded-lg ${short ? "h-6" : ""} ${i === 0 ? "grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)] content-center" : "flex shrink-0 items-center gap-0.5 before:h-3.5 before:w-px before:bg-border"}`}
         >
           {i === 0 ? tab.node : (tab.compact ?? tab.node)}
         </div>
