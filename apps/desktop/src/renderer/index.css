@@ -1060,7 +1060,7 @@ body {
     radial-gradient(0.9px 0.9px at 55px 18px, #fff 50%, transparent);
   background-size: 60px 22px;
   animation:
-    effort-stars 6s linear infinite,
+    effort-stars var(--effort-speed) linear infinite,
     effort-twinkle 2.4s ease-in-out infinite;
 }
 .effort-full .effort-track {
