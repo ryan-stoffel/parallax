@@ -78,10 +78,17 @@ pub(crate) fn check_files(uploads: &Path, files: &[String]) -> Result<Vec<String
     let refuse = |path: &str| {
         ErrorObject::invalid_params(format!("{path:?} is not a file uploaded to this host"))
     };
-    let root = uploads.canonicalize().map_err(|_| refuse(""))?;
+    // Canonical, without Windows' `\\?\` prefix, so a stored path is the one the app and a worker
+    // read, as `host/upload` returned it.
+    let canonical = |path: &Path| {
+        path.canonicalize()
+            .ok()
+            .and_then(|path| crate::paths::without_verbatim_prefix(&path))
+    };
+    let root = canonical(uploads).ok_or_else(|| refuse(""))?;
     let mut checked: Vec<String> = Vec::with_capacity(files.len());
     for path in files {
-        let file = Path::new(path).canonicalize().map_err(|_| refuse(path))?;
+        let file = canonical(Path::new(path)).ok_or_else(|| refuse(path))?;
         let file = file
             .to_str()
             .filter(|_| file.starts_with(&root) && file.is_file())

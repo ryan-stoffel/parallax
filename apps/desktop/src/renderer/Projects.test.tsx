@@ -849,6 +849,18 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
   expect(projectRows()).toEqual(["photon"]);
 });
 
+test("a card's menu shows a hidden sidebar before it opens a dialog the sidebar holds", async () => {
+  capabilities = { projectEdit: {} };
+  await renderApp();
+  openProjectsPage();
+  await click(document.querySelector('button[aria-label="Hide sidebar"]'));
+  const hidden = () => !!document.getElementById("sidebar")!.closest("[hidden]");
+  expect(hidden()).toBe(true);
+  await click(menuItem("ember", "Rename…"));
+  expect(hidden()).toBe(false);
+  expect([...document.querySelectorAll("dialog")].some((d) => d.open)).toBe(true);
+});
+
 test("without projectDelete there's no Delete…, and another client's project.deleted removes the open Project's row and leaves its page", async () => {
   capabilities = { projectEdit: {} };
   await renderApp();

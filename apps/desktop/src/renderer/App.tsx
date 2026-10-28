@@ -57,7 +57,7 @@ import { ProjectHome, waitingCount } from "./ProjectHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { PullRequestsPage } from "./PullRequestsPage";
 import { NewChatProject, ProjectsPage } from "./ProjectsPage";
-import { projectEntries } from "./projectList";
+import { projectEntries, type ProjectEntry } from "./projectList";
 import { pinnedProjects, togglePinnedProject } from "./sidebarPrefs";
 import { RunTargetMenu } from "./RunTargetMenu";
 import { SpaceContext, SpaceHeader, SpaceThreads } from "./SpaceHome";
@@ -220,6 +220,16 @@ export function App() {
     if (askedSettings.title) setSettingsFocus({ anchor: anchorOf(askedSettings.title) });
   }, [askedSettings]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // A project's menu items, from the sidebar, which holds their dialogs and icon picker. Each
+  // shows the sidebar first, since a modal in a hidden sidebar would leave the window inert.
+  const projectActions = (entry: ProjectEntry) =>
+    (projectMenu.current?.actionsFor(entry) ?? []).map((action) => ({
+      ...action,
+      run: (square: HTMLElement) => {
+        if (!sidebarOpen) flushSync(() => setSidebarOpen(true));
+        action.run(square);
+      },
+    }));
   // What each chat's right column shows, if anything: the side panel's views, or the browser,
   // which is apart from them (PLX-962). Each host's chats stay independent when switching.
   const [openPanes, setOpenPanes] = useState<Record<string, "views" | "browser" | undefined>>({});
@@ -1370,7 +1380,7 @@ export function App() {
                   else openOnHost(entry.host.id, { kind: "new", groupId: entry.id });
                 }}
                 onTogglePin={togglePinnedProject}
-                actionsFor={(entry) => projectMenu.current?.actionsFor(entry) ?? []}
+                actionsFor={projectActions}
                 onNewProject={() => openAdd("project")}
                 onNewChatProject={newSpace}
               />
@@ -1657,7 +1667,7 @@ export function App() {
                             onBack={() => openMainPage("projects")}
                             pinned={pins.includes(spaceEntry.key)}
                             onTogglePin={() => togglePinnedProject(spaceEntry.key)}
-                            actionsFor={() => projectMenu.current?.actionsFor(spaceEntry) ?? []}
+                            actionsFor={() => projectActions(spaceEntry)}
                           />
                         )
                       }
