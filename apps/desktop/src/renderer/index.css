@@ -574,7 +574,7 @@ body {
   --pane-sidebar: color-mix(in srgb, var(--sidebar) 40%, transparent);
   --pane-card: color-mix(in srgb, var(--surface) 45%, transparent);
   --glass: blur(28px) saturate(1.6);
-  --raised: color-mix(in oklab, var(--foreground) light-dark(0%, 9%), var(--surface));
+  --raised: light-dark(var(--surface), color-mix(in oklab, var(--foreground) 9%, var(--surface)));
   /* Code's fill: in dark a faint tint of the text's color, rather than a black hole in the glass.
      Code fills read it, falling back to --code where the window is opaque. */
   --code-fill: light-dark(
