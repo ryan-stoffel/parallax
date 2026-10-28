@@ -1,21 +1,38 @@
-import { CircleUser, LogIn, LogOut, Settings, UserPlus, type LucideIcon } from "lucide-react";
+import {
+  CircleUser,
+  LogIn,
+  LogOut,
+  Settings,
+  UserCog,
+  UserPlus,
+  type LucideIcon,
+} from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import { AccountDialog, SecuredByClerk } from "./Account";
+import { useShortcutLabel } from "./keybindings";
 import { ParallaxMark } from "./logos";
 import { Avatar, useProfile } from "./profile";
 import { Redacted } from "./Redacted";
+import type { SettingsSection } from "./App";
 import type { HostThreads } from "./Sidebar";
 import { IconButton, Menu, menuItem } from "./ui";
 
 /**
  * The sidebar footer's Profile button (0067): the account's picture or initials, which opens a
- * menu above it. Signed in, the menu shows the account with Manage account, which opens the
- * Account dialog, and Sign out. Signed out, it offers Sign in and Create an account, which open
- * Clerk's pages in the browser.
+ * menu above it. The menu always offers Settings. Signed in, it shows the account with Manage
+ * account, which opens the Account dialog, and Sign out. Signed out, it offers Sign in and Create
+ * an account, which open Clerk's pages in the browser.
  */
-export function ProfileButton({ listed }: { listed: HostThreads[] }) {
+export function ProfileButton({
+  listed,
+  onOpenSettings,
+}: {
+  listed: HostThreads[];
+  onOpenSettings: (section: SettingsSection) => void;
+}) {
   const id = useId();
+  const settingsKeys = useShortcutLabel("settings");
   const menu = useRef<HTMLDivElement>(null);
   const profile = useProfile();
   const [managing, setManaging] = useState(false);
@@ -76,10 +93,26 @@ export function ProfileButton({ listed }: { listed: HostThreads[] }) {
               </div>
             </div>
             <div role="separator" className="my-1 h-px bg-border" />
+          </>
+        )}
+        <button
+          type="button"
+          role="menuitem"
+          onClick={closing(() => onOpenSettings("general"))}
+          className={menuItem}
+        >
+          <Settings aria-hidden className="text-muted-foreground" />
+          Settings
+          {settingsKeys && (
+            <span className="ml-auto text-meta text-faint-foreground">{settingsKeys}</span>
+          )}
+        </button>
+        {profile !== undefined && (
+          <>
             {profile ? (
               <>
                 {item(
-                  Settings,
+                  UserCog,
                   "Manage account",
                   closing(() => setManaging(true)),
                 )}
@@ -95,9 +128,9 @@ export function ProfileButton({ listed }: { listed: HostThreads[] }) {
                 {item(UserPlus, "Create an account", () => void signIn(true))}
               </>
             )}
-            <div role="separator" className="my-1 h-px bg-border" />
           </>
         )}
+        <div role="separator" className="my-1 h-px bg-border" />
         <div className="flex items-center justify-between px-2 py-1">
           <span className="flex items-center gap-1.5 font-brand text-meta font-semibold text-faint-foreground">
             <ParallaxMark className="size-3.5" />

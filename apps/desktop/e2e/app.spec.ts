@@ -99,7 +99,8 @@ test("starts a thread and shows the agent's output", async () => {
   // New Thread reads the default again as Settings closes, and keeps what was typed behind it.
   const message = page.getByRole("textbox", { name: "Message" });
   await message.fill("Tidy up the README");
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Close settings" }).click();
   await expect(message).toHaveText("Tidy up the README");
   await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -157,7 +158,8 @@ test("a pasted image sits in the composer, goes with the message, and outlives a
 });
 
 test("signs in to a CLI in a host terminal, then shows it signed in (PLX-35)", async () => {
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Providers" }).click();
   const codex = page.getByRole("tab", { name: /^(Codex|Email hidden)/ });
   await codex.click();
@@ -231,7 +233,8 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   })`);
   expect(set).not.toHaveProperty("error");
   // The project chat reads the default again as Settings closes, to offer its backend's models.
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Profile", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Close settings" }).click();
 
   // The last test left the ember project open. Every message goes to its coordinator.
