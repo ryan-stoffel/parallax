@@ -197,6 +197,17 @@ export function seesThrough(material: WindowMaterial) {
   return bridge.canBlur === true;
 }
 
+/**
+ * How much of the theme's background covers what shows through, in percent. macOS's vibrancy and
+ * Windows' acrylic tint what they blur with a material of their own, so the theme covers 2/5 of
+ * `opacity` over them: at the full setting the two together hid the blur (PLX-1117). Linux's blur
+ * is its compositor's, of a clear window, so it takes `opacity` as Clear does.
+ */
+export function tint(material: WindowMaterial, opacity: number, platform: string): number {
+  if (material === "opaque") return 100;
+  return needsTransparentWindow(material, platform) ? opacity : opacity * 0.4;
+}
+
 // A font name the user typed, kept to what a CSS family name can hold.
 const family = (name: string) => name.replace(/["';{}\\]/g, "").trim();
 
@@ -232,7 +243,10 @@ export function applyAppearance(appearance: Appearance, onboarding = false) {
   // index.css mixes the panes' colors with transparent by --tint, over what shows through.
   const through = seesThrough(appearance.windowMaterial);
   root.classList.toggle("translucent", through);
-  root.style.setProperty("--tint", `${through ? appearance.backgroundOpacity : 100}%`);
+  const covered = through
+    ? tint(appearance.windowMaterial, appearance.backgroundOpacity, window.parallax.platform)
+    : 100;
+  root.style.setProperty("--tint", `${covered}%`);
 }
 
 /**
