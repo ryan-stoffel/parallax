@@ -23,19 +23,18 @@ const needle: Record<AgentEffort, number> = {
   max: 120,
 };
 
-// The flames that burst from the gauge's arc when it's turned up to Max: where each stands, and how
-// big and how late it is.
+// The flames that flicker up off the far end of the gauge's arc when it's turned up to Max: where
+// each stands, and how big and how late it is.
 const flames = [
-  { x: 6, y: 8, size: 0.6, delay: 0.32 },
-  { x: 12, y: 4.5, size: 0.85, delay: 0.25 },
-  { x: 18, y: 7, size: 0.75, delay: 0.29 },
-  { x: 21, y: 12.5, size: 0.55, delay: 0.36 },
+  { x: 16, y: 5.5, size: 0.4, delay: 0.3 },
+  { x: 19.5, y: 8.5, size: 0.5, delay: 0.25 },
+  { x: 21, y: 13, size: 0.35, delay: 0.34 },
 ];
 
 /**
  * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
- * The needle springs to each level. Turned up to Max, the gauge catches fire for a moment while the
- * needle rattles against the end of the arc, then it settles there (index.css). Opening a thread
+ * The needle springs to each level. Turned up to Max, a few flames flicker off the end of the arc
+ * while the needle rattles against it, then it settles there (index.css). Opening a thread
  * already at Max shows it settled, without the fire.
  */
 function EffortGauge({ value }: { value: AgentEffort }) {

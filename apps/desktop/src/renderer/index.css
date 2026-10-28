@@ -1045,7 +1045,7 @@ body {
 }
 /* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
    --needle. Turned up to Max (.effort-lit), once the needle has swung over, it rattles against the
-   end of the arc while the gauge runs hot and flames flare up off it and burn out; then it's still. */
+   end of the arc while a few flames flicker up off it and burn out; then it's still. */
 .effort-needle {
   transform-box: view-box;
   transform-origin: 12px 14px;
@@ -1056,17 +1056,8 @@ body {
   100% {
     rotate: var(--needle);
   }
-  35% {
-    rotate: calc(var(--needle) - 10deg);
-  }
-  70% {
-    rotate: calc(var(--needle) - 4deg);
-  }
-}
-@keyframes effort-heat {
-  20%,
-  60% {
-    color: #f97316;
+  40% {
+    rotate: calc(var(--needle) - 5deg);
   }
 }
 @keyframes effort-flame {
@@ -1074,41 +1065,34 @@ body {
     scale: 0;
     opacity: 0;
   }
-  15% {
-    scale: 1.15;
-    opacity: 1;
+  20% {
+    scale: 1;
+    opacity: 0.85;
   }
-  35% {
-    scale: 0.85 1.05;
-  }
-  55% {
-    scale: 1.05 0.9;
-    opacity: 1;
+  50% {
+    scale: 0.9 1.05;
+    opacity: 0.85;
   }
   100% {
-    scale: 0.2 0.6;
-    translate: 0 -5px;
+    scale: 0.3 0.6;
+    translate: 0 -3px;
     opacity: 0;
   }
 }
-.effort-lit {
-  animation: effort-heat 1.1s ease-out;
-}
 .effort-lit .effort-needle {
-  animation: effort-rattle 0.12s linear 0.25s 6;
+  animation: effort-rattle 0.1s linear 0.3s 3;
 }
 .effort-flame {
   transform-box: fill-box;
   transform-origin: 50% 100%;
   opacity: 0;
-  animation: effort-flame 0.75s ease-out both;
+  animation: effort-flame 0.6s ease-out both;
 }
 :root.reduce-motion {
   .effort-fill::after,
   .effort-full .effort-fill,
   .effort-full .effort-track,
   .effort-full .effort-thumb,
-  .effort-lit,
   .effort-lit .effort-needle {
     animation: none;
   }
