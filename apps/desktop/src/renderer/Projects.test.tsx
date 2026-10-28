@@ -968,7 +968,7 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
   });
 });
 
-test("Add puts this computer's other threads in a Space, and Remove from Space takes one back out", async () => {
+test("Add puts this computer's other threads in a Space, and each archives from its card", async () => {
   capabilities = { spaces: {}, spaceThreads: {} };
   const space: Repo = {
     id: "s-essays",
@@ -1033,11 +1033,13 @@ test("Add puts this computer's other threads in a Space, and Remove from Space t
   expect(picker.open).toBe(false);
   expect(threads()).toEqual(["Draft the intro", "Outline"]);
 
-  // Only the added thread can leave, back to where it works.
-  const rows = document.querySelectorAll('main section[aria-label="Threads"] > ul > li');
-  expect(rows[1]!.querySelector('[aria-label="Remove from Space"]')).toBeNull();
-  await click(rows[0]!.querySelector('[aria-label="Remove from Space"]'));
-  expect(calls("thread/setSpace").at(-1)).toEqual({ threads: ["t-draft"] });
+  // Each card archives as the sidebar's does.
+  answers["thread/archive"] = (p) => ({
+    result: { thread: { ...draft, space: space.id, archived: p["archived"] as boolean } },
+  });
+  const row = document.querySelector('main section[aria-label="Threads"] > ul > li')!;
+  await click(row.querySelector('button[title="Archive (E)"]'));
+  expect(calls("thread/archive")).toEqual([{ runId: "t-draft", archived: true }]);
   expect(threads()).toEqual(["Outline"]);
 });
 

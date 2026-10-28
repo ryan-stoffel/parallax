@@ -1,6 +1,7 @@
 // A Space's page, New thread laid out as a page (0090): its header, the composer, then its threads
 // beside the instructions and files plxd gives every thread in it.
 import {
+  Archive,
   ArrowLeft,
   Check,
   MessagesSquare,
@@ -10,7 +11,6 @@ import {
   Plus,
   Search,
   Upload,
-  X,
 } from "lucide-react";
 import { useId, useRef, useState, type DragEvent, type Ref } from "react";
 
@@ -29,6 +29,7 @@ import { hostIcon } from "./RunTargetMenu";
 import { age, backendLogo, RepoIcon } from "./Sidebar";
 import { asksOf, spaceOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
+import { toast } from "./undo";
 import { uploadBytes, uploadFiles } from "./uploads";
 
 const panelPart = "p-5";
@@ -103,8 +104,8 @@ export function SpaceHeader({
 
 /**
  * A Space's threads under the composer, newest first, as the sidebar's thread cards show them:
- * those started in it, and those the user added, which Remove from Space takes back out. Add opens
- * a picker of this computer's other threads.
+ * those started in it, and those the user added. Each archives from its card, as in the sidebar,
+ * and Add opens a picker of this computer's other threads.
  */
 export function SpaceThreads({
   host,
@@ -121,9 +122,11 @@ export function SpaceThreads({
   const { state } = view;
   const picker = useRef<HTMLDialogElement>(null);
   const canAdd = "spaceThreads" in view.capabilities;
-  const remove = async (thread: string) => {
-    const failed = await view.setSpace([thread]);
-    if (failed) notify({ tone: "error", title: "Couldn't remove the thread", body: failed });
+  const archive = async (thread: string, title: string) => {
+    const failed = await view.archive(thread, true);
+    if (failed)
+      return notify({ tone: "error", title: "Couldn't archive the thread", body: failed });
+    toast(`Archived “${title}”`, () => void view.archive(thread, false));
   };
   const threads = state.threads
     .filter((t) => spaceOf(state, t) === space.id && !t.parent && !t.archived)
@@ -142,14 +145,9 @@ export function SpaceThreads({
       <div className="mb-2 flex items-center justify-between gap-2">
         <h2 className="text-reading font-medium">Threads</h2>
         {canAdd && (
-          <button
-            type="button"
-            aria-label="Add threads"
-            onClick={() => picker.current?.showModal()}
-            className={quietButton}
-          >
-            Add
-          </button>
+          <IconButton label="Add threads" onClick={() => picker.current?.showModal()}>
+            <Plus />
+          </IconButton>
         )}
       </div>
       {threads.length === 0 ? (
@@ -167,6 +165,7 @@ export function SpaceThreads({
         <ul className="-mx-2 flex flex-col gap-1">
           {threads.map(({ thread, run, at, attention }) => {
             const Logo = run?.backend ? backendLogo(run.backend) : undefined;
+            const title = state.titles[thread.id] ?? "Thread";
             return (
               <li key={thread.id} className="group/row relative rounded-lg hover:bg-hover">
                 <button
@@ -179,15 +178,13 @@ export function SpaceThreads({
                       <RepoIcon repo={space} />
                       <span className="truncate">{space.name}</span>
                     </span>
-                    <span
-                      className={`shrink-0 ${thread.space ? "group-focus-within/row:invisible group-hover/row:invisible" : ""}`}
-                    >
+                    <span className="shrink-0 group-focus-within/row:invisible group-hover/row:invisible">
                       {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
                     </span>
                   </span>
                   <span className="flex w-full items-center gap-2">
                     <span className="min-w-0 flex-1 truncate text-body font-semibold transition-colors group-hover/row:font-bold">
-                      {state.titles[thread.id] ?? "Thread"}
+                      {title}
                     </span>
                     <span className="flex shrink-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3.5">
                       {hostIcon(host)}
@@ -201,17 +198,15 @@ export function SpaceThreads({
                     </span>
                   </span>
                 </button>
-                {thread.space && (
-                  <button
-                    type="button"
-                    aria-label="Remove from Space"
-                    title="Remove from Space"
-                    onClick={() => void remove(thread.id)}
-                    className="absolute top-1.5 right-1.5 grid size-5 place-items-center rounded-md text-faint-foreground opacity-0 group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
-                  >
-                    <X aria-hidden />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  title="Archive (E)"
+                  onClick={() => void archive(thread.id, title)}
+                  className="absolute top-1 right-1 flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta text-muted-foreground opacity-0 transition-opacity duration-150 group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+                >
+                  <Archive aria-hidden />
+                  Archive
+                </button>
               </li>
             );
           })}
