@@ -12,7 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 uuid = { workspace = true, features = ["v7"] }
 jiff = { workspace = true }
 thiserror = "2"
