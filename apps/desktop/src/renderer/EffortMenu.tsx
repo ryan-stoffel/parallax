@@ -31,8 +31,8 @@ const drop = (h: number, r: number) =>
  * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
  * The needle springs to each level. Turned up to Max, the gauge runs orange and a flame flares up
  * off its arc while the needle rattles against the end, then it settles there (index.css). The
- * flame is drawn like the nightly sky's clouds (NightSky.tsx): flat layers, each lit one lighter
- * and higher than the last. Opening a thread already at Max shows it settled, without the fire.
+ * flame is drawn like the nightly sky's clouds (NightSky.tsx): flat layers, each one lighter
+ * and smaller than the last. Opening a thread already at Max shows it settled, without the fire.
  */
 function EffortGauge({ value }: { value: AgentEffort }) {
   const [from] = useState(value);
