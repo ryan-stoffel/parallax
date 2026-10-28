@@ -42,10 +42,7 @@ export function startExtensions(
   tell: (tab: WebContents, action: BrowserAction) => void,
 ) {
   tellTab = tell;
-  // ponytail: GPL-3.0 is the library's free license, which binds the app's distribution; Ryan
-  // decides between it and the Patron license (PLX-888).
   chrome = new ElectronChromeExtensions({
-    license: "GPL-3.0",
     session,
     createTab: async (details) => [await openTab(details.url), hostWindow()],
     selectTab: (tab) => tellTab(tab, { kind: "select" }),
