@@ -59,7 +59,7 @@ import { PullRequestsPage } from "./PullRequestsPage";
 import { NewChatProject, ProjectsPage } from "./ProjectsPage";
 import { projectEntries } from "./projectList";
 import { pinnedProjects, togglePinnedProject } from "./sidebarPrefs";
-import { SpaceThreads, SpaceTray } from "./SpaceHome";
+import { SpaceContext, SpaceHeader, SpaceThreads } from "./SpaceHome";
 import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
 import { SettingsDialog } from "./Settings";
@@ -390,6 +390,9 @@ export function App() {
     selection.kind === "new" && group.space
       ? threads.state.repos.find((r) => r.id === group.id)
       : undefined;
+  const spaceEntry = spaceRepo
+    ? projectEntries(listed).find((e) => e.key === `${host.id}/${spaceRepo.id}`)
+    : undefined;
 
   if (
     opening?.hostId === host.id &&
@@ -1627,10 +1630,20 @@ export function App() {
                       disabledReason={offline}
                       threadLinks={threadLinks}
                       settingsClosed={settingsClosed.count}
-                      tray={
+                      header={
+                        spaceEntry && (
+                          <SpaceHeader
+                            entry={spaceEntry}
+                            pinned={pins.includes(spaceEntry.key)}
+                            onTogglePin={() => togglePinnedProject(spaceEntry.key)}
+                            actionsFor={() => projectMenu.current?.actionsFor(spaceEntry) ?? []}
+                          />
+                        )
+                      }
+                      aside={
                         spaceRepo &&
                         "spaceContext" in threads.capabilities && (
-                          <SpaceTray hostId={host.id} space={spaceRepo} view={threads} />
+                          <SpaceContext hostId={host.id} space={spaceRepo} view={threads} />
                         )
                       }
                       below={

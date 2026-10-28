@@ -1,44 +1,65 @@
-// A Space in New thread (0090): its instructions and files in the tray tucked under the composer,
-// where a repository's thread shows where it runs, and its threads under the box.
-import { Paperclip, Plus, ScrollText, X } from "lucide-react";
+// A Space's page, New thread laid out as two columns (0090): its header, the composer, and its
+// threads on the left; on the right, the instructions and files plxd gives every thread in it.
+import { Pin, PinOff, Plus, Upload, X } from "lucide-react";
 import { useId, useRef, useState, type DragEvent } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
 import { activeAt, attentionOf } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
 import { useConnection } from "./ConnectionStatus";
+import type { FavoriteAction } from "./Favorites";
 import { fileIcon } from "./Mention";
 import { notify } from "./notifications";
+import type { ProjectEntry } from "./projectList";
+import { ProjectMenu, ProjectTile } from "./ProjectsPage";
+import { quietButton } from "./settings/parts";
 import { age } from "./Sidebar";
 import { asksOf, waitingOf, type ThreadsView } from "./threads";
-import { menuButton, menuItem, menuPanel } from "./ui";
+import { IconButton } from "./ui";
 import { uploadBytes, uploadFiles } from "./uploads";
 
-/**
- * A Space's tray under the composer: Instructions, which opens their editor, and its files, whose
- * menu lists them with Remove and takes more by Add or a drop.
- */
-export function SpaceTray({
-  hostId,
-  space,
-  view,
+const panel = "rounded-xl border border-border bg-surface p-5";
+const panelHead = "mb-3 flex items-center justify-between gap-2";
+
+/** A Space's header, in place of New thread's question: its tile, name, and size, Pin, and its menu. */
+export function SpaceHeader({
+  entry,
+  pinned,
+  onTogglePin,
+  actionsFor,
 }: {
-  hostId: string;
-  space: Repo;
-  view: ThreadsView;
+  entry: ProjectEntry;
+  pinned: boolean;
+  onTogglePin: () => void;
+  actionsFor: () => FavoriteAction[];
 }) {
+  const trigger = useRef<HTMLButtonElement>(null);
+  const n = entry.threads;
   return (
-    <div className="flex min-w-0 items-center gap-1">
-      <Instructions space={space} view={view} />
-      <span aria-hidden className="text-faint-foreground">
-        ·
-      </span>
-      <Files hostId={hostId} space={space} view={view} />
-    </div>
+    <header className="mb-6 flex items-center gap-4">
+      <ProjectTile entry={entry} size="lg" />
+      <div className="min-w-0 flex-1">
+        <h1 className="truncate text-display font-semibold tracking-tight">{entry.name}</h1>
+        <p className="mt-0.5 text-body text-muted-foreground">
+          Space · {n} {n === 1 ? "thread" : "threads"}
+        </p>
+      </div>
+      <IconButton label={pinned ? "Unpin" : "Pin"} onClick={onTogglePin}>
+        {pinned ? <PinOff /> : <Pin />}
+      </IconButton>
+      <ProjectMenu
+        entry={entry}
+        pinned={pinned}
+        onTogglePin={onTogglePin}
+        actionsFor={actionsFor}
+        trigger={trigger}
+        className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
+      />
+    </header>
   );
 }
 
-/** A Space's threads under the composer, newest first, each with its status or age. */
+/** A Space's threads under the composer, newest first: each title, when it was last active, and its status. */
 export function SpaceThreads({
   space,
   view,
@@ -60,33 +81,59 @@ export function SpaceThreads({
       };
     })
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  if (threads.length === 0) return null;
   return (
-    <section aria-label="Threads" className="mx-4 mt-10">
-      <h2 className="mb-1 px-2 text-meta font-medium text-faint-foreground">Threads</h2>
-      <ul className="flex flex-col">
-        {threads.map(({ thread, at, attention }) => (
-          <li key={thread.id}>
-            <button
-              type="button"
-              onClick={() => onOpenThread(thread.id)}
-              className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-hover"
-            >
-              <span className="min-w-0 flex-1 truncate text-body">
-                {state.titles[thread.id] ?? "Thread"}
-              </span>
-              <span className="shrink-0 text-meta text-faint-foreground">
-                {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
-              </span>
-            </button>
-          </li>
-        ))}
-      </ul>
+    <section aria-label="Threads" className="mt-10">
+      <h2 className="mb-2 text-reading font-medium">Threads</h2>
+      {threads.length === 0 ? (
+        <p className="border-t border-border py-4 text-body text-faint-foreground">
+          No threads yet. Ask anything above to start one.
+        </p>
+      ) : (
+        <ul className="border-t border-border">
+          {threads.map(({ thread, at, attention }) => (
+            <li key={thread.id} className="border-b border-border">
+              <button
+                type="button"
+                onClick={() => onOpenThread(thread.id)}
+                className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-4 rounded-lg px-3 py-3 text-left hover:bg-hover"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body font-medium">
+                    {state.titles[thread.id] ?? "Thread"}
+                  </span>
+                  <span className="mt-0.5 block text-meta text-faint-foreground">
+                    {age(at) === "now" ? "Active just now" : `Last active ${age(at)} ago`}
+                  </span>
+                </span>
+                {attention !== "settled" && <AttentionBadge attention={attention} />}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
 
-/** The tray's Instructions: what every thread here is told, edited in a dialog. */
+/** A Space's instructions and files, beside the composer. */
+export function SpaceContext({
+  hostId,
+  space,
+  view,
+}: {
+  hostId: string;
+  space: Repo;
+  view: ThreadsView;
+}) {
+  return (
+    <div className="flex flex-col gap-4">
+      <Instructions space={space} view={view} />
+      <Files hostId={hostId} space={space} view={view} />
+    </div>
+  );
+}
+
+/** The Instructions panel: what every thread here is told, edited in a dialog. */
 function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [text, setText] = useState("");
@@ -99,18 +146,32 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
     dialog.current?.showModal();
   };
   return (
-    <>
-      <button
-        type="button"
-        aria-haspopup="dialog"
-        aria-label={space.instructions ? "Edit instructions" : "Add instructions"}
-        title={space.instructions}
-        onClick={open}
-        className={menuButton}
-      >
-        <ScrollText aria-hidden />
-        {space.instructions ? "Instructions" : "Add instructions"}
-      </button>
+    <section aria-label="Instructions" className={panel}>
+      <div className={panelHead}>
+        <h2 className="text-reading font-medium">Instructions</h2>
+        <button
+          type="button"
+          aria-label={space.instructions ? "Edit instructions" : "Add instructions"}
+          onClick={open}
+          className={quietButton}
+        >
+          {space.instructions ? "Edit" : "Add"}
+        </button>
+      </div>
+      {space.instructions ? (
+        <button
+          type="button"
+          onClick={open}
+          className="line-clamp-[12] text-left text-body leading-relaxed whitespace-pre-wrap text-muted-foreground hover:text-foreground"
+        >
+          {space.instructions}
+        </button>
+      ) : (
+        <p className="text-body leading-relaxed text-faint-foreground">
+          Tell every thread here how to work: who it's for, the tone and format you want, and what
+          it should know.
+        </p>
+      )}
       <dialog
         ref={dialog}
         aria-labelledby={titleId}
@@ -164,17 +225,16 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
           </div>
         </form>
       </dialog>
-    </>
+    </section>
   );
 }
 
 /**
- * The tray's files: how many, opening a menu that lists each with Remove, then Add files. Files
- * dropped on the button or the menu are added too.
+ * The Files panel: each file as a tile with Remove, then Add or a drop anywhere on the panel, which
+ * uploads to the host.
  */
 function Files({ hostId, space, view }: { hostId: string; space: Repo; view: ThreadsView }) {
   const input = useRef<HTMLInputElement>(null);
-  const menu = useId();
   const [adding, setAdding] = useState(false);
   const [over, setOver] = useState(false);
   const caps = uploadBytes(useConnection(hostId));
@@ -199,97 +259,117 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
     else await save([...files, ...paths]);
     setAdding(false);
   };
+  const pick = () => input.current?.click();
   const takesFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
-  const drop = {
-    onDragOver: (e: DragEvent) => {
-      if (!caps || adding || !takesFiles(e)) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "copy";
-      setOver(true);
-    },
-    onDragLeave: () => setOver(false),
-    onDrop: (e: DragEvent) => {
-      if (!takesFiles(e)) return;
-      e.preventDefault();
-      setOver(false);
-      void add([...e.dataTransfer.files]);
-    },
-  };
-  const n = files.length;
   return (
-    <>
-      <button
-        type="button"
-        popoverTarget={menu}
-        aria-haspopup="menu"
-        {...drop}
-        className={`${menuButton} ${over ? "bg-hover text-foreground" : ""}`}
-      >
-        <Paperclip aria-hidden />
-        {adding ? "Adding…" : n === 0 ? "Add files" : `${n} ${n === 1 ? "file" : "files"}`}
-      </button>
-      <div
-        id={menu}
-        popover="auto"
-        role="menu"
-        aria-label="Files"
-        {...drop}
-        className={`${menuPanel("start")} w-72 p-1 ${over ? "outline-2 outline-accent" : ""}`}
-      >
-        {n === 0 ? (
-          <p className="px-2 py-1.5 text-meta text-faint-foreground">
-            Every thread here can read the files you add. Drop them here, or add them.
-          </p>
-        ) : (
-          <ul aria-label="Files" className="flex max-h-60 flex-col overflow-y-auto">
-            {files.map((path) => {
-              const name = path.split(/[\\/]/).at(-1) ?? path;
-              return (
-                <li key={path} className="group/file flex items-center gap-2 rounded-md px-2 py-1">
-                  <span aria-hidden className="shrink-0 [&_img]:size-4">
-                    {fileIcon(name)}
-                  </span>
-                  <span title={name} className="min-w-0 flex-1 truncate text-body">
-                    {name}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label={`Remove ${name}`}
-                    // An add in flight saves the list as it began, which would undo a remove.
-                    disabled={adding}
-                    onClick={() => void save(files.filter((f) => f !== path))}
-                    className="grid size-5 shrink-0 place-items-center rounded-sm text-faint-foreground opacity-0 group-hover/file:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 disabled:hidden"
-                  >
-                    <X className="size-3" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+    <section
+      aria-label="Files"
+      onDragOver={(e) => {
+        if (!caps || adding || !takesFiles(e)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setOver(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
+      }}
+      onDrop={(e) => {
+        if (!takesFiles(e)) return;
+        e.preventDefault();
+        setOver(false);
+        void add([...e.dataTransfer.files]);
+      }}
+      className={`${panel} transition-colors ${over ? "border-accent" : ""}`}
+    >
+      <div className={panelHead}>
+        <h2 className="text-reading font-medium">
+          Files
+          {files.length > 0 && (
+            <span className="ml-1.5 font-normal text-faint-foreground tabular-nums">
+              {files.length}
+            </span>
+          )}
+        </h2>
+        {files.length > 0 && (
+          <button
+            type="button"
+            aria-label="Add files"
+            disabled={!caps || adding}
+            onClick={pick}
+            className={`${quietButton} flex items-center gap-1 disabled:opacity-50 [&_svg]:size-3.5`}
+          >
+            <Plus aria-hidden />
+            Add
+          </button>
         )}
-        <hr className="-mx-1 my-1 border-border" />
+      </div>
+      {files.length === 0 ? (
         <button
           type="button"
-          role="menuitem"
           aria-label="Add files"
           disabled={!caps || adding}
-          onClick={() => input.current?.click()}
-          className={`${menuItem} disabled:opacity-50`}
+          onClick={pick}
+          className={`flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center transition-colors disabled:opacity-50 ${over ? "border-accent bg-accent/5" : "border-border hover:bg-hover"}`}
         >
-          <Plus aria-hidden />
-          Add files…
+          <Upload aria-hidden className="size-5 text-faint-foreground" />
+          <span className="text-body text-muted-foreground">
+            {adding ? "Adding…" : "Drop files here, or click to add"}
+          </span>
+          <span className="text-meta text-faint-foreground">
+            PDFs, notes, or code every thread here can read
+          </span>
         </button>
-        <input
-          ref={input}
-          type="file"
-          multiple
-          hidden
-          onChange={(e) => {
-            void add([...(e.target.files ?? [])]);
-            e.target.value = "";
-          }}
-        />
-      </div>
-    </>
+      ) : (
+        <ul className="grid grid-cols-2 gap-2">
+          {files.map((path) => {
+            const name = path.split(/[\\/]/).at(-1) ?? path;
+            const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
+            return (
+              <li
+                key={path}
+                className="group/file relative flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-background p-3"
+              >
+                <span aria-hidden className="[&_img]:size-5">
+                  {fileIcon(name)}
+                </span>
+                <span title={name} className="line-clamp-2 text-meta break-all">
+                  {name}
+                </span>
+                {ext && (
+                  <span className="text-micro tracking-wide text-faint-foreground uppercase">
+                    {ext}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  aria-label={`Remove ${name}`}
+                  // An add in flight saves the list as it began, which would undo a remove.
+                  disabled={adding}
+                  onClick={() => void save(files.filter((f) => f !== path))}
+                  className="absolute top-1.5 right-1.5 grid size-5 place-items-center rounded-sm text-faint-foreground opacity-0 group-hover/file:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 disabled:hidden"
+                >
+                  <X className="size-3" />
+                </button>
+              </li>
+            );
+          })}
+          {adding && (
+            <li className="grid place-items-center rounded-lg border border-dashed border-border p-3 text-meta text-faint-foreground">
+              Adding…
+            </li>
+          )}
+        </ul>
+      )}
+      <input
+        ref={input}
+        type="file"
+        multiple
+        hidden
+        onChange={(e) => {
+          void add([...(e.target.files ?? [])]);
+          e.target.value = "";
+        }}
+      />
+    </section>
   );
 }

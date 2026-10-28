@@ -81,8 +81,13 @@ interface NewThreadProps {
   settingsClosed?: number;
   /** Shown under the composer until a thread starts, as a Space's page (0090). */
   below?: ReactNode;
-  /** A Space's tray under the composer, in place of where a thread runs (0090). */
-  tray?: ReactNode;
+  /** Shown over the composer in place of its question, as a Space's header (0090). */
+  header?: ReactNode;
+  /**
+   * A column beside the composer, as a Space's instructions and files (0090). With it, New thread
+   * lays out as a page: the header, composer, and `below` on the left, this on the right.
+   */
+  aside?: ReactNode;
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -124,7 +129,8 @@ export function NewThread({
   settingsClosed,
   draftId: reopened,
   below,
-  tray,
+  header,
+  aside,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
@@ -410,15 +416,19 @@ export function NewThread({
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.
   // Before it starts, it's centered a little above the middle, so as the Composer grows to its
   // seven lines the heading rises by only half as much, never toward the top. With a page under
-  // it, it sits at a fixed height instead, and the page scrolls.
+  // it, it sits at a fixed height instead, and the page scrolls; with a column beside it, it's a
+  // page of two columns.
+  const page = starting === undefined && !!aside;
   return (
     <div
       className={
         starting !== undefined
           ? "flex min-h-0 flex-1 flex-col"
-          : below
-            ? "flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-[14vh] pb-16"
-            : "flex flex-1 flex-col items-center justify-center-safe px-6 pb-[16vh]"
+          : page
+            ? "flex min-h-0 flex-1 flex-col overflow-y-auto"
+            : below
+              ? "flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-[14vh] pb-16"
+              : "flex flex-1 flex-col items-center justify-center-safe px-6 pb-[16vh]"
       }
     >
       {starting !== undefined && (
@@ -442,10 +452,15 @@ export function NewThread({
       )}
       <div
         className={
-          starting === undefined ? "w-full max-w-3xl" : "mx-auto w-full max-w-3xl px-6 pb-5"
+          page
+            ? "mx-auto grid w-full max-w-6xl items-start gap-x-10 px-10 pt-12 pb-16 lg:grid-cols-[minmax(0,1fr)_22rem] lg:grid-rows-[auto_auto_1fr]"
+            : starting === undefined
+              ? "w-full max-w-3xl"
+              : "mx-auto w-full max-w-3xl px-6 pb-5"
         }
       >
-        {starting === undefined && (
+        {starting === undefined && header}
+        {starting === undefined && !header && (
           <>
             <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
               {group.id === noRepo
@@ -562,13 +577,11 @@ export function NewThread({
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           noAccess={group.space}
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
-          // Chat picks only its computer here, and a Space shows its instructions and files instead
-          // (0090), since its entry is on this computer alone. While a start is under way it stays as it was, but inert, so the thread
+          // Chat picks only its computer here, and a Space nothing, since its entry is on this
+          // computer alone. While a start is under way it stays as it was, but inert, so the thread
           // can't move. `contents` keeps the tab's own layout.
           tab={
-            group.space ? (
-              tray
-            ) : (
+            group.space ? undefined : (
               <div inert={starting !== undefined} className="contents">
                 {repoless(group) ? (
                   <RunTargetMenu
@@ -667,6 +680,11 @@ export function NewThread({
           }
         />
         {starting === undefined && below}
+        {page && (
+          <aside className="mt-10 lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0">
+            {aside}
+          </aside>
+        )}
       </div>
     </div>
   );

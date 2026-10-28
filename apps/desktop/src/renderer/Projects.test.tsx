@@ -950,8 +950,8 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
     { repo: made!["id"], instructions: "Cite a source for every claim." },
   ]);
 
-  const files = document.querySelector('main [role="menu"][aria-label="Files"]')!;
-  expect([...files.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
+  const files = document.querySelector('main section[aria-label="Files"]')!;
+  expect([...files.querySelectorAll("li [title]")].map((name) => name.textContent)).toEqual([
     "brief.pdf",
     "notes.md",
   ]);
