@@ -25,8 +25,8 @@ const needle: Record<AgentEffort, number> = {
 
 /**
  * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
- * The needle springs to each level. At Max the gauge is the slider's galaxy: its lines run from
- * indigo through violet to pink and stars twinkle in the dial (index.css). Turned up to Max, the
+ * The needle springs to each level. At Max it takes the slider's night sky: its lines run from
+ * indigo to violet and stars twinkle in the dial (index.css). Turned up to Max, the
  * needle rattles against the end of the arc before it settles; opening a thread already at Max
  * shows it settled.
  */
@@ -82,8 +82,9 @@ const fastNames: Partial<Record<string, { label: string; on: string; off: string
 
 /**
  * The reasoning picker: a button showing a gauge that points at the effort, the effort, and a bolt
- * in fast mode, that opens a slider with a stop for each level. The fill is the nightly sky, its
- * stars drifting faster with the level, and at Max it's a glowing galaxy (index.css). Below it, the
+ * in fast mode, that opens a slider with a stop for each level. The fill is the nightly send
+ * button's sky, its stars drifting faster with the level, and at Max it fills with stars and glows
+ * (index.css). Below it, the
  * context window is a choice when the model offers more than one, and fast mode when the model has
  * it (`fastMode`, by its instance kind's name for it).
  */
