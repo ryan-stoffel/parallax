@@ -1,5 +1,5 @@
-// The sidebar's head (0090): New thread and Search as rows, the pages Settings shows there, More,
-// and the projects pinned under them.
+// The sidebar's head (0090): New thread, New project or repository, and Search as rows, then the
+// pages Settings shows there, More, and the projects pinned under them.
 import {
   ChartNoAxesColumn,
   ChevronDown,
@@ -109,6 +109,10 @@ export function SidebarNav({
           </kbd>
         )}
       </button>
+      <button type="button" onClick={onAdd} className={navRow}>
+        <FolderPlus />
+        New project or repository
+      </button>
       {search}
       {navChoices.filter((c) => shown[c.id]).map(page)}
       {/* The pages left out of the head grow in under the rest, the divider moving below them. */}
@@ -117,13 +121,7 @@ export function SidebarNav({
         inert={!moreOpen}
         className={`grid motion-safe:transition-[grid-template-rows,opacity] motion-safe:duration-200 motion-safe:ease-out ${moreOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
       >
-        <div className="flex min-h-0 flex-col overflow-hidden *:shrink-0">
-          {hidden.map(page)}
-          <button type="button" onClick={onAdd} className={navRow}>
-            <FolderPlus />
-            New project or repository
-          </button>
-        </div>
+        <div className="flex min-h-0 flex-col overflow-hidden *:shrink-0">{hidden.map(page)}</div>
       </div>
       <button
         type="button"

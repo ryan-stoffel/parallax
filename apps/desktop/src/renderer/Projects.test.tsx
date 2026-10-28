@@ -240,12 +240,8 @@ const paletteOptions = () => [
 ];
 const paletteOption = (name: string) =>
   paletteOptions().find((b) => b.textContent?.startsWith(name));
-// More's row, which opens More first (0090).
+// The sidebar's row under New thread (0090).
 const openPalette = async () => {
-  const more = [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
-    (b) => b.textContent === "More",
-  );
-  if (more) await click(more);
   await click(
     [...document.querySelectorAll("#sidebar button")].find(
       (b) => b.textContent === "New project or repository",
