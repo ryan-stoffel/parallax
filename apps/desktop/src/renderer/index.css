@@ -988,23 +988,17 @@ body {
   outline: none;
 }
 
-/* The fill is a quiet tint of the text color, and a soft sheen sweeps through it, faster the harder
-   it thinks (--effort-speed). */
+/* The fill is the accent, flat, and a soft sheen sweeps through it, faster the harder it thinks
+   (--effort-speed). */
 .effort-fill {
-  background-color: color-mix(in oklab, var(--foreground) 14%, transparent);
+  background-color: var(--accent);
 }
 .effort-fill::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: linear-gradient(
-      90deg,
-      transparent,
-      color-mix(in oklab, var(--foreground) 12%, transparent),
-      transparent
-    )
-    no-repeat;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 22%), transparent) no-repeat;
   background-size: 50% 100%;
   animation: effort-sheen calc(var(--effort-speed) * 2.5) ease-in-out infinite;
 }
@@ -1017,19 +1011,19 @@ body {
   }
 }
 
-/* At Max (.effort-full) the track breathes, a soft ring swelling and fading around it, and the
-   thumb pops once. */
+/* At Max (.effort-full) the track breathes, a soft accent ring swelling and fading around it, and
+   the thumb pops once. */
 @keyframes effort-glow {
   0%,
   100% {
     box-shadow:
       inset 0 0 0 1px var(--border),
-      0 0 0 0 color-mix(in oklab, var(--foreground) 12%, transparent);
+      0 0 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
   }
   50% {
     box-shadow:
       inset 0 0 0 1px var(--border),
-      0 0 0 4px color-mix(in oklab, var(--foreground) 6%, transparent);
+      0 0 0 4px color-mix(in srgb, var(--accent) 15%, transparent);
   }
 }
 @keyframes effort-pop {

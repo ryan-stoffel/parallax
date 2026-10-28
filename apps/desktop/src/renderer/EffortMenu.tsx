@@ -135,7 +135,7 @@ export function EffortMenu({
               <span
                 key={l.name}
                 aria-hidden
-                className={`absolute top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full ${i < level ? "bg-foreground/55" : "bg-foreground/35"}`}
+                className={`absolute top-1/2 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full ${i < level ? "bg-white/60" : "bg-foreground/35"}`}
                 style={{ left: at(i) }}
               />
             ))}
