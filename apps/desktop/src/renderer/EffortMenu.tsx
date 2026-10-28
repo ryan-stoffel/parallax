@@ -24,8 +24,9 @@ const needle: Record<AgentEffort, number> = {
 };
 
 /**
- * lucide's Gauge, with its needle turned to the effort. The needle springs to each level, and at
- * Max it quivers against the end of the arc while the gauge glows (index.css).
+ * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
+ * The needle springs to each level, and at Max it quivers against the end of the arc while the
+ * gauge glows (index.css).
  */
 function EffortGauge({ value }: { value: AgentEffort }) {
   return (
@@ -37,7 +38,7 @@ function EffortGauge({ value }: { value: AgentEffort }) {
       strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={value === "max" ? "effort-gauge-max" : undefined}
+      className={value === "max" ? "lucide effort-gauge-max" : "lucide"}
       style={{ "--needle": `${needle[value]}deg` } as CSSProperties}
     >
       <path d="M3.34 19a10 10 0 1 1 17.32 0" />

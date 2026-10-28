@@ -1065,7 +1065,7 @@ body {
 @keyframes effort-gauge-glow {
   0%,
   100% {
-    filter: drop-shadow(0 0 1px color-mix(in srgb, var(--accent) 50%, transparent));
+    filter: drop-shadow(0 0 1px var(--accent));
   }
   50% {
     filter: drop-shadow(0 0 4px var(--accent));
