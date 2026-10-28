@@ -111,30 +111,36 @@ export function SidebarNav({
       </button>
       {search}
       {navChoices.filter((c) => shown[c.id]).map(page)}
-      <button
-        type="button"
-        aria-expanded={moreOpen}
-        aria-controls={moreList}
-        onClick={() => moreShown.set(!moreOpen)}
-        className={`mt-4 ${sectionToggle}`}
+      {/* The pages left out of the head grow in under the rest, the divider moving below them. */}
+      <div
+        id={moreList}
+        inert={!moreOpen}
+        className={`grid motion-safe:transition-[grid-template-rows,opacity] motion-safe:duration-200 motion-safe:ease-out ${moreOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
       >
-        More
-        <ChevronDown
-          aria-hidden
-          className={`size-3 transition-transform duration-150 ${moreOpen ? "" : "-rotate-90"}`}
-        />
-      </button>
-      {moreOpen && (
-        <div id={moreList} className="rise-in flex flex-col">
+        <div className="flex min-h-0 flex-col overflow-hidden *:shrink-0">
           {hidden.map(page)}
           <button type="button" onClick={onAdd} className={navRow}>
             <FolderPlus />
             New project or repository
           </button>
         </div>
-      )}
+      </div>
+      <button
+        type="button"
+        aria-expanded={moreOpen}
+        aria-controls={moreList}
+        onClick={() => moreShown.set(!moreOpen)}
+        className="group/more mt-1 flex h-6 items-center gap-1 rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground"
+      >
+        {moreOpen ? "Less" : "More"}
+        <ChevronDown
+          aria-hidden
+          className={`size-3 motion-safe:transition-transform motion-safe:duration-200 ${moreOpen ? "rotate-180" : ""}`}
+        />
+        <span aria-hidden className="ml-1.5 h-px flex-1 bg-border" />
+      </button>
       {pinned.length > 0 && (
-        <section aria-label="Pinned" className="mt-4">
+        <section aria-label="Pinned" className="mt-3">
           <button
             type="button"
             aria-expanded={!folded}
