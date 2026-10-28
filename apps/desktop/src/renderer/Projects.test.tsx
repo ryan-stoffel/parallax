@@ -930,10 +930,12 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
   expect(made).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: "Essays" });
   expect(crumbs()).toEqual(["This Mac", "Essays", "New thread"]);
 
-  // Its page, under the composer: Instructions, Files, and Threads.
-  const instructions = document.querySelector('main section[aria-label="Instructions"]')!;
-  await click(instructions.querySelector('button[aria-label="Add instructions"]'));
-  const editor = instructions.querySelector("dialog")!;
+  // Its instructions and files, in the tray under the composer.
+  await click(document.querySelector('main button[aria-label="Add instructions"]'));
+  const editor = [...document.querySelectorAll<HTMLDialogElement>("main dialog")].find(
+    (d) => d.querySelector("h2")?.textContent === "Instructions for Essays",
+  )!;
+  expect(editor.open).toBe(true);
   const box = editor.querySelector("textarea")!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
@@ -948,7 +950,7 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
     { repo: made!["id"], instructions: "Cite a source for every claim." },
   ]);
 
-  const files = document.querySelector('main section[aria-label="Files"]')!;
+  const files = document.querySelector('main [role="menu"][aria-label="Files"]')!;
   expect([...files.querySelectorAll("li")].map((li) => li.textContent)).toEqual([
     "brief.pdf",
     "notes.md",

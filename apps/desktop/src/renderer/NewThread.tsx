@@ -81,8 +81,8 @@ interface NewThreadProps {
   settingsClosed?: number;
   /** Shown under the composer until a thread starts, as a Space's page (0090). */
   below?: ReactNode;
-  /** Shown over the composer in place of its question, as a Space's header (0090). */
-  header?: ReactNode;
+  /** A Space's tray under the composer, in place of where a thread runs (0090). */
+  tray?: ReactNode;
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -124,7 +124,7 @@ export function NewThread({
   settingsClosed,
   draftId: reopened,
   below,
-  header,
+  tray,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
@@ -445,8 +445,7 @@ export function NewThread({
           starting === undefined ? "w-full max-w-3xl" : "mx-auto w-full max-w-3xl px-6 pb-5"
         }
       >
-        {starting === undefined && header}
-        {starting === undefined && !header && (
+        {starting === undefined && (
           <>
             <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
               {group.id === noRepo
@@ -563,11 +562,13 @@ export function NewThread({
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           noAccess={group.space}
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
-          // Chat picks only its computer here, and a Space nothing, since its entry is on this
-          // computer alone. While a start is under way it stays as it was, but inert, so the thread
+          // Chat picks only its computer here, and a Space shows its instructions and files instead
+          // (0090), since its entry is on this computer alone. While a start is under way it stays as it was, but inert, so the thread
           // can't move. `contents` keeps the tab's own layout.
           tab={
-            group.space ? undefined : (
+            group.space ? (
+              tray
+            ) : (
               <div inert={starting !== undefined} className="contents">
                 {repoless(group) ? (
                   <RunTargetMenu

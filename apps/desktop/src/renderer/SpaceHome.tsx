@@ -1,97 +1,49 @@
-// A Space's page in New thread (0090): its header over the composer, then its context, the
-// instructions and files plxd gives every thread in it, and its threads.
-import { Pin, PinOff, X } from "lucide-react";
-import { useId, useRef, useState, type CSSProperties, type DragEvent } from "react";
+// A Space in New thread (0090): its instructions and files in the tray tucked under the composer,
+// where a repository's thread shows where it runs, and its threads under the box.
+import { Paperclip, Plus, ScrollText, X } from "lucide-react";
+import { useId, useRef, useState, type DragEvent } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
 import { activeAt, attentionOf } from "./attention";
 import { AttentionBadge } from "./AttentionMark";
 import { useConnection } from "./ConnectionStatus";
-import type { FavoriteAction } from "./Favorites";
 import { fileIcon } from "./Mention";
 import { notify } from "./notifications";
-import type { ProjectEntry } from "./projectList";
-import { ProjectMenu, ProjectTile, tint, useImageTint } from "./ProjectsPage";
 import { age } from "./Sidebar";
 import { asksOf, waitingOf, type ThreadsView } from "./threads";
-import { quietButton } from "./settings/parts";
-import { IconButton } from "./ui";
+import { menuButton, menuItem, menuPanel } from "./ui";
 import { uploadBytes, uploadFiles } from "./uploads";
 
-/** A Space header's light: its color, from behind its tile, fading out. */
-const headerGlow =
-  "radial-gradient(closest-side at 30% 50%, color-mix(in srgb, var(--tint) 16%, transparent), transparent)";
-
 /**
- * A Space's header, in place of New thread's question: its tile, name, and size, with Pin and its
- * menu, over a soft light in its color when it has one.
+ * A Space's tray under the composer: Instructions, which opens their editor, and its files, whose
+ * menu lists them with Remove and takes more by Add or a drop.
  */
-export function SpaceHeader({
-  entry,
-  pinned,
-  onTogglePin,
-  actionsFor,
+export function SpaceTray({
+  hostId,
+  space,
+  view,
 }: {
-  entry: ProjectEntry;
-  pinned: boolean;
-  onTogglePin: () => void;
-  actionsFor: () => FavoriteAction[];
+  hostId: string;
+  space: Repo;
+  view: ThreadsView;
 }) {
-  const trigger = useRef<HTMLButtonElement>(null);
-  const color = tint(entry, useImageTint(entry.icon));
-  const n = entry.threads;
-  const files = entry.files;
   return (
-    <header style={{ "--tint": color } as CSSProperties} className="relative mb-8">
-      {/* A Space with no color of its own has no light to cast. */}
-      {(entry.icon?.color || entry.icon?.image) && (
-        <span
-          aria-hidden
-          style={{ background: headerGlow }}
-          className="pointer-events-none absolute -top-28 -left-24 h-72 w-[40rem]"
-        />
-      )}
-      <div className="relative flex items-center gap-4">
-        <ProjectTile entry={entry} size="lg" />
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-display font-semibold tracking-tight">{entry.name}</h1>
-          <p className="mt-0.5 text-body text-muted-foreground">
-            Space · {n} {n === 1 ? "thread" : "threads"}
-            {files > 0 && ` · ${files} ${files === 1 ? "file" : "files"}`}
-          </p>
-        </div>
-        <div className="flex items-center gap-0.5">
-          <IconButton label={pinned ? "Unpin" : "Pin"} onClick={onTogglePin}>
-            {pinned ? <PinOff /> : <Pin />}
-          </IconButton>
-          <ProjectMenu
-            entry={entry}
-            pinned={pinned}
-            onTogglePin={onTogglePin}
-            actionsFor={actionsFor}
-            trigger={trigger}
-            className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
-          />
-        </div>
-      </div>
-    </header>
+    <div className="flex min-w-0 items-center gap-1">
+      <Instructions space={space} view={view} />
+      <span aria-hidden className="text-faint-foreground">
+        ·
+      </span>
+      <Files hostId={hostId} space={space} view={view} />
+    </div>
   );
 }
 
-/** A rounded group of rows with hairlines between them, as Settings and the Project tab show. */
-const group = "overflow-hidden rounded-xl border border-border bg-(--pane-card)";
-const groupRow = "flex items-start gap-4 border-border px-4 py-3 not-last:border-b";
-const rowLabel = "w-24 shrink-0 pt-0.5 text-body font-medium";
-const heading = "mb-3 text-reading font-medium";
-
-/** A Space's context, its instructions and files, then its threads, newest first. */
-export function SpaceHome({
-  hostId,
+/** A Space's threads under the composer, newest first, each with its status or age. */
+export function SpaceThreads({
   space,
   view,
   onOpenThread,
 }: {
-  hostId: string;
   space: Repo;
   view: ThreadsView;
   onOpenThread: (threadId: string) => void;
@@ -108,48 +60,33 @@ export function SpaceHome({
       };
     })
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  if (threads.length === 0) return null;
   return (
-    <div className="mt-10 flex flex-col gap-10">
-      {"spaceContext" in view.capabilities && (
-        <section aria-label="Context">
-          <h2 className={heading}>Context</h2>
-          <div className={group}>
-            <Instructions space={space} view={view} />
-            <Files hostId={hostId} space={space} view={view} />
-          </div>
-        </section>
-      )}
-      <section aria-label="Threads">
-        <h2 className={heading}>Threads</h2>
-        <ul className={group}>
-          {threads.length === 0 && (
-            <li className={`${groupRow} text-body text-faint-foreground`}>
-              No threads yet. Ask anything above to start one.
-            </li>
-          )}
-          {threads.map(({ thread, at, attention }) => (
-            <li key={thread.id} className="border-border not-last:border-b">
-              <button
-                type="button"
-                onClick={() => onOpenThread(thread.id)}
-                className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-hover"
-              >
-                <span className="min-w-0 flex-1 truncate text-body font-medium">
-                  {state.titles[thread.id] ?? "Thread"}
-                </span>
-                <span className="shrink-0 text-meta text-faint-foreground">
-                  {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </section>
-    </div>
+    <section aria-label="Threads" className="mx-4 mt-10">
+      <h2 className="mb-1 px-2 text-meta font-medium text-faint-foreground">Threads</h2>
+      <ul className="flex flex-col">
+        {threads.map(({ thread, at, attention }) => (
+          <li key={thread.id}>
+            <button
+              type="button"
+              onClick={() => onOpenThread(thread.id)}
+              className="flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-hover"
+            >
+              <span className="min-w-0 flex-1 truncate text-body">
+                {state.titles[thread.id] ?? "Thread"}
+              </span>
+              <span className="shrink-0 text-meta text-faint-foreground">
+                {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
-/** The Instructions row: what every thread here is told, which opens an editor. */
+/** The tray's Instructions: what every thread here is told, edited in a dialog. */
 function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [text, setText] = useState("");
@@ -162,23 +99,17 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
     dialog.current?.showModal();
   };
   return (
-    <section aria-label="Instructions" className={groupRow}>
-      <h3 className={rowLabel}>Instructions</h3>
+    <>
       <button
         type="button"
-        onClick={open}
-        className={`min-w-0 flex-1 pt-0.5 text-left text-body whitespace-pre-wrap ${space.instructions ? "line-clamp-3 text-muted-foreground hover:text-foreground" : "text-faint-foreground hover:text-muted-foreground"}`}
-      >
-        {space.instructions ??
-          "Tell every thread here how to work: a tone, a format, or what it should know."}
-      </button>
-      <button
-        type="button"
+        aria-haspopup="dialog"
         aria-label={space.instructions ? "Edit instructions" : "Add instructions"}
+        title={space.instructions}
         onClick={open}
-        className={quietButton}
+        className={menuButton}
       >
-        {space.instructions ? "Edit" : "Add"}
+        <ScrollText aria-hidden />
+        {space.instructions ? "Instructions" : "Add instructions"}
       </button>
       <dialog
         ref={dialog}
@@ -233,13 +164,17 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
           </div>
         </form>
       </dialog>
-    </section>
+    </>
   );
 }
 
-/** The Files row: each file as a chip with Remove, and Add or a drop, which uploads to the host. */
+/**
+ * The tray's files: how many, opening a menu that lists each with Remove, then Add files. Files
+ * dropped on the button or the menu are added too.
+ */
 function Files({ hostId, space, view }: { hostId: string; space: Repo; view: ThreadsView }) {
   const input = useRef<HTMLInputElement>(null);
+  const menu = useId();
   const [adding, setAdding] = useState(false);
   const [over, setOver] = useState(false);
   const caps = uploadBytes(useConnection(hostId));
@@ -265,85 +200,96 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
     setAdding(false);
   };
   const takesFiles = (e: DragEvent) => e.dataTransfer.types.includes("Files");
+  const drop = {
+    onDragOver: (e: DragEvent) => {
+      if (!caps || adding || !takesFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      setOver(true);
+    },
+    onDragLeave: () => setOver(false),
+    onDrop: (e: DragEvent) => {
+      if (!takesFiles(e)) return;
+      e.preventDefault();
+      setOver(false);
+      void add([...e.dataTransfer.files]);
+    },
+  };
+  const n = files.length;
   return (
-    <section
-      aria-label="Files"
-      onDragOver={(e) => {
-        if (!caps || adding || !takesFiles(e)) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "copy";
-        setOver(true);
-      }}
-      onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
-      }}
-      onDrop={(e) => {
-        if (!takesFiles(e)) return;
-        e.preventDefault();
-        setOver(false);
-        void add([...e.dataTransfer.files]);
-      }}
-      className={`${groupRow} transition-colors ${over ? "bg-accent/5" : ""}`}
-    >
-      <h3 className={rowLabel}>Files</h3>
-      {files.length === 0 ? (
-        <p className="min-w-0 flex-1 pt-0.5 text-body text-faint-foreground">
-          {adding
-            ? "Adding…"
-            : over
-              ? "Drop to add them"
-              : "Drop PDFs, notes, or code here for every thread to read."}
-        </p>
-      ) : (
-        <ul className="flex min-w-0 flex-1 flex-wrap gap-1.5">
-          {files.map((path) => {
-            const name = path.split(/[\\/]/).at(-1) ?? path;
-            return (
-              <li
-                key={path}
-                className="group/file flex max-w-full items-center gap-1.5 rounded-md border border-border bg-surface py-1 pr-1 pl-2 text-meta"
-              >
-                <span aria-hidden className="shrink-0 [&_img]:size-3.5">
-                  {fileIcon(name)}
-                </span>
-                <span title={name} className="min-w-0 truncate">
-                  {name}
-                </span>
-                <button
-                  type="button"
-                  aria-label={`Remove ${name}`}
-                  // An add in flight saves the list as it began, which would undo a remove.
-                  disabled={adding}
-                  onClick={() => void save(files.filter((f) => f !== path))}
-                  className="grid size-4 shrink-0 place-items-center rounded-sm text-faint-foreground hover:bg-hover hover:text-foreground disabled:opacity-40"
-                >
-                  <X className="size-3" />
-                </button>
-              </li>
-            );
-          })}
-          {adding && <li className="py-1 text-meta text-faint-foreground">Adding…</li>}
-        </ul>
-      )}
+    <>
       <button
         type="button"
-        aria-label="Add files"
-        disabled={!caps || adding}
-        onClick={() => input.current?.click()}
-        className={`${quietButton} disabled:opacity-50`}
+        popoverTarget={menu}
+        aria-haspopup="menu"
+        {...drop}
+        className={`${menuButton} ${over ? "bg-hover text-foreground" : ""}`}
       >
-        Add
+        <Paperclip aria-hidden />
+        {adding ? "Adding…" : n === 0 ? "Add files" : `${n} ${n === 1 ? "file" : "files"}`}
       </button>
-      <input
-        ref={input}
-        type="file"
-        multiple
-        hidden
-        onChange={(e) => {
-          void add([...(e.target.files ?? [])]);
-          e.target.value = "";
-        }}
-      />
-    </section>
+      <div
+        id={menu}
+        popover="auto"
+        role="menu"
+        aria-label="Files"
+        {...drop}
+        className={`${menuPanel("start")} w-72 p-1 ${over ? "outline-2 outline-accent" : ""}`}
+      >
+        {n === 0 ? (
+          <p className="px-2 py-1.5 text-meta text-faint-foreground">
+            Every thread here can read the files you add. Drop them here, or add them.
+          </p>
+        ) : (
+          <ul aria-label="Files" className="flex max-h-60 flex-col overflow-y-auto">
+            {files.map((path) => {
+              const name = path.split(/[\\/]/).at(-1) ?? path;
+              return (
+                <li key={path} className="group/file flex items-center gap-2 rounded-md px-2 py-1">
+                  <span aria-hidden className="shrink-0 [&_img]:size-4">
+                    {fileIcon(name)}
+                  </span>
+                  <span title={name} className="min-w-0 flex-1 truncate text-body">
+                    {name}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={`Remove ${name}`}
+                    // An add in flight saves the list as it began, which would undo a remove.
+                    disabled={adding}
+                    onClick={() => void save(files.filter((f) => f !== path))}
+                    className="grid size-5 shrink-0 place-items-center rounded-sm text-faint-foreground opacity-0 group-hover/file:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 disabled:hidden"
+                  >
+                    <X className="size-3" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <hr className="-mx-1 my-1 border-border" />
+        <button
+          type="button"
+          role="menuitem"
+          aria-label="Add files"
+          disabled={!caps || adding}
+          onClick={() => input.current?.click()}
+          className={`${menuItem} disabled:opacity-50`}
+        >
+          <Plus aria-hidden />
+          Add files…
+        </button>
+        <input
+          ref={input}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            void add([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
+      </div>
+    </>
   );
 }
