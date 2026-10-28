@@ -55,7 +55,10 @@ export function ProjectTile({
   size = "md",
 }: {
   entry: Pick<ProjectEntry, "icon" | "kind">;
-  /** `glyph` draws only its glyph in its color, the size of an icon beside text. */
+  /**
+   * `glyph` draws only its glyph, the size of an icon beside text, with its color as `--tint`
+   * for the row to show when it chooses.
+   */
   size?: "glyph" | "sm" | "md" | "lg";
 }) {
   const box = {
@@ -73,7 +76,13 @@ export function ProjectTile({
   const Glyph = entry.icon ? Icon : entry.kind === "space" ? MessagesSquare : Layers;
   const color = tint(entry);
   if (size === "glyph")
-    return <Glyph aria-hidden style={{ color }} className={`${glyph} shrink-0`} />;
+    return (
+      <Glyph
+        aria-hidden
+        style={{ "--tint": color } as CSSProperties}
+        className={`${glyph} shrink-0`}
+      />
+    );
   return (
     <span
       aria-hidden

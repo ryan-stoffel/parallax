@@ -23,9 +23,12 @@ import { stored } from "./stored";
 import { Menu, menuItem, openOnContextMenu } from "./ui";
 
 /** A row in the sidebar's head: its icon and label, and something at its end. */
-export const navRow =
-  "group/nav flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-body text-foreground/90 hover:bg-hover hover:text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground [&>svg]:transition-colors hover:[&>svg]:text-foreground";
+const navBase =
+  "group/nav flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-body text-foreground/90 hover:bg-hover hover:text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground [&>svg]:transition-colors";
+export const navRow = `${navBase} hover:[&>svg]:text-foreground`;
 const navCurrent = "bg-selected text-foreground [&>svg]:text-foreground";
+/** A pinned project's row: its glyph gray until hovered, focused, or open, then its color. */
+const pinRow = `${navBase} hover:[&>svg]:text-(--tint) focus-visible:[&>svg]:text-(--tint) aria-[current=page]:bg-selected aria-[current=page]:text-foreground aria-[current=page]:[&>svg]:text-(--tint)`;
 
 /** The rows Edit sidebar chooses between, in the order they list. */
 export const navChoices: { id: NavRow; label: string; Icon: LucideIcon }[] = [
@@ -199,7 +202,7 @@ function PinnedRow({
         type="button"
         aria-current={open ? "page" : undefined}
         onClick={onOpen}
-        className={`${navRow} pr-8 ${open ? navCurrent : ""}`}
+        className={`${pinRow} pr-8`}
       >
         <ProjectTile entry={entry} size="glyph" />
         <span className="min-w-0 flex-1 truncate">{entry.name}</span>
