@@ -28,6 +28,9 @@ import type {
 
 export const HOME = "/Users/ryan";
 export const PARALLAX_PATH = `${HOME}/Developer/personal/parallax`;
+/** An icon the user uploaded (0038): a warm gradient with a light disc, for landing-page. */
+const LANDING_ICON =
+  "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAABVUlEQVR42rXU7SuDYRQG8OsPI4kkkkQS2cxmHpuZvZjZzGxmm72YLUkkkST/ms8+nfvc82ES5Xmee1unzuffVafrHHQ979rzpr2veuNF+5715pP2P2r/gw7c6607HbzV2zfautZWR++0dajF4Sbv1jlS40iV98ocLfF+kWMFjuc5nuNElpMZPkhzKsWHSU4nIKqrdAyiujqKQlRXmQhEdZUNQ1RXxyGI6ipnQVRXuSBEdXUSgKiu8n6Y693Pj58x1NWpDyb6b/pPjJuuCl4MrPfGWVfFdfS1mX8CHHVVXMMw+neGva7OVuHcGaMAe12VVuDcSLMAW53Ol+Hcd6MAe53KS3C9pmF0qizC9VZdAhx1qizA5BMMrFN1HuZ/pq/N9HS6mMPAX8xEp9osRHWqz0BUp8Y0RHVqTEFUp+YkRHW6nICoTq1xiOp0NQZRndqjENWpM/IFItgHWLGjZ9UAAAAASUVORK5CYII=";
 const DOCS_PATH = `${HOME}/Developer/personal/docs-site`;
 
 /** A run's logged event, before the mock numbers it. */
@@ -235,7 +238,10 @@ export function createFixtures(now = Date.now()): Fixtures {
     ).map(([id, name, icon, color], n): Project => ({
       id,
       name,
-      icon: { name: icon, color },
+      icon:
+        id === ids.projectLanding
+          ? { name: icon, image: { mediaType: "image/png", data: LANDING_ICON } }
+          : { name: icon, color },
       repoPath: DOCS_PATH,
       branch: "main",
       permission: "auto",

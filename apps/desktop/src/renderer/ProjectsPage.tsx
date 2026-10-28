@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  useEffect,
   useId,
   useRef,
   useState,
@@ -47,8 +48,12 @@ const projectSort = stored<ProjectSort>("parallax.projectSort", "activity", (raw
   sorts.some((s) => s.value === raw) ? (raw as ProjectSort) : fallback,
 );
 
-/** A project's color, as a CSS value: its icon's, else the accent, or gray for a Space. */
-function tint(entry: Pick<ProjectEntry, "icon" | "kind">) {
+/**
+ * A project's color, as a CSS value: an uploaded image's own (`imageTint`), its icon's, else the
+ * accent, or gray for a Space.
+ */
+function tint(entry: Pick<ProjectEntry, "icon" | "kind">, imageTint?: string) {
+  if (entry.icon?.image) return imageTint ?? "var(--faint-foreground)";
   if (entry.icon?.color) return `var(--project-${entry.icon.color})`;
   return entry.kind === "space" && !entry.icon ? "var(--project-gray)" : "var(--accent)";
 }
@@ -77,7 +82,11 @@ export function ProjectTile({
   const glyph = { glyph: "size-4", sm: "size-3.5", md: "size-5", lg: "size-6" }[size];
   if (entry.icon?.image)
     return (
-      <img alt="" src={imageUrl(entry.icon.image)} className={`${box} shrink-0 object-cover`} />
+      <img
+        alt=""
+        src={imageUrl(entry.icon.image)}
+        className={`${box} shrink-0 object-cover ring-1 ring-border/60`}
+      />
     );
   const { Icon } = iconLook(entry.icon);
   const Glyph = entry.icon ? Icon : entry.kind === "space" ? MessagesSquare : Layers;
@@ -99,6 +108,50 @@ export function ProjectTile({
       <Glyph className={glyph} />
     </span>
   );
+}
+
+// Each uploaded icon's color, by its data URL, read once.
+const imageTints = new Map<string, string>();
+
+/**
+ * An uploaded icon's color for its card: the average of a 16px copy, each pixel weighted by how
+ * vivid it is, so a logo's color wins over its white or black. Undefined until it's read, or for
+ * no image.
+ */
+function useImageTint(icon?: ProjectIconValue): string | undefined {
+  const url = icon?.image ? imageUrl(icon.image) : undefined;
+  const [read, setRead] = useState<{ url: string; color: string }>();
+  useEffect(() => {
+    if (!url || imageTints.has(url)) return;
+    let live = true;
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 16;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) return;
+      context.drawImage(image, 0, 0, 16, 16);
+      const pixels = context.getImageData(0, 0, 16, 16).data;
+      let [r, g, b, total] = [0, 0, 0, 0];
+      for (let i = 0; i < pixels.length; i += 4) {
+        const [pr, pg, pb, pa] = [pixels[i]!, pixels[i + 1]!, pixels[i + 2]!, pixels[i + 3]!];
+        const weight = ((Math.max(pr, pg, pb) - Math.min(pr, pg, pb)) / 255 + 0.05) * (pa / 255);
+        r += pr * weight;
+        g += pg * weight;
+        b += pb * weight;
+        total += weight;
+      }
+      if (!total) return;
+      const color = `rgb(${Math.round(r / total)} ${Math.round(g / total)} ${Math.round(b / total)})`;
+      imageTints.set(url, color);
+      if (live) setRead({ url, color });
+    };
+    image.src = url;
+    return () => {
+      live = false;
+    };
+  }, [url]);
+  return url ? (imageTints.get(url) ?? (read?.url === url ? read.color : undefined)) : undefined;
 }
 
 /** A card's color, washing down from the top. */
@@ -347,13 +400,14 @@ function ProjectCard({
   actionsFor: () => FavoriteAction[];
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
+  const imageTint = useImageTint(entry.icon);
   const status = entry.attention === "settled" ? undefined : entry.attention;
   const n = entry.threads;
   return (
     <li
       data-project={entry.key}
       onContextMenu={(e) => openOnContextMenu(e, trigger.current)}
-      style={{ "--tint": tint(entry) } as CSSProperties}
+      style={{ "--tint": tint(entry, imageTint) } as CSSProperties}
       className="group/card relative"
     >
       <button

@@ -28,8 +28,8 @@ const navCurrent = "bg-selected text-foreground [&>svg]:text-foreground";
 const sectionToggle =
   "flex h-7 items-center gap-1 self-start rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground";
 
-/** A pinned project's row: its glyph gray until hovered, focused, or open, then its color. */
-const pinRow = `${navBase} hover:[&>svg]:text-(--tint) focus-visible:[&>svg]:text-(--tint) aria-[current=page]:bg-selected aria-[current=page]:text-foreground aria-[current=page]:[&>svg]:text-(--tint)`;
+/** A pinned project's row: its glyph gray, or its image grayscale, until hovered, focused, or open. */
+const pinRow = `${navBase} hover:[&>svg]:text-(--tint) focus-visible:[&>svg]:text-(--tint) aria-[current=page]:bg-selected aria-[current=page]:text-foreground aria-[current=page]:[&>svg]:text-(--tint) [&>img]:opacity-70 [&>img]:grayscale [&>img]:transition hover:[&>img]:opacity-100 hover:[&>img]:grayscale-0 focus-visible:[&>img]:grayscale-0 aria-[current=page]:[&>img]:opacity-100 aria-[current=page]:[&>img]:grayscale-0`;
 
 /** The pages Settings › Appearance › Sidebar chooses between, in the order they list. */
 export const navChoices: { id: NavRow; label: string; Icon: LucideIcon }[] = [
