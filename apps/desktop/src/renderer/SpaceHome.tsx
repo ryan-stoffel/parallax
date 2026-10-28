@@ -242,8 +242,10 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
                 <button
                   type="button"
                   aria-label={`Remove ${name}`}
+                  // An add in flight saves the list as it began, which would undo a remove.
+                  disabled={adding}
                   onClick={() => void save(files.filter((f) => f !== path))}
-                  className="grid size-5 place-items-center rounded-sm text-faint-foreground opacity-0 group-hover/file:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100"
+                  className="grid size-5 place-items-center rounded-sm text-faint-foreground opacity-0 group-hover/file:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 disabled:hidden"
                 >
                   <X className="size-3" />
                 </button>
