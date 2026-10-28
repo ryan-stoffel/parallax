@@ -4,11 +4,15 @@ import {
   Check,
   ChevronDown,
   Ellipsis,
+  GitBranch,
   Layers,
+  MessageSquare,
   MessagesSquare,
+  Paperclip,
   Pin,
   PinOff,
   Plus,
+  ScrollText,
   Search,
   X,
 } from "lucide-react";
@@ -97,19 +101,12 @@ export function ProjectTile({
   );
 }
 
-/** What a card's last line says: its size, and a Project's branch or a Space's files. */
-function details(entry: ProjectEntry) {
-  const n = entry.threads;
-  const parts = [`${n} ${n === 1 ? "thread" : "threads"}`];
-  if (entry.kind === "project" && entry.branch) parts.push(entry.branch);
-  if (entry.kind === "space" && entry.files > 0)
-    parts.push(`${entry.files} ${entry.files === 1 ? "file" : "files"}`);
-  return parts.join(" · ");
-}
-
+/** A card's color, washing down from the top. */
+const wash =
+  "linear-gradient(180deg, color-mix(in srgb, var(--tint) 9%, transparent), transparent 70%)";
 /** A card's hover light: its color from the top left corner, fading out across it. */
 const glow =
-  "radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--tint) 14%, transparent), transparent 70%)";
+  "radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--tint) 16%, transparent), transparent 70%)";
 
 type KindFilter = "all" | ProjectEntry["kind"];
 const kinds: { value: KindFilter; name: string }[] = [
@@ -332,9 +329,9 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 }
 
 /**
- * A project's card, laid out as the sidebar's thread cards are: its tile and its status or age,
- * its name, then its size and branch or files. Hovering lights it in its own color and shows Pin
- * and its menu.
+ * A project's card: its tile and its status or age, its name, what its latest thread is, then its
+ * branch or a Space's files and instructions, and how many threads it has. It's washed in its own
+ * color, which lights up from the corner on hover, and Pin and its menu show then.
  */
 function ProjectCard({
   entry,
@@ -351,6 +348,7 @@ function ProjectCard({
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
   const status = entry.attention === "settled" ? undefined : entry.attention;
+  const n = entry.threads;
   return (
     <li
       data-project={entry.key}
@@ -361,17 +359,17 @@ function ProjectCard({
       <button
         type="button"
         onClick={onOpen}
-        className="relative flex h-full w-full flex-col gap-3 overflow-hidden rounded-xl bg-surface p-4 text-left ring-1 ring-border/60 transition-[box-shadow,background-color] duration-200 hover:ring-[color-mix(in_srgb,var(--tint)_45%,transparent)]"
+        style={{ backgroundImage: wash }}
+        className="relative flex h-full w-full flex-col overflow-hidden rounded-xl bg-surface p-4 text-left ring-1 ring-border/60 transition-[box-shadow,translate] duration-200 hover:-translate-y-px hover:shadow-composer hover:ring-[color-mix(in_srgb,var(--tint)_40%,transparent)] motion-reduce:hover:translate-y-0"
       >
-        {/* Its color, glowing from the tile's corner while hovered. */}
         <span
           aria-hidden
           style={{ background: glow }}
           className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-300 group-hover/card:opacity-100"
         />
-        <span className="relative flex items-center justify-between gap-2">
+        <span className="relative flex items-start justify-between gap-2">
           <ProjectTile entry={entry} size="md" />
-          <span className="text-meta text-faint-foreground transition-opacity group-focus-within/card:opacity-0 group-hover/card:opacity-0">
+          <span className="pt-1 text-meta text-faint-foreground transition-opacity group-focus-within/card:opacity-0 group-hover/card:opacity-0">
             {status ? (
               <AttentionBadge attention={status} count={entry.working} />
             ) : (
@@ -379,16 +377,43 @@ function ProjectCard({
             )}
           </span>
         </span>
-        <span className="relative min-w-0">
-          <span data-title className="block truncate text-reading font-medium">
+        <span className="relative mt-4 min-w-0">
+          <span data-title className="block truncate text-reading font-semibold tracking-tight">
             {entry.name}
           </span>
-          <span className="mt-0.5 block truncate text-meta text-muted-foreground">
-            {entry.kind === "space" ? "Space" : "Project"} · {details(entry)}
+          <span className="mt-0.5 block truncate text-body text-muted-foreground">
+            {entry.latest ?? (entry.kind === "space" ? "No threads yet" : "No work yet")}
+          </span>
+        </span>
+        <span className="relative mt-4 flex items-center gap-3 border-t border-border/60 pt-3 text-meta text-faint-foreground [&_svg]:size-3.5 [&_svg]:shrink-0">
+          {entry.kind === "project" ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <GitBranch aria-hidden />
+              <span className="truncate">{entry.branch ?? "No branch"}</span>
+            </span>
+          ) : (
+            <>
+              <span className="flex items-center gap-1.5">
+                <Paperclip aria-hidden />
+                {entry.files === 0
+                  ? "No files"
+                  : `${entry.files} ${entry.files === 1 ? "file" : "files"}`}
+              </span>
+              {entry.instructions && (
+                <span className="flex items-center gap-1.5">
+                  <ScrollText aria-hidden />
+                  Instructions
+                </span>
+              )}
+            </>
+          )}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            <MessageSquare aria-hidden />
+            {n} {n === 1 ? "thread" : "threads"}
           </span>
         </span>
       </button>
-      <div className="absolute top-4 right-3 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/card:opacity-100 group-hover/card:opacity-100 has-[[aria-expanded=true]]:opacity-100">
+      <div className="absolute top-3.5 right-3 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/card:opacity-100 group-hover/card:opacity-100 has-[[aria-expanded=true]]:opacity-100">
         <button
           type="button"
           aria-label={pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}

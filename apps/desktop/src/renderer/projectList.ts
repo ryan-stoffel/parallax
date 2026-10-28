@@ -30,7 +30,15 @@ export interface ProjectEntry {
   branch?: string;
   /** How many files a Space gives its threads. */
   files: number;
+  /** Whether a Space gives its threads instructions. */
+  instructions: boolean;
+  /** Its most recently active thread's title, its coordinator's aside. */
+  latest?: string;
 }
+
+/** A thread's title, else its first message's first line. */
+const titleOf = (titles: Record<string, string>, id: string, prompt?: string) =>
+  titles[id] ?? prompt?.split("\n")[0];
 
 export type ProjectSort = "activity" | "name" | "created";
 
@@ -42,6 +50,12 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
     const projects = state.projects.map((p): ProjectEntry => {
       const runs = projectRuns(state, p.id, inProject);
       const attention = projectAttention(runs, (id) => asksOf(state, id));
+      const latest = runs
+        .filter((r) => r.id !== p.coordinator)
+        .reduce<(typeof runs)[number] | undefined>(
+          (a, r) => (!a || Date.parse(r.updatedAt) > Date.parse(a.updatedAt) ? r : a),
+          undefined,
+        );
       return {
         key: `${host.id}/${p.id}`,
         host,
@@ -58,6 +72,8 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
         needsYou: attention === "needsYou",
         branch: p.integrationBranch ?? p.branch,
         files: 0,
+        instructions: false,
+        latest: latest && titleOf(state.titles, latest.id, latest.prompt),
       };
     });
     const spaces = state.repos
@@ -65,11 +81,15 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
       .map((r): ProjectEntry => {
         const spaceThreads = state.threads.filter((t) => t.repo === r.id && !t.parent);
         let latest = r.createdAt;
+        let latestThread: string | undefined;
         const attentions: Attention[] = [];
         for (const t of spaceThreads) {
           const run = state.runs[t.id];
           const at = activeAt(t, run, state.stoppedAt[t.id]);
-          if (Date.parse(at) > Date.parse(latest)) latest = at;
+          if (Date.parse(at) > Date.parse(latest)) {
+            latest = at;
+            latestThread = titleOf(state.titles, t.id, run?.prompt);
+          }
           attentions.push(attentionOf(t, run, asksOf(state, t.id), waitingOf(state, t.id)));
         }
         const attention = mostUrgent(attentions);
@@ -88,6 +108,8 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
           working: attentions.filter((a) => a === "working").length,
           needsYou: attention === "needsYou",
           files: r.files?.length ?? 0,
+          instructions: !!r.instructions,
+          latest: latestThread,
         };
       });
     return [...projects, ...spaces];
