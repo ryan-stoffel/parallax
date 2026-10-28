@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { expect, test } from "vite-plus/test";
 
 import { isOpenableExternally, isReload, mayNavigate, shownFilePath } from "./links";
@@ -52,8 +54,22 @@ test("an extension's page may go only to its own pages", () => {
 });
 
 test("a linked file shows only as an absolute path, or one from the home folder", () => {
-  expect(shownFilePath("~/Movies/demo.mp4", "/Users/me")).toBe("/Users/me/Movies/demo.mp4");
-  expect(shownFilePath("/tmp/a/../b.txt", "/Users/me")).toBe("/tmp/b.txt");
-  for (const value of ["out/a.txt", "../a.txt", "~", "~other/a.txt", "/a\nb", 7, undefined])
+  // In this platform's separators, as main hands it to the shell.
+  expect(shownFilePath("~/Movies/demo.mp4", "/Users/me")).toBe(
+    path.normalize("/Users/me/Movies/demo.mp4"),
+  );
+  expect(shownFilePath("/tmp/a/../b.txt", "/Users/me")).toBe(path.normalize("/tmp/b.txt"));
+  for (const value of [
+    "out/a.txt",
+    "../a.txt",
+    "~",
+    "~other/a.txt",
+    "/a\nb",
+    "//server/share/a.txt",
+    "\\\\?\\UNC\\server\\share",
+    "/\\server\\share",
+    7,
+    undefined,
+  ])
     expect(shownFilePath(value, "/Users/me"), String(value)).toBeUndefined();
 });
