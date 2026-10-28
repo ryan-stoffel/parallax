@@ -59,6 +59,7 @@ import { PullRequestsPage } from "./PullRequestsPage";
 import { NewChatProject, ProjectsPage } from "./ProjectsPage";
 import { projectEntries } from "./projectList";
 import { pinnedProjects, togglePinnedProject } from "./sidebarPrefs";
+import { RunTargetMenu } from "./RunTargetMenu";
 import { SpaceContext, SpaceHeader, SpaceThreads } from "./SpaceHome";
 import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
@@ -390,6 +391,14 @@ export function App() {
     selection.kind === "new" && group.space
       ? threads.state.repos.find((r) => r.id === group.id)
       : undefined;
+  // The computers a Space's thread can run on: its own, and any other with a Space of its name.
+  const spaceHosts = spaceRepo
+    ? hosts.filter(
+        (h) =>
+          h.id === host.id ||
+          views[h.id]?.state.repos.some((r) => r.space && r.name === spaceRepo.name),
+      )
+    : [];
   const spaceEntry = spaceRepo
     ? projectEntries(listed).find((e) => e.key === `${host.id}/${spaceRepo.id}`)
     : undefined;
@@ -1641,6 +1650,21 @@ export function App() {
                           />
                         )
                       }
+                      tray={
+                        spaceRepo && (
+                          <RunTargetMenu
+                            hosts={spaceHosts}
+                            hostId={host.id}
+                            onHostChange={(id) => {
+                              const there = views[id]?.state.repos.find(
+                                (r) => r.space && r.name === spaceRepo.name,
+                              );
+                              if (id !== host.id && there)
+                                openOnHost(id, { kind: "new", groupId: there.id });
+                            }}
+                          />
+                        )
+                      }
                       aside={
                         spaceRepo &&
                         "spaceContext" in threads.capabilities && (
@@ -1650,6 +1674,7 @@ export function App() {
                       below={
                         spaceRepo && (
                           <SpaceThreads
+                            host={host}
                             space={spaceRepo}
                             view={threads}
                             onOpenThread={(threadId) => setSelection({ kind: "thread", threadId })}

@@ -13,6 +13,8 @@ import { notify } from "./notifications";
 import type { ProjectEntry } from "./projectList";
 import { ProjectMenu, ProjectTile } from "./ProjectsPage";
 import { quietButton } from "./settings/parts";
+import type { Host } from "./hosts";
+import { hostIcon } from "./RunTargetMenu";
 import { age, backendLogo, RepoIcon } from "./Sidebar";
 import { asksOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
@@ -73,10 +75,13 @@ export function SpaceHeader({
 
 /** A Space's threads under the composer, newest first, as the sidebar's thread cards show them. */
 export function SpaceThreads({
+  host,
   space,
   view,
   onOpenThread,
 }: {
+  /** The computer the Space, and so each thread in it, is on. */
+  host: Host;
   space: Repo;
   view: ThreadsView;
   onOpenThread: (threadId: string) => void;
@@ -132,7 +137,16 @@ export function SpaceThreads({
                     <span className="min-w-0 flex-1 truncate text-body font-semibold transition-colors group-hover/row:font-bold">
                       {state.titles[thread.id] ?? "Thread"}
                     </span>
-                    {Logo && <Logo className="size-3.5 shrink-0 opacity-80 grayscale" />}
+                    <span className="flex shrink-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3.5">
+                      {hostIcon(host)}
+                      {host.name}
+                      {Logo && (
+                        <>
+                          <span aria-hidden>·</span>
+                          <Logo className="opacity-80 grayscale" />
+                        </>
+                      )}
+                    </span>
                   </span>
                 </button>
               </li>

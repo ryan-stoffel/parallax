@@ -83,6 +83,8 @@ interface NewThreadProps {
   below?: ReactNode;
   /** Shown over the composer in place of its question, as a Space's header (0090). */
   header?: ReactNode;
+  /** A Space's tray under the composer: the computers it can run on (0090). */
+  tray?: ReactNode;
   /**
    * A column beside `below`, as a Space's instructions and files beside its threads (0090). With
    * it, New thread lays out as a page: the header, the composer at full width, then `below` and
@@ -131,6 +133,7 @@ export function NewThread({
   draftId: reopened,
   below,
   header,
+  tray,
   aside,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
@@ -580,11 +583,13 @@ export function NewThread({
           }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
-          // Chat picks only its computer here, and a Space nothing, since its entry is on this
-          // computer alone. While a start is under way it stays as it was, but inert, so the thread
+          // Chat picks only its computer here, and a Space only among the computers that have it
+          // (`tray`), since its entry is on each computer alone. While a start is under way it stays as it was, but inert, so the thread
           // can't move. `contents` keeps the tab's own layout.
           tab={
-            group.space ? undefined : (
+            group.space ? (
+              tray
+            ) : (
               <div inert={starting !== undefined} className="contents">
                 {repoless(group) ? (
                   <RunTargetMenu
