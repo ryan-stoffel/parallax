@@ -2352,7 +2352,9 @@ function ScopeMenu({
         aria-pressed={scope !== "all"}
         aria-haspopup="menu"
         popoverTarget={menuId}
-        className="relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
+        // It sits in the Search row (0090), shown there on hover or focus, or while a scope is
+        // chosen, when its dot says so.
+        className={`relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-opacity hover:bg-hover hover:text-foreground aria-pressed:text-foreground [&_svg]:size-4 ${scope === "all" && !outside ? "opacity-0 group-focus-within/nav:opacity-100 group-hover/nav:opacity-100" : ""}`}
       >
         <ListFilter />
         {current && (
