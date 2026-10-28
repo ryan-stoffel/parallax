@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
-import icon from "./assets/app-icon.svg";
 import nightlyIcon from "./assets/app-icon-nightly.svg";
+import { ParallaxMark } from "./logos";
 
 // The least time the splash shows from launch, so a fast load doesn't flash it, and the most, so
 // a host that's slow to answer still opens the window. Both count from the page's start.
@@ -10,9 +10,10 @@ const MAX_MS = 3000;
 const FADE_MS = 300;
 
 /**
- * The app icon centered on the window's background while the app launches, as T3 Code does
- * (PLX-1109). It fades out once `ready`, the open host's list loaded or its connection failed,
- * and goes away when faded. A nightly build shows its own icon (main.tsx sets `.nightly`).
+ * The app's mark centered on the window's background while the app launches, as T3 Code does
+ * (PLX-1109): its circles' overlap light in dark mode and dark in light mode. A nightly build
+ * shows its whole app icon instead, sky tile and all (main.tsx sets `.nightly`). It fades out
+ * once `ready`, the open host's list loaded or its connection failed, and goes away when faded.
  */
 export function Splash({ ready }: { ready: boolean }) {
   const [phase, setPhase] = useState<"shown" | "fading" | "gone">("shown");
@@ -36,7 +37,7 @@ export function Splash({ ready }: { ready: boolean }) {
       data-testid="splash"
       className={`fixed inset-0 z-[1000] grid place-items-center bg-[var(--background)] transition-opacity duration-300 ${phase === "fading" ? "pointer-events-none opacity-0" : ""}`}
     >
-      <img src={icon} alt="" className="size-16 rounded-[22%] [:root.nightly_&]:hidden" />
+      <ParallaxMark className="size-16 [:root.nightly_&]:hidden" />
       <img
         src={nightlyIcon}
         alt=""
