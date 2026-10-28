@@ -162,10 +162,11 @@ export function blurSupported(platform: string, version: string): boolean {
 
 /**
  * Whether `material` needs the window created see-through: clear everywhere, and blurred on
- * Linux, where the compositor blurs what a see-through window shows.
+ * Linux, where the compositor blurs what a see-through window shows, and on macOS, where vibrancy
+ * behind a window created opaque leaves old frames showing under the page (PLX-1117).
  */
 export const needsTransparentWindow = (material: WindowMaterial, platform: string) =>
-  material === "clear" || (material === "blur" && platform === "linux");
+  material === "clear" || (material === "blur" && platform !== "win32");
 
 /** A window's background: Settings > Appearance's Window. */
 export type WindowMaterial = "opaque" | "clear" | "blur";
@@ -187,13 +188,18 @@ export interface ParallaxBridge {
    */
   onFullScreen(listener: (full: boolean) => void): () => void;
   /**
-   * This window's background, Settings > Appearance's Window: opaque, clear (see-through where
-   * `transparent`, and from the next launch), or blurred where `canBlur`. Not on the web.
+   * This window's background, Settings > Appearance's Window: opaque, clear, or blurred where
+   * `canBlur`. A material that needs a see-through window (needsTransparentWindow: clear, and
+   * blurred outside Windows) shows only where `transparent`, so from the next launch. Not on the
+   * web.
    */
   setWindowLook?(look: { material: WindowMaterial }): void;
   /** Whether `setWindowLook` can blur: `blurSupported` here. */
   canBlur?: boolean;
-  /** Whether this window was created see-through, so a clear background shows the desktop. */
+  /**
+   * Whether this window was created see-through, so a clear background, or a blurred one outside
+   * Windows, shows the desktop.
+   */
   transparent?: boolean;
   /** Restarts Parallax. Not on the web. */
   relaunch?(): void;

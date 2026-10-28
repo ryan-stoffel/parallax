@@ -14,7 +14,8 @@ const mac = () => window.parallax.platform === "darwin";
  * ends when it unmounts, unless it `keep`s it running in plxd for the next view. What's typed and
  * printed only passes between the two. `onStart` is called once what it runs has started, and
  * `onEnd` gets an error for people if it couldn't start, or nothing once what it ran exits. Its
- * colors follow the app theme, with `background` the CSS token behind it. Import it lazily:
+ * colors follow the app theme, with `background` the CSS token behind it, or none over a
+ * see-through window. Import it lazily:
  * xterm.js is large.
  */
 export function TerminalView({
@@ -49,7 +50,10 @@ export function TerminalView({
       const style = getComputedStyle(element);
       const color = (token: string) => style.getPropertyValue(token).trim();
       return {
-        background: color(background),
+        // Over a see-through window (.translucent, appearance.ts), the glass behind shows through.
+        background: document.documentElement.classList.contains("translucent")
+          ? "#00000000"
+          : color(background),
         foreground: color("--foreground"),
         cursor: color("--foreground"),
       };
@@ -66,6 +70,7 @@ export function TerminalView({
     const term = new Terminal({
       ...font(),
       cursorBlink: true,
+      allowTransparency: true,
       theme: theme(),
     });
     const fit = new FitAddon();

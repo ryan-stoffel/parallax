@@ -40,7 +40,10 @@ export type Appearance = {
    * Windows 11 blur what shows through).
    */
   windowMaterial: WindowMaterial;
-  /** How much of the theme's background covers what shows through, in percent. */
+  /**
+   * How much of the theme's background covers what shows through, in percent. Over macOS's and
+   * Windows' blur it covers 2/5 of this (`tint`).
+   */
   backgroundOpacity: number;
 };
 
@@ -187,14 +190,26 @@ export function shownThemes(appearance: Appearance, added: AddedExtension[]): Re
 }
 
 /**
- * Whether this window shows what's behind it with `material`: blurred where the OS can blur, and
- * clear where the window was created see-through.
+ * Whether this window shows what's behind it with `material`: where the material needs a window
+ * created see-through (needsTransparentWindow), only if this one was, and else blurred where the
+ * OS can blur.
  */
 export function seesThrough(material: WindowMaterial) {
   const bridge = window.parallax;
   if (!bridge || material === "opaque") return false;
   if (needsTransparentWindow(material, bridge.platform)) return bridge.transparent === true;
   return bridge.canBlur === true;
+}
+
+/**
+ * How much of a see-through window's theme background covers what shows through, in percent.
+ * macOS's vibrancy and Windows' acrylic tint what they blur with a material of their own, so the
+ * theme covers 2/5 of `opacity` over them: at the full setting the two together hid the blur
+ * (PLX-1117). Linux's blur is its compositor's, of a clear window, so it takes `opacity` as Clear
+ * does.
+ */
+export function tint(material: WindowMaterial, opacity: number, platform: string): number {
+  return material === "blur" && platform !== "linux" ? opacity * 0.4 : opacity;
 }
 
 // A font name the user typed, kept to what a CSS family name can hold.
@@ -232,7 +247,10 @@ export function applyAppearance(appearance: Appearance, onboarding = false) {
   // index.css mixes the panes' colors with transparent by --tint, over what shows through.
   const through = seesThrough(appearance.windowMaterial);
   root.classList.toggle("translucent", through);
-  root.style.setProperty("--tint", `${through ? appearance.backgroundOpacity : 100}%`);
+  const covered = through
+    ? tint(appearance.windowMaterial, appearance.backgroundOpacity, window.parallax.platform)
+    : 100;
+  root.style.setProperty("--tint", `${covered}%`);
 }
 
 /**

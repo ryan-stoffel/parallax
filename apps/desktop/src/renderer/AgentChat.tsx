@@ -2516,7 +2516,7 @@ const markdownStyle: MarkdownStyle = (() => {
       fontSize: 12,
       // The text's color, so code that's a link's text is the link's.
       color: "inherit",
-      backgroundColor: "var(--code)",
+      backgroundColor: "var(--code-fill, var(--code))",
       borderColor: "var(--border)",
     },
     codeBlock: {
@@ -2524,7 +2524,7 @@ const markdownStyle: MarkdownStyle = (() => {
       fontFamily: "var(--font-mono)",
       fontSize: 12.5,
       lineHeight: 20,
-      backgroundColor: "var(--code)",
+      backgroundColor: "var(--code-fill, var(--code))",
       borderColor: "var(--border)",
       borderWidth: 1,
       borderRadius: 12,

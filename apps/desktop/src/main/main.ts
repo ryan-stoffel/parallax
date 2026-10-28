@@ -139,8 +139,9 @@ const firstRun =
 const devServerUrl = app.isPackaged ? undefined : process.env["PLX_DEV_SERVER_URL"];
 registerAppScheme();
 
-// Whether windows open see-through (Settings > Appearance's Clear background), read at launch. The
-// OS fixes a window's transparency when it's created, so a change applies on the next launch.
+// Whether windows open see-through (Settings > Appearance's Clear background, or Blurred outside
+// Windows: needsTransparentWindow), read at launch. The OS fixes a window's transparency when it's
+// created, so a change applies on the next launch.
 const clearFile = path.join(app.getPath("userData"), "clear-window.json");
 const clearAtLaunch = (() => {
   try {
@@ -797,7 +798,8 @@ ipcMain.on("parallax:theme", (_event, preference: unknown) => {
 });
 // Settings > Appearance's window background for the asking window: opaque; clear, which shows the
 // desktop where the window was created transparent (the next launch's windows are); or blurred,
-// with macOS's vibrancy or Windows 11's acrylic where the OS can. Its panes let either through.
+// with macOS's vibrancy, also of a window created transparent, or Windows 11's acrylic where the
+// OS can. Its panes let either through.
 const seeThrough = new WeakSet<BrowserWindow>();
 ipcMain.on("parallax:windowLook", (event, look: unknown) => {
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -809,12 +811,12 @@ ipcMain.on("parallax:windowLook", (event, look: unknown) => {
   } catch {
     // Unwritable: the next launch opens as this one did.
   }
+  // A see-through window shows what's behind it from the next launch; Windows blurs any window.
+  const through = clear
+    ? clearAtLaunch
+    : material === "blur" && blurSupported(process.platform, process.getSystemVersion());
   // Linux's blur is its compositor's, of a see-through window.
-  const blur =
-    material === "blur" &&
-    process.platform !== "linux" &&
-    blurSupported(process.platform, process.getSystemVersion());
-  const through = blur || (clear && clearAtLaunch);
+  const blur = through && material === "blur" && process.platform !== "linux";
   if (through) seeThrough.add(win);
   else seeThrough.delete(win);
   if (process.platform === "darwin") win.setVibrancy(blur ? "under-window" : null);
