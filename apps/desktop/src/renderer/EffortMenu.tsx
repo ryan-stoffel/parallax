@@ -25,29 +25,48 @@ const needle: Record<AgentEffort, number> = {
 
 /**
  * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
- * The needle springs to each level. Turned up to Max, the gauge flushes orange while the needle
- * rattles against the end of the arc, then it cools and the needle settles there (index.css).
- * Opening a thread already at Max shows it settled.
+ * The needle springs to each level. At Max the gauge is the slider's galaxy: its lines run from
+ * indigo through violet to pink and stars twinkle in the dial (index.css). Turned up to Max, the
+ * needle rattles against the end of the arc before it settles; opening a thread already at Max
+ * shows it settled.
  */
 function EffortGauge({ value }: { value: AgentEffort }) {
+  const id = useId();
   const [from] = useState(value);
   const [moved, setMoved] = useState(false);
   if (!moved && value !== from) setMoved(true);
-  const lit = moved && value === "max";
+  const galaxy = value === "max";
+  const lit = moved && galaxy;
   return (
     <svg
       aria-hidden
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
+      stroke={galaxy ? `url(#${id})` : "currentColor"}
       strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={lit ? "lucide effort-lit" : "lucide"}
+      className={`lucide ${galaxy ? "effort-galaxy" : ""} ${lit ? "effort-lit" : ""}`}
       style={{ "--needle": `${needle[value]}deg` } as CSSProperties}
     >
+      {galaxy && (
+        <defs>
+          <linearGradient id={id} x1="2" y1="0" x2="22" y2="0" gradientUnits="userSpaceOnUse">
+            <stop offset="0" className="effort-galaxy-from" />
+            <stop offset="0.5" className="effort-galaxy-via" />
+            <stop offset="1" className="effort-galaxy-to" />
+          </linearGradient>
+        </defs>
+      )}
       <path d="M3.34 19a10 10 0 1 1 17.32 0" />
       <path d="M12 14V8.34" className={`effort-needle transition-[rotate] ${spring}`} />
+      {galaxy && (
+        <g className="effort-stars" stroke="none">
+          <circle cx="8" cy="10" r="1" />
+          <circle cx="12.5" cy="7.5" r="0.8" />
+          <circle cx="16" cy="10.5" r="0.7" />
+        </g>
+      )}
     </svg>
   );
 }
@@ -63,10 +82,10 @@ const fastNames: Partial<Record<string, { label: string; on: string; off: string
 
 /**
  * The reasoning picker: a button showing a gauge that points at the effort, the effort, and a bolt
- * in fast mode, that opens a slider with a stop for each level. Stripes in the fill speed up with
- * the level, and Max shimmers and glows (index.css). Below it, the context window is a choice when
- * the model offers more than one, and fast mode when the model has it (`fastMode`, by its instance
- * kind's name for it).
+ * in fast mode, that opens a slider with a stop for each level. The fill is the nightly sky, its
+ * stars drifting faster with the level, and at Max it's a glowing galaxy (index.css). Below it, the
+ * context window is a choice when the model offers more than one, and fast mode when the model has
+ * it (`fastMode`, by its instance kind's name for it).
  */
 export function EffortMenu({
   value,
@@ -129,7 +148,7 @@ export function EffortMenu({
             {/* Square on the right, where the thumb covers it. */}
             <div
               aria-hidden
-              className={`effort-fill absolute inset-y-0 left-0 rounded-l-full bg-linear-to-r from-accent to-[color-mix(in_srgb,var(--accent)_65%,white)] transition-[width] ${spring}`}
+              className={`effort-fill absolute inset-y-0 left-0 rounded-l-full transition-[width] ${spring}`}
               style={{ width: at(level) }}
             />
             {levels.map((l, i) => (

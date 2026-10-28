@@ -988,38 +988,75 @@ body {
   outline: none;
 }
 
-/* Stripes drift through the fill, faster the harder it thinks (--effort-speed). */
+/* The fill is the nightly sky (.night-sky): dawn in light mode and night in dark, with cartoon
+   clouds along its bottom and stars drifting through it, faster the harder it thinks
+   (--effort-speed). */
+.effort-fill {
+  --star: rgb(79 70 229 / 75%);
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 44 12'%3E%3Cg fill='%23e6e4fc'%3E%3Ccircle cx='5' cy='11' r='4.5'/%3E%3Ccircle cx='16' cy='8.5' r='5.5'/%3E%3Ccircle cx='28' cy='10' r='5'/%3E%3Ccircle cx='39' cy='9' r='5'/%3E%3C/g%3E%3Cg fill='%23ffffff'%3E%3Ccircle cx='10' cy='14' r='5'/%3E%3Ccircle cx='22' cy='13.5' r='5'/%3E%3Ccircle cx='34' cy='14' r='5'/%3E%3C/g%3E%3C/svg%3E")
+      left bottom / 44px 12px repeat-x,
+    radial-gradient(circle at 85% 0%, rgb(236 72 153 / 35%), transparent 70%),
+    linear-gradient(in oklab, #c3c9fb, #d9d6fb 55%, #ebe7fb);
+}
+:root.dark .effort-fill {
+  --star: #ffffff;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 44 12'%3E%3Cg fill='%2343409a'%3E%3Ccircle cx='5' cy='11' r='4.5'/%3E%3Ccircle cx='16' cy='8.5' r='5.5'/%3E%3Ccircle cx='28' cy='10' r='5'/%3E%3Ccircle cx='39' cy='9' r='5'/%3E%3C/g%3E%3Cg fill='%236e6ac8'%3E%3Ccircle cx='10' cy='14' r='5'/%3E%3Ccircle cx='22' cy='13.5' r='5'/%3E%3Ccircle cx='34' cy='14' r='5'/%3E%3C/g%3E%3C/svg%3E")
+      left bottom / 44px 12px repeat-x,
+    radial-gradient(circle at 85% 0%, rgb(124 58 237 / 45%), transparent 70%),
+    linear-gradient(in oklab, #070923, #17184f 55%, #2a2470);
+}
 .effort-fill::after {
   content: "";
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: repeating-linear-gradient(-45deg, rgb(255 255 255 / 13%) 0 8px, transparent 8px 16px);
-  background-size: 22.627px 100%;
-  animation: effort-stripes var(--effort-speed) linear infinite;
+  background:
+    radial-gradient(1px 1px at 6px 7px, var(--star) 50%, transparent),
+    radial-gradient(0.8px 0.8px at 19px 16px, var(--star) 50%, transparent),
+    radial-gradient(1.2px 1.2px at 31px 5px, var(--star) 50%, transparent),
+    radial-gradient(0.7px 0.7px at 40px 19px, var(--star) 50%, transparent);
+  background-size: 46px 36px;
+  animation: effort-stars var(--effort-speed) linear infinite;
 }
-@keyframes effort-stripes {
+@keyframes effort-stars {
   to {
-    background-position: 22.627px 0;
+    background-position: 46px 0;
   }
 }
 
-/* At Max: the thumb pops once, the fill shimmers, and the track glows. */
-@keyframes effort-shimmer {
+/* At Max (.effort-full) the sky is a galaxy in either mode: violet and pink nebulae drifting in a
+   deep night, a band of stars across it, and more stars, twinkling. The track glows violet and the
+   thumb pops once. The gauge on the button turns the galaxy's colors too (.effort-galaxy). */
+@keyframes effort-nebula {
   from {
-    background-position: 200% 0;
+    background-position:
+      0% 0,
+      100% 0,
+      0 0,
+      0 0;
   }
   to {
-    background-position: -200% 0;
+    background-position:
+      100% 0,
+      0% 0,
+      0 0,
+      0 0;
+  }
+}
+@keyframes effort-twinkle {
+  50% {
+    opacity: 0.5;
   }
 }
 @keyframes effort-glow {
   0%,
   100% {
-    box-shadow: 0 0 6px 0 color-mix(in srgb, var(--accent) 40%, transparent);
+    box-shadow: 0 0 6px 0 rgb(124 58 237 / 40%);
   }
   50% {
-    box-shadow: 0 0 22px 5px color-mix(in srgb, var(--accent) 70%, transparent);
+    box-shadow: 0 0 22px 5px rgb(168 85 247 / 60%);
   }
 }
 @keyframes effort-pop {
@@ -1027,25 +1064,43 @@ body {
     transform: scale(1.2);
   }
 }
-.effort-full .effort-fill {
-  background-image: linear-gradient(
-    90deg,
-    var(--accent),
-    color-mix(in srgb, var(--accent) 45%, white),
-    var(--accent)
-  );
-  background-size: 200% 100%;
-  animation: effort-shimmer 1.8s linear infinite;
+:root .effort-full .effort-fill {
+  background:
+    radial-gradient(ellipse 45% 95% at 30% 60%, rgb(124 58 237 / 65%), transparent),
+    radial-gradient(ellipse 40% 85% at 70% 35%, rgb(236 72 153 / 45%), transparent),
+    linear-gradient(170deg, transparent 32%, rgb(196 181 253 / 25%) 50%, transparent 68%),
+    linear-gradient(in oklab, #05061a, #120f3d 55%, #221a5c);
+  background-size:
+    200% 100%,
+    200% 100%,
+    100% 100%,
+    100% 100%;
+  animation: effort-nebula 6s ease-in-out infinite alternate;
+}
+.effort-full .effort-fill::after {
+  --star: #ffffff;
+  background:
+    radial-gradient(1px 1px at 4px 6px, var(--star) 50%, transparent),
+    radial-gradient(0.7px 0.7px at 12px 20px, var(--star) 50%, transparent),
+    radial-gradient(1.3px 1.3px at 21px 11px, var(--star) 50%, transparent),
+    radial-gradient(0.6px 0.6px at 27px 28px, var(--star) 50%, transparent),
+    radial-gradient(0.9px 0.9px at 33px 4px, var(--star) 50%, transparent),
+    radial-gradient(0.7px 0.7px at 36px 17px, var(--star) 50%, transparent);
+  background-size: 38px 36px;
+  animation:
+    effort-stars 8s linear infinite,
+    effort-twinkle 2.4s ease-in-out infinite;
 }
 .effort-full .effort-track {
-  animation: effort-glow 1.8s ease-in-out infinite;
+  animation: effort-glow 2.4s ease-in-out infinite;
 }
 .effort-full .effort-thumb {
   animation: effort-pop 0.45s ease-out;
 }
 /* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
-   --needle. Turned up to Max (.effort-lit), once the needle has swung over, it rattles against the
-   end of the arc while the gauge flushes orange; then it cools and is still. */
+   --needle. At Max (.effort-galaxy) its lines take the galaxy's colors, lighter in dark mode, and
+   stars twinkle in the dial. Turned up to Max (.effort-lit), once the needle has swung over, it
+   rattles against the end of the arc; then it's still. */
 .effort-needle {
   transform-box: view-box;
   transform-origin: 12px 14px;
@@ -1060,25 +1115,50 @@ body {
     rotate: calc(var(--needle) - 5deg);
   }
 }
-@keyframes effort-heat {
-  15%,
-  65% {
-    color: #f97316;
-  }
-}
-.effort-lit {
-  animation: effort-heat 1.2s ease-out;
-}
 .effort-lit .effort-needle {
   animation: effort-rattle 0.1s linear 0.3s 3;
+}
+.effort-galaxy {
+  --galaxy-from: #4f46e5;
+  --galaxy-via: #7c3aed;
+  --galaxy-to: #db2777;
+  --galaxy-star: #7c3aed;
+}
+:root.dark .effort-galaxy {
+  --galaxy-from: #a5b4fc;
+  --galaxy-via: #c084fc;
+  --galaxy-to: #f472b6;
+  --galaxy-star: #ffffff;
+}
+.effort-galaxy-from {
+  stop-color: var(--galaxy-from);
+}
+.effort-galaxy-via {
+  stop-color: var(--galaxy-via);
+}
+.effort-galaxy-to {
+  stop-color: var(--galaxy-to);
+}
+.effort-stars {
+  fill: var(--galaxy-star);
+}
+.effort-stars circle {
+  animation: effort-twinkle 2.4s ease-in-out infinite;
+}
+.effort-stars circle:nth-child(2) {
+  animation-delay: 0.8s;
+}
+.effort-stars circle:nth-child(3) {
+  animation-delay: 1.6s;
 }
 :root.reduce-motion {
   .effort-fill::after,
   .effort-full .effort-fill,
   .effort-full .effort-track,
   .effort-full .effort-thumb,
-  .effort-lit,
-  .effort-lit .effort-needle {
+  .effort-full .effort-fill::after,
+  .effort-lit .effort-needle,
+  .effort-stars circle {
     animation: none;
   }
   .effort-needle {
