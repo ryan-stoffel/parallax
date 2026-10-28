@@ -73,9 +73,9 @@ test("the files plxd embeds run a query through the real SDK and Rust supervisor
     // The SDK is installed separately on first use.
     symlinkSync(path.join(here, "../node_modules"), path.join(staged, "node_modules"), "dir");
     const { dir, lines, open, prompt, until, send, exit } = scratchSidecar(t, path.join(staged, "src/main.mjs"));
-    const flags = ["--permission-mode", "default", "--permission-prompt-tool", "stdio", "--restricted",
-      "--settings", '{"env":{}}', "--add-dir", "/tmp/a"];
-    open("packaged", flags, {
+    const flags = [["--permission-mode", "default"], ["--permission-prompt-tool", "stdio"], ["--restricted"],
+      ["--settings", '{"env":{}}'], ["--add-dir", "/tmp/a"]];
+    open("packaged", flags.flat(), {
       env: { PATH: "/usr/bin:/bin", HOME: dir, FAKE_CLAUDE_DIR: dir,
         FAKE_CLAUDE_FIXTURE: path.join(fixtures, "approval.jsonl") },
     });
@@ -89,9 +89,15 @@ test("the files plxd embeds run a query through the real SDK and Rust supervisor
     send({ id: "packaged", type: "end" });
     assert.deepEqual(await exit("packaged"), { code: 0, signal: null, stderr: "" });
     assert.equal(lines.filter((line) => line.startsWith("packaged exit ")).length, 1);
-    // Every flag plxd gave reached the CLI, beside the SDK's own.
+    // Every flag plxd gave reached the CLI with its value, beside the SDK's own. The SDK may write
+    // a value as `--flag value` or `--flag=value`.
     const argv = readFileSync(path.join(dir, "argv"), "utf8").trim().split("\n");
-    for (const flag of flags) assert.ok(argv.includes(flag), `${flag}: ${argv}`);
+    for (const [flag, value] of flags) {
+      const passed = value === undefined
+        ? argv.includes(flag)
+        : argv.includes(`${flag}=${value}`) || argv.some((arg, i) => arg === flag && argv[i + 1] === value);
+      assert.ok(passed, `${flag}: ${argv}`);
+    }
     // The SDK initialized the CLI, then sent plxd's prompt and its answer as plxd wrote them.
     const stdin = readFileSync(path.join(dir, "stdin"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     assert.equal(stdin[0].request.subtype, "initialize");
