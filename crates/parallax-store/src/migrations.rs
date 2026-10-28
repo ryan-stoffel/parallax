@@ -861,6 +861,12 @@ const MIGRATIONS: &[Migration] = &[
         sql: "ALTER TABLE repos ADD COLUMN instructions TEXT;
         ALTER TABLE repos ADD COLUMN files TEXT;",
     },
+    // The Space the user added a thread to (0090, PLX-1108), apart from the repo entry it works
+    // in, which a Space it started in is.
+    Migration {
+        version: 55,
+        sql: "ALTER TABLE threads ADD COLUMN space_id TEXT;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a

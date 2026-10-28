@@ -475,6 +475,11 @@ export const repoless = (g: { id: string; space?: boolean }) => g.id === noRepo 
 /** A repo entry that is a repository of the user's: not Chat's scratch entry, nor a Space. */
 export const isRepository = (r: { scratch?: boolean; space?: boolean }) => !r.scratch && !r.space;
 
+/** The Space a thread is in: the one it started in, or the one the user added it to (0090). */
+export const spaceOf = (state: ThreadsState, thread: Thread) =>
+  thread.space ??
+  (state.repos.some((r) => r.id === thread.repo && r.space) ? thread.repo : undefined);
+
 /** A thread's group id: its repository's, or `noRepo`. */
 export const groupOf = (state: ThreadsState, thread: Thread) =>
   state.repos.some((r) => r.id === thread.repo && !r.scratch) ? thread.repo : noRepo;
@@ -655,6 +660,11 @@ export interface ThreadsView {
   createSpace: (name: string, icon?: ProjectIconValue) => Promise<Repo | string>;
   /** Deletes a Space and every chat in it. Resolves to an error message, or undefined. */
   removeSpace: (space: string) => Promise<string | undefined>;
+  /**
+   * Adds threads to a Space, or with no `space` takes them out of theirs, where each keeps working
+   * (0090). Resolves to an error message, or undefined.
+   */
+  setSpace: (threads: string[], space?: string) => Promise<string | undefined>;
 }
 
 export type RepoChange = Omit<RepoUpdateParams, "repo">;
@@ -964,6 +974,17 @@ export function useThreads(
         dispatch({ type: "event", event: { kind: "repo.removed", repo: space } });
         return undefined;
       },
+
+      async setSpace(threads: string[], space?: string) {
+        const answer = await window.parallax.request(hostId, "thread/setSpace", {
+          threads,
+          ...(space && { space }),
+        });
+        if ("error" in answer) return describeError(answer.error);
+        for (const thread of answer.result.threads)
+          dispatch({ type: "event", event: { kind: "thread.updated", thread } });
+        return undefined;
+      },
     }),
     [hostId, approvals, naming],
   );
@@ -1004,4 +1025,5 @@ export const idleThreads: ThreadsView = {
   updateRepo: async () => notConnected,
   createSpace: async () => notConnected,
   removeSpace: async () => notConnected,
+  setSpace: async () => notConnected,
 };

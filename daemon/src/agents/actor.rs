@@ -3484,12 +3484,15 @@ impl Actor {
         // the shared context folder isn't an allowed directory for it, and stays as unreadable as
         // the rest of plxd's data folder in the sandbox (0044, PLX-468).
         sandbox.writable.clear();
-        // A thread in a Space gets its instructions and files, read as they are now (0090).
-        let scope = Uuid::from(self.project);
+        // A thread in a Space, started there or added to it, gets its instructions and files,
+        // read as they are now (0090).
+        let (scope, run) = (Uuid::from(self.project), Uuid::from(self.id));
         let instructions = store(&self.daemon, move |db| {
+            let error = |error| store_error(&error);
+            let added = db.get_thread(run).map_err(error)?.and_then(|t| t.space_id);
             Ok(db
-                .get_repo(scope)
-                .map_err(|error| store_error(&error))?
+                .get_repo(added.unwrap_or(scope))
+                .map_err(error)?
                 .and_then(|repo| crate::spaces::thread_instructions(&repo)))
         })
         .await

@@ -693,16 +693,26 @@ export function ThreadList({
   // What a row shows, and where: its own status, or its family's news.
   const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
   // Where a thread is, for its card: its repo, or No repo.
-  const placeOf = (item: Item) => ({
-    name: item.repo && !item.repo.scratch ? item.repo.name : "No repo",
-    icon: <RepoIcon repo={item.repo} />,
-  });
+  // The Space a thread was added to (0090), which it shows and filters as, over where it works.
+  const addedTo = (item: Item) => (item.kind === "thread" ? item.thread.space : undefined);
+  const placeOf = (item: Item) => {
+    const space = addedTo(item);
+    const repo = (space && item.view.state.repos.find((r) => r.id === space)) || item.repo;
+    return {
+      name: repo && !repo.scratch ? repo.name : "No repo",
+      icon: <RepoIcon repo={repo} />,
+    };
+  };
 
   const inScope = (item: Item, s: Scope) => {
     const p = parseScope(s);
     if (p.kind === "all") return true;
-    if (p.kind === "none") return !item.repo || item.repo.scratch;
-    return p.kind === "repo" && item.host.id === p.hostId && item.repo?.id === p.id;
+    if (p.kind === "none") return (!item.repo || item.repo.scratch) && !addedTo(item);
+    return (
+      p.kind === "repo" &&
+      item.host.id === p.hostId &&
+      (item.repo?.id === p.id || addedTo(item) === p.id)
+    );
   };
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
   // A snoozed thread wakes early when it, or one it started, needs the user.

@@ -129,6 +129,12 @@ pub struct Thread {
     /// Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
+    /// The Space the user added it to with `thread/setSpace` (0090), where it works elsewhere.
+    /// Absent for a thread in no Space, and for one started in a Space, whose `repo` is the
+    /// Space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub space: Option<RepoId>,
 }
 
 /// Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
@@ -255,6 +261,30 @@ pub struct SpaceCreateResult {
 pub struct SpaceDeleteParams {
     /// The Space's id.
     pub space: RepoId,
+}
+
+/// Params of `thread/setSpace` (0090), behind the `spaceThreads` capability: adds threads to a
+/// Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+/// and transcript, and its next CLI process gets the Space's instructions and files. Appends
+/// `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
+/// thread started in a Space or a Project, and with `repoNotFound` for a `space` that isn't one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetSpaceParams {
+    /// The threads, by run id.
+    pub threads: Vec<RunId>,
+    /// The Space to add them to. Absent takes them out of their Space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub space: Option<RepoId>,
+}
+
+/// Result of `thread/setSpace`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetSpaceResult {
+    /// The threads as they stand, in the order asked.
+    pub threads: Vec<Thread>,
 }
 
 /// Result of `space/delete`.

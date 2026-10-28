@@ -49,12 +49,36 @@
   {
     "jsonrpc": "2.0",
     "id": 3,
+    "method": "thread/setSpace",
+    "params": {
+      "threads": ["01a0f755-f300-7000-8000-000000000001"],
+      "space": "01a0f755-f200-74dd-8cfc-06d0b225c5f0"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "threads": [
+        {
+          "id": "01a0f755-f300-7000-8000-000000000001",
+          "repo": "01a0f755-f100-7000-8000-000000000001",
+          "createdAt": "2026-10-12T11:00:00Z",
+          "lastPromptAt": "2026-10-12T11:30:00Z",
+          "space": "01a0f755-f200-74dd-8cfc-06d0b225c5f0"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
     "method": "space/delete",
     "params": { "space": "01a0f755-f200-74dd-8cfc-06d0b225c5f0" }
   },
   {
     "jsonrpc": "2.0",
-    "id": 3,
+    "id": 4,
     "result": {}
   },
   {

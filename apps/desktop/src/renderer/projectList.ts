@@ -4,7 +4,14 @@
 import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
 import { activeAt, attentionOf, mostUrgent, projectAttention, type Attention } from "./attention";
 import type { Host } from "./hosts";
-import { asksOf, projectRuns, threadProjects, waitingOf, type ThreadsView } from "./threads";
+import {
+  asksOf,
+  projectRuns,
+  spaceOf,
+  threadProjects,
+  waitingOf,
+  type ThreadsView,
+} from "./threads";
 import { isRunning } from "./transcript";
 
 export interface ProjectEntry {
@@ -79,7 +86,7 @@ export function projectEntries(hosts: { host: Host; view: ThreadsView }[]): Proj
     const spaces = state.repos
       .filter((r) => r.space)
       .map((r): ProjectEntry => {
-        const spaceThreads = state.threads.filter((t) => t.repo === r.id && !t.parent);
+        const spaceThreads = state.threads.filter((t) => spaceOf(state, t) === r.id && !t.parent);
         let latest = r.createdAt;
         let latestThread: string | undefined;
         const attentions: Attention[] = [];

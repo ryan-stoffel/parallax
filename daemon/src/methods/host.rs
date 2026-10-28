@@ -392,6 +392,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "sendOptions",
     "setupScripts",
     "spaceContext",
+    "spaceThreads",
     "spaces",
     "terminals",
     "threadAttention",

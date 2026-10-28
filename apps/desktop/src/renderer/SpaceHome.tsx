@@ -1,7 +1,18 @@
 // A Space's page, New thread laid out as a page (0090): its header, the composer, then its threads
 // beside the instructions and files plxd gives every thread in it.
-import { ArrowLeft, MessagesSquare, Pencil, Pin, PinOff, Plus, Upload } from "lucide-react";
-import { useId, useRef, useState, type DragEvent } from "react";
+import {
+  ArrowLeft,
+  Check,
+  MessagesSquare,
+  Pencil,
+  Pin,
+  PinOff,
+  Plus,
+  Search,
+  Upload,
+  X,
+} from "lucide-react";
+import { useId, useRef, useState, type DragEvent, type Ref } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
 import { activeAt, attentionOf } from "./attention";
@@ -16,7 +27,7 @@ import { quietButton } from "./settings/parts";
 import type { Host } from "./hosts";
 import { hostIcon } from "./RunTargetMenu";
 import { age, backendLogo, RepoIcon } from "./Sidebar";
-import { asksOf, waitingOf, type ThreadsView } from "./threads";
+import { asksOf, spaceOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
 import { uploadBytes, uploadFiles } from "./uploads";
 
@@ -90,7 +101,11 @@ export function SpaceHeader({
   );
 }
 
-/** A Space's threads under the composer, newest first, as the sidebar's thread cards show them. */
+/**
+ * A Space's threads under the composer, newest first, as the sidebar's thread cards show them:
+ * those started in it, and those the user added, which Remove from Space takes back out. Add opens
+ * a picker of this computer's other threads.
+ */
 export function SpaceThreads({
   host,
   space,
@@ -104,8 +119,14 @@ export function SpaceThreads({
   onOpenThread: (threadId: string) => void;
 }) {
   const { state } = view;
+  const picker = useRef<HTMLDialogElement>(null);
+  const canAdd = "spaceThreads" in view.capabilities;
+  const remove = async (thread: string) => {
+    const failed = await view.setSpace([thread]);
+    if (failed) notify({ tone: "error", title: "Couldn't remove the thread", body: failed });
+  };
   const threads = state.threads
-    .filter((t) => t.repo === space.id && !t.parent && !t.archived)
+    .filter((t) => spaceOf(state, t) === space.id && !t.parent && !t.archived)
     .map((t) => {
       const run = state.runs[t.id];
       return {
@@ -118,7 +139,19 @@ export function SpaceThreads({
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   return (
     <section aria-label="Threads">
-      <h2 className="mb-2 text-reading font-medium">Threads</h2>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="text-reading font-medium">Threads</h2>
+        {canAdd && (
+          <button
+            type="button"
+            aria-label="Add threads"
+            onClick={() => picker.current?.showModal()}
+            className={quietButton}
+          >
+            Add
+          </button>
+        )}
+      </div>
       {threads.length === 0 ? (
         <div className="flex flex-col items-center px-6 py-12 text-center">
           <span className="grid size-10 place-items-center rounded-xl bg-hover text-muted-foreground">
@@ -126,8 +159,8 @@ export function SpaceThreads({
           </span>
           <p className="mt-3 text-body font-medium">No threads yet</p>
           <p className="mt-1 max-w-xs text-body text-muted-foreground">
-            Ask anything above. Each thread here follows this Space's instructions and can read its
-            files.
+            Ask anything above, or add threads you've started. Each thread here follows this Space's
+            instructions and can read its files.
           </p>
         </div>
       ) : (
@@ -135,7 +168,7 @@ export function SpaceThreads({
           {threads.map(({ thread, run, at, attention }) => {
             const Logo = run?.backend ? backendLogo(run.backend) : undefined;
             return (
-              <li key={thread.id} className="group/row rounded-lg hover:bg-hover">
+              <li key={thread.id} className="group/row relative rounded-lg hover:bg-hover">
                 <button
                   type="button"
                   onClick={() => onOpenThread(thread.id)}
@@ -146,7 +179,9 @@ export function SpaceThreads({
                       <RepoIcon repo={space} />
                       <span className="truncate">{space.name}</span>
                     </span>
-                    <span className="shrink-0">
+                    <span
+                      className={`shrink-0 ${thread.space ? "group-focus-within/row:invisible group-hover/row:invisible" : ""}`}
+                    >
                       {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
                     </span>
                   </span>
@@ -166,12 +201,181 @@ export function SpaceThreads({
                     </span>
                   </span>
                 </button>
+                {thread.space && (
+                  <button
+                    type="button"
+                    aria-label="Remove from Space"
+                    title="Remove from Space"
+                    onClick={() => void remove(thread.id)}
+                    className="absolute top-1.5 right-1.5 grid size-5 place-items-center rounded-md text-faint-foreground opacity-0 group-focus-within/row:opacity-100 group-hover/row:opacity-100 hover:bg-hover hover:text-foreground [&_svg]:size-3.5"
+                  >
+                    <X aria-hidden />
+                  </button>
+                )}
               </li>
             );
           })}
         </ul>
       )}
+      {canAdd && <AddThreads ref={picker} space={space} view={view} />}
     </section>
+  );
+}
+
+/**
+ * Add threads: this computer's threads outside the Space, newest first, to search and check, then
+ * add. A thread started in a Space lives there, and a Project's in its Project, so neither shows.
+ */
+function AddThreads({
+  ref,
+  space,
+  view,
+}: {
+  ref: Ref<HTMLDialogElement>;
+  space: Repo;
+  view: ThreadsView;
+}) {
+  const { state } = view;
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const [error, setError] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const titleId = useId();
+  const homes = new Map(state.repos.map((r) => [r.id, r]));
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const threads = state.threads
+    .filter((t) => {
+      const home = homes.get(t.repo);
+      return home && !home.space && !t.parent && !t.archived && t.space !== space.id;
+    })
+    .map((t) => {
+      const run = state.runs[t.id];
+      const home = homes.get(t.repo)!;
+      return {
+        thread: t,
+        title: state.titles[t.id] ?? "Thread",
+        // Where it is now: the Space it was added to, else where it works.
+        place: (t.space && homes.get(t.space)) || home,
+        at: activeAt(t, run, state.stoppedAt[t.id]),
+      };
+    })
+    .filter(({ title, place }) => {
+      const text = `${title} ${place.scratch ? "No repo" : place.name}`.toLowerCase();
+      return words.every((w) => text.includes(w));
+    })
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const toggle = (id: string) => {
+    const next = new Set(picked);
+    if (!next.delete(id)) next.add(id);
+    setPicked(next);
+  };
+  const reset = () => {
+    setQuery("");
+    setPicked(new Set());
+    setError(undefined);
+  };
+  return (
+    <dialog
+      ref={ref}
+      aria-labelledby={titleId}
+      onClose={reset}
+      className="m-auto w-[min(36rem,90vw)] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+    >
+      <form
+        method="dialog"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const dialog = e.currentTarget.closest("dialog");
+          setAdding(true);
+          const failed = await view.setSpace([...picked], space.id);
+          setAdding(false);
+          if (failed) return setError(failed);
+          dialog?.close();
+        }}
+        className="flex flex-col p-5"
+      >
+        <h2 id={titleId} className="text-reading font-semibold">
+          Add threads to {space.name}
+        </h2>
+        <p className="mt-1 text-body text-muted-foreground">
+          They keep working where they are, and follow this Space's instructions from their next
+          message.
+        </p>
+        <label className="mt-4 flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 focus-within:outline-2 focus-within:outline-ring">
+          <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+          <input
+            type="search"
+            aria-label="Search threads"
+            placeholder="Search threads"
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
+          />
+        </label>
+        <ul
+          aria-label="Threads to add"
+          className="-mx-2 mt-3 flex h-80 flex-col gap-0.5 overflow-y-auto"
+        >
+          {threads.length === 0 && (
+            <li className="m-auto text-body text-faint-foreground">
+              {words.length ? "Nothing matches" : "No other threads on this computer"}
+            </li>
+          )}
+          {threads.map(({ thread, title, place, at }) => (
+            <li key={thread.id}>
+              <label
+                className={`flex cursor-pointer items-center gap-3 rounded-lg px-2.5 py-2 hover:bg-hover ${picked.has(thread.id) ? "bg-accent/8" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  aria-label={`Add ${title}`}
+                  checked={picked.has(thread.id)}
+                  onChange={() => toggle(thread.id)}
+                  className="peer sr-only"
+                />
+                <span
+                  aria-hidden
+                  className="grid size-4 shrink-0 place-items-center rounded-sm border border-faint-foreground/50 bg-background text-accent-foreground peer-checked:border-accent peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-ring [&_svg]:invisible peer-checked:[&_svg]:visible"
+                >
+                  <Check className="size-3" strokeWidth={3} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-body font-medium">{title}</span>
+                  <span className="flex items-center gap-1.5 text-meta text-faint-foreground">
+                    <RepoIcon repo={place} />
+                    <span className="truncate">{place.scratch ? "No repo" : place.name}</span>
+                    <span aria-hidden>·</span>
+                    <span className="shrink-0">{age(at)}</span>
+                  </span>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+        {error && (
+          <p role="alert" className="mt-2 text-meta text-danger">
+            {error}
+          </p>
+        )}
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={(e) => e.currentTarget.closest("dialog")?.close()}
+            className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={adding || picked.size === 0}
+            className="rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
+          >
+            {adding ? "Adding…" : picked.size > 1 ? `Add ${picked.size} threads` : "Add"}
+          </button>
+        </div>
+      </form>
+    </dialog>
   );
 }
 

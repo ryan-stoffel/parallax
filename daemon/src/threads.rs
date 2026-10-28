@@ -129,6 +129,10 @@ pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, Error
         title: row.fields.title.clone(),
         settled: row.settled,
         pinned: row.pinned,
+        space: row
+            .space_id
+            .map(|id| RepoId::try_from(id).map_err(|_| corrupt("thread", row.id)))
+            .transpose()?,
     })
 }
 
@@ -144,7 +148,7 @@ pub(crate) fn check_title(title: &str) -> Result<Option<String>, ErrorObject> {
     Ok((!title.is_empty()).then(|| title.to_owned()))
 }
 
-fn thread_not_found(id: RunId) -> ErrorObject {
+pub(crate) fn thread_not_found(id: RunId) -> ErrorObject {
     ErrorObject::parallax(
         ErrorKind::ThreadNotFound,
         format!("no thread has run id {id}"),

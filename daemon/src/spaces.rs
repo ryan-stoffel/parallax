@@ -5,6 +5,8 @@
 //! `repo`, so it runs in a worktree of the Space's repository and shares the Space's context
 //! folder. `repo/update` renames a Space and sets its instructions and files
 //! ([`crate::threads::update_repo`]), which every thread in it gets in its system prompt (0090).
+//! `thread/setSpace` adds a thread started elsewhere to a Space, where it keeps working where it
+//! was, and gets the Space's instructions and files too.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -13,6 +15,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ErrorKind, MAX_SPACE_FILES, MAX_SPACE_INSTRUCTIONS_BYTES, MAX_SPACE_NAME_BYTES, ParallaxEvent,
     ProjectId, RepoId, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
+    ThreadSetSpaceParams, ThreadSetSpaceResult,
 };
 use parallax_store::RepoFields;
 use tracing::{info, warn};
@@ -188,8 +191,69 @@ pub(crate) async fn create(
     .await
 }
 
-/// `space/delete`: deletes each chat in the Space through `thread/delete`, then the entry and its
-/// folders. Run it detached, as `thread/delete` is, so a dropped connection can't leave it half
+/// `thread/setSpace`: adds each thread to the Space, or takes it out of its Space, appending
+/// `thread.updated` for each that changed. A thread started in a Space lives in its repository, and
+/// a Project's thread in its Project, so neither moves.
+pub(crate) async fn set_space(
+    daemon: &Arc<Daemon>,
+    params: ThreadSetSpaceParams,
+) -> Result<ThreadSetSpaceResult, ErrorObject> {
+    let ThreadSetSpaceParams { threads, space } = params;
+    if threads.is_empty() {
+        return Err(ErrorObject::invalid_params(
+            "thread/setSpace needs a thread",
+        ));
+    }
+    store(daemon, move |db| {
+        let error = |e| store_error(&e);
+        if let Some(space) = space {
+            db.get_repo(space.into())
+                .map_err(error)?
+                .filter(|repo| repo.fields.space)
+                .ok_or_else(|| not_found(space))?;
+        }
+        let mut changed = Vec::with_capacity(threads.len());
+        for run in &threads {
+            let thread = db
+                .get_thread((*run).into())
+                .map_err(error)?
+                .ok_or_else(|| threads::thread_not_found(*run))?;
+            let home = db.get_repo(thread.repo_id).map_err(error)?;
+            match home {
+                Some(home) if home.fields.space => {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "thread {run} started in a Space, so it stays there"
+                    )));
+                }
+                None => {
+                    return Err(ErrorObject::invalid_params(format!(
+                        "thread {run} is a Project's, so it can't join a Space"
+                    )));
+                }
+                Some(_) => {}
+            }
+            let (thread, moved) = db
+                .set_thread_space(thread.id, space.map(Uuid::from))
+                .map_err(error)?;
+            let thread = threads::thread_entry(&thread)?;
+            if moved {
+                db.stage(
+                    jiff::Timestamp::now(),
+                    None,
+                    ParallaxEvent::ThreadUpdated {
+                        thread: thread.clone(),
+                    },
+                );
+            }
+            changed.push(thread);
+        }
+        Ok(ThreadSetSpaceResult { threads: changed })
+    })
+    .await
+}
+
+/// `space/delete`: deletes each chat in the Space through `thread/delete`, takes the threads added
+/// to it out, then deletes the entry and its folders. Run it detached, as `thread/delete` is, so a dropped connection can't leave it half
 /// done: deleting again finishes the job.
 pub(crate) async fn delete(
     daemon: &Arc<Daemon>,
@@ -217,6 +281,24 @@ pub(crate) async fn delete(
         threads::delete(daemon, run, None).await?;
     }
     store(daemon, move |db| {
+        // A thread added to it goes back to working where it was, in no Space.
+        let added = db
+            .list_threads()
+            .map_err(|e| store_error(&e))?
+            .into_iter()
+            .filter(|thread| thread.space_id == Some(Uuid::from(id)));
+        for thread in added {
+            let (thread, _) = db
+                .set_thread_space(thread.id, None)
+                .map_err(|e| store_error(&e))?;
+            db.stage(
+                jiff::Timestamp::now(),
+                None,
+                ParallaxEvent::ThreadUpdated {
+                    thread: threads::thread_entry(&thread)?,
+                },
+            );
+        }
         db.delete_repo(id.into()).map_err(|e| store_error(&e))?;
         db.stage(
             jiff::Timestamp::now(),

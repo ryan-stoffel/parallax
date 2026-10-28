@@ -260,8 +260,8 @@ pub use thread::{
     RepoUpdateResult, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
     Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
     ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming, ThreadSearchParams,
-    ThreadSearchResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult,
+    ThreadSearchResult, ThreadSetSpaceParams, ThreadSetSpaceResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
     AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,

@@ -968,6 +968,79 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
   });
 });
 
+test("Add puts this computer's other threads in a Space, and Remove from Space takes one back out", async () => {
+  capabilities = { spaces: {}, spaceThreads: {} };
+  const space: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    space: true,
+    createdAt: "2026-09-29T10:00:00Z",
+  };
+  const scratch: Repo = {
+    id: "r-scratch",
+    name: "scratch",
+    path: "/data/scratch",
+    scratch: true,
+    createdAt: "2026-09-29T09:00:00Z",
+  };
+  const fix = { ...flaky, title: "Fix the flaky test" };
+  const draft: Thread = {
+    id: "t-draft",
+    repo: scratch.id,
+    createdAt: "2026-09-29T11:30:00Z",
+    title: "Draft the intro",
+  };
+  const outline: Thread = {
+    id: "t-outline",
+    repo: space.id,
+    createdAt: "2026-09-29T10:30:00Z",
+    title: "Outline",
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, scratch, space], threads: [fix, draft, outline], seq: 7 },
+  });
+  answers["thread/setSpace"] = (p) => ({
+    result: {
+      threads: (p["threads"] as string[]).map((id) => ({
+        ...[fix, draft].find((t) => t.id === id)!,
+        ...(p["space"] ? { space: p["space"] as string } : {}),
+      })),
+    },
+  });
+  await renderApp();
+  await click(rowButton("Essays"));
+  const threads = () =>
+    [...document.querySelectorAll('main section[aria-label="Threads"] > ul > li')].map(
+      (li) => li.querySelector("button span.font-semibold")?.textContent,
+    );
+  expect(threads()).toEqual(["Outline"]);
+
+  // The picker lists the threads outside the Space, newest first, but not one started in it.
+  await click(document.querySelector('main button[aria-label="Add threads"]'));
+  const picker = document.querySelector('ul[aria-label="Threads to add"]')!.closest("dialog")!;
+  expect(picker.open).toBe(true);
+  const boxes = () => [...picker.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+  expect(boxes().map((b) => b.getAttribute("aria-label"))).toEqual([
+    "Add Draft the intro",
+    "Add Fix the flaky test",
+  ]);
+  await click(boxes()[0]);
+  expect(picker.querySelector('button[type="submit"]')!.textContent).toBe("Add");
+  await act(async () => picker.querySelector("form")!.requestSubmit());
+  await settle();
+  expect(calls("thread/setSpace")).toEqual([{ threads: ["t-draft"], space: "s-essays" }]);
+  expect(picker.open).toBe(false);
+  expect(threads()).toEqual(["Draft the intro", "Outline"]);
+
+  // Only the added thread can leave, back to where it works.
+  const rows = document.querySelectorAll('main section[aria-label="Threads"] > ul > li');
+  expect(rows[1]!.querySelector('[aria-label="Remove from Space"]')).toBeNull();
+  await click(rows[0]!.querySelector('[aria-label="Remove from Space"]'));
+  expect(calls("thread/setSpace").at(-1)).toEqual({ threads: ["t-draft"] });
+  expect(threads()).toEqual(["Outline"]);
+});
+
 test("the add palette offers New Space after New Project where the host makes Spaces, and it opens Create Space", async () => {
   await renderApp();
   await openPalette();

@@ -106,6 +106,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "sendOptions",
     "setupScripts",
     "spaceContext",
+    "spaceThreads",
     "spaces",
     "threadAttention",
     "threadFork",
@@ -861,6 +862,17 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "thread/update": (p) => {
     const { runId, seen, ...rest } = p;
     return threadResult(runId, { ...rest, ...(seen && { seenAt: now() }) });
+  },
+  "thread/setSpace": (p) => {
+    const threads = p.threads.map((runId) => {
+      const thread = db.threads.find((t) => t.id === runId);
+      if (!thread) return undefined;
+      if (p.space) thread.space = p.space;
+      else delete thread.space;
+      emit({ kind: "thread.updated", thread });
+      return thread;
+    });
+    return { threads: threads.filter((t) => t !== undefined) };
   },
   "thread/delete": (p) => {
     const thread = db.threads.find((t) => t.id === p.runId);

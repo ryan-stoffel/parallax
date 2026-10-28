@@ -60,6 +60,8 @@ pub struct Thread {
     pub unarchived_at: Option<Timestamp>,
     /// Whether the user pinned it to the top of the sidebar (PLX-789).
     pub pinned: bool,
+    /// The Space the user added it to (0090), apart from `repo_id`.
+    pub space_id: Option<Uuid>,
 }
 
 /// The run and turn a thread was forked from (decision record 0041).
@@ -99,7 +101,8 @@ const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snooze
     AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
     forked_from_turn, title, settled, unarchived_at, pinned, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id AND from_user \
-        AND substr(text, 1, 22) != 'Parallax, not the user'), created_at) AS last_user_prompt_at";
+        AND substr(text, 1, 22) != 'Parallax, not the user'), created_at) AS last_user_prompt_at, \
+    space_id";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (
@@ -164,6 +167,7 @@ struct RawThread {
     unarchived_at: Option<String>,
     pinned: bool,
     last_user_prompt_at: String,
+    space_id: Option<String>,
 }
 
 fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
@@ -183,6 +187,7 @@ fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
         unarchived_at: row.get(12)?,
         pinned: row.get(13)?,
         last_user_prompt_at: row.get(14)?,
+        space_id: row.get(15)?,
     })
 }
 
@@ -217,6 +222,7 @@ fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
             .map(timestamp::parse)
             .transpose()?,
         pinned: raw.pinned,
+        space_id: uuid(raw.space_id)?,
     })
 }
 
@@ -622,6 +628,25 @@ impl Store {
                 params![key, pinned],
             )?;
         }
+        let thread = fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })?;
+        Ok((thread, changed > 0))
+    }
+
+    /// Adds thread `id` to Space `space`, or with `None` takes it out of its Space (0090). Returns
+    /// the thread and whether it changed.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no thread has `id`, or a database error.
+    pub fn set_thread_space(
+        &self,
+        id: Uuid,
+        space: Option<Uuid>,
+    ) -> Result<(Thread, bool), StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE threads SET space_id = ?2 WHERE id = ?1 AND space_id IS NOT ?2",
+            params![id.to_string(), space.map(|space| space.to_string())],
+        )?;
         let thread = fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })?;
         Ok((thread, changed > 0))
     }

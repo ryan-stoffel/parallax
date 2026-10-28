@@ -494,6 +494,11 @@ export type ParallaxRequests = {
 	 */
 	"space/delete": { params: SpaceDeleteParams, result: SpaceDeleteResult },
 	/**
+	 * `thread/setSpace`: adds threads to a Space, or takes them out of one, leaving where
+	 * each works as it is (0090). Gated on the `spaceThreads` capability.
+	 */
+	"thread/setSpace": { params: ThreadSetSpaceParams, result: ThreadSetSpaceResult },
+	/**
 	 * `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
 	 * stopping its CLI first if it runs.
 	 */
@@ -1094,6 +1099,7 @@ export const REQUEST_METHODS = [
 	"repo/update",
 	"space/create",
 	"space/delete",
+	"thread/setSpace",
 	"thread/delete",
 	"project/start",
 	"coordinator/fresh",
@@ -4772,6 +4778,12 @@ export type Thread = {
 	 * Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
 	 */
 	pinned?: boolean,
+	/**
+	 * The Space the user added it to with `thread/setSpace` (0090), where it works elsewhere.
+	 * Absent for a thread in no Space, and for one started in a Space, whose `repo` is the
+	 * Space.
+	 */
+	space?: RepoId,
 };
 
 /**
@@ -6709,6 +6721,34 @@ export type SpaceDeleteParams = {
  * Result of `space/delete`.
  */
 export type SpaceDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `thread/setSpace` (0090), behind the `spaceThreads` capability: adds threads to a
+ * Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+ * and transcript, and its next CLI process gets the Space's instructions and files. Appends
+ * `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
+ * thread started in a Space or a Project, and with `repoNotFound` for a `space` that isn't one.
+ */
+export type ThreadSetSpaceParams = {
+	/**
+	 * The threads, by run id.
+	 */
+	threads: Array<RunId>,
+	/**
+	 * The Space to add them to. Absent takes them out of their Space.
+	 */
+	space?: RepoId,
+};
+
+/**
+ * Result of `thread/setSpace`.
+ */
+export type ThreadSetSpaceResult = {
+	/**
+	 * The threads as they stand, in the order asked.
+	 */
+	threads: Array<Thread>,
+};
 
 /**
  * Params of `thread/delete`: deletes a thread, its run, its worktree and branch, a thread with
