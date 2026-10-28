@@ -564,15 +564,24 @@ body {
 /* A clear or blurred window background (.translucent) is one sheet of glass, as Ghostty's
    background-opacity is: the theme's background is painted once, on <body>, letting the desktop
    through by --tint (appearance.ts), and what sits on it is a light layer of its own color rather
-   than an opaque block, so nothing reads as a patch. Text keeps its color, solid. Menus and
-   dialogs float over the page as frosted glass, and the sidebar's sticky headings frost what
-   scrolls under them. Unlayered, so these win over Tailwind's utilities. */
+   than an opaque block, so nothing reads as a patch. Text keeps its color, solid. The sidebar is
+   a denser pane of the same glass, as a macOS sidebar is, and what's raised over the glass (the
+   composer, menus, dialogs, cards) is a lighter frosted layer with a lit top edge rather than a
+   dark slab. The sidebar's sticky headings frost what scrolls under them. Unlayered, so these win
+   over Tailwind's utilities. */
 :root.translucent {
   --pane: transparent;
-  /* A faint lift, so the sidebar reads apart from the main pane without thickening the glass. */
-  --pane-sidebar: color-mix(in srgb, var(--foreground) 2.5%, transparent);
+  --pane-sidebar: color-mix(in srgb, var(--sidebar) 40%, transparent);
   --pane-card: color-mix(in srgb, var(--surface) 45%, transparent);
   --glass: blur(28px) saturate(1.6);
+  --raised: color-mix(in oklab, var(--foreground) light-dark(0%, 9%), var(--surface));
+  /* Code's fill: in dark a faint tint of the text's color, rather than a black hole in the glass.
+     Code fills read it, falling back to --code where the window is opaque. */
+  --code-fill: light-dark(
+    color-mix(in srgb, var(--code) 55%, transparent),
+    color-mix(in srgb, var(--foreground) 6%, transparent)
+  );
+  --glass-edge: inset 0 1px 0 light-dark(rgb(255 255 255 / 80%), rgb(255 255 255 / 9%));
 }
 :root.translucent body {
   background: color-mix(in srgb, var(--background) var(--tint), transparent);
@@ -585,10 +594,11 @@ body {
   background-color: color-mix(in srgb, var(--surface) 55%, transparent);
 }
 :root.translucent .bg-code:not(:where([class*="hover:bg-"]:hover)) {
-  background-color: color-mix(in srgb, var(--code) 55%, transparent);
+  background-color: var(--code-fill);
 }
+/* The sidebar's sticky headings, over its own glass: a light frost over what scrolls under. */
 :root.translucent .bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
-  background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
+  background-color: color-mix(in srgb, var(--sidebar) 25%, transparent);
   backdrop-filter: var(--glass);
 }
 /* What floats over the page: menus, dialogs, and the cards and bars that cast the composer's
@@ -597,8 +607,14 @@ body {
   :is([popover], dialog, .shadow-composer):is(.bg-background, .bg-surface):not(
     :where([class*="hover:bg-"]:hover)
   ) {
-  background-color: color-mix(in srgb, var(--surface) 82%, transparent);
+  background-color: color-mix(in srgb, var(--raised) 78%, transparent);
   backdrop-filter: var(--glass);
+  box-shadow: var(--glass-edge), var(--shadow-composer);
+}
+/* Menus and dialogs hold rows of text over whatever is under them, so they're denser. */
+:root.translucent
+  :is([popover], dialog):is(.bg-background, .bg-surface):not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--raised) 92%, transparent);
 }
 /* A tray tucked 1rem under a prompt box (.tucked, -mt-4) would show its top through the box's
    glass: its side borders and a second layer of fill. Through glass it starts where the box ends. */
@@ -808,7 +824,7 @@ body {
 .markdown :not(pre) > code {
   border: 1px solid var(--border);
   border-radius: 4px;
-  background: var(--code);
+  background: var(--code-fill, var(--code));
   padding: 0.1em 0.35em;
   font-family: var(--font-mono);
   /* --text-body, wherever it sits. */
@@ -961,7 +977,7 @@ body {
 .composer-input pre {
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--code);
+  background: var(--code-fill, var(--code));
   padding: 0.75rem;
   font-family: var(--font-mono);
   font-size: 13px;
