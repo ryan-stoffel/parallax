@@ -629,7 +629,7 @@ export function ThreadList({
           title,
           text: [
             title,
-            repo && !repo.scratch ? repo.name : `${h.name} No repo`,
+            repo && !repo.scratch ? repo.name : "No repo",
             run?.branch,
             ...(run?.pullRequests ?? []).map((url) => `#${numberOf(url)}`),
           ].join(" "),
@@ -690,11 +690,11 @@ export function ThreadList({
   }
   // What a row shows, and where: its own status, or its family's news.
   const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
-  // Where a thread is, for its card: its repo, or with none the computer it runs on.
-  const placeOf = (item: Item) =>
-    item.repo && !item.repo.scratch
-      ? { name: item.repo.name, icon: <RepoIcon repo={item.repo} /> }
-      : { name: item.host.name, icon: <ComputerIcon host={item.host} /> };
+  // Where a thread is, for its card: its repo, or No repo.
+  const placeOf = (item: Item) => ({
+    name: item.repo && !item.repo.scratch ? item.repo.name : "No repo",
+    icon: <RepoIcon repo={item.repo} />,
+  });
 
   const inScope = (item: Item, s: Scope) => {
     const p = parseScope(s);
@@ -1217,7 +1217,6 @@ export function ThreadList({
         rowKey={item.key}
         thread={t}
         hostId={item.host.id}
-        computer={item.host}
         device={many && item.host.icon ? item.host : undefined}
         title={item.title}
         run={item.run}
@@ -1576,7 +1575,6 @@ export function ThreadList({
               key={draft.id}
               draft={draft}
               repo={repo}
-              computer={hosts.find((h) => h.host.id === draft.hostId)?.host}
               onOpen={() =>
                 onSelect(draft.hostId, { kind: "new", groupId: draft.groupId, draft: draft.id })
               }
@@ -2726,38 +2724,15 @@ function RowHead({
   );
 }
 
-/**
- * Where a row's thread is, at the start of its second line: its repo's icon and name, or with no
- * repo the computer it runs on, since it works on that computer (0090).
- */
-function RowPlace({
-  repo,
-  computer,
-  words = [],
-}: {
-  repo?: Repo;
-  computer?: Host;
-  words?: readonly string[];
-}) {
-  const repoless = !repo || repo.scratch;
+/** Where a row's thread is, at the start of its second line: its repo's icon and name, or No repo. */
+function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[] }) {
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      {repoless ? <ComputerIcon host={computer} /> : <RepoIcon repo={repo} />}
+      <RepoIcon repo={repo} />
       <span className="min-w-0 truncate">
-        <Marked text={repoless ? (computer?.name ?? "No repo") : repo.name} words={words} />
+        <Marked text={repo && !repo.scratch ? repo.name : "No repo"} words={words} />
       </span>
     </span>
-  );
-}
-
-/** A computer's icon, as it chose one (0056), else a laptop. */
-function ComputerIcon({ host }: { host?: Host }) {
-  return (
-    <DeviceIcon
-      icon={host?.icon ?? "laptop"}
-      aria-hidden
-      className="size-4 shrink-0 text-faint-foreground"
-    />
   );
 }
 
@@ -2876,18 +2851,7 @@ function DraftStatus() {
  * outlined in the warning color and spaced off its neighbors (PLX-932). Opening it reopens New
  * Thread with it, which takes it off the list.
  */
-function DraftRow({
-  draft,
-  repo,
-  computer,
-  onOpen,
-}: {
-  draft: Draft;
-  repo?: Repo;
-  /** The computer it would run on, which its place names when it has no repo. */
-  computer?: Host;
-  onOpen: () => void;
-}) {
+function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: () => void }) {
   const attached = draft.images.length + draft.files.length + draft.threads.length;
   const title =
     draft.text.trim().split("\n")[0] ||
@@ -2899,11 +2863,7 @@ function DraftRow({
         onClick={onOpen}
         className="group/row flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2.5 py-2 text-left hover:bg-hover"
       >
-        <RowTop
-          place={<RowPlace repo={repo} computer={computer} />}
-          status={<DraftStatus />}
-          oneAction
-        />
+        <RowTop place={<RowPlace repo={repo} />} status={<DraftStatus />} oneAction />
         <RowTitle title={title} color="text-foreground" />
       </button>
     </li>
@@ -3099,7 +3059,6 @@ function ThreadRow({
   rowKey,
   thread,
   hostId,
-  computer,
   device,
   title,
   run,
@@ -3144,8 +3103,6 @@ function ThreadRow({
   thread: Thread;
   /** Its host, which a drag onto the composer names (PLX-378). */
   hostId: string;
-  /** The computer it runs on, which its place names when it has no repo (0090). */
-  computer: Host;
   /** Its computer, whose icon shows beside the provider's while there are several (0056). */
   device?: Host;
   title: string;
@@ -3402,7 +3359,7 @@ function ThreadRow({
           // details. Under its repo's heading, it leaves out the repo.
           <>
             <RowTop
-              place={!nested && <RowPlace repo={repo} computer={computer} words={words} />}
+              place={!nested && <RowPlace repo={repo} words={words} />}
               status={shownStatus}
             />
             <RowTitle title={titleText} color={titleColor} />
