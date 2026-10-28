@@ -85,7 +85,8 @@ interface NewThreadProps {
   header?: ReactNode;
   /**
    * A column beside the composer, as a Space's instructions and files (0090). With it, New thread
-   * lays out as a page: the header, composer, and `below` on the left, this on the right.
+   * lays out as a page: the header across the top, then the composer and `below` on the left and
+   * this on the right. The header spans both columns itself.
    */
   aside?: ReactNode;
 }
@@ -453,7 +454,7 @@ export function NewThread({
       <div
         className={
           page
-            ? "mx-auto grid w-full max-w-6xl items-start gap-x-10 px-10 pt-12 pb-16 lg:grid-cols-[minmax(0,1fr)_22rem] lg:grid-rows-[auto_auto_1fr]"
+            ? "mx-auto grid w-full max-w-5xl items-start gap-x-8 px-10 pt-12 pb-16 lg:grid-cols-[minmax(0,1fr)_20rem] lg:grid-rows-[auto_auto_1fr]"
             : starting === undefined
               ? "w-full max-w-3xl"
               : "mx-auto w-full max-w-3xl px-6 pb-5"
@@ -681,7 +682,7 @@ export function NewThread({
         />
         {starting === undefined && below}
         {page && (
-          <aside className="mt-10 lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:mt-0">
+          <aside className="mt-10 lg:col-start-2 lg:row-span-2 lg:row-start-2 lg:mt-0">
             {aside}
           </aside>
         )}

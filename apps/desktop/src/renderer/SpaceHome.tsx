@@ -1,6 +1,6 @@
 // A Space's page, New thread laid out as two columns (0090): its header, the composer, and its
 // threads on the left; on the right, the instructions and files plxd gives every thread in it.
-import { Pin, PinOff, Plus, Upload, X } from "lucide-react";
+import { MessagesSquare, Pin, PinOff, Plus, Upload, X } from "lucide-react";
 import { useId, useRef, useState, type DragEvent } from "react";
 
 import type { Repo } from "../protocol/generated/protocol";
@@ -18,7 +18,7 @@ import { asksOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
 import { uploadBytes, uploadFiles } from "./uploads";
 
-const panel = "rounded-xl border border-border bg-surface p-5";
+const panelPart = "p-5";
 const panelHead = "mb-3 flex items-center justify-between gap-2";
 
 /** A Space's header, in place of New thread's question: its tile, name, and size, Pin, and its menu. */
@@ -36,7 +36,7 @@ export function SpaceHeader({
   const trigger = useRef<HTMLButtonElement>(null);
   const n = entry.threads;
   return (
-    <header className="mb-6 flex items-center gap-4">
+    <header className="mb-8 flex items-center gap-4 lg:col-span-2">
       <ProjectTile entry={entry} size="lg" />
       <div className="min-w-0 flex-1">
         <h1 className="truncate text-display font-semibold tracking-tight">{entry.name}</h1>
@@ -85,9 +85,16 @@ export function SpaceThreads({
     <section aria-label="Threads" className="mt-10">
       <h2 className="mb-2 text-reading font-medium">Threads</h2>
       {threads.length === 0 ? (
-        <p className="border-t border-border py-4 text-body text-faint-foreground">
-          No threads yet. Ask anything above to start one.
-        </p>
+        <div className="flex flex-col items-center border-t border-border px-6 py-14 text-center">
+          <span className="grid size-10 place-items-center rounded-xl bg-hover text-muted-foreground">
+            <MessagesSquare aria-hidden className="size-5" />
+          </span>
+          <p className="mt-3 text-body font-medium">No threads yet</p>
+          <p className="mt-1 max-w-xs text-body text-muted-foreground">
+            Ask anything above. Each thread here follows this Space's instructions and can read its
+            files.
+          </p>
+        </div>
       ) : (
         <ul className="border-t border-border">
           {threads.map(({ thread, at, attention }) => (
@@ -115,7 +122,7 @@ export function SpaceThreads({
   );
 }
 
-/** A Space's instructions and files, beside the composer. */
+/** A Space's instructions and files, beside the composer, in one panel that stays in view. */
 export function SpaceContext({
   hostId,
   space,
@@ -126,14 +133,14 @@ export function SpaceContext({
   view: ThreadsView;
 }) {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="overflow-hidden rounded-xl border border-border bg-surface lg:sticky lg:top-6">
       <Instructions space={space} view={view} />
       <Files hostId={hostId} space={space} view={view} />
     </div>
   );
 }
 
-/** The Instructions panel: what every thread here is told, edited in a dialog. */
+/** The panel's Instructions: what every thread here is told, edited in a dialog. */
 function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [text, setText] = useState("");
@@ -146,7 +153,7 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
     dialog.current?.showModal();
   };
   return (
-    <section aria-label="Instructions" className={panel}>
+    <section aria-label="Instructions" className={panelPart}>
       <div className={panelHead}>
         <h2 className="text-reading font-medium">Instructions</h2>
         <button
@@ -230,7 +237,7 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
 }
 
 /**
- * The Files panel: each file as a tile with Remove, then Add or a drop anywhere on the panel, which
+ * The panel's Files: each file as a row with Remove, then Add or a drop anywhere on it, which
  * uploads to the host.
  */
 function Files({ hostId, space, view }: { hostId: string; space: Repo; view: ThreadsView }) {
@@ -279,7 +286,7 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
         setOver(false);
         void add([...e.dataTransfer.files]);
       }}
-      className={`${panel} transition-colors ${over ? "border-accent" : ""}`}
+      className={`${panelPart} border-t border-border transition-colors ${over ? "bg-accent/5" : ""}`}
     >
       <div className={panelHead}>
         <h2 className="text-reading font-medium">
@@ -309,7 +316,7 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
           aria-label="Add files"
           disabled={!caps || adding}
           onClick={pick}
-          className={`flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-8 text-center transition-colors disabled:opacity-50 ${over ? "border-accent bg-accent/5" : "border-border hover:bg-hover"}`}
+          className={`flex w-full flex-col items-center gap-2 rounded-lg border border-dashed px-4 py-6 text-center transition-colors disabled:opacity-50 ${over ? "border-accent" : "border-border hover:bg-hover"}`}
         >
           <Upload aria-hidden className="size-5 text-faint-foreground" />
           <span className="text-body text-muted-foreground">
@@ -320,23 +327,23 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
           </span>
         </button>
       ) : (
-        <ul className="grid grid-cols-2 gap-2">
+        <ul className="-mx-2 flex flex-col">
           {files.map((path) => {
             const name = path.split(/[\\/]/).at(-1) ?? path;
             const ext = name.includes(".") ? name.slice(name.lastIndexOf(".") + 1) : "";
             return (
               <li
                 key={path}
-                className="group/file relative flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-background p-3"
+                className="group/file flex items-center gap-2.5 rounded-md px-2 py-1.5 hover:bg-hover"
               >
-                <span aria-hidden className="[&_img]:size-5">
+                <span aria-hidden className="shrink-0 [&_img]:size-4">
                   {fileIcon(name)}
                 </span>
-                <span title={name} className="line-clamp-2 text-meta break-all">
+                <span title={name} className="min-w-0 flex-1 truncate text-body">
                   {name}
                 </span>
                 {ext && (
-                  <span className="text-micro tracking-wide text-faint-foreground uppercase">
+                  <span className="shrink-0 text-micro tracking-wide text-faint-foreground uppercase group-focus-within/file:hidden group-hover/file:hidden">
                     {ext}
                   </span>
                 )}
@@ -346,18 +353,14 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
                   // An add in flight saves the list as it began, which would undo a remove.
                   disabled={adding}
                   onClick={() => void save(files.filter((f) => f !== path))}
-                  className="absolute top-1.5 right-1.5 grid size-5 place-items-center rounded-sm text-faint-foreground opacity-0 group-hover/file:opacity-100 hover:bg-hover hover:text-foreground focus-visible:opacity-100 disabled:hidden"
+                  className="hidden size-5 shrink-0 place-items-center rounded-sm text-faint-foreground group-focus-within/file:grid group-hover/file:grid hover:text-foreground disabled:opacity-40"
                 >
                   <X className="size-3" />
                 </button>
               </li>
             );
           })}
-          {adding && (
-            <li className="grid place-items-center rounded-lg border border-dashed border-border p-3 text-meta text-faint-foreground">
-              Adding…
-            </li>
-          )}
+          {adding && <li className="px-2 py-1.5 text-meta text-faint-foreground">Adding…</li>}
         </ul>
       )}
       <input
