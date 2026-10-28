@@ -1,0 +1,81 @@
+name: Bug report
+description: Something in Parallax doesn't work the way it should.
+labels:
+  - type:bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/ryan-stoffel/parallax/issues) first, and keep one problem per issue.
+        Redact keys, tokens, and home folder paths from anything you paste. Report security problems through
+        [SECURITY.md](https://github.com/ryan-stoffel/parallax/blob/develop/SECURITY.md), not here.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, including any error message.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps that shows the bug, starting from opening Parallax.
+      placeholder: |
+        1. Start a new Claude Code thread in a git repository
+        2. Ask it to run the tests
+        3. Approve the command
+        4. The thread stops responding
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or a recording
+      description: Drag images or a video into this box. Show the problem itself, such as the error or the wrong screen.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Parallax version
+      description: In the app, Settings > General > About > Version.
+      placeholder: 2610.12704.13012-nightly
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      description: The OS and version of the computer that showed the bug, and of the computer running the agent if it's a different one.
+      placeholder: macOS 27.0, agent on Ubuntu 24.04 over SSH
+    validations:
+      required: true
+
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and provider
+      description: The agent the thread used and how it's signed in.
+      placeholder: Claude Code with a Claude subscription
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log lines or a stack trace, if you have them. Redacted.
+      render: shell
