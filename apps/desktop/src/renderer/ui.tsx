@@ -640,24 +640,26 @@ export interface Crumb {
 }
 
 /**
- * Where the user is: host, workspace, then the current page, split by slashes.
+ * Where the user is: host, workspace, then the current page, split by slashes. Only the last crumb
+ * shrinks, down to a few letters, so the ones before it keep their names. In a narrow
+ * `@container`, a trail of three or more drops its host.
  */
 export function Breadcrumb({ items }: { items: Crumb[] }) {
   return (
-    <nav aria-label="Breadcrumb" className="min-w-0 overflow-x-clip">
-      <ol className="flex min-w-0 items-center gap-2 text-body">
+    <nav aria-label="Breadcrumb" className="-ml-1.5 min-w-0 overflow-x-clip">
+      <ol className="flex min-w-0 items-center gap-0.5 text-body">
         {items.map(({ label, icon, onClick }, i) => {
           const current = i === items.length - 1 && !onClick;
           const Tag = onClick ? "button" : "span";
           return (
             <li
               key={i}
-              className={`flex min-w-0 items-center gap-2 ${i < items.length - 1 ? "max-w-48 min-w-10 shrink-[10]" : ""} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""}`}
+              className={`flex items-center gap-0.5 ${i < items.length - 1 ? "max-w-48 shrink-0" : "min-w-16"} ${i > 0 ? "before:text-faint-foreground before:content-['/']" : ""} ${items.length > 2 ? (i === 0 ? "@max-lg:hidden" : i === 1 ? "@max-lg:before:hidden" : "") : ""}`}
             >
               <Tag
                 {...(onClick && { type: "button", onClick })}
                 aria-current={current ? "page" : undefined}
-                className={`flex min-w-0 items-center gap-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${current ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "rounded-md hover:text-foreground" : ""}`}
+                className={`flex h-7 min-w-0 items-center gap-1.5 rounded-md px-1.5 [&_svg]:size-3.5 [&_svg]:shrink-0 ${current ? "font-medium text-foreground" : "text-muted-foreground"} ${onClick ? "hover:bg-hover hover:text-foreground" : ""}`}
               >
                 {icon}
                 <span className="truncate" title={label}>
