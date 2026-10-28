@@ -52,7 +52,7 @@ export function SpaceHeader({
         Projects
       </button>
       <div className="flex items-center gap-3.5">
-        <ProjectTile entry={entry} size="md" />
+        <ProjectTile entry={entry} size="mark" />
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-display font-semibold tracking-tight">{entry.name}</h1>
           <p className="mt-0.5 text-body text-muted-foreground">

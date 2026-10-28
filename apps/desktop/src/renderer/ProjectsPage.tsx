@@ -70,17 +70,21 @@ export function ProjectTile({
   entry: Pick<ProjectEntry, "icon" | "kind">;
   /**
    * `glyph` draws only its glyph, the size of an icon beside text, with its color as `--tint`
-   * for the row to show when it chooses.
+   * for the row to show when it chooses. `mark` draws only its glyph, large and in its color, as a
+   * Space's header shows it.
    */
-  size?: "glyph" | "sm" | "md" | "lg";
+  size?: "glyph" | "mark" | "sm" | "md" | "lg";
 }) {
   const box = {
     glyph: "size-4 rounded-sm",
+    mark: "size-9 rounded-lg",
     sm: "size-5 rounded-sm",
     md: "size-10 rounded-lg",
     lg: "size-12 rounded-xl",
   }[size];
-  const glyph = { glyph: "size-4", sm: "size-3.5", md: "size-5", lg: "size-6" }[size];
+  const glyph = { glyph: "size-4", mark: "size-9", sm: "size-3.5", md: "size-5", lg: "size-6" }[
+    size
+  ];
   if (entry.icon?.image)
     return (
       <img
@@ -92,6 +96,8 @@ export function ProjectTile({
   const { Icon } = iconLook(entry.icon);
   const Glyph = entry.icon ? Icon : entry.kind === "space" ? MessagesSquare : Layers;
   const color = tint(entry);
+  if (size === "mark")
+    return <Glyph aria-hidden style={{ color }} className={`${glyph} shrink-0`} />;
   if (size === "glyph")
     return (
       <Glyph
