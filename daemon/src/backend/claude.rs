@@ -345,6 +345,11 @@ pub const BYPASS_PERMISSION_MODE: &str = "bypassPermissions";
 /// [`prompts`] get them.
 pub const PROMPT_TOOL_ARGS: &[&str] = &["--permission-prompt-tool", "stdio"];
 
+/// The argument, after [`PROMPT_TOOL_ARGS`], that lets a thread's mode change to Bypass
+/// Permissions while it runs ([`Run::set_permission`](super::Run::set_permission)): Claude Code refuses the switch in a
+/// session not launched with it. It doesn't change the mode the session starts in.
+pub const LIVE_MODE_ARGS: &[&str] = &["--allow-dangerously-skip-permissions"];
+
 /// The tool whose approval takes Claude Code out of plan mode.
 const EXIT_PLAN_MODE: &str = "ExitPlanMode";
 
@@ -810,6 +815,9 @@ pub fn arguments(request: &RunRequest) -> Result<Vec<OsString>, StartError> {
         if prompts(request) {
             args.extend(PROMPT_TOOL_ARGS.iter().map(Into::into));
         }
+        if full_thread(request) {
+            args.extend(LIVE_MODE_ARGS.iter().map(Into::into));
+        }
     }
     if coordinator || unsandboxed {
         // A coordinator's or a thread's host-wide tools join the user's own MCP servers (0041),
@@ -974,21 +982,21 @@ pub fn full_thread(request: &RunRequest) -> bool {
 }
 
 /// Whether `request`'s CLI asks plxd before a tool call that would prompt (PLX-222, 0031): a
-/// worker, a thread, or a coordinator in Manual, Auto, or Plan, and a thread in Accept Edits too,
-/// whose client answers ([`RunRequest::approvals`]). A thread has no sandbox to run its commands
-/// without asking, so in Accept Edits its Bash calls prompt, as in a terminal (0034). A sandboxed
-/// worker's don't, and Bypass Permissions asks about nothing. A plain no-write run denies
+/// worker or a coordinator in Manual, Auto, or Plan, and a thread in every mode, whose client
+/// answers ([`RunRequest::approvals`]). A thread has no sandbox to run its commands without
+/// asking, so in Accept Edits its Bash calls prompt, as in a terminal (0034), and its mode can
+/// change while it runs ([`LIVE_MODE_ARGS`]), so in Bypass Permissions it keeps the channel for a
+/// later mode that asks. A sandboxed worker's Accept Edits calls don't prompt, and a worker in
+/// Bypass Permissions asks about nothing. A plain no-write run denies
 /// anything not allowed (`dontAsk`), and a run without `approvals` denies what would prompt, as
 /// headless Claude Code does.
 #[must_use]
 pub fn prompts(request: &RunRequest) -> bool {
     let plain_no_write =
         request.policy == ToolPolicy::NoWrite && request.coordinator_tools.is_none();
-    let thread_edits =
-        full_thread(request) && matches!(request.permission, None | Some(AgentPermission::Edit));
     request.approvals
         && !plain_no_write
-        && (thread_edits
+        && (full_thread(request)
             || matches!(
                 request.permission,
                 Some(AgentPermission::Manual | AgentPermission::Auto | AgentPermission::Plan)
@@ -1247,6 +1255,13 @@ impl Backend for ClaudeBackend {
         let (handle, control) = RunHandle::new(request.run_id, true, switch.clone());
         let (handle, answers) = handle.with_answers();
         let (handle, task_stops) = handle.with_task_stops();
+        // Only a thread switches its mode live: it launched with [`LIVE_MODE_ARGS`] and always
+        // asks plxd, whatever its mode ([`prompts`]).
+        let (handle, permissions) = if full {
+            handle.with_permissions()
+        } else {
+            (handle, mpsc::unbounded_channel().1)
+        };
         let held = handle.held();
         let resumed = request.resume.is_some();
         let baseline = request
@@ -1261,6 +1276,7 @@ impl Backend for ClaudeBackend {
             control,
             answers,
             task_stops,
+            permissions,
             held,
             sink,
             switch,
@@ -1472,6 +1488,8 @@ struct Driver {
     answers: mpsc::UnboundedReceiver<Answer>,
     /// [`Run::stop_task`]'s task ids (PLX-777).
     task_stops: mpsc::UnboundedReceiver<String>,
+    /// [`Run::set_permission`]'s modes, for a thread. Closed for any other run.
+    permissions: mpsc::UnboundedReceiver<AgentPermission>,
     /// While held, plxd has a message waiting for the CLI, so stdin stays open (PLX-370).
     held: Held,
     sink: EventSink,
@@ -1539,6 +1557,13 @@ impl Driver {
                     None => answers_open = false,
                 },
                 Some(task_id) = self.task_stops.recv() => self.input.stop_task(&task_id),
+                Some(permission) = self.permissions.recv() => {
+                    // Only modes in `PERMISSIONS` reach here; the translator follows the switch
+                    // once the CLI reports it.
+                    if let Ok(mode) = permission_mode(Some(permission)) {
+                        self.input.set_permission_mode(mode);
+                    }
+                }
                 follow_up = self.control.recv(), if control_open => match follow_up {
                     Some(follow_up) => self.follow_up(follow_up, &mut stdin).await,
                     None => control_open = false,

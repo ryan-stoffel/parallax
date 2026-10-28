@@ -863,6 +863,12 @@ export function AgentChat({
           }
           history={history}
           onStop={isRunning(box?.status) ? stop : undefined}
+          onPermission={
+            running
+              ? (permission) =>
+                  void window.parallax.request(hostId, "agent/setPermission", { runId, permission })
+              : undefined
+          }
           unanswered={stopBack}
           disabledReason={disabledReason}
           tab={tab}

@@ -865,6 +865,17 @@ pub struct AgentStopTaskParams {
     pub task_id: String,
 }
 
+/// Params of `agent/setPermission`: moves a running run to another permission mode now, mid-turn
+/// included, rather than with its next message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSetPermissionParams {
+    /// The run.
+    pub run_id: RunId,
+    /// The mode, one its backend offers.
+    pub permission: AgentPermission,
+}
+
 /// Result of `agent/stopTask`. The task's end arrives as an `agent.background` event.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

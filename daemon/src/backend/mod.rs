@@ -269,6 +269,17 @@ pub trait Run: Send + Sync {
     fn stop_task(&self, _task_id: &str) -> Result<(), AnswerError> {
         Err(AnswerError::Unsupported)
     }
+
+    /// Moves the live session to `permission` now, mid-turn included, rather than on its next
+    /// turn (`agent/setPermission`). Returns at once. Only a value in [`Backend::permissions`].
+    ///
+    /// # Errors
+    ///
+    /// [`AnswerError::Unsupported`] if the run can't, the default, and
+    /// [`AnswerError::Finished`] once the run has ended.
+    fn set_permission(&self, _permission: AgentPermission) -> Result<(), AnswerError> {
+        Err(AnswerError::Unsupported)
+    }
 }
 
 /// A task for a backend.
@@ -850,6 +861,8 @@ pub struct RunHandle {
     answers: Option<mpsc::UnboundedSender<Answer>>,
     /// Where [`Run::stop_task`] sends task ids, for a driver that stops them.
     task_stops: Option<mpsc::UnboundedSender<String>>,
+    /// Where [`Run::set_permission`] sends modes, for a driver that switches them live.
+    permissions: Option<mpsc::UnboundedSender<AgentPermission>>,
     /// [`Run::hold`]'s flag, which a driver reads through [`RunHandle::held`].
     hold: watch::Sender<bool>,
 }
@@ -872,6 +885,7 @@ impl RunHandle {
             cancel,
             answers: None,
             task_stops: None,
+            permissions: None,
             hold: watch::Sender::new(false),
         };
         (handle, receiver)
@@ -899,6 +913,15 @@ impl RunHandle {
     pub fn with_task_stops(mut self) -> (Self, mpsc::UnboundedReceiver<String>) {
         let (stops, receiver) = mpsc::unbounded_channel();
         self.task_stops = Some(stops);
+        (self, receiver)
+    }
+
+    /// Takes [`Run::set_permission`]'s modes, and returns the receiver its driver reads them
+    /// from. The driver drops it once it can switch no more.
+    #[must_use]
+    pub fn with_permissions(mut self) -> (Self, mpsc::UnboundedReceiver<AgentPermission>) {
+        let (permissions, receiver) = mpsc::unbounded_channel();
+        self.permissions = Some(permissions);
         (self, receiver)
     }
 }
@@ -952,6 +975,15 @@ impl Run for RunHandle {
         };
         stops
             .send(task_id.to_owned())
+            .map_err(|_| AnswerError::Finished)
+    }
+
+    fn set_permission(&self, permission: AgentPermission) -> Result<(), AnswerError> {
+        let Some(permissions) = &self.permissions else {
+            return Err(AnswerError::Unsupported);
+        };
+        permissions
+            .send(permission)
             .map_err(|_| AnswerError::Finished)
     }
 }

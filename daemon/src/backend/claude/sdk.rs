@@ -364,6 +364,15 @@ impl Input {
         ));
     }
 
+    /// Moves the session to Claude Code's permission `mode`: the SDK's `setPermissionMode()`.
+    pub fn set_permission_mode(&self, mode: &str) {
+        let id = serde_json::Value::from(&*self.id);
+        let mode = serde_json::Value::from(mode);
+        self.send(format!(
+            "{{\"id\":{id},\"type\":\"setPermissionMode\",\"mode\":{mode}}}\n"
+        ));
+    }
+
     /// Ends the query's prompt, so the CLI exits after its last turn, as closing its stdin did.
     pub fn end(&self) {
         self.control("end");

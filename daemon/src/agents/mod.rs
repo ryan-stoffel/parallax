@@ -1934,6 +1934,18 @@ pub(crate) async fn stop_task(
     ask(daemon, id, |reply| Command::StopTask { task_id, reply }).await
 }
 
+/// `agent/setPermission`: moves run `id`'s live CLI to `permission` now.
+pub(crate) async fn set_permission(
+    daemon: &Arc<Daemon>,
+    id: RunId,
+    permission: AgentPermission,
+) -> Result<AgentRun, ErrorObject> {
+    ask(daemon, id, |reply| {
+        Command::SetPermission(permission, reply)
+    })
+    .await
+}
+
 /// `agent/resumeNow` (PLX-371): resumes a run waiting for its usage limit to reset now.
 pub(crate) async fn resume_now(daemon: Arc<Daemon>, id: RunId) -> Result<AgentRun, ErrorObject> {
     ask(&daemon, id, |reply| Command::ResumeNow { reply }).await

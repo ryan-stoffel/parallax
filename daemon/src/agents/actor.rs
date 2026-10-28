@@ -250,6 +250,8 @@ pub(super) enum Command {
         task_id: String,
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
+    /// `agent/setPermission`.
+    SetPermission(AgentPermission, Reply<AgentRun>),
     /// `agent/autoResume` (PLX-371).
     AutoResume {
         auto_resume: Option<bool>,
@@ -312,6 +314,7 @@ impl Command {
             | Self::LinkPr { reply, .. }
             | Self::ResumeNow { reply }
             | Self::AutoResume { reply, .. }
+            | Self::SetPermission(_, reply)
             | Self::Place { reply, .. }
             | Self::Revert { reply, .. }
             | Self::Fresh { reply }
@@ -1083,6 +1086,7 @@ impl Actor {
             Command::ResumeNow { reply } => {
                 let _ = reply.send(self.resume_now().await);
             }
+            Command::SetPermission(mode, reply) => self.on_permission(mode, reply).await,
             Command::AutoResume { auto_resume, reply } => {
                 let _ = reply.send(self.set_auto_resume(auto_resume).await);
             }
@@ -1152,6 +1156,60 @@ impl Actor {
         {
             self.save_wakes().await;
         }
+    }
+
+    /// `agent/setPermission`: moves the live CLI to `permission` now, mid-turn included, then
+    /// stores it as the run's, so its next message and next process run in it too. A run in a
+    /// Project runs in the Project's mode (0042), and a run whose backend can't switch live
+    /// takes the mode with its next message instead.
+    async fn on_permission(&mut self, permission: AgentPermission, reply: Reply<AgentRun>) {
+        let _ = reply.send(self.set_permission(permission).await);
+    }
+
+    /// [`Actor::on_permission`]'s work.
+    async fn set_permission(
+        &mut self,
+        permission: AgentPermission,
+    ) -> Result<AgentRun, ErrorObject> {
+        if super::project_mode(&self.daemon, self.project)
+            .await?
+            .is_some()
+        {
+            return Err(ErrorObject::invalid_params(
+                "a run in a Project runs in the Project's mode",
+            ));
+        }
+        let changes = self.changes(RunOptions {
+            permission: Some(permission),
+            ..RunOptions::default()
+        });
+        if changes == RunOptions::default() {
+            return self.snapshot();
+        }
+        let Some((_, backend)) = self
+            .daemon
+            .agents
+            .backends
+            .by_backend_name(&self.row.fields.backend)
+        else {
+            return Err(ErrorObject::invalid_params(
+                "the run's provider is no longer set up",
+            ));
+        };
+        changes.check(backend.as_ref())?;
+        let switched = match &self.live {
+            Some(live) => live.run.set_permission(permission),
+            None => Err(AnswerError::Finished),
+        };
+        switched.map_err(|error| {
+            ErrorObject::invalid_params(match error {
+                AnswerError::Unsupported => "this run can't change its mode while it runs",
+                AnswerError::Finished => "the run's CLI has exited",
+            })
+        })?;
+        self.store_options(backend.as_ref(), changes).await?;
+        self.save().await;
+        self.snapshot()
     }
 
     /// `agent/stopTask` (PLX-777): stops background task `task_id` through the live CLI.
@@ -4443,8 +4501,8 @@ mod tests {
     use std::time::Duration;
 
     use parallax_protocol::{
-        AgentBackgroundKind, AgentBackgroundTask, AgentOutcome, AgentOutputItem, ParallaxEvent,
-        ProjectId, RunId, TurnId,
+        AgentBackgroundKind, AgentBackgroundTask, AgentOutcome, AgentOutputItem, AgentPermission,
+        ParallaxEvent, ProjectId, RunId, TurnId,
     };
     use parallax_store::{Run as RunRow, RunFields, RunState, Worktree};
     use tokio::sync::{mpsc, oneshot};
@@ -4453,7 +4511,7 @@ mod tests {
     use super::{Actor, Command, Live};
 
     use crate::agents::tests::{project_fields, run_fields};
-    use crate::backend::{Event, EventSink, FollowUp, Run, SendError};
+    use crate::backend::{AnswerError, Event, EventSink, FollowUp, Run, SendError};
     use crate::server::Daemon;
 
     struct NoopRun;
@@ -4573,6 +4631,8 @@ mod tests {
         switched:
             std::sync::Mutex<Vec<(Option<String>, Option<parallax_protocol::AgentPermission>)>>,
         held: std::sync::atomic::AtomicBool,
+        /// Each mode `agent/setPermission` moved it to.
+        modes: std::sync::Mutex<Vec<AgentPermission>>,
     }
 
     impl Run for SessionRun {
@@ -4594,6 +4654,11 @@ mod tests {
         fn hold(&self, held: bool) {
             self.held.store(held, std::sync::atomic::Ordering::SeqCst);
         }
+
+        fn set_permission(&self, permission: AgentPermission) -> Result<(), AnswerError> {
+            self.modes.lock().unwrap().push(permission);
+            Ok(())
+        }
     }
 
     /// Gives `actor` a live [`SessionRun`] that holds its session, as a launch does, and returns
@@ -4604,6 +4669,55 @@ mod tests {
         let (sink, events) = EventSink::channel(4, Vec::new());
         actor.live = Some(Live::new(run.clone(), events, None));
         (run, sink)
+    }
+
+    /// `agent/setPermission`: a live run that can switch takes the mode at once, and the run
+    /// stores it and reports it in `agent.updated`. One that can't is refused and keeps its mode,
+    /// so the app sends it with the next message instead.
+    #[tokio::test]
+    async fn a_live_permission_change_reaches_the_cli_and_is_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
+        let (row, worktree) = fake_row_and_worktree();
+        // A thread's: in no Project, so no Project's mode wins.
+        let stored = row.clone();
+        crate::agents::store(&daemon, move |db| {
+            db.create_run(stored.id, &stored.fields, &stored.state)
+                .unwrap();
+            Ok(())
+        })
+        .await
+        .unwrap();
+        let launcher = crate::backend::process::Launcher::new(
+            crate::paths::DataDir::new(dir.path().join("cli")).unwrap(),
+            crate::backend::process::Environment::empty(),
+        );
+        daemon
+            .agents
+            .backends
+            .set(Arc::new(crate::backend::fake::FakeBackend::new(
+                launcher,
+                crate::backend::fake::Script::default(),
+            )));
+        let mut actor = Actor::new(Arc::clone(&daemon), row, Some(worktree), HashMap::new());
+
+        let (_sink, events) = EventSink::channel(4, Vec::new());
+        actor.live = Some(Live::new(Arc::new(NoopRun), events, None));
+        assert!(actor.set_permission(AgentPermission::Bypass).await.is_err());
+        assert_eq!(actor.row.fields.permission, None);
+
+        let (run, _sink) = hold_session(&mut actor);
+        let answer = actor.set_permission(AgentPermission::Bypass).await.unwrap();
+        assert_eq!(*run.modes.lock().unwrap(), [AgentPermission::Bypass]);
+        assert_eq!(answer.permission, Some(AgentPermission::Bypass));
+        let id = actor.row.id;
+        let permission = crate::agents::store(&daemon, move |db| {
+            Ok(db.get_run(id).unwrap().unwrap().fields.permission)
+        })
+        .await
+        .unwrap();
+        assert_eq!(permission.as_deref(), Some("bypass"));
+        assert_eq!(logged_kinds(&daemon, actor.id), ["agent.updated"]);
     }
 
     /// PLX-725: a background command keeps its idle session up and out of the host's cap after

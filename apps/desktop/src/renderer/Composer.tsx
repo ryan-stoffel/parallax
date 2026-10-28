@@ -767,6 +767,11 @@ export interface ComposerProps {
    * too.
    */
   onStop?: () => Promise<string | undefined>;
+  /**
+   * While the run works: moves it to a newly picked Access now (`agent/setPermission`), rather
+   * than with the next message. Where plxd can't, the pick still goes with the next message.
+   */
+  onPermission?: (permission: AgentPermission) => void;
   /** The run's latest prompt while nothing answers it yet, which a Stop that works puts back. */
   unanswered?: Unanswered;
   /** Why sending is off right now, shown in place of the box's hint. */
@@ -895,6 +900,7 @@ export function Composer({
   onSendInBackground,
   onSteer,
   onStop,
+  onPermission,
   unanswered,
   disabledReason,
   tab,
@@ -1772,7 +1778,12 @@ export function Composer({
         <Picker
           label="Access"
           value={permission}
-          onChange={(value) => setPermission(value as AgentPermission)}
+          onChange={(value) => {
+            const picked = value as AgentPermission;
+            setPermission(picked);
+            if (run && started && target === backend && picked !== permission)
+              onPermission?.(picked);
+          }}
           options={permissions.map((p) =>
             p === "manual" && manualDenied
               ? { ...accessOptions[p], description: manualDenials[manualDenied] }

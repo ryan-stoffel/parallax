@@ -594,6 +594,13 @@ export type ParallaxRequests = {
 	 */
 	"agent/stopTask": { params: AgentStopTaskParams, result: AgentStopTaskResult },
 	/**
+	 * `agent/setPermission`: moves a run's live CLI to another permission mode now, and
+	 * stores it as the run's. Fails with `invalidParams` when the run has no live CLI, is in
+	 * a Project, or its backend can't switch mid-turn; send the mode with the next message
+	 * instead.
+	 */
+	"agent/setPermission": { params: AgentSetPermissionParams, result: AgentRunResult },
+	/**
 	 * `agent/autoResume`: sets or clears a run's auto-resume override.
 	 */
 	"agent/autoResume": { params: AgentAutoResumeParams, result: AgentRunResult },
@@ -1105,6 +1112,7 @@ export const REQUEST_METHODS = [
 	"thread/search",
 	"agent/resumeNow",
 	"agent/stopTask",
+	"agent/setPermission",
 	"agent/autoResume",
 	"host/settings/get",
 	"host/settings/set",
@@ -7527,6 +7535,21 @@ export type AgentStopTaskParams = {
  * Result of `agent/stopTask`. The task's end arrives as an `agent.background` event.
  */
 export type AgentStopTaskResult = Record<symbol, never>;
+
+/**
+ * Params of `agent/setPermission`: moves a running run to another permission mode now, mid-turn
+ * included, rather than with its next message.
+ */
+export type AgentSetPermissionParams = {
+	/**
+	 * The run.
+	 */
+	runId: RunId,
+	/**
+	 * The mode, one its backend offers.
+	 */
+	permission: AgentPermission,
+};
 
 /**
  * Params of `agent/autoResume`: sets or clears a run's auto-resume override (decision 0049).
