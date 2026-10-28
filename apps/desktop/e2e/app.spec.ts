@@ -203,7 +203,7 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Close settings" }).click();
   await page.getByRole("button", { name: "New project or repository" }).click();
-  const dialog = page.getByRole("dialog", { name: "New project or repository" });
+  const dialog = page.getByRole("dialog", { name: "New project or Space" });
   await dialog.getByRole("option", { name: /^New Project/ }).click();
   await dialog.getByRole("button", { name: /^Workspace/ }).click();
   await page.getByRole("menuitem", { name: "Choose folder…" }).click();
@@ -216,7 +216,7 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  // One card for the Project, in the Projects drawer (0087).
+  // One card for the Project, in the classic sidebar's Projects drawer (0087).
   await page.locator("#sidebar summary", { hasText: "Projects" }).click();
   await expect(page.locator('#sidebar li[data-kind="project"] [data-title]')).toHaveText(["ember"]);
 });

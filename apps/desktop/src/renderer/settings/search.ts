@@ -15,6 +15,7 @@ export const settingsSections: { id: SettingsSection; name: string; keywords?: s
   { id: "scripts", name: "Scripts", keywords: "setup commands worktree" },
   { id: "connections", name: "Connections", keywords: "hosts computers ssh" },
   { id: "storage", name: "Storage", keywords: "disk space cleanup" },
+  { id: "beta", name: "Beta", keywords: "experimental preview labs early features flask" },
 ];
 
 /**
@@ -200,6 +201,12 @@ export const settingsIndex: SettingEntry[] = [
       "What marks added and removed lines",
       "diff colors colorblind red green blue orange",
     ],
+  ]),
+  ...entries("beta", "Sidebar", [
+    ["New sidebar", "The new sidebar, or the classic one", "sidebar nav pinned projects page"],
+    ["Projects", "In the sidebar's head, or under More", "sidebar nav pages edit"],
+    ["Pull requests", "In the sidebar's head, or under More", "sidebar nav pages edit prs"],
+    ["Usage", "In the sidebar's head, or under More", "sidebar nav pages edit limits"],
   ]),
   // Browser (PLX-974)
   ...entries("browser", "Appearance", [

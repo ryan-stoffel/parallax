@@ -238,7 +238,7 @@ export function CommandMenu({
             title: view.state.titles[t.id] ?? "Thread",
             repo,
             place: [
-              repo && !repo.scratch ? repo.name : "Chat",
+              repo && !repo.scratch ? repo.name : "No repo",
               run?.branch,
               ...(run?.pullRequests ?? []).map((url) => `#${url.split("/").pop()}`),
               hosts.length > 1 ? host.name : undefined,

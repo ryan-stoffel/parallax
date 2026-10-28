@@ -22,7 +22,15 @@ import type {
 import { App } from "./App";
 import { scopeStore } from "./scope";
 import { sectionsStore } from "./Sidebar";
-import { sidebarDefaults, sidebarPrefs } from "./sidebarPrefs";
+import { moreShown } from "./SidebarNav";
+import {
+  navDefaults,
+  newSidebar,
+  pinnedProjects,
+  sidebarDefaults,
+  sidebarNav,
+  sidebarPrefs,
+} from "./sidebarPrefs";
 import { fakeWatch } from "./fakeWatch";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -87,8 +95,12 @@ beforeEach(() => {
   request.mockClear();
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
-  // The Projects drawer open (PLX-1043), so its cards show.
-  sectionsStore.set({ all: { projects: true } });
+  sidebarNav.set(navDefaults);
+  // These tests are the new sidebar's (0090); one below covers the classic one.
+  newSidebar.set(true);
+  pinnedProjects.set([]);
+  moreShown.set(false);
+  sectionsStore.set({});
   scopeStore.set("all");
   popoverSources = [];
   listeners = new Set();
@@ -173,20 +185,24 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-// The Projects atop the list, which need the user or match a search, by name (PLX-1043).
-const topProjects = () =>
-  [...document.querySelectorAll('#sidebar ul[aria-label="Projects"] [data-title]')].map(
+/** Opens the Projects page from its sidebar row (0090). */
+const openProjectsPage = () =>
+  act(() =>
+    [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")]
+      .find((b) => b.textContent === "Projects")!
+      .click(),
+  );
+// Each project's card, by name, on the Projects page, which this opens (0090).
+const projectRows = () => {
+  openProjectsPage();
+  return [...document.querySelectorAll("main li[data-project] [data-title]")].map(
     (t) => t.textContent,
   );
-// Each Project's card, by name, in the sidebar's order: atop the list, then in its drawer (PLX-1043).
-const projectRows = () =>
-  [...document.querySelectorAll('#sidebar li[data-kind="project"] [data-title]')].map(
-    (t) => t.textContent,
-  );
+};
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 const dialog = () =>
-  document.querySelector<HTMLDialogElement>('dialog[aria-label="New project or repository"]')!;
+  document.querySelector<HTMLDialogElement>('dialog[aria-label="New project or Space"]')!;
 const inDialog = (name: string) =>
   [...dialog().querySelectorAll("button")].find(
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
@@ -222,8 +238,14 @@ const paletteOptions = () => [
 ];
 const paletteOption = (name: string) =>
   paletteOptions().find((b) => b.textContent?.startsWith(name));
-const openPalette = () =>
-  click(document.querySelector('#sidebar button[aria-label="New project or repository"]'));
+// The sidebar's row under New thread (0090).
+const openPalette = async () => {
+  await click(
+    [...document.querySelectorAll("#sidebar button")].find(
+      (b) => b.textContent === "New project or Space",
+    ),
+  );
+};
 const openNewProject = async () => {
   await openPalette();
   await click(paletteOption("New Project"));
@@ -249,17 +271,16 @@ test("lists plxd's Projects as rows, most recently active first, and adds one fr
   expect(projectRows()).toEqual(["parallax", "photon", "ember"]);
 });
 
-test("Projects live in a drawer, folded until opened, and a search shows its matches atop the list", async () => {
-  sectionsStore.set({});
+test("Projects live on the Projects page, not in the sidebar's list, even when one matches a search or needs the user", async () => {
   await renderApp();
-  expect(projectRows()).toEqual([]);
-  // The drawer sits last under the list, after the thread drawers (PLX-1087).
-  const summaries = [...document.querySelectorAll("#sidebar summary")];
-  expect(summaries.at(-1)!.textContent).toBe("Projects2");
+  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
+  expect(
+    [...document.querySelectorAll("#sidebar summary")].map((s) => s.textContent),
+  ).not.toContain("Projects2");
   const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
   typeInto(search, "emb");
   await settle();
-  expect(topProjects()).toEqual(["ember"]);
+  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
 });
 
 test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
@@ -355,21 +376,18 @@ test("a failed clone says why above the folders, where a long list can't push it
   expect(dialog().open).toBe(true);
 });
 
-/** A Project's row in the sidebar, by its name (PLX-1043). */
-const rowButton = (name: string) =>
-  [
-    ...document.querySelectorAll<HTMLButtonElement>(
-      '#sidebar li[data-kind="project"] button[data-row]',
-    ),
-  ].find((b) => b.querySelector("[data-title]")?.textContent === name)!;
-// A Project row's menu, which a right-click on it opens.
+/** A Project's card on the Projects page, which this opens, by its name (0090). */
+const rowButton = (name: string) => {
+  openProjectsPage();
+  return [...document.querySelectorAll<HTMLButtonElement>("main li[data-project] > button")].find(
+    (b) => b.querySelector("[data-title]")?.textContent === name,
+  )!;
+};
+// A Project card's menu after Pin, which a right-click on it opens.
 const menuItems = (name: string) => {
-  act(() => void rowButton(name).dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
-  return [
-    ...rowButton(name)
-      .closest("li")!
-      .querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]'),
-  ];
+  const card = rowButton(name).closest("li")!;
+  act(() => void card.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+  return [...card.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')].slice(1);
 };
 const menuItem = (name: string, item: string) =>
   menuItems(name).find((b) => b.textContent === item);
@@ -731,8 +749,8 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
   });
   expect(pinned()!.textContent).toContain("Subagent: Write the docs");
   expect(pinned()!.textContent).toContain("git tag v1.2.0");
-  // Waiting on the user, ember leaves its drawer for the top of the list (PLX-1043).
-  expect(topProjects()).toEqual(["ember"]);
+  // Waiting on the user, ember still stays out of the list unless pinned (0090).
+  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
   await openView("Agents");
   expect(agentRow("Write the docs")!.textContent).toContain("Needs approval");
 
@@ -762,7 +780,6 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
     }),
   );
   expect(agentRow("Write the docs")!.textContent).not.toContain("Needs approval");
-  expect(topProjects()).toEqual([]);
 });
 
 // The sidebar's Projects section (PLX-340).
@@ -827,9 +844,21 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
   await click(confirm());
   expect(calls("project/delete")).toEqual([{ project: "p-ember" }, { project: "p-ember" }]);
   expect(deleteDialog().open).toBe(false);
-  expect(projectRows()).toEqual(["photon"]);
-  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
   expect(crumbs().at(-1)).toBe("New thread");
+  expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
+  expect(projectRows()).toEqual(["photon"]);
+});
+
+test("a card's menu shows a hidden sidebar before it opens a dialog the sidebar holds", async () => {
+  capabilities = { projectEdit: {} };
+  await renderApp();
+  openProjectsPage();
+  await click(document.querySelector('button[aria-label="Hide sidebar"]'));
+  const hidden = () => !!document.getElementById("sidebar")!.closest("[hidden]");
+  expect(hidden()).toBe(true);
+  await click(menuItem("ember", "Rename…"));
+  expect(hidden()).toBe(false);
+  expect([...document.querySelectorAll("dialog")].some((d) => d.open)).toBe(true);
 });
 
 test("without projectDelete there's no Delete…, and another client's project.deleted removes the open Project's row and leaves its page", async () => {
@@ -851,6 +880,261 @@ test("without projectDelete there's no Delete…, and another client's project.d
     }),
   );
   await settle();
-  expect(projectRows()).toEqual(["photon"]);
   expect(crumbs().at(-1)).toBe("New thread");
+  expect(projectRows()).toEqual(["photon"]);
+});
+
+/** A sidebar button, by its text. */
+const sidebarButton = (text: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
+    (b) => b.textContent === text,
+  );
+
+test("Usage waits under More until Settings shows it in the head, and pinned projects list by name", async () => {
+  await renderApp();
+  // Folded under More, out of reach until it opens.
+  const fold = () => sidebarButton("Usage")!.closest<HTMLElement>("[aria-controls], [id]")!;
+  expect(fold().id).toBe(sidebarButton("More")!.getAttribute("aria-controls"));
+  expect(fold().inert).toBe(true);
+  await click(sidebarButton("More"));
+  expect(fold().inert).toBe(false);
+  await click(sidebarButton("Less"));
+  expect(fold().inert).toBe(true);
+  // Settings › Appearance › Sidebar's switch for it puts it in the head.
+  await act(async () => sidebarNav.set({ ...sidebarNav.get(), usage: true }));
+  expect(sidebarButton("Usage")!.closest("[inert]")).toBeNull();
+
+  // Pinning from a card lists the Project under Pinned, and its row opens it.
+  openProjectsPage();
+  await click(document.querySelector('main button[aria-label="Pin ember"]'));
+  expect(pinnedProjects.get()).toEqual(["local/p-ember"]);
+  const pinned = document.querySelector('#sidebar section[aria-label="Pinned"]')!;
+  expect([...pinned.querySelectorAll("li > button")].map((b) => b.textContent)).toEqual(["ember"]);
+  await click(pinned.querySelector("li > button"));
+  expect(crumbs()).toEqual(["This Mac", "ember"]);
+});
+
+test("a Space is made from the Projects page, opens to New thread in it, and keeps its icon, instructions, and files", async () => {
+  capabilities = { spaces: {}, spaceContext: {}, threadAttention: {} };
+  const space: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    space: true,
+    createdAt: "2026-09-29T11:00:00Z",
+    files: ["/data/uploads/a/brief.pdf", "/data/uploads/b/notes.md"],
+  };
+  answers["space/create"] = (p) => ({ result: { repo: { ...space, id: p["id"], files: [] } } });
+  answers["repo/update"] = (p) => ({
+    result: { repo: { ...space, ...p, id: p["repo"] } },
+  });
+  await renderApp();
+  openProjectsPage();
+  const create = [...document.querySelectorAll("dialog")].find(
+    (d) => d.querySelector("h2")?.textContent === "Create Space",
+  )!;
+  await click(
+    [...document.querySelectorAll('main [role="menuitem"]')].find((b) =>
+      b.textContent?.startsWith("Space"),
+    ),
+  );
+  typeInto(create.querySelector<HTMLInputElement>('input[aria-label="Name"]')!, " Essays ");
+  await act(async () => create.querySelector("form")!.requestSubmit());
+  await settle();
+  const [made] = calls("space/create");
+  expect(made).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: "Essays" });
+  // A Space's page is the Space, so its crumbs end there.
+  expect(crumbs()).toEqual(["This Mac", "Essays"]);
+  // Its icon in the header opens the icon picker under it.
+  const icon = document.querySelector<HTMLElement>('main button[aria-label="Change icon"]')!;
+  await click(icon);
+  expect(popoverSources.at(-1)).toBe(icon);
+
+  // Its instructions and files, in the tray under the composer.
+  await click(document.querySelector('main button[aria-label="Add instructions"]'));
+  const editor = [...document.querySelectorAll<HTMLDialogElement>("main dialog")].find(
+    (d) => d.querySelector("h2")?.textContent === "Instructions for Essays",
+  )!;
+  expect(editor.open).toBe(true);
+  const box = editor.querySelector("textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      box,
+      "Cite a source for every claim.",
+    );
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => editor.querySelector("form")!.requestSubmit());
+  await settle();
+  expect(calls("repo/update")).toEqual([
+    { repo: made!["id"], instructions: "Cite a source for every claim." },
+  ]);
+
+  const files = document.querySelector('main section[aria-label="Files"]')!;
+  expect(
+    [...files.querySelectorAll('button[aria-label^="Remove "]')].map((b) =>
+      b.getAttribute("aria-label"),
+    ),
+  ).toEqual(["Remove brief.pdf", "Remove notes.md"]);
+  await click(files.querySelector('button[aria-label="Remove brief.pdf"]'));
+  expect(calls("repo/update").at(-1)).toEqual({
+    repo: made!["id"],
+    files: ["/data/uploads/b/notes.md"],
+  });
+});
+
+test("Add puts this computer's other threads in a Space, and each archives from its card", async () => {
+  capabilities = { spaces: {}, spaceThreads: {} };
+  const space: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    space: true,
+    createdAt: "2026-09-29T10:00:00Z",
+  };
+  const scratch: Repo = {
+    id: "r-scratch",
+    name: "scratch",
+    path: "/data/scratch",
+    scratch: true,
+    createdAt: "2026-09-29T09:00:00Z",
+  };
+  const fix = { ...flaky, title: "Fix the flaky test" };
+  const draft: Thread = {
+    id: "t-draft",
+    repo: scratch.id,
+    createdAt: "2026-09-29T11:30:00Z",
+    title: "Draft the intro",
+  };
+  const outline: Thread = {
+    id: "t-outline",
+    repo: space.id,
+    createdAt: "2026-09-29T10:30:00Z",
+    title: "Outline",
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, scratch, space], threads: [fix, draft, outline], seq: 7 },
+  });
+  answers["thread/setSpace"] = (p) => ({
+    result: {
+      threads: (p["threads"] as string[]).map((id) => ({
+        ...[fix, draft].find((t) => t.id === id)!,
+        ...(p["space"] ? { space: p["space"] as string } : {}),
+      })),
+    },
+  });
+  await renderApp();
+  await click(rowButton("Essays"));
+  const threads = () =>
+    [...document.querySelectorAll('main section[aria-label="Threads"] > ul > li')].map(
+      (li) => li.querySelector("button span.font-semibold")?.textContent,
+    );
+  expect(threads()).toEqual(["Outline"]);
+
+  // The picker lists the threads outside the Space, newest first, but not one started in it.
+  await click(document.querySelector('main button[aria-label="Add threads"]'));
+  const picker = document.querySelector('ul[aria-label="Threads to add"]')!.closest("dialog")!;
+  expect(picker.open).toBe(true);
+  const boxes = () => [...picker.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+  expect(boxes().map((b) => b.getAttribute("aria-label"))).toEqual([
+    "Add Draft the intro",
+    "Add Fix the flaky test",
+  ]);
+  await click(boxes()[0]);
+  expect(picker.querySelector('button[type="submit"]')!.textContent).toBe("Add");
+  await act(async () => picker.querySelector("form")!.requestSubmit());
+  await settle();
+  expect(calls("thread/setSpace")).toEqual([{ threads: ["t-draft"], space: "s-essays" }]);
+  expect(picker.open).toBe(false);
+  expect(threads()).toEqual(["Draft the intro", "Outline"]);
+
+  // Each card archives as the sidebar's does.
+  answers["thread/archive"] = (p) => ({
+    result: { thread: { ...draft, space: space.id, archived: p["archived"] as boolean } },
+  });
+  const row = document.querySelector('main section[aria-label="Threads"] > ul > li')!;
+  await click(row.querySelector('button[title="Archive (E)"]'));
+  expect(calls("thread/archive")).toEqual([{ runId: "t-draft", archived: true }]);
+  expect(threads()).toEqual(["Outline"]);
+});
+
+test("Thread details adds the open thread to a Space, which its crumbs then name, and takes it out", async () => {
+  capabilities = { spaces: {}, spaceThreads: {} };
+  const space: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    space: true,
+    createdAt: "2026-09-29T10:00:00Z",
+  };
+  const draft: Thread = {
+    id: "t-draft",
+    repo: parallax.id,
+    createdAt: "2026-09-29T11:30:00Z",
+    title: "Draft the intro",
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, space], threads: [draft], seq: 7 },
+  });
+  answers["thread/setSpace"] = (p) => ({
+    result: { threads: [{ ...draft, ...(p["space"] ? { space: p["space"] as string } : {}) }] },
+  });
+  await renderApp();
+  await click(document.querySelector('#sidebar li[data-kind="thread"] button'));
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
+
+  const details = document.getElementById("thread-details")!;
+  await click(details.querySelector('button[aria-label="Add to a Space"]'));
+  const spaces = () => [
+    ...document.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Spaces"] button'),
+  ];
+  expect(spaces().map((b) => b.textContent)).toEqual(["Essays"]);
+  await click(spaces()[0]);
+  expect(calls("thread/setSpace")).toEqual([{ threads: ["t-draft"], space: "s-essays" }]);
+  expect(crumbs()).toEqual(["This Mac", "Essays", "Draft the intro"]);
+  expect(details.querySelector('button[aria-label="Space: Essays"]')).not.toBeNull();
+
+  await click(spaces().find((b) => b.textContent === "Remove from Space"));
+  expect(calls("thread/setSpace").at(-1)).toEqual({ threads: ["t-draft"] });
+  expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
+});
+
+test("the classic sidebar keeps Projects in a drawer and Pull requests in the footer until Beta turns on the new one", async () => {
+  newSidebar.set(false);
+  sectionsStore.set({ all: { projects: true } });
+  await renderApp();
+  const sidebar = document.getElementById("sidebar")!;
+  const drawer = [...sidebar.querySelectorAll("details")].find((d) =>
+    d.querySelector("summary")?.textContent?.startsWith("Projects"),
+  )!;
+  expect(
+    [...drawer.querySelectorAll('li[data-kind="project"] [data-title]')].map((t) => t.textContent),
+  ).toEqual(["photon", "ember"]);
+  expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
+  expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
+  expect(sidebarButton("Projects")).toBeUndefined();
+
+  await act(async () => newSidebar.set(true));
+  expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
+  expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
+  expect(sidebarButton("Projects")).toBeDefined();
+});
+
+test("the add palette offers New Space after New Project where the host makes Spaces, and it opens Create Space", async () => {
+  await renderApp();
+  await openPalette();
+  expect(paletteOption("New Space")).toBeUndefined();
+  act(() => dialog().close());
+
+  capabilities = { spaces: {} };
+  unmount();
+  await renderApp();
+  await openPalette();
+  expect(paletteOptions().indexOf(paletteOption("New Space")!)).toBe(1);
+  await click(paletteOption("New Space"));
+  expect(dialog().open).toBe(false);
+  const create = [...document.querySelectorAll("dialog")].find(
+    (d) => d.querySelector("h2")?.textContent === "Create Space",
+  )!;
+  expect(create.open).toBe(true);
 });

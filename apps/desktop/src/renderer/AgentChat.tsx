@@ -249,7 +249,6 @@ export function AgentChat({
   prompt,
   going,
   listed,
-  space,
   tab,
   strip,
   others,
@@ -282,8 +281,6 @@ export function AgentChat({
   going?: boolean;
   /** The run as the thread list has it, which the composer shows until the transcript loads. */
   listed?: AgentRun;
-  /** A chat in a Space: no Access picker. */
-  space?: boolean;
   /**
    * The tab tucked under the composer, such as a coordinator's repository. A thread's own has
    * none: where it runs and its branch show in Thread details, as a new thread's picker did.
@@ -885,7 +882,6 @@ export function AgentChat({
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
           manualDenied={manualDenied}
-          noAccess={space}
           projectMode={projectMode}
           insert={compose && !compose.send ? compose.text : undefined}
           cite={cite}

@@ -44,7 +44,7 @@ import {
   type ThreadRun,
   type ThreadSnapshot,
 } from "../src/protocol/generated/protocol";
-import { createFixtures, HOME, ids, PARALLAX_PATH, type RunEvent } from "./fixtures";
+import { createFixtures, HOME, ids, PARALLAX_PATH, uploadSeeds, type RunEvent } from "./fixtures";
 
 const LOCAL = "local";
 const LOG_ID = "0199a6f0-0000-7000-8000-preview00log";
@@ -105,6 +105,8 @@ const capabilities: Capabilities = Object.fromEntries(
     "sendModel",
     "sendOptions",
     "setupScripts",
+    "spaceContext",
+    "spaceThreads",
     "spaces",
     "threadAttention",
     "threadFork",
@@ -598,7 +600,7 @@ const fileScripts: RepoScript[] = [
 ];
 
 // Files `host/upload` took, by path, for `host/readUpload`.
-const uploads = new Map<string, string>();
+const uploads = new Map<string, string>(Object.entries(uploadSeeds));
 
 const handlers: { [M in Method]?: Handler<M> } = {
   "repo/scripts": (p) => ({
@@ -861,6 +863,17 @@ const handlers: { [M in Method]?: Handler<M> } = {
     const { runId, seen, ...rest } = p;
     return threadResult(runId, { ...rest, ...(seen && { seenAt: now() }) });
   },
+  "thread/setSpace": (p) => {
+    const threads = p.threads.map((runId) => {
+      const thread = db.threads.find((t) => t.id === runId);
+      if (!thread) return undefined;
+      if (p.space) thread.space = p.space;
+      else delete thread.space;
+      emit({ kind: "thread.updated", thread });
+      return thread;
+    });
+    return { threads: threads.filter((t) => t !== undefined) };
+  },
   "thread/delete": (p) => {
     const thread = db.threads.find((t) => t.id === p.runId);
     db.threads = db.threads.filter((t) => t.id !== p.runId);
@@ -913,8 +926,38 @@ const handlers: { [M in Method]?: Handler<M> } = {
     if (!repo) return fail("no such repo");
     if (p.icon) repo.icon = p.icon;
     if (p.name) repo.name = p.name;
+    if (p.instructions !== undefined) {
+      const text = p.instructions.trim();
+      if (text) repo.instructions = text;
+      else delete repo.instructions;
+    }
+    if (p.files) {
+      if (p.files.length) repo.files = [...new Set(p.files)];
+      else delete repo.files;
+    }
     emit({ kind: "repo.updated", repo });
     return { repo };
+  },
+  "space/create": (p) => {
+    const found = db.repos.find((r) => r.id === p.id);
+    if (found) return { repo: found };
+    const repo = {
+      id: p.id,
+      name: p.name.trim(),
+      path: `${HOME}/.parallax/spaces/${p.id}`,
+      space: true,
+      ...(p.icon && { icon: p.icon }),
+      createdAt: now(),
+    };
+    db.repos.push(repo);
+    emit({ kind: "repo.added", repo });
+    return { repo };
+  },
+  "space/delete": (p) => {
+    db.threads = db.threads.filter((t) => t.repo !== p.space);
+    db.repos = db.repos.filter((r) => r.id !== p.space);
+    emit({ kind: "repo.removed", repo: p.space });
+    return {};
   },
   "repo/refs": () => ({
     refs: [

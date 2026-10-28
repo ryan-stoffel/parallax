@@ -28,6 +28,10 @@ pub struct Repo {
     /// Its icon, in a project's shape (decision record 0033), stored as the client sent it.
     pub icon: Option<ProjectIcon>,
     pub created_at: Timestamp,
+    /// A Space's instructions for every thread in it (decision record 0090).
+    pub instructions: Option<String>,
+    /// The files a Space gives every thread in it, as absolute paths (decision record 0090).
+    pub files: Vec<String>,
 }
 
 /// A normal thread row, keyed by its run's id.
@@ -56,6 +60,8 @@ pub struct Thread {
     pub unarchived_at: Option<Timestamp>,
     /// Whether the user pinned it to the top of the sidebar (PLX-789).
     pub pinned: bool,
+    /// The Space the user added it to (0090), apart from `repo_id`.
+    pub space_id: Option<Uuid>,
 }
 
 /// The run and turn a thread was forked from (decision record 0041).
@@ -89,13 +95,14 @@ pub struct ThreadUpdate {
 }
 
 const REPO_COLUMNS: &str = "id, name, path, scratch, created_at, \
-    icon_name, icon_color, icon_image_type, icon_image_data, space";
+    icon_name, icon_color, icon_image_type, icon_image_data, space, instructions, files";
 const THREAD_COLUMNS: &str = "id, repo_id, archived, created_at, seen_at, snoozed_until, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id), created_at) \
     AS last_prompt_at, (SELECT parent FROM runs WHERE runs.id = threads.id), forked_from_run, \
     forked_from_turn, title, settled, unarchived_at, pinned, \
     COALESCE((SELECT MAX(created_at) FROM turns WHERE turns.run_id = threads.id AND from_user \
-        AND substr(text, 1, 22) != 'Parallax, not the user'), created_at) AS last_user_prompt_at";
+        AND substr(text, 1, 22) != 'Parallax, not the user'), created_at) AS last_user_prompt_at, \
+    space_id";
 
 /// A repo entry's columns as TEXT, before the fallible conversion to [`Repo`].
 type RawRepo = (
@@ -106,6 +113,8 @@ type RawRepo = (
     String,
     Option<ProjectIcon>,
     bool,
+    Option<String>,
+    Option<String>,
 );
 
 fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
@@ -117,11 +126,13 @@ fn repo_from_row(row: &Row<'_>) -> rusqlite::Result<RawRepo> {
         row.get(4)?,
         icon_from_row(row, 5)?,
         row.get(9)?,
+        row.get(10)?,
+        row.get(11)?,
     ))
 }
 
 fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
-    let (id, name, path, scratch, created_at, icon, space) = raw;
+    let (id, name, path, scratch, created_at, icon, space, instructions, files) = raw;
     Ok(Repo {
         id: Uuid::parse_str(&id)?,
         fields: RepoFields {
@@ -132,6 +143,10 @@ fn into_repo(raw: RawRepo) -> Result<Repo, StoreError> {
         },
         icon,
         created_at: timestamp::parse(&created_at)?,
+        instructions,
+        files: files
+            .map(|files| files.lines().map(str::to_owned).collect())
+            .unwrap_or_default(),
     })
 }
 
@@ -152,6 +167,7 @@ struct RawThread {
     unarchived_at: Option<String>,
     pinned: bool,
     last_user_prompt_at: String,
+    space_id: Option<String>,
 }
 
 fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
@@ -171,6 +187,7 @@ fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<RawThread> {
         unarchived_at: row.get(12)?,
         pinned: row.get(13)?,
         last_user_prompt_at: row.get(14)?,
+        space_id: row.get(15)?,
     })
 }
 
@@ -205,6 +222,7 @@ fn into_thread(raw: RawThread) -> Result<Thread, StoreError> {
             .map(timestamp::parse)
             .transpose()?,
         pinned: raw.pinned,
+        space_id: uuid(raw.space_id)?,
     })
 }
 
@@ -614,6 +632,25 @@ impl Store {
         Ok((thread, changed > 0))
     }
 
+    /// Adds thread `id` to Space `space`, or with `None` takes it out of its Space (0090). Returns
+    /// the thread and whether it changed.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no thread has `id`, or a database error.
+    pub fn set_thread_space(
+        &self,
+        id: Uuid,
+        space: Option<Uuid>,
+    ) -> Result<(Thread, bool), StoreError> {
+        let changed = self.conn.execute(
+            "UPDATE threads SET space_id = ?2 WHERE id = ?1 AND space_id IS NOT ?2",
+            params![id.to_string(), space.map(|space| space.to_string())],
+        )?;
+        let thread = fetch_thread(&self.conn, id)?.ok_or(StoreError::NotFound { id })?;
+        Ok((thread, changed > 0))
+    }
+
     /// Sets repo entry `id`'s icon, replacing the whole icon. Returns the entry and whether it
     /// changed.
     ///
@@ -648,6 +685,43 @@ impl Store {
             "UPDATE repos SET name = ?2 WHERE id = ?1",
             params![id.to_string(), name],
         )?;
+        Ok((existing_repo(&self.conn, id)?, true))
+    }
+
+    /// Sets a Space's instructions and files, each when given, `None` or empty instructions and
+    /// an empty list clearing them. A file path holds no newline, since the paths are stored one
+    /// per line. Returns the entry and whether it changed.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
+    pub fn set_space_context(
+        &self,
+        id: Uuid,
+        instructions: Option<&str>,
+        files: Option<&[String]>,
+    ) -> Result<(Repo, bool), StoreError> {
+        let before = existing_repo(&self.conn, id)?;
+        let instructions = instructions.map(|text| (!text.is_empty()).then_some(text));
+        let same_instructions =
+            instructions.is_none_or(|text| text == before.instructions.as_deref());
+        let same_files = files.is_none_or(|files| files == before.files.as_slice());
+        if same_instructions && same_files {
+            return Ok((before, false));
+        }
+        if let Some(text) = instructions {
+            self.conn.execute(
+                "UPDATE repos SET instructions = ?2 WHERE id = ?1",
+                params![id.to_string(), text],
+            )?;
+        }
+        if let Some(files) = files {
+            let joined = (!files.is_empty()).then(|| files.join("\n"));
+            self.conn.execute(
+                "UPDATE repos SET files = ?2 WHERE id = ?1",
+                params![id.to_string(), joined],
+            )?;
+        }
         Ok((existing_repo(&self.conn, id)?, true))
     }
 

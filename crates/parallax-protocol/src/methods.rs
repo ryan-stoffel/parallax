@@ -94,10 +94,11 @@ use crate::{
     ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
     ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
     ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams,
-    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams,
-    UsageDailyResult, UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult,
-    UsageLimitsParams, UsageLimitsResult,
+    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadSetSpaceParams,
+    ThreadSetSpaceResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
+    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
+    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
+    UsageLimitsResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -458,6 +459,9 @@ method_table! {
         /// `space/delete`: deletes a Space and the chats in it (0069). Gated on the `spaces`
         /// capability.
         SpaceDelete = "space/delete": SpaceDeleteParams => SpaceDeleteResult;
+        /// `thread/setSpace`: adds threads to a Space, or takes them out of one, leaving where
+        /// each works as it is (0090). Gated on the `spaceThreads` capability.
+        ThreadSetSpace = "thread/setSpace": ThreadSetSpaceParams => ThreadSetSpaceResult;
         /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;

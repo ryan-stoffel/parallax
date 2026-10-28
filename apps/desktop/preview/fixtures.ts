@@ -28,6 +28,19 @@ import type {
 
 export const HOME = "/Users/ryan";
 export const PARALLAX_PATH = `${HOME}/Developer/personal/parallax`;
+/** The files a Space's fixture holds, as uploads the mock serves, by path: base64. */
+export const uploadSeeds: Record<string, string> = {
+  [`${HOME}/.parallax/uploads/0199a6f0-a001/syllabus.pdf`]:
+    "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MzcgPj4Kc3RyZWFtCkJUCi9GMSAyMiBUZgo1NiA3MjAgVGQKKENTQ0kgNDIzMDogRGF0YSBNaW5pbmcpIFRqCi9GMSAxMSBUZgowIC0yMCBUZAooRmFsbCAyMDI2ICB8ICBUdWUvVGh1IDEwOjMwKSBUagowIC0yMCBUZAooKSBUagowIC0yMCBUZAooQ291cnNlIGdvYWxzKSBUagowIC0yMCBUZAooLSBQcmVwcm9jZXNzIGFuZCBleHBsb3JlIHJlYWwgZGF0YXNldHMpIFRqCjAgLTIwIFRkCigtIENsYXNzaWZpY2F0aW9uLCBjbHVzdGVyaW5nLCBhc3NvY2lhdGlvbiBydWxlcykgVGoKMCAtMjAgVGQKKC0gRXZhbHVhdGUgbW9kZWxzIGhvbmVzdGx5KSBUagowIC0yMCBUZAooKSBUagowIC0yMCBUZAooR3JhZGluZykgVGoKMCAtMjAgVGQKKEhvbWV3b3JrIDQwJSAgIE1pZHRlcm0gMjUlICAgUHJvamVjdCAzNSUpIFRqCjAgLTIwIFRkCigpIFRqCjAgLTIwIFRkCihTY2hlZHVsZSkgVGoKMCAtMjAgVGQKKFdlZWsgMSAgIERhdGEgYW5kIHByZXByb2Nlc3NpbmcpIFRqCjAgLTIwIFRkCihXZWVrIDQgICBEZWNpc2lvbiB0cmVlcykgVGoKMCAtMjAgVGQKKFdlZWsgNyAgIENsdXN0ZXJpbmcpIFRqCjAgLTIwIFRkCihXZWVrIDEwICBBc3NvY2lhdGlvbiBydWxlcykgVGoKMCAtMjAgVGQKKFdlZWsgMTMgIFByb2plY3QgcHJlc2VudGF0aW9ucykgVGoKRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDA5MjkgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo5OTkKJSVFT0YK",
+  [`${HOME}/.parallax/uploads/0199a6f0-a002/lecture-07-clustering.pdf`]:
+    "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MTEgPj4Kc3RyZWFtCkJUCi9GMSAyMiBUZgo1NiA3MjAgVGQKKExlY3R1cmUgNzogQ2x1c3RlcmluZykgVGoKL0YxIDExIFRmCjAgLTIwIFRkCihrLW1lYW5zLCBoaWVyYXJjaGljYWwsIGFuZCBEQlNDQU4pIFRqCjAgLTIwIFRkCigpIFRqCjAgLTIwIFRkCihrLW1lYW5zKSBUagowIC0yMCBUZAooMS4gUGljayBrIGNlbnRyb2lkcykgVGoKMCAtMjAgVGQKKDIuIEFzc2lnbiBlYWNoIHBvaW50IHRvIGl0cyBuZWFyZXN0IGNlbnRyb2lkKSBUagowIC0yMCBUZAooMy4gTW92ZSBlYWNoIGNlbnRyb2lkIHRvIGl0cyBwb2ludHMnIG1lYW4pIFRqCjAgLTIwIFRkCig0LiBSZXBlYXQgdW50aWwgbm90aGluZyBtb3ZlcykgVGoKMCAtMjAgVGQKKCkgVGoKMCAtMjAgVGQKKENob29zaW5nIGspIFRqCjAgLTIwIFRkCigtIEVsYm93IG1ldGhvZCBvbiB3aXRoaW4tY2x1c3RlciBTU0UpIFRqCjAgLTIwIFRkCigtIFNpbGhvdWV0dGUgc2NvcmUpIFRqCjAgLTIwIFRkCigpIFRqCjAgLTIwIFRkCihIaWVyYXJjaGljYWwpIFRqCjAgLTIwIFRkCigtIEFnZ2xvbWVyYXRpdmU6IG1lcmdlIHRoZSBjbG9zZXN0IHBhaXIpIFRqCjAgLTIwIFRkCigtIExpbmthZ2U6IHNpbmdsZSwgY29tcGxldGUsIGF2ZXJhZ2UpIFRqCkVUCmVuZHN0cmVhbQplbmRvYmoKNSAwIG9iago8PCAvVHlwZSAvRm9udCAvU3VidHlwZSAvVHlwZTEgL0Jhc2VGb250IC9IZWx2ZXRpY2EgPj4KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDI0MSAwMDAwMCBuIAowMDAwMDAwOTAzIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKOTczCiUlRU9GCg==",
+  [`${HOME}/.parallax/uploads/0199a6f0-a003/homework-3.md`]:
+    "IyBIb21ld29yayAzOiBDbHVzdGVyaW5nCgpEdWUgKipPY3QgMzAqKiBhdCAxMTo1OXBtLgoKMS4gUnVuIGstbWVhbnMgb24gYGN1c3RvbWVycy5jc3ZgIGZvciBrID0gMi4uOC4KMi4gUGxvdCBTU0UgYWdhaW5zdCBrIGFuZCBwaWNrIGsgd2l0aCB0aGUgZWxib3cgbWV0aG9kLgozLiBDb21wYXJlIHdpdGggdGhlIHNpbGhvdWV0dGUgc2NvcmUuCjQuIENsdXN0ZXIgYWdhaW4gd2l0aCBEQlNDQU4gKGVwcyA9IDAuNSwgbWluX3NhbXBsZXMgPSA1KS4KCkV4cGxhaW4gd2hpY2ggeW91IHRydXN0IG1vcmUsIGFuZCB3aHkuCg==",
+};
+
+/** An icon the user uploaded (0038): a warm gradient with a light disc, for landing-page. */
+const LANDING_ICON =
+  "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAABVUlEQVR42rXU7SuDYRQG8OsPI4kkkkQS2cxmHpuZvZjZzGxmm72YLUkkkST/ms8+nfvc82ES5Xmee1unzuffVafrHHQ979rzpr2veuNF+5715pP2P2r/gw7c6607HbzV2zfautZWR++0dajF4Sbv1jlS40iV98ocLfF+kWMFjuc5nuNElpMZPkhzKsWHSU4nIKqrdAyiujqKQlRXmQhEdZUNQ1RXxyGI6ipnQVRXuSBEdXUSgKiu8n6Y693Pj58x1NWpDyb6b/pPjJuuCl4MrPfGWVfFdfS1mX8CHHVVXMMw+neGva7OVuHcGaMAe12VVuDcSLMAW53Ol+Hcd6MAe53KS3C9pmF0qizC9VZdAhx1qizA5BMMrFN1HuZ/pq/N9HS6mMPAX8xEp9osRHWqz0BUp8Y0RHVqTEFUp+YkRHW6nICoTq1xiOp0NQZRndqjENWpM/IFItgHWLGjZ9UAAAAASUVORK5CYII=";
 const DOCS_PATH = `${HOME}/Developer/personal/docs-site`;
 
 /** A run's logged event, before the mock numbers it. */
@@ -118,6 +131,9 @@ export const ids = {
   physics: uuid(123),
   essay: uuid(124),
   names: uuid(125),
+  spaceCoursework: uuid(130),
+  spaceEssays: uuid(131),
+  spaceApartment: uuid(132),
 } as const;
 
 const OPUS = "claude-opus-5-5";
@@ -163,6 +179,33 @@ export function createFixtures(now = Date.now()): Fixtures {
       scratch: true,
       createdAt: ago(60 * 24 * 40),
     },
+    // Chat projects (0090).
+    {
+      id: ids.spaceCoursework,
+      name: "CSCI4230 · Data Mining",
+      path: `${HOME}/.parallax/spaces/${ids.spaceCoursework}`,
+      space: true,
+      icon: { name: "graduation-cap", color: "sky" },
+      createdAt: ago(60 * 24 * 30),
+      instructions:
+        "I'm a senior CS student. Explain with the math first, then a small worked example in Python. Keep answers under 300 words unless I ask for more.",
+      files: Object.keys(uploadSeeds),
+    },
+    {
+      id: ids.spaceEssays,
+      name: "Essays",
+      path: `${HOME}/.parallax/spaces/${ids.spaceEssays}`,
+      space: true,
+      icon: { name: "feather", color: "orange" },
+      createdAt: ago(60 * 24 * 20),
+    },
+    {
+      id: ids.spaceApartment,
+      name: "Moving into my own apartment",
+      path: `${HOME}/.parallax/spaces/${ids.spaceApartment}`,
+      space: true,
+      createdAt: ago(60 * 24 * 14),
+    },
   ];
 
   const projects: Project[] = [
@@ -201,7 +244,10 @@ export function createFixtures(now = Date.now()): Fixtures {
     ).map(([id, name, icon, color], n): Project => ({
       id,
       name,
-      icon: { name: icon, color },
+      icon:
+        id === ids.projectLanding
+          ? { name: icon, image: { mediaType: "image/png", data: LANDING_ICON } }
+          : { name: icon, color },
       repoPath: DOCS_PATH,
       branch: "main",
       permission: "auto",
@@ -1409,8 +1455,10 @@ export function createFixtures(now = Date.now()): Fixtures {
     started: number;
     updated: number;
     seen?: number;
+    /** A chat project's id, for a chat in one. */
+    repo?: string;
   }) => {
-    const run = thread({ ...c, repo: ids.repoScratch, status: "completed" });
+    const run = thread({ ...c, repo: c.repo ?? ids.repoScratch, status: "completed" });
     log(run)
       .out(
         ago(c.started),
@@ -1450,6 +1498,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     .finish(ago(12), { status: "completed" });
   chat({
     id: ids.homework,
+    repo: ids.spaceCoursework,
     title: "Linear algebra: eigenvalues walkthrough",
     slug: "eigenvalues",
     prompt:
@@ -1460,6 +1509,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   chat({
     id: ids.physics,
+    repo: ids.spaceCoursework,
     title: "Physics: torque and angular momentum",
     slug: "torque",
     prompt: "Explain torque and angular momentum like I'm studying for Thursday's exam.",
@@ -1470,6 +1520,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   chat({
     id: ids.essay,
+    repo: ids.spaceEssays,
     title: "Essay outline: AI tutors and academic honesty",
     slug: "essay-outline",
     prompt: "Help me outline a 1,500 word essay on AI tutors and academic honesty.",

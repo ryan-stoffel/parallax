@@ -19,6 +19,7 @@ import {
   CircleX,
   Ellipsis,
   FileDiff,
+  FlaskConical,
   Folder,
   FolderGit2,
   FolderPlus,
@@ -44,7 +45,8 @@ import {
   Server,
   Settings,
   ShieldCheck,
-  MessageCircle,
+  MessagesSquare,
+  Laptop,
   SquarePen,
   SquareTerminal,
   Trash2,
@@ -125,7 +127,15 @@ import { NightSky } from "./NightSky";
 import { dismiss, notify } from "./notifications";
 import { iconColors, iconLook } from "./projectIcons";
 import { ForkMenu } from "./Fork";
-import { archivePageSize, sidebarPrefs } from "./sidebarPrefs";
+import {
+  archivePageSize,
+  newSidebar,
+  pinnedProjects,
+  sidebarPrefs,
+  type NavRow,
+} from "./sidebarPrefs";
+import { SidebarNav, navRow } from "./SidebarNav";
+import { projectEntries, type ProjectEntry } from "./projectList";
 import { stored } from "./stored";
 
 import { useFlip } from "./flip";
@@ -270,10 +280,16 @@ interface ThreadListProps {
   /** Opens a Project, on another host by opening that host first. */
   onOpenProject: (hostId: string, projectId: string) => void;
   onOpenSettings: (section: SettingsSection) => void;
-  /** Opens the Pull requests page, in place of the main pane. */
-  onOpenPullRequests: () => void;
-  /** Opens the Usage page, in place of the main pane. */
-  onOpenUsage: () => void;
+  /** The page open in place of the main pane, whose nav row reads as selected (0090). */
+  page?: NavRow;
+  /** Opens Projects, Pull requests, or Usage in place of the main pane. */
+  onOpenPage: (page: NavRow) => void;
+  /** The open Space, as `<host>/<id>`, whose pinned row reads as selected. */
+  openSpace?: string;
+  /** A project's menu, for the Projects page's cards (0090). */
+  projectMenu?: Ref<ProjectMenuHandle>;
+  /** Opens Create Space, from the add palette's New Space, where the open host makes Spaces. */
+  onNewSpace?: () => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   /** The add palette, for the command menu's New Project and Add repository (PLX-993). */
@@ -344,16 +360,19 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
 
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
- * another computer, or else its initials on a tile in a color picked from its name. Chat is a
- * chat bubble.
+ * another computer, or else its initials on a tile in a color picked from its name. No repo is a
+ * laptop, and a Space with no icon of its own two speech bubbles (0090).
  */
 export function RepoIcon({ repo }: { repo?: Repo }) {
   const shared = useContext(SharedRepoIcons);
   const size = "size-4";
   if (!repo || repo.scratch)
-    return <MessageCircle aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
+    return <Laptop aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);
   if (icon) return <ProjectIcon icon={icon} className={`${size} shrink-0`} />;
+  // A Space with no icon draws the Space glyph, as on the Projects page (0090).
+  if (repo.space)
+    return <MessagesSquare aria-hidden className={`${size} shrink-0 text-project-gray`} />;
   return (
     <span
       aria-hidden
@@ -370,7 +389,10 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
 // one shows switches at once.
 const cardDelay = 450;
 
-/** A scope's drawers, by whether each is open. Working stays tucked away until asked for. */
+/**
+ * A scope's drawers, by whether each is open. Working stays tucked away until asked for. Projects
+ * is the classic sidebar's (0090).
+ */
 type Sections = Record<"projects" | "working" | "snoozed" | "archived", boolean>;
 const sectionDefaults: Sections = {
   projects: false,
@@ -501,8 +523,11 @@ export function ThreadList({
   onSelect,
   onOpenProject,
   onOpenSettings,
-  onOpenPullRequests,
-  onOpenUsage,
+  page,
+  onOpenPage,
+  openSpace,
+  projectMenu,
+  onNewSpace,
   onDelete,
   addDialog: addDialogRef,
   onNewThread,
@@ -515,6 +540,12 @@ export function ThreadList({
   const deleteDialog = useRef<HTMLDialogElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const projectDialogs = useRef<ProjectDialogsHandle>(null);
+  const spaceDelete = useRef<HTMLDialogElement>(null);
+  // The Space the delete dialog asks about, and its host's view.
+  const [spaceToDelete, setSpaceToDelete] = useState<ProjectEntry>();
+  const pins = pinnedProjects.use();
+  // The classic sidebar, as before 0090, unless Settings › Beta turns on the new one.
+  const classic = !newSidebar.use();
   // The thread or Project the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
@@ -568,7 +599,7 @@ export function ThreadList({
   const scopeLabel = scopeRepo
     ? { name: scopeRepo.name, color: repoColor(scopeRepo, repoIconOf(scopeRepo, sharedIcons)) }
     : scope === "none"
-      ? { name: "Chat", color: "var(--faint-foreground)" }
+      ? { name: "No repo", color: "var(--faint-foreground)" }
       : undefined;
   const sections = { ...sectionDefaults, ...sectionsStore.use()[scope] };
   const toggleSection = (name: keyof Sections, value = !sections[name]) => {
@@ -618,7 +649,7 @@ export function ThreadList({
           title,
           text: [
             title,
-            repo && !repo.scratch ? repo.name : "Chat",
+            repo && !repo.scratch ? repo.name : "No repo",
             run?.branch,
             ...(run?.pullRequests ?? []).map((url) => `#${numberOf(url)}`),
           ].join(" "),
@@ -679,19 +710,27 @@ export function ThreadList({
   }
   // What a row shows, and where: its own status, or its family's news.
   const rowAttention = (i: Item) => familyNews.get(i.key) ?? i.attention;
-  // Where a thread is, for its card: its repo, or Chat.
+  // Where a thread is, for its card: its repo, or No repo.
+  // The Space a thread was added to (0090), which it shows and filters as, over where it works.
+  const addedTo = (item: Item) => (item.kind === "thread" ? item.thread.space : undefined);
   const placeOf = (item: Item) => {
+    const space = addedTo(item);
+    const repo = (space && item.view.state.repos.find((r) => r.id === space)) || item.repo;
     return {
-      name: item.repo && !item.repo.scratch ? item.repo.name : "Chat",
-      icon: <RepoIcon repo={item.repo} />,
+      name: repo && !repo.scratch ? repo.name : "No repo",
+      icon: <RepoIcon repo={repo} />,
     };
   };
 
   const inScope = (item: Item, s: Scope) => {
     const p = parseScope(s);
     if (p.kind === "all") return true;
-    if (p.kind === "none") return !item.repo || item.repo.scratch;
-    return p.kind === "repo" && item.host.id === p.hostId && item.repo?.id === p.id;
+    if (p.kind === "none") return (!item.repo || item.repo.scratch) && !addedTo(item);
+    return (
+      p.kind === "repo" &&
+      item.host.id === p.hostId &&
+      (item.repo?.id === p.id || addedTo(item) === p.id)
+    );
   };
   const isArchived = (i: Item) => i.kind === "thread" && !!i.thread.archived;
   // A snoozed thread wakes early when it, or one it started, needs the user.
@@ -761,9 +800,10 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // Projects, most recently active first, as threads are (PLX-1043). They live in their drawer,
-  // except one that needs the user, or matches a search, which shows atop the list.
-  const allProjects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
+  // In the classic sidebar, Projects, most recently active first, as threads are (PLX-1043). They
+  // live in their drawer, except one that needs the user, or matches a search, which shows atop
+  // the list. The new sidebar lists them only under Pinned and on the Projects page (0090).
+  const allProjects = classic ? shown.flatMap((i) => (i.kind === "project" ? [i] : [])) : [];
   const projects = allProjects.filter((p) => p.attention === "needsYou" || words.length > 0);
   const drawerProjects = allProjects.filter((p) => !projects.includes(p));
   // The favorite threads stay in the order they're moved into (pins.ts).
@@ -863,7 +903,8 @@ export function ThreadList({
           .filter((i) => !isFolded(groupKey(i)))
           .sort((a, b) => groupPlace.get(groupKey(a))! - groupPlace.get(groupKey(b))!);
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // Projects' and pinned threads' rows, then Today's threads, then Working's, while it's open.
+  // classic sidebar's Projects' rows, the pinned threads' rows, then Today's threads, then
+  // Working's, while it's open.
   const listed = [
     ...projects,
     ...pinnedRows,
@@ -1212,6 +1253,7 @@ export function ThreadList({
         title={item.title}
         run={item.run}
         repo={item.repo}
+        space={t.space ? view.state.repos.find((r) => r.id === t.space) : undefined}
         attention={rowAttention(item)}
         selected={selected}
         picked={picked.has(item.key)}
@@ -1322,6 +1364,17 @@ export function ThreadList({
     setDeleting(false);
     if (error) setDeleteError(error);
     else deleteDialog.current?.close();
+  };
+
+  const confirmSpaceDelete = async () => {
+    if (!spaceToDelete) return;
+    setDeleting(true);
+    const error = await spaceToDelete.view.removeSpace(spaceToDelete.id);
+    setDeleting(false);
+    if (error) return setDeleteError(error);
+    spaceDelete.current?.close();
+    pinnedProjects.set(pinnedProjects.get().filter((k) => k !== spaceToDelete.key));
+    if (openSpace === spaceToDelete.key) onSelect(spaceToDelete.host.id, { kind: "new" });
   };
 
   // Each favorite's icon, chosen for it, else its repo's.
@@ -1482,7 +1535,7 @@ export function ThreadList({
         groupBy === "repo" ? (
           <>
             <RepoIcon repo={repo} />
-            <span className="min-w-0 truncate">{repo?.name ?? "Chat"}</span>
+            <span className="min-w-0 truncate">{repo?.name ?? "No repo"}</span>
             {/* Repos on two computers can share a name. */}
             {many && (
               <span className="min-w-0 truncate font-normal text-faint-foreground">
@@ -1651,6 +1704,49 @@ export function ThreadList({
         : []),
     ];
   };
+  // A Space's menu items (0090): Rename and Change icon where its plxd keeps icons, and
+  // Delete.
+  const spaceActions = (entry: ProjectEntry): FavoriteAction[] => {
+    const space = entry.view.state.repos.find((r) => r.id === entry.id);
+    if (!space) return [];
+    const open = (what: ProjectDialog) => (square: HTMLElement) =>
+      projectDialogs.current?.open(what, space, entry.view, square);
+    return [
+      { label: "Rename…", icon: <PencilLine aria-hidden />, run: open("rename") },
+      ...("threadAttention" in entry.view.capabilities
+        ? [{ label: "Change icon…", icon: <Palette aria-hidden />, run: open("icon") }]
+        : []),
+      {
+        label: "Delete…",
+        icon: <Trash2 aria-hidden />,
+        danger: true,
+        run: () => {
+          setSpaceToDelete(entry);
+          setDeleteError(undefined);
+          spaceDelete.current?.showModal();
+        },
+      },
+    ];
+  };
+  const entryActions = (entry: ProjectEntry): FavoriteAction[] => {
+    if (entry.kind === "space") return spaceActions(entry);
+    const item = byKey.get(entry.key);
+    return item?.kind === "project" ? projectActions(item) : [];
+  };
+  useImperativeHandle(projectMenu, () => ({ actionsFor: entryActions }));
+  // Every project, Projects and Spaces, for Pinned, in the order pinned.
+  const entries = projectEntries(hosts);
+  const pinnedEntries = pins.flatMap((key) => entries.filter((e) => e.key === key));
+  const openEntry = (entry: ProjectEntry) => {
+    hideCard();
+    onSelect(
+      entry.host.id,
+      entry.kind === "project"
+        ? { kind: "project", projectId: entry.id }
+        : { kind: "new", groupId: entry.id },
+    );
+  };
+
   // The pinned threads moved up into the favorites, in the order moved into.
   const favorites = favoriteThreads
     .map((i) => {
@@ -1667,7 +1763,7 @@ export function ThreadList({
       };
     })
     .sort((a, b) => favRank(a.key) - favRank(b.key));
-  // A Project's card (PLX-1043).
+  // A Project's card in the classic sidebar (PLX-1043).
   const projectCard = (p: Item & { kind: "project" }) => {
     const n = modHeld ? listed.indexOf(p) : -1;
     return (
@@ -1742,63 +1838,96 @@ export function ThreadList({
     !archived.length &&
     !draftRows.length;
 
+  // The search box and the filter, which the classic head and the new Search row each lay out.
+  const searchInput = (className: string) => (
+    <input
+      ref={search}
+      type="search"
+      aria-label={scopeLabel ? `Search ${scopeLabel.name}` : "Search threads and Projects"}
+      placeholder={scopeLabel ? `Search ${scopeLabel.name}` : "Search"}
+      value={query}
+      onChange={(e) => {
+        quiet();
+        setQuery(e.target.value);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          if (query) setQuery("");
+          else e.currentTarget.blur();
+        } else if (e.key === "Enter" || e.key === "ArrowDown") {
+          // Into the list: Enter opens the first row, Down focuses it.
+          const first = shownRows()[0];
+          if (!first) return;
+          e.preventDefault();
+          if (e.key === "Enter") first.click();
+          else first.focus();
+        }
+      }}
+      className={className}
+    />
+  );
+  const scopeMenu = (
+    <ScopeMenu
+      hosts={hosts}
+      scope={scope}
+      current={scopeLabel}
+      onScope={(next) => setScope(next)}
+      many={many}
+      needs={needsIn}
+      outside={outside}
+      tucked={!classic}
+      view={
+        <ViewOptions
+          autoHours={autoHours}
+          onAutoHours={(hours) => autoClear.set(hours)}
+          compact={compact}
+          onCompact={(on) => compactRows.set(on)}
+          group={groupBy}
+          onGroup={(next) => todayGroup.set(next)}
+        />
+      }
+    />
+  );
+
   return (
     <>
-      <div className="flex items-center gap-1 px-2">
-        <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
-          <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-          <input
-            ref={search}
-            type="search"
-            aria-label={scopeLabel ? `Search ${scopeLabel.name}` : "Search threads and Projects"}
-            placeholder={scopeLabel ? `Search ${scopeLabel.name}` : "Search"}
-            value={query}
-            onChange={(e) => {
-              quiet();
-              setQuery(e.target.value);
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") {
-                if (query) setQuery("");
-                else e.currentTarget.blur();
-              } else if (e.key === "Enter" || e.key === "ArrowDown") {
-                // Into the list: Enter opens the first row, Down focuses it.
-                const first = shownRows()[0];
-                if (!first) return;
-                e.preventDefault();
-                if (e.key === "Enter") first.click();
-                else first.focus();
-              }
-            }}
-            className="min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
-          />
-        </label>
-        <ScopeMenu
-          hosts={hosts}
-          scope={scope}
-          current={scopeLabel}
-          onScope={(next) => setScope(next)}
-          many={many}
-          needs={needsIn}
-          outside={outside}
-          view={
-            <ViewOptions
-              autoHours={autoHours}
-              onAutoHours={(hours) => autoClear.set(hours)}
-              compact={compact}
-              onCompact={(on) => compactRows.set(on)}
-              group={groupBy}
-              onGroup={(next) => todayGroup.set(next)}
-            />
+      {classic ? (
+        <div className="flex items-center gap-1 px-2">
+          <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+            <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+            {searchInput(
+              "min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none",
+            )}
+          </label>
+          {scopeMenu}
+          <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
+            <FolderPlus />
+          </IconButton>
+          <IconButton label="New thread" command="newThread" onClick={onNewThread}>
+            <SquarePen />
+          </IconButton>
+        </div>
+      ) : (
+        <SidebarNav
+          current={page}
+          pinned={pinnedEntries}
+          openKey={openSpace ?? (selection.kind === "project" ? openKey : undefined)}
+          onNewThread={onNewThread}
+          onOpen={onOpenPage}
+          onOpenProject={openEntry}
+          onAdd={() => addDialog.current?.open()}
+          pinActions={(entry) => entryActions(entry)}
+          search={
+            <label className={`sky-search ${navRow} focus-within:bg-hover`}>
+              <Search aria-hidden />
+              {searchInput(
+                "min-w-0 flex-1 truncate bg-transparent text-body text-foreground placeholder:text-foreground/90 focus:placeholder:text-faint-foreground focus-visible:outline-none",
+              )}
+              {scopeMenu}
+            </label>
           }
         />
-        <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
-          <FolderPlus />
-        </IconButton>
-        <IconButton label="New thread" command="newThread" onClick={onNewThread}>
-          <SquarePen />
-        </IconButton>
-      </div>
+      )}
       <div
         onScroll={hideCard}
         data-flip-scroll
@@ -1860,13 +1989,15 @@ export function ThreadList({
       {drawerProjects.length > 0 && (
         <div aria-hidden className="mx-4 my-1 border-t border-border" />
       )}
-      <Drawer
-        label="Projects"
-        items={drawerProjects}
-        row={(p) => (p.kind === "project" ? projectCard(p) : null)}
-        open={sections.projects}
-        onOpenChange={(o) => toggleSection("projects", o)}
-      />
+      {classic && (
+        <Drawer
+          label="Projects"
+          items={drawerProjects}
+          row={(p) => (p.kind === "project" ? projectCard(p) : null)}
+          open={sections.projects}
+          onOpenChange={(o) => toggleSection("projects", o)}
+        />
+      )}
       {pickedItems.length > 0 && (
         <BulkBar
           count={pickedItems.length}
@@ -1888,6 +2019,7 @@ export function ThreadList({
         repos={open?.state.repos ?? []}
         create={open?.createProject ?? (async () => "Not connected")}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
+        onNewSpace={onNewSpace}
       />
       <ProjectDialogs
         ref={projectDialogs}
@@ -1906,13 +2038,24 @@ export function ThreadList({
           ? projectLoss(toDelete.runs.length)
           : ", with its transcript, worktree, and branch."}
       </ConfirmDialog>
+      <ConfirmDialog
+        ref={spaceDelete}
+        title="Delete this Space?"
+        action="Delete"
+        busy={deleting ? "Deleting…" : undefined}
+        error={deleteError}
+        onConfirm={() => void confirmSpaceDelete()}
+      >
+        “{spaceToDelete?.name}” goes for good, with{" "}
+        {spaceToDelete?.threads === 1 ? "its thread" : `its ${spaceToDelete?.threads ?? 0} threads`}
+        , instructions, and files.
+      </ConfirmDialog>
       <div className="border-t border-border p-2">
         <ConnectionStatus hostId={host.id} />
         <Footer
           listed={hosts}
           onOpenSettings={onOpenSettings}
-          onOpenPullRequests={onOpenPullRequests}
-          onOpenUsage={onOpenUsage}
+          onOpenPage={classic ? onOpenPage : undefined}
         />
       </div>
     </>
@@ -2157,6 +2300,7 @@ function ScopeMenu({
   many,
   needs,
   outside,
+  tucked,
   view,
 }: {
   hosts: HostThreads[];
@@ -2169,6 +2313,8 @@ function ScopeMenu({
   needs: (scope: Scope) => number;
   /** How many threads outside the chosen scope need the user. */
   outside: number;
+  /** In the new sidebar's Search row (0090): hidden until hovered or focused, or a scope is chosen. */
+  tucked?: boolean;
   /** The View options (PLX-1043), under the repos. */
   view: ReactNode;
 }) {
@@ -2289,7 +2435,7 @@ function ScopeMenu({
         aria-pressed={scope !== "all"}
         aria-haspopup="menu"
         popoverTarget={menuId}
-        className="relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
+        className={`relative grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground transition-opacity hover:bg-hover hover:text-foreground aria-pressed:text-foreground [&_svg]:size-4 ${tucked ? (scope === "all" && !outside ? "opacity-0 group-focus-within/nav:opacity-100 group-hover/nav:opacity-100" : "") : "aria-pressed:bg-selected"}`}
       >
         <ListFilter />
         {current && (
@@ -2344,7 +2490,7 @@ function ScopeMenu({
           {!q && fixedRow("all", <Layers aria-hidden />, "All threads")}
           {(repos.length > 0 || !q) && heading("Repos")}
           {repos.map(row)}
-          {!q && fixedRow("none", <MessageCircle aria-hidden />, "Chat")}
+          {!q && fixedRow("none", <Laptop aria-hidden />, "No repo")}
           {q && repos.length === 0 && (
             <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
           )}
@@ -2382,20 +2528,25 @@ function ScopeMenu({
 function Footer({
   listed,
   onOpenSettings,
-  onOpenPullRequests,
-  onOpenUsage,
-}: Pick<ThreadListProps, "onOpenSettings" | "onOpenPullRequests" | "onOpenUsage"> & {
+  onOpenPage,
+}: Pick<ThreadListProps, "onOpenSettings"> & {
   listed: HostThreads[];
+  /** The classic sidebar's Pull requests and Usage buttons, which the new one lists in its head. */
+  onOpenPage?: (page: NavRow) => void;
 }) {
   return (
     <div className="flex items-center gap-1">
       <ProfileButton listed={listed} />
-      <IconButton label="Pull requests" onClick={onOpenPullRequests}>
-        <GitPullRequest />
-      </IconButton>
-      <IconButton label="Usage" onClick={onOpenUsage}>
-        <ChartNoAxesColumn />
-      </IconButton>
+      {onOpenPage && (
+        <>
+          <IconButton label="Pull requests" onClick={() => onOpenPage("pullRequests")}>
+            <GitPullRequest />
+          </IconButton>
+          <IconButton label="Usage" onClick={() => onOpenPage("usage")}>
+            <ChartNoAxesColumn />
+          </IconButton>
+        </>
+      )}
       <span className="flex-1" />
       <IconButton label="Settings" command="settings" onClick={() => onOpenSettings("general")}>
         <Settings />
@@ -2431,8 +2582,17 @@ function actionFailed(error: string | undefined, title: string) {
 }
 
 type ProjectDialogsHandle = {
-  open: (what: ProjectDialog, project: Project, view: ThreadsView, square: HTMLElement) => void;
+  /** Opens `what` for a Project, or for a Space's entry (0090), which renames and recolors only. */
+  open: (
+    what: ProjectDialog,
+    project: Project | Repo,
+    view: ThreadsView,
+    square: HTMLElement,
+  ) => void;
 };
+
+/** Project handle the Projects page reads a project's menu through (0090). */
+export type ProjectMenuHandle = { actionsFor: (entry: ProjectEntry) => FavoriteAction[] };
 
 /**
  * A Project's dialogs, opened from its row's menu: Rename, the icon picker beside its row,
@@ -2448,7 +2608,7 @@ function ProjectDialogs({
 }) {
   const [opened, setOpened] = useState<{
     what: ProjectDialog;
-    project: Project;
+    project: Project | Repo;
     view: ThreadsView;
     square: HTMLElement;
   }>();
@@ -2460,7 +2620,7 @@ function ProjectDialogs({
   useImperativeHandle(ref, () => ({
     open(what, project, view, square) {
       setName(project.name);
-      setAutonomy(project.autonomy ?? "routine");
+      setAutonomy(("autonomy" in project && project.autonomy) || "routine");
       setOpened({ what, project, view, square });
     },
   }));
@@ -2470,7 +2630,16 @@ function ProjectDialogs({
     else if (opened) dialog.current?.showModal();
   }, [opened]);
   const update = async (change: ProjectChange) => {
-    if (opened) onError(await opened.view.updateProject(opened.project.id, change));
+    if (!opened) return;
+    const { project, view } = opened;
+    onError(
+      "repoPath" in project
+        ? await view.updateProject(project.id, change)
+        : await view.updateRepo(project.id, {
+            ...(change.name && { name: change.name }),
+            ...(change.icon && { icon: change.icon }),
+          }),
+    );
   };
   const project = opened?.project;
   const close = () => setOpened(undefined);
@@ -2487,7 +2656,7 @@ function ProjectDialogs({
       {opened?.what === "rename" && (
         <SettingDialog
           ref={dialog}
-          label="Rename Project"
+          label={opened.project && "repoPath" in opened.project ? "Rename Project" : "Rename Space"}
           action="Rename"
           onClose={close}
           onSave={() => {
@@ -2651,154 +2820,8 @@ function RowHead({
   );
 }
 
-/** Where a row's thread is, at the start of its second line: its repo's icon and name, or Chat. */
-function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[] }) {
-  return (
-    <span className="flex min-w-0 items-center gap-1.5">
-      <RepoIcon repo={repo} />
-      <span className="min-w-0 truncate">
-        <Marked text={repo && !repo.scratch ? repo.name : "Chat"} words={words} />
-      </span>
-    </span>
-  );
-}
-
 /**
- * A card's top line (PLX-1043): where it is, its icon and name, then `status` at the end, what it
- * asks of the user or how long ago it was last active. Hovering or focusing the card hides the
- * status for its actions and keeps the place clear of them.
- */
-function RowTop({
-  place,
-  status,
-  oneAction = false,
-}: {
-  place?: ReactNode;
-  status: ReactNode;
-  /** Whether the card shows only its actions button. */
-  oneAction?: boolean;
-}) {
-  const clear = oneAction
-    ? "group-has-[:focus-visible]/row:pr-7 group-hover/row:pr-7"
-    : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34";
-  return (
-    <span
-      className={`flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground ${clear}`}
-    >
-      <span className="flex min-w-0 flex-1 items-center">{place}</span>
-      <span
-        data-status
-        className="shrink-0 group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
-      >
-        {status}
-      </span>
-    </span>
-  );
-}
-
-/** A card's title (PLX-1043): bold, and bolder while hovered. */
-function RowTitle({ title, color }: { title: ReactNode; color: string }) {
-  return (
-    <span
-      data-title
-      className={`w-full min-w-0 truncate text-body font-semibold transition-colors group-hover/row:font-bold ${color}`}
-    >
-      {title}
-    </span>
-  );
-}
-
-// Measures text for `BranchName`, made once.
-let measure: CanvasRenderingContext2D | null | undefined;
-
-/**
- * A branch name in the room its line leaves, cut in the middle at word breaks to fit
- * (`shortBranch`), as `feature/PLX-49-…implementation`, and refit as the sidebar resizes. Its title
- * is the whole name.
- */
-function BranchName({ branch, words }: { branch: string; words: readonly string[] }) {
-  const self = useRef<HTMLSpanElement>(null);
-  const [max, setMax] = useState(branch.length);
-  useLayoutEffect(() => {
-    const el = self.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const fit = () => {
-      measure ??= document.createElement("canvas").getContext("2d");
-      if (!measure || !el.clientWidth) return;
-      measure.font = getComputedStyle(el).font;
-      let n = branch.length;
-      while (n > 12 && measure.measureText(shortBranch(branch, n)).width > el.clientWidth) n--;
-      setMax(n);
-    };
-    fit();
-    const observer = new ResizeObserver(fit);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [branch]);
-  return (
-    <span ref={self} title={branch} className="min-w-0 flex-1 truncate">
-      <Marked text={shortBranch(branch, max)} words={words} />
-    </span>
-  );
-}
-
-/** The space between cards in a list. */
-const cardGap = "flex flex-col gap-1";
-
-/**
- * The look of a thread's linked pull requests: that of the most common state among those read,
- * and the newest linked one on a tie.
- */
-function majorityLook(prs: PullRequests) {
-  const read = prs.urls.flatMap((url) => prs.get(url)?.pr ?? []);
-  let best: (typeof read)[number] | undefined;
-  let top = 0;
-  for (const pr of read) {
-    const n = read.filter((p) => p.state === pr.state).length;
-    if (n >= top) [best, top] = [pr, n];
-  }
-  return lookOf(best);
-}
-
-/** Space between a draft's outlined row and its neighbors, so the outline doesn't touch them. */
-const draftGap = "my-1 first:mt-0 last:mb-0";
-
-/** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
-function DraftStatus() {
-  return (
-    <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
-      <PencilLine aria-hidden />
-      Draft
-    </span>
-  );
-}
-
-/**
- * An unsent New Thread prompt's card (PLX-788): its repo and a Draft status, then its first line,
- * outlined in the warning color and spaced off its neighbors (PLX-932). Opening it reopens New
- * Thread with it, which takes it off the list.
- */
-function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: () => void }) {
-  const attached = draft.images.length + draft.files.length + draft.threads.length;
-  const title =
-    draft.text.trim().split("\n")[0] ||
-    `${attached} ${attached === 1 ? "attachment" : "attachments"}`;
-  return (
-    <li data-kind="draft" className={draftGap}>
-      <button
-        type="button"
-        onClick={onOpen}
-        className="group/row flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2.5 py-2 text-left hover:bg-hover"
-      >
-        <RowTop place={<RowPlace repo={repo} />} status={<DraftStatus />} oneAction />
-        <RowTitle title={title} color="text-foreground" />
-      </button>
-    </li>
-  );
-}
-
-/**
- * A Project's card (PLX-1043), shaped like a thread's: its icon, "Project", and how many threads it
+ * The classic sidebar's Project card (PLX-1043, 0090), shaped like a thread's: its icon, "Project", and how many threads it
  * holds, with its status at the end (what it asks of the user, how many of its runs work, or how
  * long ago it was last active), then its name in bold, then its branch, its computer, and its
  * coordinator's provider, in color while it's open. Hovering or focusing it shows its actions button, whose menu also opens by
@@ -2970,6 +2993,152 @@ function ProjectRow({
   );
 }
 
+/** Where a row's thread is, at the start of its second line: its repo's icon and name, or No repo. */
+function RowPlace({ repo, words = [] }: { repo?: Repo; words?: readonly string[] }) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <RepoIcon repo={repo} />
+      <span className="min-w-0 truncate">
+        <Marked text={repo && !repo.scratch ? repo.name : "No repo"} words={words} />
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A card's top line (PLX-1043): where it is, its icon and name, then `status` at the end, what it
+ * asks of the user or how long ago it was last active. Hovering or focusing the card hides the
+ * status for its actions and keeps the place clear of them.
+ */
+function RowTop({
+  place,
+  status,
+  oneAction = false,
+}: {
+  place?: ReactNode;
+  status: ReactNode;
+  /** Whether the card shows only its actions button. */
+  oneAction?: boolean;
+}) {
+  const clear = oneAction
+    ? "group-has-[:focus-visible]/row:pr-7 group-hover/row:pr-7"
+    : "group-has-[:focus-visible]/row:pr-34 group-hover/row:pr-34";
+  return (
+    <span
+      className={`flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground ${clear}`}
+    >
+      <span className="flex min-w-0 flex-1 items-center">{place}</span>
+      <span
+        data-status
+        className="shrink-0 group-has-[:focus-visible]/row:hidden group-hover/row:hidden"
+      >
+        {status}
+      </span>
+    </span>
+  );
+}
+
+/** A card's title (PLX-1043): bold, and bolder while hovered. */
+function RowTitle({ title, color }: { title: ReactNode; color: string }) {
+  return (
+    <span
+      data-title
+      className={`w-full min-w-0 truncate text-body font-semibold transition-colors group-hover/row:font-bold ${color}`}
+    >
+      {title}
+    </span>
+  );
+}
+
+// Measures text for `BranchName`, made once.
+let measure: CanvasRenderingContext2D | null | undefined;
+
+/**
+ * A branch name in the room its line leaves, cut in the middle at word breaks to fit
+ * (`shortBranch`), as `feature/PLX-49-…implementation`, and refit as the sidebar resizes. Its title
+ * is the whole name.
+ */
+function BranchName({ branch, words }: { branch: string; words: readonly string[] }) {
+  const self = useRef<HTMLSpanElement>(null);
+  const [max, setMax] = useState(branch.length);
+  useLayoutEffect(() => {
+    const el = self.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const fit = () => {
+      measure ??= document.createElement("canvas").getContext("2d");
+      if (!measure || !el.clientWidth) return;
+      measure.font = getComputedStyle(el).font;
+      let n = branch.length;
+      while (n > 12 && measure.measureText(shortBranch(branch, n)).width > el.clientWidth) n--;
+      setMax(n);
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [branch]);
+  return (
+    <span ref={self} title={branch} className="min-w-0 flex-1 truncate">
+      <Marked text={shortBranch(branch, max)} words={words} />
+    </span>
+  );
+}
+
+/** The space between cards in a list. */
+const cardGap = "flex flex-col gap-1";
+
+/**
+ * The look of a thread's linked pull requests: that of the most common state among those read,
+ * and the newest linked one on a tie.
+ */
+function majorityLook(prs: PullRequests) {
+  const read = prs.urls.flatMap((url) => prs.get(url)?.pr ?? []);
+  let best: (typeof read)[number] | undefined;
+  let top = 0;
+  for (const pr of read) {
+    const n = read.filter((p) => p.state === pr.state).length;
+    if (n >= top) [best, top] = [pr, n];
+  }
+  return lookOf(best);
+}
+
+/** Space between a draft's outlined row and its neighbors, so the outline doesn't touch them. */
+const draftGap = "my-1 first:mt-0 last:mb-0";
+
+/** A draft's status: a New Thread draft's row, or a thread's with an unsent prompt (PLX-887). */
+function DraftStatus() {
+  return (
+    <span className="flex items-center gap-1 text-meta font-medium text-warning [&_svg]:size-3.5">
+      <PencilLine aria-hidden />
+      Draft
+    </span>
+  );
+}
+
+/**
+ * An unsent New Thread prompt's card (PLX-788): its repo and a Draft status, then its first line,
+ * outlined in the warning color and spaced off its neighbors (PLX-932). Opening it reopens New
+ * Thread with it, which takes it off the list.
+ */
+function DraftRow({ draft, repo, onOpen }: { draft: Draft; repo?: Repo; onOpen: () => void }) {
+  const attached = draft.images.length + draft.files.length + draft.threads.length;
+  const title =
+    draft.text.trim().split("\n")[0] ||
+    `${attached} ${attached === 1 ? "attachment" : "attachments"}`;
+  return (
+    <li data-kind="draft" className={draftGap}>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="group/row flex w-full flex-col gap-0.5 rounded-lg border border-warning px-2.5 py-2 text-left hover:bg-hover"
+      >
+        <RowTop place={<RowPlace repo={repo} />} status={<DraftStatus />} oneAction />
+        <RowTitle title={title} color="text-foreground" />
+      </button>
+    </li>
+  );
+}
+
 /**
  * A thread's card (0033, 0075, PLX-1043): its repo's icon and name with its status at the end (what
  * it asks of the user, or how long ago it was last active), its title in bold, then its branch (not
@@ -2990,6 +3159,7 @@ function ThreadRow({
   title,
   run,
   repo,
+  space,
   attention,
   selected,
   picked,
@@ -3035,6 +3205,8 @@ function ThreadRow({
   title: string;
   run?: AgentRun;
   repo?: Repo;
+  /** The Space it was added to (0090), which it shows as its place over `repo`. */
+  space?: Repo;
   attention: Attention;
   selected: boolean;
   /** Whether it's one of the threads picked for a bulk action. */
@@ -3143,8 +3315,9 @@ function ThreadRow({
       : checks.length && checks.every((c) => c === "passed")
         ? "passed"
         : undefined;
-  // A Chat thread's card leaves out its scratch branch.
-  const branch = repo && !repo.scratch ? run?.branch : undefined;
+  // A thread with no repo leaves out its scratch branch, and a Space's thread the branch plxd made
+  // in its repository.
+  const branch = repo && !repo.scratch && !repo.space ? run?.branch : undefined;
   const hasDetails = !!(
     (git && (git.ahead || git.changes)) ||
     prs.urls.length ||
@@ -3285,7 +3458,7 @@ function ThreadRow({
           // details. Under its repo's heading, it leaves out the repo.
           <>
             <RowTop
-              place={!nested && <RowPlace repo={repo} words={words} />}
+              place={!nested && <RowPlace repo={space ?? repo} words={words} />}
               status={shownStatus}
             />
             <RowTitle title={titleText} color={titleColor} />
@@ -3889,6 +4062,7 @@ const sectionIcons: Record<SettingsSection, LucideIcon> = {
   scripts: SquareTerminal,
   connections: Server,
   storage: HardDrive,
+  beta: FlaskConical,
 };
 export const settingsNames = Object.fromEntries(
   settingsSections.map((s) => [s.id, s.name]),

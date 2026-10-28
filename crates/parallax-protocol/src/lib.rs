@@ -253,14 +253,15 @@ pub use terminal::{
     TerminalWriteParams,
 };
 pub use thread::{
-    ForkedFrom, MAX_SPACE_NAME_BYTES, MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult,
-    RepoCloneParams, RepoCloneProgressParams, RepoCloneProgressResult, RepoId, RepoMatchParams,
-    RepoMatchResult, RepoRef, RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult,
-    RepoUpdateParams, RepoUpdateResult, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams,
-    SpaceDeleteResult, Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
-    ThreadDeleteResult, ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming,
-    ThreadSearchParams, ThreadSearchResult, ThreadStartParams, ThreadStartResult,
-    ThreadUpdateParams, ThreadUpdateResult,
+    ForkedFrom, MAX_SPACE_FILES, MAX_SPACE_INSTRUCTIONS_BYTES, MAX_SPACE_NAME_BYTES,
+    MAX_THREAD_TITLE_BYTES, Repo, RepoAddParams, RepoAddResult, RepoCloneParams,
+    RepoCloneProgressParams, RepoCloneProgressResult, RepoId, RepoMatchParams, RepoMatchResult,
+    RepoRef, RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoUpdateParams,
+    RepoUpdateResult, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
+    Thread, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams, ThreadDeleteResult,
+    ThreadForkParams, ThreadListParams, ThreadListResult, ThreadNaming, ThreadSearchParams,
+    ThreadSearchResult, ThreadSetSpaceParams, ThreadSetSpaceResult, ThreadStartParams,
+    ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult,
 };
 pub use usage::{
     AccountLimits, AccountRuns, AccountUsage, UsageDailyParams, UsageDailyResult, UsageDay,

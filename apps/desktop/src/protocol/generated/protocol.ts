@@ -494,6 +494,11 @@ export type ParallaxRequests = {
 	 */
 	"space/delete": { params: SpaceDeleteParams, result: SpaceDeleteResult },
 	/**
+	 * `thread/setSpace`: adds threads to a Space, or takes them out of one, leaving where
+	 * each works as it is (0090). Gated on the `spaceThreads` capability.
+	 */
+	"thread/setSpace": { params: ThreadSetSpaceParams, result: ThreadSetSpaceResult },
+	/**
 	 * `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
 	 * stopping its CLI first if it runs.
 	 */
@@ -1094,6 +1099,7 @@ export const REQUEST_METHODS = [
 	"repo/update",
 	"space/create",
 	"space/delete",
+	"thread/setSpace",
 	"thread/delete",
 	"project/start",
 	"coordinator/fresh",
@@ -4679,6 +4685,16 @@ export type Repo = {
 	 * When the entry was created, in RFC 3339 UTC.
 	 */
 	createdAt: string,
+	/**
+	 * A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
+	 * behind the `spaceContext` capability. Absent when it has none.
+	 */
+	instructions?: string,
+	/**
+	 * The files a Space gives every thread in it (0090), as absolute paths on the host, such as
+	 * `host/upload` answers, behind `spaceContext`. Each thread's system prompt lists them.
+	 */
+	files?: Array<string>,
 };
 
 /**
@@ -4762,6 +4778,12 @@ export type Thread = {
 	 * Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
 	 */
 	pinned?: boolean,
+	/**
+	 * The Space the user added it to with `thread/setSpace` (0090), where it works elsewhere.
+	 * Absent for a thread in no Space, and for one started in a Space, whose `repo` is the
+	 * Space.
+	 */
+	space?: RepoId,
 };
 
 /**
@@ -6612,9 +6634,10 @@ export type ThreadUpdateResult = {
 
 /**
  * Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
- * behind the `threadAttention` capability, or renames a Space (0069), behind `spaces`. A change
- * appends `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams`
- * for `name` on an entry that isn't a Space.
+ * behind the `threadAttention` capability, renames a Space (0069), behind `spaces`, or sets a
+ * Space's instructions and files (0090), behind `spaceContext`. A change appends
+ * `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
+ * `name`, `instructions`, or `files` on an entry that isn't a Space.
  */
 export type RepoUpdateParams = {
 	/**
@@ -6629,6 +6652,16 @@ export type RepoUpdateParams = {
 	 * A Space's new name, trimmed, 1 to 128 bytes.
 	 */
 	name?: string,
+	/**
+	 * A Space's new instructions, up to [`MAX_SPACE_INSTRUCTIONS_BYTES`] once trimmed. Empty
+	 * clears them.
+	 */
+	instructions?: string,
+	/**
+	 * A Space's files in full, replacing the list: at most [`MAX_SPACE_FILES`] absolute paths
+	 * inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
+	 */
+	files?: Array<string>,
 };
 
 /**
@@ -6688,6 +6721,34 @@ export type SpaceDeleteParams = {
  * Result of `space/delete`.
  */
 export type SpaceDeleteResult = Record<symbol, never>;
+
+/**
+ * Params of `thread/setSpace` (0090), behind the `spaceThreads` capability: adds threads to a
+ * Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+ * and transcript, and its next CLI process gets the Space's instructions and files. Appends
+ * `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
+ * thread started in a Space or a Project, and with `repoNotFound` for a `space` that isn't one.
+ */
+export type ThreadSetSpaceParams = {
+	/**
+	 * The threads, by run id.
+	 */
+	threads: Array<RunId>,
+	/**
+	 * The Space to add them to. Absent takes them out of their Space.
+	 */
+	space?: RepoId,
+};
+
+/**
+ * Result of `thread/setSpace`.
+ */
+export type ThreadSetSpaceResult = {
+	/**
+	 * The threads as they stand, in the order asked.
+	 */
+	threads: Array<Thread>,
+};
 
 /**
  * Params of `thread/delete`: deletes a thread, its run, its worktree and branch, a thread with

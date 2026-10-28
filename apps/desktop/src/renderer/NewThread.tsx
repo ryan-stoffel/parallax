@@ -1,5 +1,5 @@
-import { Folder, MessageCircle, MessagesSquare, Plus } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { Folder, Laptop, MessagesSquare, Plus } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { PromptImage, Repo } from "../protocol/generated/protocol";
 import { CloneDialog } from "./AddDialog";
@@ -79,6 +79,18 @@ interface NewThreadProps {
   draftId?: string;
   /** How many times Settings has closed. The default is read again each time, as it may have changed there. */
   settingsClosed?: number;
+  /** Shown under the composer until a thread starts, as a Space's page (0090). */
+  below?: ReactNode;
+  /** Shown over the composer in place of its question, as a Space's header (0090). */
+  header?: ReactNode;
+  /** A Space's tray under the composer: the computers it can run on (0090). */
+  tray?: ReactNode;
+  /**
+   * A column beside `below`, as a Space's instructions and files beside its threads (0090). With
+   * it, New thread lays out as a page: the header, the composer at full width, then `below` and
+   * this side by side.
+   */
+  aside?: ReactNode;
 }
 
 /** One start of a thread. Retrying it reuses its run id, so plxd never makes a second thread (0007). */
@@ -119,6 +131,10 @@ export function NewThread({
   threadLinks,
   settingsClosed,
   draftId: reopened,
+  below,
+  header,
+  tray,
+  aside,
 }: NewThreadProps) {
   // The no-repo start's shortcut, as Settings > Keybinds has it.
   const noRepoKeys = useShortcutLabel("noRepoThread");
@@ -403,13 +419,20 @@ export function NewThread({
   // While starting, laid out as AgentChat is, so opening the thread doesn't move anything. The
   // Composer keeps its place in the tree either way, so a failed start still puts the text back.
   // Before it starts, it's centered a little above the middle, so as the Composer grows to its
-  // seven lines the heading rises by only half as much, never toward the top.
+  // seven lines the heading rises by only half as much, never toward the top. With a page under
+  // it, it sits at a fixed height instead, and the page scrolls; with a column beside what's under
+  // it, it's a page.
+  const page = starting === undefined && !!aside;
   return (
     <div
       className={
-        starting === undefined
-          ? "flex flex-1 flex-col items-center justify-center-safe px-6 pb-[16vh]"
-          : "flex min-h-0 flex-1 flex-col"
+        starting !== undefined
+          ? "flex min-h-0 flex-1 flex-col"
+          : page
+            ? "flex min-h-0 flex-1 flex-col overflow-y-auto"
+            : below
+              ? "flex min-h-0 flex-1 flex-col items-center overflow-y-auto px-6 pt-[14vh] pb-16"
+              : "flex flex-1 flex-col items-center justify-center-safe px-6 pb-[16vh]"
       }
     >
       {starting !== undefined && (
@@ -433,16 +456,21 @@ export function NewThread({
       )}
       <div
         className={
-          starting === undefined ? "w-full max-w-3xl" : "mx-auto w-full max-w-3xl px-6 pb-5"
+          page
+            ? "mx-auto w-full max-w-5xl px-10 pt-12 pb-16"
+            : starting === undefined
+              ? "w-full max-w-3xl"
+              : "mx-auto w-full max-w-3xl px-6 pb-5"
         }
       >
-        {starting === undefined && (
+        {starting === undefined && header}
+        {starting === undefined && !header && (
           <>
             <h1 className="mb-2 flex justify-center-safe text-display font-medium tracking-tight whitespace-pre">
               {group.id === noRepo
-                ? "What should we "
+                ? "What should we do on "
                 : group.space
-                  ? "What should we talk about in "
+                  ? "What should we work on in "
                   : "What should we build in "}
               <button
                 type="button"
@@ -451,7 +479,7 @@ export function NewThread({
                 title={group.id === noRepo ? undefined : group.name}
                 className="min-w-0 truncate rounded-md underline decoration-muted-foreground decoration-dotted decoration-2 underline-offset-[6px] hover:decoration-foreground hover:decoration-solid"
               >
-                {group.id === noRepo ? "chat about" : group.name}
+                {group.id === noRepo ? hosts.find((h) => h.id === shownHostId)?.name : group.name}
               </button>
               {shared && !repoless(group) && ` on ${hosts.find((h) => h.id === shownHostId)?.name}`}
               ?
@@ -473,7 +501,7 @@ export function NewThread({
                   aria-keyshortcuts={noRepoBinding && ariaKeyshortcut(noRepoBinding)}
                   className="group relative rounded-md text-reading text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:text-foreground"
                 >
-                  or just chat
+                  or work without a repo
                   {noRepoKeys && (
                     <kbd
                       aria-hidden
@@ -502,8 +530,7 @@ export function NewThread({
                 ...groups.map((g) => ({
                   value: g.id,
                   label: g.name,
-                  icon:
-                    g.id === noRepo ? <MessageCircle /> : g.space ? <MessagesSquare /> : <Folder />,
+                  icon: g.id === noRepo ? <Laptop /> : g.space ? <MessagesSquare /> : <Folder />,
                 })),
                 ...elsewhere.map((o, i) => ({
                   value: elsewhereValue(o),
@@ -551,14 +578,18 @@ export function NewThread({
               ? { hostId, repo: group.id === noRepo || group.space ? undefined : group.id }
               : undefined
           }
+          placeholder={
+            group.space ? "Ask anything, paste an image, use /skills or @threads" : undefined
+          }
           // A new thread asks only through a plxd that sends its requests (PLX-196).
-          noAccess={group.space}
           manualDenied={connected && !("approvals" in connection.capabilities) ? "host" : undefined}
-          // Chat picks only its computer here, and a Space nothing, since its entry is on this
-          // computer alone. While a start is under way it stays as it was, but inert, so the thread
+          // Chat picks only its computer here, and a Space only among the computers that have it
+          // (`tray`), since its entry is on each computer alone. While a start is under way it stays as it was, but inert, so the thread
           // can't move. `contents` keeps the tab's own layout.
           tab={
-            group.space ? undefined : (
+            group.space ? (
+              tray
+            ) : (
               <div inert={starting !== undefined} className="contents">
                 {repoless(group) ? (
                   <RunTargetMenu
@@ -656,6 +687,14 @@ export function NewThread({
             </div>
           }
         />
+        {page ? (
+          <div className="mt-10 grid items-start gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
+            <div className="min-w-0">{below}</div>
+            <aside>{aside}</aside>
+          </div>
+        ) : (
+          starting === undefined && below
+        )}
       </div>
     </div>
   );

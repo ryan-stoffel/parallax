@@ -1,6 +1,6 @@
 # 0069: A Space is a named group of chats with no repository, made as a repo entry plxd backs
 
-- Status: accepted
+- Status: accepted; amended by [0090](0090-projects-page-and-spaces.md), where a Space gets instructions and files
 - Date: 2026-10-12
 - Issue: PLX-732
 

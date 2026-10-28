@@ -97,6 +97,8 @@ pub(crate) fn repo_entry(row: parallax_store::Repo) -> Result<Repo, ErrorObject>
         space: row.fields.space,
         icon: row.icon.map(crate::store::protocol_icon),
         created_at: row.created_at,
+        instructions: row.instructions,
+        files: row.files,
     })
 }
 
@@ -127,6 +129,10 @@ pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, Error
         title: row.fields.title.clone(),
         settled: row.settled,
         pinned: row.pinned,
+        space: row
+            .space_id
+            .map(|id| RepoId::try_from(id).map_err(|_| corrupt("thread", row.id)))
+            .transpose()?,
     })
 }
 
@@ -142,7 +148,7 @@ pub(crate) fn check_title(title: &str) -> Result<Option<String>, ErrorObject> {
     Ok((!title.is_empty()).then(|| title.to_owned()))
 }
 
-fn thread_not_found(id: RunId) -> ErrorObject {
+pub(crate) fn thread_not_found(id: RunId) -> ErrorObject {
     ErrorObject::parallax(
         ErrorKind::ThreadNotFound,
         format!("no thread has run id {id}"),
@@ -1185,16 +1191,22 @@ pub(crate) fn prompted(db: &mut crate::store::Tx, run_id: Uuid) -> Result<(), Er
     Ok(())
 }
 
-/// `repo/update`: sets a repo entry's icon (0033), or renames a Space (0069), appending
-/// `repo.updated` when something changed.
+/// `repo/update`: sets a repo entry's icon (0033), renames a Space (0069), or sets a Space's
+/// instructions and files (0090), appending `repo.updated` when something changed.
 pub(crate) async fn update_repo(
     daemon: &Arc<Daemon>,
     params: RepoUpdateParams,
 ) -> Result<RepoUpdateResult, ErrorObject> {
-    let RepoUpdateParams { repo, icon, name } = params;
-    if icon.is_none() && name.is_none() {
+    let RepoUpdateParams {
+        repo,
+        icon,
+        name,
+        instructions,
+        files,
+    } = params;
+    if icon.is_none() && name.is_none() && instructions.is_none() && files.is_none() {
         return Err(ErrorObject::invalid_params(
-            "repo/update needs an icon or a name",
+            "repo/update needs an icon, a name, instructions, or files",
         ));
     }
     let stored = icon
@@ -1204,21 +1216,38 @@ pub(crate) async fn update_repo(
         })
         .transpose()?;
     let name = name.as_deref().map(crate::spaces::check_name).transpose()?;
+    let instructions = instructions
+        .as_deref()
+        .map(crate::spaces::check_instructions)
+        .transpose()?;
+    let files = files
+        .map(|files| crate::spaces::check_files(&daemon.data_dir.uploads_dir(), &files))
+        .transpose()?;
     store(daemon, move |db| {
         let not_found = |error: parallax_store::StoreError| match error {
             parallax_store::StoreError::NotFound { .. } => repo_not_found(repo),
             other => store_error(&other),
         };
         let mut changed = false;
-        if let Some(name) = &name {
+        if name.is_some() || instructions.is_some() || files.is_some() {
             let current = db
                 .get_repo(repo.into())
                 .map_err(|e| store_error(&e))?
                 .ok_or_else(|| repo_not_found(repo))?;
             if !current.fields.space {
-                return Err(ErrorObject::invalid_params("only a Space can be renamed"));
+                return Err(ErrorObject::invalid_params(
+                    "only a Space has a name, instructions, or files to change",
+                ));
             }
+        }
+        if let Some(name) = &name {
             changed |= db.rename_repo(repo.into(), name).map_err(not_found)?.1;
+        }
+        if instructions.is_some() || files.is_some() {
+            changed |= db
+                .set_space_context(repo.into(), instructions.as_deref(), files.as_deref())
+                .map_err(not_found)?
+                .1;
         }
         if let Some(icon) = &stored {
             changed |= db.set_repo_icon(repo.into(), icon).map_err(not_found)?.1;

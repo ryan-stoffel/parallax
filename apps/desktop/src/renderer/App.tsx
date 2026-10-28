@@ -11,7 +11,7 @@ import {
   ChartColumn,
   Palette,
   Settings as SettingsIcon,
-  MessageCircle,
+  Laptop,
   SquarePen,
   SunMoon,
   TextSearch,
@@ -56,6 +56,11 @@ import { ProjectChat } from "./ProjectChat";
 import { ProjectHome, waitingCount } from "./ProjectHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { PullRequestsPage } from "./PullRequestsPage";
+import { NewChatProject, ProjectsPage } from "./ProjectsPage";
+import { projectEntries, type ProjectEntry } from "./projectList";
+import { pinnedProjects, togglePinnedProject } from "./sidebarPrefs";
+import { RunTargetMenu } from "./RunTargetMenu";
+import { SpaceContext, SpaceHeader, SpaceThreads } from "./SpaceHome";
 import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
 import { SettingsDialog } from "./Settings";
@@ -73,7 +78,14 @@ import {
   useSnoozeAlarms,
   useThreadAlarms,
 } from "./alarms";
-import { ProjectIcon, RepoIcon, SharedRepoIcons, Sidebar, ThreadList } from "./Sidebar";
+import {
+  ProjectIcon,
+  RepoIcon,
+  SharedRepoIcons,
+  Sidebar,
+  ThreadList,
+  type ProjectMenuHandle,
+} from "./Sidebar";
 import { behaviorPrefs, newThreadPrefs } from "./prefs";
 import { useThemePreference } from "./theme";
 import type { ThreadLinks } from "./threadContext";
@@ -146,7 +158,8 @@ export type SettingsSection =
   | "schedules"
   | "scripts"
   | "storage"
-  | "connections";
+  | "connections"
+  | "beta";
 
 /**
  * The app frame: sidebar, then the chat or a page, then the side panel, with Settings floating
@@ -185,8 +198,13 @@ export function App() {
       open: settings !== null,
       count: settings ? count : count + 1,
     }));
-  // The page shown in place of the chat, if any: Pull requests or Usage. Opening a thread closes it.
-  const [mainPage, setMainPage] = useState<"pullRequests" | "usage">();
+  // The page shown in place of the chat, if any: Projects, Pull requests, or Usage. Opening a
+  // thread closes it.
+  const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "usage">();
+  // The sidebar's project menus, which the Projects page's cards open (0090).
+  const projectMenu = useRef<ProjectMenuHandle>(null);
+  const newChatProject = useRef<HTMLDialogElement>(null);
+  const pins = pinnedProjects.use();
 
   useEffect(() => setMainPage(undefined), [selection]);
   const openSettings = (section: SettingsSection, hostId?: string) => {
@@ -202,6 +220,16 @@ export function App() {
     if (askedSettings.title) setSettingsFocus({ anchor: anchorOf(askedSettings.title) });
   }, [askedSettings]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // A project's menu items, from the sidebar, which holds their dialogs and icon picker. Each
+  // shows the sidebar first, since a modal in a hidden sidebar would leave the window inert.
+  const projectActions = (entry: ProjectEntry) =>
+    (projectMenu.current?.actionsFor(entry) ?? []).map((action) => ({
+      ...action,
+      run: (square: HTMLElement) => {
+        if (!sidebarOpen) flushSync(() => setSidebarOpen(true));
+        action.run(square);
+      },
+    }));
   // What each chat's right column shows, if anything: the side panel's views, or the browser,
   // which is apart from them (PLX-962). Each host's chats stay independent when switching.
   const [openPanes, setOpenPanes] = useState<Record<string, "views" | "browser" | undefined>>({});
@@ -369,6 +397,22 @@ export function App() {
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
     group = groups.find((g) => g.id === selection.groupId) ?? group;
+  // A Space's entry, while New thread is open in it (0090).
+  const spaceRepo =
+    selection.kind === "new" && group.space
+      ? threads.state.repos.find((r) => r.id === group.id)
+      : undefined;
+  // The computers a Space's thread can run on: its own, and any other with a Space of its name.
+  const spaceHosts = spaceRepo
+    ? hosts.filter(
+        (h) =>
+          h.id === host.id ||
+          views[h.id]?.state.repos.some((r) => r.space && r.name === spaceRepo.name),
+      )
+    : [];
+  const spaceEntry = spaceRepo
+    ? projectEntries(listed).find((e) => e.key === `${host.id}/${spaceRepo.id}`)
+    : undefined;
 
   if (
     opening?.hostId === host.id &&
@@ -613,20 +657,29 @@ export function App() {
     ];
     if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
   } else {
-    const groupRepo = threads.state.repos.find((r) => r.id === group.id);
+    // A thread added to a Space names the Space, and opens its page (0090).
+    const addedTo =
+      selection.kind === "thread" && openThread?.space
+        ? threads.state.repos.find((r) => r.id === openThread.space)
+        : undefined;
+    const groupRepo = addedTo ?? threads.state.repos.find((r) => r.id === group.id);
     const repo = {
-      label: group.name,
+      label: addedTo?.name ?? group.name,
       icon: <RepoIcon repo={groupRepo} />,
       onClick:
         selection.kind === "thread"
-          ? () => setSelection({ kind: "new", groupId: group.id })
+          ? () => setSelection({ kind: "new", groupId: addedTo?.id ?? group.id })
           : undefined,
     };
     const page =
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
-    crumbs = [{ label: host.name }, repo, { label: page }];
+    // A Space's page is the Space itself (0090), so its crumbs end there.
+    crumbs =
+      selection.kind === "new" && group.space
+        ? [{ label: host.name }, repo]
+        : [{ label: host.name }, repo, { label: page }];
 
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.
@@ -768,6 +821,11 @@ export function App() {
     });
     addDialog.current?.open(start);
   };
+  // Create Space (0090), from the Projects page or the add palette, where the open host makes them.
+  const newSpace =
+    connected && "spaces" in connection.capabilities
+      ? () => newChatProject.current?.showModal()
+      : undefined;
   const openMainPage = (next: NonNullable<typeof mainPage>) => {
     setSettings(null);
     setMainPage(next);
@@ -827,9 +885,9 @@ export function App() {
     },
     {
       id: "noRepoThread",
-      label: "New chat",
-      text: "New chat",
-      icon: <MessageCircle />,
+      label: "New thread without a repo",
+      text: "New thread without a repo",
+      icon: <Laptop />,
       command: "noRepoThread",
       run: () => newThread(noRepo),
     },
@@ -1138,6 +1196,11 @@ export function App() {
           : undefined
       }
       prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
+      space={
+        selection.kind === "thread" && openThread && !openThread.parent
+          ? { thread: openThread, view: threads }
+          : undefined
+      }
       lineage={
         openThread
           ? {
@@ -1223,6 +1286,15 @@ export function App() {
           setRevealFile({ runId, path });
         }}
       />
+      <NewChatProject
+        ref={newChatProject}
+        create={threads.createSpace}
+        maxImageBytes={threads.iconImageBytes}
+        onCreated={(space) => {
+          setMainPage(undefined);
+          setSelection({ kind: "new", groupId: space.id });
+        }}
+      />
       <NewThreadPicker
         ref={picker}
         groups={startGroups.filter((g) => !g.space)}
@@ -1272,8 +1344,15 @@ export function App() {
           }}
           onOpenProject={openProject}
           onOpenSettings={openSettings}
-          onOpenPullRequests={() => openMainPage("pullRequests")}
-          onOpenUsage={() => openMainPage("usage")}
+          page={mainPage}
+          onOpenPage={openMainPage}
+          openSpace={
+            selection.kind === "new" && group.space && !mainPage
+              ? `${host.id}/${group.id}`
+              : undefined
+          }
+          projectMenu={projectMenu}
+          onNewSpace={newSpace}
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.showModal()}
@@ -1286,7 +1365,27 @@ export function App() {
       {/* An expanded side panel takes the main pane's place. */}
       <OpenDocumentContext value={openDoc}>
         <main hidden={expanded} className="flex min-w-0 flex-1 flex-col bg-pane">
-          {mainPage === "usage" ? (
+          {mainPage === "projects" ? (
+            <>
+              <TopBar className={topBarInset}>
+                {showSidebar}
+                <Breadcrumb items={[{ label: "Projects" }]} />
+              </TopBar>
+              <ProjectsPage
+                entries={projectEntries(listed)}
+                pins={pins}
+                onOpen={(entry) => {
+                  setMainPage(undefined);
+                  if (entry.kind === "project") openProject(entry.host.id, entry.id);
+                  else openOnHost(entry.host.id, { kind: "new", groupId: entry.id });
+                }}
+                onTogglePin={togglePinnedProject}
+                actionsFor={projectActions}
+                onNewProject={() => openAdd("project")}
+                onNewChatProject={newSpace}
+              />
+            </>
+          ) : mainPage === "usage" ? (
             <>
               <TopBar className={topBarInset}>
                 {showSidebar}
@@ -1429,9 +1528,6 @@ export function App() {
                               ? lineageOf(threads.state, paneThread)?.parent?.id
                               : undefined;
                           const title = threads.state.titles[threadId];
-                          const inSpace = threads.state.repos.some(
-                            (r) => r.id === paneThread?.repo && r.space,
-                          );
                           // Keyed, so another run starts from an empty transcript.
                           return {
                             key: `${host.id}/${threadId}`,
@@ -1484,7 +1580,6 @@ export function App() {
                                   going={focused && selection.started}
                                   quiet={tiled && !focused}
                                   listed={threads.state.runs[threadId]}
-                                  space={inSpace}
                                   compose={focused ? compose : undefined}
                                   onComposed={composed}
                                   threadLinks={threadLinks}
@@ -1565,6 +1660,48 @@ export function App() {
                       disabledReason={offline}
                       threadLinks={threadLinks}
                       settingsClosed={settingsClosed.count}
+                      header={
+                        spaceEntry && (
+                          <SpaceHeader
+                            entry={spaceEntry}
+                            onBack={() => openMainPage("projects")}
+                            pinned={pins.includes(spaceEntry.key)}
+                            onTogglePin={() => togglePinnedProject(spaceEntry.key)}
+                            actionsFor={() => projectActions(spaceEntry)}
+                          />
+                        )
+                      }
+                      tray={
+                        spaceRepo && (
+                          <RunTargetMenu
+                            hosts={spaceHosts}
+                            hostId={host.id}
+                            onHostChange={(id) => {
+                              const there = views[id]?.state.repos.find(
+                                (r) => r.space && r.name === spaceRepo.name,
+                              );
+                              if (id !== host.id && there)
+                                openOnHost(id, { kind: "new", groupId: there.id });
+                            }}
+                          />
+                        )
+                      }
+                      aside={
+                        spaceRepo &&
+                        "spaceContext" in threads.capabilities && (
+                          <SpaceContext hostId={host.id} space={spaceRepo} view={threads} />
+                        )
+                      }
+                      below={
+                        spaceRepo && (
+                          <SpaceThreads
+                            host={host}
+                            space={spaceRepo}
+                            view={threads}
+                            onOpenThread={(threadId) => setSelection({ kind: "thread", threadId })}
+                          />
+                        )
+                      }
                     />
                   ) : agentId ? (
                     <AgentChat

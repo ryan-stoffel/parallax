@@ -41,6 +41,7 @@ mod schedules;
 mod scripts;
 #[cfg(unix)]
 mod sessions;
+mod spaces;
 
 fn real_repo(dir: &Path, name: &str) -> PathBuf {
     named_repo(dir, name).canonicalize().unwrap()

@@ -63,6 +63,16 @@ pub struct Repo {
     pub icon: Option<ProjectIcon>,
     /// When the entry was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
+    /// A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
+    /// behind the `spaceContext` capability. Absent when it has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instructions: Option<String>,
+    /// The files a Space gives every thread in it (0090), as absolute paths on the host, such as
+    /// `host/upload` answers, behind `spaceContext`. Each thread's system prompt lists them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub files: Vec<String>,
 }
 
 /// A normal thread: what threads add to its run.
@@ -119,6 +129,12 @@ pub struct Thread {
     /// Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
+    /// The Space the user added it to with `thread/setSpace` (0090), where it works elsewhere.
+    /// Absent for a thread in no Space, and for one started in a Space, whose `repo` is the
+    /// Space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub space: Option<RepoId>,
 }
 
 /// Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
@@ -174,9 +190,10 @@ pub struct ThreadUpdateResult {
 }
 
 /// Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
-/// behind the `threadAttention` capability, or renames a Space (0069), behind `spaces`. A change
-/// appends `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams`
-/// for `name` on an entry that isn't a Space.
+/// behind the `threadAttention` capability, renames a Space (0069), behind `spaces`, or sets a
+/// Space's instructions and files (0090), behind `spaceContext`. A change appends
+/// `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
+/// `name`, `instructions`, or `files` on an entry that isn't a Space.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoUpdateParams {
@@ -190,10 +207,26 @@ pub struct RepoUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub name: Option<String>,
+    /// A Space's new instructions, up to [`MAX_SPACE_INSTRUCTIONS_BYTES`] once trimmed. Empty
+    /// clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub instructions: Option<String>,
+    /// A Space's files in full, replacing the list: at most [`MAX_SPACE_FILES`] absolute paths
+    /// inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub files: Option<Vec<String>>,
 }
 
 /// The longest Space name `space/create` and `repo/update` take, in bytes once trimmed.
 pub const MAX_SPACE_NAME_BYTES: usize = 128;
+
+/// The longest instructions a Space keeps (0090), in bytes once trimmed.
+pub const MAX_SPACE_INSTRUCTIONS_BYTES: usize = 32 * 1024;
+
+/// The most files a Space keeps (0090).
+pub const MAX_SPACE_FILES: usize = 50;
 
 /// Params of `space/create` (0069), behind the `spaces` capability: makes a Space, a named group
 /// for chats with no repository, backed by a repository plxd makes. Idempotent on `id`: a retry
@@ -228,6 +261,30 @@ pub struct SpaceCreateResult {
 pub struct SpaceDeleteParams {
     /// The Space's id.
     pub space: RepoId,
+}
+
+/// Params of `thread/setSpace` (0090), behind the `spaceThreads` capability: adds threads to a
+/// Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+/// and transcript, and its next CLI process gets the Space's instructions and files. Appends
+/// `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
+/// thread started in a Space or a Project, and with `repoNotFound` for a `space` that isn't one.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetSpaceParams {
+    /// The threads, by run id.
+    pub threads: Vec<RunId>,
+    /// The Space to add them to. Absent takes them out of their Space.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub space: Option<RepoId>,
+}
+
+/// Result of `thread/setSpace`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSetSpaceResult {
+    /// The threads as they stand, in the order asked.
+    pub threads: Vec<Thread>,
 }
 
 /// Result of `space/delete`.
