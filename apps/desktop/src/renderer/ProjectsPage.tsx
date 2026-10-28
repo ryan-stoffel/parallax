@@ -1,8 +1,8 @@
 // The Projects page (0090): every host's Projects and Spaces as cards, pinned ones
 // first, with a search, a sort, and New project for either kind.
 import {
+  ArrowDownUp,
   Check,
-  ChevronDown,
   Ellipsis,
   GitBranch,
   Layers,
@@ -35,8 +35,9 @@ import { iconLook } from "./projectIcons";
 import { sortProjects, type ProjectEntry, type ProjectSort } from "./projectList";
 import { stored } from "./stored";
 import { AttentionBadge } from "./AttentionMark";
+import { toolButton } from "./PullRequestsPage";
 import { age } from "./Sidebar";
-import { Menu, menuItem, openOnContextMenu, Segmented } from "./ui";
+import { IconButton, Menu, menuItem, openOnContextMenu, Segmented } from "./ui";
 
 const sorts: { value: ProjectSort; label: string }[] = [
   { value: "activity", label: "Recent" },
@@ -218,23 +219,12 @@ export function ProjectsPage({
   );
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-8 pt-12 pb-16">
-        <header className="flex items-center gap-4">
-          <div className="mr-auto">
-            <h1 className="text-display font-semibold tracking-tight">Projects</h1>
-            <p className="mt-1 text-body text-muted-foreground">
-              {entries.length} {entries.length === 1 ? "project" : "projects"}
-            </p>
-          </div>
-          <button
-            type="button"
-            popoverTarget={newMenu}
-            aria-haspopup="menu"
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-primary pr-2.5 pl-3 text-body font-medium text-primary-foreground hover:opacity-90"
-          >
-            <Plus aria-hidden className="size-4" />
+      <div className="mx-auto max-w-5xl px-8 pt-6 pb-16">
+        <header className="flex items-center gap-2">
+          <h1 className="mr-auto text-heading font-semibold">Projects</h1>
+          <button type="button" popoverTarget={newMenu} aria-haspopup="menu" className={toolButton}>
+            <Plus aria-hidden />
             New project
-            <ChevronDown aria-hidden className="size-3.5 opacity-60" />
           </button>
           <Menu id={newMenu} label="New project" align="end" className="w-72 p-1">
             <NewChoice
@@ -257,8 +247,8 @@ export function ProjectsPage({
         </header>
 
         {entries.length > 0 && (
-          <div className="mt-8 flex items-center gap-2">
-            <label className="flex h-8 w-64 items-center gap-2 rounded-lg bg-hover px-2.5 focus-within:outline-2 focus-within:outline-ring">
+          <div className="mt-5 flex items-center gap-2">
+            <label className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-surface px-3 focus-within:outline-2 focus-within:outline-ring">
               <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
               <input
                 type="search"
@@ -277,10 +267,10 @@ export function ProjectsPage({
               type="button"
               popoverTarget={sortMenu}
               aria-haspopup="menu"
-              className="ml-auto flex h-8 items-center gap-1 rounded-lg px-2 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
+              className={toolButton}
             >
+              <ArrowDownUp aria-hidden />
               {sorts.find((s) => s.value === sort)?.label}
-              <ChevronDown aria-hidden className="size-3.5" />
             </button>
             <Menu
               id={sortMenu}
@@ -372,10 +362,8 @@ function NewChoice({
 
 function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
-    <section aria-label={title ?? "Projects"} className="mt-6">
-      {title && (
-        <h2 className="mb-2.5 px-1 text-meta font-medium text-faint-foreground">{title}</h2>
-      )}
+    <section aria-label={title ?? "Projects"} className="mt-8">
+      {title && <h2 className="mb-3 text-reading font-medium">{title}</h2>}
       <ul className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">{children}</ul>
     </section>
   );
@@ -468,15 +456,12 @@ function ProjectCard({
         </span>
       </button>
       <div className="absolute top-3.5 right-3 flex items-center gap-0.5 opacity-0 transition-opacity group-focus-within/card:opacity-100 group-hover/card:opacity-100 has-[[aria-expanded=true]]:opacity-100">
-        <button
-          type="button"
-          aria-label={pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
-          title={pinned ? "Unpin" : "Pin"}
+        <IconButton
+          label={pinned ? `Unpin ${entry.name}` : `Pin ${entry.name}`}
           onClick={onTogglePin}
-          className={cardTool}
         >
-          {pinned ? <PinOff className="size-4" /> : <Pin className="size-4" />}
-        </button>
+          {pinned ? <PinOff /> : <Pin />}
+        </IconButton>
         <ProjectMenu
           entry={entry}
           pinned={pinned}

@@ -10,11 +10,10 @@ import { fileIcon } from "./Mention";
 import { notify } from "./notifications";
 import { age } from "./Sidebar";
 import type { ThreadsView } from "./threads";
+import { IconButton } from "./ui";
 import { uploadBytes, uploadFiles } from "./uploads";
 
 const card = "flex min-h-0 flex-col rounded-xl border border-border/70 bg-surface p-4";
-const cardTool =
-  "grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground disabled:opacity-50 [&_svg]:size-4";
 
 export function SpaceHome({
   hostId,
@@ -84,14 +83,12 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
     <section aria-label="Instructions" className={card}>
       <div className="flex items-center justify-between">
         <h2 className="text-body font-medium">Instructions</h2>
-        <button
-          type="button"
-          aria-label={space.instructions ? "Edit instructions" : "Add instructions"}
+        <IconButton
+          label={space.instructions ? "Edit instructions" : "Add instructions"}
           onClick={open}
-          className={cardTool}
         >
           {space.instructions ? <PencilLine /> : <Plus />}
-        </button>
+        </IconButton>
       </div>
       {space.instructions ? (
         <button
@@ -200,15 +197,13 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
             </span>
           )}
         </h2>
-        <button
-          type="button"
-          aria-label="Add files"
+        <IconButton
+          label="Add files"
           disabled={!caps || adding}
           onClick={() => input.current?.click()}
-          className={cardTool}
         >
           <Plus />
-        </button>
+        </IconButton>
         <input
           ref={input}
           type="file"
