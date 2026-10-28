@@ -11,7 +11,7 @@ in plain language, such as "fix: new threads no longer spike CPU".
 
 <!-- What this PR does about it. -->
 
-<!-- Outside contributors: delete the Linear line and link the GitHub issue that agreed on this change, if there is one. -->
+<!-- Outside contributors: delete the Linear line and link the GitHub issue or discussion that agreed on this change, if there is one. -->
 Linear: https://linear.app/ryanstoffel/issue/PLX-
 
 ## Acceptance criteria

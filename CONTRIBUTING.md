@@ -6,9 +6,9 @@ To build and run Parallax, see [Build from source](README.md#build-from-source).
 
 ## Agree on the problem first
 
-Report bugs in [issues](https://github.com/ryan-stoffel/parallax/issues), and search existing issues before you start.
+Report bugs in [issues](https://github.com/ryan-stoffel/parallax/issues), and search existing issues before you start. Ask questions in [Q&A](https://github.com/ryan-stoffel/parallax/discussions/categories/q-a).
 
-A new feature or a change to how the product behaves needs an issue where Ryan has agreed to the direction and scope before you write it. Link that agreement in your PR. A larger bug fix should link an issue that describes the failure and the expected behavior.
+A new feature or a change to how the product behaves needs an [Ideas](https://github.com/ryan-stoffel/parallax/discussions/categories/ideas) discussion where Ryan has agreed to the direction and scope before you write it. Link that agreement in your PR. A larger bug fix should link an issue that describes the failure and the expected behavior.
 
 A small, focused fix for an obvious bug can skip the issue. Explain the bug in the PR and why the fix is that small.
 
