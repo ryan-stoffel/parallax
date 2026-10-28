@@ -42,7 +42,7 @@ uuid = { workspace = true, features = ["v4"] }
 parallax-protocol = { path = "../crates/parallax-protocol" }
 parallax-store = { path = "../crates/parallax-store" }
 # Reads Cursor desktop's sign-in for `usage/daily` (0039). The store already builds it.
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 zeroize.workspace = true
 # Remote access on the LAN (PLX-641, 0065): HTTPS and WebSocket with a pinned self-signed key,
 # and ES256 DPoP proofs, all on ring, not aws-lc-rs, which would need CMake and NASM. ring's build
