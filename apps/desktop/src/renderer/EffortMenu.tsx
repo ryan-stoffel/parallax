@@ -1,5 +1,5 @@
 import { ChevronDown, Zap } from "lucide-react";
-import { useId, type CSSProperties } from "react";
+import { useId, useState, type CSSProperties } from "react";
 
 import type { AgentEffort } from "../protocol/generated/protocol";
 import { effortLevels as levels } from "./catalog";
@@ -14,35 +14,68 @@ const at = (i: number) => `calc(${thumb} / 2 + (100% - ${thumb}) * ${i / last})`
 const spring = "duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]";
 
 // Where the gauge's needle points at each level, in degrees clockwise from straight up. High is
-// lucide's own Gauge; the arc ends at 120.
+// lucide's own Gauge, and Max is the end of the arc.
 const needle: Record<AgentEffort, number> = {
   low: -80,
   medium: -20,
   high: 45,
   xhigh: 80,
-  max: 110,
+  max: 120,
 };
+
+// The flames that burst from the gauge's arc when it's turned up to Max: where each stands, and how
+// big and how late it is.
+const flames = [
+  { x: 6, y: 8, size: 0.6, delay: 0.32 },
+  { x: 12, y: 4.5, size: 0.85, delay: 0.25 },
+  { x: 18, y: 7, size: 0.75, delay: 0.29 },
+  { x: 21, y: 12.5, size: 0.55, delay: 0.36 },
+];
 
 /**
  * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
- * The needle springs to each level, and at Max it quivers against the end of the arc while the
- * gauge glows (index.css).
+ * The needle springs to each level. Turned up to Max, the gauge catches fire for a moment while the
+ * needle rattles against the end of the arc, then it settles there (index.css). Opening a thread
+ * already at Max shows it settled, without the fire.
  */
 function EffortGauge({ value }: { value: AgentEffort }) {
+  const [from] = useState(value);
+  const [moved, setMoved] = useState(false);
+  if (!moved && value !== from) setMoved(true);
+  const lit = moved && value === "max";
   return (
     <svg
       aria-hidden
       viewBox="0 0 24 24"
+      overflow="visible"
       fill="none"
       stroke="currentColor"
       strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"
-      className={value === "max" ? "lucide effort-gauge-max" : "lucide"}
+      className={lit ? "lucide effort-lit" : "lucide"}
       style={{ "--needle": `${needle[value]}deg` } as CSSProperties}
     >
       <path d="M3.34 19a10 10 0 1 1 17.32 0" />
       <path d="M12 14V8.34" className={`effort-needle transition-[rotate] ${spring}`} />
+      {lit && (
+        <g className="effort-fire" stroke="none">
+          {flames.map((f) => (
+            <g key={f.x} transform={`translate(${f.x} ${f.y}) scale(${f.size})`}>
+              <g className="effort-flame" style={{ animationDelay: `${f.delay}s` }}>
+                <path
+                  fill="#f97316"
+                  d="M0 0c-2.6 0-3.8-1.9-3.8-3.8 0-2.6 2.4-4 3.8-8.2 1.4 4.2 3.8 5.6 3.8 8.2 0 1.9-1.2 3.8-3.8 3.8z"
+                />
+                <path
+                  fill="#fde047"
+                  d="M0 0c-1.3 0-1.9-.9-1.9-1.9 0-1.3 1.2-2 1.9-4.6.7 2.6 1.9 3.3 1.9 4.6 0 1-.6 1.9-1.9 1.9z"
+                />
+              </g>
+            </g>
+          ))}
+        </g>
+      )}
     </svg>
   );
 }

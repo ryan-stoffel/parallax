@@ -1044,51 +1044,79 @@ body {
   animation: effort-pop 0.45s ease-out;
 }
 /* The reasoning button's gauge (EffortGauge): the needle turns about the gauge's center to
-   --needle. Once it has swung to Max, it quivers against the end of the arc and the gauge glows. */
+   --needle. Turned up to Max (.effort-lit), once the needle has swung over, it rattles against the
+   end of the arc while the gauge runs hot and flames flare up off it and burn out; then it's still. */
 .effort-needle {
   transform-box: view-box;
   transform-origin: 12px 14px;
   rotate: var(--needle);
 }
-@keyframes effort-quiver {
+@keyframes effort-rattle {
   0%,
   100% {
     rotate: var(--needle);
   }
-  25% {
-    rotate: calc(var(--needle) + 6deg);
+  35% {
+    rotate: calc(var(--needle) - 10deg);
   }
+  70% {
+    rotate: calc(var(--needle) - 4deg);
+  }
+}
+@keyframes effort-heat {
+  20%,
   60% {
-    rotate: calc(var(--needle) - 7deg);
+    color: #f97316;
   }
 }
-@keyframes effort-gauge-glow {
-  0%,
+@keyframes effort-flame {
+  0% {
+    scale: 0;
+    opacity: 0;
+  }
+  15% {
+    scale: 1.15;
+    opacity: 1;
+  }
+  35% {
+    scale: 0.85 1.05;
+  }
+  55% {
+    scale: 1.05 0.9;
+    opacity: 1;
+  }
   100% {
-    filter: drop-shadow(0 0 1px var(--accent));
-  }
-  50% {
-    filter: drop-shadow(0 0 4px var(--accent));
+    scale: 0.2 0.6;
+    translate: 0 -5px;
+    opacity: 0;
   }
 }
-.effort-gauge-max {
-  color: var(--accent);
-  animation: effort-gauge-glow 1.8s ease-in-out 0.3s infinite;
+.effort-lit {
+  animation: effort-heat 1.1s ease-out;
 }
-.effort-gauge-max .effort-needle {
-  animation: effort-quiver 0.18s linear 0.3s infinite;
+.effort-lit .effort-needle {
+  animation: effort-rattle 0.12s linear 0.25s 6;
+}
+.effort-flame {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  opacity: 0;
+  animation: effort-flame 0.75s ease-out both;
 }
 :root.reduce-motion {
   .effort-fill::after,
   .effort-full .effort-fill,
   .effort-full .effort-track,
   .effort-full .effort-thumb,
-  .effort-gauge-max,
-  .effort-gauge-max .effort-needle {
+  .effort-lit,
+  .effort-lit .effort-needle {
     animation: none;
   }
   .effort-needle {
     transition: none;
+  }
+  .effort-fire {
+    display: none;
   }
 }
 
