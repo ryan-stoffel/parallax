@@ -22,6 +22,7 @@ import type {
 import { App } from "./App";
 import { scopeStore } from "./scope";
 import { sectionsStore } from "./Sidebar";
+import { moreShown } from "./SidebarNav";
 import {
   navDefaults,
   pinnedProjects,
@@ -95,6 +96,7 @@ beforeEach(() => {
   sidebarPrefs.set(sidebarDefaults);
   sidebarNav.set(navDefaults);
   pinnedProjects.set([]);
+  moreShown.set(false);
   sectionsStore.set({});
   scopeStore.set("all");
   popoverSources = [];
@@ -238,13 +240,18 @@ const paletteOptions = () => [
 ];
 const paletteOption = (name: string) =>
   paletteOptions().find((b) => b.textContent?.startsWith(name));
-// More's item, whose menu is in the DOM whether or not it's shown.
-const openPalette = () =>
-  click(
-    [...document.querySelectorAll('#sidebar [role="menuitem"]')].find(
+// More's row, which opens More first (0090).
+const openPalette = async () => {
+  const more = [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
+    (b) => b.textContent === "More",
+  );
+  if (more) await click(more);
+  await click(
+    [...document.querySelectorAll("#sidebar button")].find(
       (b) => b.textContent === "New project or repository",
     ),
   );
+};
 const openNewProject = async () => {
   await openPalette();
   await click(paletteOption("New Project"));
@@ -878,16 +885,21 @@ const sidebarButton = (text: string) =>
     (b) => b.textContent === text,
   );
 
-test("Edit sidebar hides a page's row, which then waits under More, and pinned projects list by name", async () => {
+test("Usage waits under More until Edit sidebar shows it, and pinned projects list by name", async () => {
   await renderApp();
-  expect(sidebarButton("Usage")).toBeDefined();
+  expect(sidebarButton("Usage")).toBeUndefined();
+  await click(sidebarButton("More"));
+  expect(sidebarButton("Usage")!.closest("[id]")!.id).toBe(
+    sidebarButton("Less")!.getAttribute("aria-controls"),
+  );
+  await click(sidebarButton("Less"));
   const usage = [...document.querySelectorAll<HTMLLabelElement>("dialog label")].find(
     (l) => l.textContent === "Usage",
   )!;
   await click(usage.querySelector("input"));
-  expect(sidebarNav.get().usage).toBe(false);
-  // Only More's menu item is left.
-  expect(sidebarButton("Usage")!.getAttribute("role")).toBe("menuitem");
+  expect(sidebarNav.get().usage).toBe(true);
+  // A row of its own, with More closed.
+  expect(sidebarButton("Usage")).toBeDefined();
 
   // Pinning from a card lists the Project under Pinned, and its row opens it.
   openProjectsPage();

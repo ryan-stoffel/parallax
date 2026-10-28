@@ -204,7 +204,7 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   await page.getByRole("button", { name: "Close settings" }).click();
   // Under More, with Edit sidebar (0090).
   await page.locator("#sidebar").getByRole("button", { name: "More" }).click();
-  await page.getByRole("menuitem", { name: "New project or repository" }).click();
+  await page.locator("#sidebar").getByRole("button", { name: "New project or repository" }).click();
   const dialog = page.getByRole("dialog", { name: "New project or repository" });
   await dialog.getByRole("option", { name: /^New Project/ }).click();
   await dialog.getByRole("button", { name: /^Workspace/ }).click();

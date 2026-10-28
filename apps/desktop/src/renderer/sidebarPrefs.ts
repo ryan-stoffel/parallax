@@ -21,13 +21,14 @@ export const sidebarDefaults: SidebarPrefs = {
 
 export const sidebarPrefs = stored("parallax.sidebar", sidebarDefaults, merged);
 
-/** The sidebar's nav rows that Edit sidebar shows or hides (0090). New thread, Search, and More always show. */
+/** The sidebar's pages that Edit sidebar shows or leaves under More (0090). New thread, Search, and More always show. */
 export type NavRow = "projects" | "pullRequests" | "usage";
 
+/** Projects shows by default; Pull requests and Usage wait under More until chosen. */
 export const navDefaults: Record<NavRow, boolean> = {
   projects: true,
-  pullRequests: true,
-  usage: true,
+  pullRequests: false,
+  usage: false,
 };
 
 export const sidebarNav = stored("parallax.sidebarNav", navDefaults, merged);

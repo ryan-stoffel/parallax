@@ -20,7 +20,7 @@ import type { FavoriteAction } from "./Favorites";
 import { ProjectMenu, ProjectTile } from "./ProjectsPage";
 import { navDefaults, sidebarNav, togglePinnedProject, type NavRow } from "./sidebarPrefs";
 import { stored } from "./stored";
-import { Menu, menuItem, openOnContextMenu } from "./ui";
+import { openOnContextMenu } from "./ui";
 
 /** A row in the sidebar's head: its icon and label, and something at its end. */
 const navBase =
@@ -36,6 +36,11 @@ export const navChoices: { id: NavRow; label: string; Icon: LucideIcon }[] = [
   { id: "pullRequests", label: "Pull requests", Icon: GitPullRequest },
   { id: "usage", label: "Usage", Icon: ChartNoAxesColumn },
 ];
+
+/** Whether More is open, showing the pages Edit sidebar leaves out, on this computer. */
+export const moreShown = stored("parallax.moreShown", false, (raw, fallback) =>
+  typeof raw === "boolean" ? raw : fallback,
+);
 
 /** Whether the Pinned list is folded, on this computer. */
 const pinnedFolded = stored("parallax.pinnedFolded", false, (raw, fallback) =>
@@ -73,7 +78,21 @@ export function SidebarNav({
   const folded = pinnedFolded.use();
   const newKeys = useShortcutLabel("newThread");
   const editDialog = useRef<HTMLDialogElement>(null);
-  const moreMenu = useId();
+  const moreList = useId();
+  const moreOpen = moreShown.use();
+  // A page's row, under the head or under More.
+  const page = ({ id, label, Icon }: (typeof navChoices)[number]) => (
+    <button
+      key={id}
+      type="button"
+      aria-current={current === id ? "page" : undefined}
+      onClick={() => onOpen(id)}
+      className={`${navRow} ${current === id ? navCurrent : ""}`}
+    >
+      <Icon />
+      {label}
+    </button>
+  );
   const pinnedList = useId();
   const hidden = navChoices.filter((c) => !shown[c.id]);
   return (
@@ -91,63 +110,34 @@ export function SidebarNav({
         )}
       </button>
       {search}
-      {navChoices
-        .filter((c) => shown[c.id])
-        .map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            type="button"
-            aria-current={current === id ? "page" : undefined}
-            onClick={() => onOpen(id)}
-            className={`${navRow} ${current === id ? navCurrent : ""}`}
-          >
-            <Icon />
-            {label}
-          </button>
-        ))}
-      <button type="button" popoverTarget={moreMenu} aria-haspopup="menu" className={navRow}>
+      {navChoices.filter((c) => shown[c.id]).map(page)}
+      <button
+        type="button"
+        aria-expanded={moreOpen}
+        aria-controls={moreList}
+        onClick={() => moreShown.set(!moreOpen)}
+        className={navRow}
+      >
         <Ellipsis />
-        More
+        <span className="flex-1">{moreOpen ? "Less" : "More"}</span>
+        <ChevronDown
+          aria-hidden
+          className={`size-3.5 text-faint-foreground transition-transform duration-150 ${moreOpen ? "rotate-180" : ""}`}
+        />
       </button>
-      <Menu id={moreMenu} label="More" className="w-56 p-1">
-        {hidden.map(({ id, label, Icon }) => (
-          <button
-            key={id}
-            type="button"
-            role="menuitem"
-            popoverTarget={moreMenu}
-            popoverTargetAction="hide"
-            onClick={() => onOpen(id)}
-            className={menuItem}
-          >
-            <Icon />
-            {label}
+      {moreOpen && (
+        <div id={moreList} className="rise-in flex flex-col">
+          {hidden.map(page)}
+          <button type="button" onClick={onAdd} className={navRow}>
+            <FolderPlus />
+            New project or repository
           </button>
-        ))}
-        {hidden.length > 0 && <hr className="-mx-1 my-1 border-border" />}
-        <button
-          type="button"
-          role="menuitem"
-          popoverTarget={moreMenu}
-          popoverTargetAction="hide"
-          onClick={onAdd}
-          className={menuItem}
-        >
-          <FolderPlus />
-          New project or repository
-        </button>
-        <button
-          type="button"
-          role="menuitem"
-          popoverTarget={moreMenu}
-          popoverTargetAction="hide"
-          onClick={() => editDialog.current?.showModal()}
-          className={menuItem}
-        >
-          <SlidersHorizontal />
-          Edit sidebar…
-        </button>
-      </Menu>
+          <button type="button" onClick={() => editDialog.current?.showModal()} className={navRow}>
+            <SlidersHorizontal />
+            Edit sidebar…
+          </button>
+        </div>
+      )}
       <EditSidebar ref={editDialog} />
       {pinned.length > 0 && (
         <section aria-label="Pinned" className="mt-4">
