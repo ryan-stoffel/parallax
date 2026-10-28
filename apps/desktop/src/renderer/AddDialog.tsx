@@ -6,6 +6,7 @@ import {
   FolderGit2,
   FolderOpen,
   Layers,
+  MessagesSquare,
   Search,
 } from "lucide-react";
 import {
@@ -55,8 +56,9 @@ export type AddDialogHandle = { open: (start?: "project") => void };
 
 /**
  * The sidebar's add palette, a native modal <dialog> laid out like a command palette. Its menu
- * offers New repository, Local folder, Clone from GitHub, and New Project, each opening a step of
- * its own in the same dialog; Back returns to the step before. With more than one computer,
+ * offers New Project, New Space (0090), New repository, Local folder, and Clone from GitHub. New
+ * Space hands off to `onNewSpace`'s dialog; the rest open a step of their own in the same dialog,
+ * and Back returns to the step before. With more than one computer,
  * Local folder first asks which (PLX-769). The first three make or find a repository and
  * register it with its computer's plxd (`repo/add`), then close, or, when Create Project's
  * Workspace menu asked for it, return there with it chosen.
@@ -69,6 +71,7 @@ export function AddDialog({
   repos,
   create,
   onCreated,
+  onNewSpace,
 }: {
   ref: Ref<AddDialogHandle>;
   hosts: Host[];
@@ -81,6 +84,8 @@ export function AddDialog({
   /** Creates a Project on the open host. */
   create: ThreadsView["createProject"];
   onCreated: (hostId: string, project: Project) => void;
+  /** Opens Create Space, or undefined where the open host's plxd makes no Spaces. */
+  onNewSpace?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [stack, setStack] = useState<Step[]>([{ kind: "menu" }]);
@@ -117,7 +122,7 @@ export function AddDialog({
   return (
     <dialog
       ref={dialog}
-      aria-label="New project or repository"
+      aria-label="New project or Space"
       onClose={() => {
         setStack([{ kind: "menu" }]);
         setWorkspace(undefined);
@@ -130,10 +135,15 @@ export function AddDialog({
         <MenuStep
           key={session}
           computers={hosts.length > 1}
+          spaces={!!onNewSpace}
           onBack={back}
-          onPick={(kind) =>
-            push(kind === "browse" && hosts.length > 1 ? { kind: "computer" } : { kind })
-          }
+          onPick={(kind) => {
+            if (kind === "space") {
+              dialog.current?.close();
+              return onNewSpace?.();
+            }
+            push(kind === "browse" && hosts.length > 1 ? { kind: "computer" } : { kind });
+          }}
         />
       )}
       {step.kind === "create" && <CreateStep {...steps} />}
@@ -244,8 +254,8 @@ export function CloneDialog({
 
 type StepProps = { onBack: () => void; onAdded: (hostId: string, repo: Repo) => void };
 
-/** What the menu step picks: a way to add a repository, or New Project. */
-type MenuKind = WorkspaceSource | "project";
+/** What the menu step picks: New Project, New Space, or a way to add a repository. */
+type MenuKind = WorkspaceSource | "project" | "space";
 
 const menu: {
   kind: MenuKind;
@@ -253,6 +263,18 @@ const menu: {
   detail: string;
   icon: ReactNode;
 }[] = [
+  {
+    kind: "project",
+    name: "New Project",
+    detail: "A focused chat where agents coordinate work",
+    icon: <Layers />,
+  },
+  {
+    kind: "space",
+    name: "New Space",
+    detail: "Threads that share your instructions and files, with no repository",
+    icon: <MessagesSquare />,
+  },
   {
     kind: "create",
     name: "New repository",
@@ -271,22 +293,19 @@ const menu: {
     detail: "Clone a repository by its owner/name or link",
     icon: <GitHubLogo />,
   },
-  {
-    kind: "project",
-    name: "New Project",
-    detail: "A focused chat where agents coordinate work",
-    icon: <Layers />,
-  },
 ];
 
 /** The palette's first step: what to add, searchable. */
 function MenuStep({
   computers,
+  spaces,
   onBack,
   onPick,
 }: {
   /** Whether there's more than one computer, so Local folder can be on any of them. */
   computers: boolean;
+  /** Whether New Space is offered. */
+  spaces: boolean;
   onBack: () => void;
   onPick: (kind: MenuKind) => void;
 }) {
@@ -294,6 +313,7 @@ function MenuStep({
   const [active, setActive] = useState(0);
   const q = query.trim().toLowerCase();
   const shown = menu
+    .filter((m) => spaces || m.kind !== "space")
     .map((m) =>
       computers && m.kind === "browse"
         ? { ...m, detail: "Add a repository that's already on one of your computers" }

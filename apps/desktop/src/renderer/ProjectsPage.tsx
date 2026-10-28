@@ -224,9 +224,9 @@ export function ProjectsPage({
           <h1 className="mr-auto text-heading font-semibold">Projects</h1>
           <button type="button" popoverTarget={newMenu} aria-haspopup="menu" className={toolButton}>
             <Plus aria-hidden />
-            New project
+            New project or Space
           </button>
-          <Menu id={newMenu} label="New project" align="end" className="w-72 p-1">
+          <Menu id={newMenu} label="New project or Space" align="end" className="w-72 p-1">
             <NewChoice
               menu={newMenu}
               kind="project"

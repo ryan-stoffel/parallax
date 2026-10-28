@@ -276,6 +276,8 @@ interface ThreadListProps {
   openSpace?: string;
   /** A project's menu, for the Projects page's cards (0090). */
   projectMenu?: Ref<ProjectMenuHandle>;
+  /** Opens Create Space, from the add palette's New Space, where the open host makes Spaces. */
+  onNewSpace?: () => void;
   /** Deletes a thread. Resolves to an error message, or undefined. */
   onDelete: (hostId: string, thread: Thread) => Promise<string | undefined>;
   /** The add palette, for the command menu's New Project and Add repository (PLX-993). */
@@ -509,6 +511,7 @@ export function ThreadList({
   onOpenPage,
   openSpace,
   projectMenu,
+  onNewSpace,
   onDelete,
   addDialog: addDialogRef,
   onNewThread,
@@ -1897,6 +1900,7 @@ export function ThreadList({
         repos={open?.state.repos ?? []}
         create={open?.createProject ?? (async () => "Not connected")}
         onCreated={(hostId, project) => onOpenProject(hostId, project.id)}
+        onNewSpace={onNewSpace}
       />
       <ProjectDialogs
         ref={projectDialogs}

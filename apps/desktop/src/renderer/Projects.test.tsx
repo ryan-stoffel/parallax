@@ -199,7 +199,7 @@ const projectRows = () => {
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 const dialog = () =>
-  document.querySelector<HTMLDialogElement>('dialog[aria-label="New project or repository"]')!;
+  document.querySelector<HTMLDialogElement>('dialog[aria-label="New project or Space"]')!;
 const inDialog = (name: string) =>
   [...dialog().querySelectorAll("button")].find(
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
@@ -239,7 +239,7 @@ const paletteOption = (name: string) =>
 const openPalette = async () => {
   await click(
     [...document.querySelectorAll("#sidebar button")].find(
-      (b) => b.textContent === "New project or repository",
+      (b) => b.textContent === "New project or Space",
     ),
   );
 };
@@ -958,4 +958,23 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
     repo: made!["id"],
     files: ["/data/uploads/b/notes.md"],
   });
+});
+
+test("the add palette offers New Space after New Project where the host makes Spaces, and it opens Create Space", async () => {
+  await renderApp();
+  await openPalette();
+  expect(paletteOption("New Space")).toBeUndefined();
+  act(() => dialog().close());
+
+  capabilities = { spaces: {} };
+  unmount();
+  await renderApp();
+  await openPalette();
+  expect(paletteOptions().indexOf(paletteOption("New Space")!)).toBe(1);
+  await click(paletteOption("New Space"));
+  expect(dialog().open).toBe(false);
+  const create = [...document.querySelectorAll("dialog")].find(
+    (d) => d.querySelector("h2")?.textContent === "Create Space",
+  )!;
+  expect(create.open).toBe(true);
 });

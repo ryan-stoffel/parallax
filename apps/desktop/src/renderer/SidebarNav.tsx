@@ -1,4 +1,4 @@
-// The sidebar's head (0090): New thread, New project or repository, and Search as rows, then the
+// The sidebar's head (0090): New thread, New project or Space, and Search as rows, then the
 // pages Settings shows there, More, and the projects pinned under them.
 import {
   ChartNoAxesColumn,
@@ -70,7 +70,7 @@ export function SidebarNav({
   onNewThread: () => void;
   onOpen: (row: NavRow) => void;
   onOpenProject: (entry: ProjectEntry) => void;
-  /** Opens the add palette: a new Project, or a repository. */
+  /** Opens the add palette: a new Project, Space, or repository. */
   onAdd: () => void;
   /** A pinned project's menu items after Unpin. */
   pinActions: (entry: ProjectEntry) => FavoriteAction[];
@@ -111,7 +111,7 @@ export function SidebarNav({
       </button>
       <button type="button" onClick={onAdd} className={navRow}>
         <FolderPlus />
-        New project or repository
+        New project or Space
       </button>
       {search}
       {navChoices.filter((c) => shown[c.id]).map(page)}

@@ -202,8 +202,8 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Close settings" }).click();
-  await page.locator("#sidebar").getByRole("button", { name: "New project or repository" }).click();
-  const dialog = page.getByRole("dialog", { name: "New project or repository" });
+  await page.locator("#sidebar").getByRole("button", { name: "New project or Space" }).click();
+  const dialog = page.getByRole("dialog", { name: "New project or Space" });
   await dialog.getByRole("option", { name: /^New Project/ }).click();
   await dialog.getByRole("button", { name: /^Workspace/ }).click();
   await page.getByRole("menuitem", { name: "Choose folder…" }).click();

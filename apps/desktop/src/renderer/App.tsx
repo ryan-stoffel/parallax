@@ -789,6 +789,11 @@ export function App() {
     });
     addDialog.current?.open(start);
   };
+  // Create Space (0090), from the Projects page or the add palette, where the open host makes them.
+  const newSpace =
+    connected && "spaces" in connection.capabilities
+      ? () => newChatProject.current?.showModal()
+      : undefined;
   const openMainPage = (next: NonNullable<typeof mainPage>) => {
     setSettings(null);
     setMainPage(next);
@@ -1244,6 +1249,15 @@ export function App() {
           setRevealFile({ runId, path });
         }}
       />
+      <NewChatProject
+        ref={newChatProject}
+        create={threads.createSpace}
+        maxImageBytes={threads.iconImageBytes}
+        onCreated={(space) => {
+          setMainPage(undefined);
+          setSelection({ kind: "new", groupId: space.id });
+        }}
+      />
       <NewThreadPicker
         ref={picker}
         groups={startGroups.filter((g) => !g.space)}
@@ -1301,6 +1315,7 @@ export function App() {
               : undefined
           }
           projectMenu={projectMenu}
+          onNewSpace={newSpace}
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.showModal()}
@@ -1330,20 +1345,7 @@ export function App() {
                 onTogglePin={togglePinnedProject}
                 actionsFor={(entry) => projectMenu.current?.actionsFor(entry) ?? []}
                 onNewProject={() => openAdd("project")}
-                onNewChatProject={
-                  connected && "spaces" in connection.capabilities
-                    ? () => newChatProject.current?.showModal()
-                    : undefined
-                }
-              />
-              <NewChatProject
-                ref={newChatProject}
-                create={threads.createSpace}
-                maxImageBytes={threads.iconImageBytes}
-                onCreated={(space) => {
-                  setMainPage(undefined);
-                  setSelection({ kind: "new", groupId: space.id });
-                }}
+                onNewChatProject={newSpace}
               />
             </>
           ) : mainPage === "usage" ? (
