@@ -337,7 +337,7 @@ function Files({ hostId, space, view }: { hostId: string; space: Repo; view: Thr
           </span>
         </button>
       ) : (
-        <ul className="grid grid-cols-2 gap-2">
+        <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {files.map((path) => (
             <li key={path} className="flex min-w-0 flex-col gap-1.5">
               <FileCard

@@ -683,7 +683,7 @@ export function NewThread({
           }
         />
         {page ? (
-          <div className="mt-10 grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <div className="mt-10 grid items-start gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
             <div className="min-w-0">{below}</div>
             <aside>{aside}</aside>
           </div>
