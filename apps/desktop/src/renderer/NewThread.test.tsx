@@ -35,9 +35,17 @@ vi.mock(import("./images"), async (importOriginal) => {
   };
 });
 // happy-dom lays nothing out. A tall transcript with small rows renders every row.
-Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
-  get(this: HTMLElement) {
-    return this.getAttribute("role") === "log" ? 10_000 : 20;
+// The list reads the transcript's height from clientHeight and each row's from offsetHeight.
+Object.defineProperties(HTMLElement.prototype, {
+  clientHeight: {
+    get(this: HTMLElement) {
+      return this.getAttribute("role") === "log" ? 10_000 : 0;
+    },
+  },
+  offsetHeight: {
+    get(this: HTMLElement) {
+      return this.getAttribute("role") === "log" ? 10_000 : 20;
+    },
   },
 });
 
