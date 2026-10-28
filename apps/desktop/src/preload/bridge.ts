@@ -188,13 +188,18 @@ export interface ParallaxBridge {
    */
   onFullScreen(listener: (full: boolean) => void): () => void;
   /**
-   * This window's background, Settings > Appearance's Window: opaque, clear (see-through where
-   * `transparent`, and from the next launch), or blurred where `canBlur`. Not on the web.
+   * This window's background, Settings > Appearance's Window: opaque, clear, or blurred where
+   * `canBlur`. A material that needs a see-through window (needsTransparentWindow: clear, and
+   * blurred outside Windows) shows only where `transparent`, so from the next launch. Not on the
+   * web.
    */
   setWindowLook?(look: { material: WindowMaterial }): void;
   /** Whether `setWindowLook` can blur: `blurSupported` here. */
   canBlur?: boolean;
-  /** Whether this window was created see-through, so a clear background shows the desktop. */
+  /**
+   * Whether this window was created see-through, so a clear background, or a blurred one outside
+   * Windows, shows the desktop.
+   */
   transparent?: boolean;
   /** Restarts Parallax. Not on the web. */
   relaunch?(): void;

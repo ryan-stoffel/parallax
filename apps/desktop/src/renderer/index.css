@@ -596,10 +596,14 @@ body {
 :root.translucent .bg-code:not(:where([class*="hover:bg-"]:hover)) {
   background-color: var(--code-fill);
 }
-/* The sidebar's sticky headings, over its own glass: a light frost over what scrolls under. */
 :root.translucent .bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
-  background-color: color-mix(in srgb, var(--sidebar) 25%, transparent);
+  background-color: color-mix(in srgb, var(--sidebar) 55%, transparent);
   backdrop-filter: var(--glass);
+}
+/* The sidebar's sticky headings sit on its own glass, so they're only a light frost over what
+   scrolls under them. */
+:root.translucent .sticky.bg-sidebar:not(:where([class*="hover:bg-"]:hover)) {
+  background-color: color-mix(in srgb, var(--sidebar) 25%, transparent);
 }
 /* What floats over the page: menus, dialogs, and the cards and bars that cast the composer's
    shadow (tooltips, the find bar, suggestions, hover cards). */
