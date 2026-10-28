@@ -70,12 +70,15 @@ const request = vi.fn(async () => ({
   result: { entries: [], truncated: false, folder: "/home/me/repo" },
 }));
 const open = vi.fn<(doc: DocRef) => void>();
+const showFile = vi.fn(async (_path: string): Promise<string | undefined> => undefined);
 let unmount = () => {};
 beforeEach(() => {
   request.mockClear();
   open.mockClear();
+  showFile.mockClear();
   window.parallax = {
     request,
+    showFile,
     connectionState: async () => ({ status: "connected", plxd: "", protocol: 1, capabilities: {} }),
     siteIcon: async () => undefined,
   } as Partial<ParallaxBridge> as ParallaxBridge;
@@ -89,11 +92,11 @@ afterEach(() => {
   act(() => unmount());
 });
 
-async function click(path: string) {
+async function click(path: string, hostId = "box") {
   const root = createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root.render(
-      <FileRunContext value={{ hostId: "box", runId: "run-1" }}>
+      <FileRunContext value={{ hostId, runId: "run-1" }}>
         <OpenDocumentContext value={open}>
           <FileLink path={path}>the file</FileLink>
         </OpenDocumentContext>
@@ -119,6 +122,18 @@ test("an absolute link is checked against the folder agent/files names", async (
 
   await click("/etc/passwd");
   expect(open).toHaveBeenCalledTimes(1);
+});
+
+test("a file outside the folder shows in Finder only for this computer's threads", async () => {
+  await click("~/Movies/demo.mp4", "local");
+  expect(showFile).toHaveBeenCalledWith("~/Movies/demo.mp4");
+  act(() => unmount());
+
+  await click("../secret.txt", "local");
+  act(() => unmount());
+  await click("~/Movies/demo.mp4");
+  expect(showFile).toHaveBeenCalledTimes(1);
+  expect(open).not.toHaveBeenCalled();
 });
 
 /** Renders `text` as a transcript's agent message does, in thread run-1 on host box. */

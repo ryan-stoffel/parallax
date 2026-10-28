@@ -190,6 +190,7 @@ const bridge: ParallaxBridge = {
   openTargets: (hostId) => ipcRenderer.invoke("parallax:openTargets", hostId),
   openFolder: (hostId, target, folder, terminal) =>
     ipcRenderer.invoke("parallax:openFolder", hostId, target, folder, terminal),
+  showFile: (path) => ipcRenderer.invoke("parallax:showFile", path),
   terminalApp: () => ipcRenderer.invoke("parallax:terminalApp"),
   terminalApps: () => ipcRenderer.invoke("parallax:terminalApps"),
   selectTerminalApp: (path) => ipcRenderer.invoke("parallax:selectTerminalApp", path),

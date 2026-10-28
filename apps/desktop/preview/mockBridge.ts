@@ -2067,6 +2067,7 @@ export const mockBridge: ParallaxBridge = {
           ],
     ),
   openFolder: () => delay(undefined),
+  showFile: () => delay(undefined),
   terminalApp: () => delay(mockTerminal),
   terminalApps: () =>
     delay([

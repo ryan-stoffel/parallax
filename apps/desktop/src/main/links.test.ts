@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import { isOpenableExternally, isReload, mayNavigate } from "./links";
+import { isOpenableExternally, isReload, mayNavigate, shownFilePath } from "./links";
 
 test("only https links open in the system browser", () => {
   expect(isOpenableExternally("https://github.com/ryan-stoffel/parallax")).toBe(true);
@@ -49,4 +49,11 @@ test("an extension's page may go only to its own pages", () => {
   expect(mayNavigate("chrome-extension://xyz/popup.html", popup, true)).toBe(false);
   expect(mayNavigate(popup, "https://example.com/", true)).toBe(false);
   expect(mayNavigate("https://example.com/", popup, true)).toBe(true);
+});
+
+test("a linked file shows only as an absolute path, or one from the home folder", () => {
+  expect(shownFilePath("~/Movies/demo.mp4", "/Users/me")).toBe("/Users/me/Movies/demo.mp4");
+  expect(shownFilePath("/tmp/a/../b.txt", "/Users/me")).toBe("/tmp/b.txt");
+  for (const value of ["out/a.txt", "../a.txt", "~", "~other/a.txt", "/a\nb", 7, undefined])
+    expect(shownFilePath(value, "/Users/me"), String(value)).toBeUndefined();
 });
