@@ -23,19 +23,16 @@ const needle: Record<AgentEffort, number> = {
   max: 120,
 };
 
-// The flames that flicker up off the upper right of the gauge's arc when it's turned up to Max:
-// where each stands, and how big and how late it is.
-const flames = [
-  { x: 16, y: 5.5, size: 0.4, delay: 0.3 },
-  { x: 19.5, y: 8.5, size: 0.5, delay: 0.25 },
-  { x: 21, y: 13, size: 0.35, delay: 0.34 },
-];
+/** A cartoon flame's outline standing on (0, 0): a round base of radius `r`, and its tip `h` up. */
+const drop = (h: number, r: number) =>
+  `M0 ${-h}C${r / 2} ${-h * 0.66} ${r} ${-r * 1.6} ${r} ${-r}A${r} ${r} 0 0 1 ${-r} ${-r}C${-r} ${-r * 1.6} ${-r / 2} ${-h * 0.66} 0 ${-h}Z`;
 
 /**
  * lucide's Gauge, with its needle turned to the effort. The `lucide` class keeps its 1.5px lines.
- * The needle springs to each level. Turned up to Max, a few flames flicker off the upper right of
- * the arc while the needle rattles against its end, then it settles there (index.css). Opening a
- * thread already at Max shows it settled, without the fire.
+ * The needle springs to each level. Turned up to Max, the gauge runs orange and a flame flares up
+ * off its arc while the needle rattles against the end, then it settles there (index.css). The
+ * flame is drawn like the nightly sky's clouds (NightSky.tsx): flat layers, each lit one lighter
+ * and higher than the last. Opening a thread already at Max shows it settled, without the fire.
  */
 function EffortGauge({ value }: { value: AgentEffort }) {
   const [from] = useState(value);
@@ -58,21 +55,12 @@ function EffortGauge({ value }: { value: AgentEffort }) {
       <path d="M3.34 19a10 10 0 1 1 17.32 0" />
       <path d="M12 14V8.34" className={`effort-needle transition-[rotate] ${spring}`} />
       {lit && (
-        <g className="effort-fire" stroke="none">
-          {flames.map((f) => (
-            <g key={f.x} transform={`translate(${f.x} ${f.y}) scale(${f.size})`}>
-              <g className="effort-flame" style={{ animationDelay: `${f.delay}s` }}>
-                <path
-                  fill="#f97316"
-                  d="M0 0c-2.6 0-3.8-1.9-3.8-3.8 0-2.6 2.4-4 3.8-8.2 1.4 4.2 3.8 5.6 3.8 8.2 0 1.9-1.2 3.8-3.8 3.8z"
-                />
-                <path
-                  fill="#fde047"
-                  d="M0 0c-1.3 0-1.9-.9-1.9-1.9 0-1.3 1.2-2 1.9-4.6.7 2.6 1.9 3.3 1.9 4.6 0 1-.6 1.9-1.9 1.9z"
-                />
-              </g>
-            </g>
-          ))}
+        <g transform="translate(17.5 6.5) scale(0.6)" stroke="none" className="effort-fire">
+          <g className="effort-flame">
+            <path fill="#ea580c" d={drop(12, 4.5)} />
+            <path fill="#fb923c" d={drop(9, 3.4)} />
+            <path fill="#fde68a" d={drop(5.5, 2)} />
+          </g>
         </g>
       )}
     </svg>
