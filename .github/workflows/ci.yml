@@ -85,7 +85,7 @@ jobs:
 
       # rust-cache.yml saves this on develop. A PR can't read another PR's caches, so saving here
       # would only fill the cache quota.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: test-${{ runner.os }}-${{ runner.arch }}
           save-if: false
@@ -126,7 +126,7 @@ jobs:
 
       # The tests that run that Claude Code through plxd's backend go through the Agent SDK
       # sidecar (0061), so they need Node and the SDK the sidecar pins.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: runner.os == 'Linux'
         with:
           node-version-file: apps/desktop/.node-version
@@ -147,7 +147,7 @@ jobs:
 
       # plxd behind the relay under `wrangler dev`, end to end (PLX-652): pairing and a session
       # through it, and webhooks forwarded and held. Reuses check-rust's test build.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: matrix.os == 'ubuntu-24.04'
         with:
           node-version-file: apps/desktop/.node-version
@@ -226,7 +226,7 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       # As in the rust job, rust-cache.yml saves this on develop.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: plxd-${{ runner.os }}-${{ runner.arch }}
           save-if: false
@@ -235,7 +235,7 @@ jobs:
         run: cargo build -p plxd --locked --features fake-backend
 
       - name: Upload plxd
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: plxd-${{ matrix.os }}
           path: target/debug/plxd${{ runner.os == 'Windows' && '.exe' || '' }}
@@ -257,7 +257,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: apps/desktop/.node-version
 
@@ -283,7 +283,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: apps/desktop/.node-version
 
@@ -335,7 +335,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: apps/desktop/.node-version
 
@@ -373,7 +373,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plxd-${{ matrix.os }}
           path: ${{ runner.temp }}/plxd
@@ -388,7 +388,7 @@ jobs:
             echo "PLXD_PATH=$RUNNER_TEMP/plxd/plxd" >> "$GITHUB_ENV"
           fi
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: apps/desktop/.node-version
 
@@ -436,7 +436,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: plxd-ubuntu-24.04
           path: ${{ runner.temp }}/plxd
@@ -473,7 +473,7 @@ jobs:
 
       - name: Upload the results
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: load
           path: load*.json
