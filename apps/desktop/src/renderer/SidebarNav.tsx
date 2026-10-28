@@ -1,18 +1,15 @@
-// The sidebar's head (0090): New thread and Search as rows, the pages Edit sidebar chooses, More,
+// The sidebar's head (0090): New thread and Search as rows, the pages Settings shows there, More,
 // and the projects pinned under them.
 import {
   ChartNoAxesColumn,
   ChevronDown,
-  Ellipsis,
   FolderPlus,
   GitPullRequest,
   LayoutGrid,
-  SlidersHorizontal,
   SquarePen,
-  X,
   type LucideIcon,
 } from "lucide-react";
-import { useId, useRef, type ReactNode, type Ref } from "react";
+import { useId, useRef, type ReactNode } from "react";
 
 import { useShortcutLabel } from "./keybindings";
 import type { ProjectEntry } from "./projectList";
@@ -27,17 +24,21 @@ const navBase =
   "group/nav flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-left text-body text-foreground/90 hover:bg-hover hover:text-foreground [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-muted-foreground [&>svg]:transition-colors";
 export const navRow = `${navBase} hover:[&>svg]:text-foreground`;
 const navCurrent = "bg-selected text-foreground [&>svg]:text-foreground";
+/** More's and Pinned's headings, which fold what's under them. */
+const sectionToggle =
+  "flex h-7 items-center gap-1 self-start rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground";
+
 /** A pinned project's row: its glyph gray until hovered, focused, or open, then its color. */
 const pinRow = `${navBase} hover:[&>svg]:text-(--tint) focus-visible:[&>svg]:text-(--tint) aria-[current=page]:bg-selected aria-[current=page]:text-foreground aria-[current=page]:[&>svg]:text-(--tint)`;
 
-/** The rows Edit sidebar chooses between, in the order they list. */
+/** The pages Settings › Appearance › Sidebar chooses between, in the order they list. */
 export const navChoices: { id: NavRow; label: string; Icon: LucideIcon }[] = [
   { id: "projects", label: "Projects", Icon: LayoutGrid },
   { id: "pullRequests", label: "Pull requests", Icon: GitPullRequest },
   { id: "usage", label: "Usage", Icon: ChartNoAxesColumn },
 ];
 
-/** Whether More is open, showing the pages Edit sidebar leaves out, on this computer. */
+/** Whether More is open, showing the pages Settings leaves out of the head, on this computer. */
 export const moreShown = stored("parallax.moreShown", false, (raw, fallback) =>
   typeof raw === "boolean" ? raw : fallback,
 );
@@ -77,7 +78,6 @@ export function SidebarNav({
   const shown = { ...navDefaults, ...sidebarNav.use() };
   const folded = pinnedFolded.use();
   const newKeys = useShortcutLabel("newThread");
-  const editDialog = useRef<HTMLDialogElement>(null);
   const moreList = useId();
   const moreOpen = moreShown.use();
   // A page's row, under the head or under More.
@@ -116,13 +116,12 @@ export function SidebarNav({
         aria-expanded={moreOpen}
         aria-controls={moreList}
         onClick={() => moreShown.set(!moreOpen)}
-        className={navRow}
+        className={`mt-4 ${sectionToggle}`}
       >
-        <Ellipsis />
-        <span className="flex-1">{moreOpen ? "Less" : "More"}</span>
+        More
         <ChevronDown
           aria-hidden
-          className={`size-3.5 text-faint-foreground transition-transform duration-150 ${moreOpen ? "rotate-180" : ""}`}
+          className={`size-3 transition-transform duration-150 ${moreOpen ? "" : "-rotate-90"}`}
         />
       </button>
       {moreOpen && (
@@ -132,13 +131,8 @@ export function SidebarNav({
             <FolderPlus />
             New project or repository
           </button>
-          <button type="button" onClick={() => editDialog.current?.showModal()} className={navRow}>
-            <SlidersHorizontal />
-            Edit sidebar…
-          </button>
         </div>
       )}
-      <EditSidebar ref={editDialog} />
       {pinned.length > 0 && (
         <section aria-label="Pinned" className="mt-4">
           <button
@@ -146,7 +140,7 @@ export function SidebarNav({
             aria-expanded={!folded}
             aria-controls={pinnedList}
             onClick={() => pinnedFolded.set(!folded)}
-            className="group/fold flex h-7 items-center gap-1 rounded-md px-2 text-meta font-medium text-faint-foreground hover:text-muted-foreground"
+            className={sectionToggle}
           >
             Pinned
             <ChevronDown
@@ -215,60 +209,5 @@ function PinnedRow({
         />
       </div>
     </li>
-  );
-}
-
-/** Edit sidebar: which of the pages' rows the sidebar lists. Those it hides stay under More. */
-function EditSidebar({ ref }: { ref: Ref<HTMLDialogElement> }) {
-  const shown = { ...navDefaults, ...sidebarNav.use() };
-  const titleId = useId();
-  return (
-    <dialog
-      ref={ref}
-      aria-labelledby={titleId}
-      className="m-auto w-[26rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
-    >
-      <form method="dialog" className="p-5">
-        <div className="flex items-center justify-between">
-          <h2 id={titleId} className="text-reading font-semibold">
-            Edit sidebar
-          </h2>
-          <button
-            type="submit"
-            aria-label="Close"
-            className="-mr-1.5 grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-        <p className="mt-1 text-body text-muted-foreground">
-          Choose which pages appear in your sidebar. Hidden ones stay under More.
-        </p>
-        <ul className="mt-4 flex flex-col gap-0.5">
-          {navChoices.map(({ id, label, Icon }) => (
-            <li key={id}>
-              <label className="flex h-9 cursor-default items-center gap-3 rounded-lg px-2 text-body hover:bg-hover">
-                <input
-                  type="checkbox"
-                  checked={shown[id]}
-                  onChange={(e) => sidebarNav.set({ ...shown, [id]: e.target.checked })}
-                  className="size-4 accent-accent"
-                />
-                <Icon aria-hidden className="size-4 text-muted-foreground" />
-                {label}
-              </label>
-            </li>
-          ))}
-        </ul>
-        <div className="mt-5 flex justify-end">
-          <button
-            type="submit"
-            className="rounded-md bg-primary px-3.5 py-1.5 text-body font-medium text-primary-foreground hover:opacity-90"
-          >
-            Done
-          </button>
-        </div>
-      </form>
-    </dialog>
   );
 }

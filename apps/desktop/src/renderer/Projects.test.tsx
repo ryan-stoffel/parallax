@@ -885,20 +885,17 @@ const sidebarButton = (text: string) =>
     (b) => b.textContent === text,
   );
 
-test("Usage waits under More until Edit sidebar shows it, and pinned projects list by name", async () => {
+test("Usage waits under More until Settings shows it in the head, and pinned projects list by name", async () => {
   await renderApp();
   expect(sidebarButton("Usage")).toBeUndefined();
   await click(sidebarButton("More"));
-  expect(sidebarButton("Usage")!.closest("[id]")!.id).toBe(
-    sidebarButton("Less")!.getAttribute("aria-controls"),
+  expect(sidebarButton("Usage")!.parentElement!.id).toBe(
+    sidebarButton("More")!.getAttribute("aria-controls"),
   );
-  await click(sidebarButton("Less"));
-  const usage = [...document.querySelectorAll<HTMLLabelElement>("dialog label")].find(
-    (l) => l.textContent === "Usage",
-  )!;
-  await click(usage.querySelector("input"));
-  expect(sidebarNav.get().usage).toBe(true);
-  // A row of its own, with More closed.
+  await click(sidebarButton("More"));
+  expect(sidebarButton("Usage")).toBeUndefined();
+  // Settings › Appearance › Sidebar's switch for it.
+  await act(async () => sidebarNav.set({ ...sidebarNav.get(), usage: true }));
   expect(sidebarButton("Usage")).toBeDefined();
 
   // Pinning from a card lists the Project under Pinned, and its row opens it.

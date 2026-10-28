@@ -201,6 +201,11 @@ export const settingsIndex: SettingEntry[] = [
       "diff colors colorblind red green blue orange",
     ],
   ]),
+  ...entries("appearance", "Sidebar", [
+    ["Projects", "In the sidebar's head, or under More", "sidebar nav pages edit"],
+    ["Pull requests", "In the sidebar's head, or under More", "sidebar nav pages edit prs"],
+    ["Usage", "In the sidebar's head, or under More", "sidebar nav pages edit limits"],
+  ]),
   // Browser (PLX-974)
   ...entries("browser", "Appearance", [
     ["Theme", "Parallax's own colors, or Helium's and Chrome's", "color colour palette dark light"],

@@ -8,6 +8,8 @@ import {
 } from "../../preload/bridge";
 import { seesThrough, setAppearance, shownThemes, useAppearance } from "../appearance";
 import { ParallaxMark } from "../logos";
+import { navChoices } from "../SidebarNav";
+import { navDefaults, sidebarNav } from "../sidebarPrefs";
 import { IconButton, Picker, Segmented, menuItem, type PickerOption } from "../ui";
 import {
   fillIcons,
@@ -101,6 +103,7 @@ export function AppearanceSettings({
   onThemeChange: (theme: ThemePreference) => void;
 }) {
   const appearance = useAppearance();
+  const nav = { ...navDefaults, ...sidebarNav.use() };
   // The mode whose menu opened Add theme, which gets the added theme.
   const [adding, setAdding] = useState<Mode>();
   const added = useAddedThemes();
@@ -376,6 +379,22 @@ export function AppearanceSettings({
             onChange={(diffColors) => setAppearance({ diffColors })}
           />
         </Row>
+      </Section>
+
+      <Section title="Sidebar">
+        {navChoices.map(({ id, label }) => (
+          <Row
+            key={id}
+            title={label}
+            description="In the sidebar's head. Off, it waits under More."
+          >
+            <Switch
+              label={`Show ${label} in the sidebar`}
+              checked={nav[id]}
+              onChange={(on) => sidebarNav.set({ ...nav, [id]: on })}
+            />
+          </Row>
+        ))}
       </Section>
     </>
   );
