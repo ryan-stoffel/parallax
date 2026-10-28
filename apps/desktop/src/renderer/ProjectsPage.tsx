@@ -77,12 +77,12 @@ export function ProjectTile({
 }) {
   const box = {
     glyph: "size-4 rounded-sm",
-    mark: "size-9 rounded-lg",
+    mark: "size-7 rounded-md",
     sm: "size-5 rounded-sm",
     md: "size-10 rounded-lg",
     lg: "size-12 rounded-xl",
   }[size];
-  const glyph = { glyph: "size-4", mark: "size-9", sm: "size-3.5", md: "size-5", lg: "size-6" }[
+  const glyph = { glyph: "size-4", mark: "size-7", sm: "size-3.5", md: "size-5", lg: "size-6" }[
     size
   ];
   if (entry.icon?.image)

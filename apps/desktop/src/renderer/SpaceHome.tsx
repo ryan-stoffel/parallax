@@ -22,8 +22,8 @@ const panelPart = "p-5";
 const panelHead = "mb-3 flex items-center justify-between gap-2";
 
 /**
- * A Space's header, in place of New thread's question: a way back to Projects, then its tile, name,
- * and size, Pin, and its menu.
+ * A Space's header, in place of New thread's question: a way back to Projects, then its icon and
+ * name on one line, Pin, and its menu.
  */
 export function SpaceHeader({
   entry,
@@ -40,7 +40,6 @@ export function SpaceHeader({
   onBack: () => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
-  const n = entry.threads;
   return (
     <header className="mb-8 lg:col-span-2">
       <button
@@ -51,14 +50,11 @@ export function SpaceHeader({
         <ArrowLeft aria-hidden />
         Projects
       </button>
-      <div className="flex items-center gap-3.5">
+      <div className="flex items-center gap-3">
         <ProjectTile entry={entry} size="mark" />
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-display font-semibold tracking-tight">{entry.name}</h1>
-          <p className="mt-0.5 text-body text-muted-foreground">
-            Space · {n} {n === 1 ? "thread" : "threads"}
-          </p>
-        </div>
+        <h1 className="min-w-0 flex-1 truncate text-display leading-none font-semibold tracking-tight">
+          {entry.name}
+        </h1>
         <IconButton label={pinned ? "Unpin" : "Pin"} onClick={onTogglePin}>
           {pinned ? <PinOff /> : <Pin />}
         </IconButton>
