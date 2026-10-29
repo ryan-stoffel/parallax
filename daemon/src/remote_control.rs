@@ -24,7 +24,8 @@ use std::time::Duration;
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    RemoteControlSession, RemoteControlState, ThreadRemoteControlParams, ThreadRemoteControlResult,
+    RemoteControlSession, RemoteControlState, ThreadRemoteControlOriginParams,
+    ThreadRemoteControlOriginResult, ThreadRemoteControlParams, ThreadRemoteControlResult,
 };
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -313,6 +314,30 @@ pub(crate) async fn session(
             session_id,
             state,
         }),
+    })
+}
+
+/// `thread/remoteControlOrigin`: see [`ThreadRemoteControlOriginResult`].
+pub(crate) async fn origin(
+    daemon: &Arc<Daemon>,
+    params: ThreadRemoteControlOriginParams,
+) -> Result<ThreadRemoteControlOriginResult, ErrorObject> {
+    let id = params.run_id;
+    let row = store(daemon, move |db| {
+        db.get_run(id.into()).map_err(|e| store_error(&e))
+    })
+    .await?;
+    let Some(row) = row else {
+        return Err(ErrorObject::invalid_params(format!("no run {id}")));
+    };
+    let Some(session_id) = row.state.session_id.filter(|id| is_session(id)) else {
+        return Ok(ThreadRemoteControlOriginResult { origin: None });
+    };
+    let origin = cloud::origin(daemon, &session_id)
+        .await
+        .map_err(ErrorObject::internal_error)?;
+    Ok(ThreadRemoteControlOriginResult {
+        origin: Some(origin),
     })
 }
 

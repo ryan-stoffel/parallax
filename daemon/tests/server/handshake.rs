@@ -45,6 +45,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("checks".to_owned(), serde_json::Map::new()),
             ("checkout".to_owned(), serde_json::Map::new()),
             ("claudeRemoteControl".to_owned(), serde_json::Map::new()),
+            ("claudeRemoteControlMove".to_owned(), serde_json::Map::new()),
             ("commandIds".to_owned(), serde_json::Map::new()),
             ("composerMenus".to_owned(), serde_json::Map::new()),
             ("connect".to_owned(), serde_json::Map::new()),

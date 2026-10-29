@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
-use parallax_protocol::ImportSource;
+use parallax_protocol::{ImportSource, RemoteControlOrigin};
 use serde_json::{Value, json};
 
 use super::{Message, Session, claude_messages, title_from};
@@ -266,6 +266,37 @@ pub(super) async fn load(daemon: &Arc<Daemon>, id: &str) -> Result<Option<Loaded
     .unwrap_or_else(|_| Err("claude.ai's session took too long to read".to_owned()))
 }
 
+/// Where session `id` runs, from its first transcript page: Claude Code's own id for it there, its
+/// folder, and the platform its environment names (PLX-1143). `claude.ai` doesn't name the
+/// computer.
+///
+/// # Errors
+///
+/// Why it couldn't be read, in words.
+pub(crate) async fn origin(daemon: &Arc<Daemon>, id: &str) -> Result<RemoteControlOrigin, String> {
+    tokio::time::timeout(LIMIT, async {
+        let mut claude = start(daemon).await?;
+        let page = claude
+            .ask(json!({"subtype": "get_cloud_session_transcript", "session_id": id}))
+            .await?;
+        let entries = page["entries"].as_array().map_or(&[][..], Vec::as_slice);
+        Ok(origin_of(entries))
+    })
+    .await
+    .unwrap_or_else(|_| Err("claude.ai's session took too long to read".to_owned()))
+}
+
+/// The origin transcript `entries` name: the first session id, folder, and environment platform.
+fn origin_of(entries: &[Value]) -> RemoteControlOrigin {
+    RemoteControlOrigin {
+        session_id: entries.iter().find_map(|e| text(&e["sessionId"])),
+        cwd: entries.iter().find_map(|e| text(&e["cwd"])),
+        platform: entries
+            .iter()
+            .find_map(|e| text(&e["attachment"]["snapshot"]["platform"])),
+    }
+}
+
 /// The session `entries` from `claude.ai` hold, titled by its first message from the user: `None`
 /// when they hold none. It resumes its own `claude.ai` id, as a Claude Remote Control run.
 fn session(id: &str, entries: &[Value]) -> Option<Session> {
@@ -332,6 +363,34 @@ mod tests {
                 "message": {"role": "assistant", "content": [{"type": "text", "text": "Hi Ryan."}]},
             }),
         ]
+    }
+
+    #[test]
+    fn the_origin_is_the_local_session_folder_and_platform_the_entries_name() {
+        let mut entries = page();
+        entries.insert(
+            1,
+            json!({
+                "type": "attachment", "sessionId": "5c5f05dc",
+                "attachment": {"type": "environment", "snapshot": {"platform": "win32", "osVersion": "Windows 11"}},
+            }),
+        );
+        assert_eq!(
+            origin_of(&entries),
+            RemoteControlOrigin {
+                session_id: Some("5c5f05dc".to_owned()),
+                cwd: Some("/Users/ryan/Developer/learn-rust".to_owned()),
+                platform: Some("win32".to_owned()),
+            }
+        );
+        assert_eq!(
+            origin_of(&[]),
+            RemoteControlOrigin {
+                session_id: None,
+                cwd: None,
+                platform: None,
+            }
+        );
     }
 
     #[test]

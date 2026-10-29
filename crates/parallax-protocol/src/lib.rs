@@ -231,7 +231,8 @@ pub use remote::{
     RemoteSessionsParams, RemoteSessionsResult,
 };
 pub use remote_control::{
-    RemoteControlSession, RemoteControlState, ThreadRemoteControlParams, ThreadRemoteControlResult,
+    RemoteControlOrigin, RemoteControlSession, RemoteControlState, ThreadRemoteControlOriginParams,
+    ThreadRemoteControlOriginResult, ThreadRemoteControlParams, ThreadRemoteControlResult,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,

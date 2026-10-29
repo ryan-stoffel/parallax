@@ -474,6 +474,11 @@ export type ParallaxRequests = {
 	 */
 	"thread/remoteControl": { params: ThreadRemoteControlParams, result: ThreadRemoteControlResult },
 	/**
+	 * `thread/remoteControlOrigin`: where a Claude Remote Control thread's session runs, read
+	 * from `claude.ai`, to move it there (PLX-1143). Gated on `claudeRemoteControlMove`.
+	 */
+	"thread/remoteControlOrigin": { params: ThreadRemoteControlOriginParams, result: ThreadRemoteControlOriginResult },
+	/**
 	 * `thread/archive`: archives a normal thread or brings it back.
 	 */
 	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
@@ -1101,6 +1106,7 @@ export const REQUEST_METHODS = [
 	"thread/importChat",
 	"thread/importedChats",
 	"thread/remoteControl",
+	"thread/remoteControlOrigin",
 	"thread/archive",
 	"thread/update",
 	"repo/update",
@@ -6644,6 +6650,46 @@ export type RemoteControlSession = {
  * A newer plxd may send a state this version does not know; treat it as unknown.
  */
 export type RemoteControlState = "running" | "idle" | "waiting" | "offline" | "archived";
+
+/**
+ * Params of `thread/remoteControlOrigin`.
+ */
+export type ThreadRemoteControlOriginParams = {
+	/**
+	 * The thread's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `thread/remoteControlOrigin`, read from `claude.ai` through Claude Code.
+ */
+export type ThreadRemoteControlOriginResult = {
+	/**
+	 * Absent for a thread that isn't a Claude Remote Control thread.
+	 */
+	origin?: RemoteControlOrigin,
+};
+
+/**
+ * Where a Claude Remote Control session runs, from its transcript on `claude.ai` (PLX-1143).
+ * `claude.ai` doesn't name the computer, so the app finds it by this session's transcript there.
+ */
+export type RemoteControlOrigin = {
+	/**
+	 * Claude Code's own id for the session on its computer, which that computer's plxd lists
+	 * among its Claude sessions to import.
+	 */
+	sessionId?: string,
+	/**
+	 * The folder it works in there.
+	 */
+	cwd?: string,
+	/**
+	 * The computer's platform, as Node names it: `darwin`, `win32`, or `linux`.
+	 */
+	platform?: string,
+};
 
 /**
  * Params of `thread/archive`: archives a thread or brings it back.

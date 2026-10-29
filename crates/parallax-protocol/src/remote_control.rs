@@ -75,3 +75,41 @@ pub struct ThreadRemoteControlResult {
     #[ts(optional)]
     pub session: Option<RemoteControlSession>,
 }
+
+/// Params of `thread/remoteControlOrigin`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRemoteControlOriginParams {
+    /// The thread's run.
+    pub run_id: RunId,
+}
+
+/// Where a Claude Remote Control session runs, from its transcript on `claude.ai` (PLX-1143).
+/// `claude.ai` doesn't name the computer, so the app finds it by this session's transcript there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteControlOrigin {
+    /// Claude Code's own id for the session on its computer, which that computer's plxd lists
+    /// among its Claude sessions to import.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub session_id: Option<String>,
+    /// The folder it works in there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub cwd: Option<String>,
+    /// The computer's platform, as Node names it: `darwin`, `win32`, or `linux`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub platform: Option<String>,
+}
+
+/// Result of `thread/remoteControlOrigin`, read from `claude.ai` through Claude Code.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadRemoteControlOriginResult {
+    /// Absent for a thread that isn't a Claude Remote Control thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub origin: Option<RemoteControlOrigin>,
+}

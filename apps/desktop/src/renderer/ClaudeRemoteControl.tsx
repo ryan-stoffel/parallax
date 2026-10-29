@@ -1,4 +1,4 @@
-import { Cloud, GitBranch } from "lucide-react";
+import { Cloud, GitBranch, Network } from "lucide-react";
 
 import type { RemoteControlSession } from "../protocol/generated/protocol";
 import { ClaudeLogo, GitHubLogo } from "./logos";
@@ -89,9 +89,16 @@ export function RemoteControlTab({
 
 /**
  * Thread details' section for a Claude Remote Control thread: that it is one, what the session is
- * doing, the repository and branch it works in on its own computer, and Open in Claude.
+ * doing, the repository and branch it works in on its own computer, and Open in Claude. `onMove`
+ * moves it to its computer through Parallax Connect (PLX-1143), when that plxd can.
  */
-export function RemoteControlSection({ session }: { session?: RemoteControlSession }) {
+export function RemoteControlSection({
+  session,
+  onMove,
+}: {
+  session?: RemoteControlSession;
+  onMove?: () => void;
+}) {
   const look = session?.state && remoteControlLook[session.state];
   const row = "flex min-w-0 items-center gap-2 px-2 py-1 text-body";
   return (
@@ -126,6 +133,12 @@ export function RemoteControlSection({ session }: { session?: RemoteControlSessi
         </div>
       )}
       {session && <OpenInClaude url={session.url} className={`${menuItem} [&_svg]:!size-4`} />}
+      {onMove && (
+        <button type="button" onClick={onMove} className={`${menuItem} [&_svg]:!size-4`}>
+          <Network aria-hidden />
+          Move to Parallax Connect
+        </button>
+      )}
     </section>
   );
 }

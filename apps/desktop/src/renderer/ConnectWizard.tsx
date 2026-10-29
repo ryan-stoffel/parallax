@@ -328,7 +328,15 @@ function Footer({ children, start }: { children: ReactNode; start?: ReactNode })
 }
 
 /** One thing `plx-connect add` does, in Set up's list. */
-function Plan({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+export function Plan({
+  icon,
+  title,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  children: ReactNode;
+}) {
   return (
     <li className="flex gap-3 border-border px-3 py-2.5 not-last:border-b [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground">
       {icon}
