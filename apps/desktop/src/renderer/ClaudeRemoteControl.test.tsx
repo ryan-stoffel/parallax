@@ -5,6 +5,7 @@ import { afterEach, expect, test } from "vite-plus/test";
 
 import type { RemoteControlSession } from "../protocol/generated/protocol";
 import { RemoteControlSection, RemoteControlTab } from "./ClaudeRemoteControl";
+import { ThreadDetails } from "./ThreadDetails";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -59,4 +60,22 @@ test("Thread details names Claude Remote Control, its state, repository, and bra
     "main",
     "Open in Claude",
   ]);
+});
+
+test("Thread details leaves out this computer's folder, apps, actions, and Git for a Remote Control thread", () => {
+  const body = show(
+    <ThreadDetails
+      mode="docked"
+      host={{ id: "local", name: "macbook" }}
+      folder="/Users/ryan/Developer/learn-rust"
+      actions={{ hostId: "local", repoId: "r", canRun: true, onRun: () => {} }}
+      git={{ hostId: "local" }}
+      remoteControl={{ session: session("idle") }}
+    />,
+  );
+  const sections = [...body.querySelectorAll("aside section")].map((s) =>
+    s.getAttribute("aria-label"),
+  );
+  expect(sections).toEqual(["Claude Remote Control"]);
+  expect(body.textContent).not.toContain("macbook");
 });

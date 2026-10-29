@@ -1,5 +1,6 @@
 import {
   ChevronLeft,
+  Cloud,
   ChevronRight,
   FileSearch,
   FolderGit2,
@@ -682,11 +683,14 @@ export function App() {
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
+    // A Claude Remote Control thread runs on another computer, not this host (PLX-1140).
+    const where: Crumb =
+      selection.kind === "thread" && remoteThread
+        ? { label: "Remote Control", icon: <Cloud aria-hidden /> }
+        : { label: host.name };
     // A Space's page is the Space itself (0090), so its crumbs end there.
     crumbs =
-      selection.kind === "new" && group.space
-        ? [{ label: host.name }, repo]
-        : [{ label: host.name }, repo, { label: page }];
+      selection.kind === "new" && group.space ? [where, repo] : [where, repo, { label: page }];
 
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.

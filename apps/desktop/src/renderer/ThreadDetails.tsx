@@ -89,8 +89,9 @@ export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggl
 /**
  * The thread's host, Open in, repository actions, its Space, Git status, linked pull requests, and
  * lineage, docked at the thread's right, left of the side panel, or floating over the thread.
- * A Claude Remote Control thread's session leads it (PLX-1140). Mounted while hidden, so the Open
- * and action shortcuts keep working.
+ * A Claude Remote Control thread's session takes the place of the host, Open in, actions, and Git,
+ * which are this computer's (PLX-1140). Mounted while hidden, so the Open and action shortcuts
+ * keep working.
  */
 export function ThreadDetails({
   mode,
@@ -118,6 +119,28 @@ export function ThreadDetails({
 }) {
   const linked = prs?.prs.urls.length ?? 0;
   const prOpen = !!prs?.prs.urls.some((url) => prs.prs.get(url)?.pr?.state === "open");
+  // This computer's folder, apps, and actions for the thread.
+  const workspace = (
+    <section aria-label="Workspace" className="p-2">
+      <div
+        title={folder ?? "No folder yet"}
+        className="flex items-center gap-0.5 px-2 py-1.5 text-body"
+      >
+        <span aria-hidden className="shrink-0 text-muted-foreground">
+          {hostIcon(host)}
+        </span>
+        {worktree ? (
+          <FolderGit2 aria-hidden className="shrink-0 text-muted-foreground" />
+        ) : (
+          <FolderOpen aria-hidden className="shrink-0 text-muted-foreground" />
+        )}
+        <span className="ml-2 truncate">{host.name}</span>
+      </div>
+      <OpenMenu hostId={host.id} folder={folder} />
+      {actions && <Actions {...actions} />}
+      {space && <SpaceMenu {...space} />}
+    </section>
+  );
   return (
     <aside
       id={THREAD_DETAILS_ID}
@@ -135,26 +158,16 @@ export function ThreadDetails({
     >
       <div className="pointer-events-auto max-h-full overflow-y-auto rounded-xl border border-border bg-surface text-foreground shadow-composer [&_img]:size-4 [&_svg]:size-4">
         {remoteControl && <RemoteControlSection {...remoteControl} />}
-        <section aria-label="Workspace" className="p-2">
-          <div
-            title={folder ?? "No folder yet"}
-            className="flex items-center gap-0.5 px-2 py-1.5 text-body"
-          >
-            <span aria-hidden className="shrink-0 text-muted-foreground">
-              {hostIcon(host)}
-            </span>
-            {worktree ? (
-              <FolderGit2 aria-hidden className="shrink-0 text-muted-foreground" />
-            ) : (
-              <FolderOpen aria-hidden className="shrink-0 text-muted-foreground" />
-            )}
-            <span className="ml-2 truncate">{host.name}</span>
-          </div>
-          <OpenMenu hostId={host.id} folder={folder} />
-          {actions && <Actions {...actions} />}
-          {space && <SpaceMenu {...space} />}
-        </section>
-        {git && (
+        {/* A Remote Control thread works on another computer, which its section names: no folder,
+            apps, actions, or Git of this one's. */}
+        {remoteControl
+          ? space && (
+              <section aria-label="Space" className="p-2">
+                <SpaceMenu {...space} />
+              </section>
+            )
+          : workspace}
+        {git && !remoteControl && (
           <section aria-label="Git" className="border-t border-border p-2">
             <GitMenu {...git} hasPr={prOpen} />
           </section>
