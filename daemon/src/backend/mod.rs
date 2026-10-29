@@ -156,6 +156,18 @@ pub trait Backend: Send + Sync {
         Ok(None)
     }
 
+    /// Starts the CLI in `cwd` to answer control requests one after another over its stdin, on
+    /// the login a thread on this backend gets, with no hooks or MCP servers: Claude Code's
+    /// `list_cloud_sessions` and `get_cloud_session_transcript`, for importing the sessions
+    /// `claude.ai` keeps (PLX-1136). `None` for a backend with no such requests, the default.
+    ///
+    /// # Errors
+    ///
+    /// If the CLI can't be started.
+    fn control(&self, _cwd: &Path) -> Result<Option<process::Process>, StartError> {
+        Ok(None)
+    }
+
     /// Starts the CLI in `dir`, an empty folder of the call's own that holds
     /// [`namer::SCHEMA_FILE`], to name a thread (0058): `model` at `effort`, on the login a thread
     /// on this backend gets, with no tools, for [`namer::ask`]. `None` for a backend that can't,

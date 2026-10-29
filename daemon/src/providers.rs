@@ -1392,6 +1392,17 @@ impl Backend for WithSecrets {
         self.plain.limits(cwd)
     }
 
+    fn control(
+        &self,
+        cwd: &Path,
+    ) -> Result<Option<crate::backend::process::Process>, crate::backend::StartError> {
+        // As for limits: another login's sessions, and no waiting on the keychain.
+        if self.entry.instance.env.iter().any(|var| var.secret) {
+            return Ok(None);
+        }
+        self.plain.control(cwd)
+    }
+
     fn namer(
         &self,
         dir: &Path,

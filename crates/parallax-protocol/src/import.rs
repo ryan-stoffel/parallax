@@ -5,7 +5,9 @@
 //! from a `ChatGPT` or `claude.ai` data export, which has no session to resume.
 //!
 //! `thread/importable` lists the sessions each app keeps on the host, with the Claude Code and
-//! Codex sessions that ran on it through Remote Control, driven from another device.
+//! Codex sessions that ran on it through Remote Control, driven from another device. With
+//! `remote`, it lists instead the Claude Code sessions `claude remote-control` served on any of
+//! the user's computers, which `claude.ai` keeps (PLX-1136).
 //! `thread/import` makes one an archived thread: its conversation, the user's messages and the
 //! agent's replies, logged as the thread's own, at rest with no CLI running, as a fork is (0050).
 //! Its first follow-up continues the app's own session when the thread's CLI can, and otherwise
@@ -56,12 +58,25 @@ pub struct ImportableSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub thread: Option<RunId>,
+    /// A Claude Code session `claude remote-control` served on another computer, which
+    /// `claude.ai` keeps (PLX-1136): its id is `claude.ai`'s, and its transcript is read from there
+    /// through Claude Code's own sign-in.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub remote: bool,
 }
 
 /// Params of `thread/importable`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadImportableParams {}
+pub struct ThreadImportableParams {
+    /// Lists the `claude.ai` sessions to import ([`ImportableSession::remote`]) instead of the
+    /// apps' sessions on the host. Slower, as each is read to check it has a transcript. Behind
+    /// the `threadImportRemote` capability.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub remote: bool,
+}
 
 /// Result of `thread/importable`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -70,6 +85,11 @@ pub struct ThreadImportableResult {
     /// Every app's sessions on the host, the most recently active first. An app that isn't
     /// installed, or whose files can't be read, adds none.
     pub sessions: Vec<ImportableSession>,
+    /// For `remote`, why `claude.ai`'s sessions couldn't be listed, such as Claude Code not being
+    /// signed in with a `claude.ai` account.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub problem: Option<String>,
 }
 
 /// Params of `thread/import`: makes a session an archived thread, in its folder's own checkout
@@ -83,6 +103,10 @@ pub struct ThreadImportParams {
     pub source: ImportSource,
     /// The app's id for it, as `thread/importable` listed it.
     pub id: String,
+    /// It's a `claude.ai` session ([`ImportableSession::remote`]).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub remote: bool,
     /// The account the thread's follow-ups run on. Absent means the built-in agent of the
     /// session's app: `claude`, `codex`, or `cursor`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

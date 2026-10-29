@@ -11,7 +11,6 @@ import {
   type LanHost,
   type ParallaxBridge,
   type Profile,
-  type RemoteControlSession,
   type RendererMethod,
   type RpcError,
   type SubscribeParams,
@@ -113,6 +112,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "threadAttention",
     "threadFork",
     "threadImport",
+    "threadImportRemote",
     "threadLineage",
     "threadNaming",
     "threadTools",
@@ -605,6 +605,46 @@ const fileScripts: RepoScript[] = [
 // Files `host/upload` took, by path, for `host/readUpload`.
 const uploads = new Map<string, string>(Object.entries(uploadSeeds));
 
+/**
+ * The Claude Code sessions `claude remote-control` served on other computers, which claude.ai
+ * keeps (`thread/importable` with `remote`, PLX-1136). plxd reads each through Claude Code, so
+ * listing them takes a moment.
+ */
+const remoteImportable: ImportableSession[] = [
+  {
+    source: "claude",
+    id: "session_01r1",
+    title: "Hello from Claude RC",
+    cwd: "/Users/ryan/Developer/learn-rust",
+    updatedAt: ago(5),
+    remote: true,
+  },
+  {
+    source: "claude",
+    id: "session_01r2",
+    title: "Upgrade the homelab Postgres",
+    cwd: "C:\\Users\\ryan\\life\\projects\\homelab",
+    updatedAt: ago(40),
+    remote: true,
+  },
+  {
+    source: "claude",
+    id: "session_01r3",
+    title: "Port the lexer to Rust",
+    cwd: "/Users/ryan/Developer/learn-rust",
+    updatedAt: ago(190),
+    remote: true,
+  },
+  {
+    source: "claude",
+    id: "session_01r4",
+    title: "Write the backup cron script",
+    cwd: "C:\\Users\\ryan\\life\\projects\\homelab",
+    updatedAt: ago(60 * 30),
+    remote: true,
+  },
+];
+
 /** This computer's past Claude, Codex, and Cursor app sessions (`thread/importable`). */
 const importable: ImportableSession[] = [
   {
@@ -868,9 +908,11 @@ const handlers: { [M in Method]?: Handler<M> } = {
   },
   // This computer's past app sessions to import, kept until the page reloads. An import only
   // marks its session imported: the preview makes no archived thread for it.
-  "thread/importable": () => ({ sessions: importable }),
+  "thread/importable": (p) => ({ sessions: p.remote ? remoteImportable : importable }),
   "thread/import": (p) => {
-    const session = importable.find((s) => s.source === p.source && s.id === p.id);
+    const session = (p.remote ? remoteImportable : importable).find(
+      (s) => s.source === p.source && s.id === p.id,
+    );
     if (!session) return fail("no such session");
     session.thread = `imported-${p.id}`;
     return {} as never;
@@ -1842,101 +1884,11 @@ const expand = (p: string) => p.replace(/^~(?=\/|$)/, HOME).replace(/\/+$/, "") 
 // The terminal app Settings > General chose, once Choose… is clicked.
 let mockTerminal: string | null = "Ghostty";
 
-/**
- * PLX-1136's prototype: Claude Code sessions that ran with Remote Control on other computers, as
- * claude.ai lists them. Copying one takes a moment and marks it imported.
- */
-const remoteSessions: RemoteControlSession[] = [
-  {
-    id: "r1",
-    title: "Test for RC",
-    folder: "learn-rust",
-    updatedAt: ago(5),
-    device: "mac-mini",
-    deviceIcon: "mini",
-  },
-  {
-    id: "r2",
-    title: "Upgrade the homelab Postgres",
-    folder: "homelab",
-    updatedAt: ago(40),
-    device: "studio",
-    deviceIcon: "desktop",
-  },
-  {
-    id: "r3",
-    title: "Port the lexer to Rust",
-    folder: "learn-rust",
-    updatedAt: ago(190),
-    device: "mac-mini",
-    deviceIcon: "mini",
-  },
-  {
-    id: "r4",
-    title: "Write the backup cron script",
-    folder: "homelab",
-    updatedAt: ago(60 * 30),
-    device: "studio",
-    deviceIcon: "desktop",
-  },
-  {
-    id: "r5",
-    title: "Fix the parser's borrow errors",
-    folder: "learn-rust",
-    updatedAt: ago(60 * 50),
-    device: "mac-mini",
-    deviceIcon: "mini",
-  },
-];
-
 function ago(minutes: number) {
   return new Date(Date.now() - minutes * 60_000).toISOString();
 }
 
-/**
- * The SSH sign-ins `sshCopy` terminals fake, by terminal id: a password prompt that takes whatever
- * is typed. `studio.local` doesn't resolve, as a computer's Remote Control name might not, so
- * studio signs in only at another address.
- */
-const sshSignIns = new Map<string, { address: string; typed: boolean }>();
-
-function openSshSignIn(id: string, address: string) {
-  const say = (data: string, ms: number) =>
-    later(ms, () => terminalListeners.get(id)?.({ type: "data", data }));
-  if (address.split("@").pop() === "studio.local") {
-    say(`ssh: Could not resolve hostname ${address}: nodename nor servname provided\r\n`, 500);
-    later(700, () => terminalListeners.get(id)?.({ type: "exit", exitCode: 255 }));
-    return;
-  }
-  sshSignIns.set(id, { address, typed: false });
-  say(`(${address}) Password: `, 600);
-}
-
-function typeSshSignIn(id: string, data: string) {
-  const signIn = sshSignIns.get(id);
-  if (!signIn || !data.includes("\r")) return;
-  sshSignIns.delete(id);
-  const say = (text: string, ms: number) =>
-    later(ms, () => terminalListeners.get(id)?.({ type: "data", data: text }));
-  say("\r\n", 50);
-  say(
-    `Signed in to ${signIn.address.split("@").pop()}. Copying session files over this connection…\r\n`,
-    700,
-  );
-  later(1400, () => terminalListeners.get(id)?.({ type: "exit", exitCode: 0 }));
-}
-
 export const mockBridge: ParallaxBridge = {
-  remoteImport: {
-    sessions: () => delay(structuredClone(remoteSessions), 300),
-    copy: async (device, id) => {
-      await delay(undefined, 700);
-      const session = remoteSessions.find((r) => r.device === device && r.id === id);
-      if (!session) return "That session isn't on that computer anymore.";
-      session.thread = `imported-${id}`;
-      return undefined;
-    },
-  },
   platform: "darwin",
   version: () => delay("0.0.0-preview"),
   setThemeSource: noop,
@@ -2033,7 +1985,11 @@ export const mockBridge: ParallaxBridge = {
       ? { error: answer }
       : { result: structuredClone(answer), logId: LOG_ID };
     // plxd runs ccusage and pages Cursor's API for usage/daily, which takes a second or two.
-    return delay(response as HostResponse<Result<M>>, method === "usage/daily" ? 1200 : 40);
+    // plxd reads claude.ai's sessions through Claude Code for thread/importable's remote.
+    const slow =
+      method === "usage/daily" ||
+      (method === "thread/importable" && (params as { remote?: boolean }).remote);
+    return delay(response as HostResponse<Result<M>>, slow ? 1800 : 40);
   },
 
   subscribe(hostId: string, params: SubscribeParams, listener: (m: SubscriptionMessage) => void) {
@@ -2208,10 +2164,6 @@ export const mockBridge: ParallaxBridge = {
         later(80 * (i + 1), () => terminalListeners.get(id)?.({ type: "data", data }));
       return delay(undefined);
     }
-    if ("sshCopy" in target) {
-      openSshSignIn(id, target.sshCopy.address);
-      return delay(undefined);
-    }
     if (!("connect" in target)) return delay("Terminals don't run in the preview.");
     const device = tailnet.find((d) => d.ip === target.connect.device)!;
     let wait = 0;
@@ -2227,7 +2179,7 @@ export const mockBridge: ParallaxBridge = {
     return delay(undefined);
   },
   install: () => delay("Installs don't run in the preview."),
-  terminalInput: typeSshSignIn,
+  terminalInput: noop,
   resizeTerminal: noop,
   closeTerminal: noop,
   onTerminal: (id, listener) => {

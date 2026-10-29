@@ -22,6 +22,11 @@
 //! the same thread. `thread/importChat` (PLX-883) takes a chat the client read from a `ChatGPT` or
 //! `claude.ai` data export instead, which always has no repo and no session.
 //!
+//! `thread/importable` with `remote` lists instead the Claude Code sessions `claude remote-control`
+//! served on any of the user's computers, which `claude.ai` keeps, and `thread/import` with
+//! `remote` reads one from there ([`cloud`], PLX-1136). Their follow-ups tell a new session the
+//! conversation, as their transcript isn't on this computer.
+//!
 //! A Codex thread keeps its session, which a follow-up resumes, falling back to a handoff. A Claude
 //! one keeps it only in its own folder, where Claude Code looks for it. Every other follow-up tells
 //! a new session the conversation (0014).
@@ -37,8 +42,8 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentOutputItem, ChatRole, ImportSource, ImportableSession, MAX_CHAT_MESSAGES,
     MAX_THREAD_TITLE_BYTES, ProjectId, RepoAddParams, RepoId, RunId, ThreadArchiveParams,
-    ThreadImportChatParams, ThreadImportParams, ThreadImportableResult, ThreadImportedChatsParams,
-    ThreadImportedChatsResult, ThreadStartResult, TurnId,
+    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
+    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadStartResult, TurnId,
 };
 use parallax_store::ThreadFields;
 use rusqlite::{Connection, OpenFlags};
@@ -101,14 +106,40 @@ enum Message {
     Agent(String),
 }
 
-/// `thread/importable`: see the module documentation.
+/// `thread/importable`: see the module documentation. With `remote`, the sessions `claude.ai`
+/// keeps ([`cloud`]) that the apps' list here doesn't have.
 pub(crate) async fn importable(
     daemon: &Arc<Daemon>,
+    params: ThreadImportableParams,
 ) -> Result<ThreadImportableResult, ErrorObject> {
     let homes = Homes::detect();
-    let mut sessions = tokio::task::spawn_blocking(move || list(&homes))
+    let (mut sessions, problem) = if params.remote {
+        // The Claude Code sessions here, by their CLI session, which `claude.ai` may keep too.
+        let here: HashSet<String> = tokio::task::spawn_blocking(move || {
+            claude_sessions(&homes)
+                .into_iter()
+                .filter_map(|session| session.resume)
+                .collect()
+        })
         .await
         .map_err(|error| ErrorObject::internal_error(error.to_string()))?;
+        match cloud::list(daemon).await {
+            Ok(listed) => (
+                listed
+                    .into_iter()
+                    .filter(|listed| !listed.local.as_ref().is_some_and(|id| here.contains(id)))
+                    .map(|listed| listed.session)
+                    .collect(),
+                None,
+            ),
+            Err(problem) => (Vec::new(), Some(problem)),
+        }
+    } else {
+        let listed = tokio::task::spawn_blocking(move || list(&homes))
+            .await
+            .map_err(|error| ErrorObject::internal_error(error.to_string()))?;
+        (listed, None)
+    };
     sessions.sort_by_key(|session| std::cmp::Reverse(session.updated));
     let ids: Vec<RunId> = sessions.iter().filter_map(run_id).collect();
     let imported: HashSet<RunId> = store(daemon, move |db| {
@@ -137,9 +168,11 @@ pub(crate) async fn importable(
                     cwd: session.cwd,
                     updated_at: session.updated,
                     thread,
+                    remote: params.remote,
                 }
             })
             .collect(),
+        problem,
     })
 }
 
@@ -151,8 +184,20 @@ pub(crate) async fn import(
     let ThreadImportParams {
         source,
         id,
+        remote,
         account,
     } = params;
+    if remote {
+        let loaded = cloud::load(&daemon, &id)
+            .await
+            .map_err(ErrorObject::invalid_params)?;
+        let Some((session, messages)) = loaded else {
+            return Err(ErrorObject::invalid_params(format!(
+                "claude.ai has no conversation for session {id}"
+            )));
+        };
+        return create(daemon, session, &messages, account).await;
+    }
     let homes = Homes::detect();
     let wanted = id.clone();
     let loaded = tokio::task::spawn_blocking(move || load(&homes, source, &wanted))
@@ -1079,3 +1124,5 @@ fn cursor_messages(path: &Path, id: &str) -> rusqlite::Result<Vec<Message>> {
 
 #[cfg(test)]
 mod tests;
+
+mod cloud;

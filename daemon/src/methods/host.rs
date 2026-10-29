@@ -148,6 +148,9 @@ pub(crate) fn initialize(
 /// `claude.ai` data exports.
 /// `threadImport` (PLX-881): `thread/importable` and `thread/import`, past sessions from the
 /// Claude, Codex, and Cursor desktop apps.
+/// `threadImportRemote` (PLX-1136): `thread/importable`'s and `thread/import`'s `remote`, the
+/// Claude Code sessions `claude.ai` keeps, which an older plxd would ignore and answer with the
+/// apps' sessions here.
 /// `threadNaming` (PLX-610, 0058): `thread/start` takes `naming`, which an older plxd would
 /// silently ignore, to name the thread and its branch with the user's own model, and
 /// `agent.updated` carries `branch` when plxd renamed it.
@@ -398,6 +401,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "threadAttention",
     "threadFork",
     "threadImport",
+    "threadImportRemote",
     "threadLineage",
     "threadNaming",
     "threadTools",
