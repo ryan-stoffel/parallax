@@ -18,7 +18,7 @@
 //! A client reaches a host over a `relay:<hostId>` route: [`open_stream`] is the byte stream its
 //! TLS runs over, signed in with the Clerk session [`sign_in`] keeps.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -26,7 +26,9 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
-use parallax_protocol::{AgentOutcome, AgentOutputItem, ParallaxEvent, RelayHost, RelayStatus};
+use parallax_protocol::{
+    AgentOutcome, AgentOutputItem, ParallaxEvent, RelayHost, RelayStatus, RunId,
+};
 use rustls::pki_types::ServerName;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -737,6 +739,7 @@ async fn serve(
     );
     let mut events = daemon.log.watch();
     let mut after = daemon.log.head();
+    let mut waiting = Waiting::default();
     let mut ping = time::interval_at(Instant::now() + PING, PING);
     let mut heard = true;
     let failed = |error: tungstenite::Error| Error::Protocol(error.to_string());
@@ -770,7 +773,7 @@ async fn serve(
                 sink.send(hooks().await).await.map_err(failed)?;
             }
             Ok(()) = events.changed() => {
-                for push in pushes(&daemon.log, &mut after) {
+                for push in pushes(&daemon.log, &mut after, &mut waiting) {
                     sink.send(Message::text(push)).await.map_err(failed)?;
                 }
             }
@@ -871,15 +874,46 @@ async fn hook(daemon: &Daemon, frame: &[u8]) -> Option<Value> {
     Some(json!({ "t": "hook", "id": head.id, "status": status, "body": answer }))
 }
 
+/// The runs whose agent still waits on background work (a subagent, command, or Monitor) or on
+/// pull requests plxd watches (PLX-777). A turn that ends while its run waits isn't done: the
+/// agent wakes for what it waits on and carries on.
+#[derive(Default)]
+struct Waiting {
+    background: HashSet<RunId>,
+    watching: HashSet<RunId>,
+}
+
+impl Waiting {
+    fn on(&self, run: RunId) -> bool {
+        self.background.contains(&run) || self.watching.contains(&run)
+    }
+}
+
+/// Puts `run` in `set` or takes it out.
+fn mark(set: &mut HashSet<RunId>, run: RunId, on: bool) {
+    if on {
+        set.insert(run);
+    } else {
+        set.remove(&run);
+    }
+}
+
 /// The pushes for the events after `after`, which moves past them: a run that asks for approval,
-/// finishes, or fails. Each names only the run.
-fn pushes(log: &EventLog, after: &mut u64) -> Vec<String> {
+/// finishes with nothing left to wait on, or fails. Each names only the run.
+fn pushes(log: &EventLog, after: &mut u64, waiting: &mut Waiting) -> Vec<String> {
     let mut pushes = Vec::new();
+    let kept = |e: &Entry| {
+        e.approvals
+            || matches!(
+                e.kind(),
+                "agent.finished" | "agent.background" | "pr.watches"
+            )
+    };
     loop {
-        match log.next_matching(*after, |e| e.approvals || e.kind() == "agent.finished") {
+        match log.next_matching(*after, kept) {
             Ok((Some(entry), seq)) => {
                 *after = seq;
-                pushes.extend(push(&entry));
+                pushes.extend(push(&entry.event(), waiting));
             }
             Ok((None, head)) => {
                 *after = head;
@@ -893,9 +927,19 @@ fn pushes(log: &EventLog, after: &mut u64) -> Vec<String> {
     }
 }
 
-fn push(entry: &Entry) -> Option<String> {
-    let (run, state) = match &*entry.event() {
+/// The push for `event`, if any, keeping `waiting` up to date.
+fn push(event: &ParallaxEvent, waiting: &mut Waiting) -> Option<String> {
+    let (run, state) = match event {
+        ParallaxEvent::AgentBackground { run_id, tasks } => {
+            mark(&mut waiting.background, *run_id, !tasks.is_empty());
+            return None;
+        }
+        ParallaxEvent::PrWatches { run_id, urls } => {
+            mark(&mut waiting.watching, *run_id, !urls.is_empty());
+            return None;
+        }
         ParallaxEvent::AgentFinished { run_id, outcome } => match outcome {
+            AgentOutcome::Completed { .. } if waiting.on(*run_id) => return None,
             AgentOutcome::Completed { .. } => (*run_id, "done"),
             AgentOutcome::Failed { .. } => (*run_id, "failed"),
             _ => return None,
@@ -919,7 +963,57 @@ fn push(entry: &Entry) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use parallax_protocol::{AgentBackgroundKind, AgentBackgroundTask, AgentFailureKind};
+
     use super::*;
+
+    #[test]
+    fn a_turn_that_ends_while_its_run_waits_is_not_done() {
+        let run = RunId::generate();
+        let mut waiting = Waiting::default();
+        let mut state = |event: ParallaxEvent| {
+            push(&event, &mut waiting)
+                .map(|p| serde_json::from_str::<Value>(&p).unwrap()["state"].clone())
+        };
+        let finished = || ParallaxEvent::AgentFinished {
+            run_id: run,
+            outcome: AgentOutcome::Completed { result: None },
+        };
+        let background = |on: bool| ParallaxEvent::AgentBackground {
+            run_id: run,
+            tasks: on
+                .then(|| AgentBackgroundTask {
+                    task_id: "t1".to_owned(),
+                    kind: AgentBackgroundKind::Monitor,
+                    description: "Watching the build".to_owned(),
+                    call_id: None,
+                })
+                .into_iter()
+                .collect(),
+        };
+        let watches = |urls: Vec<String>| ParallaxEvent::PrWatches { run_id: run, urls };
+
+        assert_eq!(state(background(true)), None);
+        assert_eq!(state(finished()), None, "a Monitor still runs");
+        assert_eq!(state(background(false)), None);
+        assert_eq!(
+            state(watches(vec!["https://github.com/o/r/pull/1".to_owned()])),
+            None
+        );
+        assert_eq!(state(finished()), None, "a pull request is still watched");
+        assert_eq!(state(watches(Vec::new())), None);
+        assert_eq!(state(finished()), Some(json!("done")));
+        // A failure is news whatever the run waits on.
+        assert_eq!(state(background(true)), None);
+        let failed = ParallaxEvent::AgentFinished {
+            run_id: run,
+            outcome: AgentOutcome::Failed {
+                failure: AgentFailureKind::SpawnFailed,
+                message: "no CLI".to_owned(),
+            },
+        };
+        assert_eq!(state(failed), Some(json!("failed")));
+    }
 
     #[test]
     fn urls_are_https_or_plain_http_to_this_computer() {
