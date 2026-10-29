@@ -160,6 +160,7 @@ pub(crate) async fn importable(
             .into_iter()
             .map(|session| {
                 let thread = run_id(&session).filter(|id| imported.contains(id));
+                let claude_session = (!params.remote).then(|| claude_code_id(&session)).flatten();
                 ImportableSession {
                     source: session.source,
                     id: session.id,
@@ -168,6 +169,7 @@ pub(crate) async fn importable(
                     updated_at: session.updated,
                     thread,
                     remote: params.remote,
+                    claude_session,
                 }
             })
             .collect(),
@@ -836,6 +838,19 @@ fn claude_sessions(homes: &Homes) -> Vec<Session> {
             .filter_map(|path| claude_remote_session(path)),
     );
     sessions
+}
+
+/// Claude Code's own id for a Claude `session` when the app lists it under another, as the Claude
+/// desktop app does (PLX-1143).
+fn claude_code_id(session: &Session) -> Option<String> {
+    (session.source == ImportSource::Claude)
+        .then(|| {
+            session
+                .resume
+                .clone()
+                .filter(|resume| *resume != session.id)
+        })
+        .flatten()
 }
 
 /// The Claude desktop app's Claude Code sessions that still have a transcript.

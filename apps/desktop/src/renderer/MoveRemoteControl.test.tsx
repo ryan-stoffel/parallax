@@ -119,7 +119,13 @@ test("a session on a connected computer is imported there, brought out of the ar
     {
       "thread/remoteControlOrigin": origin,
       "thread/importable": (host) => ({
-        result: { sessions: host === "ssh:hp" ? [local(), local({ id: "other" })] : [] },
+        // As the Claude desktop app records it: its own id, with Claude Code's beside it.
+        result: {
+          sessions:
+            host === "ssh:hp"
+              ? [local({ id: "desktop-1", claudeSession: "5c5f05dc" }), local({ id: "other" })]
+              : [],
+        },
       }),
       "thread/import": () => ({ result: { thread: { id: "t2" } } }),
       "thread/archive": (_host, p) => ({ result: { thread: { id: p["runId"] } } }),
@@ -131,7 +137,7 @@ test("a session on a connected computer is imported there, brought out of the ar
   await click("Move it to Parallax Connect");
   await act(() => vi.waitFor(() => expect(text()).toContain("Moved to HP desktop")));
   const calls = parallax.request.mock.calls.map(([host, method, params]) => [host, method, params]);
-  expect(calls).toContainEqual(["ssh:hp", "thread/import", { source: "claude", id: "5c5f05dc" }]);
+  expect(calls).toContainEqual(["ssh:hp", "thread/import", { source: "claude", id: "desktop-1" }]);
   expect(calls).toContainEqual(["ssh:hp", "thread/archive", { runId: "t2", archived: false }]);
   expect(calls).toContainEqual(["local", "thread/archive", { runId: "rc1", archived: true }]);
   // Found on a connected computer: Connect and Tailscale are left alone.
@@ -221,4 +227,27 @@ test("with no Tailscale, or no computer of its OS, it says why and offers the ta
   expect(text()).toContain("No Windows computer on Tailscale but this one");
   await click("Add with SSH");
   expect(onAddWithSsh).toHaveBeenCalledOnce();
+});
+
+test("closing it while it looks moves nothing", async () => {
+  let answer: (value: unknown) => void = () => {};
+  const parallax = bridge(
+    {
+      "thread/remoteControlOrigin": origin,
+      "thread/importable": () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    },
+    ["local"],
+  );
+  await open();
+  await click("Move it to Parallax Connect");
+  await act(() => vi.waitFor(() => expect(text()).toContain("Looking for it on your computers")));
+  act(() => root!.unmount());
+  root = undefined;
+  await act(async () => answer({ result: { sessions: [local()] } }));
+  const methods = parallax.request.mock.calls.map(([, method]) => method);
+  expect(methods).not.toContain("thread/import");
+  expect(methods).not.toContain("thread/archive");
 });

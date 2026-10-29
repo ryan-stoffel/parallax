@@ -6471,6 +6471,12 @@ export type ImportableSession = {
 	 * that session (PLX-1140).
 	 */
 	remote?: boolean,
+	/**
+	 * For a Claude session, Claude Code's own id for it when that isn't `id`, as for one the
+	 * Claude desktop app records. Moving a Claude Remote Control thread finds its session by it
+	 * (PLX-1143).
+	 */
+	claudeSession?: string,
 };
 
 /**

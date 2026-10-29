@@ -126,13 +126,16 @@ export function MoveRemoteControl({
   const sessionOn = async (id: string): Promise<ImportableSession | undefined> => {
     const answer = await window.parallax.request(id, "thread/importable", {});
     if ("error" in answer) return undefined;
+    const wanted = origin.current?.sessionId;
     return answer.result.sessions.find(
-      (s) => s.source === "claude" && !s.remote && s.id === origin.current?.sessionId,
+      (s) => s.source === "claude" && !s.remote && (s.id === wanted || s.claudeSession === wanted),
     );
   };
 
   /** Makes `session` on host `target` a normal thread there, and archives this one. */
   const move = async (target: string, where: string, session: ImportableSession) => {
+    // Closed while it looked: nothing moves.
+    if (!live.current) return;
     show({ kind: "moving", where });
     let thread = session.thread;
     if (!thread) {
