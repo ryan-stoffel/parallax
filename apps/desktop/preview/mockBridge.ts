@@ -1903,15 +1903,13 @@ const sshSignIns = new Map<string, { address: string; typed: boolean }>();
 function openSshSignIn(id: string, address: string) {
   const say = (data: string, ms: number) =>
     later(ms, () => terminalListeners.get(id)?.({ type: "data", data }));
-  if (address === "studio.local") {
+  if (address.split("@").pop() === "studio.local") {
     say(`ssh: Could not resolve hostname ${address}: nodename nor servname provided\r\n`, 500);
     later(700, () => terminalListeners.get(id)?.({ type: "exit", exitCode: 255 }));
     return;
   }
-  const host = address.split("@").pop()!;
-  const user = address.includes("@") ? address.split("@")[0] : "ryan";
   sshSignIns.set(id, { address, typed: false });
-  say(`(${user}@${host}) Password: `, 600);
+  say(`(${address}) Password: `, 600);
 }
 
 function typeSshSignIn(id: string, data: string) {
