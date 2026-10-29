@@ -1,5 +1,4 @@
 import {
-  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   FileSearch,
@@ -18,7 +17,6 @@ import {
   PanelBottom,
   PanelLeftOpen,
   PanelRight,
-  Workflow,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { flushSync } from "react-dom";
@@ -655,7 +653,7 @@ export function App() {
         onClick: agentId ? () => openAgent() : undefined,
       },
     ];
-    if (agentTitle) crumbs.push({ label: agentTitle, icon: <Workflow /> });
+    if (agentTitle) crumbs.push({ label: agentTitle });
   } else {
     // A thread added to a Space names the Space, and opens its page (0090).
     const addedTo =
@@ -1435,15 +1433,6 @@ export function App() {
                     <ChevronRight />
                   </IconButton>
                 </div>
-                {agentId && (
-                  <IconButton
-                    label="Back to the coordinator"
-                    command="parentThread"
-                    onClick={() => openAgent()}
-                  >
-                    <ArrowLeft />
-                  </IconButton>
-                )}
                 <Breadcrumb items={crumbs} />
                 <div className="ml-auto flex shrink-0 items-center gap-2">
                   {!group.space && !tiled && (
