@@ -41,6 +41,11 @@ export interface Env {
   /** The origins a browser session token's `azp` may name, comma-separated. Unset accepts no
    *  browser. Native apps' tokens carry no `azp`. */
   CLERK_AUTHORIZED_PARTIES?: string;
+  /** The APNs auth key (.p8, PEM), its key id, and the Apple team id, as secrets. Unset, pushes
+   *  only log. */
+  APNS_KEY?: string;
+  APNS_KEY_ID?: string;
+  APNS_TEAM_ID?: string;
 }
 
 /** A host's id: its key's JWK thumbprint, 32 bytes in base64url. */

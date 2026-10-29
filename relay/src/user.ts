@@ -72,12 +72,15 @@ export class UserAccount extends DurableObject<Env> {
     return (await this.ctx.storage.get<string[]>("devices")) ?? [];
   }
 
-  /** Tells this user's devices that run `run` on host `hostId` needs them, finished, or failed. */
+  /** Tells this user's devices that run `run` on host `hostId` needs them, finished, or failed,
+   *  and forgets any device Apple no longer knows. */
   async push(hostId: string, run: string, state: Notification["state"]) {
     if (!this.limits.allow("pushes", USER_LIMITS.pushes)) return;
     const notification: Notification = { hostId, run, state };
     for (const device of await this.devices()) {
-      if ((await sendApns(this.env, device, notification)) === "stubbed") {
+      const sent = await sendApns(this.env, device, notification);
+      if (sent === "gone") await this.removeDevice(device);
+      if (sent === "stubbed") {
         this.outbox.push({ device, notification });
         this.outbox.splice(0, this.outbox.length - 50);
       }

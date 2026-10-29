@@ -47,7 +47,7 @@ plxd already has what end-to-end encryption needs (0065): a self-signed P-256 ce
 ### Push
 
 - plxd tells the relay when a run asks for approval (`needsYou`), finishes (`done`), or fails (`failed`), with the run id only. The relay sends the user's registered iOS devices a fixed text per state, with the host and run ids for the app to open. No title or text from a thread.
-- Devices register at `POST /v1/devices` with an APNs token. APNs is a stub that logs until Ryan's key exists (PLX-653). FCM waits for Android.
+- Devices register at `POST /v1/devices` with an APNs token, which the app does at each launch. The relay signs with an APNs auth key held as Worker secrets and tries production, then sandbox for a development build's token. A token Apple no longer knows is dropped. Without the secrets it only logs (PLX-984). FCM waits for Android.
 
 ### Deploy
 
