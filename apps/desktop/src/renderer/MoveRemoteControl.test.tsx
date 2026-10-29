@@ -251,3 +251,24 @@ test("closing it while it looks moves nothing", async () => {
   expect(methods).not.toContain("thread/import");
   expect(methods).not.toContain("thread/archive");
 });
+
+test("closing it while it reads claude.ai leaves Connect off", async () => {
+  let answer: (value: unknown) => void = () => {};
+  const parallax = bridge(
+    {
+      "thread/remoteControlOrigin": () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+      "thread/importable": () => ({ result: { sessions: [] } }),
+    },
+    ["local"],
+  );
+  await open();
+  await click("Move it to Parallax Connect");
+  act(() => root!.unmount());
+  root = undefined;
+  await act(async () => answer(origin()));
+  expect(parallax.setConnect).not.toHaveBeenCalled();
+  expect(parallax.request.mock.calls.map(([, method]) => method)).not.toContain("connect/devices");
+});

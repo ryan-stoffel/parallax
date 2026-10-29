@@ -161,6 +161,8 @@ export function MoveRemoteControl({
 
   /** Lists the tailnet's computers of the session's OS, turning Connect on first. */
   const lookOnTailnet = async () => {
+    // Closed while it looked: Connect stays as it was.
+    if (!live.current) return;
     if (!now.current.connect?.on) {
       show({ kind: "finding", what: "Turning on Parallax Connect" });
       const failed = await window.parallax.setConnect(true);
@@ -260,7 +262,7 @@ export function MoveRemoteControl({
       `No ${step.kind === "noComputer" && step.os ? `${step.os} ` : ""}computer on Tailscale but this one.`,
     ],
     done: [step.kind === "done" ? `Moved to ${step.where}` : "", "It's a Parallax thread now."],
-    failed: ["Couldn't move it", "Nothing changed. The thread is still here."],
+    failed: ["Couldn't move it", "Try again picks up where it stopped."],
   };
   const [heading1, line] = heading[step.kind];
 
