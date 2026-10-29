@@ -180,24 +180,14 @@ export function ImportSessions({ className = "" }: { className?: string }) {
         </span>
       )}
       <span className="flex min-w-0 items-center gap-2">
-        {checking ? (
+        {!checking && problem && (
           <span
-            role="status"
+            title={problem}
             className="flex min-w-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3"
           >
-            <LoaderCircle aria-hidden className="shrink-0 animate-spin" />
-            <span className="truncate">Checking claude.ai for Remote Control sessions…</span>
+            <CloudOff aria-hidden className="shrink-0" />
+            <span className="truncate">Couldn't check claude.ai</span>
           </span>
-        ) : (
-          problem && (
-            <span
-              title={problem}
-              className="flex min-w-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3"
-            >
-              <CloudOff aria-hidden className="shrink-0" />
-              <span className="truncate">Couldn't check claude.ai</span>
-            </span>
-          )
         )}
         <IconButton
           label="Refresh"
@@ -259,6 +249,7 @@ export function ImportSessions({ className = "" }: { className?: string }) {
         className="min-h-0 flex-1"
         apps={sessionApps}
         items={items}
+        checking={checking}
         importItem={async (item) => {
           const session = (item.remote ? remote : sessions!).find(
             (s) => (item.remote ? `remote:${s.id}` : `${s.source}:${s.id}`) === item.key,
@@ -521,10 +512,13 @@ function SessionList({
   items,
   importItem,
   onImported,
+  checking = false,
 }: {
   className: string;
   apps: App[];
   items: Item[];
+  /** claude.ai's Remote Control sessions are still being read: a row says so (PLX-1136). */
+  checking?: boolean;
   importItem: (item: Item) => Promise<string | undefined>;
   onImported: () => Promise<void>;
 }) {
@@ -617,6 +611,7 @@ function SessionList({
         aria-label="Sessions"
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-xl border border-border bg-surface p-1"
       >
+        {checking && (filter === "all" || filter === "claude") && <CheckingRow />}
         {shown.map((s) => (
           <SessionRow
             key={s.key}
@@ -711,7 +706,7 @@ function SessionRow({
   onToggle: (on: boolean) => void;
 }) {
   return (
-    <li>
+    <li className={s.remote ? "rise-in" : undefined}>
       <label
         className={`flex items-center gap-3 rounded-lg px-2.5 py-2 ${s.thread ? "" : "cursor-pointer hover:bg-hover"} ${picked ? "bg-accent/8" : ""}`}
       >
@@ -761,6 +756,29 @@ function SessionRow({
           </span>
         )}
       </label>
+    </li>
+  );
+}
+
+/**
+ * The row `SessionList` shows while claude.ai's Remote Control sessions are read (PLX-1136), shaped
+ * like a session's: a cloud that pulses where the app's logo goes, and a title that shimmers.
+ */
+function CheckingRow() {
+  return (
+    <li aria-busy="true" className="flex items-center gap-3 rounded-lg px-2.5 py-2">
+      <span className="size-4 shrink-0" />
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background text-faint-foreground">
+        <Cloud aria-hidden className="size-4 animate-pulse" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span role="status" className="shimmer-text block truncate text-body font-medium">
+          Looking for Remote Control sessions on claude.ai
+        </span>
+        <span className="block truncate text-meta text-faint-foreground">
+          The ones claude rc ran on your other computers
+        </span>
+      </span>
     </li>
   );
 }
