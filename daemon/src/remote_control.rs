@@ -107,12 +107,14 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             () = stop.cancelled() => return,
             () = tokio::time::sleep_until(next) => {}
         }
-        let found = tokio::time::timeout(SYNC_LIMIT, sync(&daemon))
-            .await
-            .unwrap_or_else(|_| {
+        // A pass waiting on Claude Code ends with plxd, rather than holding up its shutdown.
+        let found = tokio::select! {
+            () = stop.cancelled() => return,
+            found = tokio::time::timeout(SYNC_LIMIT, sync(&daemon)) => found.unwrap_or_else(|_| {
                 warn!("syncing Claude Remote Control sessions took too long");
                 true
-            });
+            }),
+        };
         next = Instant::now() + if found { SYNC_EVERY } else { SYNC_IDLE };
     }
 }
