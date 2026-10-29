@@ -1,4 +1,4 @@
-import { ArrowUpRight, Cloud, GitBranch } from "lucide-react";
+import { Cloud, GitBranch } from "lucide-react";
 
 import type { RemoteControlSession } from "../protocol/generated/protocol";
 import { ClaudeLogo, GitHubLogo } from "./logos";
@@ -32,7 +32,7 @@ function StateDot({ session }: { session?: RemoteControlSession }) {
 function OpenInClaude({ url, className }: { url: string; className: string }) {
   return (
     <a href={url} target="_blank" rel="noreferrer" title="Open in Claude" className={className}>
-      <ArrowUpRight aria-hidden />
+      <ClaudeLogo aria-hidden />
       Open in Claude
     </a>
   );
