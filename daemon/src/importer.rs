@@ -5,9 +5,12 @@
 //!
 //! - Claude: the desktop app's `Claude/claude-code-sessions/<account>/<org>/local_*.json`, under
 //!   the app config folder, names each Claude Code session, its folder, and its CLI session, whose
-//!   transcript is Claude Code's own, `<config>/projects/<folder>/<session>.jsonl`.
-//! - Codex: `<CODEX_HOME>/sessions/**/rollout-*.jsonl`, the ones the desktop app started (their
-//!   `session_meta` originator), titled from `<CODEX_HOME>/session_index.jsonl`.
+//!   transcript is Claude Code's own, `<config>/projects/<folder>/<session>.jsonl`. A session that
+//!   ran with Remote Control, driven from claude.ai or the Claude apps on another device, has no
+//!   such record: it's a transcript with a `bridge-session` entry or a `ccr-tip.json` beside it.
+//! - Codex: `<CODEX_HOME>/sessions/**/rollout-*.jsonl`, the ones the Codex or `ChatGPT` apps started
+//!   (their `session_meta` originator), here or through Remote Control, titled from
+//!   `<CODEX_HOME>/session_index.jsonl`.
 //! - Cursor: its `state.vscdb`, whose `composerData:<id>` rows list each chat's messages and
 //!   `bubbleId:<id>:<message>` rows hold them.
 //!
@@ -584,7 +587,10 @@ fn load(homes: &Homes, source: ImportSource, id: &str) -> Option<(Session, Vec<M
     match source {
         ImportSource::Chatgpt | ImportSource::ClaudeChat => None,
         ImportSource::Claude => {
-            let session = claude_sessions(homes).into_iter().find(|s| s.id == id)?;
+            let session = match claude_app_sessions(homes).into_iter().find(|s| s.id == id) {
+                Some(session) => session,
+                None => claude_remote_session(&claude_transcript(homes, id)?)?,
+            };
             let file = claude_transcript(homes, session.resume.as_deref()?)?;
             Some((session, claude_messages(&fs::read_to_string(file).ok()?)))
         }
@@ -642,8 +648,30 @@ fn modified(path: &Path) -> Option<Timestamp> {
 
 // Claude
 
-/// The Claude desktop app's Claude Code sessions that still have a transcript.
+/// The Claude desktop app's Claude Code sessions, then the Remote Control sessions it doesn't
+/// list.
 fn claude_sessions(homes: &Homes) -> Vec<Session> {
+    let mut sessions = claude_app_sessions(homes);
+    let listed: HashSet<String> = sessions.iter().filter_map(|s| s.resume.clone()).collect();
+    let Some(projects) = homes.claude.as_ref().map(|dir| dir.join("projects")) else {
+        return sessions;
+    };
+    let transcript = |name: &str| has_extension(name, "jsonl");
+    sessions.extend(
+        files(&projects, 1, &transcript)
+            .iter()
+            .filter(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| !listed.contains(stem))
+            })
+            .filter_map(|path| claude_remote_session(path)),
+    );
+    sessions
+}
+
+/// The Claude desktop app's Claude Code sessions that still have a transcript.
+fn claude_app_sessions(homes: &Homes) -> Vec<Session> {
     let Some(app) = &homes.claude_app else {
         return Vec::new();
     };
@@ -681,6 +709,93 @@ fn claude_session(json: &str) -> Option<Session> {
         updated: millis(&record["lastActivityAt"]).unwrap_or(started),
         resume: Some(record["cliSessionId"].as_str()?.to_owned()),
     })
+}
+
+/// The Claude Code session in the transcript at `path` when it ran with Remote Control: one with a
+/// `bridge-session` entry naming a claude.ai session, as `claude --remote-control` and
+/// `/remote-control` write, or a `ccr-tip.json` beside it, as the sessions `claude remote-control`
+/// serves keep. Titled as `claude --resume` titles it: its name, else Claude's title for it, else
+/// its first message.
+fn claude_remote_session(path: &Path) -> Option<Session> {
+    let id = path.file_stem()?.to_str()?.to_owned();
+    let folder = path.with_extension("");
+    let synced =
+        folder.join("ccr-tip.json").is_file() || folder.with_extension("ccr-tip.json").is_file();
+    // An Agent SDK app's, Parallax's own among them, isn't read through: they're most of the
+    // transcripts, and the largest.
+    if !synced && claude_entrypoint(path).is_some_and(|entry| entry.starts_with("sdk-")) {
+        return None;
+    }
+    let jsonl = fs::read_to_string(path).ok()?;
+    if !synced && !jsonl.contains("\"bridge-session\"") {
+        return None;
+    }
+    let mut bridged = synced;
+    let (mut started, mut cwd, mut name, mut ai_title, mut first) = (None, None, None, None, None);
+    for line in jsonl.lines() {
+        let wanted = started.is_none()
+            || cwd.is_none()
+            || ["bridge-session", "custom-title", "ai-title"]
+                .iter()
+                .any(|kind| line.contains(kind))
+            || (first.is_none() && line.contains("\"user\""));
+        let Some(entry) = wanted
+            .then(|| serde_json::from_str::<Value>(line).ok())
+            .flatten()
+        else {
+            continue;
+        };
+        let text = |key: &str| {
+            entry[key]
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_owned)
+        };
+        started = started.or_else(|| entry["timestamp"].as_str()?.parse::<Timestamp>().ok());
+        cwd = cwd.or_else(|| text("cwd"));
+        match entry["type"].as_str() {
+            Some("bridge-session") => bridged |= text("bridgeSessionId").is_some(),
+            Some("custom-title") => name = text("customTitle").or(name),
+            Some("ai-title") => ai_title = text("aiTitle").or(ai_title),
+            Some("user") if first.is_none() => {
+                first = claude_messages(line).into_iter().find_map(|m| match m {
+                    Message::User(text) => Some(title_from(&text)),
+                    Message::Agent(_) => None,
+                });
+            }
+            _ => {}
+        }
+    }
+    if !bridged {
+        return None;
+    }
+    let started = started?;
+    Some(Session {
+        source: ImportSource::Claude,
+        title: name
+            .or(ai_title)
+            .or(first)
+            .unwrap_or_else(|| "Claude Code session".to_owned()),
+        cwd,
+        started,
+        updated: modified(path).unwrap_or(started),
+        resume: Some(id.clone()),
+        id,
+    })
+}
+
+/// The entrypoint a Claude Code transcript's first entries name, such as `cli` or `sdk-ts`.
+fn claude_entrypoint(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    BufReader::new(file)
+        .lines()
+        .take(50)
+        .map_while(Result::ok)
+        .find_map(|line| {
+            let entry: Value = serde_json::from_str(&line).ok()?;
+            entry["entrypoint"].as_str().map(str::to_owned)
+        })
 }
 
 /// Claude Code's transcript of CLI session `session`, in whichever project folder has it.
@@ -737,8 +852,14 @@ fn claude_messages(jsonl: &str) -> Vec<Message> {
 
 // Codex
 
-/// The originators of the sessions the Codex desktop app starts.
-const CODEX_APPS: [&str; 2] = ["Codex Desktop", "codex_work_desktop"];
+/// The originators of the sessions the Codex and `ChatGPT` apps start: on this computer, or on
+/// another through Remote Control, from `ChatGPT` on the web or a phone.
+const CODEX_APPS: [&str; 4] = [
+    "Codex Desktop",
+    "codex_work_desktop",
+    "codex_work_web",
+    "codex_work_mobile",
+];
 
 fn codex_sessions(homes: &Homes) -> Vec<Session> {
     codex_rollouts(homes)
@@ -747,7 +868,7 @@ fn codex_sessions(homes: &Homes) -> Vec<Session> {
         .collect()
 }
 
-/// The Codex desktop app's sessions, each with its rollout file. Archived ones are left out.
+/// The Codex and `ChatGPT` apps' sessions, each with its rollout file. Archived ones are left out.
 fn codex_rollouts(homes: &Homes) -> Vec<(Session, PathBuf)> {
     let Some(home) = &homes.codex else {
         return Vec::new();
@@ -779,7 +900,7 @@ fn codex_titles(jsonl: &str) -> HashMap<String, String> {
         .collect()
 }
 
-/// A rollout's session, when the desktop app started it and it isn't a subagent's: from its
+/// A rollout's session, when one of the apps started it and it isn't a subagent's: from its
 /// first line, `session_meta`, titled from `titles` or else its first message from the user.
 fn codex_session(rollout: impl BufRead, titles: &HashMap<String, String>) -> Option<Session> {
     let mut lines = rollout.lines();

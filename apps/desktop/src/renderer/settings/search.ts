@@ -146,7 +146,7 @@ export const settingsIndex: SettingEntry[] = [
     [
       "Import sessions",
       "Continue Claude, Codex, and Cursor sessions as threads",
-      "import history past migrate desktop app claude codex cursor chats",
+      "import history past migrate desktop app claude codex cursor chats remote control rc",
     ],
     [
       "Import chats",

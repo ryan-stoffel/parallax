@@ -8,12 +8,32 @@ import type { ImportableSession } from "../protocol/generated/protocol";
 import { ImportSessions } from "./ImportSessions";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+HTMLElement.prototype.hidePopover = () => {};
 let root: Root | undefined;
 afterEach(() => {
   act(() => root?.unmount());
   root = undefined;
   document.body.innerHTML = "";
 });
+
+/** A bridge whose hosts are all connected and can import, with `saved` SSH hosts. */
+function bridge(request: unknown, saved: { id: string; name: string }[] = []) {
+  window.parallax = {
+    connectionState: async () => ({
+      status: "connected" as const,
+      plxd: "1",
+      protocol: 1,
+      capabilities: { threadImport: {} },
+    }),
+    onConnectionState: () => () => {},
+    hosts: async () => saved,
+    onHosts: () => () => {},
+    onLocalName: () => () => {},
+    onDevices: () => () => {},
+    onConnect: () => () => {},
+    request,
+  } as unknown as ParallaxBridge;
+}
 
 const session = (over: Partial<ImportableSession>): ImportableSession => ({
   source: "codex",
@@ -47,16 +67,7 @@ test("picking an app's sessions imports each on that app's agent, then lists the
     }
     throw new Error(`unexpected ${method}`);
   });
-  window.parallax = {
-    connectionState: async () => ({
-      status: "connected" as const,
-      plxd: "1",
-      protocol: 1,
-      capabilities: { threadImport: {} },
-    }),
-    onConnectionState: () => () => {},
-    request,
-  } as unknown as ParallaxBridge;
+  bridge(request);
   root = createRoot(document.body.appendChild(document.createElement("div")));
   await act(async () => root!.render(<ImportSessions />));
   const box = (label: string) =>
@@ -79,4 +90,40 @@ test("picking an app's sessions imports each on that app's agent, then lists the
   ]);
   expect(document.body.textContent).toContain("3 of 4 imported");
   expect(button("Select all").disabled).toBe(true);
+});
+
+test("Refresh lists a computer's sessions again, and the menu lists another connected one's", async () => {
+  const found: Record<string, ImportableSession[]> = {
+    local: [session({ id: "x1", title: "Finish HW2" })],
+    desk: [session({ source: "claude", id: "c9", title: "Run through Remote Control" })],
+  };
+  const request = vi.fn(async (host: string, method: string) => {
+    if (method === "thread/importable") return { result: { sessions: found[host] } };
+    if (method === "providers/list") return { result: { providers: [] } };
+    throw new Error(`unexpected ${method}`);
+  });
+  bridge(request, [{ id: "desk", name: "Desktop PC" }]);
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  await act(async () => root!.render(<ImportSessions />));
+  const text = () => document.body.textContent;
+  expect(text()).toContain("Finish HW2");
+
+  found["local"] = [...found["local"]!, session({ id: "x2", title: "Started a minute ago" })];
+  await act(async () =>
+    document.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click(),
+  );
+  expect(text()).toContain("Started a minute ago");
+
+  await act(async () =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        '[role="menu"][aria-label="Computer"] [role="menuitemradio"]',
+      ),
+    ]
+      .find((o) => o.textContent === "Desktop PC")!
+      .click(),
+  );
+  expect(text()).toContain("Run through Remote Control");
+  expect(text()).not.toContain("Finish HW2");
+  expect(request).toHaveBeenCalledWith("desk", "thread/importable", {});
 });

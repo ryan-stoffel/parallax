@@ -450,7 +450,8 @@ export type ParallaxRequests = {
 	"thread/fork": { params: ThreadForkParams, result: ThreadStartResult },
 	/**
 	 * `thread/importable`: the past sessions the Claude, Codex, and Cursor desktop apps
-	 * keep on the host (PLX-881). Gated on the `threadImport` capability.
+	 * keep on the host, and Claude Code's and Codex's Remote Control sessions that ran on
+	 * it (PLX-881). Gated on the `threadImport` capability.
 	 */
 	"thread/importable": { params: ThreadImportableParams, result: ThreadImportableResult },
 	/**
