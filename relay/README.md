@@ -23,11 +23,11 @@ Point a plxd at a local relay with `PLXD_RELAY_URL=http://127.0.0.1:8787`. Plain
 
 No workflow deploys the relay. Ryan deploys it by hand once these exist:
 
-1. **The domain.** Register `parallx.dev` and add it to the Cloudflare account as a zone (Cloudflare's nameservers at the registrar). `wrangler.toml` routes `relay.parallx.dev` to the Worker as a custom domain, and the deploy creates its DNS record and certificate.
-2. **A Cloudflare API token**: My Profile > API Tokens > Create Token > Create Custom Token, not the "Edit Cloudflare Workers" template, which adds KV, R2, Pages, and Tail. Give it exactly these four permissions: Account > Workers Scripts > Edit, Account > Account Settings > Read, Zone > Workers Routes > Edit, and Zone > DNS > Edit. Under Account Resources include only Ryan's account, under Zone Resources only `parallx.dev`, and set an expiry. Durable Objects need the Workers Paid plan.
+1. **The domain.** `parallax.codes` is registered through Cloudflare Registrar, so it is already a zone on the account. `wrangler.toml` routes `relay.parallax.codes` to the Worker as a custom domain, and the deploy creates its DNS record and certificate.
+2. **A Cloudflare API token**: My Profile > API Tokens > Create Token > Create Custom Token, not the "Edit Cloudflare Workers" template, which adds KV, R2, Pages, and Tail. Give it exactly these four permissions: Account > Workers Scripts > Edit, Account > Account Settings > Read, Zone > Workers Routes > Edit, and Zone > DNS > Edit. Under Account Resources include only Ryan's account, under Zone Resources only `parallax.codes`, and set an expiry. Durable Objects need the Workers Paid plan.
 3. **The account id**, from the Cloudflare dashboard's Workers & Pages overview.
 4. **Clerk's production instance** (0067). The top level of `wrangler.toml` sets no Clerk instance, so a deploy without it refuses every token; the development instance is only in `[env.dev]`. Add a `[vars]` table at the top level with:
-   - `CLERK_ISSUER`: the instance's Frontend API URL, such as `https://clerk.parallx.dev`.
+   - `CLERK_ISSUER`: the instance's Frontend API URL, such as `https://clerk.parallax.codes`.
    - `CLERK_JWKS_URL`: `<CLERK_ISSUER>/.well-known/jwks.json`.
    - `CLERK_CLIENT_IDS`: the production desktop OAuth application's client id.
    - `CLERK_AUTHORIZED_PARTIES`: the web client's origins, comma-separated, once there is one. Unset, browsers' session tokens are refused. The mobile app's carry no origin and pass.
@@ -39,7 +39,7 @@ export CLOUDFLARE_API_TOKEN=<token> CLOUDFLARE_ACCOUNT_ID=<account id>
 corepack pnpm install --frozen-lockfile
 corepack pnpm test
 corepack pnpm exec wrangler deploy --env=""
-curl -s -o /dev/null -w '%{http_code}\n' https://relay.parallx.dev/v1/hosts   # 401
+curl -s -o /dev/null -w '%{http_code}\n' https://relay.parallax.codes/v1/hosts   # 401
 ```
 
 The first deploy creates both Durable Object classes from the `v1` migration. A later change to a class's storage adds a migration rather than editing `v1`.

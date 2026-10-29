@@ -142,9 +142,9 @@ afterAll(() => {
 });
 
 test("a publishable key names its Frontend API and Account Portal", () => {
-  const live = frontendApi(`pk_live_${btoa("clerk.parallx.dev$")}`);
-  expect(live).toBe("https://clerk.parallx.dev");
-  expect(accountPortal(live)).toBe("https://accounts.parallx.dev");
+  const live = frontendApi(`pk_live_${btoa("clerk.parallax.codes$")}`);
+  expect(live).toBe("https://clerk.parallax.codes");
+  expect(accountPortal(live)).toBe("https://accounts.parallax.codes");
   const dev = frontendApi("pk_test_YWRqdXN0ZWQtbWFzdG9kb24tODcwNS5jbGVyay5hY2NvdW50cy5kZXYk");
   expect(dev).toBe("https://adjusted-mastodon-8705.clerk.accounts.dev");
   expect(accountPortal(dev)).toBe("https://adjusted-mastodon-8705.accounts.dev");

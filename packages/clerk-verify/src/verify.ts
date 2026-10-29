@@ -4,7 +4,7 @@
 // runs in Cloudflare Workers, Node, and browsers alike.
 
 export type VerifyOptions = {
-  /** The instance's Frontend API URL, which tokens carry as `iss`: `https://clerk.parallx.dev`. */
+  /** The instance's Frontend API URL, which tokens carry as `iss`: `https://clerk.parallax.codes`. */
   issuer: string;
   /** The OAuth applications whose access tokens count, by `client_id`. `[]` accepts none. */
   clientIds: readonly string[];

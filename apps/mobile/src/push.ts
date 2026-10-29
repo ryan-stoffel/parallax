@@ -6,7 +6,7 @@
 // the run's id. Tapping either opens the thread.
 import * as Notifications from "expo-notifications";
 
-const RELAY = "https://relay.parallx.dev";
+const RELAY = "https://relay.parallax.codes";
 
 /** The thread on screen, whose own notifications don't show while it's open. */
 let viewing: string | undefined;
