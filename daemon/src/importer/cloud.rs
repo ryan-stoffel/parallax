@@ -34,9 +34,10 @@ const LIMIT: Duration = Duration::from_secs(120);
 /// The most transcript pages one session reads, at up to a thousand entries each.
 const MAX_PAGES: usize = 50;
 
-/// How long requests in flight wait after Claude Code wrote a line too big to read, which was
-/// one of their answers: then they fail, and the rest go on.
-const OVERSIZED_WAIT: Duration = Duration::from_secs(20);
+/// How long requests in flight wait for their next answer after Claude Code wrote a line too big to
+/// read, which was one of their answers: then they fail, and the rest go on. Longer than the 25 s
+/// Claude Code gives each request, so by then only the cut one is left.
+const OVERSIZED_WAIT: Duration = Duration::from_secs(30);
 
 /// Why Claude Code can't read `claude.ai`'s sessions that aren't a fault to report: it isn't signed
 /// in to `claude.ai`, or it runs on another provider. Listing then finds none, quietly.
@@ -235,7 +236,7 @@ struct Control {
     next: u64,
     /// Claude Code answered with one of [`QUIET_REASONS`].
     quiet: bool,
-    /// It wrote a line too big to read since the last answer.
+    /// It wrote a line too big to read since what was in flight last failed.
     oversized: bool,
 }
 
@@ -321,7 +322,11 @@ impl Control {
                 continue;
             };
             let (id, answer) = match next {
-                Ok(answered) => answered,
+                Ok(Some(answered)) => answered,
+                Ok(None) => {
+                    self.oversized = true;
+                    continue;
+                }
                 Err(error) => {
                     for index in asked.into_values().chain(waiting) {
                         answers[index] = Some(Err(error.clone()));
@@ -344,16 +349,13 @@ impl Control {
             .collect()
     }
 
-    /// The next `control_response`: its `request_id`, and its answer or why there is none.
-    async fn answer(&mut self) -> Result<(String, Result<Value, String>), String> {
+    /// The next `control_response`: its `request_id`, and its answer or why there is none. `None`
+    /// when Claude Code wrote a line too big to read, a page whose request goes unanswered.
+    async fn answer(&mut self) -> Result<Option<(String, Result<Value, String>)>, String> {
         loop {
             let line = match self.process.next().await {
                 Some(Output::Line(line)) => line,
-                // A page too big to read: its request goes unanswered (see `ask_all`).
-                Some(Output::Oversized { .. }) => {
-                    self.oversized = true;
-                    continue;
-                }
+                Some(Output::Oversized { .. }) => return Ok(None),
                 Some(Output::Exited(exit)) => {
                     return Err(format!("Claude Code stopped: {}", exit.stderr_tail.trim()));
                 }
@@ -384,7 +386,7 @@ impl Control {
                         .unwrap_or_else(|| "claude.ai's sessions aren't available".to_owned())),
                 }
             };
-            return Ok((id.to_owned(), answer));
+            return Ok(Some((id.to_owned(), answer)));
         }
     }
 }
@@ -416,6 +418,52 @@ mod tests {
                 "message": {"role": "assistant", "content": [{"type": "text", "text": "Hi Ryan."}]},
             }),
         ]
+    }
+
+    /// A request whose answer was too big to read fails once the rest are answered, even when it
+    /// is the last, rather than holding up the list until its limit.
+    #[cfg(unix)]
+    #[tokio::test(start_paused = true)]
+    async fn an_answer_too_big_to_read_fails_only_its_request() {
+        use crate::backend::process::{
+            Environment, Launcher, OutputLimits, ProcessSpec, StdinMode,
+        };
+        use crate::paths::DataDir;
+
+        let ok = r#"{"type":"control_response","response":{"subtype":"success","request_id":"import-1","response":{"ok":1}}}"#;
+        let mut spec = ProcessSpec::new("sh", "/");
+        spec.args = vec![
+            "-c".into(),
+            format!(
+                "printf '%s\\n%s\\n' '{ok}' \"$(head -c 2000 /dev/zero | tr '\\0' x)\"; sleep 60"
+            )
+            .into(),
+        ];
+        spec.stdin = StdinMode::Piped;
+        spec.limits = OutputLimits {
+            max_line_bytes: 1024,
+            ..OutputLimits::default()
+        };
+        let base: Environment = [("PATH", "/usr/bin:/bin")].into_iter().collect();
+        let launcher = Launcher::new(DataDir::new("/tmp/plxd-test-data").unwrap(), base);
+        let mut process = launcher.spawn(&spec).unwrap();
+        let stdin = process.take_stdin().unwrap();
+        let mut claude = Control {
+            process,
+            stdin,
+            next: 0,
+            quiet: false,
+            oversized: false,
+        };
+
+        let answers = claude.ask_all(vec![json!({"a": 1}), json!({"b": 2})]).await;
+        assert_eq!(
+            answers,
+            [
+                Ok(json!({"ok": 1})),
+                Err("a session was too large to read".to_owned())
+            ]
+        );
     }
 
     #[test]
