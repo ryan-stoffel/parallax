@@ -111,6 +111,7 @@ import {
 } from "./threads";
 import { cloneOnto, type CloneAsk } from "./clone";
 import { isRunning, kindOf } from "./transcript";
+import { isRemoteControl, useRemoteControl } from "./remoteControl";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { tileCommands } from "./keybindings";
@@ -473,6 +474,14 @@ export function App() {
   const threadRun =
     selection.kind === "thread" ? threads.state.runs[selection.threadId] : undefined;
   const linksPrs = connected && "pullRequests" in connection.capabilities;
+  // A Claude Remote Control thread's session, for Thread details (PLX-1140).
+  const remoteThread = isRemoteControl(threadRun);
+  const remoteSession = useRemoteControl(
+    host.id,
+    remoteThread ? threadRun?.id : undefined,
+    connected && "claudeRemoteControl" in connection.capabilities,
+    threadRun?.status,
+  );
   const prs = usePullRequests(
     host.id,
     threadRun?.id,
@@ -1194,6 +1203,7 @@ export function App() {
           : undefined
       }
       prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
+      remoteControl={remoteThread ? { session: remoteSession } : undefined}
       space={
         selection.kind === "thread" && openThread && !openThread.parent
           ? { thread: openThread, view: threads }

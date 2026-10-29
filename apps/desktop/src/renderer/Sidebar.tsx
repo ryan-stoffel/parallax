@@ -197,6 +197,8 @@ import { close, Fold, quietFor, shownRows, Tick, ViewOptions } from "./SidebarPa
 import { DropLine, PinList, type PinDrag } from "./PinList";
 import { searchSettings, settingsSections } from "./settings/search";
 import { cancelPrefetch, prefetchThread } from "./threadWatches";
+import { RemoteControlBadge } from "./ClaudeRemoteControl";
+import { isRemoteControl } from "./remoteControl";
 
 const row =
   "flex w-full items-center gap-2 rounded-lg px-2 py-[5px] text-left text-body hover:bg-hover";
@@ -3509,6 +3511,8 @@ function ThreadRow({
                     <DeviceIcon icon={device.icon} className="size-3.5" />
                   </span>
                 )}
+                {/* A Claude Remote Control thread (PLX-1140): its session runs on another computer. */}
+                {isRemoteControl(run) && <RemoteControlBadge />}
                 {/* In gray, so a list isn't striped with providers' colors, but in color while open. */}
                 {Logo && (
                   <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />

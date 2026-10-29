@@ -2,6 +2,7 @@ import { ClipboardList, FolderGit2, FolderOpen } from "lucide-react";
 import { useLayoutEffect, useState, type ComponentProps } from "react";
 
 import { Actions } from "./Actions";
+import { RemoteControlSection } from "./ClaudeRemoteControl";
 import { GitMenu } from "./GitMenu";
 import { LineageSection } from "./Lineage";
 import { OpenMenu } from "./OpenMenu";
@@ -88,7 +89,8 @@ export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggl
 /**
  * The thread's host, Open in, repository actions, its Space, Git status, linked pull requests, and
  * lineage, docked at the thread's right, left of the side panel, or floating over the thread.
- * Mounted while hidden, so the Open and action shortcuts keep working.
+ * A Claude Remote Control thread's session leads it (PLX-1140). Mounted while hidden, so the Open
+ * and action shortcuts keep working.
  */
 export function ThreadDetails({
   mode,
@@ -100,6 +102,7 @@ export function ThreadDetails({
   prs,
   lineage,
   space,
+  remoteControl,
 }: {
   mode: ThreadDetailsMode;
   host: Host;
@@ -110,6 +113,8 @@ export function ThreadDetails({
   prs?: ComponentProps<typeof LinkedPullRequests>;
   lineage?: Omit<ComponentProps<typeof LineageSection>, "visible">;
   space?: ComponentProps<typeof SpaceMenu>;
+  /** A Claude Remote Control thread's session, once read. */
+  remoteControl?: ComponentProps<typeof RemoteControlSection>;
 }) {
   const linked = prs?.prs.urls.length ?? 0;
   const prOpen = !!prs?.prs.urls.some((url) => prs.prs.get(url)?.pr?.state === "open");
@@ -129,6 +134,7 @@ export function ThreadDetails({
       }`}
     >
       <div className="pointer-events-auto max-h-full overflow-y-auto rounded-xl border border-border bg-surface text-foreground shadow-composer [&_img]:size-4 [&_svg]:size-4">
+        {remoteControl && <RemoteControlSection {...remoteControl} />}
         <section aria-label="Workspace" className="p-2">
           <div
             title={folder ?? "No folder yet"}

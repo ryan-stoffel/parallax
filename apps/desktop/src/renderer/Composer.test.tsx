@@ -270,6 +270,40 @@ test("with fileUploads, a file goes to the host and the message lists its path (
   );
 });
 
+test("for a Claude Remote Control thread, images are refused and a text file goes inside the message (PLX-1140)", async () => {
+  const request = vi.fn();
+  window.parallax = {
+    platform: "darwin",
+    request,
+    onConnectionState: () => () => {},
+    connectionState: () => new Promise(() => {}),
+  } as Partial<ParallaxBridge> as ParallaxBridge;
+  const onSend = vi.fn(async () => undefined);
+  const { paste, type, press } = render(onSend, caps, {
+    hostId: "local",
+    uploadBytes: { maxBytes: 1024 },
+    inlineFiles: true,
+  });
+  await paste([
+    pngFile(),
+    new File(["# Notes"], "notes.md", { type: "text/markdown" }),
+    new File([new Uint8Array([0, 1, 2])], "data.bin"),
+  ]);
+  await vi.waitFor(() =>
+    expect(document.querySelector('[aria-label="Remove notes.md"]')).not.toBeNull(),
+  );
+  expect(thumbnails()).toEqual([]);
+  expect(document.querySelector('[aria-label="Remove data.bin"]')).toBeNull();
+  expect(notices.textContent).toContain("takes text only, so images can't be sent to it");
+
+  type("Read this");
+  await press("Enter");
+  await vi.waitFor(() => expect(onSend).toHaveBeenCalled());
+  expect(onSend).toHaveBeenCalledWith("Read this\n\nnotes.md:\n```\n# Notes\n```", {}, [], []);
+  // Nothing is saved on the host.
+  expect(request).not.toHaveBeenCalledWith("local", "host/upload", expect.anything());
+});
+
 test("with fileChunks, a file goes in pieces, each answered before the next (PLX-835)", async () => {
   // Each piece waits to be answered, so the chip shows mid-upload.
   const answers: (() => void)[] = [];
