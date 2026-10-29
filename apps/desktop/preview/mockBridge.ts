@@ -11,8 +11,7 @@ import {
   type LanHost,
   type ParallaxBridge,
   type Profile,
-  type RemoteComputer,
-  type RemoteImportState,
+  type RemoteControlSession,
   type RendererMethod,
   type RpcError,
   type SubscribeParams,
@@ -1844,50 +1843,101 @@ const expand = (p: string) => p.replace(/^~(?=\/|$)/, HOME).replace(/\/+$/, "") 
 let mockTerminal: string | null = "Ghostty";
 
 /**
- * PLX-1136's prototype: computers whose Claude Code sessions ran with Remote Control. Mac mini
- * imports after its confirmation; studio's first try finds no session listening, and its retry
- * works; ThinkPad is offline.
+ * PLX-1136's prototype: Claude Code sessions that ran with Remote Control on other computers, as
+ * claude.ai lists them. Copying one takes a moment and marks it imported.
  */
-const remoteComputers: RemoteComputer[] = [
-  { name: "Mac mini", icon: "mini", sessions: 12, lastActive: ago(5), online: true },
-  { name: "studio", icon: "desktop", sessions: 4, lastActive: ago(80), online: true },
-  { name: "ThinkPad", icon: "laptop", sessions: 3, lastActive: ago(60 * 52), online: false },
+const remoteSessions: RemoteControlSession[] = [
+  {
+    id: "r1",
+    title: "Test for RC",
+    folder: "learn-rust",
+    updatedAt: ago(5),
+    device: "mac-mini",
+    deviceIcon: "mini",
+  },
+  {
+    id: "r2",
+    title: "Upgrade the homelab Postgres",
+    folder: "homelab",
+    updatedAt: ago(40),
+    device: "studio",
+    deviceIcon: "desktop",
+  },
+  {
+    id: "r3",
+    title: "Port the lexer to Rust",
+    folder: "learn-rust",
+    updatedAt: ago(190),
+    device: "mac-mini",
+    deviceIcon: "mini",
+  },
+  {
+    id: "r4",
+    title: "Write the backup cron script",
+    folder: "homelab",
+    updatedAt: ago(60 * 30),
+    device: "studio",
+    deviceIcon: "desktop",
+  },
+  {
+    id: "r5",
+    title: "Fix the parser's borrow errors",
+    folder: "learn-rust",
+    updatedAt: ago(60 * 50),
+    device: "mac-mini",
+    deviceIcon: "mini",
+  },
 ];
-const remoteTries = new Map<string, number>();
 
 function ago(minutes: number) {
   return new Date(Date.now() - minutes * 60_000).toISOString();
 }
 
-/** Plays one computer's import: asking, the code to confirm, receiving, then done. */
-function startRemoteImport(name: string, onState: (state: RemoteImportState) => void) {
-  const tries = (remoteTries.get(name) ?? 0) + 1;
-  remoteTries.set(name, tries);
-  const computer = remoteComputers.find((c) => c.name === name)!;
-  const code = Array.from(
-    { length: 4 },
-    () => "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 31)],
-  ).join("");
-  const steps: [number, RemoteImportState][] =
-    name === "studio" && tries === 1
-      ? [
-          [0, { state: "asking" }],
-          [2500, { state: "failed", message: "No Claude session on studio answered. Try again." }],
-        ]
-      : [
-          [0, { state: "asking" }],
-          [1500, { state: "confirm", code, url: "https://claude.ai/code" }],
-          [9000, { state: "receiving" }],
-          [11000, { state: "done", imported: computer.sessions }],
-        ];
-  const timers = steps.map(([ms, state]) => setTimeout(() => onState(state), ms));
-  return () => timers.forEach(clearTimeout);
+/**
+ * The SSH sign-ins `sshCopy` terminals fake, by terminal id: a password prompt that takes whatever
+ * is typed. `studio.local` doesn't resolve, as a computer's Remote Control name might not, so
+ * studio signs in only at another address.
+ */
+const sshSignIns = new Map<string, { address: string; typed: boolean }>();
+
+function openSshSignIn(id: string, address: string) {
+  const say = (data: string, ms: number) =>
+    later(ms, () => terminalListeners.get(id)?.({ type: "data", data }));
+  if (address === "studio.local") {
+    say(`ssh: Could not resolve hostname ${address}: nodename nor servname provided\r\n`, 500);
+    later(700, () => terminalListeners.get(id)?.({ type: "exit", exitCode: 255 }));
+    return;
+  }
+  const host = address.split("@").pop()!;
+  const user = address.includes("@") ? address.split("@")[0] : "ryan";
+  sshSignIns.set(id, { address, typed: false });
+  say(`(${user}@${host}) Password: `, 600);
+}
+
+function typeSshSignIn(id: string, data: string) {
+  const signIn = sshSignIns.get(id);
+  if (!signIn || !data.includes("\r")) return;
+  sshSignIns.delete(id);
+  const say = (text: string, ms: number) =>
+    later(ms, () => terminalListeners.get(id)?.({ type: "data", data: text }));
+  say("\r\n", 50);
+  say(
+    `Signed in to ${signIn.address.split("@").pop()}. Copying session files over this connection…\r\n`,
+    700,
+  );
+  later(1400, () => terminalListeners.get(id)?.({ type: "exit", exitCode: 0 }));
 }
 
 export const mockBridge: ParallaxBridge = {
   remoteImport: {
-    computers: () => delay(remoteComputers, 300),
-    start: startRemoteImport,
+    sessions: () => delay(structuredClone(remoteSessions), 300),
+    copy: async (device, id) => {
+      await delay(undefined, 700);
+      const session = remoteSessions.find((r) => r.device === device && r.id === id);
+      if (!session) return "That session isn't on that computer anymore.";
+      session.thread = `imported-${id}`;
+      return undefined;
+    },
   },
   platform: "darwin",
   version: () => delay("0.0.0-preview"),
@@ -2160,6 +2210,10 @@ export const mockBridge: ParallaxBridge = {
         later(80 * (i + 1), () => terminalListeners.get(id)?.({ type: "data", data }));
       return delay(undefined);
     }
+    if ("sshCopy" in target) {
+      openSshSignIn(id, target.sshCopy.address);
+      return delay(undefined);
+    }
     if (!("connect" in target)) return delay("Terminals don't run in the preview.");
     const device = tailnet.find((d) => d.ip === target.connect.device)!;
     let wait = 0;
@@ -2175,7 +2229,7 @@ export const mockBridge: ParallaxBridge = {
     return delay(undefined);
   },
   install: () => delay("Installs don't run in the preview."),
-  terminalInput: noop,
+  terminalInput: typeSshSignIn,
   resizeTerminal: noop,
   closeTerminal: noop,
   onTerminal: (id, listener) => {

@@ -171,37 +171,37 @@ export const needsTransparentWindow = (material: WindowMaterial, platform: strin
 /** A window's background: Settings > Appearance's Window. */
 export type WindowMaterial = "opaque" | "clear" | "blur";
 
-/** A computer that ran Claude Code sessions with Remote Control, as claude.ai lists it (PLX-1136). */
-export type RemoteComputer = {
-  /** Its host name, as Remote Control names it. */
-  name: string;
-  icon: DeviceIcon;
-  /** How many Remote Control sessions it ran. */
-  sessions: number;
-  /** When one last changed, ISO. */
-  lastActive: string;
-  /** Whether a session there is connected now, so Claude there can be asked. */
-  online: boolean;
+/**
+ * A Claude Code session that ran with Remote Control on another computer, as claude.ai lists it
+ * (PLX-1136). Its transcript is still on that computer.
+ */
+export type RemoteControlSession = {
+  id: string;
+  title: string;
+  /** Its folder's name there. */
+  folder?: string;
+  /** When it last changed, ISO. */
+  updatedAt: string;
+  /** The computer it ran on, by the host name Remote Control gives it. */
+  device: string;
+  deviceIcon: DeviceIcon;
+  /** Its thread, once imported. */
+  thread?: string;
 };
-
-/** How far one computer's import through Claude has got (PLX-1136). */
-export type RemoteImportState =
-  | { state: "asking" }
-  /** Claude there is asking the user to confirm, showing `code`. `url` opens that session. */
-  | { state: "confirm"; code: string; url: string }
-  | { state: "receiving" }
-  | { state: "done"; imported: number }
-  | { state: "failed"; message: string };
 
 export interface ParallaxBridge {
   /**
-   * Prototype (PLX-1136): imports the Remote Control sessions on the user's other computers by
-   * asking Claude there for a copy. Only the renderer preview has it, so the app hides it.
+   * Prototype (PLX-1136): imports Remote Control sessions from the computers they ran on. The user
+   * signs in to each over SSH in a terminal (`TerminalTarget`'s `sshCopy`), then their transcripts
+   * are copied over that connection. Only the renderer preview has it, so the app hides it.
    */
   remoteImport?: {
-    computers(): Promise<RemoteComputer[]>;
-    /** Starts importing `computer`'s sessions. `onState` hears each stage. Returns a cancel. */
-    start(computer: string, onState: (state: RemoteImportState) => void): () => void;
+    sessions(): Promise<RemoteControlSession[]>;
+    /**
+     * Copies session `id` from `device`, over the connection its `sshCopy` terminal signed in,
+     * and imports it. Answers why it couldn't, in words, or nothing.
+     */
+    copy(device: string, id: string): Promise<string | undefined>;
   };
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
@@ -609,7 +609,9 @@ export type TerminalTarget =
    * script's `setup-<id>` (PLX-650), which `id` then only names in this window.
    */
   | { hostId: string; path: string; threadId?: string; terminalId?: string }
-  | { hostId: string; connect: ConnectAdd };
+  | { hostId: string; connect: ConnectAdd }
+  /** Prototype (PLX-1136): an SSH sign-in to `address`, kept open to copy sessions from it. */
+  | { hostId: string; sshCopy: { address: string } };
 
 /**
  * What Add computer sets up with `plx-connect add` (0056): a Tailscale IP, an ssh user, and with

@@ -2,17 +2,15 @@ import {
   ArrowLeft,
   Check,
   Download,
-  ExternalLink,
   FileArchive,
   Folder,
   LoaderCircle,
-  Lock,
   RefreshCw,
-  RotateCw,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useId,
@@ -22,11 +20,12 @@ import {
   type ReactNode,
 } from "react";
 
-import type { RemoteComputer, RemoteImportState } from "../preload/bridge";
+import type { RemoteControlSession } from "../preload/bridge";
 import type { ImportSource, ImportableSession } from "../protocol/generated/protocol";
 import { readExports, type ExportPart, type ExportedChat } from "./chatExports";
 import { useConnection, useConnections } from "./ConnectionStatus";
 import { DeviceIcon } from "./DeviceIcon";
+import type { Device } from "./SshSignIn";
 import { describeError } from "./errors";
 import { localId, useHosts } from "./hosts";
 import { notify } from "./notifications";
@@ -37,6 +36,8 @@ import { age } from "./Sidebar";
 import { IconButton, Picker, segment } from "./ui";
 
 type App = { source: ImportSource; name: string; Logo: typeof ClaudeLogo };
+
+const SshSignIn = lazy(() => import("./SshSignIn").then((m) => ({ default: m.SshSignIn })));
 
 /** The desktop apps sessions import from (PLX-881), in the order they're listed. */
 const sessionApps: App[] = [
@@ -61,6 +62,8 @@ type Item = {
   at: string;
   /** Its thread, once imported. */
   thread?: string | undefined;
+  /** The other computer it ran on, for a Remote Control session that's still there (PLX-1136). */
+  device?: Device;
 };
 
 /**
@@ -94,6 +97,11 @@ function useImport(capability: "threadImport" | "chatImport", hostId = localId, 
  * imported says so. It starts on this computer, with a menu for any other connected one, and
  * Refresh lists them again. A computer that disconnects leaves the menu, and the dialog goes back
  * to this one. Onboarding and Settings > Threads' Import sessions show it.
+ *
+ * Prototype (PLX-1136): on this computer, the list also has the Remote Control sessions that ran on
+ * the user's other computers, marked with that computer's icon. Importing one first asks the user
+ * to sign in to that computer over SSH, once per computer, then copies its transcript over that
+ * connection.
  */
 export function ImportSessions({ className = "" }: { className?: string }) {
   const all = useHosts();
@@ -103,8 +111,13 @@ export function ImportSessions({ className = "" }: { className?: string }) {
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const { supported, why, providers } = useImport("threadImport", host.id, host.name);
   const [sessions, setSessions] = useState<ImportableSession[]>();
+  const [away, setAway] = useState<RemoteControlSession[]>([]);
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
+  const remote = window.parallax.remoteImport;
+  // The SSH sign-in on screen, and each computer's, by name: done, or why not.
+  const [signIn, setSignIn] = useState<{ device: Device; done: (why?: string) => void }>();
+  const signIns = useRef(new Map<string, Promise<string | undefined>>());
   // The host shown, so an answer from one picked before it, or an import's reload there, is
   // dropped.
   const shown = useRef(host.id);
@@ -113,9 +126,13 @@ export function ImportSessions({ className = "" }: { className?: string }) {
     const id = host.id;
     if (shown.current !== id) return;
     setLoading(true);
-    const answer = await window.parallax.request(id, "thread/importable", {});
+    const [answer, others] = await Promise.all([
+      window.parallax.request(id, "thread/importable", {}),
+      id === localId && remote ? remote.sessions() : [],
+    ]);
     if (shown.current !== id) return;
     setLoading(false);
+    setAway(others);
     if ("error" in answer) {
       setSessions(undefined);
       setError(describeError(answer.error));
@@ -123,7 +140,7 @@ export function ImportSessions({ className = "" }: { className?: string }) {
       setError(undefined);
       setSessions(answer.result.sessions);
     }
-  }, [host.id]);
+  }, [host.id, remote]);
   useEffect(() => {
     shown.current = host.id;
     setSessions(undefined);
@@ -131,6 +148,29 @@ export function ImportSessions({ className = "" }: { className?: string }) {
     setLoading(false);
     if (supported) void load();
   }, [host.id, supported, load]);
+
+  /** Resolves once the user signed in to `device` over SSH, or with why not. Asks once per computer. */
+  const signedIn = (device: Device) => {
+    let pending = signIns.current.get(device.name);
+    if (!pending) {
+      pending = new Promise((resolve) =>
+        setSignIn({
+          device,
+          done: (why) => {
+            setSignIn(undefined);
+            resolve(why);
+          },
+        }),
+      );
+      signIns.current.set(device.name, pending);
+    }
+    return pending;
+  };
+  const imported = async () => {
+    // A computer the user didn't sign in to asks again next time.
+    for (const [name, pending] of signIns.current) if (await pending) signIns.current.delete(name);
+    await load();
+  };
 
   const where = host.id === localId ? "this computer" : host.name;
   const bar = (
@@ -147,7 +187,9 @@ export function ImportSessions({ className = "" }: { className?: string }) {
           />
         </span>
       ) : (
-        <span className="text-body font-medium">Sessions on this computer</span>
+        <span className="text-body font-medium">
+          {away.length ? "Sessions on your computers" : "Sessions on this computer"}
+        </span>
       )}
       <IconButton label="Refresh" disabled={!supported || loading} onClick={() => void load()}>
         <RefreshCw aria-hidden className={loading ? "animate-spin" : ""} />
@@ -182,15 +224,30 @@ export function ImportSessions({ className = "" }: { className?: string }) {
         key={host.id}
         className="min-h-0 flex-1"
         apps={sessionApps}
-        items={sessions.map((s) => ({
-          key: `${s.source}:${s.id}`,
-          source: s.source,
-          title: s.title,
-          folder: s.cwd?.split(/[\\/]/).filter(Boolean).pop(),
-          at: s.updatedAt,
-          thread: s.thread,
-        }))}
+        items={[
+          ...sessions.map((s): Item => ({
+            key: `${s.source}:${s.id}`,
+            source: s.source,
+            title: s.title,
+            folder: s.cwd?.split(/[\\/]/).filter(Boolean).pop(),
+            at: s.updatedAt,
+            thread: s.thread,
+          })),
+          ...away.map((s): Item => ({
+            key: `remote:${s.device}:${s.id}`,
+            source: "claude",
+            title: s.title,
+            folder: s.folder,
+            at: s.updatedAt,
+            thread: s.thread,
+            device: { name: s.device, icon: s.deviceIcon },
+          })),
+        ].sort((a, b) => b.at.localeCompare(a.at))}
         importItem={async (item) => {
+          if (item.device && remote) {
+            const id = away.find((s) => `remote:${s.device}:${s.id}` === item.key)!.id;
+            return (await signedIn(item.device)) ?? remote.copy(item.device.name, id);
+          }
           const session = sessions.find((s) => `${s.source}:${s.id}` === item.key)!;
           const account = importAccount(session.source, providers);
           const answer = await window.parallax.request(host.id, "thread/import", {
@@ -200,13 +257,18 @@ export function ImportSessions({ className = "" }: { className?: string }) {
           });
           return "error" in answer ? describeError(answer.error) : undefined;
         }}
-        onImported={load}
+        onImported={imported}
       />
     );
   return (
-    <div className={`flex min-h-0 flex-col gap-3 ${className}`}>
+    <div className={`relative flex min-h-0 flex-col gap-3 ${className}`}>
       {bar}
       {body}
+      {signIn && (
+        <Suspense>
+          <SshSignIn key={signIn.device.name} device={signIn.device} onDone={signIn.done} />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -659,6 +721,13 @@ function SessionRow({
             {s.title}
           </span>
           <span className="flex items-center gap-1 truncate text-meta text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
+            {s.device && (
+              <>
+                <DeviceIcon icon={s.device.icon} />
+                <span className="truncate">{s.device.name}</span>
+                <span aria-hidden>·</span>
+              </>
+            )}
             {s.folder && (
               <>
                 <Folder aria-hidden />
@@ -708,268 +777,6 @@ function PickBox({
         <Check className="size-3" strokeWidth={3} />
       </span>
     </>
-  );
-}
-
-/** The helper model each import through Claude runs on (PLX-1136). */
-const helperModel = "Haiku 5.5";
-
-/**
- * Prototype (PLX-1136): the user's other computers that ran Claude Code with Remote Control, to
- * pick and import by asking Claude there for a copy. Claude asks the user to confirm, showing a
- * code Parallax shows too. Hidden unless the bridge has `remoteImport`, which only the renderer
- * preview fakes.
- */
-function RemoteComputers() {
-  const source = window.parallax.remoteImport;
-  const [computers, setComputers] = useState<RemoteComputer[]>();
-  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
-  const [states, setStates] = useState<Record<string, RemoteImportState>>({});
-  const dialog = useRef<HTMLDialogElement>(null);
-  const cancels = useRef(new Map<string, () => void>());
-  const titleId = useId();
-  useEffect(() => {
-    void source?.computers().then(setComputers);
-    const running = cancels.current;
-    return () => {
-      for (const cancel of running.values()) cancel();
-    };
-  }, [source]);
-  if (!source || !computers?.length) return null;
-
-  const start = (names: string[]) => {
-    dialog.current?.close();
-    setPicked(new Set());
-    for (const name of names) {
-      cancels.current.get(name)?.();
-      cancels.current.set(
-        name,
-        source.start(name, (state) => setStates((old) => ({ ...old, [name]: state }))),
-      );
-    }
-  };
-  const idle = (c: RemoteComputer) => {
-    const s = states[c.name]?.state;
-    return c.online && (s === undefined || s === "failed");
-  };
-  const chosen = computers.filter((c) => picked.has(c.name) && idle(c));
-  const names = (list: RemoteComputer[]) =>
-    list.length === 1 ? list[0]!.name : `${list.length} computers`;
-  return (
-    <section aria-labelledby={titleId} className="flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-3">
-        <h3 id={titleId} className="text-body font-medium">
-          Sessions on your other computers
-        </h3>
-        <span className="flex items-center gap-1 text-meta text-faint-foreground [&_svg]:size-3">
-          <ClaudeLogo aria-hidden />
-          Remote Control sessions, through Claude
-        </span>
-      </div>
-      <ul
-        aria-label="Other computers"
-        className="flex flex-col gap-0.5 rounded-xl border border-border bg-surface p-1"
-      >
-        {computers.map((c) => (
-          <RemoteComputerRow
-            key={c.name}
-            computer={c}
-            state={states[c.name]}
-            picked={picked.has(c.name)}
-            pickable={idle(c)}
-            onToggle={(on) =>
-              setPicked((old) => {
-                const next = new Set(old);
-                if (on) next.add(c.name);
-                else next.delete(c.name);
-                return next;
-              })
-            }
-            onRetry={() => start([c.name])}
-          />
-        ))}
-      </ul>
-      <div className="flex items-center justify-between gap-4">
-        <p className="min-w-0 flex-1 truncate text-body text-muted-foreground">
-          Parallax asks Claude on each computer for a copy.
-        </p>
-        <button
-          type="button"
-          disabled={chosen.length === 0}
-          onClick={() => dialog.current?.showModal()}
-          className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3.5 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50 [&_svg]:size-3.5"
-        >
-          <Download aria-hidden />
-          {chosen.length ? `Import from ${names(chosen)}` : "Import"}
-        </button>
-      </div>
-      {/* Onboarding is a <dialog> too, and React passes this one's close up to its onClose. */}
-      <dialog
-        ref={dialog}
-        onClose={(e) => e.stopPropagation()}
-        aria-labelledby={`${titleId}-dialog`}
-        className="m-auto w-[28rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
-      >
-        <form method="dialog" className="px-5 pt-4 pb-4">
-          <h2 id={`${titleId}-dialog`} className="text-reading font-semibold">
-            Import from {names(chosen)} through Claude?
-          </h2>
-          <ul className="mt-3 flex flex-col gap-2.5 text-body text-muted-foreground [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-faint-foreground">
-            <li className="flex gap-2.5">
-              <ClaudeLogo aria-hidden />
-              <span>
-                A Parallax helper session on {helperModel} asks a Claude session on{" "}
-                {chosen.length === 1 ? "that computer" : "each computer"} for a copy. It uses your
-                Claude plan.
-              </span>
-            </li>
-            <li className="flex gap-2.5">
-              <ShieldCheck aria-hidden />
-              <span>
-                Claude there asks you to confirm, with a code that Parallax shows here. Say yes only
-                if the codes match.
-              </span>
-            </li>
-            <li className="flex gap-2.5">
-              <Lock aria-hidden />
-              <span>
-                The sessions are encrypted so only Parallax on this computer can read them. Nothing
-                on {chosen.length === 1 ? "that computer" : "those computers"} changes.
-              </span>
-            </li>
-          </ul>
-          <div className="mt-5 flex justify-end gap-2">
-            <button
-              type="submit"
-              value="cancel"
-              className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => start(chosen.map((c) => c.name))}
-              className="rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground hover:opacity-90"
-            >
-              Import
-            </button>
-          </div>
-        </form>
-      </dialog>
-    </section>
-  );
-}
-
-/** One of `RemoteComputers`' computers, with its import's progress. */
-function RemoteComputerRow({
-  computer: c,
-  state,
-  picked,
-  pickable,
-  onToggle,
-  onRetry,
-}: {
-  computer: RemoteComputer;
-  state: RemoteImportState | undefined;
-  picked: boolean;
-  pickable: boolean;
-  onToggle: (on: boolean) => void;
-  onRetry: () => void;
-}) {
-  const sessions = `${c.sessions} ${c.sessions === 1 ? "session" : "sessions"}`;
-  let line: ReactNode = (
-    <>
-      <span>{sessions}</span>
-      <span aria-hidden>·</span>
-      <span>{c.online ? age(c.lastActive) : `offline, last seen ${age(c.lastActive)}`}</span>
-    </>
-  );
-  let end: ReactNode = null;
-  switch (state?.state) {
-    case "asking":
-      line = <span>Asking Claude on {c.name}…</span>;
-      end = <LoaderCircle aria-hidden className="size-4 animate-spin text-faint-foreground" />;
-      break;
-    case "confirm":
-      line = (
-        <span className="text-foreground">
-          Claude on {c.name} is asking you to confirm. Say yes if it shows this code.
-        </span>
-      );
-      end = (
-        <span className="flex items-center gap-2">
-          <span
-            aria-label={`Code ${state.code.split("").join(" ")}`}
-            className="rounded-md border border-border bg-background px-2 py-0.5 font-mono text-body font-semibold tracking-[0.2em]"
-          >
-            {state.code}
-          </span>
-          <a
-            href={state.url}
-            target="_blank"
-            rel="noreferrer"
-            className="flex items-center gap-1 rounded-md bg-selected px-2.5 py-1 text-body font-medium hover:bg-hover [&_svg]:size-3.5"
-          >
-            Open in Claude
-            <ExternalLink aria-hidden />
-          </a>
-        </span>
-      );
-      break;
-    case "receiving":
-      line = <span>Receiving {sessions}…</span>;
-      end = <LoaderCircle aria-hidden className="size-4 animate-spin text-faint-foreground" />;
-      break;
-    case "done":
-      line = (
-        <span>
-          {state.imported} {state.imported === 1 ? "session" : "sessions"} in Archived
-        </span>
-      );
-      end = (
-        <span className="shrink-0 rounded-full bg-added/15 px-2 py-0.5 text-meta font-medium text-added">
-          Imported
-        </span>
-      );
-      break;
-    case "failed":
-      line = <span className="text-danger">{state.message}</span>;
-      end = (
-        <IconButton label="Try again" onClick={onRetry}>
-          <RotateCw aria-hidden />
-        </IconButton>
-      );
-      break;
-  }
-  return (
-    <li>
-      <label
-        className={`flex items-center gap-3 rounded-lg px-2.5 py-2 ${pickable ? "cursor-pointer hover:bg-hover" : ""} ${picked && pickable ? "bg-accent/8" : ""}`}
-      >
-        {state?.state === "done" ? (
-          <span className="size-4 shrink-0" />
-        ) : (
-          <PickBox
-            label={`Import from ${c.name}`}
-            disabled={!pickable}
-            picked={picked && pickable}
-            onToggle={onToggle}
-          />
-        )}
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background">
-          <DeviceIcon icon={c.icon} className="size-4" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span
-            className={`block truncate text-body font-medium ${c.online ? "" : "text-muted-foreground"}`}
-          >
-            {c.name}
-          </span>
-          <span className="flex items-center gap-1 text-meta text-faint-foreground">{line}</span>
-        </span>
-        {end}
-      </label>
-    </li>
   );
 }
 
@@ -1056,8 +863,7 @@ export function ImportStepBody({ className = "" }: { className?: string }) {
         </>
       ) : (
         <>
-          <ImportSessions className="min-h-64 flex-1" />
-          <RemoteComputers />
+          <ImportSessions className="min-h-0 flex-1" />
           <button type="button" onClick={() => setChats(true)} className={link}>
             <FileArchive aria-hidden />
             Import ChatGPT or Claude chats from an export…
