@@ -161,9 +161,17 @@
 //! Cancel is the SDK's `interrupt()`, which ends Claude's turn as `SIGINT` did (0004 [11]), then
 //! the end of the prompt, so the CLI exits after the interrupted turn, and the sidecar kills its
 //! process group if it is still running after the grace period.
+//!
+//! # Claude Remote Control
+//!
+//! A run that resumes a `claude.ai` session, whose id starts with `session_`, runs nowhere here:
+//! [`remote`] sends its messages to the session `claude remote-control` serves on another
+//! computer and follows its transcript (PLX-1140).
 
+pub(crate) mod control;
 #[cfg(target_os = "linux")]
 pub mod linux_sandbox;
+pub(crate) mod remote;
 pub(crate) mod sdk;
 mod stream;
 #[cfg(all(test, unix))]
@@ -759,6 +767,25 @@ impl ClaudeBackend {
         Ok((spec, key_source))
     }
 
+    /// [`Backend::control`]'s `claude -p` in `cwd` on `credential`'s login: stream-json, with
+    /// hooks and MCP servers off.
+    fn control_process(&self, cwd: &Path, credential: &Credential) -> Result<Process, StartError> {
+        let (mut spec, _) = self.spec(cwd, credential)?;
+        spec.args = BASE_ARGS.iter().map(OsString::from).collect();
+        spec.args.extend(
+            [
+                "--strict-mcp-config",
+                "--settings",
+                r#"{"disableAllHooks":true}"#,
+            ]
+            .map(OsString::from),
+        );
+        spec.args.extend(self.overrides.args.iter().cloned());
+        // A page of a long session's transcript can pass the usual line limit.
+        spec.limits.max_line_bytes = 64 * 1024 * 1024;
+        Ok(self.launcher.spawn(&spec)?)
+    }
+
     /// [`Self::spec`] for one of the CLI's probes on the backend's own login: `args`, then the
     /// instance's.
     fn probe_spec(&self, cwd: &Path, args: Vec<OsString>) -> Result<ProcessSpec, StartError> {
@@ -1136,12 +1163,19 @@ impl Backend for ClaudeBackend {
     /// Keeps the session as it is, as T3 Code's Claude adapter does: the next run resumes it at
     /// the kept turn's cursor with `resumeSessionAt` ([`super::Resume::at`]), or starts a new
     /// one when the revert kept no turn. A fork would give every message a new id, so the
-    /// cursors plxd keeps for the turns before it would no longer match.
+    /// cursors plxd keeps for the turns before it would no longer match. A Claude Remote Control
+    /// session ([`remote`]) can't go back, as it runs on another computer.
     fn rewind(
         &self,
         rewind: super::Rewind,
     ) -> std::pin::Pin<Box<dyn Future<Output = Result<String, String>> + Send>> {
-        Box::pin(std::future::ready(Ok(rewind.session_id)))
+        Box::pin(std::future::ready(
+            if remote::is_session(&rewind.session_id) {
+                Err("a Claude Remote Control session can't go back to an earlier turn".to_owned())
+            } else {
+                Ok(rewind.session_id)
+            },
+        ))
     }
 
     fn efforts(&self) -> &'static [AgentEffort] {
@@ -1212,18 +1246,8 @@ impl Backend for ClaudeBackend {
     /// `claude -p` in stream-json on this backend's login, with hooks and MCP servers off, as for
     /// `get_usage`.
     fn control(&self, cwd: &Path) -> Result<Option<Process>, StartError> {
-        let mut spec = self.probe_spec(cwd, BASE_ARGS.iter().map(OsString::from).collect())?;
-        spec.args.extend(
-            [
-                "--strict-mcp-config",
-                "--settings",
-                r#"{"disableAllHooks":true}"#,
-            ]
-            .map(OsString::from),
-        );
-        // A page of a long session's transcript can pass the usual line limit.
-        spec.limits.max_line_bytes = 64 * 1024 * 1024;
-        Ok(Some(self.launcher.spawn(&spec)?))
+        let login = Credential::Subscription { config_home: None };
+        Ok(Some(self.control_process(cwd, &login)?))
     }
 
     /// `claude -p` on the user's login ([`namer_arguments`]), answering in [`namer::schema`]'s
@@ -1243,6 +1267,13 @@ impl Backend for ClaudeBackend {
     }
 
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
+        if request
+            .resume
+            .as_ref()
+            .is_some_and(|resume| remote::is_session(&resume.session_id))
+        {
+            return remote::start(self, request);
+        }
         // Images alone are a message too (PLX-202), as a resumed run's may be.
         if request.prompt.is_empty() && request.images.is_empty() {
             return Err(StartError::Invalid("the prompt is empty".into()));

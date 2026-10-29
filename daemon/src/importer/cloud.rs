@@ -1,32 +1,30 @@
 //! The Claude Code sessions `claude remote-control` served on the user's computers, which
 //! `claude.ai` keeps (PLX-1136), read through Claude Code's own sign-in.
 //!
-//! plxd starts `claude -p` in stream-json ([`Backend::control`]) and asks it
-//! `list_cloud_sessions`, then `get_cloud_session_transcript` for each Remote Control session, up
-//! to four at once, as Claude Code reads at most four in parallel. A session `claude.ai` returns
-//! no conversation for is left out: one that had Remote Control turned on in an open session is
-//! only streamed through `claude.ai`, so its transcript is only on its computer. So is one whose
-//! transcript is on this computer too, which the apps' list has: its entries name that local
-//! session. Claude Code answers these requests only for the program that started it, and refuses
-//! them inside a Claude Code session.
+//! plxd starts `claude -p` in stream-json ([`Control`]) and asks it `list_cloud_sessions`, then
+//! `get_cloud_session_transcript` for each Remote Control session, up to four at once, as Claude
+//! Code reads at most four in parallel. A session `claude.ai` returns no conversation for is left
+//! out: one that had Remote Control turned on in an open session is only streamed through
+//! `claude.ai`, so its transcript is only on its computer. So is one whose transcript is on this
+//! computer too, which the apps' list has: its entries name that local session. Claude Code
+//! answers these requests only for the program that started it, and refuses them inside a Claude
+//! Code session. Listing finds none, quietly, when Claude Code isn't set up, isn't signed in to
+//! `claude.ai`, or runs on another provider, as there is nothing to fix.
 //!
-//! [`Backend::control`]: crate::backend::Backend::control
+//! A session imported from here keeps its `claude.ai` id as the session its follow-ups resume,
+//! so they go to it as a Claude Remote Control run (PLX-1140). [`crate::remote_control`] lists
+//! them to import new ones on its own.
 
-use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
 use jiff::Timestamp;
 use parallax_protocol::ImportSource;
 use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt as _;
 
 use super::{Message, Session, claude_messages, title_from};
-use crate::backend::process::{Output, Process};
+use crate::backend::claude::control::{Control, text};
 use crate::server::Daemon;
-
-/// The most requests in flight, as many as Claude Code reads in parallel.
-const IN_FLIGHT: usize = 4;
 
 /// How long listing, or reading one session, may take in all.
 const LIMIT: Duration = Duration::from_secs(120);
@@ -34,25 +32,113 @@ const LIMIT: Duration = Duration::from_secs(120);
 /// The most transcript pages one session reads, at up to a thousand entries each.
 const MAX_PAGES: usize = 50;
 
-/// How long requests in flight wait for their next answer after Claude Code wrote a line too big to
-/// read, which was one of their answers: then they fail, and the rest go on. Longer than the 25 s
-/// Claude Code gives each request, so by then only the cut one is left.
-const OVERSIZED_WAIT: Duration = Duration::from_secs(30);
+/// A Remote Control session as `claude.ai` lists it (`environment_kind` `bridge`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Listed {
+    /// Its `session_` id.
+    pub id: String,
+    pub title: Option<String>,
+    pub updated: Option<Timestamp>,
+    /// `running`, `idle`, `requires_action`, `archived`, `pending`, or `failed`, when given.
+    pub status: Option<String>,
+    /// `owner/name`, when it worked in a GitHub repository ([`repository`]).
+    pub repository: Option<String>,
+    pub branch: Option<String>,
+}
 
-/// Why Claude Code can't read `claude.ai`'s sessions that aren't a fault to report: it isn't signed
-/// in to `claude.ai`, or it runs on another provider. Listing then finds none, quietly.
-const QUIET_REASONS: [&str; 2] = ["not_signed_in", "provider"];
-
-/// What [`list`] found: the sessions, and how many it couldn't read.
-pub(super) struct Listing {
-    pub sessions: Vec<Listed>,
-    pub unread: usize,
+impl Listed {
+    /// The Remote Control session `entry` of `list_cloud_sessions` names, if it is one.
+    fn of(entry: &Value) -> Option<Self> {
+        if entry["environment_kind"] != "bridge" {
+            return None;
+        }
+        Some(Self {
+            id: text(&entry["id"])?,
+            title: text(&entry["title"]),
+            updated: entry["updated_at"].as_str().and_then(|at| at.parse().ok()),
+            status: text(&entry["status"]),
+            repository: repository(&entry["repository"]),
+            branch: text(&entry["branch"]),
+        })
+    }
 }
 
 /// A `claude.ai` session to import, with the local session its entries name.
-pub(super) struct Listed {
+pub(super) struct Importable {
     pub session: Session,
     pub local: Option<String>,
+}
+
+/// What [`list`] found: the sessions, and how many it couldn't read.
+pub(super) struct Listing {
+    pub sessions: Vec<Importable>,
+    pub unread: usize,
+}
+
+/// A `claude -p` that has answered `initialize`, on the login of the instance named `claude`.
+///
+/// # Errors
+///
+/// Why it couldn't start, in words, such as Claude Code not being set up in Parallax.
+pub(crate) async fn start(daemon: &Arc<Daemon>) -> Result<Control, String> {
+    let home = std::env::home_dir()
+        .filter(|home| home.is_absolute())
+        .ok_or("the home folder is unknown")?;
+    let claude = daemon
+        .agents
+        .backends()
+        .by_name()
+        .into_iter()
+        .find_map(|(name, backend)| (name == "claude").then_some(backend))
+        .ok_or("Claude Code isn't set up in Parallax")?;
+    let process = claude
+        .control(&home)
+        .map_err(|error| error.to_string())?
+        .ok_or("Claude Code can't read claude.ai's sessions")?;
+    let mut control = Control::new(process)?;
+    control.ask(json!({"subtype": "initialize"})).await?;
+    Ok(control)
+}
+
+/// The Remote Control sessions `claude.ai` lists, newest first, as it orders them: for a person
+/// asking now when `user_initiated`, else a background reload.
+///
+/// # Errors
+///
+/// Why they couldn't be listed, such as Claude Code not being signed in to `claude.ai`.
+pub(crate) async fn listed(
+    control: &mut Control,
+    user_initiated: bool,
+) -> Result<Vec<Listed>, String> {
+    let answer = control
+        .ask(json!({"subtype": "list_cloud_sessions", "user_initiated": user_initiated}))
+        .await?;
+    Ok(answer["sessions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Listed::of)
+        .collect())
+}
+
+/// Which of sessions `ids` `claude.ai` keeps a conversation for, in their order: a session that
+/// had Remote Control turned on in an open session has none there.
+pub(crate) async fn conversations(control: &mut Control, ids: &[String]) -> Vec<bool> {
+    let pages = control
+        .ask_all(
+            ids.iter()
+                .map(|id| json!({"subtype": "get_cloud_session_transcript", "session_id": id}))
+                .collect(),
+        )
+        .await;
+    ids.iter()
+        .zip(pages)
+        .map(|(id, page)| {
+            page.ok()
+                .and_then(|page| session(id, page["entries"].as_array()?))
+                .is_some()
+        })
+        .collect()
 }
 
 /// The Remote Control sessions `claude.ai` keeps a conversation for, newest first. None, quietly,
@@ -63,53 +149,42 @@ pub(super) struct Listed {
 ///
 /// Why they couldn't be listed, in words.
 pub(super) async fn list(daemon: &Arc<Daemon>) -> Result<Listing, String> {
-    let none = Listing {
+    let none = || Listing {
         sessions: Vec::new(),
         unread: 0,
     };
-    let Ok(mut claude) = Control::start(daemon) else {
-        return Ok(none);
-    };
     tokio::time::timeout(LIMIT, async {
-        claude.ask(json!({"subtype": "initialize"})).await?;
-        let listed = match claude
-            .ask(json!({"subtype": "list_cloud_sessions", "user_initiated": true}))
-            .await
-        {
-            Ok(listed) => listed,
-            Err(_) if claude.quiet => return Ok(none),
+        let Ok(mut claude) = start(daemon).await else {
+            return Ok(none());
+        };
+        let remote = match listed(&mut claude, true).await {
+            Ok(remote) => remote,
+            Err(_) if claude.quiet() => return Ok(none()),
             Err(error) => return Err(error),
         };
-        let remote: Vec<Value> = listed["sessions"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|s| s["environment_kind"] == "bridge" && s["id"].is_string())
-            .cloned()
-            .collect();
         let pages = claude
             .ask_all(
                 remote
                     .iter()
-                    .map(|s| json!({"subtype": "get_cloud_session_transcript", "session_id": s["id"]}))
+                    .map(|s| json!({"subtype": "get_cloud_session_transcript", "session_id": s.id}))
                     .collect(),
             )
             .await;
         let unread = pages.iter().filter(|page| page.is_err()).count();
         let sessions = remote
-            .iter()
+            .into_iter()
             .zip(pages)
             .filter_map(|(listed, page)| {
                 let entries = page.ok()?["entries"].as_array()?.clone();
-                let mut session = session(listed["id"].as_str()?, &entries)?;
-                if let Some(title) = text(&listed["title"]) {
+                let mut session = session(&listed.id, &entries)?;
+                if let Some(title) = listed.title {
                     session.title = title;
                 }
-                if let Some(at) = listed["updated_at"].as_str().and_then(|at| at.parse().ok()) {
+                if let Some(at) = listed.updated {
                     session.updated = at;
                 }
                 let local = entries.iter().find_map(|e| text(&e["sessionId"]));
-                Some(Listed { session, local })
+                Some(Importable { session, local })
             })
             .collect();
         Ok(Listing { sessions, unread })
@@ -132,22 +207,17 @@ pub(super) struct Loaded {
 ///
 /// Why it couldn't be read, in words.
 pub(super) async fn load(daemon: &Arc<Daemon>, id: &str) -> Result<Option<Loaded>, String> {
-    let mut claude = Control::start(daemon)?;
     tokio::time::timeout(LIMIT, async {
-        claude.ask(json!({"subtype": "initialize"})).await?;
+        let mut claude = start(daemon).await?;
         let about = claude
             .ask(json!({"subtype": "get_cloud_session", "session_id": id}))
             .await?;
         // Only the list names a session's repository.
-        let listed = claude
-            .ask(json!({"subtype": "list_cloud_sessions", "user_initiated": true}))
-            .await?;
-        let repository = listed["sessions"]
-            .as_array()
+        let repository = listed(&mut claude, true)
+            .await?
             .into_iter()
-            .flatten()
-            .find(|s| s["id"] == id)
-            .and_then(|s| repository(&s["repository"]));
+            .find(|s| s.id == id)
+            .and_then(|s| s.repository);
         let mut entries = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_PAGES {
@@ -179,7 +249,7 @@ pub(super) async fn load(daemon: &Arc<Daemon>, id: &str) -> Result<Option<Loaded
 }
 
 /// The session `entries` from `claude.ai` hold, titled by its first message from the user: `None`
-/// when they hold none.
+/// when they hold none. It resumes its own `claude.ai` id, as a Claude Remote Control run.
 fn session(id: &str, entries: &[Value]) -> Option<Session> {
     let first = messages(entries).into_iter().find_map(|m| match m {
         Message::User(text) => Some(text),
@@ -194,7 +264,7 @@ fn session(id: &str, entries: &[Value]) -> Option<Session> {
         cwd: entries.iter().find_map(|e| text(&e["cwd"])),
         started,
         updated: entries.iter().rev().find_map(at).unwrap_or(started),
-        resume: None,
+        resume: Some(id.to_owned()),
     })
 }
 
@@ -219,180 +289,6 @@ fn messages(entries: &[Value]) -> Vec<Message> {
     let jsonl: String = entries.iter().map(|e| e.to_string() + "\n").collect();
     claude_messages(&jsonl)
 }
-
-fn text(value: &Value) -> Option<String> {
-    value
-        .as_str()
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(str::to_owned)
-}
-
-/// A `claude -p` answering control requests: each written as a line, answered in a
-/// `control_response` carrying its `request_id`.
-struct Control {
-    process: Process,
-    stdin: crate::backend::process::StdinPipe,
-    next: u64,
-    /// Claude Code answered with one of [`QUIET_REASONS`].
-    quiet: bool,
-    /// It wrote a line too big to read since what was in flight last failed.
-    oversized: bool,
-}
-
-impl Control {
-    fn start(daemon: &Arc<Daemon>) -> Result<Self, String> {
-        let home = std::env::home_dir()
-            .filter(|home| home.is_absolute())
-            .ok_or("the home folder is unknown")?;
-        let claude = daemon
-            .agents
-            .backends()
-            .by_name()
-            .into_iter()
-            .find_map(|(name, backend)| (name == "claude").then_some(backend))
-            .ok_or("Claude Code isn't set up in Parallax")?;
-        let mut process = claude
-            .control(&home)
-            .map_err(|error| error.to_string())?
-            .ok_or("Claude Code can't read claude.ai's sessions")?;
-        let stdin = process.take_stdin().ok_or("Claude Code has no stdin")?;
-        Ok(Self {
-            process,
-            stdin,
-            next: 0,
-            quiet: false,
-            oversized: false,
-        })
-    }
-
-    async fn send(&mut self, request: &Value) -> Result<String, String> {
-        self.next += 1;
-        let id = format!("import-{}", self.next);
-        let line = json!({"type": "control_request", "request_id": id, "request": request});
-        self.stdin
-            .write_all(format!("{line}\n").as_bytes())
-            .await
-            .map_err(|_| "Claude Code stopped".to_owned())?;
-        Ok(id)
-    }
-
-    /// The answer to one request.
-    async fn ask(&mut self, request: Value) -> Result<Value, String> {
-        let mut answers = self.ask_all(vec![request]).await;
-        answers
-            .pop()
-            .unwrap_or_else(|| Err("Claude Code didn't answer".to_owned()))
-    }
-
-    /// The answers to `requests`, in their order, with at most [`IN_FLIGHT`] asked at once. One
-    /// Claude Code turns away as busy is asked again.
-    async fn ask_all(&mut self, requests: Vec<Value>) -> Vec<Result<Value, String>> {
-        let mut answers: Vec<Option<Result<Value, String>>> = vec![None; requests.len()];
-        let mut waiting: VecDeque<usize> = (0..requests.len()).collect();
-        let mut asked: HashMap<String, usize> = HashMap::new();
-        let mut busy: HashSet<usize> = HashSet::new();
-        while answers.iter().any(Option::is_none) {
-            while asked.len() < IN_FLIGHT {
-                let Some(index) = waiting.pop_front() else {
-                    break;
-                };
-                match self.send(&requests[index]).await {
-                    Ok(id) => {
-                        asked.insert(id, index);
-                    }
-                    Err(error) => answers[index] = Some(Err(error)),
-                }
-            }
-            if asked.is_empty() {
-                break;
-            }
-            // An answer too big to read never arrives: once one was cut, what's in flight waits a
-            // while longer, then fails, so one huge session can't hold up the rest.
-            let next = if self.oversized {
-                tokio::time::timeout(OVERSIZED_WAIT, self.answer()).await
-            } else {
-                Ok(self.answer().await)
-            };
-            let Ok(next) = next else {
-                self.oversized = false;
-                for index in asked.drain().map(|(_, index)| index) {
-                    answers[index] = Some(Err("a session was too large to read".to_owned()));
-                }
-                continue;
-            };
-            let (id, answer) = match next {
-                Ok(Some(answered)) => answered,
-                Ok(None) => {
-                    self.oversized = true;
-                    continue;
-                }
-                Err(error) => {
-                    for index in asked.into_values().chain(waiting) {
-                        answers[index] = Some(Err(error.clone()));
-                    }
-                    break;
-                }
-            };
-            let Some(index) = asked.remove(&id) else {
-                continue;
-            };
-            if answer.as_ref().is_err_and(|why| why == BUSY) && busy.insert(index) {
-                waiting.push_back(index);
-            } else {
-                answers[index] = Some(answer);
-            }
-        }
-        answers
-            .into_iter()
-            .map(|a| a.unwrap_or_else(|| Err("Claude Code didn't answer".to_owned())))
-            .collect()
-    }
-
-    /// The next `control_response`: its `request_id`, and its answer or why there is none. `None`
-    /// when Claude Code wrote a line too big to read, a page whose request goes unanswered.
-    async fn answer(&mut self) -> Result<Option<(String, Result<Value, String>)>, String> {
-        loop {
-            let line = match self.process.next().await {
-                Some(Output::Line(line)) => line,
-                Some(Output::Oversized { .. }) => return Ok(None),
-                Some(Output::Exited(exit)) => {
-                    return Err(format!("Claude Code stopped: {}", exit.stderr_tail.trim()));
-                }
-                None => return Err("Claude Code stopped".to_owned()),
-            };
-            let Ok(message) = serde_json::from_slice::<Value>(&line) else {
-                continue;
-            };
-            let response = &message["response"];
-            if message["type"] != "control_response" {
-                continue;
-            }
-            let Some(id) = response["request_id"].as_str() else {
-                continue;
-            };
-            let answer = if response["subtype"] == "error" {
-                Err(text(&response["error"]).unwrap_or_else(|| "Claude Code refused".to_owned()))
-            } else {
-                let body = &response["response"];
-                match body["status"].as_str() {
-                    Some("ok") | None => Ok(body.clone()),
-                    Some(_) if body["reason"] == "temporarily_unavailable" => Err(BUSY.to_owned()),
-                    Some(_) if QUIET_REASONS.iter().any(|reason| body["reason"] == *reason) => {
-                        self.quiet = true;
-                        Err(text(&body["message"]).unwrap_or_default())
-                    }
-                    Some(_) => Err(text(&body["message"])
-                        .unwrap_or_else(|| "claude.ai's sessions aren't available".to_owned())),
-                }
-            };
-            return Ok(Some((id.to_owned(), answer)));
-        }
-    }
-}
-
-/// What a request Claude Code turned away as busy answers, to be asked again once.
-const BUSY: &str = "Claude Code is busy";
 
 #[cfg(test)]
 mod tests {
@@ -420,52 +316,6 @@ mod tests {
         ]
     }
 
-    /// A request whose answer was too big to read fails once the rest are answered, even when it
-    /// is the last, rather than holding up the list until its limit.
-    #[cfg(unix)]
-    #[tokio::test(start_paused = true)]
-    async fn an_answer_too_big_to_read_fails_only_its_request() {
-        use crate::backend::process::{
-            Environment, Launcher, OutputLimits, ProcessSpec, StdinMode,
-        };
-        use crate::paths::DataDir;
-
-        let ok = r#"{"type":"control_response","response":{"subtype":"success","request_id":"import-1","response":{"ok":1}}}"#;
-        let mut spec = ProcessSpec::new("sh", "/");
-        spec.args = vec![
-            "-c".into(),
-            format!(
-                "printf '%s\\n%s\\n' '{ok}' \"$(head -c 2000 /dev/zero | tr '\\0' x)\"; sleep 60"
-            )
-            .into(),
-        ];
-        spec.stdin = StdinMode::Piped;
-        spec.limits = OutputLimits {
-            max_line_bytes: 1024,
-            ..OutputLimits::default()
-        };
-        let base: Environment = [("PATH", "/usr/bin:/bin")].into_iter().collect();
-        let launcher = Launcher::new(DataDir::new("/tmp/plxd-test-data").unwrap(), base);
-        let mut process = launcher.spawn(&spec).unwrap();
-        let stdin = process.take_stdin().unwrap();
-        let mut claude = Control {
-            process,
-            stdin,
-            next: 0,
-            quiet: false,
-            oversized: false,
-        };
-
-        let answers = claude.ask_all(vec![json!({"a": 1}), json!({"b": 2})]).await;
-        assert_eq!(
-            answers,
-            [
-                Ok(json!({"ok": 1})),
-                Err("a session was too large to read".to_owned())
-            ]
-        );
-    }
-
     #[test]
     fn a_page_with_a_conversation_is_a_session_titled_by_its_first_message() {
         let entries = page();
@@ -484,7 +334,7 @@ mod tests {
             session.updated,
             "2026-10-29T03:43:09.100Z".parse::<Timestamp>().unwrap()
         );
-        assert_eq!(session.resume, None);
+        assert_eq!(session.resume.as_deref(), Some("session_018aq"));
         assert_eq!(
             messages(&entries),
             [

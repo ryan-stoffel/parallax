@@ -87,6 +87,7 @@ pub mod providers;
 mod public_proxy;
 pub mod relay;
 pub mod remote;
+mod remote_control;
 mod repo;
 mod repo_clone;
 pub mod routing;

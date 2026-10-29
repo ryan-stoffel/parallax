@@ -307,6 +307,15 @@ impl Translator {
         }
     }
 
+    /// A translator for the transcript entries of a Claude Remote Control session (PLX-1140),
+    /// which runs on another computer: no `system/init` comes, so there are no credentials or
+    /// tools of plxd's to check, and every entry is the main session's or a subagent's.
+    pub fn transcript() -> Self {
+        let mut translator = Self::new(ToolPolicy::WorkspaceWrite, "").with_thread(true);
+        translator.verified = true;
+        translator
+    }
+
     /// Checks `system/init` as a coordinator's when plxd's MCP tools were `attached` (0019, 0027).
     pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
         self.coordinator_tools = attached;

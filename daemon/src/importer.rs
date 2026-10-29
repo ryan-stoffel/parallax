@@ -16,7 +16,8 @@
 //!
 //! An import is a thread shaped like a fork (0050): its prompt is the session's first message,
 //! its log the rest of the conversation, the user's messages and the agent's replies, and no CLI
-//! runs until the first follow-up. It starts archived. A session in a repository's root works in
+//! runs until the first follow-up. It starts archived, unless [`crate::remote_control`]'s sync
+//! imported it. A session in a repository's root works in
 //! that checkout, as it did in the app; any other has no repo. Its run id is a version 7 UUID made
 //! from the session (its start time, then a hash of its app and id), so importing it again finds
 //! the same thread. `thread/importChat` (PLX-883) takes a chat the client read from a `ChatGPT` or
@@ -24,8 +25,9 @@
 //!
 //! `thread/importable` with `remote` lists instead the Claude Code sessions `claude remote-control`
 //! served on any of the user's computers, which `claude.ai` keeps, and `thread/import` with
-//! `remote` reads one from there ([`cloud`], PLX-1136). Their follow-ups tell a new session the
-//! conversation, as their transcript isn't on this computer.
+//! `remote` reads one from there ([`cloud`], PLX-1136). Such a thread keeps the `claude.ai`
+//! session, so its follow-ups go to it as a Claude Remote Control run (PLX-1140), and
+//! [`crate::remote_control`] imports new ones on its own, not archived.
 //!
 //! A Codex thread keeps its session, which a follow-up resumes, falling back to a handoff. A Claude
 //! one keeps it only in its own folder, where Claude Code looks for it. Every other follow-up tells
@@ -193,19 +195,7 @@ pub(crate) async fn import(
         account,
     } = params;
     if remote {
-        let loaded = cloud::load(&daemon, &id)
-            .await
-            .map_err(ErrorObject::invalid_params)?;
-        let Some(loaded) = loaded else {
-            return Err(ErrorObject::invalid_params(format!(
-                "claude.ai has no conversation for session {id}"
-            )));
-        };
-        let repo = match &loaded.repository {
-            Some(repository) => repo_for(&daemon, repository, loaded.session.cwd.as_deref()).await,
-            None => None,
-        };
-        return create(daemon, loaded.session, &loaded.messages, account, repo).await;
+        return import_remote(daemon, &id, account, false).await;
     }
     let homes = Homes::detect();
     let wanted = id.clone();
@@ -218,7 +208,34 @@ pub(crate) async fn import(
             app_name(source)
         )));
     };
-    create(daemon, session, &messages, account, None).await
+    create(daemon, session, &messages, account, None, true).await
+}
+
+/// Imports Claude Remote Control session `id` from `claude.ai` ([`cloud::load`]), in its GitHub
+/// repository's checkout ([`repo_for`]). For `thread/import`, the thread is archived and the
+/// repository cloned if it isn't here. For [`crate::remote_control`]'s sync, `synced`, whose
+/// sessions are recent and which nobody asked for, it isn't archived, and nothing is cloned.
+pub(crate) async fn import_remote(
+    daemon: Arc<Daemon>,
+    id: &str,
+    account: Option<AccountChoice>,
+    synced: bool,
+) -> Result<ThreadStartResult, ErrorObject> {
+    let loaded = cloud::load(&daemon, id)
+        .await
+        .map_err(ErrorObject::invalid_params)?;
+    let Some(loaded) = loaded else {
+        return Err(ErrorObject::invalid_params(format!(
+            "claude.ai has no conversation for session {id}"
+        )));
+    };
+    let cwd = loaded.session.cwd.as_deref();
+    let repo = match &loaded.repository {
+        Some(repository) => repo_for(&daemon, repository, cwd, !synced).await,
+        None => None,
+    };
+    let messages = &loaded.messages;
+    create(daemon, loaded.session, messages, account, repo, !synced).await
 }
 
 /// `thread/importChat` (PLX-883): see [`ThreadImportChatParams`].
@@ -267,7 +284,7 @@ pub(crate) async fn import_chat(
         updated: created_at,
         resume: None,
     };
-    create(daemon, session, &messages, account, None).await
+    create(daemon, session, &messages, account, None, true).await
 }
 
 /// `thread/importedChats` (PLX-883): each chat's thread, if it was imported.
@@ -307,8 +324,8 @@ pub(crate) async fn imported_chats(
     .await
 }
 
-/// Makes `session`, with its conversation `messages`, an archived thread: in `repo` when one is
-/// given, else in its folder's checkout when that's a repository's root, else with no repo.
+/// Makes `session`, with its conversation `messages`, a thread, `archived` or not: in `repo` when
+/// one is given, else in its folder's checkout when that's a repository's root, else with no repo.
 /// Returns the thread it already is when it was imported before.
 async fn create(
     daemon: Arc<Daemon>,
@@ -316,9 +333,11 @@ async fn create(
     messages: &[Message],
     account: Option<AccountChoice>,
     repo: Option<RepoId>,
+    archived: bool,
 ) -> Result<ThreadStartResult, ErrorObject> {
     let source = session.source;
-    let Some((prompt, transcript)) = transcript(source, messages) else {
+    let remote = remote_control(&session);
+    let Some((prompt, transcript)) = transcript(source, remote, messages) else {
         return Err(ErrorObject::invalid_params(format!(
             "{} has no message from the user to import",
             session.id
@@ -392,8 +411,13 @@ async fn create(
             }
         }
     }
+    let thread = if archived {
+        archive(&daemon, run_id, thread).await?
+    } else {
+        threads::thread_entry(&thread)?
+    };
     Ok(ThreadStartResult {
-        thread: archive(&daemon, run_id, thread).await?,
+        thread,
         run: created.run,
     })
 }
@@ -496,14 +520,20 @@ async fn repo_of(daemon: &Arc<Daemon>, cwd: &str) -> Option<RepoId> {
 }
 
 /// The repo entry for GitHub repository `repository` (`owner/name`), a `claude.ai` session's
-/// (PLX-1136): the registered one whose `origin` it is, else a new clone where [`clone_path`] puts
-/// it, which git makes over SSH or else HTTPS. `None` when git can't clone it, such as a private
-/// repository with no credentials here, so the session imports with no repo.
-async fn repo_for(daemon: &Arc<Daemon>, repository: &str, cwd: Option<&str>) -> Option<RepoId> {
+/// (PLX-1136): the registered one whose `origin` it is, else with `clone` a new clone where
+/// [`clone_path`] puts it, which git makes over SSH or else HTTPS. `None` when git can't clone it,
+/// such as a private repository with no credentials here, so the session imports with no repo.
+async fn repo_for(
+    daemon: &Arc<Daemon>,
+    repository: &str,
+    cwd: Option<&str>,
+    clone: bool,
+) -> Option<RepoId> {
     let url = format!("git@github.com:{repository}.git");
     match crate::repo_clone::with_origin(daemon, &url).await {
         Ok(Some(repo)) => return Some(repo.id),
-        Ok(None) => {}
+        Ok(None) if clone => {}
+        Ok(None) => return None,
         Err(error) => {
             warn!(repository, error = %error.message, "could not look for an imported session's repository");
             return None;
@@ -545,7 +575,8 @@ fn clone_path(name: &str, cwd: Option<&str>) -> String {
 
 /// The session a follow-up resumes: Codex's on its built-in backend, which falls back to a
 /// handoff when the session is gone, and Claude Code's on its built-in backend in the folder it
-/// ran in, where Claude Code finds it.
+/// ran in, where Claude Code finds it, or wherever for a Claude Remote Control session, which
+/// runs on its own computer.
 // ponytail: a Claude instance with its own config folder can't see the app's session; check the
 // instance's `home` if people import onto one.
 fn resumable(
@@ -559,9 +590,19 @@ fn resumable(
     }
     match session.source {
         ImportSource::Codex => session.resume.clone(),
-        ImportSource::Claude if checkout => session.resume.clone(),
+        ImportSource::Claude if checkout || remote_control(session) => session.resume.clone(),
         _ => None,
     }
+}
+
+/// Whether `session` is a Claude Remote Control session from `claude.ai`, which resumes its
+/// `session_` id ([`crate::backend::claude::remote`]).
+fn remote_control(session: &Session) -> bool {
+    session.source == ImportSource::Claude
+        && session
+            .resume
+            .as_deref()
+            .is_some_and(crate::backend::claude::remote::is_session)
 }
 
 /// The built-in backend a source's sessions ran on.
@@ -594,10 +635,11 @@ fn run_id(session: &Session) -> Option<RunId> {
 }
 
 /// A session's prompt, its first message from the user, and its log after that: a notice that it
-/// was imported, then a turn per message from the user with the agent's replies, one item per
+/// was imported, from Claude Remote Control when `remote`, then a turn per message from the user with the agent's replies, one item per
 /// event. `None` with no message from the user.
 fn transcript(
     source: ImportSource,
+    remote: bool,
     messages: &[Message],
 ) -> Option<(String, Vec<Vec<AgentOutputItem>>)> {
     let (first, prompt) =
@@ -619,6 +661,7 @@ fn transcript(
     let mut items = vec![
         AgentOutputItem::Notice {
             detail: match source {
+                _ if remote => "Imported from Claude Remote Control.".to_owned(),
                 ImportSource::Chatgpt | ImportSource::ClaudeChat => {
                     format!("Imported from a {} export.", app_name(source))
                 }
@@ -1184,4 +1227,4 @@ fn cursor_messages(path: &Path, id: &str) -> rusqlite::Result<Vec<Message>> {
 #[cfg(test)]
 mod tests;
 
-mod cloud;
+pub(crate) mod cloud;

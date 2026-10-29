@@ -60,7 +60,8 @@ pub struct ImportableSession {
     pub thread: Option<RunId>,
     /// A Claude Code session `claude remote-control` served on another computer, which
     /// `claude.ai` keeps (PLX-1136): its id is `claude.ai`'s, and its transcript is read from there
-    /// through Claude Code's own sign-in.
+    /// through Claude Code's own sign-in. With `claudeRemoteControl`, its thread's follow-ups go to
+    /// that session (PLX-1140).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub remote: bool,

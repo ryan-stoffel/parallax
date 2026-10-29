@@ -213,6 +213,12 @@ pub enum Event {
         /// Every one still running, by Claude Code's `task_id`.
         tasks: Vec<BackgroundTask>,
     },
+    /// What the Claude Remote Control session a run follows is doing now (PLX-1140), which
+    /// plxd keeps for `thread/remoteControl`. Not logged.
+    RemoteControl {
+        /// Its state.
+        state: parallax_protocol::RemoteControlState,
+    },
     /// Something in the CLI's output that the backend skipped. It never ends a run.
     Warning {
         /// What was wrong.

@@ -65,6 +65,7 @@ mod pull_request;
 mod question;
 mod queue;
 mod remote;
+mod remote_control;
 mod review;
 mod schedule;
 mod scripts;
@@ -228,6 +229,9 @@ pub use remote::{
     RelayHost, RelayHostsParams, RelayHostsResult, RelayRegisterParams, RelayRemoveParams,
     RelayStatus, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSession,
     RemoteSessionsParams, RemoteSessionsResult,
+};
+pub use remote_control::{
+    RemoteControlSession, RemoteControlState, ThreadRemoteControlParams, ThreadRemoteControlResult,
 };
 pub use review::{
     AcceptId, AgentAcceptParams, AgentAcceptResult, AgentDiffFile, AgentDiffParams,

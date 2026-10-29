@@ -412,6 +412,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
         | Event::RateLimit(_)
         | Event::AccountFallback { .. }
         | Event::BackgroundTasks { .. }
+        | Event::RemoteControl { .. }
         | Event::Finished { .. }
         | Event::Unknown => return None,
     })

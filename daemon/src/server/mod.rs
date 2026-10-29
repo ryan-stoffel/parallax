@@ -347,6 +347,8 @@ pub(crate) struct Daemon {
     pub bundles: crate::methods::bundle::Bundles,
     /// Held while plxd records or applies You memory's versions (0082).
     pub(crate) you_sync: tokio::sync::Mutex<()>,
+    /// The Claude Remote Control sessions plxd last listed and follows (PLX-1140).
+    pub(crate) remote_control: crate::remote_control::RemoteControl,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -518,6 +520,7 @@ impl Server {
                 config.max_bundle_bytes,
             ),
             you_sync: tokio::sync::Mutex::new(()),
+            remote_control: crate::remote_control::RemoteControl::default(),
         });
         // Best effort: a project's context folder is also ensured lazily on its first
         // `context/*` call (#155), so a watcher that fails to start only loses live updates for
@@ -653,6 +656,10 @@ impl Server {
                 stop.clone(),
             )),
             tokio::spawn(crate::secrets::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(crate::remote_control::run(
+                Arc::clone(&daemon),
+                stop.clone(),
+            )),
         ]);
         let connections = TaskTracker::new();
         let abort = CancellationToken::new();
@@ -908,6 +915,7 @@ impl Daemon {
                 crate::methods::bundle::MAX_BYTES,
             ),
             you_sync: tokio::sync::Mutex::new(()),
+            remote_control: crate::remote_control::RemoteControl::default(),
         })
     }
 }
