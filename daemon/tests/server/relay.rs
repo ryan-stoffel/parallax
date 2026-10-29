@@ -280,7 +280,8 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
     relay_status(&mut client, |s| s.connected).await;
     fired(&mut client, 2).await;
 
-    // The account's hosts on the relay, and removing this one, which frees its place.
+    // The account's hosts on the relay, and removing this one, which frees its place. The other
+    // test's computer may be on the same account at the same time.
     let listed = client
         .call::<RelayHosts>(RelayHostsParams {
             token: token.clone(),
@@ -288,17 +289,18 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
         .await
         .unwrap()
         .hosts;
-    assert_eq!(listed.len(), 1);
-    assert!(listed[0].this_computer && listed[0].online, "{listed:?}");
+    let this = listed.iter().find(|h| h.this_computer);
+    let this = this.unwrap_or_else(|| panic!("{listed:?}"));
+    assert!(this.online, "{listed:?}");
     let left = client
         .call::<RelayRemove>(RelayRemoveParams {
             token: token.clone(),
-            host_id: listed[0].host_id.clone(),
+            host_id: this.host_id.clone(),
         })
         .await
         .unwrap()
         .hosts;
-    assert!(left.is_empty(), "{left:?}");
+    assert!(left.iter().all(|h| h.host_id != this.host_id), "{left:?}");
     relay_status(&mut client, |s| !s.connected).await;
 }
 
