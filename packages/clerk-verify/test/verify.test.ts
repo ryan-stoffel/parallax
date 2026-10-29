@@ -18,7 +18,7 @@ async function instance(issuer: string) {
   const options: VerifyOptions = {
     issuer,
     clientIds: ["desktop"],
-    authorizedParties: ["https://app.parallx.dev"],
+    authorizedParties: ["https://app.parallax.codes"],
     fetch: (async (url: string) => {
       assert.equal(url, `${issuer}/.well-known/jwks.json`);
       fetches++;
@@ -54,7 +54,7 @@ test("accepts a session token and the desktop app's OAuth access token", async (
   });
   // A native app's session token has no azp.
   assert.deepEqual(
-    await verifyClerkToken(await sign({ ...session, azp: "https://app.parallx.dev" }), options),
+    await verifyClerkToken(await sign({ ...session, azp: "https://app.parallax.codes" }), options),
     { userId: "user_1", sessionId: "sess_1" },
   );
   const oauth = { iss: issuer, sub: "user_1", client_id: "desktop", exp: now + 60 };

@@ -7,8 +7,8 @@ name = "parallax-relay"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
-# relay.parallx.dev, once the parallx.dev zone is on the Cloudflare account, and no workers.dev URL.
-routes = [{ pattern = "relay.parallx.dev", custom_domain = true }]
+# relay.parallax.codes, on the account's parallax.codes zone, and no workers.dev URL.
+routes = [{ pattern = "relay.parallax.codes", custom_domain = true }]
 workers_dev = false
 
 [[durable_objects.bindings]]

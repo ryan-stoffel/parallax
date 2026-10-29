@@ -44,7 +44,7 @@ use crate::remote::{self, DpopKey, Error};
 use crate::server::Daemon;
 
 /// Where the relay is unless `PLXD_RELAY_URL` says otherwise.
-pub const DEFAULT_URL: &str = "https://relay.parallx.dev";
+pub const DEFAULT_URL: &str = "https://relay.parallax.codes";
 
 /// The most plxd corrects its clock by from the relay's: a day, in milliseconds.
 const MAX_CLOCK_OFFSET_MS: i64 = 24 * 60 * 60 * 1000;
@@ -923,17 +923,17 @@ mod tests {
 
     #[test]
     fn urls_are_https_or_plain_http_to_this_computer() {
-        let base = Base::parse("https://relay.parallx.dev").unwrap();
+        let base = Base::parse("https://relay.parallax.codes").unwrap();
         assert_eq!(
             (base.tls, base.authority(), base.port),
-            (true, "relay.parallx.dev".to_owned(), 443)
+            (true, "relay.parallax.codes".to_owned(), 443)
         );
         let local = Base::parse("http://127.0.0.1:8787").unwrap();
         assert_eq!(
             (local.tls, local.authority()),
             (false, "127.0.0.1:8787".to_owned())
         );
-        assert!(Base::parse("http://relay.parallx.dev").is_err());
-        assert!(Base::parse("ftp://relay.parallx.dev").is_err());
+        assert!(Base::parse("http://relay.parallax.codes").is_err());
+        assert!(Base::parse("ftp://relay.parallax.codes").is_err());
     }
 }

@@ -145,7 +145,7 @@ pub struct Config {
     /// Where API keys and secrets live. `None`, the default, is this OS's keystore
     /// ([`keystore::system_store`]); tests use one in memory.
     pub keys: Option<Arc<dyn KeyStore>>,
-    /// Parallax Relay's URL (PLX-652). `PLXD_RELAY_URL` when set, else relay.parallx.dev.
+    /// Parallax Relay's URL (PLX-652). `PLXD_RELAY_URL` when set, else relay.parallax.codes.
     pub relay_url: String,
     /// Whether `project/update` takes `computer` and plxd advertises `projectComputer` (0057).
     /// Off until a Project's child can start, be followed, and land on another computer; tests

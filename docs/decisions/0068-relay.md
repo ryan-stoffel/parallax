@@ -6,7 +6,7 @@
 
 ## Context
 
-0065 planned Parallax Relay as T3 Connect is built: a managed Cloudflare tunnel per host, a bootstrap credential, and no relay in the data path after that. A tunnel ends TLS at Cloudflare, so Cloudflare, and the relay's operator, could read every thread. On 2026-10-11 Ryan chose Cloudflare Workers with Durable Objects, `relay.parallx.dev`, and Clerk sign-in ([0067](0067-clerk-accounts.md)), and asked that the relay never see thread content.
+0065 planned Parallax Relay as T3 Connect is built: a managed Cloudflare tunnel per host, a bootstrap credential, and no relay in the data path after that. A tunnel ends TLS at Cloudflare, so Cloudflare, and the relay's operator, could read every thread. On 2026-10-11 Ryan chose Cloudflare Workers with Durable Objects, `relay.parallax.codes` (the domain was bought on 2026-10-29, PLX-1125), and Clerk sign-in ([0067](0067-clerk-accounts.md)), and asked that the relay never see thread content.
 
 plxd already has what end-to-end encryption needs (0065): a self-signed P-256 certificate per host, TLS 1.3 to it, a client that pins its fingerprint after SPAKE2 pairing with a one-time code, and DPoP-bound sessions with 30-second WebSocket tickets.
 
@@ -19,7 +19,7 @@ plxd already has what end-to-end encryption needs (0065): a self-signed P-256 ce
 - The client runs TLS to plxd's certificate inside the stream, pinned as on the LAN. Pairing (SPAKE2 with the code), sessions, tickets, and `/ws` are 0065's, unchanged. The relay carries TLS records only, so it can't read or change a thread, and it can't stand in for the host: a client that pinned the host's fingerprint refuses any other certificate.
 - A client that has never paired pairs through the relay too, with the code from Settings, over the same stream. SPAKE2 gives a relay in the middle one online guess per code and no fingerprint.
 - No new crypto. A `relay:<hostId>` route goes in the host's route list, after its LAN and tailnet addresses. `plxd dial` signs in to the relay with `PLXD_RELAY_TOKEN`, which the app sets from the account's access token.
-- A browser or React Native client needs a TLS 1.3 implementation over a WebSocket, such as subtls on WebCrypto, to use the relay. For the mobile app (PLX-653), that is end to end: its code ships in the app, and it can scan a QR code that carries the host's fingerprint and a pairing code where SPAKE2 isn't available. For a web client, it is end to end only when its JavaScript comes from somewhere the relay's operator doesn't control. A web client served from `parallx.dev`, by the same operator, could be changed to send its keys or plaintext anywhere.
+- A browser or React Native client needs a TLS 1.3 implementation over a WebSocket, such as subtls on WebCrypto, to use the relay. For the mobile app (PLX-653), that is end to end: its code ships in the app, and it can scan a QR code that carries the host's fingerprint and a pairing code where SPAKE2 isn't available. For a web client, it is end to end only when its JavaScript comes from somewhere the relay's operator doesn't control. A web client served from `parallax.codes`, by the same operator, could be changed to send its keys or plaintext anywhere.
 
 ### Identity
 
@@ -51,7 +51,7 @@ plxd already has what end-to-end encryption needs (0065): a self-signed P-256 ce
 
 ### Deploy
 
-- `relay/wrangler.toml` is the infrastructure: the Worker, both Durable Object classes and their migration, the rate limit, and the `relay.parallx.dev` custom domain with no `workers.dev` URL. Its top level sets no Clerk instance, so a deploy refuses every token until production's issuer, JWKS URL, and the desktop app's client id are added. Clerk's development instance is only in `[env.dev]`, which `pnpm dev` runs. `relay/README.md` lists what Ryan provides and the deploy commands, with a custom API token of exactly the four permissions the deploy needs. No workflow deploys it.
+- `relay/wrangler.toml` is the infrastructure: the Worker, both Durable Object classes and their migration, the rate limit, and the `relay.parallax.codes` custom domain with no `workers.dev` URL. Its top level sets no Clerk instance, so a deploy refuses every token until production's issuer, JWKS URL, and the desktop app's client id are added. Clerk's development instance is only in `[env.dev]`, which `pnpm dev` runs. `relay/README.md` lists what Ryan provides and the deploy commands, with a custom API token of exactly the four permissions the deploy needs. No workflow deploys it.
 - CI type-checks the Worker and runs its tests in Miniflare, and the Linux Rust job runs plxd against `wrangler dev` end to end.
 
 ## Consequences

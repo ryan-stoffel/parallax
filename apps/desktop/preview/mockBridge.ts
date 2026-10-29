@@ -524,7 +524,7 @@ let relayHosts: RelayHost[] = [
 ];
 const relayStatus = () => ({
   connected: true,
-  hookUrl: "https://relay.parallx.dev/v1/hooks/tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+  hookUrl: "https://relay.parallax.codes/v1/hooks/tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
 });
 const hostsListeners = new Set<(hosts: LanHost[]) => void>();
 const isLanHost = (hostId: string) => lan.hosts.some((h) => h.id === hostId);
