@@ -8,13 +8,13 @@
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    HostSettingsSet, RelayHosts, RelayRegister, RelayRemove, RemoteSessions, ScheduleList,
-    ScheduleSave,
+    HostSettingsGet, HostSettingsSet, RelayHosts, RelayRegister, RelayRemove, RelaySign,
+    RemoteSessions, ScheduleList, ScheduleSave,
 };
 use parallax_protocol::{
-    AccountChoice, HostSettingsSetParams, RelayHostsParams, RelayRegisterParams, RelayRemoveParams,
-    RelayStatus, RemoteSessionsParams, Schedule, ScheduleListParams, ScheduleSaveParams,
-    SignatureEncoding, WebhookSignature,
+    AccountChoice, HostSettingsGetParams, HostSettingsSetParams, RelayHostsParams,
+    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelayStatus, RemoteSessionsParams,
+    Schedule, ScheduleListParams, ScheduleSaveParams, SignatureEncoding, WebhookSignature,
 };
 use plxd::{relay, remote};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -35,6 +35,41 @@ async fn set_relay(client: &mut Client, on: bool) {
         })
         .await
         .unwrap();
+}
+
+async fn relay_on(client: &mut Client) -> bool {
+    let settings = client.call::<HostSettingsGet>(HostSettingsGetParams {});
+    settings.await.unwrap().relay == Some(true)
+}
+
+/// This host's registration, signed over `token`'s hash, as another computer asks for it.
+async fn sign(client: &mut Client, token: &str) -> parallax_protocol::RelaySignResult {
+    let hash = remote::base64url(&remote::sha256(token.as_bytes()));
+    client
+        .call::<RelaySign>(RelaySignParams { token_hash: hash })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn signing_in_turns_the_relay_on_unless_its_user_turned_it_off() {
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    // Nothing answers here, so no relay is reached.
+    config.relay_url = "http://127.0.0.1:9".to_owned();
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+
+    assert!(!relay_on(&mut client).await);
+    let signed = sign(&mut client, "token").await;
+    assert_eq!(signed.host_id.len(), 43, "{signed:?}");
+    assert!(relay_on(&mut client).await, "signing in turns it on");
+    set_relay(&mut client, false).await;
+    sign(&mut client, "token").await;
+    assert!(
+        !relay_on(&mut client).await,
+        "an off the user chose stays off"
+    );
 }
 
 /// The relay status once `done` says so.
@@ -153,6 +188,7 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
     let registered = client
         .call::<RelayRegister>(RelayRegisterParams {
             token: token.clone(),
+            signed: None,
         })
         .await;
     assert!(registered.is_ok(), "{registered:?}");
@@ -264,4 +300,52 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
         .hosts;
     assert!(left.is_empty(), "{left:?}");
     relay_status(&mut client, |s| !s.connected).await;
+}
+
+/// A computer the user didn't sign in on joins the relay with only its signature (PLX-1146): the
+/// token stays with the computer that posts it, and pairing stays off.
+#[tokio::test]
+async fn another_computer_registers_with_its_signature_alone() {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+    ) else {
+        return;
+    };
+    let start = |dir: &std::path::Path| {
+        let mut config = InProcess::config(dir);
+        config.relay_url.clone_from(&url);
+        InProcess::start(config)
+    };
+    let (here_dir, there_dir) = (temp_dir(), temp_dir());
+    let (here, there) = (start(here_dir.path()), start(there_dir.path()));
+    let mut here = Client::ready(&here.socket).await;
+    let mut there = Client::ready(&there.socket).await;
+
+    let signed = sign(&mut there, &token).await;
+    let registered = here
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: token.clone(),
+            signed: Some(signed.clone()),
+        })
+        .await;
+    assert!(registered.is_ok(), "{registered:?}");
+    relay_status(&mut there, |s| s.connected).await;
+    let listed = here
+        .call::<RelayHosts>(RelayHostsParams {
+            token: token.clone(),
+        })
+        .await
+        .unwrap()
+        .hosts;
+    let joined = listed.iter().find(|h| h.host_id == signed.host_id);
+    assert!(
+        joined.is_some_and(|h| h.online && !h.this_computer),
+        "{listed:?}"
+    );
+    let removed = here.call::<RelayRemove>(RelayRemoveParams {
+        token,
+        host_id: signed.host_id,
+    });
+    removed.await.unwrap();
 }

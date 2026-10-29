@@ -1,7 +1,7 @@
 import { app, ipcMain, powerMonitor, type WebContents } from "electron";
 import { execFile, execFileSync } from "node:child_process";
 import { rmSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import path from "node:path";
@@ -152,6 +152,11 @@ const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
  */
 export function startHosts(signedIn: Account | undefined, target: () => string): void {
   account = signedIn;
+  // Signing in registers every computer this app is connected to (PLX-1146).
+  account?.onSignIn(() => {
+    for (const [hostId, connection] of connections)
+      if (connection.state.status === "connected") void joinRelay(hostId);
+  });
   targetVersion = target;
   hostUpdater = new HostUpdater({
     packaged: app.isPackaged && !process.env["PLXD_PATH"],
@@ -847,6 +852,7 @@ function addConnection(
       broadcast("parallax:state", hostId, state);
       hostUpdater?.onState(hostId, state);
       if (state.status !== "connected") return;
+      void joinRelay(hostId);
       if (hostId === "local") {
         // A new local plxd, such as after `host/update` or a service uninstall, is checked again.
         if (serviceState === "done") serviceState = "check";
@@ -1044,6 +1050,28 @@ async function registerRelay(): Promise<string | undefined> {
     : "error" in answer
       ? answer.error.message
       : undefined;
+}
+
+/**
+ * Registers computer `hostId` with Parallax Relay under the signed-in account, so its threads
+ * notify the phone with no switch to turn on (PLX-1146): this computer's plxd and each Parallax
+ * Connect computer's. Another computer's plxd signs the registration over the token's hash and
+ * this one's posts it, so the token never leaves this computer. Quiet when signed out, for any
+ * other kind of host, and for a plxd too old to sign.
+ */
+async function joinRelay(hostId: string): Promise<void> {
+  if (hostId !== "local" && !hostId.startsWith("tailnet:")) return;
+  const token = await account?.accessToken();
+  const local = connections.get("local");
+  if (!token || local?.state.status !== "connected") return;
+  if (hostId === "local") {
+    await local.request("relay/register", { token });
+    return;
+  }
+  const tokenHash = createHash("sha256").update(token).digest("base64url");
+  const signed = await connections.get(hostId)?.request("relay/sign", { tokenHash });
+  if (signed && "result" in signed)
+    await local.request("relay/register", { token, signed: signed.result });
 }
 
 /** The hosts the last `discoverLan` found, by the id the renderer picks one with. */

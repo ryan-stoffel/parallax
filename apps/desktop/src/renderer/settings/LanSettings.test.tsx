@@ -151,7 +151,7 @@ test("Reach from anywhere registers this computer with the relay before turning 
   await click(document.querySelectorAll('[aria-label="Remove macbook from the relay"]')[1]!);
   // It asks first, and Cancel keeps the computer.
   expect(document.body.textContent).toContain(
-    "until its Reach from anywhere switch is turned back on",
+    "unless its Reach from anywhere is off",
   );
   expect(removeRelayHost).not.toHaveBeenCalled();
   await click(button("Cancel"));

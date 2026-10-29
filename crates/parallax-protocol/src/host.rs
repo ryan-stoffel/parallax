@@ -336,9 +336,10 @@ pub struct HostSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub remote_web: Option<bool>,
-    /// Whether plxd keeps a connection to Parallax Relay while `remote` is on, so this user's
-    /// other devices reach it from anywhere and its webhooks have a public URL (PLX-652, 0068).
-    /// Off by default. An older plxd, without the `relay` capability, leaves it out.
+    /// Whether plxd keeps a connection to Parallax Relay, for phone notifications and its
+    /// webhooks' public URL, and while `remote` is on too, so this user's other devices reach it
+    /// from anywhere (PLX-652, 0068, PLX-1146). Off until set, or until the host first registers.
+    /// An older plxd, without the `relay` capability, leaves it out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub relay: Option<bool>,

@@ -112,12 +112,42 @@ pub struct RelayHost {
     pub this_computer: bool,
 }
 
-/// Params of `relay/register`: registers this host with Parallax Relay under the signed-in user.
+/// Params of `relay/register`: registers a host with Parallax Relay under the signed-in user.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayRegisterParams {
     /// The user's Clerk session token. plxd sends it to the relay once and keeps nothing of it.
     pub token: String,
+    /// Another computer's registration, from its `relay/sign` over this token's hash, to post in
+    /// its place (PLX-1146). Absent registers this host.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub signed: Option<RelaySignResult>,
+}
+
+/// Params of `relay/sign` (PLX-1146): signs this host's relay registration for a token that stays
+/// on another computer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelaySignParams {
+    /// The token's SHA-256, in base64url without padding.
+    pub token_hash: String,
+}
+
+/// Result of `relay/sign`: what `relay/register`'s `signed` takes.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelaySignResult {
+    /// Its relay id: its host key's JWK thumbprint.
+    pub host_id: String,
+    /// Its host key's P-256 public x coordinate, in base64url.
+    pub x: String,
+    /// Its y coordinate.
+    pub y: String,
+    /// Its name.
+    pub name: String,
+    /// Its ES256 signature over the registration message, in base64url.
+    pub signature: String,
 }
 
 /// A paired client's session.

@@ -232,6 +232,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         RemotePair => |p| remote::pair(context, p),
         RemoteSessions => |p| remote::sessions(context, p),
         RelayRegister => |p| remote::register_relay(context, p),
+        RelaySign => |p| remote::relay_sign(context, p),
         RelayHosts => |p| remote::relay_hosts(context, p),
         RelayRemove => |p| remote::relay_remove(context, p),
         RemoteRevoke => |p| remote::revoke(context, p),

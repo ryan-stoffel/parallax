@@ -227,8 +227,8 @@ pub use queue::{
 };
 pub use remote::{
     RelayHost, RelayHostsParams, RelayHostsResult, RelayRegisterParams, RelayRemoveParams,
-    RelayStatus, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSession,
-    RemoteSessionsParams, RemoteSessionsResult,
+    RelaySignParams, RelaySignResult, RelayStatus, RemotePairParams, RemotePairResult,
+    RemoteRevokeParams, RemoteSession, RemoteSessionsParams, RemoteSessionsResult,
 };
 pub use remote_control::{
     RemoteControlOrigin, RemoteControlSession, RemoteControlState, ThreadRemoteControlOriginParams,

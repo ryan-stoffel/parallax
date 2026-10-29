@@ -33,7 +33,9 @@ const GRANTS =
  * `remote`, has it listen for paired computers over HTTPS with its own pinned certificate, and Open
  * in a browser, its `remoteWeb`, also serves the app there for a browser to pair with (PLX-651).
  * Reach from anywhere, its `relay`, registers it with Parallax Relay and keeps it connected there,
- * and lists the account's computers on the relay, each with Remove (PLX-652). Pair a device shows a short one-time code while this computer advertises itself by
+ * for phone notifications and, with pairing on, reach from anywhere, and lists the account's
+ * computers on the relay, each with Remove (PLX-652). Shown with pairing off too, since signing in
+ * turns it on (PLX-1146). Pair a device shows a short one-time code while this computer advertises itself by
  * name over mDNS, and the computers paired with this one can be revoked, even with the switch off.
  * Below, the computers this app paired with, each with its connection and Remove, and Add
  * computer, which finds the computers showing a code, or takes an address, then the code.
@@ -74,17 +76,16 @@ export function LanSettings() {
     void readSessions();
   }, [connected]);
   useEffect(() => {
-    if (!connected || !on || !relay) return setRelayHosts(undefined);
+    if (!connected || !relay) return setRelayHosts(undefined);
     void window.parallax.relayHosts().then((hosts) => {
       if (typeof hosts !== "string") setRelayHosts(hosts);
     });
-  }, [connected, on, relay]);
+  }, [connected, relay]);
   // While a code is up, a computer that pairs shows up here, and the code goes, as it does once
   // plxd ends the pairing: used, locked, or expired. A bind that failed shows up too.
   const showing =
     code && sessions.length <= code.before && status?.pairing !== false ? code : undefined;
-  const polling =
-    !!showing || (on && !status?.listening) || (on && relay && !status?.relay?.connected);
+  const polling = !!showing || (on && !status?.listening) || (relay && !status?.relay?.connected);
   useEffect(() => {
     if (!polling) return;
     const timer = setInterval(() => void readSessions(), 2000);
@@ -191,15 +192,17 @@ export function LanSettings() {
             />
           </Row>
         )}
-        {on && relay !== undefined && (
+        {relay !== undefined && (
           <Row
             title="Reach from anywhere"
             description={
               <>
-                Your devices signed in to your Parallax account reach this computer through Parallax
-                Relay, and webhooks get a public address. The relay passes only encrypted traffic,
-                so it can't read your threads. Pair each device once, as on this network. An account
-                holds 10 computers on the relay: remove the ones you no longer use below.
+                Your phone hears when a thread here finishes, needs you, or fails, and webhooks get
+                a public address, through Parallax Relay. Signing in to Parallax turns this on. With
+                pairing on, your devices signed in to your Parallax account also reach this computer
+                through the relay, which passes only encrypted traffic, so it can't read your
+                threads. Pair each device once, as on this network. An account holds 10 computers on
+                the relay: remove the ones you no longer use below.
                 {relay && (
                   <span role="status" className="mt-1 block text-foreground">
                     {status?.relay?.connected
@@ -217,15 +220,14 @@ export function LanSettings() {
             />
           </Row>
         )}
-        {on &&
-          relay &&
+        {relay &&
           relayHosts?.map((h) => (
             <Row
               key={h.hostId}
               title={h.name || "Unnamed computer"}
               description={
                 confirmingRelay === h.hostId
-                  ? "Remove this computer from the relay? It stays off the relay until its Reach from anywhere switch is turned back on."
+                  ? "Remove this computer from the relay? One Parallax still connects to joins again, unless its Reach from anywhere is off."
                   : `On the relay${h.thisComputer ? ", this computer" : ""}. ${h.online ? "Connected." : "Not connected."}`
               }
             >

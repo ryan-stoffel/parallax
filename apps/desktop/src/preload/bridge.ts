@@ -720,8 +720,10 @@ export const withheldMethods = [
   "project/fromThreads",
   "question/ask",
   "question/escalate",
-  // Carry the account's token, which only main may send (PLX-652): see `registerRelay`.
+  // Carry the account's token, which only main may send (PLX-652): see `registerRelay`. Only
+  // main signs in a computer with `relay/sign` too (PLX-1146).
   "relay/register",
+  "relay/sign",
   "relay/hosts",
   "relay/remove",
   "terminal/open",
