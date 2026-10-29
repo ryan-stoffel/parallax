@@ -469,6 +469,11 @@ export type ParallaxRequests = {
 	 */
 	"thread/importedChats": { params: ThreadImportedChatsParams, result: ThreadImportedChatsResult },
 	/**
+	 * `thread/remoteControl`: a Claude Remote Control thread's session, where it works, and
+	 * what it's doing (PLX-1140). Gated on the `claudeRemoteControl` capability.
+	 */
+	"thread/remoteControl": { params: ThreadRemoteControlParams, result: ThreadRemoteControlResult },
+	/**
 	 * `thread/archive`: archives a normal thread or brings it back.
 	 */
 	"thread/archive": { params: ThreadArchiveParams, result: ThreadArchiveResult },
@@ -1095,6 +1100,7 @@ export const REQUEST_METHODS = [
 	"thread/import",
 	"thread/importChat",
 	"thread/importedChats",
+	"thread/remoteControl",
 	"thread/archive",
 	"thread/update",
 	"repo/update",
@@ -6455,7 +6461,8 @@ export type ImportableSession = {
 	/**
 	 * A Claude Code session `claude remote-control` served on another computer, which
 	 * `claude.ai` keeps (PLX-1136): its id is `claude.ai`'s, and its transcript is read from there
-	 * through Claude Code's own sign-in.
+	 * through Claude Code's own sign-in. With `claudeRemoteControl`, its thread's follow-ups go to
+	 * that session (PLX-1140).
 	 */
 	remote?: boolean,
 };
@@ -6583,6 +6590,60 @@ export type ThreadImportedChatsResult = {
 	 */
 	threads: Array<RunId | null>,
 };
+
+/**
+ * Params of `thread/remoteControl`.
+ */
+export type ThreadRemoteControlParams = {
+	/**
+	 * The thread's run.
+	 */
+	runId: RunId,
+};
+
+/**
+ * Result of `thread/remoteControl`: answered at once from what plxd last read, which it reads
+ * again in the background once it's half a minute old.
+ */
+export type ThreadRemoteControlResult = {
+	/**
+	 * The thread's session. Absent for a thread that isn't a Claude Remote Control thread.
+	 */
+	session?: RemoteControlSession,
+};
+
+/**
+ * A Claude Remote Control session, as plxd last saw it.
+ */
+export type RemoteControlSession = {
+	/**
+	 * `claude.ai`'s id for it, starting with `session_`.
+	 */
+	sessionId: string,
+	/**
+	 * Where it opens in Claude: `https://claude.ai/code/<sessionId>`.
+	 */
+	url: string,
+	/**
+	 * The GitHub repository it works in, `owner/name`, when it has one.
+	 */
+	repository?: string,
+	/**
+	 * The branch it works on, when `claude.ai` names one.
+	 */
+	branch?: string,
+	/**
+	 * What it's doing. Absent until plxd has read it.
+	 */
+	state?: RemoteControlState,
+};
+
+/**
+ * What a Claude Remote Control session is doing.
+ *
+ * A newer plxd may send a state this version does not know; treat it as unknown.
+ */
+export type RemoteControlState = "running" | "idle" | "waiting" | "offline" | "archived";
 
 /**
  * Params of `thread/archive`: archives a thread or brings it back.

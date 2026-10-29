@@ -38,6 +38,10 @@ const RELAY: &str = "relay";
 /// The `host_settings` key for the remote clients' sessions, as plxd's JSON (PLX-641).
 const REMOTE_SESSIONS: &str = "remote_sessions";
 
+/// The `host_settings` key for the Claude Remote Control sessions plxd's sync already imported
+/// or found imported, as a JSON array of their ids (PLX-1140).
+const REMOTE_CONTROL_SYNCED: &str = "remote_control_synced";
+
 /// The `host_settings` key prefix for a repository's scripts, before its path (PLX-650).
 const REPO_SCRIPTS: &str = "repo_scripts:";
 
@@ -271,6 +275,25 @@ impl Store {
     /// A database error.
     pub fn set_remote_sessions(&self, sessions: Option<&str>) -> Result<(), StoreError> {
         self.set_text(REMOTE_SESSIONS, sessions)
+    }
+
+    /// The Claude Remote Control sessions plxd's sync already took, as plxd's JSON, if any
+    /// (PLX-1140).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn remote_control_synced(&self) -> Result<Option<String>, StoreError> {
+        self.text(REMOTE_CONTROL_SYNCED)
+    }
+
+    /// Stores the Claude Remote Control sessions plxd's sync took.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_remote_control_synced(&self, sessions: &str) -> Result<(), StoreError> {
+        self.set_text(REMOTE_CONTROL_SYNCED, Some(sessions))
     }
 
     /// The setup and settle scripts of the repository at `path`, as plxd's JSON, if any

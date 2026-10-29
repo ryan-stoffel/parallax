@@ -174,6 +174,13 @@ import { presentWaiting } from "./waiting";
 import { WaitingBar } from "./WaitingBar";
 import { clockOptions } from "./prefs";
 import { askSiteIcon, linkSite, siteIcons } from "./siteIcons";
+import { RemoteControlTab } from "./ClaudeRemoteControl";
+import {
+  isRemoteControl,
+  needsAttention,
+  remoteControlDisabled,
+  useRemoteControl,
+} from "./remoteControl";
 
 /** A row: a transcript item, or a message this window sent that hasn't reached the agent yet. */
 type Row =
@@ -666,9 +673,19 @@ export function AgentChat({
   // The run as the composer shows it: the transcript's, or until that loads, the thread list's, so
   // the box opens as it will look.
   const box = run ?? listed;
+  // A Claude Remote Control thread (PLX-1140): its messages go to a session on another computer,
+  // as text, with nothing to choose about how it runs.
+  const remote = isRemoteControl(box);
+  const remoteSession = useRemoteControl(
+    hostId,
+    remote ? runId : undefined,
+    connected && "claudeRemoteControl" in connection.capabilities,
+    box?.status,
+  );
   let disabledReason = offlineReason(connection);
   if (connected && !run && (error || !box))
     disabledReason = error ? "This chat couldn't load" : "Loading…";
+  if (remote) disabledReason ??= remoteControlDisabled(remoteSession);
   let optionsDisabled: string | undefined;
   // `sendModel` is `sendOptions`' successor, which also takes the model (PLX-163). With
   // `sendAccount`, a message that changes them while the run works waits for it to finish.
@@ -833,6 +850,16 @@ export function AgentChat({
     );
     tabs.push({ key: "queue", node: strip(false), compact: strip(true) });
   }
+  // Leads the line while it asks something of the user, and otherwise sits at its end.
+  if (remote) {
+    const tab: ComposerTab = {
+      key: "remoteControl",
+      node: <RemoteControlTab session={remoteSession} />,
+      compact: <RemoteControlTab session={remoteSession} compact />,
+    };
+    if (needsAttention(remoteSession?.state)) tabs.unshift(tab);
+    else tabs.push(tab);
+  }
 
   const dock = (
     // A column the window bounds, so a pinned card's preview gives way to a grown composer. Only
@@ -853,7 +880,7 @@ export function AgentChat({
               : Promise.resolve("")
           }
           onSteer={
-            queueEnabled && running
+            queueEnabled && running && !remote
               ? (text, options, images, threads) =>
                   sendText(text, options, images, threads, "steer")
               : undefined
@@ -869,7 +896,7 @@ export function AgentChat({
           unanswered={stopBack}
           disabledReason={disabledReason}
           tab={tab}
-          backend={box?.backend}
+          backend={remote ? undefined : box?.backend}
           started={box}
           accountId={box?.accountId}
           requestUsage={transcript.requestUsage}
@@ -881,6 +908,7 @@ export function AgentChat({
           optionsDisabled={optionsDisabled}
           imageCaps={imageCaps(connection)}
           uploadBytes={uploadBytes(connection)}
+          inlineFiles={remote}
           manualDenied={manualDenied}
           projectMode={projectMode}
           insert={compose && !compose.send ? compose.text : undefined}

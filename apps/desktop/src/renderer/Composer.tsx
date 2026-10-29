@@ -88,6 +88,7 @@ import { Chip, fileIcon, Mention } from "./Mention";
 import { imageFromUrl, imageUrl, readImage, type ImageCaps } from "./images";
 import { Lightbox } from "./Lightbox";
 import { encodedImage, withFiles } from "./attachments";
+import { IMAGES_REFUSED, MAX_INLINE_BYTES, readTextFile, withInlineFiles } from "./remoteControl";
 import { uploadFiles, type UploadCaps } from "./uploads";
 import { ModelMenu } from "./ModelMenu";
 import { ScrollThumb } from "./ScrollThumb";
@@ -825,6 +826,12 @@ export interface ComposerProps {
    */
   uploadBytes?: UploadCaps;
   /**
+   * The message goes to a Claude Remote Control session, which takes text only (PLX-1140): images
+   * are refused with why, and text files go inside the message under their names, up to
+   * `MAX_INLINE_BYTES` in all, instead of being saved on the host.
+   */
+  inlineFiles?: boolean;
+  /**
    * Why Supervised's requests are denied instead of coming to the chat (0031): the host's plxd lacks
    * `approvals`, or the open run started without them. Absent: they come as approval cards.
    */
@@ -917,6 +924,7 @@ export function Composer({
   optionsDisabled,
   imageCaps,
   uploadBytes,
+  inlineFiles = false,
   manualDenied,
   placeholder: hint,
   projectMode,
@@ -935,7 +943,9 @@ export function Composer({
   const [stopping, setStopping] = useState(false);
   // Files that aren't images, shown as chips, and uploaded on send where the host takes them.
   const [files, setFiles] = useState<File[]>(initial?.files ?? []);
-  const canUpload = !!host && !!uploadBytes;
+  const canUpload = !!host && !!uploadBytes && !inlineFiles;
+  // Files go with the message: saved on the host, or inside the message.
+  const sendsFiles = canUpload || inlineFiles;
   // While the files upload, before the message goes.
   const [uploading, setUploading] = useState(false);
   // The file going in pieces now, the share of it sent, and whether a piece failed.
@@ -1325,13 +1335,30 @@ export function Composer({
 
   // The run stopped (or never ran), so a later run's Stop starts fresh.
   if (stopping && !onStop) setStopping(false);
-  const empty = text.trim() === "" && images.length === 0 && (!canUpload || files.length === 0);
+  const empty = text.trim() === "" && images.length === 0 && (!sendsFiles || files.length === 0);
   const canSend = !!onSend && !disabledReason && !empty && !uploading;
   const showStop = !!onStop && !disabledReason && empty;
 
   // Adds pasted, dropped, or picked files: images as thumbnails, anything else as a chip.
   const addFiles = async (added: File[]): Promise<PromptImage[]> => {
     const isImage = (f: File) => f.type.startsWith("image/");
+    if (inlineFiles) {
+      // Only text, which is read now so a file that can't go is refused as it's added.
+      let room = MAX_INLINE_BYTES - files.reduce((total, f) => total + f.size, 0);
+      const taken: File[] = [];
+      let why = added.some(isImage) ? IMAGES_REFUSED : undefined;
+      for (const file of added.filter((f) => !isImage(f))) {
+        const read = await readTextFile(file, room);
+        if ("error" in read) why ??= read.error;
+        else {
+          taken.push(file);
+          room -= file.size;
+        }
+      }
+      setFiles((all) => [...all, ...taken]);
+      setAttachError(why);
+      return [];
+    }
     const others = added.filter((f) => !isImage(f));
     const fits = (f: File) => !host || !uploadBytes || f.size <= uploadBytes.maxBytes;
     setFiles((all) => [...all, ...others.filter(fits)]);
@@ -1376,7 +1403,7 @@ export function Composer({
   const submit = async (background = false, steer = false) => {
     if (!canSend) return;
     const sent = editor.getJSON();
-    const sentFiles = canUpload ? files : [];
+    const sentFiles = sendsFiles ? files : [];
     const sentImages = images;
     // Only the host's own, never the open thread: undo can bring back a chip from before the box
     // changed computer, and a paste can bring the open thread's own.
@@ -1405,6 +1432,17 @@ export function Composer({
       if (typeof paths === "string")
         return notify({ tone: "error", title: "Couldn't upload the files", body: paths });
       sentText = withFiles(sentText, paths);
+    }
+    if (inlineFiles && sentFiles.length > 0) {
+      const read = await Promise.all(sentFiles.map((f) => readTextFile(f)));
+      const failed = read.find((r) => "error" in r);
+      if (failed && "error" in failed)
+        return notify({ tone: "error", title: "Couldn't attach the files", body: failed.error });
+      const texts = read.map((r) => ("text" in r ? r.text : ""));
+      sentText = withInlineFiles(
+        sentText,
+        sentFiles.map((f, i) => ({ name: f.name, text: texts[i]! })),
+      );
     }
     editor.commands.clearContent();
     // Only what's sent: images added during an upload stay.
@@ -1659,13 +1697,15 @@ export function Composer({
           if (!image) return node.type.create({ key: node.attrs["key"], src: null });
           if (image === carried && !added.includes(carried)) {
             // As an added file is: an even share of the total cap each.
-            const why = !imageCaps
-              ? "This host's plxd can't take images."
-              : images.length + added.length >= imageCaps.maxImages
-                ? `A message takes at most ${imageCaps.maxImages} images.`
-                : carried.data.length > imageShare(imageCaps)
-                  ? "That image is too large to send."
-                  : undefined;
+            const why = inlineFiles
+              ? IMAGES_REFUSED
+              : !imageCaps
+                ? "This host's plxd can't take images."
+                : images.length + added.length >= imageCaps.maxImages
+                  ? `A message takes at most ${imageCaps.maxImages} images.`
+                  : carried.data.length > imageShare(imageCaps)
+                    ? "That image is too large to send."
+                    : undefined;
             if (why) {
               refused = why;
               return null;
@@ -1984,7 +2024,7 @@ export function Composer({
                 onRemove={() => setFiles((all) => all.filter((_, j) => j !== i))}
               />
             ))}
-            {files.length > 0 && !canUpload && (
+            {files.length > 0 && !sendsFiles && (
               <span className="text-meta text-faint-foreground">Not sent to the agent yet</span>
             )}
           </fieldset>

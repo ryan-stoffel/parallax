@@ -64,6 +64,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "checkpoints",
     "checks",
     "checkout",
+    "claudeRemoteControl",
     "commandIds",
     "composerMenus",
     "computerUse",
@@ -909,6 +910,8 @@ const handlers: { [M in Method]?: Handler<M> } = {
   // This computer's past app sessions to import, kept until the page reloads. An import only
   // marks its session imported: the preview makes no archived thread for it.
   "thread/importable": (p) => ({ sessions: p.remote ? remoteImportable : importable }),
+  // A Claude Remote Control thread's session, as plxd last listed it (PLX-1140).
+  "thread/remoteControl": (p) => ({ session: db.remoteControl[p.runId] }),
   "thread/import": (p) => {
     const session = (p.remote ? remoteImportable : importable).find(
       (s) => s.source === p.source && s.id === p.id,

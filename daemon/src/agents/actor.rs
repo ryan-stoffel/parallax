@@ -3156,11 +3156,14 @@ impl Actor {
             {
                 ran = run;
             }
+            // A Claude Remote Control session runs on its own computer, so a fork of its thread
+            // takes a handoff here (PLX-1140).
+            let remote = |id: &String| crate::backend::claude::remote::is_session(id);
             Ok(Some(ForkSource {
                 session_id: parent
                     .state
                     .session_id
-                    .filter(|_| can_fork && idle && same && unmoved),
+                    .filter(|id| can_fork && idle && same && unmoved && !remote(id)),
                 backend: ran.fields.backend,
             }))
         })
@@ -3710,6 +3713,7 @@ impl Actor {
         }
     }
 
+    #[expect(clippy::too_many_lines, reason = "one arm per kind of event")]
     async fn on_event(&mut self, event: Option<Event>) {
         let Some(event) = event else {
             // An `EventStream` always ends with `Finished`, which clears `live` first.
@@ -3775,6 +3779,7 @@ impl Actor {
                 let outcome = outcome.clone();
                 self.exited(event, &outcome).await;
             }
+            Event::RemoteControl { state } => self.saw_remote(*state),
             Event::BackgroundTasks { tasks } => {
                 let (run_id, tasks) = (self.id, tasks.clone());
                 self.track_work(&event);
@@ -3810,6 +3815,14 @@ impl Actor {
                     self.turn_ended(result, failed).await;
                 }
             }
+        }
+    }
+
+    /// Keeps what the run's Claude Remote Control session is doing, for `thread/remoteControl`
+    /// (PLX-1140).
+    fn saw_remote(&self, state: parallax_protocol::RemoteControlState) {
+        if let Some(session_id) = &self.row.state.session_id {
+            self.daemon.remote_control.saw(session_id, state);
         }
     }
 

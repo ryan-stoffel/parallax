@@ -19,6 +19,7 @@ import type {
   Project,
   ProviderInfo,
   Question,
+  RemoteControlSession,
   Repo,
   Thread,
   UsageDay,
@@ -83,6 +84,8 @@ interface Fixtures {
   usageSessions: UsageSessions[];
   commands: AgentCommand[];
   repoFiles: string[];
+  /** Claude Remote Control threads' sessions, by run id (`thread/remoteControl`, PLX-1140). */
+  remoteControl: Record<string, RemoteControlSession>;
 }
 
 // Fixed ids, shaped like the version 7 UUIDs plxd wants.
@@ -134,6 +137,11 @@ export const ids = {
   spaceCoursework: uuid(130),
   spaceEssays: uuid(131),
   spaceApartment: uuid(132),
+  repoLearnRust: uuid(140),
+  rcLifetimes: uuid(141),
+  rcClap: uuid(142),
+  rcJson: uuid(143),
+  rcBench: uuid(144),
 } as const;
 
 const OPUS = "claude-opus-5-5";
@@ -171,6 +179,12 @@ export function createFixtures(now = Date.now()): Fixtures {
       name: "acme-api",
       path: `${HOME}/Developer/clients/acme-api`,
       createdAt: ago(60 * 24 * 9),
+    },
+    {
+      id: ids.repoLearnRust,
+      name: "learn-rust",
+      path: `${HOME}/Developer/learn-rust`,
+      createdAt: ago(60 * 24 * 3),
     },
     {
       id: ids.repoScratch,
@@ -1372,6 +1386,158 @@ export function createFixtures(now = Date.now()): Fixtures {
     )
     .update(ago(60 * 29), { status: "completed" })
     .finish(ago(60 * 29), { status: "completed" });
+
+  // ---- Claude Remote Control (PLX-1140): sessions `claude remote-control` serves elsewhere ----
+
+  const remoteControl: Record<string, RemoteControlSession> = {};
+  /** A thread that follows Claude Remote Control session `sessionId`, in learn-rust's checkout. */
+  const remote = (
+    t: Omit<Parameters<typeof thread>[0], "repo">,
+    sessionId: string,
+    state: RemoteControlSession["state"],
+  ) => {
+    const run = thread({ ...t, repo: ids.repoLearnRust });
+    Object.assign(run, {
+      sessionId,
+      checkout: true,
+      branch: undefined,
+      worktreePath: undefined,
+      model: undefined,
+      effort: undefined,
+      contextWindow: undefined,
+    });
+    remoteControl[run.id] = {
+      sessionId,
+      url: `https://claude.ai/code/${sessionId}`,
+      repository: "ryan-stoffel/learn-rust",
+      branch: "main",
+      state,
+    };
+    const imported: AgentOutputItem = {
+      kind: "notice",
+      detail: "Imported from Claude Remote Control.",
+    };
+    const started: AgentOutputItem = { kind: "sessionStarted", sessionId };
+    return { run, imported, started };
+  };
+  const lifetimes = remote(
+    {
+      id: ids.rcLifetimes,
+      title: "Explain the lifetime errors in parser.rs",
+      slug: "rc-lifetimes",
+      prompt: "cargo check fails in parser.rs with lifetime errors. Explain them, then fix them.",
+      status: "completed",
+      started: 60 * 3,
+      updated: 6,
+      seen: 5,
+    },
+    "session_018aqLm2Vb7XyLifetimes",
+    "idle",
+  );
+  log(lifetimes.run)
+    .out(ago(60 * 3), lifetimes.imported, { kind: "turnStarted" })
+    .out(
+      ago(60 * 3 - 1),
+      {
+        kind: "text",
+        text: "`Token<'a>` borrows from the input, but `Parser::next` returns it after the buffer it points into is dropped. Owning the text in `Token` fixes both errors.",
+      },
+      { kind: "turnFinished" },
+    )
+    .out(
+      ago(8),
+      lifetimes.started,
+      {
+        kind: "turnStarted",
+        turnId: uuid(150),
+        text: "Make the fix, and run the tests.",
+      },
+      ...tool("Edit", { file_path: "src/parser.rs" }, "The file src/parser.rs has been updated."),
+      ...tool("Bash", { command: "cargo test" }, "test result: ok. 24 passed; 0 failed; 0 ignored"),
+      {
+        kind: "text",
+        text: "`Token` now owns its text as a `String`, so nothing outlives the buffer. `cargo test` passes: 24 tests.",
+      },
+      { kind: "turnFinished" },
+    )
+    .update(ago(6), { status: "completed" })
+    .finish(ago(6), { status: "completed" });
+  const clap = remote(
+    {
+      id: ids.rcClap,
+      title: "Migrate the CLI to clap 5",
+      slug: "rc-clap",
+      prompt: "Move the CLI from clap 4's builder API to clap 5's derive API.",
+      status: "running",
+      started: 40,
+      updated: 1,
+    },
+    "session_01Cb9QpWaitingForAnswer",
+    "waiting",
+  );
+  log(clap.run).out(
+    ago(3),
+    clap.imported,
+    clap.started,
+    { kind: "turnStarted", turnId: uuid(151), text: "Bump clap to 5 and fix what breaks." },
+    ...tool("Read", { file_path: "Cargo.toml" }, '[dependencies]\nclap = "4.5"'),
+    {
+      kind: "toolCall",
+      callId: callId(),
+      name: "Bash",
+      input: { command: "cargo update -p clap" },
+    },
+    { kind: "notice", detail: "Claude is waiting for your answer in Claude." },
+  );
+  const json = remote(
+    {
+      id: ids.rcJson,
+      title: "Add a --json flag to the stats command",
+      slug: "rc-json",
+      prompt: "Add a --json flag to `stats` that prints the same numbers as JSON.",
+      status: "running",
+      started: 90,
+      updated: 2,
+    },
+    "session_01DqOfflineComputer",
+    "offline",
+  );
+  log(json.run).out(
+    ago(2),
+    json.imported,
+    json.started,
+    { kind: "turnStarted", turnId: uuid(152), text: "Use serde_json, and add a test." },
+    {
+      kind: "notice",
+      detail:
+        "The computer serving this session is offline. Your message is queued until it's back.",
+    },
+  );
+  const bench = remote(
+    {
+      id: ids.rcBench,
+      title: "Benchmark the tokenizer",
+      slug: "rc-bench",
+      prompt: "Add a criterion benchmark for the tokenizer.",
+      status: "completed",
+      started: 60 * 26,
+      updated: 60 * 25,
+      seen: 60 * 25,
+    },
+    "session_01EnArchivedSession",
+    "archived",
+  );
+  log(bench.run)
+    .out(
+      ago(60 * 26),
+      bench.imported,
+      { kind: "turnStarted" },
+      { kind: "text", text: "Added `benches/tokenizer.rs`: 1.8 µs per line on the sample file." },
+      { kind: "turnFinished" },
+    )
+    .update(ago(60 * 25), { status: "completed" })
+    .finish(ago(60 * 25), { status: "completed" });
+
   // ---- Computer use (PLX-897): Notes always allowed, Reminders waiting for an answer ----------
 
   const groceries = thread({
@@ -2179,6 +2345,7 @@ See PR https://github.com/ryanstoffel/parallax/pull/512 for the routing groundwo
     usageSessions,
     usageDays,
     commands,
+    remoteControl,
     repoFiles,
   };
 }

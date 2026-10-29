@@ -1,5 +1,6 @@
 import {
   ChevronLeft,
+  Cloud,
   ChevronRight,
   FileSearch,
   FolderGit2,
@@ -111,6 +112,7 @@ import {
 } from "./threads";
 import { cloneOnto, type CloneAsk } from "./clone";
 import { isRunning, kindOf } from "./transcript";
+import { isRemoteControl, useRemoteControl } from "./remoteControl";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { tileCommands } from "./keybindings";
@@ -473,6 +475,14 @@ export function App() {
   const threadRun =
     selection.kind === "thread" ? threads.state.runs[selection.threadId] : undefined;
   const linksPrs = connected && "pullRequests" in connection.capabilities;
+  // A Claude Remote Control thread's session, for Thread details (PLX-1140).
+  const remoteThread = isRemoteControl(threadRun);
+  const remoteSession = useRemoteControl(
+    host.id,
+    remoteThread ? threadRun?.id : undefined,
+    connected && "claudeRemoteControl" in connection.capabilities,
+    threadRun?.status,
+  );
   const prs = usePullRequests(
     host.id,
     threadRun?.id,
@@ -673,11 +683,14 @@ export function App() {
       selection.kind === "thread"
         ? (threads.state.titles[selection.threadId] ?? "Thread")
         : "New thread";
+    // A Claude Remote Control thread runs on another computer, not this host (PLX-1140).
+    const where: Crumb =
+      selection.kind === "thread" && remoteThread
+        ? { label: "Remote Control", icon: <Cloud aria-hidden /> }
+        : { label: host.name };
     // A Space's page is the Space itself (0090), so its crumbs end there.
     crumbs =
-      selection.kind === "new" && group.space
-        ? [{ label: host.name }, repo]
-        : [{ label: host.name }, repo, { label: page }];
+      selection.kind === "new" && group.space ? [where, repo] : [where, repo, { label: page }];
 
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.
@@ -1194,6 +1207,7 @@ export function App() {
           : undefined
       }
       prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
+      remoteControl={remoteThread ? { session: remoteSession } : undefined}
       space={
         selection.kind === "thread" && openThread && !openThread.parent
           ? { thread: openThread, view: threads }
