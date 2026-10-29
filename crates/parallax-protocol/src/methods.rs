@@ -433,7 +433,8 @@ method_table! {
         /// run id. Gated on the `threadFork` capability.
         ThreadFork = "thread/fork": ThreadForkParams => ThreadStartResult;
         /// `thread/importable`: the past sessions the Claude, Codex, and Cursor desktop apps
-        /// keep on the host (PLX-881). Gated on the `threadImport` capability.
+        /// keep on the host, and Claude Code's and Codex's Remote Control sessions that ran on
+        /// it (PLX-881). Gated on the `threadImport` capability.
         ThreadImportable = "thread/importable": ThreadImportableParams => ThreadImportableResult;
         /// `thread/import`: makes one of those sessions a thread, at rest with its
         /// conversation. Idempotent on the session. Gated on the `threadImport` capability.

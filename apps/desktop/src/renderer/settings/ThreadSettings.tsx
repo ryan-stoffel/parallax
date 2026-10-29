@@ -63,7 +63,7 @@ export function ThreadSettings() {
       <Section title="Import">
         <Row
           title="Import sessions"
-          description="Bring past sessions from the Claude, Codex, and Cursor desktop apps into Archived as threads on this computer."
+          description="Bring past sessions from the Claude, Codex, and Cursor desktop apps and Claude Code and Codex Remote Control into Archived as threads, on this computer or another connected one."
         >
           <ImportButton what="sessions" />
         </Row>

@@ -4,11 +4,12 @@
 //! Behind `chatImport` (PLX-883), `thread/importChat` does the same for a chat the client read
 //! from a `ChatGPT` or `claude.ai` data export, which has no session to resume.
 //!
-//! `thread/importable` lists the sessions each app keeps on the host. `thread/import` makes one an
-//! archived thread: its conversation, the user's messages and the agent's replies, logged as the
-//! thread's own, at rest with no CLI running, as a fork is (0050). Its first follow-up continues
-//! the app's own session when the thread's CLI can, and otherwise tells a new session the
-//! conversation.
+//! `thread/importable` lists the sessions each app keeps on the host, with the Claude Code and
+//! Codex sessions that ran on it through Remote Control, driven from another device.
+//! `thread/import` makes one an archived thread: its conversation, the user's messages and the
+//! agent's replies, logged as the thread's own, at rest with no CLI running, as a fork is (0050).
+//! Its first follow-up continues the app's own session when the thread's CLI can, and otherwise
+//! tells a new session the conversation.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -23,9 +24,9 @@ pub const MAX_CHAT_MESSAGES: usize = 10_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum ImportSource {
-    /// The Claude desktop app's Claude Code sessions.
+    /// The Claude desktop app's Claude Code sessions, and Claude Code's Remote Control sessions.
     Claude,
-    /// The Codex desktop app.
+    /// The Codex and `ChatGPT` apps' Codex sessions, Remote Control's among them.
     Codex,
     /// Cursor's agent chats.
     Cursor,

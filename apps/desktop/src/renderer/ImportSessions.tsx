@@ -1,4 +1,13 @@
-import { ArrowLeft, Check, Download, FileArchive, Folder, LoaderCircle, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  Download,
+  FileArchive,
+  Folder,
+  LoaderCircle,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -11,15 +20,15 @@ import {
 
 import type { ImportSource, ImportableSession } from "../protocol/generated/protocol";
 import { readExports, type ExportPart, type ExportedChat } from "./chatExports";
-import { useConnection } from "./ConnectionStatus";
+import { useConnection, useConnections } from "./ConnectionStatus";
 import { describeError } from "./errors";
-import { localId } from "./hosts";
+import { localId, useHosts } from "./hosts";
 import { notify } from "./notifications";
 import { ClaudeLogo, CursorLogo, OpenAILogo } from "./logos";
 import { loadProviders, useProviders } from "./providers";
 import { importAccount } from "./settings/shared";
 import { age } from "./Sidebar";
-import { IconButton, segment } from "./ui";
+import { IconButton, Picker, segment } from "./ui";
 
 type App = { source: ImportSource; name: string; Logo: typeof ClaudeLogo };
 
@@ -48,89 +57,151 @@ type Item = {
   thread?: string | undefined;
 };
 
-/** Whether this computer's plxd can import, in words when it can't; `undefined` while connecting. */
-function useImport(capability: "threadImport" | "chatImport") {
-  const connection = useConnection(localId);
+/**
+ * Whether host `hostId`'s plxd can import, in words when it can't, naming it `name`; `undefined`
+ * while connecting.
+ */
+function useImport(capability: "threadImport" | "chatImport", hostId = localId, name = "") {
+  const connection = useConnection(hostId);
   const connected = connection?.status === "connected";
   const supported = connected && capability in connection.capabilities;
+  const local = hostId === localId;
   const why =
     connection?.status === "failed"
-      ? "Parallax couldn't start on this computer, so it can't import."
+      ? local
+        ? "Parallax couldn't start on this computer, so it can't import."
+        : `Parallax couldn't connect to ${name}, so it can't import.`
       : connected && !supported
-        ? "This computer's plxd can't import these yet. Update it, then try again."
+        ? `${local ? "This computer" : name}'s plxd can't import these yet. Update it, then try again.`
         : undefined;
   useEffect(() => {
     // The agents imports run on: listed here, as Settings > Threads may be the first to need them.
-    if (supported) void loadProviders(localId);
-  }, [supported]);
-  return { supported, why, providers: useProviders(localId)?.providers };
+    if (supported) void loadProviders(hostId);
+  }, [supported, hostId]);
+  return { supported, why, providers: useProviders(hostId)?.providers };
 }
 
 /**
- * This computer's past sessions from the Claude, Codex, and Cursor desktop apps (PLX-881), the
- * most recent first and filtered by app, to pick and import as archived threads
- * (`thread/importable`, `thread/import`). One already imported says so. Onboarding and Settings >
- * Threads' Import sessions show it.
+ * A computer's past sessions from the Claude, Codex, and Cursor desktop apps, and its Claude Code
+ * and Codex Remote Control sessions (PLX-881), the most recent first and filtered by app, to pick
+ * and import as archived threads on it (`thread/importable`, `thread/import`). One already
+ * imported says so. It starts on this computer, with a menu for any other connected one, and
+ * Refresh lists them again. A computer that disconnects leaves the menu, and the dialog goes back
+ * to this one. Onboarding and Settings > Threads' Import sessions show it.
  */
 export function ImportSessions({ className = "" }: { className?: string }) {
-  const { supported, why, providers } = useImport("threadImport");
+  const all = useHosts();
+  const states = useConnections(all.map((h) => h.id));
+  const hosts = all.filter((h, i) => h.id === localId || states[i]?.status === "connected");
+  const [hostId, setHostId] = useState(localId);
+  const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
+  const { supported, why, providers } = useImport("threadImport", host.id, host.name);
   const [sessions, setSessions] = useState<ImportableSession[]>();
   const [error, setError] = useState<string>();
+  const [loading, setLoading] = useState(false);
+  // The host shown, so an answer from one picked before it, or an import's reload there, is
+  // dropped.
+  const shown = useRef(host.id);
 
   const load = useCallback(async () => {
-    const answer = await window.parallax.request(localId, "thread/importable", {});
-    if ("error" in answer) setError(describeError(answer.error));
-    else setSessions(answer.result.sessions);
-  }, []);
+    const id = host.id;
+    if (shown.current !== id) return;
+    setLoading(true);
+    const answer = await window.parallax.request(id, "thread/importable", {});
+    if (shown.current !== id) return;
+    setLoading(false);
+    if ("error" in answer) {
+      setSessions(undefined);
+      setError(describeError(answer.error));
+    } else {
+      setError(undefined);
+      setSessions(answer.result.sessions);
+    }
+  }, [host.id]);
   useEffect(() => {
+    shown.current = host.id;
+    setSessions(undefined);
+    setError(undefined);
+    setLoading(false);
     if (supported) void load();
-  }, [supported, load]);
+  }, [host.id, supported, load]);
 
-  if (why) return <Notice className={className}>{why}</Notice>;
-  if (!sessions && error)
-    return (
-      <Notice className={className} alert>
+  const where = host.id === localId ? "this computer" : host.name;
+  const bar = (
+    <div className="flex items-center justify-between gap-3">
+      {hosts.length > 1 ? (
+        <span className="flex min-w-0 items-center gap-1.5 text-body text-muted-foreground">
+          Sessions on
+          <Picker
+            label="Computer"
+            value={host.id}
+            onChange={setHostId}
+            options={hosts.map((h) => ({ value: h.id, label: h.name }))}
+            className="font-medium text-foreground"
+          />
+        </span>
+      ) : (
+        <span />
+      )}
+      <IconButton label="Refresh" disabled={!supported || loading} onClick={() => void load()}>
+        <RefreshCw aria-hidden className={loading ? "animate-spin" : ""} />
+      </IconButton>
+    </div>
+  );
+  let body: ReactNode;
+  if (why) body = <Notice className="min-h-0 flex-1">{why}</Notice>;
+  else if (!sessions && error)
+    body = (
+      <Notice className="min-h-0 flex-1" alert>
         {error}
       </Notice>
     );
-  if (!sessions)
-    return (
-      <Notice className={className}>
+  else if (!sessions)
+    body = (
+      <Notice className="min-h-0 flex-1">
         <LoaderCircle aria-hidden className="mb-2 size-5 animate-spin text-faint-foreground" />
         Looking for sessions in Claude, Codex, and Cursor…
       </Notice>
     );
-  if (sessions.length === 0)
-    return (
-      <Notice className={className}>
+  else if (sessions.length === 0)
+    body = (
+      <Notice className="min-h-0 flex-1">
         <AppLogos apps={sessionApps} className="mb-3" />
-        No sessions from the Claude, Codex, or Cursor desktop apps on this computer.
+        No sessions from Claude, Codex, or Cursor on {where}.
       </Notice>
     );
+  else
+    body = (
+      <SessionList
+        key={host.id}
+        className="min-h-0 flex-1"
+        apps={sessionApps}
+        items={sessions.map((s) => ({
+          key: `${s.source}:${s.id}`,
+          source: s.source,
+          title: s.title,
+          folder: s.cwd?.split(/[\\/]/).filter(Boolean).pop(),
+          at: s.updatedAt,
+          thread: s.thread,
+        }))}
+        importItem={async (item) => {
+          const session = sessions.find((s) => `${s.source}:${s.id}` === item.key)!;
+          const account = importAccount(session.source, providers);
+          const answer = await window.parallax.request(host.id, "thread/import", {
+            source: session.source,
+            id: session.id,
+            ...(account && { account }),
+          });
+          return "error" in answer ? describeError(answer.error) : undefined;
+        }}
+        onImported={load}
+      />
+    );
   return (
-    <SessionList
-      className={className}
-      apps={sessionApps}
-      items={sessions.map((s) => ({
-        key: `${s.source}:${s.id}`,
-        source: s.source,
-        title: s.title,
-        folder: s.cwd?.split(/[\\/]/).filter(Boolean).pop(),
-        at: s.updatedAt,
-        thread: s.thread,
-      }))}
-      importItem={async (item) => {
-        const session = sessions.find((s) => `${s.source}:${s.id}` === item.key)!;
-        const account = importAccount(session.source, providers);
-        const answer = await window.parallax.request(localId, "thread/import", {
-          source: session.source,
-          id: session.id,
-          ...(account && { account }),
-        });
-        return "error" in answer ? describeError(answer.error) : undefined;
-      }}
-      onImported={load}
-    />
+    <div className={`flex min-h-0 flex-col gap-3 ${className}`}>
+      {bar}
+      {body}
+    </div>
   );
 }
 
@@ -617,7 +688,7 @@ const imports = {
   sessions: {
     label: "Import sessions…",
     title: "Import sessions",
-    line: "Bring past sessions from the Claude, Codex, and Cursor apps into Archived as threads.",
+    line: "Bring past sessions from the Claude, Codex, and Cursor apps and Remote Control into Archived as threads.",
     apps: sessionApps,
     List: ImportSessions,
   },

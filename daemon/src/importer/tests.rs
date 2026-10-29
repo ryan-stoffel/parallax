@@ -1,6 +1,8 @@
 use parallax_protocol::ImportSource;
 
-use super::{Message, Session, claude_messages, run_id};
+use std::fs;
+
+use super::{Message, Session, claude_messages, claude_remote_session, run_id};
 
 fn user(text: &str) -> Message {
     Message::User(text.to_owned())
@@ -56,4 +58,69 @@ fn a_session_imports_under_one_run_id() {
         ..session("local_1")
     };
     assert_ne!(run_id(&other_app), Some(id));
+}
+
+#[test]
+fn a_claude_code_session_lists_only_when_it_ran_with_remote_control() {
+    let dir = tempfile::tempdir().unwrap();
+    let write = |name: &str, lines: &[&str]| {
+        let path = dir.path().join(name);
+        fs::write(&path, lines.join("\n")).unwrap();
+        path
+    };
+    let start = r#"{"type":"user","entrypoint":"cli","cwd":"/src/web","timestamp":"2026-10-20T10:00:00Z","message":{"content":"Fix the login redirect\nand more"}}"#;
+    let reply = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Looking."}]}}"#;
+
+    let bridged = write(
+        "a.jsonl",
+        &[
+            start,
+            r#"{"type":"bridge-session","sessionId":"a","bridgeSessionId":"session_01X","lastSequenceNum":3}"#,
+            reply,
+            r#"{"type":"ai-title","aiTitle":"Login redirect","sessionId":"a"}"#,
+        ],
+    );
+    let session = claude_remote_session(&bridged).unwrap();
+    assert_eq!(session.id, "a");
+    assert_eq!(session.resume.as_deref(), Some("a"));
+    assert_eq!(session.title, "Login redirect");
+    assert_eq!(session.cwd.as_deref(), Some("/src/web"));
+    assert_eq!(session.started, "2026-10-20T10:00:00Z".parse().unwrap());
+
+    // Remote Control turned off before it connected names no claude.ai session.
+    let cleared = write(
+        "b.jsonl",
+        &[
+            start,
+            r#"{"type":"bridge-session","sessionId":"b","bridgeSessionId":"","lastSequenceNum":0}"#,
+        ],
+    );
+    assert_eq!(claude_remote_session(&cleared), None);
+    assert_eq!(
+        claude_remote_session(&write("c.jsonl", &[start, reply])),
+        None
+    );
+
+    // A session `claude remote-control` served keeps its claude.ai sync point beside it, and a
+    // name set with /rename wins.
+    let served = write(
+        "d.jsonl",
+        &[
+            &start.replace(r#""cli""#, r#""sdk-cli""#),
+            r#"{"type":"custom-title","customTitle":"Ship it","sessionId":"d"}"#,
+        ],
+    );
+    fs::create_dir(dir.path().join("d")).unwrap();
+    fs::write(dir.path().join("d/ccr-tip.json"), r#"{"eventId":"e1"}"#).unwrap();
+    assert_eq!(claude_remote_session(&served).unwrap().title, "Ship it");
+
+    // An Agent SDK app's transcript isn't read through.
+    let sdk = write(
+        "e.jsonl",
+        &[
+            &start.replace(r#""cli""#, r#""sdk-ts""#),
+            r#"{"type":"bridge-session","sessionId":"e","bridgeSessionId":"session_01Y","lastSequenceNum":1}"#,
+        ],
+    );
+    assert_eq!(claude_remote_session(&sdk), None);
 }
