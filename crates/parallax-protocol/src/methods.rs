@@ -683,9 +683,9 @@ method_table! {
         /// pull request's head, each log read from GitHub once per head and job. Gated on
         /// `prWatch`.
         PrFailureLog = "pr/failureLog": PrFailureLogParams => PrFailureLogResult;
-        /// `pr/uploadMedia` (PLX-1020): commits images and videos to the pull request's
-        /// repository's `pr-media` branch, one upload at a time per host, and returns links pinned
-        /// to the commit. Bytes uploaded to the repository before reuse their link.
+        /// `pr/uploadMedia` (PLX-1020): commits images and videos to the host's secret media gist
+        /// (PLX-1137), one upload at a time per host, and returns links pinned to each file's
+        /// blob. Bytes uploaded to the gist before reuse their link.
         PrUploadMedia = "pr/uploadMedia": crate::PrUploadMediaParams => crate::PrUploadMediaResult;
         /// `pr/sharedDiff` (PLX-1021): a GitHub pull request's unified diff, as `pr/diff` reads
         /// it, read once per head and shared by every run that asks. It needn't be linked. Gated

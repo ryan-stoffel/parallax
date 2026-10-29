@@ -7,10 +7,12 @@ use parallax_protocol::PrMediaFile;
 use tokio::time::Instant;
 
 use super::{
-    BUDGET, Limit, QUEUE_WAIT, backoff, branch_missing, check, embed, limit, raw_url, repository,
-    turn, upload_all,
+    BUDGET, Gist, Limit, QUEUE_WAIT, backoff, check, embed, limit, media_name, parse_gist, put,
+    repository, turn, upload_all,
 };
-use crate::worktree::PrError;
+use crate::backend::process::{Environment, Launcher};
+use crate::paths::DataDir;
+use crate::worktree::{PrError, WorktreeManager};
 
 fn file(path: &Path, caption: Option<&str>) -> PrMediaFile {
     PrMediaFile {
@@ -30,7 +32,7 @@ fn secondary() -> PrError {
 }
 
 #[tokio::test]
-async fn the_same_bytes_reuse_their_link_without_a_github_call_or_a_wait() {
+async fn the_same_bytes_reuse_their_link_without_a_push_or_a_wait() {
     let dir = tempfile::tempdir().unwrap();
     let index = dir.path().join("pr-media.json");
     let shot = dir.path().join("Settings page.png");
@@ -38,36 +40,34 @@ async fn the_same_bytes_reuse_their_link_without_a_github_call_or_a_wait() {
     std::fs::write(&shot, b"png bytes").unwrap();
     std::fs::write(&again, b"png bytes").unwrap();
     let mut puts = Vec::new();
-    let mut put = |path: String, _: Vec<u8>| {
-        puts.push(path);
-        ready(Ok("abc123".to_owned()))
+    let mut put = |name: String, _: Vec<u8>| {
+        let url = format!("https://gist/{name}");
+        puts.push(name);
+        ready(Ok(url))
     };
     let turns = Cell::new(0);
 
     let first = upload_all(
         &index,
-        "Ryan/Parallax",
+        "ryan/abc",
         vec![check(&file(&shot, Some("After"))).unwrap()],
-        "20261025-120000",
         async { counted(&turns).await },
         &mut put,
     )
     .await
     .unwrap();
-    let path = "pr-media/20261025-120000-d013614d-Settings-page.png";
-    let url = format!("https://raw.githubusercontent.com/Ryan/Parallax/abc123/{path}");
+    let url = "https://gist/d013614dc14a-Settings-page.png";
     assert_eq!(first[0].url, url);
     assert_eq!(first[0].markdown, format!("![After]({url})"));
     assert!(!first[0].reused);
     assert_eq!(turns.get(), 1);
 
-    // Another file with the same bytes, read from the saved index, in the same repository
-    // however it is cased: no upload, and no wait for the queue.
+    // Another file with the same bytes, read from the saved index, for the same gist: no upload,
+    // and no wait for the queue.
     let second = upload_all(
         &index,
-        "ryan/parallax",
+        "ryan/abc",
         vec![check(&file(&again, None)).unwrap()],
-        "20261025-130000",
         async { counted(&turns).await },
         &mut put,
     )
@@ -78,18 +78,132 @@ async fn the_same_bytes_reuse_their_link_without_a_github_call_or_a_wait() {
     assert!(second[0].reused);
     assert_eq!(turns.get(), 1);
 
-    // Another repository uploads its own copy.
+    // Another gist gets its own copy.
     upload_all(
         &index,
-        "ryan/other",
+        "ryan/def",
         vec![check(&file(&again, None)).unwrap()],
-        "20261025-130000",
         async { counted(&turns).await },
         &mut put,
     )
     .await
     .unwrap();
-    assert_eq!(puts, [path, "pr-media/20261025-130000-d013614d-copy.png"]);
+    assert_eq!(
+        puts,
+        ["d013614dc14a-Settings-page.png", "d013614dc14a-copy.png"]
+    );
+}
+
+fn run(dir: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "git {args:?}: {output:?}");
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// A bare repository standing in for a gist, with a README on `main`, and a checkout of it.
+fn fake_gist(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let remote = dir.join("gist.git");
+    let other = dir.join("other");
+    std::fs::create_dir(&remote).unwrap();
+    run(
+        &remote,
+        &["init", "--quiet", "--bare", "--initial-branch=main"],
+    );
+    // As GitHub does, so the clone is blobless.
+    run(&remote, &["config", "uploadpack.allowFilter", "true"]);
+    run(
+        dir,
+        &["clone", "--quiet", &remote.to_string_lossy(), "other"],
+    );
+    std::fs::write(other.join("README.md"), "# Media\n").unwrap();
+    run(&other, &["add", "README.md"]);
+    run(
+        &other,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--quiet",
+            "-m",
+            "init",
+        ],
+    );
+    run(&other, &["push", "--quiet", "origin", "HEAD:main"]);
+    (remote, other)
+}
+
+#[tokio::test]
+async fn files_are_committed_to_the_gist_on_top_of_other_uploads() {
+    let dir = tempfile::tempdir().unwrap();
+    let (remote, other) = fake_gist(dir.path());
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let gh = WorktreeManager::new(
+        Launcher::new(DataDir::new(&data).unwrap(), Environment::inherited()),
+        &data,
+    );
+    let clone = data.join("pr-media-gist.git");
+    // file://, not a path, so git clones through upload-pack and honors the filter.
+    let url = format!("file://{}", remote.display());
+    std::fs::write(dir.path().join("one"), "one").unwrap();
+    let expected = run(dir.path(), &["hash-object", "one"]);
+
+    let blob = put(&gh, &clone, &url, "a-shot.png", b"one".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(blob, expected.trim());
+    let tree = run(&remote, &["ls-tree", "main"]);
+    assert!(tree.contains(&format!("blob {blob}\ta-shot.png")), "{tree}");
+    assert!(
+        tree.contains("README.md"),
+        "the files already there stay: {tree}"
+    );
+    let missing = run(
+        &clone,
+        &["rev-list", "--objects", "--missing=print", "main"],
+    );
+    let readme = run(&remote, &["rev-parse", "main:README.md"]);
+    assert!(
+        missing.contains(&format!("?{}", readme.trim())),
+        "the clone never fetches the files already there: {missing}"
+    );
+
+    // The same file again needs no commit.
+    let head = run(&remote, &["rev-parse", "main"]);
+    put(&gh, &clone, &url, "a-shot.png", b"one".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(run(&remote, &["rev-parse", "main"]), head);
+
+    // Another uploader pushed meanwhile: this one fetches its commit and builds on it.
+    run(&other, &["pull", "--quiet", "origin", "main"]);
+    std::fs::write(other.join("b-other.png"), "two").unwrap();
+    run(&other, &["add", "b-other.png"]);
+    run(
+        &other,
+        &[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--quiet",
+            "-m",
+            "b",
+        ],
+    );
+    run(&other, &["push", "--quiet", "origin", "HEAD:main"]);
+    put(&gh, &clone, &url, "c-third.png", b"three".to_vec())
+        .await
+        .unwrap();
+    let tree = run(&remote, &["ls-tree", "--name-only", "main"]);
+    assert_eq!(tree, "README.md\na-shot.png\nb-other.png\nc-third.png\n");
 }
 
 #[tokio::test(start_paused = true)]
@@ -133,11 +247,37 @@ async fn a_queued_caller_and_a_backoff_stay_inside_the_budget() {
 }
 
 #[test]
-fn links_are_raw_and_pinned_to_the_commit() {
+fn links_are_pinned_to_the_blob_in_the_gist() {
+    let gist = parse_gist("ryan-stoffel/066c6f34").unwrap();
     assert_eq!(
-        raw_url("ryan/parallax", "0123abc", "pr-media/x.gif"),
-        "https://raw.githubusercontent.com/ryan/parallax/0123abc/pr-media/x.gif"
+        gist,
+        Gist {
+            owner: "ryan-stoffel".to_owned(),
+            id: "066c6f34".to_owned()
+        }
     );
+    assert_eq!(gist.key(), "ryan-stoffel/066c6f34");
+    assert_eq!(gist.remote(), "https://gist.github.com/066c6f34.git");
+    assert_eq!(
+        gist.raw_url("0123abc", "d013614dc14a-x.gif"),
+        "https://gist.githubusercontent.com/ryan-stoffel/066c6f34/raw/0123abc/d013614dc14a-x.gif"
+    );
+    assert_eq!(
+        media_name("d013614dc14a0000", "x.gif"),
+        "d013614dc14a-x.gif"
+    );
+    for bad in [
+        "",
+        "ryan",
+        "ryan/",
+        "/066c",
+        "ryan/066c/x",
+        "ry an/066c",
+        "ryan/xyz",
+        "../x/066c",
+    ] {
+        assert_eq!(parse_gist(bad), None, "{bad:?}");
+    }
     assert_eq!(
         embed("Demo", "https://u/x.gif", false),
         "![Demo](https://u/x.gif)"
@@ -203,8 +343,4 @@ fn gh_errors_are_classified() {
         Some(Limit::Secondary)
     );
     assert_eq!(limit("gh: Not Found (HTTP 404)"), None);
-    assert!(branch_missing(
-        "`gh api -X` failed: gh: Branch pr-media not found (HTTP 404)"
-    ));
-    assert!(!branch_missing("gh: Not Found (HTTP 404)"));
 }

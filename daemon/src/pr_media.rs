@@ -1,18 +1,19 @@
-//! `pr/uploadMedia` (PLX-1020): commits screenshots and recordings for pull request bodies, as the
-//! `upload-media-pr` skill's `upload.sh` did, so agents stop spending the shared GitHub quota on
-//! parallel, retried, and repeated uploads.
+//! `pr/uploadMedia` (PLX-1020): uploads screenshots and recordings for pull request bodies, so
+//! agents stop spending the shared GitHub quota on parallel, retried, and repeated uploads.
 //!
-//! Storage matches the script, so its embeds keep working: each file is one contents API commit
-//! to the repository's [`BRANCH`] branch, created from the default branch on first use, at
-//! `pr-media/<YYYYMMDD-HHMMSS>-<hash>-<name>`. The link is
-//! `raw.githubusercontent.com/<repo>/<commit>/<path>`, pinned to the commit; the script's
-//! `blob/...?raw=true` links render broken. Raw links carry no sign-in, so they don't render for a
-//! private repository.
+//! Files go to the host's secret media gist (PLX-1137), never to a repository branch. The data
+//! folder's [`GIST`] names it as `owner/id`; when it is missing, the first upload creates the gist
+//! with `gh gist create` and records it. A gist holds binary files only through git, so plxd keeps
+//! a bare, blobless clone of it in [`CLONE`] and adds each file with git plumbing, never checking
+//! out the files already there, then pushes with gh's sign-in. A file is stored as
+//! `<sha256 prefix>-<name>`, as the `upload-media` skill's `upload.sh` stores it, and linked as
+//! `gist.githubusercontent.com/<owner>/<id>/raw/<blob>/<name>`, pinned to its git blob. A secret
+//! gist is unlisted but open to anyone with a link, so its links render in any repository's pull
+//! requests, private ones included.
 //!
-//! The index in the data folder's [`INDEX`] maps each repository's uploaded SHA-256s to their
-//! links, so the same bytes again cost no GitHub call and never wait, across restarts. A hit isn't
-//! checked against GitHub: if someone deletes the `pr-media` branch, its links break and the index
-//! keeps handing them out until [`INDEX`] is deleted.
+//! The index in the data folder's [`INDEX`] maps each gist's uploaded SHA-256s to their links, so
+//! the same bytes again cost no push and never wait, across restarts. Entries for other gists, or
+//! for the `pr-media` branches uploads used to go to, are never handed out.
 //!
 //! Uploads wait their turn in [`QUEUE`], one at a time per host. plxd drops a connection silent
 //! for 90 s and `plxd mcp` sends nothing while a call waits, so a call ends within [`BUDGET`]: it
@@ -32,9 +33,6 @@ use tracing::warn;
 use crate::server::Daemon;
 use crate::worktree::{PrError, WorktreeManager, github_pr_urls};
 
-/// The branch, and the folder on it, that the files go to, as `upload.sh` uses.
-const BRANCH: &str = "pr-media";
-
 /// The largest file uploaded.
 const MAX_BYTES: u64 = 25 * 1024 * 1024;
 
@@ -53,14 +51,28 @@ const QUEUE_WAIT: Duration = Duration::from_secs(40);
 /// if it ends inside the call's [`BUDGET`].
 const BACKOFF: [Duration; 2] = [Duration::from_secs(10), Duration::from_secs(20)];
 
-/// The dedupe index's file in the data folder: `{ "<owner>/<repo>": { "<sha256>": "<url>" } }`.
+/// The dedupe index's file in the data folder: `{ "<owner>/<gist id>": { "<sha256>": "<url>" } }`.
 const INDEX: &str = "pr-media.json";
+
+/// The data folder's file naming the host's media gist as `owner/id`.
+const GIST: &str = "pr-media-gist";
+
+/// The data folder's bare, blobless clone of the media gist.
+const CLONE: &str = "pr-media-gist.git";
+
+/// Who plxd's commits to the gist are by. The push is still the gh user's.
+const AUTHOR: [&str; 4] = [
+    "-c",
+    "user.name=Parallax",
+    "-c",
+    "user.email=noreply@parallax.codes",
+];
 
 /// The host's upload queue: held from a call's first upload to its end, so uploads run one at a
 /// time.
 static QUEUE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// Repository, lowercase, to SHA-256 to link.
+/// Gist, as `owner/id`, to SHA-256 to link.
 type Index = BTreeMap<String, BTreeMap<String, String>>;
 
 /// A file checked for upload.
@@ -68,10 +80,37 @@ type Index = BTreeMap<String, BTreeMap<String, String>>;
 struct Media {
     /// The path as asked.
     asked: String,
-    /// Its name, reduced to `[A-Za-z0-9._-]` so the path needs no URL encoding.
+    /// Its name, reduced to `[A-Za-z0-9._-]` so the link needs no URL encoding.
     name: String,
     caption: String,
     video: bool,
+}
+
+/// The host's media gist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Gist {
+    owner: String,
+    id: String,
+}
+
+impl Gist {
+    /// `owner/id`, as [`GIST`] holds it and [`Index`] keys it.
+    fn key(&self) -> String {
+        format!("{}/{}", self.owner, self.id)
+    }
+
+    /// Its git remote.
+    fn remote(&self) -> String {
+        format!("https://gist.github.com/{}.git", self.id)
+    }
+
+    /// The link to file `name`, pinned to its git `blob`.
+    fn raw_url(&self, blob: &str, name: &str) -> String {
+        format!(
+            "https://gist.githubusercontent.com/{}/{}/raw/{blob}/{name}",
+            self.owner, self.id
+        )
+    }
 }
 
 /// `pr/uploadMedia`: checks every file, then answers each from the index or uploads it, within
@@ -81,9 +120,12 @@ pub(crate) async fn upload(
     params: PrUploadMediaParams,
 ) -> Result<PrUploadMediaResult, ErrorObject> {
     let deadline = Instant::now() + BUDGET;
-    let repo = repository(&params.url).ok_or_else(|| {
-        ErrorObject::invalid_params(format!("{:?} is not a GitHub pull request URL", params.url))
-    })?;
+    if repository(&params.url).is_none() {
+        return Err(ErrorObject::invalid_params(format!(
+            "{:?} is not a GitHub pull request URL",
+            params.url
+        )));
+    }
     if params.files.is_empty() {
         return Err(ErrorObject::invalid_params("pass at least one file"));
     }
@@ -94,11 +136,24 @@ pub(crate) async fn upload(
         .collect::<Result<Vec<_>, _>>()
         .map_err(ErrorObject::invalid_params)?;
     let gh = daemon.agents.worktrees();
-    let index = daemon.data_dir.root().join(INDEX);
-    let now = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string();
-    let uploads = upload_all(&index, &repo, files, &now, turn(&QUEUE), |path, bytes| {
-        put(gh, &repo, path, bytes, deadline)
-    });
+    let root = daemon.data_dir.root();
+    let index = root.join(INDEX);
+    let clone = root.join(CLONE);
+    let uploads = async {
+        let gist = host_gist(gh, root, deadline).await?;
+        let (gist, clone) = (&gist, &clone);
+        upload_all(
+            &index,
+            &gist.key(),
+            files,
+            turn(&QUEUE),
+            |name, bytes| async move {
+                let blob = put(gh, clone, &gist.remote(), &name, bytes).await?;
+                Ok(gist.raw_url(&blob, &name))
+            },
+        )
+        .await
+    };
     let files = tokio::time::timeout_at(deadline, uploads)
         .await
         .unwrap_or_else(|_| {
@@ -123,15 +178,15 @@ async fn turn(queue: &tokio::sync::Mutex<()>) -> Result<tokio::sync::MutexGuard<
         })
 }
 
-/// Answers each of `files` from the index at `index` when it has the same bytes for `repo`, and
-/// otherwise, once `turn` is had, uploads it with `put`, which commits bytes at a path and returns
-/// the commit. A call whose files are all known never waits for `turn`. Each upload is recorded as
-/// soon as `put` returns, so a failure or cancel part way keeps the ones before it.
+/// Answers each of `files` from the index at `index` when it has the same bytes for the gist
+/// `key`, and otherwise, once `turn` is had, uploads it with `put`, which stores bytes under a
+/// file name and returns its link. A call whose files are all known never waits for `turn`. Each
+/// upload is recorded as soon as `put` returns, so a failure or cancel part way keeps the ones
+/// before it.
 async fn upload_all<T, F>(
     index: &Path,
-    repo: &str,
+    key: &str,
     files: Vec<Media>,
-    now: &str,
     turn: impl Future<Output = Result<T, PrError>>,
     mut put: impl FnMut(String, Vec<u8>) -> F,
 ) -> Result<Vec<PrMediaUploaded>, PrError>
@@ -139,7 +194,7 @@ where
     F: Future<Output = Result<String, PrError>>,
 {
     let mut known = load(index);
-    let key = repo.to_ascii_lowercase();
+    let key = key.to_owned();
     let mut turn = Some(turn);
     let mut held = None;
     let mut uploaded = Vec::with_capacity(files.len());
@@ -162,9 +217,7 @@ where
         let url = if let Some(url) = hit {
             url
         } else {
-            let path = media_path(now, &hash, &media.name);
-            let commit = put(path.clone(), bytes).await?;
-            let url = raw_url(repo, &commit, &path);
+            let url = put(media_name(&hash, &media.name), bytes).await?;
             known
                 .entry(key.clone())
                 .or_default()
@@ -256,15 +309,10 @@ fn repository(url: &str) -> Option<String> {
     Some(format!("{}/{}", parts.next()?, parts.next()?))
 }
 
-/// Where a file goes on [`BRANCH`]: `upload.sh`'s `pr-media/<time>-<name>`, with the hash's
-/// first 8 digits between, so two same-named files in one second don't collide.
-fn media_path(now: &str, hash: &str, name: &str) -> String {
-    format!("{BRANCH}/{now}-{}-{name}", &hash[..8])
-}
-
-/// The file at `path` in `repo`, pinned to `commit`.
-fn raw_url(repo: &str, commit: &str, path: &str) -> String {
-    format!("https://raw.githubusercontent.com/{repo}/{commit}/{path}")
+/// A file's name in the gist: its SHA-256's first 12 digits, then its own name, as `upload.sh`
+/// names it, so different files never share a name.
+fn media_name(hash: &str, name: &str) -> String {
+    format!("{}-{name}", &hash[..12])
 }
 
 /// The Markdown to paste: an image embed, or for a video a link, since GitHub plays only the
@@ -294,61 +342,131 @@ fn save(path: &Path, index: &Index) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Commits `bytes` at `path` on `repo`'s [`BRANCH`] with one contents API call, creating the
-/// branch from the default branch's head first if GitHub says it is missing. Returns the commit.
+/// The gist recorded in `root`'s [`GIST`], or else one made now. Making one waits for a turn in
+/// [`QUEUE`] and reads [`GIST`] again, so two first uploads make one gist.
+async fn host_gist(gh: &WorktreeManager, root: &Path, deadline: Instant) -> Result<Gist, PrError> {
+    let path = root.join(GIST);
+    if let Some(gist) = read_gist(&path) {
+        return Ok(gist);
+    }
+    let _turn = turn(&QUEUE).await?;
+    if let Some(gist) = read_gist(&path) {
+        return Ok(gist);
+    }
+    let failed =
+        |error: std::io::Error| PrError::Gh(format!("could not make the media gist: {error}"));
+    let folder = tempfile::tempdir().map_err(failed)?;
+    let readme = folder.path().join("README.md");
+    std::fs::write(
+        &readme,
+        "# Pull request media\n\nScreenshots and recordings Parallax uploaded for pull requests.\n",
+    )
+    .map_err(failed)?;
+    let readme = readme.to_string_lossy();
+    let args = ["gist", "create", "--desc", "Pull request media", &readme];
+    let made = call(gh, &args, deadline).await?;
+    let gist = made
+        .lines()
+        .rev()
+        .find_map(|line| parse_gist(line.trim().strip_prefix("https://gist.github.com/")?))
+        .ok_or_else(|| PrError::Gh(format!("gh gist create printed no gist: {made}")))?;
+    std::fs::write(&path, format!("{}\n", gist.key())).map_err(failed)?;
+    Ok(gist)
+}
+
+/// The gist `owner/id` at `path` names, if it holds one.
+fn read_gist(path: &Path) -> Option<Gist> {
+    parse_gist(std::fs::read_to_string(path).ok()?.trim())
+}
+
+/// `owner/id`, checked to be a GitHub login and a hex gist id, so neither can reach a URL or a git
+/// argument as anything else.
+fn parse_gist(text: &str) -> Option<Gist> {
+    let (owner, id) = text.split_once('/')?;
+    let login = !owner.is_empty() && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    let hex = !id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit());
+    (login && hex).then(|| Gist {
+        owner: owner.to_owned(),
+        id: id.to_owned(),
+    })
+}
+
+/// Adds `bytes` to the gist at `remote` as file `name` and returns its blob: in `clone`, a bare,
+/// blobless clone made on first use, it fetches the gist's branch, builds a commit on it from the
+/// tree alone, and pushes it. A push another uploader beat is tried once more on the new head.
+/// A file already there with the same bytes needs no commit.
 async fn put(
     gh: &WorktreeManager,
-    repo: &str,
-    path: String,
+    clone: &Path,
+    remote: &str,
+    name: &str,
     bytes: Vec<u8>,
-    deadline: Instant,
 ) -> Result<String, PrError> {
     let failed =
         |error: std::io::Error| PrError::Gh(format!("could not write the upload: {error}"));
-    // The body goes through a file: a 25 MB file's base64 is past any argument limit.
-    let mut body = tempfile::NamedTempFile::new().map_err(failed)?;
-    serde_json::to_writer(
-        &mut body,
-        &serde_json::json!({
-            "message": format!("pr media: {path}"),
-            "branch": BRANCH,
-            "content": data_encoding::BASE64.encode(&bytes),
-        }),
-    )
-    .map_err(|error| failed(error.into()))?;
-    body.flush().map_err(failed)?;
-    let endpoint = format!("repos/{repo}/contents/{path}");
-    let input = body.path().to_string_lossy();
-    let args = [
-        "api",
-        "-X",
-        "PUT",
-        &endpoint,
-        "--input",
-        &input,
-        "--jq",
-        ".commit.sha",
-    ];
-    let commit = match call(gh, &args, deadline).await {
-        Err(error) if branch_missing(&error.to_string()) => {
-            create_branch(gh, repo, deadline).await?;
-            call(gh, &args, deadline).await?
+    if !clone.join("HEAD").is_file() {
+        let parent = clone.parent().unwrap_or(Path::new("."));
+        let _ = std::fs::remove_dir_all(clone);
+        let target = clone.to_string_lossy();
+        let args = [
+            "clone",
+            "--bare",
+            "--quiet",
+            "--filter=blob:none",
+            remote,
+            &target,
+        ];
+        gh.gist_git(parent, &args).await?;
+    }
+    let branch = gh
+        .gist_git(clone, &["symbolic-ref", "--short", "HEAD"])
+        .await?;
+    let branch = branch.trim();
+    let mut file = tempfile::NamedTempFile::new_in(clone).map_err(failed)?;
+    file.write_all(&bytes).map_err(failed)?;
+    let path = file.path().to_string_lossy().into_owned();
+    let blob = gh.gist_git(clone, &["hash-object", "-w", &path]).await?;
+    let blob = blob.trim();
+    let fetch = format!("+{branch}:{branch}");
+    let entry = format!("100644,{blob},{name}");
+    let message = format!("Add {name}");
+    let mut tries = 2;
+    loop {
+        tries -= 1;
+        gh.gist_git(clone, &["fetch", "--quiet", "origin", &fetch])
+            .await?;
+        if gh
+            .gist_git(clone, &["ls-tree", branch, "--", name])
+            .await?
+            .contains(blob)
+        {
+            return Ok(blob.to_owned());
         }
-        answer => answer?,
-    };
-    Ok(commit.trim().to_owned())
-}
-
-/// Creates [`BRANCH`] at the head of `repo`'s default branch. One made meanwhile is fine.
-async fn create_branch(gh: &WorktreeManager, repo: &str, deadline: Instant) -> Result<(), PrError> {
-    let commits = format!("repos/{repo}/commits/HEAD");
-    let head = call(gh, &["api", &commits, "--jq", ".sha"], deadline).await?;
-    let refs = format!("repos/{repo}/git/refs");
-    let branch = format!("ref=refs/heads/{BRANCH}");
-    let sha = format!("sha={}", head.trim());
-    match call(gh, &["api", &refs, "-f", &branch, "-f", &sha], deadline).await {
-        Err(error) if error.to_string().contains("already exists") => Ok(()),
-        created => created.map(drop),
+        gh.gist_git(clone, &["read-tree", branch]).await?;
+        gh.gist_git(clone, &["update-index", "--add", "--cacheinfo", &entry])
+            .await?;
+        // Without --missing-ok, write-tree checks every blob and fetches the whole gist.
+        let tree = gh.gist_git(clone, &["write-tree", "--missing-ok"]).await?;
+        let mut commit = AUTHOR.to_vec();
+        commit.extend(["commit-tree", tree.trim(), "-p", branch, "-m", &message]);
+        let commit = gh.gist_git(clone, &commit).await?;
+        let commit = commit.trim();
+        let refspec = format!("{commit}:refs/heads/{branch}");
+        match gh
+            .gist_git(clone, &["push", "--quiet", "origin", &refspec])
+            .await
+        {
+            Ok(_) => {
+                gh.gist_git(
+                    clone,
+                    &["update-ref", &format!("refs/heads/{branch}"), commit],
+                )
+                .await?;
+                return Ok(blob.to_owned());
+            }
+            Err(error) if tries == 0 => return Err(error),
+            Err(error) => warn!(%error, "another upload moved the media gist; trying again"),
+        }
     }
 }
 
@@ -429,12 +547,6 @@ pub(crate) fn limit(error: &str) -> Option<Limit> {
     } else {
         None
     }
-}
-
-/// Whether gh's error says [`BRANCH`] doesn't exist, as the contents API answers before the first
-/// upload to a repository.
-fn branch_missing(error: &str) -> bool {
-    error.contains(&format!("Branch {BRANCH} not found"))
 }
 
 #[cfg(test)]

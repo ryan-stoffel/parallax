@@ -870,9 +870,9 @@ export type ParallaxRequests = {
 	 */
 	"pr/failureLog": { params: PrFailureLogParams, result: PrFailureLogResult },
 	/**
-	 * `pr/uploadMedia` (PLX-1020): commits images and videos to the pull request's
-	 * repository's `pr-media` branch, one upload at a time per host, and returns links pinned
-	 * to the commit. Bytes uploaded to the repository before reuse their link.
+	 * `pr/uploadMedia` (PLX-1020): commits images and videos to the host's secret media gist
+	 * (PLX-1137), one upload at a time per host, and returns links pinned to each file's
+	 * blob. Bytes uploaded to the gist before reuse their link.
 	 */
 	"pr/uploadMedia": { params: PrUploadMediaParams, result: PrUploadMediaResult },
 	/**
@@ -9666,7 +9666,7 @@ export type PrFailureLog = {
  */
 export type PrUploadMediaParams = {
 	/**
-	 * A GitHub pull request URL. The files go to its repository.
+	 * The GitHub pull request URL the files are for.
 	 */
 	url: string,
 	/**
@@ -9708,7 +9708,7 @@ export type PrMediaUploaded = {
 	 */
 	path: string,
 	/**
-	 * `https://raw.githubusercontent.com/<owner>/<repo>/<commit>/<path>`.
+	 * `https://gist.githubusercontent.com/<owner>/<gist id>/raw/<blob>/<name>`.
 	 */
 	url: string,
 	/**

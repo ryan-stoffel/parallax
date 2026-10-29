@@ -220,6 +220,24 @@ impl WorktreeManager {
         self.view_pr(url).await
     }
 
+    /// Runs `git args` in `cwd` for the pull request media gist (PLX-1137) and returns its stdout,
+    /// with the network timeout and `gh auth git-credential` as gist.github.com's only credential
+    /// helper, so a clone or push uses gh's sign-in and never prompts. A non-zero exit is a
+    /// [`PrError`].
+    pub(crate) async fn gist_git(&self, cwd: &Path, args: &[&str]) -> Result<String, PrError> {
+        const HELPER: &str = "credential.https://gist.github.com.helper";
+        let reset = format!("{HELPER}=");
+        let gh = format!("{HELPER}=!gh auth git-credential");
+        let all: Vec<&str> = ["-c", &reset, "-c", &gh]
+            .into_iter()
+            .chain(args.iter().copied())
+            .collect();
+        self.run_git_for(cwd, &all, NETWORK_TIMEOUT)
+            .await
+            .and_then(|output| output.ok(cwd, &all))
+            .map_err(|error| PrError::Gh(error.to_string()))
+    }
+
     /// Runs `gh args` in `repo_root` and returns its stdout, turning a missing `gh`, a sign-in
     /// it needs, and any other failure into a [`PrError`].
     pub(crate) async fn gh(&self, repo_root: &Path, args: &[&str]) -> Result<String, PrError> {

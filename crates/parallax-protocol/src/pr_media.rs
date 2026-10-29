@@ -1,6 +1,6 @@
 //! `pr/uploadMedia` (PLX-1020), behind the `prWatch` capability: plxd commits screenshots and
-//! recordings to a repository's `pr-media` branch, one upload at a time per host, and answers
-//! with links pinned to the commit and Markdown to paste into a pull request's body.
+//! recordings to the host's secret media gist (PLX-1137), one upload at a time per host, and
+//! answers with links pinned to each file's blob and Markdown to paste into a pull request's body.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -9,7 +9,7 @@ use ts_rs::TS;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PrUploadMediaParams {
-    /// A GitHub pull request URL. The files go to its repository.
+    /// The GitHub pull request URL the files are for.
     pub url: String,
     /// The files, in order.
     pub files: Vec<PrMediaFile>,
@@ -41,7 +41,7 @@ pub struct PrUploadMediaResult {
 pub struct PrMediaUploaded {
     /// The path asked for.
     pub path: String,
-    /// `https://raw.githubusercontent.com/<owner>/<repo>/<commit>/<path>`.
+    /// `https://gist.githubusercontent.com/<owner>/<gist id>/raw/<blob>/<name>`.
     pub url: String,
     /// `![caption](url)` for an image, `[caption](url)` for a video.
     pub markdown: String,

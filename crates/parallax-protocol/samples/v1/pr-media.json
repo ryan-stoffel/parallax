@@ -18,14 +18,14 @@
       "files": [
         {
           "path": "/Users/ryan/shots/settings.png",
-          "url": "https://raw.githubusercontent.com/ryan-stoffel/parallax/17e2526c30dea6dd42eca5c642dc1789f99504c2/pr-media/20261025-120000-d013614d-settings.png",
-          "markdown": "![Settings page after the fix](https://raw.githubusercontent.com/ryan-stoffel/parallax/17e2526c30dea6dd42eca5c642dc1789f99504c2/pr-media/20261025-120000-d013614d-settings.png)",
+          "url": "https://gist.githubusercontent.com/ryan-stoffel/066c6f34ff254c7c239767d21a0df91e/raw/2c5c9fd1461d4525fb5b45dc0dccdf365688c334/d013614dc14a-settings.png",
+          "markdown": "![Settings page after the fix](https://gist.githubusercontent.com/ryan-stoffel/066c6f34ff254c7c239767d21a0df91e/raw/2c5c9fd1461d4525fb5b45dc0dccdf365688c334/d013614dc14a-settings.png)",
           "reused": false
         },
         {
           "path": "/Users/ryan/shots/flow.mp4",
-          "url": "https://raw.githubusercontent.com/ryan-stoffel/parallax/0a1b2c3d4e5f60718293a4b5c6d7e8f901234567/pr-media/20261024-090000-5e6f7a8b-flow.mp4",
-          "markdown": "[flow.mp4](https://raw.githubusercontent.com/ryan-stoffel/parallax/0a1b2c3d4e5f60718293a4b5c6d7e8f901234567/pr-media/20261024-090000-5e6f7a8b-flow.mp4)",
+          "url": "https://gist.githubusercontent.com/ryan-stoffel/066c6f34ff254c7c239767d21a0df91e/raw/0a1b2c3d4e5f60718293a4b5c6d7e8f901234567/5e6f7a8b9c0d-flow.mp4",
+          "markdown": "[flow.mp4](https://gist.githubusercontent.com/ryan-stoffel/066c6f34ff254c7c239767d21a0df91e/raw/0a1b2c3d4e5f60718293a4b5c6d7e8f901234567/5e6f7a8b9c0d-flow.mp4)",
           "reused": true
         }
       ]
