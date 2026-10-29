@@ -26,6 +26,10 @@ const OVERSIZED_WAIT: Duration = Duration::from_secs(30);
 /// in to `claude.ai`, or it runs on another provider ([`Control::quiet`]).
 const QUIET_REASONS: [&str; 2] = ["not_signed_in", "provider"];
 
+/// What a request answers when Claude Code isn't signed in to `claude.ai`, or its sign-in expired
+/// (reasons `not_signed_in` and `sign_in_expired`).
+pub(crate) const SIGNED_OUT: &str = "Claude Code is not signed in to claude.ai";
+
 /// A `claude -p` answering control requests: each written as a line, answered in a
 /// `control_response` carrying its `request_id`.
 pub(crate) struct Control {
@@ -189,6 +193,9 @@ fn answer(response: &Value) -> Result<Value, String> {
     match body["status"].as_str() {
         Some("ok") | None => Ok(body.clone()),
         Some(_) if body["reason"] == "temporarily_unavailable" => Err(BUSY.to_owned()),
+        Some(_) if body["reason"] == "not_signed_in" || body["reason"] == "sign_in_expired" => {
+            Err(SIGNED_OUT.to_owned())
+        }
         Some(_) => Err(text(&body["message"])
             .unwrap_or_else(|| "claude.ai's sessions aren't available".to_owned())),
     }
@@ -251,6 +258,9 @@ mod tests {
         assert_eq!(answer(&ok), Ok(json!({"status": "ok", "sessions": []})));
         let busy = json!({"response": {"status": "error", "reason": "temporarily_unavailable"}});
         assert_eq!(answer(&busy), Err(BUSY.to_owned()));
+        let expired = json!({"response": {"status": "unavailable", "reason": "sign_in_expired",
+            "message": "Sign in again."}});
+        assert_eq!(answer(&expired), Err(SIGNED_OUT.to_owned()));
         let refused = json!({"response": {"status": "error", "reason": "started_by_session",
             "message": "Not inside a Claude Code session."}});
         assert_eq!(

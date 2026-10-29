@@ -121,9 +121,18 @@ pub(crate) async fn listed(
         .collect())
 }
 
-/// Which of sessions `ids` `claude.ai` keeps a conversation for, in their order: a session that
-/// had Remote Control turned on in an open session has none there.
-pub(crate) async fn conversations(control: &mut Control, ids: &[String]) -> Vec<bool> {
+/// What a session's first transcript page holds.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Conversation {
+    /// No conversation, as for a session that had Remote Control turned on in an open session.
+    None,
+    /// A conversation, with the local Claude Code session its entries name, which may be on this
+    /// computer too.
+    Some { local: Option<String> },
+}
+
+/// What `claude.ai` keeps of sessions `ids`, in their order. One that couldn't be read has none.
+pub(crate) async fn conversations(control: &mut Control, ids: &[String]) -> Vec<Conversation> {
     let pages = control
         .ask_all(
             ids.iter()
@@ -134,9 +143,18 @@ pub(crate) async fn conversations(control: &mut Control, ids: &[String]) -> Vec<
     ids.iter()
         .zip(pages)
         .map(|(id, page)| {
-            page.ok()
-                .and_then(|page| session(id, page["entries"].as_array()?))
-                .is_some()
+            let Some(entries) = page
+                .ok()
+                .and_then(|page| page["entries"].as_array().cloned())
+            else {
+                return Conversation::None;
+            };
+            match session(id, &entries) {
+                Some(_) => Conversation::Some {
+                    local: entries.iter().find_map(|e| text(&e["sessionId"])),
+                },
+                None => Conversation::None,
+            }
         })
         .collect()
 }

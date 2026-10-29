@@ -1,10 +1,12 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use parallax_protocol::RemoteControlState;
 use serde_json::{Value, json};
 
-use super::{Cloud, Driver, Entry, Page, Tail, entry, sent, state};
+use super::{Cloud, Driver, End, Entry, Page, Tail, Turn, entry, read_failure, sent, state};
+use crate::backend::claude::control::SIGNED_OUT;
 use crate::backend::event::{Event, Failure, FailureKind, Outcome, ToolStatus};
 use crate::backend::{CancelSwitch, EventSink, FollowUp, Run as _, RunHandle, RunId, TurnId};
 
@@ -65,14 +67,19 @@ fn entries_are_prompts_work_or_skipped() {
     let result = json!({"type": "user", "message": {"content": [
         {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
     ]}});
-    assert_eq!(entry(&result), Entry::Work { end: false });
+    assert_eq!(entry(&result), Entry::Work { end: None });
     let call = assistant(
         "m",
         &json!({"type": "tool_use", "id": "t1", "name": "Bash"}),
         "tool_use",
     );
-    assert_eq!(entry(&call), Entry::Work { end: false });
-    assert_eq!(entry(&reply("Done.")), Entry::Work { end: true });
+    assert_eq!(entry(&call), Entry::Work { end: None });
+    assert_eq!(
+        entry(&reply("Done.")),
+        Entry::Work {
+            end: Some(End::Reply)
+        }
+    );
     let queued = json!({"type": "attachment", "attachment": {"type": "queued_command", "prompt": "and the docs"}});
     assert_eq!(entry(&queued), Entry::Prompt);
     let notification = json!({"type": "attachment", "attachment": {
@@ -159,13 +166,23 @@ struct FakeState {
     sent: Vec<String>,
     refuse: Option<Failure>,
     status: Option<String>,
+    /// What each page read adds to the transcript first, one item per read: nothing for `None`.
+    drip: VecDeque<Option<Value>>,
+    /// Sending never ends.
+    hang: bool,
+    /// Every page read fails with this.
+    unreadable: Option<String>,
+    /// How many times the status was read.
+    statuses: usize,
 }
 
 const FAKE_PAGE: usize = 2;
 
-#[expect(clippy::unused_async_trait_impl, reason = "the fake answers at once")]
 impl Cloud for Fake {
     async fn send(&mut self, text: &str) -> Result<(), Failure> {
+        if self.0.lock().unwrap().hang {
+            std::future::pending::<()>().await;
+        }
         let mut state = self.0.lock().unwrap();
         if let Some(failure) = state.refuse.clone() {
             return Err(failure);
@@ -178,8 +195,15 @@ impl Cloud for Fake {
         Ok(())
     }
 
+    #[expect(clippy::unused_async_trait_impl, reason = "the fake answers at once")]
     async fn page(&mut self, cursor: Option<&str>) -> Result<Page, String> {
-        let state = self.0.lock().unwrap();
+        let mut state = self.0.lock().unwrap();
+        if let Some(error) = state.unreadable.clone() {
+            return Err(error);
+        }
+        if let Some(Some(entry)) = state.drip.pop_front() {
+            state.entries.push(entry);
+        }
         let index: usize = cursor.map_or(0, |cursor| cursor.parse().unwrap());
         let start = (index * FAKE_PAGE).min(state.entries.len());
         let end = (start + FAKE_PAGE).min(state.entries.len());
@@ -190,8 +214,11 @@ impl Cloud for Fake {
         })
     }
 
+    #[expect(clippy::unused_async_trait_impl, reason = "the fake answers at once")]
     async fn status(&mut self) -> Result<Option<String>, String> {
-        Ok(self.0.lock().unwrap().status.clone())
+        let mut state = self.0.lock().unwrap();
+        state.statuses += 1;
+        Ok(state.status.clone())
     }
 }
 
@@ -400,4 +427,281 @@ async fn stop_only_stops_following_the_turn() {
             ..
         })
     ));
+}
+
+fn thinking(text: &str, stop: &str) -> Value {
+    assistant(
+        "msg_end",
+        &json!({"type": "thinking", "thinking": text}),
+        stop,
+    )
+}
+
+#[test]
+fn any_final_stop_reason_ends_a_turn_and_thinking_alone_waits_for_its_text() {
+    for stop in ["end_turn", "stop_sequence", "max_tokens", "refusal"] {
+        let text = assistant("m", &json!({"type": "text", "text": "x"}), stop);
+        assert_eq!(
+            entry(&text),
+            Entry::Work {
+                end: Some(End::Reply)
+            },
+            "{stop}"
+        );
+    }
+    for stop in ["tool_use", "pause_turn"] {
+        let call = assistant(
+            "m",
+            &json!({"type": "tool_use", "id": "t", "name": "Bash"}),
+            stop,
+        );
+        assert_eq!(entry(&call), Entry::Work { end: None }, "{stop}");
+    }
+    let streaming =
+        json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "x"}]}});
+    assert_eq!(entry(&streaming), Entry::Work { end: None });
+    assert_eq!(
+        entry(&thinking("Done.", "end_turn")),
+        Entry::Work {
+            end: Some(End::Thinking)
+        }
+    );
+    assert_eq!(
+        entry(&user("[Request interrupted by user]")),
+        Entry::Interrupted
+    );
+    let tool_interrupt = json!({"type": "user", "message": {"content": [
+        {"type": "text", "text": "[Request interrupted by user for tool use]"},
+    ]}});
+    assert_eq!(entry(&tool_interrupt), Entry::Interrupted);
+}
+
+#[test]
+fn a_turn_ends_after_its_message_on_a_reply_an_interrupt_or_idle() {
+    let reply = Entry::Work {
+        end: Some(End::Reply),
+    };
+    let thinking = Entry::Work {
+        end: Some(End::Thinking),
+    };
+    // An earlier turn's end, before the message, ends nothing.
+    let mut turn = Turn::default();
+    assert!(!turn.read(&[reply, Entry::Prompt]));
+    assert!(!turn.read(&[]));
+    // A reply ends it on the next quiet read.
+    assert!(!turn.read(&[Entry::Work { end: None }, reply]));
+    assert!(turn.read(&[]));
+
+    // Thinking alone waits three quiet reads, and its text, coming late, ends it on one.
+    let mut turn = Turn::default();
+    assert!(!turn.read(&[Entry::Prompt, thinking]));
+    assert!(!turn.read(&[]));
+    assert!(!turn.read(&[reply]));
+    assert!(turn.read(&[]));
+    let mut turn = Turn::default();
+    turn.read(&[Entry::Prompt, thinking]);
+    assert!(!turn.read(&[]));
+    assert!(!turn.read(&[]));
+    assert!(turn.read(&[]));
+
+    let mut turn = Turn::default();
+    turn.read(&[Entry::Prompt, Entry::Work { end: None }, Entry::Interrupted]);
+    assert!(turn.read(&[]));
+
+    // `idle` ends it only once the message reached the session.
+    let mut turn = Turn::default();
+    assert!(!turn.idle(Some("idle")));
+    turn.read(&[Entry::Prompt]);
+    assert!(turn.idle(Some("idle")));
+    assert!(!turn.idle(Some("running")));
+}
+
+#[test]
+fn a_signed_out_read_fails_at_once_and_others_after_five() {
+    let signed_out = read_failure(SIGNED_OUT, 1).unwrap();
+    assert_eq!(signed_out.failure, FailureKind::NotSignedIn);
+    assert_eq!(
+        read_failure("Claude Code stopped: Not logged in · Please run /login", 1)
+            .unwrap()
+            .failure,
+        FailureKind::NotSignedIn
+    );
+    assert_eq!(read_failure("timed out", 4), None);
+    assert_eq!(
+        read_failure("timed out", 5).unwrap().failure,
+        FailureKind::VendorError
+    );
+}
+
+#[tokio::test]
+async fn a_reply_whose_text_lands_a_read_after_its_thinking_keeps_the_text() {
+    let fake = Fake::default();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.turns = vec![vec![user("Wrap up"), thinking("Nothing left.", "end_turn")]];
+        // The read before the send, then two reads, then the text.
+        state.drip = [None, None, None, Some(reply("All done."))].into();
+    }
+    let events = run(&fake, "Wrap up", |_| {}).await;
+    let results: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::TurnFinished { result, .. } => Some(result.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, [Some("All done.".to_owned())]);
+}
+
+#[tokio::test]
+async fn a_turn_that_fails_on_max_tokens_or_goes_idle_with_no_end_still_ends() {
+    let fake = Fake::default();
+    fake.0.lock().unwrap().turns = vec![vec![
+        user("Write it all"),
+        assistant(
+            "m",
+            &json!({"type": "text", "text": "Cut off"}),
+            "max_tokens",
+        ),
+    ]];
+    let events = run(&fake, "Write it all", |_| {}).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::TurnFinished { failed: false, .. }))
+    );
+
+    // Interrupted from the Claude app with no entry that ends it: the session goes idle.
+    let fake = Fake::default();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.turns = vec![vec![user("Long job")]];
+        state.status = Some("idle".into());
+    }
+    let events = run(&fake, "Long job", |_| {}).await;
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::TurnFinished { failed: false, .. }))
+    );
+    assert!(matches!(
+        events.last(),
+        Some(Event::Finished {
+            outcome: Outcome::Completed { .. },
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn waiting_for_an_answer_stays_put_and_says_so_once() {
+    let fake = Fake::default();
+    {
+        let mut state = fake.0.lock().unwrap();
+        state.turns = vec![vec![
+            user("Bump clap"),
+            assistant(
+                "m",
+                &json!({"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}),
+                "tool_use",
+            ),
+        ]];
+        state.status = Some("requires_action".into());
+    }
+    let switch = CancelSwitch::new();
+    let (handle, follow_ups) = RunHandle::new(RunId::generate(), true, switch.clone());
+    let (sink, mut stream) = EventSink::channel(256, Vec::new());
+    let driver = Driver::new(
+        fake.clone(),
+        "session_1".into(),
+        sink,
+        switch,
+        follow_ups,
+        handle.held(),
+    )
+    .with_poll(Duration::from_millis(2));
+    tokio::spawn(driver.run(None, "Bump clap".to_owned()));
+    let mut events = Vec::new();
+    // Three status reads, each saying it waits, with no event between them once it waits.
+    while fake.0.lock().unwrap().statuses < 3 {
+        if let Ok(event) = tokio::time::timeout(Duration::from_millis(5), stream.next()).await {
+            let event = event.unwrap();
+            assert!(!matches!(event, Event::Finished { .. }), "ended early");
+            events.push(event);
+        }
+    }
+    handle.cancel();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+    let states: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::RemoteControl { state } => Some(*state),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        states,
+        [RemoteControlState::Running, RemoteControlState::Waiting]
+    );
+    let notices = events
+        .iter()
+        .filter(
+            |e| matches!(e, Event::Notice { detail } if detail.contains("waiting for your answer")),
+        )
+        .count();
+    assert_eq!(notices, 1);
+}
+
+#[tokio::test]
+async fn stop_ends_a_send_that_hangs_at_once() {
+    let fake = Fake::default();
+    fake.0.lock().unwrap().hang = true;
+    let switch = CancelSwitch::new();
+    let (handle, follow_ups) = RunHandle::new(RunId::generate(), true, switch.clone());
+    let (sink, mut stream) = EventSink::channel(64, Vec::new());
+    let driver = Driver::new(
+        fake.clone(),
+        "session_1".into(),
+        sink,
+        switch,
+        follow_ups,
+        handle.held(),
+    );
+    tokio::spawn(driver.run(None, "hello".to_owned()));
+    while !matches!(stream.next().await, Some(Event::TurnStarted { .. })) {}
+    handle.cancel();
+    let end = tokio::time::timeout(Duration::from_secs(2), async {
+        let mut last = None;
+        while let Some(event) = stream.next().await {
+            last = Some(event);
+        }
+        last
+    })
+    .await
+    .expect("Stop didn't wait for the send");
+    assert!(matches!(
+        end,
+        Some(Event::Finished {
+            outcome: Outcome::Cancelled,
+            ..
+        })
+    ));
+}
+
+#[tokio::test]
+async fn a_signed_out_claude_code_fails_the_run_as_not_signed_in() {
+    let fake = Fake::default();
+    fake.0.lock().unwrap().unreadable = Some(SIGNED_OUT.to_owned());
+    let events = run(&fake, "hello", |_| {}).await;
+    let Some(Event::Finished {
+        outcome: Outcome::Failed(failure),
+        ..
+    }) = events.last()
+    else {
+        panic!("expected a failure: {events:?}");
+    };
+    assert_eq!(failure.failure, FailureKind::NotSignedIn);
+    assert!(fake.0.lock().unwrap().sent.is_empty());
 }

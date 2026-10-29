@@ -117,15 +117,7 @@ pub(crate) async fn importable(
 ) -> Result<ThreadImportableResult, ErrorObject> {
     let homes = Homes::detect();
     let (mut sessions, problem) = if params.remote {
-        // The Claude Code sessions here, by their CLI session, which `claude.ai` may keep too.
-        let here: HashSet<String> = tokio::task::spawn_blocking(move || {
-            claude_sessions(&homes)
-                .into_iter()
-                .filter_map(|session| session.resume)
-                .collect()
-        })
-        .await
-        .map_err(|error| ErrorObject::internal_error(error.to_string()))?;
+        let here = claude_here().await?;
         match cloud::list(daemon).await {
             Ok(listing) => (
                 listing
@@ -183,6 +175,21 @@ pub(crate) async fn importable(
     })
 }
 
+/// The Claude Code sessions on this computer, by their CLI session, which `claude.ai` may keep
+/// too: a Remote Control session `claude remote-control` serves here, whose transcript the apps'
+/// list already has.
+pub(crate) async fn claude_here() -> Result<HashSet<String>, ErrorObject> {
+    let homes = Homes::detect();
+    tokio::task::spawn_blocking(move || {
+        claude_sessions(&homes)
+            .into_iter()
+            .filter_map(|session| session.resume)
+            .collect()
+    })
+    .await
+    .map_err(|error| ErrorObject::internal_error(error.to_string()))
+}
+
 /// `thread/import`: see the module documentation and [`ThreadImportParams`].
 pub(crate) async fn import(
     daemon: Arc<Daemon>,
@@ -215,6 +222,8 @@ pub(crate) async fn import(
 /// repository's checkout ([`repo_for`]). For `thread/import`, the thread is archived and the
 /// repository cloned if it isn't here. For [`crate::remote_control`]'s sync, `synced`, whose
 /// sessions are recent and which nobody asked for, it isn't archived, and nothing is cloned.
+/// Either way the sync never takes the session again ([`crate::remote_control::remember`]), so a
+/// thread the user deletes stays deleted.
 pub(crate) async fn import_remote(
     daemon: Arc<Daemon>,
     id: &str,
@@ -235,7 +244,19 @@ pub(crate) async fn import_remote(
         None => None,
     };
     let messages = &loaded.messages;
-    create(daemon, loaded.session, messages, account, repo, !synced).await
+    let created = create(
+        Arc::clone(&daemon),
+        loaded.session,
+        messages,
+        account,
+        repo,
+        !synced,
+    )
+    .await?;
+    if let Err(error) = crate::remote_control::remember(&daemon, id.to_owned()).await {
+        warn!(session = id, error = %error.message, "could not keep an imported Claude Remote Control session");
+    }
+    Ok(created)
 }
 
 /// `thread/importChat` (PLX-883): see [`ThreadImportChatParams`].
