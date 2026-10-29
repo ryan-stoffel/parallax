@@ -125,6 +125,13 @@ const PROBE_TIMEOUT_MS = 2 * 60_000;
 const CLONE_TIMEOUT_MS = 60 * 60_000;
 
 /**
+ * How long `thread/importable` may take: plxd reads each claude.ai Remote Control session through
+ * Claude Code, for up to 2 minutes (PLX-1136). `thread/import` gets `repo/clone`'s, as importing
+ * one clones its repository when it isn't here.
+ */
+const IMPORTABLE_TIMEOUT_MS = 3 * 60_000;
+
+/**
  * Every host's connection, by host id: `local`, each saved SSH host, each Connect device, and each
  * LAN computer.
  */
@@ -251,7 +258,8 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       // A provider's own update downloads it, which can take minutes (PLX-746), and an emulator
       // can take minutes to boot, or a cold Mac's simulators to list (PLX-886). A list or save
       // probes agents, each in steps of up to 20 s, which can pass the usual 30 s. A clone runs
-      // until git is done.
+      // until git is done, as may an import, which can clone; listing what to import reads
+      // claude.ai's sessions.
       const timeout =
         method === "providers/upgrade"
           ? UPDATE_TIMEOUT_MS
@@ -259,9 +267,11 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
             ? DEVICE_TIMEOUT_MS
             : method === "providers/list" || method === "providers/save"
               ? PROBE_TIMEOUT_MS
-              : method === "repo/clone"
+              : method === "repo/clone" || method === "thread/import"
                 ? CLONE_TIMEOUT_MS
-                : undefined;
+                : method === "thread/importable"
+                  ? IMPORTABLE_TIMEOUT_MS
+                  : undefined;
       return host.request(method as RendererMethod, params as never, timeout);
     },
   );

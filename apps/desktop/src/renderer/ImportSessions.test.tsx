@@ -190,7 +190,7 @@ test("the menu leaves out a computer that isn't connected, and an import's reloa
 test("claude.ai's Remote Control sessions join the list, marked remote, and import as remote", async () => {
   const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
     if (method === "providers/list") return { result: { providers: [] } };
-    if (method === "thread/import") return { result: {} };
+    if (method === "thread/import") return { result: { thread: { id: "t1" } } };
     if (params["remote"])
       return {
         result: {
@@ -229,4 +229,10 @@ test("claude.ai's Remote Control sessions join the list, marked remote, and impo
     id: "session_01r1",
     remote: true,
   });
+  // The imported row is marked without reading claude.ai again, which takes minutes.
+  expect(document.querySelector('input[aria-label="Import Hello from Claude RC"]')).toBeNull();
+  const remoteReads = request.mock.calls.filter(
+    ([, method, params]) => method === "thread/importable" && params["remote"],
+  );
+  expect(remoteReads).toHaveLength(1);
 });

@@ -1221,6 +1221,8 @@ impl Backend for ClaudeBackend {
             ]
             .map(OsString::from),
         );
+        // A page of a long session's transcript can pass the usual line limit.
+        spec.limits.max_line_bytes = 64 * 1024 * 1024;
         Ok(Some(self.launcher.spawn(&spec)?))
     }
 

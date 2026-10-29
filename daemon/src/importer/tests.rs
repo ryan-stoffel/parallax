@@ -147,4 +147,5 @@ fn a_remote_sessions_repository_is_cloned_where_it_was_or_under_home() {
     assert_eq!(at(Some("/Users/ryan/.hidden/learn-rust")), "~/learn-rust");
     assert_eq!(at(Some("/srv/learn-rust")), "~/learn-rust");
     assert_eq!(at(None), "~/learn-rust");
+    assert_eq!(at(Some("C:\\Users\\ryan\\D:\\learn-rust")), "~/learn-rust");
 }

@@ -121,10 +121,26 @@ export function ImportSessions({ className = "" }: { className?: string }) {
   const shown = useRef(host.id);
   const remoteAsked = useRef(0);
 
-  const load = useCallback(async () => {
+  // This computer's sessions, which an import's reload reads again on its own: claude.ai's take
+  // minutes, and an import marks its own row.
+  const loadLocal = useCallback(async () => {
     const id = host.id;
     if (shown.current !== id) return;
     setLoading(true);
+    const answer = await window.parallax.request(id, "thread/importable", {});
+    if (shown.current !== id) return;
+    setLoading(false);
+    if ("error" in answer) {
+      setSessions(undefined);
+      setError(describeError(answer.error));
+    } else {
+      setError(undefined);
+      setSessions(answer.result.sessions);
+    }
+  }, [host.id]);
+  const load = useCallback(async () => {
+    const id = host.id;
+    if (shown.current !== id) return;
     if (remoteSupported) {
       const asked = ++remoteAsked.current;
       setChecking(true);
@@ -138,17 +154,8 @@ export function ImportSessions({ className = "" }: { className?: string }) {
         }
       });
     }
-    const answer = await window.parallax.request(id, "thread/importable", {});
-    if (shown.current !== id) return;
-    setLoading(false);
-    if ("error" in answer) {
-      setSessions(undefined);
-      setError(describeError(answer.error));
-    } else {
-      setError(undefined);
-      setSessions(answer.result.sessions);
-    }
-  }, [host.id, remoteSupported]);
+    await loadLocal();
+  }, [host.id, remoteSupported, loadLocal]);
   useEffect(() => {
     shown.current = host.id;
     setSessions(undefined);
@@ -261,9 +268,14 @@ export function ImportSessions({ className = "" }: { className?: string }) {
             ...(item.remote && { remote: true }),
             ...(account && { account }),
           });
-          return "error" in answer ? describeError(answer.error) : undefined;
+          if ("error" in answer) return describeError(answer.error);
+          if (item.remote) {
+            const thread = answer.result.thread.id;
+            setRemote((now) => now.map((s) => (s.id === session.id ? { ...s, thread } : s)));
+          }
+          return undefined;
         }}
-        onImported={load}
+        onImported={loadLocal}
       />
     );
   return (
@@ -504,7 +516,7 @@ function ExportDrop({
 /**
  * `items` to pick and import, the newest first, filtered by `apps`, with Select all, a count, and
  * progress while `importItem` imports each picked one in turn, answering an error in words or
- * nothing. `onImported` then lists them again.
+ * nothing. `onImported` then reads them again.
  */
 function SessionList({
   className,
@@ -611,7 +623,7 @@ function SessionList({
         aria-label="Sessions"
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-xl border border-border bg-surface p-1"
       >
-        {checking && (filter === "all" || filter === "claude") && <CheckingRow />}
+        {checking && ["all", "claude", "remote"].includes(filter) && <CheckingRow />}
         {shown.map((s) => (
           <SessionRow
             key={s.key}

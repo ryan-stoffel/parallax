@@ -34,24 +34,51 @@ const LIMIT: Duration = Duration::from_secs(120);
 /// The most transcript pages one session reads, at up to a thousand entries each.
 const MAX_PAGES: usize = 50;
 
+/// How long requests in flight wait after Claude Code wrote a line too big to read, which was
+/// one of their answers: then they fail, and the rest go on.
+const OVERSIZED_WAIT: Duration = Duration::from_secs(20);
+
+/// Why Claude Code can't read `claude.ai`'s sessions that aren't a fault to report: it isn't signed
+/// in to `claude.ai`, or it runs on another provider. Listing then finds none, quietly.
+const QUIET_REASONS: [&str; 2] = ["not_signed_in", "provider"];
+
+/// What [`list`] found: the sessions, and how many it couldn't read.
+pub(super) struct Listing {
+    pub sessions: Vec<Listed>,
+    pub unread: usize,
+}
+
 /// A `claude.ai` session to import, with the local session its entries name.
 pub(super) struct Listed {
     pub session: Session,
     pub local: Option<String>,
 }
 
-/// The Remote Control sessions `claude.ai` keeps a conversation for, newest first.
+/// The Remote Control sessions `claude.ai` keeps a conversation for, newest first. None, quietly,
+/// when Claude Code isn't installed or set up in Parallax, isn't signed in to `claude.ai`, or runs
+/// on another provider, as there is nothing to fix.
 ///
 /// # Errors
 ///
-/// Why they couldn't be listed, in words, such as Claude Code not being signed in to `claude.ai`.
-pub(super) async fn list(daemon: &Arc<Daemon>) -> Result<Vec<Listed>, String> {
-    let mut claude = Control::start(daemon)?;
+/// Why they couldn't be listed, in words.
+pub(super) async fn list(daemon: &Arc<Daemon>) -> Result<Listing, String> {
+    let none = Listing {
+        sessions: Vec::new(),
+        unread: 0,
+    };
+    let Ok(mut claude) = Control::start(daemon) else {
+        return Ok(none);
+    };
     tokio::time::timeout(LIMIT, async {
         claude.ask(json!({"subtype": "initialize"})).await?;
-        let listed = claude
+        let listed = match claude
             .ask(json!({"subtype": "list_cloud_sessions", "user_initiated": true}))
-            .await?;
+            .await
+        {
+            Ok(listed) => listed,
+            Err(_) if claude.quiet => return Ok(none),
+            Err(error) => return Err(error),
+        };
         let remote: Vec<Value> = listed["sessions"]
             .as_array()
             .into_iter()
@@ -67,7 +94,8 @@ pub(super) async fn list(daemon: &Arc<Daemon>) -> Result<Vec<Listed>, String> {
                     .collect(),
             )
             .await;
-        Ok(remote
+        let unread = pages.iter().filter(|page| page.is_err()).count();
+        let sessions = remote
             .iter()
             .zip(pages)
             .filter_map(|(listed, page)| {
@@ -82,7 +110,8 @@ pub(super) async fn list(daemon: &Arc<Daemon>) -> Result<Vec<Listed>, String> {
                 let local = entries.iter().find_map(|e| text(&e["sessionId"]));
                 Some(Listed { session, local })
             })
-            .collect())
+            .collect();
+        Ok(Listing { sessions, unread })
     })
     .await
     .unwrap_or_else(|_| Err("claude.ai's sessions took too long to list".to_owned()))
@@ -204,6 +233,10 @@ struct Control {
     process: Process,
     stdin: crate::backend::process::StdinPipe,
     next: u64,
+    /// Claude Code answered with one of [`QUIET_REASONS`].
+    quiet: bool,
+    /// It wrote a line too big to read since the last answer.
+    oversized: bool,
 }
 
 impl Control {
@@ -227,6 +260,8 @@ impl Control {
             process,
             stdin,
             next: 0,
+            quiet: false,
+            oversized: false,
         })
     }
 
@@ -271,7 +306,21 @@ impl Control {
             if asked.is_empty() {
                 break;
             }
-            let (id, answer) = match self.answer().await {
+            // An answer too big to read never arrives: once one was cut, what's in flight waits a
+            // while longer, then fails, so one huge session can't hold up the rest.
+            let next = if self.oversized {
+                tokio::time::timeout(OVERSIZED_WAIT, self.answer()).await
+            } else {
+                Ok(self.answer().await)
+            };
+            let Ok(next) = next else {
+                self.oversized = false;
+                for index in asked.drain().map(|(_, index)| index) {
+                    answers[index] = Some(Err("a session was too large to read".to_owned()));
+                }
+                continue;
+            };
+            let (id, answer) = match next {
                 Ok(answered) => answered,
                 Err(error) => {
                     for index in asked.into_values().chain(waiting) {
@@ -300,8 +349,11 @@ impl Control {
         loop {
             let line = match self.process.next().await {
                 Some(Output::Line(line)) => line,
-                // A page too big to read: its request goes unanswered, and times out.
-                Some(Output::Oversized { .. }) => continue,
+                // A page too big to read: its request goes unanswered (see `ask_all`).
+                Some(Output::Oversized { .. }) => {
+                    self.oversized = true;
+                    continue;
+                }
                 Some(Output::Exited(exit)) => {
                     return Err(format!("Claude Code stopped: {}", exit.stderr_tail.trim()));
                 }
@@ -324,6 +376,10 @@ impl Control {
                 match body["status"].as_str() {
                     Some("ok") | None => Ok(body.clone()),
                     Some(_) if body["reason"] == "temporarily_unavailable" => Err(BUSY.to_owned()),
+                    Some(_) if QUIET_REASONS.iter().any(|reason| body["reason"] == *reason) => {
+                        self.quiet = true;
+                        Err(text(&body["message"]).unwrap_or_default())
+                    }
                     Some(_) => Err(text(&body["message"])
                         .unwrap_or_else(|| "claude.ai's sessions aren't available".to_owned())),
                 }

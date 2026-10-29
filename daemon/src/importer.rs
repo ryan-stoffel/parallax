@@ -125,13 +125,17 @@ pub(crate) async fn importable(
         .await
         .map_err(|error| ErrorObject::internal_error(error.to_string()))?;
         match cloud::list(daemon).await {
-            Ok(listed) => (
-                listed
+            Ok(listing) => (
+                listing
+                    .sessions
                     .into_iter()
                     .filter(|listed| !listed.local.as_ref().is_some_and(|id| here.contains(id)))
                     .map(|listed| listed.session)
                     .collect(),
-                None,
+                (listing.unread > 0).then(|| {
+                    let n = listing.unread;
+                    format!("{n} of claude.ai's sessions couldn't be read, so they aren't listed")
+                }),
             ),
             Err(problem) => (Vec::new(), Some(problem)),
         }
@@ -303,10 +307,9 @@ pub(crate) async fn imported_chats(
     .await
 }
 
-/// Makes `session`, with its conversation `messages`, an archived thread: in its folder's
-/// checkout when that's a repository's root, else with no repo. Returns the thread it already is
-/// when it was imported before.
-/// Makes `session` a thread: in `repo` when one is given, else in its folder's repository.
+/// Makes `session`, with its conversation `messages`, an archived thread: in `repo` when one is
+/// given, else in its folder's checkout when that's a repository's root, else with no repo.
+/// Returns the thread it already is when it was imported before.
 async fn create(
     daemon: Arc<Daemon>,
     session: Session,
@@ -532,7 +535,9 @@ fn clone_path(name: &str, cwd: Option<&str>) -> String {
             .iter()
             .position(|p| p.eq_ignore_ascii_case("users") || *p == "home")?;
         let rest = parts.get(home + 2..)?;
-        let named = rest.last() == Some(&name) && rest.iter().all(|p| !p.starts_with('.'));
+        // A part such as Windows' `D:` would leave the home folder.
+        let named = rest.last() == Some(&name)
+            && rest.iter().all(|p| !p.starts_with('.') && !p.contains(':'));
         named.then(|| rest.join("/"))
     });
     format!("~/{}", under_home.unwrap_or_else(|| name.to_owned()))
