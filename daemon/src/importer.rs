@@ -41,9 +41,10 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentOutputItem, ChatRole, ImportSource, ImportableSession, MAX_CHAT_MESSAGES,
-    MAX_THREAD_TITLE_BYTES, ProjectId, RepoAddParams, RepoId, RunId, ThreadArchiveParams,
-    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
-    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadStartResult, TurnId,
+    MAX_THREAD_TITLE_BYTES, ProjectId, RepoAddParams, RepoCloneParams, RepoId, RunId,
+    ThreadArchiveParams, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
+    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult,
+    ThreadStartResult, TurnId,
 };
 use parallax_store::ThreadFields;
 use rusqlite::{Connection, OpenFlags};
@@ -191,12 +192,16 @@ pub(crate) async fn import(
         let loaded = cloud::load(&daemon, &id)
             .await
             .map_err(ErrorObject::invalid_params)?;
-        let Some((session, messages)) = loaded else {
+        let Some(loaded) = loaded else {
             return Err(ErrorObject::invalid_params(format!(
                 "claude.ai has no conversation for session {id}"
             )));
         };
-        return create(daemon, session, &messages, account).await;
+        let repo = match &loaded.repository {
+            Some(repository) => repo_for(&daemon, repository, loaded.session.cwd.as_deref()).await,
+            None => None,
+        };
+        return create(daemon, loaded.session, &loaded.messages, account, repo).await;
     }
     let homes = Homes::detect();
     let wanted = id.clone();
@@ -209,7 +214,7 @@ pub(crate) async fn import(
             app_name(source)
         )));
     };
-    create(daemon, session, &messages, account).await
+    create(daemon, session, &messages, account, None).await
 }
 
 /// `thread/importChat` (PLX-883): see [`ThreadImportChatParams`].
@@ -258,7 +263,7 @@ pub(crate) async fn import_chat(
         updated: created_at,
         resume: None,
     };
-    create(daemon, session, &messages, account).await
+    create(daemon, session, &messages, account, None).await
 }
 
 /// `thread/importedChats` (PLX-883): each chat's thread, if it was imported.
@@ -301,11 +306,13 @@ pub(crate) async fn imported_chats(
 /// Makes `session`, with its conversation `messages`, an archived thread: in its folder's
 /// checkout when that's a repository's root, else with no repo. Returns the thread it already is
 /// when it was imported before.
+/// Makes `session` a thread: in `repo` when one is given, else in its folder's repository.
 async fn create(
     daemon: Arc<Daemon>,
     session: Session,
     messages: &[Message],
     account: Option<AccountChoice>,
+    repo: Option<RepoId>,
 ) -> Result<ThreadStartResult, ErrorObject> {
     let source = session.source;
     let Some((prompt, transcript)) = transcript(source, messages) else {
@@ -320,9 +327,10 @@ async fn create(
     if let Some(done) = imported(&daemon, run_id).await? {
         return Ok(done);
     }
-    let repo = match &session.cwd {
-        Some(cwd) => repo_of(&daemon, cwd).await,
-        None => None,
+    let repo = match (repo, &session.cwd) {
+        (Some(repo), _) => Some(repo),
+        (None, Some(cwd)) => repo_of(&daemon, cwd).await,
+        (None, None) => None,
     };
     let (scope, scratch) = workspace(&daemon, repo, run_id).await?;
     let title = threads::check_title(&truncate_to(&session.title, MAX_THREAD_TITLE_BYTES))?;
@@ -482,6 +490,52 @@ async fn repo_of(daemon: &Arc<Daemon>, cwd: &str) -> Option<RepoId> {
         .await
         .map(|added| added.repo.id)
         .ok()
+}
+
+/// The repo entry for GitHub repository `repository` (`owner/name`), a `claude.ai` session's
+/// (PLX-1136): the registered one whose `origin` it is, else a new clone where [`clone_path`] puts
+/// it, which git makes over SSH or else HTTPS. `None` when git can't clone it, such as a private
+/// repository with no credentials here, so the session imports with no repo.
+async fn repo_for(daemon: &Arc<Daemon>, repository: &str, cwd: Option<&str>) -> Option<RepoId> {
+    let url = format!("git@github.com:{repository}.git");
+    match crate::repo_clone::with_origin(daemon, &url).await {
+        Ok(Some(repo)) => return Some(repo.id),
+        Ok(None) => {}
+        Err(error) => {
+            warn!(repository, error = %error.message, "could not look for an imported session's repository");
+            return None;
+        }
+    }
+    let name = repository.rsplit('/').next()?;
+    let params = RepoCloneParams {
+        id: RepoId::generate(),
+        url,
+        path: clone_path(name, cwd),
+    };
+    match crate::repo_clone::clone(Arc::clone(daemon), params).await {
+        Ok(added) => Some(added.repo.id),
+        Err(error) => {
+            warn!(repository, error = %error.message, "could not clone an imported session's repository");
+            None
+        }
+    }
+}
+
+/// Where a `claude.ai` session's repository `name` is cloned: in the same folder under the home
+/// folder as the session's `cwd` on its own computer, when that folder is named for it, such as
+/// `~/Developer/learn-rust`; else `~/<name>`, as for a session in a worktree of it.
+fn clone_path(name: &str, cwd: Option<&str>) -> String {
+    let under_home = cwd.and_then(|cwd| {
+        let parts: Vec<&str> = cwd.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+        // `/Users/<user>/…`, `/home/<user>/…`, or `C:\Users\<user>\…`.
+        let home = parts
+            .iter()
+            .position(|p| p.eq_ignore_ascii_case("users") || *p == "home")?;
+        let rest = parts.get(home + 2..)?;
+        let named = rest.last() == Some(&name) && rest.iter().all(|p| !p.starts_with('.'));
+        named.then(|| rest.join("/"))
+    });
+    format!("~/{}", under_home.unwrap_or_else(|| name.to_owned()))
 }
 
 /// The session a follow-up resumes: Codex's on its built-in backend, which falls back to a

@@ -2,7 +2,7 @@ use parallax_protocol::ImportSource;
 
 use std::fs;
 
-use super::{Message, Session, claude_messages, claude_remote_session, run_id};
+use super::{Message, Session, claude_messages, claude_remote_session, clone_path, run_id};
 
 fn user(text: &str) -> Message {
     Message::User(text.to_owned())
@@ -123,4 +123,28 @@ fn a_claude_code_session_lists_only_when_it_ran_with_remote_control() {
         ],
     );
     assert_eq!(claude_remote_session(&sdk), None);
+}
+
+/// A `claude.ai` session's repository goes in the same folder under the home folder as on its
+/// own computer when that folder is the repository, else straight under the home folder (PLX-1136).
+#[test]
+fn a_remote_sessions_repository_is_cloned_where_it_was_or_under_home() {
+    let at = |cwd| clone_path("learn-rust", cwd);
+    assert_eq!(
+        at(Some("/Users/ryan-stoffel/Developer/personal/learn-rust")),
+        "~/Developer/personal/learn-rust"
+    );
+    assert_eq!(
+        at(Some("C:\\Users\\ryan\\life\\projects\\learn-rust")),
+        "~/life/projects/learn-rust"
+    );
+    assert_eq!(at(Some("/home/ryan/learn-rust")), "~/learn-rust");
+    // A worktree `claude remote-control --spawn worktree` made, or a folder not named for it.
+    assert_eq!(
+        at(Some("/Users/ryan/learn-rust/.claude/worktrees/bright-fox")),
+        "~/learn-rust"
+    );
+    assert_eq!(at(Some("/Users/ryan/.hidden/learn-rust")), "~/learn-rust");
+    assert_eq!(at(Some("/srv/learn-rust")), "~/learn-rust");
+    assert_eq!(at(None), "~/learn-rust");
 }

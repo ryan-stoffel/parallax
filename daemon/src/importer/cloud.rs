@@ -88,21 +88,36 @@ pub(super) async fn list(daemon: &Arc<Daemon>) -> Result<Vec<Listed>, String> {
     .unwrap_or_else(|_| Err("claude.ai's sessions took too long to list".to_owned()))
 }
 
+/// A `claude.ai` session read whole: its conversation, and the GitHub repository it worked in.
+pub(super) struct Loaded {
+    pub session: Session,
+    pub messages: Vec<Message>,
+    /// `owner/name`, as `claude.ai` lists it, when the session worked in a GitHub repository.
+    pub repository: Option<String>,
+}
+
 /// Session `id` from `claude.ai` and its whole conversation, or `None` when it has none.
 ///
 /// # Errors
 ///
 /// Why it couldn't be read, in words.
-pub(super) async fn load(
-    daemon: &Arc<Daemon>,
-    id: &str,
-) -> Result<Option<(Session, Vec<Message>)>, String> {
+pub(super) async fn load(daemon: &Arc<Daemon>, id: &str) -> Result<Option<Loaded>, String> {
     let mut claude = Control::start(daemon)?;
     tokio::time::timeout(LIMIT, async {
         claude.ask(json!({"subtype": "initialize"})).await?;
         let about = claude
             .ask(json!({"subtype": "get_cloud_session", "session_id": id}))
             .await?;
+        // Only the list names a session's repository.
+        let listed = claude
+            .ask(json!({"subtype": "list_cloud_sessions", "user_initiated": true}))
+            .await?;
+        let repository = listed["sessions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|s| s["id"] == id)
+            .and_then(|s| repository(&s["repository"]));
         let mut entries = Vec::new();
         let mut cursor: Option<String> = None;
         for _ in 0..MAX_PAGES {
@@ -123,7 +138,11 @@ pub(super) async fn load(
         if let Some(title) = text(&about["title"]) {
             session.title = title;
         }
-        Ok(Some((session, messages(&entries))))
+        Ok(Some(Loaded {
+            session,
+            messages: messages(&entries),
+            repository,
+        }))
     })
     .await
     .unwrap_or_else(|_| Err("claude.ai's session took too long to read".to_owned()))
@@ -147,6 +166,22 @@ fn session(id: &str, entries: &[Value]) -> Option<Session> {
         updated: entries.iter().rev().find_map(at).unwrap_or(started),
         resume: None,
     })
+}
+
+/// `owner/name` from `claude.ai`'s `{owner, name}`, when both are a GitHub name: letters, digits,
+/// `-`, `_`, and `.`, never only dots.
+fn repository(value: &Value) -> Option<String> {
+    let part = |key: &str| {
+        let text = value[key].as_str()?;
+        let valid = !text.is_empty()
+            && text.len() <= 100
+            && text.chars().any(|c| c != '.')
+            && text
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+        valid.then_some(text)
+    };
+    Some(format!("{}/{}", part("owner")?, part("name")?))
 }
 
 /// The conversation in transcript `entries`, as Claude Code's own transcript file reads.
@@ -353,6 +388,20 @@ mod tests {
                 Message::Agent("Hi Ryan.".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn a_repository_is_owner_and_name_only_when_both_are_github_names() {
+        let named = |owner: &str, name: &str| repository(&json!({"owner": owner, "name": name}));
+        assert_eq!(
+            named("ryan-stoffel", "learn-rust").as_deref(),
+            Some("ryan-stoffel/learn-rust")
+        );
+        assert_eq!(named("a.b_c", "x.y").as_deref(), Some("a.b_c/x.y"));
+        assert_eq!(named("ryan", "../etc"), None);
+        assert_eq!(named("ryan", ".."), None);
+        assert_eq!(named("", "learn-rust"), None);
+        assert_eq!(repository(&json!(null)), None);
     }
 
     /// A session that had Remote Control turned on in an open session: `claude.ai` serves no
