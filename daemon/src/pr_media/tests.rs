@@ -148,7 +148,7 @@ async fn files_are_committed_to_the_gist_on_top_of_other_uploads() {
         Launcher::new(DataDir::new(&data).unwrap(), Environment::inherited()),
         &data,
     );
-    let clone = data.join("pr-media-gist.git");
+    let clone = data.join("pr-media-gists").join("abc.git");
     // file://, not a path, so git clones through upload-pack and honors the filter.
     let url = format!("file://{}", remote.display());
     std::fs::write(dir.path().join("one"), "one").unwrap();
@@ -180,6 +180,10 @@ async fn files_are_committed_to_the_gist_on_top_of_other_uploads() {
         .await
         .unwrap();
     assert_eq!(run(&remote, &["rev-parse", "main"]), head);
+
+    // A git killed part way, such as at the budget, left its locks: the next upload clears them.
+    std::fs::write(clone.join("index.lock"), "").unwrap();
+    std::fs::write(clone.join("refs/heads/main.lock"), "").unwrap();
 
     // Another uploader pushed meanwhile: this one fetches its commit and builds on it.
     run(&other, &["pull", "--quiet", "origin", "main"]);
@@ -258,6 +262,10 @@ fn links_are_pinned_to_the_blob_in_the_gist() {
     );
     assert_eq!(gist.key(), "ryan-stoffel/066c6f34");
     assert_eq!(gist.remote(), "https://gist.github.com/066c6f34.git");
+    assert_eq!(
+        gist.clone_in(Path::new("/data")),
+        Path::new("/data/pr-media-gists/066c6f34.git")
+    );
     assert_eq!(
         gist.raw_url("0123abc", "d013614dc14a-x.gif"),
         "https://gist.githubusercontent.com/ryan-stoffel/066c6f34/raw/0123abc/d013614dc14a-x.gif"

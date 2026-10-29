@@ -235,7 +235,17 @@ impl WorktreeManager {
         self.run_git_for(cwd, &all, NETWORK_TIMEOUT)
             .await
             .and_then(|output| output.ok(cwd, &all))
-            .map_err(|error| PrError::Gh(error.to_string()))
+            .map_err(|error| {
+                let error = error.to_string();
+                // What git says when gh gave the credential helper nothing.
+                if error.contains("could not read Username") {
+                    PrError::GhUnavailable(format!(
+                        "GitHub CLI isn't signed in on the host; run `gh auth login` there: {error}"
+                    ))
+                } else {
+                    PrError::Gh(error)
+                }
+            })
     }
 
     /// Runs `gh args` in `repo_root` and returns its stdout, turning a missing `gh`, a sign-in

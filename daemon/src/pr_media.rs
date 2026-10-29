@@ -4,8 +4,8 @@
 //! Files go to the host's secret media gist (PLX-1137), never to a repository branch. The data
 //! folder's [`GIST`] names it as `owner/id`; when it is missing, the first upload creates the gist
 //! with `gh gist create` and records it. A gist holds binary files only through git, so plxd keeps
-//! a bare, blobless clone of it in [`CLONE`] and adds each file with git plumbing, never checking
-//! out the files already there, then pushes with gh's sign-in. A file is stored as
+//! a bare, blobless clone of each gist in [`CLONES`] and adds each file with git plumbing, never
+//! checking out the files already there, then pushes with gh's sign-in. A file is stored as
 //! `<sha256 prefix>-<name>`, as the `upload-media` skill's `upload.sh` stores it, and linked as
 //! `gist.githubusercontent.com/<owner>/<id>/raw/<blob>/<name>`, pinned to its git blob. A secret
 //! gist is unlisted but open to anyone with a link, so its links render in any repository's pull
@@ -57,8 +57,8 @@ const INDEX: &str = "pr-media.json";
 /// The data folder's file naming the host's media gist as `owner/id`.
 const GIST: &str = "pr-media-gist";
 
-/// The data folder's bare, blobless clone of the media gist.
-const CLONE: &str = "pr-media-gist.git";
+/// The data folder's folder of bare, blobless clones of media gists, one `<id>.git` each.
+const CLONES: &str = "pr-media-gists";
 
 /// Who plxd's commits to the gist are by. The push is still the gh user's.
 const AUTHOR: [&str; 4] = [
@@ -104,6 +104,11 @@ impl Gist {
         format!("https://gist.github.com/{}.git", self.id)
     }
 
+    /// Its clone in `root`'s [`CLONES`], so a link always names the gist its file went to.
+    fn clone_in(&self, root: &Path) -> std::path::PathBuf {
+        root.join(CLONES).join(format!("{}.git", self.id))
+    }
+
     /// The link to file `name`, pinned to its git `blob`.
     fn raw_url(&self, blob: &str, name: &str) -> String {
         format!(
@@ -138,9 +143,9 @@ pub(crate) async fn upload(
     let gh = daemon.agents.worktrees();
     let root = daemon.data_dir.root();
     let index = root.join(INDEX);
-    let clone = root.join(CLONE);
     let uploads = async {
         let gist = host_gist(gh, root, deadline).await?;
+        let clone = gist.clone_in(root);
         let (gist, clone) = (&gist, &clone);
         upload_all(
             &index,
@@ -394,7 +399,8 @@ fn parse_gist(text: &str) -> Option<Gist> {
 /// Adds `bytes` to the gist at `remote` as file `name` and returns its blob: in `clone`, a bare,
 /// blobless clone made on first use, it fetches the gist's branch, builds a commit on it from the
 /// tree alone, and pushes it. A push another uploader beat is tried once more on the new head.
-/// A file already there with the same bytes needs no commit.
+/// A file already there with the same bytes needs no commit. Only a caller holding its turn in
+/// [`QUEUE`] calls it, and only plxd uses `clone`, so no other git runs there meanwhile.
 async fn put(
     gh: &WorktreeManager,
     clone: &Path,
@@ -405,19 +411,25 @@ async fn put(
     let failed =
         |error: std::io::Error| PrError::Gh(format!("could not write the upload: {error}"));
     if !clone.join("HEAD").is_file() {
+        // Cloned beside it and moved in whole, so a clone cut off part way is never taken for one.
         let parent = clone.parent().unwrap_or(Path::new("."));
-        let _ = std::fs::remove_dir_all(clone);
-        let target = clone.to_string_lossy();
+        std::fs::create_dir_all(parent).map_err(failed)?;
+        let partial = tempfile::tempdir_in(parent).map_err(failed)?;
+        let target = partial.path().join("gist.git");
+        let target_arg = target.to_string_lossy();
         let args = [
             "clone",
             "--bare",
             "--quiet",
             "--filter=blob:none",
             remote,
-            &target,
+            &target_arg,
         ];
         gh.gist_git(parent, &args).await?;
+        let _ = std::fs::remove_dir_all(clone);
+        std::fs::rename(&target, clone).map_err(failed)?;
     }
+    clear_locks(clone);
     let branch = gh
         .gist_git(clone, &["symbolic-ref", "--short", "HEAD"])
         .await?;
@@ -466,6 +478,21 @@ async fn put(
             }
             Err(error) if tries == 0 => return Err(error),
             Err(error) => warn!(%error, "another upload moved the media gist; trying again"),
+        }
+    }
+}
+
+/// Removes the lock files a git that plxd killed part way, such as at [`BUDGET`], left in `clone`,
+/// which would fail every later upload. Safe because no other git runs there: see [`put`].
+fn clear_locks(clone: &Path) {
+    for folder in [clone.to_path_buf(), clone.join("refs").join("heads")] {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().ends_with(".lock") {
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
     }
 }
