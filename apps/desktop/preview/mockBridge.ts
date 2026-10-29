@@ -27,6 +27,7 @@ import {
   type AgentRun,
   type Capabilities,
   type EventsEventParams,
+  type ImportableSession,
   type JsonValue,
   type RelayHost,
   type RemoteSession,
@@ -110,6 +111,8 @@ const capabilities: Capabilities = Object.fromEntries(
     "spaces",
     "threadAttention",
     "threadFork",
+    "threadImport",
+    "threadImportRemote",
     "threadLineage",
     "threadNaming",
     "threadTools",
@@ -602,6 +605,78 @@ const fileScripts: RepoScript[] = [
 // Files `host/upload` took, by path, for `host/readUpload`.
 const uploads = new Map<string, string>(Object.entries(uploadSeeds));
 
+/**
+ * The Claude Code sessions `claude remote-control` served on other computers, which claude.ai
+ * keeps (`thread/importable` with `remote`, PLX-1136). plxd reads each through Claude Code, so
+ * listing them takes a moment.
+ */
+const remoteImportable: ImportableSession[] = [
+  {
+    source: "claude",
+    id: "session_01r1",
+    title: "Hello from Claude RC",
+    cwd: "/Users/ryan/Developer/learn-rust",
+    updatedAt: ago(5),
+    remote: true,
+  },
+  {
+    source: "claude",
+    id: "session_01r2",
+    title: "Upgrade the homelab Postgres",
+    cwd: "C:\\Users\\ryan\\life\\projects\\homelab",
+    updatedAt: ago(40),
+    remote: true,
+  },
+  {
+    source: "claude",
+    id: "session_01r3",
+    title: "Port the lexer to Rust",
+    cwd: "/Users/ryan/Developer/learn-rust",
+    updatedAt: ago(190),
+    remote: true,
+  },
+  {
+    source: "claude",
+    id: "session_01r4",
+    title: "Write the backup cron script",
+    cwd: "C:\\Users\\ryan\\life\\projects\\homelab",
+    updatedAt: ago(60 * 30),
+    remote: true,
+  },
+];
+
+/** This computer's past Claude, Codex, and Cursor app sessions (`thread/importable`). */
+const importable: ImportableSession[] = [
+  {
+    source: "claude",
+    id: "c1",
+    title: "Rework the updater",
+    cwd: `${HOME}/Developer/parallax`,
+    updatedAt: ago(12),
+  },
+  {
+    source: "codex",
+    id: "x1",
+    title: "Draft the M4 release notes",
+    cwd: `${HOME}/Developer/parallax`,
+    updatedAt: ago(140),
+  },
+  {
+    source: "claude",
+    id: "c2",
+    title: "Fix flaky webhook retry test",
+    cwd: `${HOME}/Developer/acme-api`,
+    updatedAt: ago(860),
+  },
+  {
+    source: "cursor",
+    id: "u1",
+    title: "Tidy the docs-site sidebar",
+    cwd: `${HOME}/Developer/docs-site`,
+    updatedAt: ago(2000),
+  },
+];
+
 const handlers: { [M in Method]?: Handler<M> } = {
   "repo/scripts": (p) => ({
     scripts: repoScripts.get(p.repo) ?? [],
@@ -830,6 +905,17 @@ const handlers: { [M in Method]?: Handler<M> } = {
         );
       });
     return { thread, run };
+  },
+  // This computer's past app sessions to import, kept until the page reloads. An import only
+  // marks its session imported: the preview makes no archived thread for it.
+  "thread/importable": (p) => ({ sessions: p.remote ? remoteImportable : importable }),
+  "thread/import": (p) => {
+    const session = (p.remote ? remoteImportable : importable).find(
+      (s) => s.source === p.source && s.id === p.id,
+    );
+    if (!session) return fail("no such session");
+    session.thread = `imported-${p.id}`;
+    return {} as never;
   },
   "thread/fork": (p) => {
     const parent = runOf(p.runId);
@@ -1798,6 +1884,10 @@ const expand = (p: string) => p.replace(/^~(?=\/|$)/, HOME).replace(/\/+$/, "") 
 // The terminal app Settings > General chose, once Choose… is clicked.
 let mockTerminal: string | null = "Ghostty";
 
+function ago(minutes: number) {
+  return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
 export const mockBridge: ParallaxBridge = {
   platform: "darwin",
   version: () => delay("0.0.0-preview"),
@@ -1895,7 +1985,11 @@ export const mockBridge: ParallaxBridge = {
       ? { error: answer }
       : { result: structuredClone(answer), logId: LOG_ID };
     // plxd runs ccusage and pages Cursor's API for usage/daily, which takes a second or two.
-    return delay(response as HostResponse<Result<M>>, method === "usage/daily" ? 1200 : 40);
+    // plxd reads claude.ai's sessions through Claude Code for thread/importable's remote.
+    const slow =
+      method === "usage/daily" ||
+      (method === "thread/importable" && (params as { remote?: boolean }).remote);
+    return delay(response as HostResponse<Result<M>>, slow ? 1800 : 40);
   },
 
   subscribe(hostId: string, params: SubscribeParams, listener: (m: SubscriptionMessage) => void) {

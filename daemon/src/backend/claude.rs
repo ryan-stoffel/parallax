@@ -189,8 +189,8 @@ use super::event::{Event, Failure, FailureKind, Outcome, WarningKind, exit_outco
 use super::limits::{self, LimitsProbe};
 use super::namer::{self, NameProbe};
 use super::process::{
-    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, ProcessSpec, SpawnError,
-    StdinMode,
+    CancelPolicy, Environment, Exit, Launcher, Output, OutputLimits, Process, ProcessSpec,
+    SpawnError, StdinMode,
 };
 use super::sandbox::worker_sandbox;
 use super::{
@@ -1207,6 +1207,23 @@ impl Backend for ClaudeBackend {
             ],
             parse: limits::claude,
         }))
+    }
+
+    /// `claude -p` in stream-json on this backend's login, with hooks and MCP servers off, as for
+    /// `get_usage`.
+    fn control(&self, cwd: &Path) -> Result<Option<Process>, StartError> {
+        let mut spec = self.probe_spec(cwd, BASE_ARGS.iter().map(OsString::from).collect())?;
+        spec.args.extend(
+            [
+                "--strict-mcp-config",
+                "--settings",
+                r#"{"disableAllHooks":true}"#,
+            ]
+            .map(OsString::from),
+        );
+        // A page of a long session's transcript can pass the usual line limit.
+        spec.limits.max_line_bytes = 64 * 1024 * 1024;
+        Ok(Some(self.launcher.spawn(&spec)?))
     }
 
     /// `claude -p` on the user's login ([`namer_arguments`]), answering in [`namer::schema`]'s

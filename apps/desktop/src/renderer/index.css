@@ -1475,6 +1475,20 @@ body {
   color: transparent;
   animation: working-shimmer 2s linear infinite;
 }
+/* Text for something still loading shimmers the same way: the import list's row while claude.ai
+   is checked (ImportSessions.tsx). */
+.shimmer-text {
+  background: linear-gradient(
+      90deg,
+      var(--muted-foreground) 40%,
+      var(--foreground) 50%,
+      var(--muted-foreground) 60%
+    )
+    0 0 / 300% 100%;
+  background-clip: text;
+  color: transparent;
+  animation: working-shimmer 2s linear infinite;
+}
 @keyframes working-shimmer {
   from {
     background-position: 100% 0;
@@ -1486,7 +1500,8 @@ body {
 
 /* Under reduced motion, spinners stand still, and titles don't shimmer. */
 :root.reduce-motion {
-  [data-slot="trace-line"][data-status="running"] [data-slot="trace-title"] {
+  [data-slot="trace-line"][data-status="running"] [data-slot="trace-title"],
+  .shimmer-text {
     animation: none;
     background: none;
     color: inherit;

@@ -16,11 +16,15 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** A bridge with `saved` SSH hosts, each connected and able to import but those `offline`. */
+/**
+ * A bridge with `saved` SSH hosts, each connected and able to import but those `offline`, and
+ * with `remote`, able to list claude.ai's Remote Control sessions too (PLX-1136).
+ */
 function bridge(
   request: unknown,
   saved: { id: string; name: string }[] = [],
   offline: string[] = [],
+  remote = false,
 ) {
   window.parallax = {
     connectionState: async (host: string) =>
@@ -30,7 +34,7 @@ function bridge(
             status: "connected" as const,
             plxd: "1",
             protocol: 1,
-            capabilities: { threadImport: {} },
+            capabilities: { threadImport: {}, ...(remote && { threadImportRemote: {} }) },
           },
     onConnectionState: () => () => {},
     hosts: async () => saved,
@@ -181,4 +185,54 @@ test("the menu leaves out a computer that isn't connected, and an import's reloa
   const text = document.body.textContent;
   expect(text).toContain("On the desktop");
   expect(text).not.toContain("On this computer");
+});
+
+test("claude.ai's Remote Control sessions join the list, marked remote, and import as remote", async () => {
+  const request = vi.fn(async (_host: string, method: string, params: Record<string, unknown>) => {
+    if (method === "providers/list") return { result: { providers: [] } };
+    if (method === "thread/import") return { result: { thread: { id: "t1" } } };
+    if (params["remote"])
+      return {
+        result: {
+          sessions: [
+            session({
+              source: "claude",
+              id: "session_01r1",
+              title: "Hello from Claude RC",
+              updatedAt: "2026-10-02T00:00:00Z",
+              remote: true,
+            }),
+          ],
+        },
+      };
+    return { result: { sessions: [session({ id: "x1", title: "Finish HW2" })] } };
+  });
+  bridge(request, [], [], true);
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  await act(async () => root!.render(<ImportSessions />));
+
+  const rows = [...document.querySelectorAll('ul[aria-label="Sessions"] li')];
+  expect(rows.map((r) => r.querySelector('[role="img"]')?.getAttribute("aria-label"))).toEqual([
+    "Remote Control, from claude.ai",
+    undefined,
+  ]);
+  await act(async () =>
+    document
+      .querySelector<HTMLInputElement>('input[aria-label="Import Hello from Claude RC"]')!
+      .click(),
+  );
+  await act(async () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Import 1")!.click(),
+  );
+  expect(request).toHaveBeenCalledWith("local", "thread/import", {
+    source: "claude",
+    id: "session_01r1",
+    remote: true,
+  });
+  // The imported row is marked without reading claude.ai again, which takes minutes.
+  expect(document.querySelector('input[aria-label="Import Hello from Claude RC"]')).toBeNull();
+  const remoteReads = request.mock.calls.filter(
+    ([, method, params]) => method === "thread/importable" && params["remote"],
+  );
+  expect(remoteReads).toHaveLength(1);
 });

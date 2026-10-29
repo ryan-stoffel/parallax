@@ -136,6 +136,7 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ),
             ("threadFork".to_owned(), serde_json::Map::new()),
             ("threadImport".to_owned(), serde_json::Map::new()),
+            ("threadImportRemote".to_owned(), serde_json::Map::new()),
             ("threadLineage".to_owned(), serde_json::Map::new()),
             ("threadNaming".to_owned(), serde_json::Map::new()),
             ("threadTools".to_owned(), serde_json::Map::new()),

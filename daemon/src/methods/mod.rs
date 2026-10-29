@@ -329,7 +329,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ThreadList => |_| threads::list(daemon),
         ThreadStart => |p| thread::start(context, p),
         ThreadFork => |p| thread::fork(context, p),
-        ThreadImportable => |_| crate::importer::importable(daemon),
+        ThreadImportable => |p| crate::importer::importable(daemon, p),
         ThreadImport => |p| thread::import(context, p),
         ThreadImportChat => |p| thread::import_chat(context, p),
         ThreadImportedChats => |p| crate::importer::imported_chats(daemon, p),

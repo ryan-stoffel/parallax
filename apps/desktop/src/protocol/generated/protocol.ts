@@ -6399,7 +6399,14 @@ export type ThreadForkParams = {
 /**
  * Params of `thread/importable`.
  */
-export type ThreadImportableParams = Record<symbol, never>;
+export type ThreadImportableParams = {
+	/**
+	 * Lists the `claude.ai` sessions to import ([`ImportableSession::remote`]) instead of the
+	 * apps' sessions on the host. Slower, as each is read to check it has a transcript. Behind
+	 * the `threadImportRemote` capability.
+	 */
+	remote?: boolean,
+};
 
 /**
  * Result of `thread/importable`.
@@ -6410,6 +6417,11 @@ export type ThreadImportableResult = {
 	 * installed, or whose files can't be read, adds none.
 	 */
 	sessions: Array<ImportableSession>,
+	/**
+	 * For `remote`, why `claude.ai`'s sessions couldn't be listed, such as Claude Code not being
+	 * signed in with a `claude.ai` account.
+	 */
+	problem?: string,
 };
 
 /**
@@ -6440,6 +6452,12 @@ export type ImportableSession = {
 	 * The thread it was imported as. Absent until it is.
 	 */
 	thread?: RunId,
+	/**
+	 * A Claude Code session `claude remote-control` served on another computer, which
+	 * `claude.ai` keeps (PLX-1136): its id is `claude.ai`'s, and its transcript is read from there
+	 * through Claude Code's own sign-in.
+	 */
+	remote?: boolean,
 };
 
 /**
@@ -6462,6 +6480,10 @@ export type ThreadImportParams = {
 	 * The app's id for it, as `thread/importable` listed it.
 	 */
 	id: string,
+	/**
+	 * It's a `claude.ai` session ([`ImportableSession::remote`]).
+	 */
+	remote?: boolean,
 	/**
 	 * The account the thread's follow-ups run on. Absent means the built-in agent of the
 	 * session's app: `claude`, `codex`, or `cursor`.

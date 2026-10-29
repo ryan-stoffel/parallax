@@ -161,7 +161,18 @@ pub(crate) async fn matching(
     params: RepoMatchParams,
 ) -> Result<RepoMatchResult, ErrorObject> {
     check_url(&params.origin)?;
-    let wanted = repo_key(&params.origin);
+    Ok(RepoMatchResult {
+        repo: with_origin(daemon, &params.origin).await?,
+    })
+}
+
+/// The registered repository whose `origin` names the same repository as `url`, whatever its
+/// scheme, user, or `.git`: for `repo/match`, and for importing a `claude.ai` session (PLX-1136).
+pub(crate) async fn with_origin(
+    daemon: &Arc<Daemon>,
+    url: &str,
+) -> Result<Option<parallax_protocol::Repo>, ErrorObject> {
+    let wanted = repo_key(url);
     let entries = daemon
         .reader
         .run(&CancellationToken::new(), |db| {
@@ -178,11 +189,10 @@ pub(crate) async fn matching(
             .await
             .is_some_and(|url| repo_key(&url) == wanted)
         {
-            let repo = threads::repo_entry(entry)?;
-            return Ok(RepoMatchResult { repo: Some(repo) });
+            return threads::repo_entry(entry).map(Some);
         }
     }
-    Ok(RepoMatchResult { repo: None })
+    Ok(None)
 }
 
 /// Clone `id`'s entry in [`PROGRESS`], removed when it drops.

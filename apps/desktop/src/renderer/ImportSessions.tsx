@@ -1,6 +1,8 @@
 import {
   ArrowLeft,
   Check,
+  Cloud,
+  CloudOff,
   Download,
   FileArchive,
   Folder,
@@ -55,6 +57,8 @@ type Item = {
   at: string;
   /** Its thread, once imported. */
   thread?: string | undefined;
+  /** A Remote Control session claude.ai keeps, from another computer (PLX-1136). */
+  remote?: boolean;
 };
 
 /**
@@ -88,6 +92,10 @@ function useImport(capability: "threadImport" | "chatImport", hostId = localId, 
  * imported says so. It starts on this computer, with a menu for any other connected one, and
  * Refresh lists them again. A computer that disconnects leaves the menu, and the dialog goes back
  * to this one. Onboarding and Settings > Threads' Import sessions show it.
+ *
+ * With `threadImportRemote` (PLX-1136), the list also has the Claude Code sessions
+ * `claude remote-control` served on the user's other computers, which claude.ai keeps, marked as
+ * remote. They're read through that plxd's Claude Code, so they arrive a moment after the rest.
  */
 export function ImportSessions({ className = "" }: { className?: string }) {
   const all = useHosts();
@@ -96,14 +104,26 @@ export function ImportSessions({ className = "" }: { className?: string }) {
   const [hostId, setHostId] = useState(localId);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const { supported, why, providers } = useImport("threadImport", host.id, host.name);
+  const connection = useConnection(host.id);
+  const remoteSupported =
+    supported &&
+    connection?.status === "connected" &&
+    "threadImportRemote" in connection.capabilities;
   const [sessions, setSessions] = useState<ImportableSession[]>();
+  const [remote, setRemote] = useState<ImportableSession[]>([]);
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
+  // Whether claude.ai's sessions are still being read, and why they couldn't be.
+  const [checking, setChecking] = useState(false);
+  const [problem, setProblem] = useState<string>();
   // The host shown, so an answer from one picked before it, or an import's reload there, is
-  // dropped.
+  // dropped; and the last claude.ai read asked, so an earlier one's late answer is too.
   const shown = useRef(host.id);
+  const remoteAsked = useRef(0);
 
-  const load = useCallback(async () => {
+  // This computer's sessions, which an import's reload reads again on its own: claude.ai's take
+  // minutes, and an import marks its own row.
+  const loadLocal = useCallback(async () => {
     const id = host.id;
     if (shown.current !== id) return;
     setLoading(true);
@@ -118,11 +138,32 @@ export function ImportSessions({ className = "" }: { className?: string }) {
       setSessions(answer.result.sessions);
     }
   }, [host.id]);
+  const load = useCallback(async () => {
+    const id = host.id;
+    if (shown.current !== id) return;
+    if (remoteSupported) {
+      const asked = ++remoteAsked.current;
+      setChecking(true);
+      void window.parallax.request(id, "thread/importable", { remote: true }).then((answer) => {
+        if (shown.current !== id || remoteAsked.current !== asked) return;
+        setChecking(false);
+        if ("error" in answer) setProblem(describeError(answer.error));
+        else {
+          setProblem(answer.result.problem);
+          setRemote(answer.result.sessions);
+        }
+      });
+    }
+    await loadLocal();
+  }, [host.id, remoteSupported, loadLocal]);
   useEffect(() => {
     shown.current = host.id;
     setSessions(undefined);
+    setRemote([]);
     setError(undefined);
+    setProblem(undefined);
     setLoading(false);
+    setChecking(false);
     if (supported) void load();
   }, [host.id, supported, load]);
 
@@ -141,13 +182,51 @@ export function ImportSessions({ className = "" }: { className?: string }) {
           />
         </span>
       ) : (
-        <span />
+        <span className="text-body font-medium">
+          {remote.length ? "Your sessions" : "Sessions on this computer"}
+        </span>
       )}
-      <IconButton label="Refresh" disabled={!supported || loading} onClick={() => void load()}>
-        <RefreshCw aria-hidden className={loading ? "animate-spin" : ""} />
-      </IconButton>
+      <span className="flex min-w-0 items-center gap-2">
+        {!checking && problem && (
+          <span
+            title={problem}
+            className="flex min-w-0 items-center gap-1.5 text-meta text-faint-foreground [&_svg]:size-3"
+          >
+            <CloudOff aria-hidden className="shrink-0" />
+            <span className="truncate">Couldn't check claude.ai</span>
+          </span>
+        )}
+        <IconButton
+          label="Refresh"
+          disabled={!supported || loading || checking}
+          onClick={() => void load()}
+        >
+          <RefreshCw aria-hidden className={loading ? "animate-spin" : ""} />
+        </IconButton>
+      </span>
     </div>
   );
+  const items =
+    sessions &&
+    [
+      ...sessions.map((s): Item => ({
+        key: `${s.source}:${s.id}`,
+        source: s.source,
+        title: s.title,
+        folder: s.cwd?.split(/[\\/]/).filter(Boolean).pop(),
+        at: s.updatedAt,
+        thread: s.thread,
+      })),
+      ...remote.map((s): Item => ({
+        key: `remote:${s.id}`,
+        source: s.source,
+        title: s.title,
+        folder: s.cwd?.split(/[\\/]/).filter(Boolean).pop(),
+        at: s.updatedAt,
+        thread: s.thread,
+        remote: true,
+      })),
+    ].sort((a, b) => b.at.localeCompare(a.at));
   let body: ReactNode;
   if (why) body = <Notice className="min-h-0 flex-1">{why}</Notice>;
   else if (!sessions && error)
@@ -156,14 +235,14 @@ export function ImportSessions({ className = "" }: { className?: string }) {
         {error}
       </Notice>
     );
-  else if (!sessions)
+  else if (!items || (items.length === 0 && checking))
     body = (
       <Notice className="min-h-0 flex-1">
         <LoaderCircle aria-hidden className="mb-2 size-5 animate-spin text-faint-foreground" />
         Looking for sessions in Claude, Codex, and Cursor…
       </Notice>
     );
-  else if (sessions.length === 0)
+  else if (items.length === 0)
     body = (
       <Notice className="min-h-0 flex-1">
         <AppLogos apps={sessionApps} className="mb-3" />
@@ -176,25 +255,27 @@ export function ImportSessions({ className = "" }: { className?: string }) {
         key={host.id}
         className="min-h-0 flex-1"
         apps={sessionApps}
-        items={sessions.map((s) => ({
-          key: `${s.source}:${s.id}`,
-          source: s.source,
-          title: s.title,
-          folder: s.cwd?.split(/[\\/]/).filter(Boolean).pop(),
-          at: s.updatedAt,
-          thread: s.thread,
-        }))}
+        items={items}
+        checking={checking}
         importItem={async (item) => {
-          const session = sessions.find((s) => `${s.source}:${s.id}` === item.key)!;
+          const session = (item.remote ? remote : sessions!).find(
+            (s) => (item.remote ? `remote:${s.id}` : `${s.source}:${s.id}`) === item.key,
+          )!;
           const account = importAccount(session.source, providers);
           const answer = await window.parallax.request(host.id, "thread/import", {
             source: session.source,
             id: session.id,
+            ...(item.remote && { remote: true }),
             ...(account && { account }),
           });
-          return "error" in answer ? describeError(answer.error) : undefined;
+          if ("error" in answer) return describeError(answer.error);
+          if (item.remote) {
+            const thread = answer.result.thread.id;
+            setRemote((now) => now.map((s) => (s.id === session.id ? { ...s, thread } : s)));
+          }
+          return undefined;
         }}
-        onImported={load}
+        onImported={loadLocal}
       />
     );
   return (
@@ -435,7 +516,7 @@ function ExportDrop({
 /**
  * `items` to pick and import, the newest first, filtered by `apps`, with Select all, a count, and
  * progress while `importItem` imports each picked one in turn, answering an error in words or
- * nothing. `onImported` then lists them again.
+ * nothing. `onImported` then reads them again.
  */
 function SessionList({
   className,
@@ -443,16 +524,20 @@ function SessionList({
   items,
   importItem,
   onImported,
+  checking = false,
 }: {
   className: string;
   apps: App[];
   items: Item[];
+  /** claude.ai's Remote Control sessions are still being read: a row says so (PLX-1136). */
+  checking?: boolean;
   importItem: (item: Item) => Promise<string | undefined>;
   onImported: () => Promise<void>;
 }) {
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [progress, setProgress] = useState<{ done: number; total: number }>();
-  const [filter, setFilter] = useState<ImportSource | "all">("all");
+  // An app, or with "remote", claude.ai's Remote Control sessions (PLX-1136).
+  const [filter, setFilter] = useState<ImportSource | "all" | "remote">("all");
   const id = useId();
 
   const open = items.filter((s) => !s.thread);
@@ -488,7 +573,9 @@ function SessionList({
 
   const busy = !!progress;
   const count = open.filter((s) => picked.has(s.key)).length;
-  const shown = items.filter((s) => filter === "all" || s.source === filter);
+  const matches = (s: Item, f: typeof filter) =>
+    f === "all" || (f === "remote" ? !!s.remote : s.source === f);
+  const shown = items.filter((s) => matches(s, filter));
   const shownOpen = shown.filter((s) => !s.thread).map((s) => s.key);
   const allShown = shownOpen.length > 0 && shownOpen.every((key) => picked.has(key));
   return (
@@ -499,11 +586,12 @@ function SessionList({
           disabled={busy}
           className="flex gap-0.5 rounded-lg border border-border p-0.5"
         >
-          {[{ source: "all" as const, name: "All" }, ...apps].map((app) => {
-            const n =
-              app.source === "all"
-                ? items.length
-                : items.filter((s) => s.source === app.source).length;
+          {[
+            { source: "all" as const, name: "All" },
+            ...apps,
+            { source: "remote" as const, name: "Remote" },
+          ].map((app) => {
+            const n = items.filter((s) => matches(s, app.source)).length;
             if (n === 0) return null;
             return (
               <label key={app.source} className={segment}>
@@ -515,7 +603,7 @@ function SessionList({
                   onChange={() => setFilter(app.source)}
                   className="sr-only"
                 />
-                {"Logo" in app && <app.Logo />}
+                {app.source === "remote" ? <Cloud aria-hidden /> : "Logo" in app && <app.Logo />}
                 {app.name}
                 <span className="text-faint-foreground tabular-nums">{n}</span>
               </label>
@@ -535,6 +623,7 @@ function SessionList({
         aria-label="Sessions"
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-xl border border-border bg-surface p-1"
       >
+        {checking && ["all", "claude", "remote"].includes(filter) && <CheckingRow />}
         {shown.map((s) => (
           <SessionRow
             key={s.key}
@@ -629,32 +718,32 @@ function SessionRow({
   onToggle: (on: boolean) => void;
 }) {
   return (
-    <li>
+    <li className={s.remote ? "rise-in" : undefined}>
       <label
         className={`flex items-center gap-3 rounded-lg px-2.5 py-2 ${s.thread ? "" : "cursor-pointer hover:bg-hover"} ${picked ? "bg-accent/8" : ""}`}
       >
         {s.thread ? (
           <span className="size-4 shrink-0" />
         ) : (
-          <>
-            <input
-              type="checkbox"
-              aria-label={`Import ${s.title}`}
-              disabled={disabled}
-              checked={picked}
-              onChange={(e) => onToggle(e.target.checked)}
-              className="peer sr-only"
-            />
-            <span
-              aria-hidden
-              className="grid size-4 shrink-0 place-items-center rounded-sm border border-faint-foreground/50 bg-background text-accent-foreground peer-checked:border-accent peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-ring [&_svg]:invisible peer-checked:[&_svg]:visible"
-            >
-              <Check className="size-3" strokeWidth={3} />
-            </span>
-          </>
+          <PickBox
+            label={`Import ${s.title}`}
+            disabled={disabled}
+            picked={picked}
+            onToggle={onToggle}
+          />
         )}
-        <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background">
+        <span className="relative grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background">
           <app.Logo className="size-4" />
+          {s.remote && (
+            <span
+              role="img"
+              aria-label="Remote Control, from claude.ai"
+              title="Remote Control session, from claude.ai"
+              className="absolute -right-1.5 -bottom-1.5 grid size-4 place-items-center rounded-full border border-border bg-surface text-muted-foreground"
+            >
+              <Cloud aria-hidden className="size-2.5" strokeWidth={2.5} />
+            </span>
+          )}
         </span>
         <span className="min-w-0 flex-1">
           <span
@@ -680,6 +769,61 @@ function SessionRow({
         )}
       </label>
     </li>
+  );
+}
+
+/**
+ * The row `SessionList` shows while claude.ai's Remote Control sessions are read (PLX-1136), shaped
+ * like a session's: a cloud that pulses where the app's logo goes, and a title that shimmers.
+ */
+function CheckingRow() {
+  return (
+    <li aria-busy="true" className="flex items-center gap-3 rounded-lg px-2.5 py-2">
+      <span className="size-4 shrink-0" />
+      <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background text-faint-foreground">
+        <Cloud aria-hidden className="size-4 animate-pulse" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span role="status" className="shimmer-text block truncate text-body font-medium">
+          Looking for Remote Control sessions on claude.ai
+        </span>
+        <span className="block truncate text-meta text-faint-foreground">
+          The ones claude rc ran on your other computers
+        </span>
+      </span>
+    </li>
+  );
+}
+
+/** A row's checkbox, inside its `<label>`. */
+function PickBox({
+  label,
+  disabled,
+  picked,
+  onToggle,
+}: {
+  label: string;
+  disabled: boolean;
+  picked: boolean;
+  onToggle: (on: boolean) => void;
+}) {
+  return (
+    <>
+      <input
+        type="checkbox"
+        aria-label={label}
+        disabled={disabled}
+        checked={picked}
+        onChange={(e) => onToggle(e.target.checked)}
+        className="peer sr-only"
+      />
+      <span
+        aria-hidden
+        className="grid size-4 shrink-0 place-items-center rounded-sm border border-faint-foreground/50 bg-background text-accent-foreground peer-checked:border-accent peer-checked:bg-accent peer-focus-visible:outline-2 peer-focus-visible:outline-ring peer-disabled:opacity-40 [&_svg]:invisible peer-checked:[&_svg]:visible"
+      >
+        <Check className="size-3" strokeWidth={3} />
+      </span>
+    </>
   );
 }
 
