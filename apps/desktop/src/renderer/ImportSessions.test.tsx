@@ -16,15 +16,22 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-/** A bridge whose hosts are all connected and can import, with `saved` SSH hosts. */
-function bridge(request: unknown, saved: { id: string; name: string }[] = []) {
+/** A bridge with `saved` SSH hosts, each connected and able to import but those `offline`. */
+function bridge(
+  request: unknown,
+  saved: { id: string; name: string }[] = [],
+  offline: string[] = [],
+) {
   window.parallax = {
-    connectionState: async () => ({
-      status: "connected" as const,
-      plxd: "1",
-      protocol: 1,
-      capabilities: { threadImport: {} },
-    }),
+    connectionState: async (host: string) =>
+      offline.includes(host)
+        ? { status: "connecting" as const }
+        : {
+            status: "connected" as const,
+            plxd: "1",
+            protocol: 1,
+            capabilities: { threadImport: {} },
+          },
     onConnectionState: () => () => {},
     hosts: async () => saved,
     onHosts: () => () => {},
@@ -126,4 +133,52 @@ test("Refresh lists a computer's sessions again, and the menu lists another conn
   expect(text()).toContain("Run through Remote Control");
   expect(text()).not.toContain("Finish HW2");
   expect(request).toHaveBeenCalledWith("desk", "thread/importable", {});
+});
+
+test("the menu leaves out a computer that isn't connected, and an import's reload doesn't replace the next one's list", async () => {
+  let imported: (value: unknown) => void = () => {};
+  const found: Record<string, ImportableSession[]> = {
+    local: [session({ id: "x1", title: "On this computer" })],
+    desk: [session({ id: "d1", title: "On the desktop" })],
+  };
+  const request = vi.fn((host: string, method: string) => {
+    if (method === "providers/list") return Promise.resolve({ result: { providers: [] } });
+    if (method === "thread/import") return new Promise((resolve) => (imported = resolve));
+    return Promise.resolve({ result: { sessions: found[host] } });
+  });
+  bridge(
+    request,
+    [
+      { id: "desk", name: "Desktop PC" },
+      { id: "lab", name: "Lab" },
+    ],
+    ["lab"],
+  );
+  root = createRoot(document.body.appendChild(document.createElement("div")));
+  await act(async () => root!.render(<ImportSessions />));
+  const options = () => [
+    ...document.querySelectorAll<HTMLElement>(
+      '[role="menu"][aria-label="Computer"] [role="menuitemradio"]',
+    ),
+  ];
+  expect(options().map((o) => o.textContent)).toEqual(["This computer", "Desktop PC"]);
+
+  // An import on this computer finishes after the desktop is picked.
+  await act(async () =>
+    document
+      .querySelector<HTMLInputElement>('input[aria-label="Import On this computer"]')!
+      .click(),
+  );
+  await act(async () =>
+    [...document.querySelectorAll("button")].find((b) => b.textContent === "Import 1")!.click(),
+  );
+  await act(async () =>
+    options()
+      .find((o) => o.textContent === "Desktop PC")!
+      .click(),
+  );
+  await act(async () => imported({ result: {} }));
+  const text = document.body.textContent;
+  expect(text).toContain("On the desktop");
+  expect(text).not.toContain("On this computer");
 });

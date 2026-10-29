@@ -20,7 +20,7 @@ import {
 
 import type { ImportSource, ImportableSession } from "../protocol/generated/protocol";
 import { readExports, type ExportPart, type ExportedChat } from "./chatExports";
-import { useConnection } from "./ConnectionStatus";
+import { useConnection, useConnections } from "./ConnectionStatus";
 import { describeError } from "./errors";
 import { localId, useHosts } from "./hosts";
 import { notify } from "./notifications";
@@ -86,24 +86,29 @@ function useImport(capability: "threadImport" | "chatImport", hostId = localId, 
  * and Codex Remote Control sessions (PLX-881), the most recent first and filtered by app, to pick
  * and import as archived threads on it (`thread/importable`, `thread/import`). One already
  * imported says so. It starts on this computer, with a menu for any other connected one, and
- * Refresh lists them again. Onboarding and Settings > Threads' Import sessions show it.
+ * Refresh lists them again. A computer that disconnects leaves the menu, and the dialog goes back
+ * to this one. Onboarding and Settings > Threads' Import sessions show it.
  */
 export function ImportSessions({ className = "" }: { className?: string }) {
-  const hosts = useHosts();
+  const all = useHosts();
+  const states = useConnections(all.map((h) => h.id));
+  const hosts = all.filter((h, i) => h.id === localId || states[i]?.status === "connected");
   const [hostId, setHostId] = useState(localId);
   const host = hosts.find((h) => h.id === hostId) ?? hosts[0]!;
   const { supported, why, providers } = useImport("threadImport", host.id, host.name);
   const [sessions, setSessions] = useState<ImportableSession[]>();
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
-  // The host last asked, so an answer from the one picked before it is dropped.
-  const asked = useRef(host.id);
+  // The host shown, so an answer from one picked before it, or an import's reload there, is
+  // dropped.
+  const shown = useRef(host.id);
 
   const load = useCallback(async () => {
-    asked.current = host.id;
+    const id = host.id;
+    if (shown.current !== id) return;
     setLoading(true);
-    const answer = await window.parallax.request(host.id, "thread/importable", {});
-    if (asked.current !== host.id) return;
+    const answer = await window.parallax.request(id, "thread/importable", {});
+    if (shown.current !== id) return;
     setLoading(false);
     if ("error" in answer) {
       setSessions(undefined);
@@ -114,10 +119,12 @@ export function ImportSessions({ className = "" }: { className?: string }) {
     }
   }, [host.id]);
   useEffect(() => {
+    shown.current = host.id;
     setSessions(undefined);
     setError(undefined);
+    setLoading(false);
     if (supported) void load();
-  }, [supported, load]);
+  }, [host.id, supported, load]);
 
   const where = host.id === localId ? "this computer" : host.name;
   const bar = (
@@ -166,6 +173,7 @@ export function ImportSessions({ className = "" }: { className?: string }) {
   else
     body = (
       <SessionList
+        key={host.id}
         className="min-h-0 flex-1"
         apps={sessionApps}
         items={sessions.map((s) => ({
