@@ -11,6 +11,8 @@ import {
   type LanHost,
   type ParallaxBridge,
   type Profile,
+  type RemoteComputer,
+  type RemoteImportState,
   type RendererMethod,
   type RpcError,
   type SubscribeParams,
@@ -27,6 +29,7 @@ import {
   type AgentRun,
   type Capabilities,
   type EventsEventParams,
+  type ImportableSession,
   type JsonValue,
   type RelayHost,
   type RemoteSession,
@@ -110,6 +113,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "spaces",
     "threadAttention",
     "threadFork",
+    "threadImport",
     "threadLineage",
     "threadNaming",
     "threadTools",
@@ -602,6 +606,38 @@ const fileScripts: RepoScript[] = [
 // Files `host/upload` took, by path, for `host/readUpload`.
 const uploads = new Map<string, string>(Object.entries(uploadSeeds));
 
+/** This computer's past Claude, Codex, and Cursor app sessions (`thread/importable`). */
+const importable: ImportableSession[] = [
+  {
+    source: "claude",
+    id: "c1",
+    title: "Rework the updater",
+    cwd: `${HOME}/Developer/parallax`,
+    updatedAt: ago(12),
+  },
+  {
+    source: "codex",
+    id: "x1",
+    title: "Draft the M4 release notes",
+    cwd: `${HOME}/Developer/parallax`,
+    updatedAt: ago(140),
+  },
+  {
+    source: "claude",
+    id: "c2",
+    title: "Fix flaky webhook retry test",
+    cwd: `${HOME}/Developer/acme-api`,
+    updatedAt: ago(860),
+  },
+  {
+    source: "cursor",
+    id: "u1",
+    title: "Tidy the docs-site sidebar",
+    cwd: `${HOME}/Developer/docs-site`,
+    updatedAt: ago(2000),
+  },
+];
+
 const handlers: { [M in Method]?: Handler<M> } = {
   "repo/scripts": (p) => ({
     scripts: repoScripts.get(p.repo) ?? [],
@@ -830,6 +866,15 @@ const handlers: { [M in Method]?: Handler<M> } = {
         );
       });
     return { thread, run };
+  },
+  // This computer's past app sessions to import, kept until the page reloads. An import only
+  // marks its session imported: the preview makes no archived thread for it.
+  "thread/importable": () => ({ sessions: importable }),
+  "thread/import": (p) => {
+    const session = importable.find((s) => s.source === p.source && s.id === p.id);
+    if (!session) return fail("no such session");
+    session.thread = `imported-${p.id}`;
+    return {} as never;
   },
   "thread/fork": (p) => {
     const parent = runOf(p.runId);
@@ -1798,7 +1843,52 @@ const expand = (p: string) => p.replace(/^~(?=\/|$)/, HOME).replace(/\/+$/, "") 
 // The terminal app Settings > General chose, once Choose… is clicked.
 let mockTerminal: string | null = "Ghostty";
 
+/**
+ * PLX-1136's prototype: computers whose Claude Code sessions ran with Remote Control. Mac mini
+ * imports after its confirmation; studio's first try finds no session listening, and its retry
+ * works; ThinkPad is offline.
+ */
+const remoteComputers: RemoteComputer[] = [
+  { name: "Mac mini", icon: "mini", sessions: 12, lastActive: ago(5), online: true },
+  { name: "studio", icon: "desktop", sessions: 4, lastActive: ago(80), online: true },
+  { name: "ThinkPad", icon: "laptop", sessions: 3, lastActive: ago(60 * 52), online: false },
+];
+const remoteTries = new Map<string, number>();
+
+function ago(minutes: number) {
+  return new Date(Date.now() - minutes * 60_000).toISOString();
+}
+
+/** Plays one computer's import: asking, the code to confirm, receiving, then done. */
+function startRemoteImport(name: string, onState: (state: RemoteImportState) => void) {
+  const tries = (remoteTries.get(name) ?? 0) + 1;
+  remoteTries.set(name, tries);
+  const computer = remoteComputers.find((c) => c.name === name)!;
+  const code = Array.from(
+    { length: 4 },
+    () => "ABCDEFGHJKMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 31)],
+  ).join("");
+  const steps: [number, RemoteImportState][] =
+    name === "studio" && tries === 1
+      ? [
+          [0, { state: "asking" }],
+          [2500, { state: "failed", message: "No Claude session on studio answered. Try again." }],
+        ]
+      : [
+          [0, { state: "asking" }],
+          [1500, { state: "confirm", code, url: "https://claude.ai/code" }],
+          [9000, { state: "receiving" }],
+          [11000, { state: "done", imported: computer.sessions }],
+        ];
+  const timers = steps.map(([ms, state]) => setTimeout(() => onState(state), ms));
+  return () => timers.forEach(clearTimeout);
+}
+
 export const mockBridge: ParallaxBridge = {
+  remoteImport: {
+    computers: () => delay(remoteComputers, 300),
+    start: startRemoteImport,
+  },
   platform: "darwin",
   version: () => delay("0.0.0-preview"),
   setThemeSource: noop,

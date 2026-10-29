@@ -171,7 +171,38 @@ export const needsTransparentWindow = (material: WindowMaterial, platform: strin
 /** A window's background: Settings > Appearance's Window. */
 export type WindowMaterial = "opaque" | "clear" | "blur";
 
+/** A computer that ran Claude Code sessions with Remote Control, as claude.ai lists it (PLX-1136). */
+export type RemoteComputer = {
+  /** Its host name, as Remote Control names it. */
+  name: string;
+  icon: DeviceIcon;
+  /** How many Remote Control sessions it ran. */
+  sessions: number;
+  /** When one last changed, ISO. */
+  lastActive: string;
+  /** Whether a session there is connected now, so Claude there can be asked. */
+  online: boolean;
+};
+
+/** How far one computer's import through Claude has got (PLX-1136). */
+export type RemoteImportState =
+  | { state: "asking" }
+  /** Claude there is asking the user to confirm, showing `code`. `url` opens that session. */
+  | { state: "confirm"; code: string; url: string }
+  | { state: "receiving" }
+  | { state: "done"; imported: number }
+  | { state: "failed"; message: string };
+
 export interface ParallaxBridge {
+  /**
+   * Prototype (PLX-1136): imports the Remote Control sessions on the user's other computers by
+   * asking Claude there for a copy. Only the renderer preview has it, so the app hides it.
+   */
+  remoteImport?: {
+    computers(): Promise<RemoteComputer[]>;
+    /** Starts importing `computer`'s sessions. `onState` hears each stage. Returns a cancel. */
+    start(computer: string, onState: (state: RemoteImportState) => void): () => void;
+  };
   /** Node's `process.platform`, e.g. "darwin", "win32", "linux". */
   platform: string;
   /** The app's version. */

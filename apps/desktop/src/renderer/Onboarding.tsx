@@ -546,8 +546,9 @@ function ImportStep({ titleId }: { titleId: string }) {
   return (
     <div className="flex h-full flex-col">
       <Heading id={titleId} title="Bring your history">
-        Pick past sessions from the Claude, Codex, and Cursor apps. Each lands in Archived as a
-        thread you can pick up again. Find this in Settings &gt; Threads.
+        Pick past sessions from the Claude, Codex, and Cursor apps, here or on your other computers.
+        Each lands in Archived as a thread you can pick up again. Find this in Settings &gt;
+        Threads.
       </Heading>
       <ImportStepBody className="onboard-rise min-h-0 flex-1" />
     </div>
