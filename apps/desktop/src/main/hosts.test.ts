@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -685,6 +685,76 @@ test("revoking a signed-in device here removes its key on every other computer t
     const answer = await fake.handlers.get("parallax:revokeDevice")!({}, "s1");
     expect(answer).toEqual(sessions);
     expect(removed).toEqual([[connection, { thumbprint: "phone-key" }]]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a tailnet device matched to its account computer by relay/id is approved over Tailscale, then dropped once the account one answers", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const device = { id: "n1", hostName: "thinkpad", ip: "100.64.0.2", os: "linux" };
+    const local = await start(
+      {
+        localName: "macbook",
+        devices: [device],
+        accounts: [{ hostId: studio, name: "studio", routes: [] }],
+      },
+      signedIn().account,
+    );
+    fake.answers.set("host/settings/get", { result: { connect: true } });
+    fake.answers.set("connect/devices", { result: { devices: [] } });
+    // Nothing vouches for studio but the tailnet device with its relay id.
+    fake.answers.set(
+      "access/get",
+      listsBy(() => ({})),
+    );
+    const tailnet = () => fake.made.find((c) => c.options.device === "thinkpad");
+    fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+      result: { hostId: c === tailnet() ? studio : "self" },
+    }));
+    const approved: [unknown, unknown][] = [];
+    fake.answers.set("access/approve", (params: unknown, c: unknown) => {
+      approved.push([c, params]);
+      return { result: {} };
+    });
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    tailnet()!.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+
+    // studio has no session yet: it signs in, and the tailnet connection allows the request.
+    fake.dialOutput = {
+      lines: [
+        '{"status":"pending","request":"r1","code":"731905"}',
+        `{"status":"approved","name":"studio","routes":["192.168.1.30:7341"]}`,
+      ],
+      code: 0,
+    };
+    const account = accountConnection(studio)!;
+    account.set(refused);
+    await vi.advanceTimersByTimeAsync(5);
+    expect(fake.dials.at(-1)?.args).toContain("--sign-in");
+    expect(listed(studio)?.access).toEqual({ step: "pending", code: "731905" });
+    expect(approved).toEqual([[tailnet(), { request: "r1" }]]);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(account.retry).toHaveBeenCalled();
+
+    // Once studio answers as `account:`, the tailnet connection goes, and discovery doesn't bring it back.
+    const old = tailnet()!;
+    account.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(old.disposed).toBe(true);
+    expect((fake.sent.get("parallax:devices") as DeviceHost[]).map((d) => d.id)).toEqual([
+      `account:${studio}`,
+    ]);
+    const made = fake.made.length;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fake.made.slice(made).some((c) => c.options.device === "thinkpad")).toBe(false);
+    const saved = JSON.parse(readFileSync(path.join(fake.userData, "settings.json"), "utf8"));
+    expect(saved.devices[0]).toMatchObject({ id: "n1", migrated: studio });
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });
