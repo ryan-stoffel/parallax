@@ -184,9 +184,12 @@ fn cant_reach(error: &Error) -> String {
 /// A JSON `GET` of `path` at `url`, with no credential, such as Clerk's JWKS (0091): its status,
 /// JSON body, and `Cache-Control` `max-age`. HTTPS checked against the Mozilla roots, as the
 /// relay's own, or plain HTTP to this computer.
-pub(crate) async fn get(url: &str, path: &str) -> Result<(u16, Value, Option<Duration>), Error> {
+pub(crate) async fn get(url: &str, path: &str) -> Result<Answer, Error> {
     request(url, "GET", path, None, None).await
 }
+
+/// An HTTP answer: its status, JSON body, and `Cache-Control` `max-age`.
+pub(crate) type Answer = (u16, Value, Option<Duration>);
 
 /// One JSON request to the relay, signed in with `token` when given: its status and JSON body.
 async fn http(
@@ -207,7 +210,7 @@ async fn request(
     path: &str,
     token: Option<&str>,
     body: Option<&Value>,
-) -> Result<(u16, Value, Option<Duration>), Error> {
+) -> Result<Answer, Error> {
     let base = Base::parse(url)?;
     let mut stream = base.connect().await?;
     let body = body.map(ToString::to_string).unwrap_or_default();
@@ -246,10 +249,7 @@ async fn request(
 
 /// The status, JSON body, and `Cache-Control` `max-age` of `answer`, once it's whole, or at the
 /// end of the connection.
-fn parse_response(
-    answer: &[u8],
-    ended: bool,
-) -> Option<Result<(u16, Value, Option<Duration>), Error>> {
+fn parse_response(answer: &[u8], ended: bool) -> Option<Result<Answer, Error>> {
     let mut headers = [httparse::EMPTY_HEADER; 32];
     let mut response = httparse::Response::new(&mut headers);
     let Ok(httparse::Status::Complete(length)) = response.parse(answer) else {
@@ -687,6 +687,8 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     loop {
         if !wanted(&daemon).await {
             relay.set(Status::default());
+            // Unlinked: a new device's request waiting for approval goes too (0091).
+            daemon.remote.access.clear();
             tokio::select! {
                 () = stop.cancelled() => return,
                 () = relay.changed.notified() => continue,

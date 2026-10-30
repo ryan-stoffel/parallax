@@ -10,7 +10,7 @@
 //!   an NSIS install on Windows), or one already in `~/.parallax-plxd`, installs to
 //!   `~/.parallax-plxd/plxd` (`plxd.exe` on Windows), where the app's SSH install
 //!   (`INSTALL_SCRIPT` in the app's installPlxd.ts) puts it and `LOCATE_PLXD` looks first.
-//!   A standalone plxd, such as the `~/.local/bin/plxd` plx-connect installs on Linux, is replaced
+//!   A standalone plxd, such as the `~/.local/bin/plxd` `plx connect` installs on Linux, is replaced
 //!   in place, falling back to `~/.parallax-plxd` when its folder isn't writable. A cargo build
 //!   (`target/debug`, `target/release`) refuses. Windows won't replace a running exe but renames
 //!   one, so the old one moves aside to [`ASIDE`] first, and the next `serve` deletes it.

@@ -622,6 +622,7 @@ impl Server {
         }
         let cut = agents::recover(&daemon).await;
         crate::setup_scripts::recover(&daemon).await;
+        remote::access::restore(&daemon).await;
         let stop = &shutdown.graceful;
         // Before what waits is sent: a turn waits for its thread's checkpoint captures (0062).
         let mut background = vec![tokio::spawn(crate::orchestrator::work(
@@ -655,6 +656,7 @@ impl Server {
             tokio::spawn(crate::schedules::run(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(crate::pr_watch::run(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(crate::relay::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(remote::access::persist(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(handover),
             tokio::spawn(crate::context::you_sync::run(
                 Arc::clone(&daemon),

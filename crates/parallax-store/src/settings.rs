@@ -45,6 +45,10 @@ const RELAY_ACCOUNT: &str = "relay_account";
 /// ids, as plxd's JSON (0091).
 const ACCOUNT_ACCESS: &str = "account_access";
 
+/// The `host_settings` key for account sign-in's hourly counts and waiting request, as plxd's JSON
+/// (0091), so a restart resets neither.
+const ACCOUNT_LIMITS: &str = "account_limits";
+
 /// The `host_settings` key for the Claude Remote Control sessions plxd's sync already imported
 /// or found imported, as a JSON array of their ids (PLX-1140).
 const REMOTE_CONTROL_SYNCED: &str = "remote_control_synced";
@@ -328,6 +332,24 @@ impl Store {
     /// A database error.
     pub fn set_account_access(&self, access: &str) -> Result<(), StoreError> {
         self.set_text(ACCOUNT_ACCESS, Some(access))
+    }
+
+    /// Account sign-in's hourly counts and waiting request, as plxd's JSON, if kept (0091).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn account_limits(&self) -> Result<Option<String>, StoreError> {
+        self.text(ACCOUNT_LIMITS)
+    }
+
+    /// Stores account sign-in's hourly counts and waiting request.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_account_limits(&self, limits: &str) -> Result<(), StoreError> {
+        self.set_text(ACCOUNT_LIMITS, Some(limits))
     }
 
     /// The Claude Remote Control sessions plxd's sync already took, as plxd's JSON, if any

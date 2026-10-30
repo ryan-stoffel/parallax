@@ -324,7 +324,7 @@ async fn an_expired_code_ends_the_pairing_and_its_advertisement() {
 
 /// One HTTPS request to the listener on loopback `port`: its status, its headers by lowercase
 /// name, and its body.
-async fn https(
+pub(crate) async fn https(
     port: u16,
     method: &str,
     path: &str,

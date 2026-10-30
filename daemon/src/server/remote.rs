@@ -45,7 +45,7 @@
 
 pub(crate) mod access;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
@@ -164,8 +164,6 @@ pub(crate) struct Remote {
     proofs: Mutex<HashMap<String, Instant>>,
     /// Each session's connections close when its token is cancelled.
     sessions: Mutex<HashMap<String, CancellationToken>>,
-    /// When setup codes' SPAKE2 runs started, within the last hour.
-    setup_runs: Mutex<VecDeque<Instant>>,
     /// Account sign-in's approvals (0091).
     pub access: access::Access,
 }
@@ -190,7 +188,6 @@ impl Remote {
             tickets: Mutex::default(),
             proofs: Mutex::default(),
             sessions: Mutex::default(),
-            setup_runs: Mutex::default(),
             access: access::Access::default(),
         }
     }
@@ -227,23 +224,6 @@ impl Remote {
         let expires = jiff::Timestamp::now()
             + jiff::SignedDuration::try_from(lifetime).expect("a short lifetime");
         (code, expires)
-    }
-
-    /// Counts a setup code's SPAKE2 run: false when [`MAX_SETUP_RUNS`] started within the hour.
-    fn setup_run(&self) -> bool {
-        let mut runs = lock(&self.setup_runs);
-        let now = Instant::now();
-        while runs
-            .front()
-            .is_some_and(|at| now.duration_since(*at) >= HOUR)
-        {
-            runs.pop_front();
-        }
-        if runs.len() >= MAX_SETUP_RUNS {
-            return false;
-        }
-        runs.push_back(now);
-        true
     }
 
     /// The waiting code and when it expires, for the listener to end the pairing then.
@@ -287,7 +267,7 @@ impl Remote {
         };
         let (answer, key) = remote::pake_host(&waiting.code, fingerprint, client)
             .map_err(|_| "a bad SPAKE2 message")?;
-        if waiting.setup && !self.setup_run() {
+        if waiting.setup && !self.access.setup_run() {
             return Err("too many tries with setup codes this hour");
         }
         waiting.pending.retain(|_, (_, expires)| now < *expires);
@@ -1011,8 +991,9 @@ async fn finish_pairing(
     {
         return refusal;
     }
-    let Some(token) = new_session(daemon, &proven, &finish.client_label, false).await else {
-        return (500, json!({ "error": "server_error" }));
+    let token = match new_session(daemon, &proven, &finish.client_label, false).await {
+        Ok(token) => token,
+        Err(refusal) => return refusal,
     };
     let confirm = remote::confirmation(&shared, b"host", fp, &proven.thumbprint);
     (
@@ -1028,12 +1009,14 @@ async fn finish_pairing(
 }
 
 /// Keeps a new session bound to the key of `proven`, named `label`, and answers with its token.
+/// A key the account removed gets none: checked in the same write that keeps the session, so a
+/// removal can't land between the check and the session (0091).
 async fn new_session(
     daemon: &Daemon,
     proven: &remote::Proven,
     label: &str,
     browser: bool,
-) -> Option<String> {
+) -> Result<String, (u16, serde_json::Value)> {
     let token = remote::random_token(32);
     let session = StoredSession {
         id: uuid::Uuid::new_v4().to_string(),
@@ -1047,17 +1030,29 @@ async fn new_session(
     let stored = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
+            if access::read_lists(db)?
+                .removed_clients
+                .contains(&session.thumbprint)
+            {
+                return Ok(false);
+            }
             let mut sessions = read_sessions(db)?;
             sessions.push(session);
-            write_sessions(db, &sessions)
+            write_sessions(db, &sessions)?;
+            Ok(true)
         })
         .await;
-    if let Err(error) = stored {
-        warn!(error = %error.message, "could not keep a remote session");
-        return None;
+    match stored {
+        Ok(true) => {
+            info!(%name, "paired a remote client");
+            Ok(token)
+        }
+        Ok(false) => Err(access::removed("this device was removed")),
+        Err(error) => {
+            warn!(error = %error.message, "could not keep a remote session");
+            Err((500, json!({ "error": "server_error" })))
+        }
     }
-    info!(%name, "paired a remote client");
-    Some(token)
 }
 
 /// `POST /api/pair/browser` (PLX-651): the waiting code, typed into a browser, with a `DPoP`
@@ -1088,8 +1083,9 @@ async fn pair_browser(daemon: &Daemon, request: &Request) -> (u16, serde_json::V
     if let Err(why) = daemon.remote.use_code(&remote::normalize_code(&pair.code)) {
         return refused(why);
     }
-    let Some(token) = new_session(daemon, &proven, &pair.client_label, true).await else {
-        return (500, json!({ "error": "server_error" }));
+    let token = match new_session(daemon, &proven, &pair.client_label, true).await {
+        Ok(token) => token,
+        Err(refusal) => return refusal,
     };
     (
         200,
@@ -1445,24 +1441,36 @@ pub(crate) async fn sessions(
     Ok(listed(sessions))
 }
 
-/// Revokes the session `id` and closes its connections. Answers with the sessions left.
+/// Revokes the session `id` and closes its connections. Answers with the sessions left. A session
+/// whose key the account approved also removes that key (0091), so the device can't sign straight
+/// back in.
 pub(crate) async fn revoke(
     daemon: &Daemon,
     cancel: &CancellationToken,
     id: String,
 ) -> Result<Vec<RemoteSession>, ErrorObject> {
     let gone = id.clone();
-    let sessions = daemon
+    let (sessions, approved) = daemon
         .store
         .run(cancel, move |db| {
             let mut sessions = read_sessions(db)?;
+            let thumbprint = sessions
+                .iter()
+                .find(|s| s.id == gone)
+                .map(|s| s.thumbprint.clone());
             sessions.retain(|s| s.id != gone);
             write_sessions(db, &sessions)?;
-            Ok(sessions)
+            let lists = access::read_lists(db)?;
+            let approved = thumbprint.filter(|key| lists.approved_clients.contains(key));
+            Ok((sessions, approved))
         })
         .await?;
     daemon.remote.revoke(&id);
     info!(session = %id, "revoked a remote session");
+    if let Some(thumbprint) = approved {
+        access::remove(daemon, cancel, thumbprint).await?;
+        return self::sessions(daemon, cancel).await;
+    }
     Ok(listed(sessions))
 }
 
