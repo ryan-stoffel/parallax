@@ -80,18 +80,45 @@ function frames(socket, onFrame) {
   });
 }
 
-/** The relay: checks the path and the token in the header, then joins the stream to the host. */
+/**
+ * The relay: checks the path and the token in the header, then joins the stream to the host.
+ * Under `/old` it is a relay from before 0091, which refuses the header with 401 and opens a
+ * stream only with a one-time ticket from `POST …/tickets`. Host `offline` answers 503.
+ */
 let streams = 0;
+let ticketsIssued = 0;
+let ticketStreams = 0;
+let offlineTicketAsks = 0;
+const issued = new Set();
 const firstBytes = [];
+const answer = (socket, status, body = "") =>
+  socket.end(`HTTP/1.1 ${status}\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
 const relay = createServer((socket) => {
   socket.once("data", (head) => {
     const text = head.toString("latin1");
-    const [, path] = text.match(/^GET (\S+) HTTP/) ?? [];
-    const hostKey = path?.match(/^\/v1\/hosts\/([^/]+)\/connect$/)?.[1];
+    const [, method, target = ""] = text.match(/^(GET|POST) (\S+) HTTP/) ?? [];
+    const [path, query = ""] = target.split("?");
+    const old = path.startsWith("/old/");
+    const [, hostKey, action] = path.replace(/^\/old/, "").match(/^\/v1\/hosts\/([^/]+)\/(connect|tickets)$/) ?? [];
     const auth = text.match(/\r\nauthorization: Bearer (\S+)\r\n/i)?.[1];
     const accept = text.match(/\r\nsec-websocket-key: (\S+)\r\n/i)?.[1];
-    if (!hostKey || !(hostKey in hosts)) return socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
-    if (auth !== TOKEN) return socket.end("HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n");
+    const ticket = new URLSearchParams(query).get("ticket");
+    if (hostKey === "offline") {
+      if (action === "tickets") offlineTicketAsks++;
+      return answer(socket, "503 Service Unavailable", '{"error":"host_offline"}');
+    }
+    if (!hostKey || !(hostKey in hosts)) return answer(socket, "404 Not Found");
+    if (method === "POST" && action === "tickets") {
+      if (!old || auth !== TOKEN) return answer(socket, "401 Unauthorized");
+      const fresh = `ticket-${++ticketsIssued}`;
+      issued.add(fresh);
+      return answer(socket, "200 OK", JSON.stringify({ ticket: fresh }));
+    }
+    if (old) {
+      // One use each, as the relay's tickets are.
+      if (!ticket || !issued.delete(ticket)) return answer(socket, "401 Unauthorized");
+      ticketStreams++;
+    } else if (auth !== TOKEN) return answer(socket, "401 Unauthorized");
     streams++;
     const digest = createHash("sha1").update(accept + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${digest}\r\n\r\n`);
@@ -130,7 +157,9 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "ok" : "FAIL"} ${name}${detail ? `: ${detail}` : ""}`);
   if (!ok) failed = true;
 };
-check("each request opened its own stream", streams >= 3, `${streams} streams`);
+check("each request opened its own stream", streams >= 4, `${streams} streams`);
+check("a refusal other than 401, 404, or 426 asks for no ticket", offlineTicketAsks === 0, `${offlineTicketAsks} asked`);
+check("a relay that takes only tickets got one per stream", ticketsIssued === 2 && ticketStreams === 2, `${ticketsIssued} tickets, ${ticketStreams} streams`);
 check("the relay saw only TLS records", firstBytes.length > 0 && firstBytes.every((b) => b === 0x16), firstBytes.join(","));
 check("the pinned host spoke TLS 1.3", protocols.filter((p) => p === "TLSv1.3").length >= 2, protocols.join(","));
 
