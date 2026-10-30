@@ -4,7 +4,7 @@ import type { GoogleAccount } from "../preload/bridge";
 import { Redacted } from "./Redacted";
 import { memory } from "./stored";
 import { AccountCircle, Logout, ManageAccounts, PersonAdd } from "./symbols";
-import { IconButton, Menu, toolbarButton, toolbarMenuDivider, ToolbarMenuRow } from "./ui";
+import { IconButton, Menu, toolbarMenuDivider, ToolbarMenuRow } from "./ui";
 
 // The Google account signed in to the browser (googleAccount.ts in main), shared by every toolbar.
 const account = memory<GoogleAccount | undefined>(undefined);
@@ -57,7 +57,7 @@ export function ProfileButton({ onOpen }: { onOpen: (url: string) => void }) {
     <>
       <IconButton
         label={signedIn ? "Google account" : "Profile"}
-        className={toolbarButton}
+        size="lg"
         popoverTarget={id}
         aria-haspopup="menu"
       >

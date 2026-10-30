@@ -150,6 +150,10 @@
   --primary-foreground: #ffffff;
   --ring: var(--accent);
   --danger: #d4330f;
+  /* Text on a danger fill (a danger Button), black or white as on the accent. */
+  --danger-foreground: color(
+    from var(--danger) srgb-linear var(--black-or-white) var(--black-or-white) var(--black-or-white)
+  );
   /* The semantic amber, for marks and icons beside a label (--danger is the red). */
   --warning: #b45309;
   /* A diff's added lines (Approval.tsx); its removed lines are --danger. */
@@ -405,9 +409,6 @@
    setting (appearance.ts). */
 @custom-variant motion-safe (&:where(:root:not(.reduce-motion) *));
 @custom-variant motion-reduce (&:where(:root.reduce-motion *));
-:root.reduce-motion .animate-pulse {
-  animation: none;
-}
 
 /* A blurred email (Redacted.tsx) spreads softly past a truncating row around it instead of being
    cut square at the row's edges: clip, unlike hidden, takes a margin, and keeps the ellipsis. */
@@ -471,7 +472,112 @@ svg.lucide[stroke-width="2"] * {
   --radius-md: 6px;
   --radius-lg: 8px;
   --radius-xl: 12px;
+  /* 16px since PLX-1089 found 24px too round (0092). */
   --radius-prompt: 16px;
+}
+
+/* Motion and stacking (docs/decisions/0092-shared-ui-and-motion.md). Static, so plain CSS can use
+   them as variables too; motion.ts repeats the motion ones for JS.
+   Durations: fast for small things (menus, tooltips, hovers, every exit), base for dialogs and
+   panels, slow for what travels (toasts, drawers). Easings: out for what arrives, in for what
+   leaves, in-out for what moves, spring for a small overshoot. A transition without its own
+   duration or easing takes fast and out. */
+@theme static {
+  --transition-duration-fast: 120ms;
+  --transition-duration-base: 180ms;
+  --transition-duration-slow: 240ms;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in: cubic-bezier(0.55, 0, 1, 0.45);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --default-transition-duration: var(--transition-duration-fast);
+  --default-transition-timing-function: var(--ease-out);
+  --animate-fade-in: fade-in var(--transition-duration-fast) var(--ease-out);
+  /* The z-index scale: raised over its neighbours (sticky headings), an overlay inside a pane
+     (the find bar, a hover card), a divider over overlays, a popover over the window, and the
+     tooltip over everything. Menus and dialogs are in the top layer and need none. */
+  --z-index-raised: 10;
+  --z-index-overlay: 20;
+  --z-index-divider: 30;
+  --z-index-popover: 50;
+  --z-index-tooltip: 1000;
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+}
+
+/* A dialog fades and scales in from a little smaller, and fades out faster, with its backdrop.
+   Every <dialog> gets it; in the base layer, so a dialog's own classes still win. */
+@layer base {
+  dialog,
+  dialog::backdrop {
+    transition-property: opacity, scale, overlay, display;
+    transition-behavior: allow-discrete;
+    transition-duration: var(--transition-duration-fast);
+    transition-timing-function: var(--ease-in);
+    opacity: 0;
+  }
+  /* Closing, it fades out without taking clicks meant for what's under it. */
+  dialog:not([open]) {
+    pointer-events: none;
+  }
+  dialog {
+    scale: 0.97;
+  }
+  :is(dialog[open], dialog[open]::backdrop) {
+    transition-duration: var(--transition-duration-base);
+    transition-timing-function: var(--ease-out);
+    opacity: 1;
+  }
+  dialog[open] {
+    scale: 1;
+  }
+  @starting-style {
+    :is(dialog[open], dialog[open]::backdrop) {
+      opacity: 0;
+    }
+    dialog[open] {
+      scale: 0.97;
+    }
+  }
+}
+
+/* A menu (ui.tsx's menuPanel) fades and grows in from its trigger, and fades out. */
+@layer components {
+  .menu-motion {
+    transition-property: opacity, scale, overlay, display;
+    transition-behavior: allow-discrete;
+    transition-duration: var(--transition-duration-fast);
+    transition-timing-function: var(--ease-out);
+  }
+  .menu-motion:not(:popover-open) {
+    transition-timing-function: var(--ease-in);
+    opacity: 0;
+    scale: 0.97;
+    pointer-events: none;
+  }
+  @starting-style {
+    .menu-motion:popover-open {
+      opacity: 0;
+      scale: 0.97;
+    }
+  }
+}
+
+/* Reduced motion (Settings > Appearance, or the OS) stops every CSS animation and transition at
+   its end state. Animations started from JS go through motion.ts's `animate`, which skips them. */
+:root.reduce-motion *,
+:root.reduce-motion *::before,
+:root.reduce-motion *::after,
+:root.reduce-motion ::backdrop {
+  animation-duration: 0s !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0s !important;
+  transition-delay: 0s !important;
 }
 
 @theme inline {
@@ -504,6 +610,7 @@ svg.lucide[stroke-width="2"] * {
   --color-primary-foreground: var(--primary-foreground);
   --color-ring: var(--ring);
   --color-danger: var(--danger);
+  --color-danger-foreground: var(--danger-foreground);
   --color-warning: var(--warning);
   --color-added: var(--added);
   --color-code: var(--code);
@@ -1197,14 +1304,6 @@ body {
     clip-path: inset(0);
   }
 }
-:root.reduce-motion {
-  .usage-rise,
-  .usage-grid,
-  .usage-average,
-  .usage-fill {
-    animation: none;
-  }
-}
 
 /* The agent's plan (Plan.tsx). The progress bar eases to its new width, a step that finishes
    draws its check, and the strip over the composer rises from behind it. A proposed plan's
@@ -1266,9 +1365,9 @@ body {
     translate: 0 8px;
   }
 }
-/* A notification (notifications.tsx) slides in from the window's right edge. */
+/* A notification (notifications.tsx) slides in from the window's right edge, and out to it. */
 .toast-in {
-  animation: toast-in 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: toast-in var(--transition-duration-slow) var(--ease-out) both;
 }
 @keyframes toast-in {
   from {
@@ -1450,17 +1549,6 @@ body {
   transition: none;
   animation: none;
 }
-:root.reduce-motion {
-  .plan-bar {
-    transition: none;
-  }
-  .plan-check-draw :is(circle, path),
-  .plan-strip,
-  .approval-in,
-  .toast-in {
-    animation: none;
-  }
-}
 
 /* A running Trace line's title (Trace.tsx) shimmers. */
 [data-slot="trace-line"][data-status="running"] [data-slot="trace-title"] {
@@ -1498,17 +1586,12 @@ body {
   }
 }
 
-/* Under reduced motion, spinners stand still, and titles don't shimmer. */
+/* Under reduced motion, titles don't shimmer: stopped, the gradient would sit over the text. */
 :root.reduce-motion {
   [data-slot="trace-line"][data-status="running"] [data-slot="trace-title"],
   .shimmer-text {
-    animation: none;
     background: none;
     color: inherit;
-  }
-  /* Spinners, such as a running Trace line's, stand still. */
-  .animate-spin {
-    animation: none;
   }
 }
 
@@ -1765,14 +1848,14 @@ body {
 }
 
 /* The browser's pinned extension buttons (Extensions.tsx), electron-chrome-extensions'
-   `<button is="browser-action">`, drawn like the toolbar's buttons (ui.tsx's toolbarButton). The
+   `<button is="browser-action">`, drawn like the toolbar's buttons (an lg IconButton). The
    library styles them only inside its own list. */
 .browser-action {
   position: relative;
   width: 32px;
   height: 32px;
   flex-shrink: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background-position: center;
   background-repeat: no-repeat;
   background-size: 20px;

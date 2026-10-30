@@ -11,12 +11,17 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
-  type Ref,
   type ToggleEvent,
 } from "react";
 
 import { commandOf, keybindingOf, useShortcutLabel, type Command } from "./keybindings";
 import { Check as CheckSymbol } from "./symbols";
+import { Kbd } from "./ui/marks";
+
+// The shared components (0092) live in ui/, and everything imports them from here.
+export * from "./ui/controls";
+export * from "./ui/Dialog";
+export * from "./ui/marks";
 
 /**
  * A Mod shortcut as the OS writes it: "Alt+B" is "⌘⌥B" on macOS, "Ctrl+Alt+B" elsewhere, and
@@ -84,23 +89,37 @@ export function useModHeld() {
 
 /** The ⌘1 to ⌘9 badge on a row that Mod and its number open. */
 export function RowBadge({ index }: { index: number }) {
-  return (
-    <kbd className="shrink-0 rounded-sm border border-border bg-surface px-1 font-sans text-caption leading-4 text-muted-foreground">
-      {shortcut(String(index + 1))}
-    </kbd>
-  );
+  return <Kbd>{shortcut(String(index + 1))}</Kbd>;
 }
 
+const iconButtonSizes = {
+  sm: "size-6 [&_svg]:size-3.5",
+  md: "size-7 [&_svg]:size-4",
+  lg: "size-8 [&_svg]:size-5",
+};
+
 /**
- * A square, icon-only toolbar button. `label` is its accessible name and tooltip, with
- * `command`'s current shortcut beside it in the tooltip; `aria-pressed` shows it on.
+ * A square, icon-only button. `label` is its accessible name and tooltip, with `command`'s
+ * current shortcut beside it in the tooltip; `aria-pressed` shows it on. `size` sets the button
+ * and its icon together: sm (24px, 14px icon) in rows and chips, md (28px, 16px) in toolbars, the
+ * default, and lg (32px, 20px) in the browser's toolbar and on its own. `reveal` hides it until
+ * the pointer is over the nearest `group` (a row), or it's focused, open, or pressed.
+ * `className` adds to its classes.
  */
 export function IconButton({
   label,
   command,
+  size = "md",
+  reveal,
+  className = "",
   children,
   ...props
-}: { label: string; command?: Command } & ButtonHTMLAttributes<HTMLButtonElement>) {
+}: {
+  label: string;
+  command?: Command;
+  size?: keyof typeof iconButtonSizes;
+  reveal?: boolean;
+} & ButtonHTMLAttributes<HTMLButtonElement>) {
   const keys = useShortcutLabel(command);
   return (
     <button
@@ -108,20 +127,13 @@ export function IconButton({
       aria-label={label}
       title={label}
       data-keys={keys}
-      className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-hover hover:text-foreground aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-4"
+      className={`grid shrink-0 place-items-center rounded-md text-muted-foreground transition-[color,background-color,opacity] enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 aria-pressed:bg-selected aria-pressed:text-foreground ${iconButtonSizes[size]} ${reveal ? "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 aria-pressed:opacity-100" : ""} ${className}`}
       {...props}
     >
       {children}
     </button>
   );
 }
-
-/**
- * A browser toolbar's button, at Helium's size: 32 px, with a 20 px icon (PLX-981). It goes in an
- * IconButton's `className`, which replaces its own.
- */
-export const toolbarButton =
-  "grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-5";
 
 /**
  * Set up GitHub, beside a pull request action that failed because `gh` is missing or signed out
@@ -190,6 +202,9 @@ export function Segmented<T extends string>({
 export const menuButton =
   "flex items-center gap-1.5 rounded-lg py-1 pr-1.5 pl-2 text-body text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0";
 
+// Where a menu grows from as it opens (index.css's .menu-motion): the corner under its trigger.
+const panelOrigins = { start: "origin-top-left", end: "origin-top-right", center: "origin-top" };
+
 const panelAreas = {
   start: "[position-area:bottom_span-right]",
   end: "[position-area:bottom_span-left]",
@@ -199,10 +214,10 @@ const panelAreas = {
 /**
  * A menu's panel, a native popover: under its trigger and lined up with its left edge (`end`:
  * its right edge; `center`: centered under it), flipping when there's no room. Escape and
- * clicking away close it.
+ * clicking away close it. It fades and grows in from its trigger, and fades out.
  */
 export const menuPanel = (align: "start" | "end" | "center" = "start") =>
-  `inset-auto m-0 mt-2 rounded-lg border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block,flip-inline] ${panelAreas[align]}`;
+  `menu-motion inset-auto m-0 mt-2 rounded-lg border border-border bg-surface text-foreground shadow-composer [position-try-fallbacks:flip-block,flip-inline] ${panelAreas[align]} ${panelOrigins[align]}`;
 
 /**
  * Where a compact composer tab's card opens: above it, a fixed width, lined up with its right
@@ -210,9 +225,9 @@ export const menuPanel = (align: "start" | "end" | "center" = "start") =>
  */
 export const popoverBeside = "w-[min(26rem,90vw)] [position-area:top_span-left]";
 
-/** A row in a menu panel. */
+/** A row in a menu panel, its icon 16px (0085). */
 export const menuItem =
-  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body hover:bg-hover [&_svg]:size-3.5 [&_svg]:shrink-0";
+  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-body hover:bg-hover [&_svg]:size-4 [&_svg]:shrink-0";
 
 /** The rule between a browser menu's groups, edge to edge. */
 export const toolbarMenuDivider = "-mx-1.5 my-1.5 border-border";
@@ -328,82 +343,6 @@ export function Menu({
   );
 }
 
-/**
- * A modal asking to confirm `action`, such as deleting a thread. Cancel closes it, and the red
- * button runs `onConfirm`. While `busy`, that button is disabled and reads `busy`, as "Deleting…".
- * `alternate` adds a plain button before it, for a second way to go ahead.
- */
-export function ConfirmDialog({
-  ref,
-  title,
-  titleClass = "",
-  action,
-  busy,
-  error,
-  onConfirm,
-  alternate,
-  children,
-}: {
-  ref: Ref<HTMLDialogElement>;
-  title: ReactNode;
-  titleClass?: string;
-  action: string;
-  busy?: string;
-  error?: string;
-  onConfirm: () => void;
-  /** A second way to go ahead, as a plain button before `action`'s. */
-  alternate?: { action: string; onConfirm: () => void };
-  children: ReactNode;
-}) {
-  const titleId = useId();
-  return (
-    <dialog
-      ref={ref}
-      aria-labelledby={titleId}
-      className={`m-auto ${alternate ? "w-[30rem]" : "w-[24rem]"} rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50`}
-    >
-      <form method="dialog" className="px-5 pt-4 pb-4">
-        <h2 id={titleId} className={`text-reading font-semibold ${titleClass}`}>
-          {title}
-        </h2>
-        <p className="mt-1.5 text-body text-muted-foreground">{children}</p>
-        {error && (
-          <p role="alert" className="mt-2 text-body text-danger">
-            {error}
-          </p>
-        )}
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="submit"
-            value="cancel"
-            className="rounded-md px-3 py-1.5 text-body hover:bg-hover"
-          >
-            Cancel
-          </button>
-          {alternate && (
-            <button
-              type="button"
-              disabled={!!busy}
-              onClick={alternate.onConfirm}
-              className="rounded-md bg-selected px-3 py-1.5 text-body font-medium enabled:hover:bg-hover disabled:opacity-50"
-            >
-              {alternate.action}
-            </button>
-          )}
-          <button
-            type="button"
-            disabled={!!busy}
-            onClick={onConfirm}
-            className="rounded-md bg-red-600 px-3 py-1.5 text-body font-medium text-white enabled:hover:opacity-90 disabled:opacity-50"
-          >
-            {busy || action}
-          </button>
-        </div>
-      </form>
-    </dialog>
-  );
-}
-
 export interface PickerOption {
   value: string;
   label: string;
@@ -472,7 +411,7 @@ export const menuHeading = "px-2 pt-1.5 pb-1 text-meta font-medium text-faint-fo
 
 /** The badge on a choice that can't be picked yet, saying why, such as "Not available yet". */
 export const unavailableBadge =
-  "shrink-0 rounded-md border border-amber-500/30 px-2 py-0.5 text-meta text-amber-500";
+  "shrink-0 rounded-md border border-warning/30 px-2 py-0.5 text-meta text-warning";
 
 const separator = <div role="separator" className="-mx-1 my-1 h-px bg-border" />;
 
@@ -702,7 +641,7 @@ type Tip = { text: string; keys?: string; top: number; left: number; above: bool
  * The app's one tooltip, mounted once. Hovering or keyboard-focusing an element with a `title`,
  * or an icon-only button or link with an `aria-label`, shows that text in a small panel under it
  * (above it when there's no room). The `title` is held aside while it shows, so the OS tooltip
- * doesn't show too. An element with `data-tooltip="off"` shows its own and gets none.
+ * doesn't show too. An element with `data-tooltip="off"` shows its own and gets none. It fades in.
  */
 export function Tooltips() {
   const [tip, setTip] = useState<Tip>();
@@ -783,7 +722,7 @@ export function Tooltips() {
         el.style.left = `${Math.min(Math.max(tip.left - half, 8), window.innerWidth - 8 - 2 * half)}px`;
       }}
       style={{ top: tip.top, left: tip.left }}
-      className={`pointer-events-none fixed z-[1000] flex w-max max-w-80 items-center gap-2 rounded-md border border-border bg-surface px-2 py-1 text-meta text-foreground shadow-composer ${tip.above ? "-translate-y-full" : ""}`}
+      className={`pointer-events-none fixed z-tooltip flex animate-fade-in w-max max-w-80 items-center gap-2 rounded-md border border-border bg-surface px-2 py-1 text-meta text-foreground shadow-composer ${tip.above ? "-translate-y-full" : ""}`}
     >
       <span className="line-clamp-3 break-words">{tip.text}</span>
       {tip.keys && <kbd className="font-sans text-muted-foreground">{tip.keys}</kbd>}

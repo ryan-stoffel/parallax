@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 
+import { animate, duration, easing, reducedMotion } from "./motion";
 import { behaviorPrefs } from "./prefs";
 
 // Every notification the app shows (PLX-507): one stack of toasts in the window's top right, in
@@ -112,6 +113,53 @@ const link =
 // while it has notices, so it shows once per mount.
 const show = (stack: HTMLDivElement | null) => stack?.showPopover();
 
+/**
+ * A toast's exit. The store drops a notice at once, so `notify`, `dismiss`, and the tests stay
+ * synchronous; a copy of the toast stays where it was, in a top-layer popover of its own, and
+ * slides out to the right. Nothing plays for a toast with no box (a test's DOM), under reduced
+ * motion, or for one still on the page after the commit, as StrictMode's re-attached refs are.
+ */
+function leave(toast: HTMLElement) {
+  // Measured now, while it's still in place; React removes it within this commit.
+  const box = toast.getBoundingClientRect();
+  if (!box.width || reducedMotion()) return;
+  queueMicrotask(() => {
+    if (!toast.isConnected) slideOut(toast, box);
+  });
+}
+
+function slideOut(toast: HTMLElement, box: DOMRect) {
+  const ghost = toast.cloneNode(true) as HTMLElement;
+  ghost.removeAttribute("role");
+  ghost.classList.remove("toast-in");
+  Object.assign(ghost.style, {
+    position: "fixed",
+    top: `${box.top}px`,
+    left: `${box.left}px`,
+    width: `${box.width}px`,
+  });
+  const layer = document.createElement("div");
+  layer.popover = "manual";
+  layer.inert = true;
+  layer.ariaHidden = "true";
+  layer.className = "pointer-events-none inset-0 m-0 size-full border-0 bg-transparent p-0";
+  layer.append(ghost);
+  document.body.append(layer);
+  layer.showPopover();
+  const done = () => layer.remove();
+  const exit = animate(ghost, [{ opacity: 1 }, { opacity: 0, translate: "16px 0" }], {
+    duration: duration.fast,
+    easing: easing.in,
+    fill: "forwards",
+  });
+  if (exit) exit.finished.then(done, done);
+  else done();
+}
+
+// A toast's ref: its cleanup runs as the toast goes, while it's still on screen. Stable, so a
+// re-render doesn't count as leaving.
+const leaveOnRemoval = (toast: HTMLDivElement) => () => leave(toast);
+
 /** The stack of notices, newest on top. App renders it once. */
 export function Notifications() {
   const list = useSyncExternalStore(subscribe, () => shown);
@@ -151,6 +199,7 @@ function Toast({ notice, onClose }: { notice: Notice; onClose: () => void }) {
   }, [sticky, held, notice]);
   return (
     <div
+      ref={leaveOnRemoval}
       role={tone === "error" ? "alert" : "status"}
       onPointerEnter={() => setHeld(true)}
       onPointerLeave={() => setHeld(false)}

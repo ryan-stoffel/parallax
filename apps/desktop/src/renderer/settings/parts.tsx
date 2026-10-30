@@ -80,39 +80,8 @@ export function Row({
   );
 }
 
-/** An on/off switch named `label`. */
-export function Switch({
-  label,
-  checked,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-label={label}
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={(e) => {
-        // A switch inside a clickable row toggles only itself.
-        e.stopPropagation();
-        onChange(!checked);
-      }}
-      className="relative h-5 w-9 shrink-0 rounded-full bg-faint-foreground transition-colors outline-offset-2 aria-checked:bg-accent disabled:opacity-50"
-    >
-      <span
-        aria-hidden
-        className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-4" : ""}`}
-      />
-    </button>
-  );
-}
+/** The app's switch, now in ui (0092); Settings' pages still import it from here. */
+export { Switch } from "../ui";
 
 /** A dot for a state: on, off, needing the user, or failing. */
 export function StatusDot({ tone }: { tone: "on" | "off" | "warn" | "error" }) {

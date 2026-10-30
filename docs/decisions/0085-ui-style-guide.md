@@ -1,6 +1,6 @@
 # 0085: One font, one type scale, one radius scale, one icon family, and a black dark theme
 
-- Status: accepted; supersedes [0083](0083-project-surfaces.md)'s Sora for headings
+- Status: accepted; supersedes [0083](0083-project-surfaces.md)'s Sora for headings; amended by [0092](0092-shared-ui-and-motion.md)
 - Date: 2026-10-25
 - Issue: PLX-996
 
@@ -51,7 +51,7 @@ The same kind of text is the same size and weight everywhere:
 | `rounded-md` | 6px | Controls: buttons, inputs, chips, menu items |
 | `rounded-lg` | 8px | Rows, cards, menus, popovers |
 | `rounded-xl` | 12px | Surfaces: panels, dialogs, settings groups |
-| `rounded-prompt` | 24px | Prompt boxes (the composer, MiniPrompt) and the bars tucked over and under them |
+| `rounded-prompt` | 16px ([0092](0092-shared-ui-and-motion.md)) | Prompt boxes (the composer, MiniPrompt) and the bars tucked over and under them |
 | `rounded-full` | | Pills, avatars, dots, round buttons |
 
 `--radius-*: initial` resets Tailwind's own here too.
