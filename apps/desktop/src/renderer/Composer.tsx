@@ -1759,22 +1759,22 @@ export function Composer({
   useEffect(() => {
     if (!insert) return;
     // A space apart from what's typed.
-    const space = editor.isEmpty || /\s$/.test(editor.getText()) ? "" : " ";
+    const project = editor.isEmpty || /\s$/.test(editor.getText()) ? "" : " ";
     editor
       .chain()
       .focus("end")
-      .insertContent(space + insert)
+      .insertContent(project + insert)
       .run();
   }, [insert, editor]);
 
   useEffect(() => {
     if (!cite) return;
-    const space = editor.isEmpty || /\s$/.test(editor.getText()) ? "" : " ";
+    const project = editor.isEmpty || /\s$/.test(editor.getText()) ? "" : " ";
     editor
       .chain()
       .focus("end")
       .insertContent([
-        ...(space ? [{ type: "text", text: space }] : []),
+        ...(project ? [{ type: "text", text: project }] : []),
         { type: "citeRef", attrs: cite },
         { type: "text", text: " " },
       ])

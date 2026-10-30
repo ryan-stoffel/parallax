@@ -383,14 +383,14 @@ export interface ThreadGroup {
   /** A repo entry's id, or `noRepo`. */
   id: string;
   name: string;
-  /** A Space (0069): threads with no repository of the user's. */
-  space?: boolean;
+  /** A Project (0069): threads with no repository of the user's. */
+  project?: boolean;
 }
 
 /** The sidebar's groups: each repository, oldest first, then No repo, always there. */
 export function groupThreads({ repos }: ThreadsState): ThreadGroup[] {
   return [
-    ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, space: r.space })),
+    ...repos.filter((r) => !r.scratch).map((r) => ({ id: r.id, name: r.name, project: r.project })),
     { id: noRepo, name: "No repo" },
   ];
 }
@@ -469,16 +469,17 @@ export function setRepoIcons(views: ThreadsView[], name: string, icon: ChosenIco
   }
 }
 
-/** Whether a group holds chats with no repository of the user's: Chat, or a Space. */
-export const repoless = (g: { id: string; space?: boolean }) => g.id === noRepo || !!g.space;
+/** Whether a group holds chats with no repository of the user's: Chat, or a Project. */
+export const repoless = (g: { id: string; project?: boolean }) => g.id === noRepo || !!g.project;
 
-/** A repo entry that is a repository of the user's: not Chat's scratch entry, nor a Space. */
-export const isRepository = (r: { scratch?: boolean; space?: boolean }) => !r.scratch && !r.space;
+/** A repo entry that is a repository of the user's: not Chat's scratch entry, nor a Project. */
+export const isRepository = (r: { scratch?: boolean; project?: boolean }) =>
+  !r.scratch && !r.project;
 
-/** The Space a thread is in: the one it started in, or the one the user added it to (0090). */
-export const spaceOf = (state: ThreadsState, thread: Thread) =>
-  thread.space ??
-  (state.repos.some((r) => r.id === thread.repo && r.space) ? thread.repo : undefined);
+/** The Project a thread is in: the one it started in, or the one the user added it to (0090). */
+export const projectOf = (state: ThreadsState, thread: Thread) =>
+  thread.project ??
+  (state.repos.some((r) => r.id === thread.repo && r.project) ? thread.repo : undefined);
 
 /** A thread's group id: its repository's, or `noRepo`. */
 export const groupOf = (state: ThreadsState, thread: Thread) =>
@@ -657,19 +658,19 @@ export interface ThreadsView {
    */
   update: (runId: string, change: ThreadChange) => Promise<string | undefined>;
   /**
-   * Sets a repo entry's icon, or a Space's name, instructions, or files (0090). Resolves to an
+   * Sets a repo entry's icon, or a Project's name, instructions, or files (0090). Resolves to an
    * error message, or undefined.
    */
   updateRepo: (repo: string, change: RepoChange) => Promise<string | undefined>;
-  /** Makes a Space, an orchestrator of threads with no repository (0069, 0090). Resolves to its entry or an error message. */
-  createSpace: (name: string, icon?: ChosenIcon) => Promise<Repo | string>;
-  /** Deletes a Space and every chat in it. Resolves to an error message, or undefined. */
-  removeSpace: (space: string) => Promise<string | undefined>;
+  /** Makes a Project, an orchestrator of threads with no repository (0069, 0090). Resolves to its entry or an error message. */
+  createProject: (name: string, icon?: ChosenIcon) => Promise<Repo | string>;
+  /** Deletes a Project and every chat in it. Resolves to an error message, or undefined. */
+  removeProject: (project: string) => Promise<string | undefined>;
   /**
-   * Adds threads to a Space, or with no `space` takes them out of theirs, where each keeps working
+   * Adds threads to a Project, or with no `project` takes them out of theirs, where each keeps working
    * (0090). Resolves to an error message, or undefined.
    */
-  setSpace: (threads: string[], space?: string) => Promise<string | undefined>;
+  setProject: (threads: string[], project?: string) => Promise<string | undefined>;
 }
 
 export type RepoChange = Omit<RepoUpdateParams, "repo">;
@@ -964,8 +965,8 @@ export function useThreads(
         return undefined;
       },
 
-      async createSpace(name: string, icon?: ChosenIcon) {
-        const answer = await window.parallax.request(hostId, "space/create", {
+      async createProject(name: string, icon?: ChosenIcon) {
+        const answer = await window.parallax.request(hostId, "project/create", {
           id: uuidv7(),
           name,
           ...(icon && { icon }),
@@ -975,17 +976,17 @@ export function useThreads(
         return answer.result.repo;
       },
 
-      async removeSpace(space: string) {
-        const answer = await window.parallax.request(hostId, "space/delete", { space });
+      async removeProject(project: string) {
+        const answer = await window.parallax.request(hostId, "project/delete", { project });
         if ("error" in answer) return describeError(answer.error);
-        dispatch({ type: "event", event: { kind: "repo.removed", repo: space } });
+        dispatch({ type: "event", event: { kind: "repo.removed", repo: project } });
         return undefined;
       },
 
-      async setSpace(threads: string[], space?: string) {
-        const answer = await window.parallax.request(hostId, "thread/setSpace", {
+      async setProject(threads: string[], project?: string) {
+        const answer = await window.parallax.request(hostId, "thread/setProject", {
           threads,
-          ...(space && { space }),
+          ...(project && { project }),
         });
         if ("error" in answer) return describeError(answer.error);
         for (const thread of answer.result.threads)
@@ -1030,7 +1031,7 @@ export const idleThreads: ThreadsView = {
   startOrchestrator: async () => ({ code: -32000, message: notConnected }),
   update: async () => notConnected,
   updateRepo: async () => notConnected,
-  createSpace: async () => notConnected,
-  removeSpace: async () => notConnected,
-  setSpace: async () => notConnected,
+  createProject: async () => notConnected,
+  removeProject: async () => notConnected,
+  setProject: async () => notConnected,
 };

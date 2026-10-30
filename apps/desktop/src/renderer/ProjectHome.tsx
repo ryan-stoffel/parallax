@@ -1,4 +1,4 @@
-// A Space's page, New thread laid out as a page (0090): its header, the composer, then its threads
+// A Project's page, New thread laid out as a page (0090): its header, the composer, then its threads
 // beside the instructions and files plxd gives every thread in it.
 import {
   Archive,
@@ -27,7 +27,7 @@ import { quietButton } from "./settings/parts";
 import type { Host } from "./hosts";
 import { hostIcon } from "./RunTargetMenu";
 import { age, backendLogo, RepoIcon } from "./Sidebar";
-import { asksOf, spaceOf, waitingOf, type ThreadsView } from "./threads";
+import { asksOf, projectOf, waitingOf, type ThreadsView } from "./threads";
 import { IconButton } from "./ui";
 import { toast } from "./undo";
 import { uploadBytes, uploadFiles } from "./uploads";
@@ -36,11 +36,11 @@ const panelPart = "p-5";
 const panelHead = "mb-3 flex items-center justify-between gap-2";
 
 /**
- * A Space's header, in place of New thread's question: a way back to Projects, then its icon and
+ * A Project's header, in place of New thread's question: a way back to Projects, then its icon and
  * name on one line, Pin, and its menu. Where its plxd keeps icons, the icon turns to a pencil on hover
  * and opens the icon picker.
  */
-export function SpaceHeader({
+export function ProjectHeader({
   entry,
   pinned,
   onTogglePin,
@@ -103,25 +103,25 @@ export function SpaceHeader({
 }
 
 /**
- * A Space's threads under the composer, newest first, as the sidebar's thread cards show them:
+ * A Project's threads under the composer, newest first, as the sidebar's thread cards show them:
  * those started in it, and those the user added. Each archives from its card, as in the sidebar,
  * and Add opens a picker of this computer's other threads.
  */
-export function SpaceThreads({
+export function ProjectThreads({
   host,
-  space,
+  project,
   view,
   onOpenThread,
 }: {
-  /** The computer the Space, and so each thread in it, is on. */
+  /** The computer the Project, and so each thread in it, is on. */
   host: Host;
-  space: Repo;
+  project: Repo;
   view: ThreadsView;
   onOpenThread: (threadId: string) => void;
 }) {
   const { state } = view;
   const picker = useRef<HTMLDialogElement>(null);
-  const canAdd = "spaceThreads" in view.capabilities;
+  const canAdd = "projectThreads" in view.capabilities;
   const archive = async (thread: string, title: string) => {
     const failed = await view.archive(thread, true);
     if (failed)
@@ -129,7 +129,7 @@ export function SpaceThreads({
     toast(`Archived “${title}”`, () => void view.archive(thread, false));
   };
   const threads = state.threads
-    .filter((t) => spaceOf(state, t) === space.id && !t.parent && !t.archived)
+    .filter((t) => projectOf(state, t) === project.id && !t.parent && !t.archived)
     .map((t) => {
       const run = state.runs[t.id];
       return {
@@ -157,8 +157,8 @@ export function SpaceThreads({
           </span>
           <p className="mt-3 text-body font-medium">No threads yet</p>
           <p className="mt-1 max-w-xs text-body text-muted-foreground">
-            Ask anything above, or add threads you've started. Each thread here follows this Space's
-            instructions and can read its files.
+            Ask anything above, or add threads you've started. Each thread here follows this
+            Project's instructions and can read its files.
           </p>
         </div>
       ) : (
@@ -175,8 +175,8 @@ export function SpaceThreads({
                 >
                   <span className="flex h-4.5 w-full items-center gap-2 text-meta text-faint-foreground">
                     <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                      <RepoIcon repo={space} />
-                      <span className="truncate">{space.name}</span>
+                      <RepoIcon repo={project} />
+                      <span className="truncate">{project.name}</span>
                     </span>
                     <span className="shrink-0 group-focus-within/row:invisible group-hover/row:invisible">
                       {attention === "settled" ? age(at) : <AttentionBadge attention={attention} />}
@@ -212,23 +212,23 @@ export function SpaceThreads({
           })}
         </ul>
       )}
-      {canAdd && <AddThreads ref={picker} space={space} view={view} />}
+      {canAdd && <AddThreads ref={picker} project={project} view={view} />}
     </section>
   );
 }
 
 /**
- * Add threads: this computer's threads outside the Space, newest first, to search and check, then
- * add. A thread started in a Space lives there, and an orchestrator's in its orchestrator, so
+ * Add threads: this computer's threads outside the Project, newest first, to search and check, then
+ * add. A thread started in a Project lives there, and an orchestrator's in its orchestrator, so
  * neither shows.
  */
 function AddThreads({
   ref,
-  space,
+  project,
   view,
 }: {
   ref: Ref<HTMLDialogElement>;
-  space: Repo;
+  project: Repo;
   view: ThreadsView;
 }) {
   const { state } = view;
@@ -242,7 +242,7 @@ function AddThreads({
   const threads = state.threads
     .filter((t) => {
       const home = homes.get(t.repo);
-      return home && !home.space && !t.parent && !t.archived && t.space !== space.id;
+      return home && !home.project && !t.parent && !t.archived && t.project !== project.id;
     })
     .map((t) => {
       const run = state.runs[t.id];
@@ -250,8 +250,8 @@ function AddThreads({
       return {
         thread: t,
         title: state.titles[t.id] ?? "Thread",
-        // Where it is now: the Space it was added to, else where it works.
-        place: (t.space && homes.get(t.space)) || home,
+        // Where it is now: the Project it was added to, else where it works.
+        place: (t.project && homes.get(t.project)) || home,
         at: activeAt(t, run, state.stoppedAt[t.id]),
       };
     })
@@ -283,7 +283,7 @@ function AddThreads({
           e.preventDefault();
           const dialog = e.currentTarget.closest("dialog");
           setAdding(true);
-          const failed = await view.setSpace([...picked], space.id);
+          const failed = await view.setProject([...picked], project.id);
           setAdding(false);
           if (failed) return setError(failed);
           dialog?.close();
@@ -291,10 +291,10 @@ function AddThreads({
         className="flex flex-col p-5"
       >
         <h2 id={titleId} className="text-reading font-semibold">
-          Add threads to {space.name}
+          Add threads to {project.name}
         </h2>
         <p className="mt-1 text-body text-muted-foreground">
-          They keep working where they are, and follow this Space's instructions from their next
+          They keep working where they are, and follow this Project's instructions from their next
           message.
         </p>
         <label className="mt-4 flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 focus-within:outline-2 focus-within:outline-ring">
@@ -375,33 +375,33 @@ function AddThreads({
   );
 }
 
-/** A Space's instructions and files, beside its threads, in one panel that stays in view. */
-export function SpaceContext({
+/** A Project's instructions and files, beside its threads, in one panel that stays in view. */
+export function ProjectContext({
   hostId,
-  space,
+  project,
   view,
 }: {
   hostId: string;
-  space: Repo;
+  project: Repo;
   view: ThreadsView;
 }) {
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-surface lg:sticky lg:top-6">
-      <Instructions space={space} view={view} />
-      <Files hostId={hostId} space={space} view={view} />
+      <Instructions project={project} view={view} />
+      <Files hostId={hostId} project={project} view={view} />
     </div>
   );
 }
 
 /** The panel's Instructions: what every thread here is told, edited in a dialog. */
-function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
+function Instructions({ project, view }: { project: Repo; view: ThreadsView }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
   const [saving, setSaving] = useState(false);
   const titleId = useId();
   const open = () => {
-    setText(space.instructions ?? "");
+    setText(project.instructions ?? "");
     setError(undefined);
     dialog.current?.showModal();
   };
@@ -411,20 +411,20 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
         <h2 className="text-reading font-medium">Instructions</h2>
         <button
           type="button"
-          aria-label={space.instructions ? "Edit instructions" : "Add instructions"}
+          aria-label={project.instructions ? "Edit instructions" : "Add instructions"}
           onClick={open}
           className={quietButton}
         >
-          {space.instructions ? "Edit" : "Add"}
+          {project.instructions ? "Edit" : "Add"}
         </button>
       </div>
-      {space.instructions ? (
+      {project.instructions ? (
         <button
           type="button"
           onClick={open}
           className="line-clamp-[12] text-left text-body leading-relaxed whitespace-pre-wrap text-muted-foreground hover:text-foreground"
         >
-          {space.instructions}
+          {project.instructions}
         </button>
       ) : (
         <p className="text-body leading-relaxed text-faint-foreground">
@@ -441,7 +441,7 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
           onSubmit={async (e) => {
             e.preventDefault();
             setSaving(true);
-            const failed = await view.updateRepo(space.id, { instructions: text });
+            const failed = await view.updateRepo(project.id, { instructions: text });
             setSaving(false);
             if (failed) return setError(failed);
             dialog.current?.close();
@@ -449,10 +449,10 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
           className="flex flex-col p-5"
         >
           <h2 id={titleId} className="text-reading font-semibold">
-            Instructions for {space.name}
+            Instructions for {project.name}
           </h2>
           <p className="mt-1 text-body text-muted-foreground">
-            New threads in this Space follow them.
+            New threads in this Project follow them.
           </p>
           <textarea
             aria-label="Instructions"
@@ -493,14 +493,14 @@ function Instructions({ space, view }: { space: Repo; view: ThreadsView }) {
  * The panel's Files: each file as a card with its preview and Remove, then an Add card, or a drop
  * anywhere on it, which uploads to the host.
  */
-function Files({ hostId, space, view }: { hostId: string; space: Repo; view: ThreadsView }) {
+function Files({ hostId, project, view }: { hostId: string; project: Repo; view: ThreadsView }) {
   const input = useRef<HTMLInputElement>(null);
   const [adding, setAdding] = useState(false);
   const [over, setOver] = useState(false);
   const caps = uploadBytes(useConnection(hostId));
-  const files = space.files ?? [];
+  const files = project.files ?? [];
   const save = async (next: string[]) => {
-    const failed = await view.updateRepo(space.id, { files: next });
+    const failed = await view.updateRepo(project.id, { files: next });
     if (failed) notify({ tone: "error", title: "Couldn't change the files", body: failed });
   };
   const add = async (picked: File[]) => {

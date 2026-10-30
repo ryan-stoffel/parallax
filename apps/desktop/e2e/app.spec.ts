@@ -222,13 +222,15 @@ test("creates an orchestrator on a repository it adds, and opens it (PLX-166)", 
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  // One card for the orchestrator, on the orchestrators page, which the classic sidebar opens from
-  // the button beside its search (0094). Opening the card goes back to the orchestrator.
+  // The Projects page lists Projects only (0093); the Inbox sidebar finds the orchestrator by its
+  // name, and its row goes back to it.
   await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
-  const cards = page.locator("li[data-project]");
-  await expect(cards).toHaveCount(1);
-  await expect(cards).toContainText("ember");
-  await cards.getByRole("button").first().click();
+  await expect(page.locator("li[data-project]")).toHaveCount(0);
+  await page.locator('#sidebar input[type="search"]').fill("ember");
+  const rows = page.locator('#sidebar li[data-kind="orchestrator"]');
+  await expect(rows).toHaveCount(1);
+  await rows.locator("button[data-row]").click();
+  await page.locator('#sidebar input[type="search"]').fill("");
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
 });
 
@@ -264,9 +266,10 @@ test("chats with the orchestrator, whose transcript outlives a reload and a plxd
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
 
   await page.reload();
-  // Back to the orchestrator from the orchestrators page.
-  await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
-  await page.locator("li[data-project]").first().getByRole("button").first().click();
+  // Back to the orchestrator, found by its name in the sidebar.
+  await page.locator('#sidebar input[type="search"]').fill("ember");
+  await page.locator('#sidebar li[data-kind="orchestrator"] button[data-row]').first().click();
+  await page.locator('#sidebar input[type="search"]').fill("");
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 
   // Stop plxd with the orchestrator running. The app reconnects through a new `serve`, which

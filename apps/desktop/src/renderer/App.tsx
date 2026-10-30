@@ -61,7 +61,7 @@ import { NewChatProject, ProjectsPage } from "./ProjectsPage";
 import { projectEntries, type ProjectEntry } from "./projectList";
 import { pinnedProjects, togglePinnedProject } from "./sidebarPrefs";
 import { RunTargetMenu } from "./RunTargetMenu";
-import { SpaceContext, SpaceHeader, SpaceThreads } from "./SpaceHome";
+import { ProjectContext, ProjectHeader, ProjectThreads } from "./ProjectHome";
 import { UsagePage } from "./UsagePage";
 import type { PrEntry } from "./pullRequestSearch";
 import { SettingsDialog } from "./Settings";
@@ -401,21 +401,21 @@ export function App() {
     group = groups.find((g) => g.id === id)!;
   } else if (selection.kind === "new")
     group = groups.find((g) => g.id === selection.groupId) ?? group;
-  // A Space's entry, while New thread is open in it (0090).
-  const spaceRepo =
-    selection.kind === "new" && group.space
+  // A Project's entry, while New thread is open in it (0090).
+  const projectRepo =
+    selection.kind === "new" && group.project
       ? threads.state.repos.find((r) => r.id === group.id)
       : undefined;
-  // The computers a Space's thread can run on: its own, and any other with a Space of its name.
-  const spaceHosts = spaceRepo
+  // The computers a Project's thread can run on: its own, and any other with a Project of its name.
+  const projectHosts = projectRepo
     ? hosts.filter(
         (h) =>
           h.id === host.id ||
-          views[h.id]?.state.repos.some((r) => r.space && r.name === spaceRepo.name),
+          views[h.id]?.state.repos.some((r) => r.project && r.name === projectRepo.name),
       )
     : [];
-  const spaceEntry = spaceRepo
-    ? projectEntries(listed).find((e) => e.key === `${host.id}/${spaceRepo.id}`)
+  const projectEntry = projectRepo
+    ? projectEntries(listed).find((e) => e.key === `${host.id}/${projectRepo.id}`)
     : undefined;
 
   if (
@@ -711,10 +711,10 @@ export function App() {
     ];
     if (agentTitle) crumbs.push({ label: agentTitle });
   } else {
-    // A thread added to a Space names the Space, and opens its page (0090).
+    // A thread added to a Project names the Project, and opens its page (0090).
     const addedTo =
-      selection.kind === "thread" && openThread?.space
-        ? threads.state.repos.find((r) => r.id === openThread.space)
+      selection.kind === "thread" && openThread?.project
+        ? threads.state.repos.find((r) => r.id === openThread.project)
         : undefined;
     const groupRepo = addedTo ?? threads.state.repos.find((r) => r.id === group.id);
     const repo = {
@@ -734,9 +734,9 @@ export function App() {
       selection.kind === "thread" && remoteThread
         ? { label: "Remote Control", icon: <Cloud aria-hidden /> }
         : { label: host.name };
-    // A Space's page is the Space itself (0090), so its crumbs end there.
+    // A Project's page is the Project itself (0090), so its crumbs end there.
     crumbs =
-      selection.kind === "new" && group.space ? [where, repo] : [where, repo, { label: page }];
+      selection.kind === "new" && group.project ? [where, repo] : [where, repo, { label: page }];
 
     // A child's parent crumb takes its title's place, the chips naming it; a thread with both a
     // parent and children has the parent's crumb before its own.
@@ -879,10 +879,10 @@ export function App() {
     });
     addDialog.current?.open(start);
   };
-  // Create Space (0090), from the orchestrators page or the add palette, where the open host makes
+  // Create Project (0090), from the orchestrators page or the add palette, where the open host makes
   // them.
-  const newSpace =
-    connected && "spaces" in connection.capabilities
+  const newProject =
+    connected && "projects" in connection.capabilities
       ? () => newChatOrchestrator.current?.showModal()
       : undefined;
   const openMainPage = (next: NonNullable<typeof mainPage>) => {
@@ -906,7 +906,7 @@ export function App() {
   // The repositories a new thread can start in, the computer new threads start on's first.
   const menuRepos: MenuItem[] = [
     ...startGroups
-      .filter((g) => !g.space && g.id !== noRepo)
+      .filter((g) => !g.project && g.id !== noRepo)
       .map((g): MenuItem => {
         const repo = startState.repos.find((r) => r.id === g.id);
         return {
@@ -1250,7 +1250,7 @@ export function App() {
       git={
         selection.kind === "thread" ||
         agent ||
-        (selection.kind === "new" && !repoless(group) && !group.space)
+        (selection.kind === "new" && !repoless(group) && !group.project)
           ? {
               hostId: host.id,
               // An orchestrator's child thread has one too, as its composer's tab had.
@@ -1277,7 +1277,7 @@ export function App() {
             }
           : undefined
       }
-      space={
+      project={
         selection.kind === "thread" && openThread && !openThread.parent
           ? { thread: openThread, view: threads }
           : undefined
@@ -1384,16 +1384,16 @@ export function App() {
       />
       <NewChatProject
         ref={newChatOrchestrator}
-        create={threads.createSpace}
+        create={threads.createProject}
         maxImageBytes={threads.iconImageBytes}
-        onCreated={(space) => {
+        onCreated={(project) => {
           setMainPage(undefined);
-          setSelection({ kind: "new", groupId: space.id });
+          setSelection({ kind: "new", groupId: project.id });
         }}
       />
       <NewThreadPicker
         ref={picker}
-        groups={startGroups.filter((g) => !g.space)}
+        groups={startGroups.filter((g) => !g.project)}
         repos={startState.repos}
         hostName={start.name}
         elsewhere={startElsewhere}
@@ -1444,13 +1444,13 @@ export function App() {
           onOpenSettings={openSettings}
           page={mainPage}
           onOpenPage={openMainPage}
-          openSpace={
-            selection.kind === "new" && group.space && !mainPage
+          openProject={
+            selection.kind === "new" && group.project && !mainPage
               ? `${host.id}/${group.id}`
               : undefined
           }
           orchestratorMenu={orchestratorMenu}
-          onNewSpace={newSpace}
+          onNewProject={newProject}
           onDelete={deleteThread}
           addDialog={addDialog}
           onNewThread={() => picker.current?.showModal()}
@@ -1474,13 +1474,11 @@ export function App() {
                 pins={pins}
                 onOpen={(entry) => {
                   setMainPage(undefined);
-                  if (entry.kind === "orchestrator") openOrchestrator(entry.host.id, entry.id);
-                  else openOnHost(entry.host.id, { kind: "new", groupId: entry.id });
+                  openOnHost(entry.host.id, { kind: "new", groupId: entry.id });
                 }}
                 onTogglePin={togglePinnedProject}
                 actionsFor={orchestratorActions}
-                onNewOrchestrator={() => openAdd("orchestrator")}
-                onNewChatProject={newSpace}
+                onNewProject={newProject}
               />
             </>
           ) : mainPage === "usage" ? (
@@ -1535,7 +1533,7 @@ export function App() {
                 </div>
                 <Breadcrumb items={crumbs} />
                 <div className="ml-auto flex shrink-0 items-center gap-2">
-                  {!group.space && !tiled && (
+                  {!group.project && !tiled && (
                     <ThreadDetailsButton
                       open={details.mode !== "hidden"}
                       onToggle={() => details.toggle()}
@@ -1588,7 +1586,7 @@ export function App() {
                         onFocus={(index) => openThreadId(panes[index]!)}
                         onClose={(index) => closePane(panes[index]!)}
                         details={
-                          tiled && !group.space
+                          tiled && !group.project
                             ? {
                                 node: threadDetails(
                                   details.mode === "hidden" ? "hidden" : "floating",
@@ -1750,24 +1748,24 @@ export function App() {
                       threadLinks={threadLinks}
                       settingsClosed={settingsClosed.count}
                       header={
-                        spaceEntry && (
-                          <SpaceHeader
-                            entry={spaceEntry}
+                        projectEntry && (
+                          <ProjectHeader
+                            entry={projectEntry}
                             onBack={() => openMainPage("projects")}
-                            pinned={pins.includes(spaceEntry.key)}
-                            onTogglePin={() => togglePinnedProject(spaceEntry.key)}
-                            actionsFor={() => orchestratorActions(spaceEntry)}
+                            pinned={pins.includes(projectEntry.key)}
+                            onTogglePin={() => togglePinnedProject(projectEntry.key)}
+                            actionsFor={() => orchestratorActions(projectEntry)}
                           />
                         )
                       }
                       tray={
-                        spaceRepo && (
+                        projectRepo && (
                           <RunTargetMenu
-                            hosts={spaceHosts}
+                            hosts={projectHosts}
                             hostId={host.id}
                             onHostChange={(id) => {
                               const there = views[id]?.state.repos.find(
-                                (r) => r.space && r.name === spaceRepo.name,
+                                (r) => r.project && r.name === projectRepo.name,
                               );
                               if (id !== host.id && there)
                                 openOnHost(id, { kind: "new", groupId: there.id, draft });
@@ -1776,16 +1774,16 @@ export function App() {
                         )
                       }
                       aside={
-                        spaceRepo &&
-                        "spaceContext" in threads.capabilities && (
-                          <SpaceContext hostId={host.id} space={spaceRepo} view={threads} />
+                        projectRepo &&
+                        "projectContext" in threads.capabilities && (
+                          <ProjectContext hostId={host.id} project={projectRepo} view={threads} />
                         )
                       }
                       below={
-                        spaceRepo && (
-                          <SpaceThreads
+                        projectRepo && (
+                          <ProjectThreads
                             host={host}
-                            space={spaceRepo}
+                            project={projectRepo}
                             view={threads}
                             onOpenThread={(threadId) => setSelection({ kind: "thread", threadId })}
                           />
@@ -1849,7 +1847,7 @@ export function App() {
                     )
                   )}
                 </div>
-                {!tiled && threadDetails(group.space ? "hidden" : details.mode)}
+                {!tiled && threadDetails(group.project ? "hidden" : details.mode)}
               </div>
             </>
           )}

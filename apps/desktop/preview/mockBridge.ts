@@ -109,9 +109,9 @@ const capabilities: Capabilities = Object.fromEntries(
     "sendModel",
     "sendOptions",
     "setupScripts",
-    "spaceContext",
-    "spaceThreads",
-    "spaces",
+    "projectContext",
+    "projectThreads",
+    "projects",
     "threadAttention",
     "threadFork",
     "threadImport",
@@ -969,12 +969,12 @@ const handlers: { [M in Method]?: Handler<M> } = {
     const { runId, seen, ...rest } = p;
     return threadResult(runId, { ...rest, ...(seen && { seenAt: now() }) });
   },
-  "thread/setSpace": (p) => {
+  "thread/setProject": (p) => {
     const threads = p.threads.map((runId) => {
       const thread = db.threads.find((t) => t.id === runId);
       if (!thread) return undefined;
-      if (p.space) thread.space = p.space;
-      else delete thread.space;
+      if (p.project) thread.project = p.project;
+      else delete thread.project;
       emit({ kind: "thread.updated", thread });
       return thread;
     });
@@ -1044,14 +1044,14 @@ const handlers: { [M in Method]?: Handler<M> } = {
     emit({ kind: "repo.updated", repo });
     return { repo };
   },
-  "space/create": (p) => {
+  "project/create": (p) => {
     const found = db.repos.find((r) => r.id === p.id);
     if (found) return { repo: found };
     const repo = {
       id: p.id,
       name: p.name.trim(),
       path: `${HOME}/.parallax/spaces/${p.id}`,
-      space: true,
+      project: true,
       ...(p.icon && { icon: p.icon }),
       createdAt: now(),
     };
@@ -1059,10 +1059,10 @@ const handlers: { [M in Method]?: Handler<M> } = {
     emit({ kind: "repo.added", repo });
     return { repo };
   },
-  "space/delete": (p) => {
-    db.threads = db.threads.filter((t) => t.repo !== p.space);
-    db.repos = db.repos.filter((r) => r.id !== p.space);
-    emit({ kind: "repo.removed", repo: p.space });
+  "project/delete": (p) => {
+    db.threads = db.threads.filter((t) => t.repo !== p.project);
+    db.repos = db.repos.filter((r) => r.id !== p.project);
+    emit({ kind: "repo.removed", repo: p.project });
     return {};
   },
   "repo/refs": () => ({

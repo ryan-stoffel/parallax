@@ -55,8 +55,8 @@ export type AddDialogHandle = { open: (start?: "orchestrator") => void };
 
 /**
  * The sidebar's add palette, a native modal <dialog> laid out like a command palette. Its menu
- * offers New Space (0090), New repository, Local folder, and Clone from GitHub; `open("orchestrator")`
- * starts on Create orchestrator, which New thread's picker opens (0093). New Space hands off to `onNewSpace`'s dialog; the rest open a step of their own in the same dialog,
+ * offers New Project (0090), New repository, Local folder, and Clone from GitHub; `open("orchestrator")`
+ * starts on Create orchestrator, which New thread's picker opens (0093). New Project hands off to `onNewProject`'s dialog; the rest open a step of their own in the same dialog,
  * and Back returns to the step before. With more than one computer,
  * Local folder first asks which (PLX-769). The first three make or find a repository and
  * register it with its computer's plxd (`repo/add`), then close, or, when Create orchestrator's
@@ -70,7 +70,7 @@ export function AddDialog({
   repos,
   create,
   onCreated,
-  onNewSpace,
+  onNewProject,
 }: {
   ref: Ref<AddDialogHandle>;
   hosts: Host[];
@@ -83,8 +83,8 @@ export function AddDialog({
   /** Creates an orchestrator on the open host. */
   create: ThreadsView["createOrchestrator"];
   onCreated: (hostId: string, orchestrator: Orchestrator) => void;
-  /** Opens Create Space, or undefined where the open host's plxd makes no Spaces. */
-  onNewSpace?: () => void;
+  /** Opens Create Project, or undefined where the open host's plxd makes no Projects. */
+  onNewProject?: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [stack, setStack] = useState<Step[]>([{ kind: "menu" }]);
@@ -134,12 +134,12 @@ export function AddDialog({
         <MenuStep
           key={session}
           computers={hosts.length > 1}
-          spaces={!!onNewSpace}
+          projects={!!onNewProject}
           onBack={back}
           onPick={(kind) => {
-            if (kind === "space") {
+            if (kind === "project") {
               dialog.current?.close();
-              return onNewSpace?.();
+              return onNewProject?.();
             }
             push(kind === "browse" && hosts.length > 1 ? { kind: "computer" } : { kind });
           }}
@@ -254,9 +254,9 @@ export function CloneDialog({
 type StepProps = { onBack: () => void; onAdded: (hostId: string, repo: Repo) => void };
 
 /**
- * What the menu step picks: New Space or a way to add a repository. An orchestrator thread starts from New thread's picker, which opens this palette on its step.
+ * What the menu step picks: New Project or a way to add a repository. An orchestrator thread starts from New thread's picker, which opens this palette on its step.
  */
-type MenuKind = WorkspaceSource | "space";
+type MenuKind = WorkspaceSource | "project";
 
 const menu: {
   kind: MenuKind;
@@ -265,8 +265,8 @@ const menu: {
   icon: ReactNode;
 }[] = [
   {
-    kind: "space",
-    name: "New Space",
+    kind: "project",
+    name: "New Project",
     detail: "Threads that share your instructions and files, with no repository",
     icon: <MessagesSquare />,
   },
@@ -293,14 +293,14 @@ const menu: {
 /** The palette's first step: what to add, searchable. */
 function MenuStep({
   computers,
-  spaces,
+  projects,
   onBack,
   onPick,
 }: {
   /** Whether there's more than one computer, so Local folder can be on any of them. */
   computers: boolean;
-  /** Whether New Space is offered. */
-  spaces: boolean;
+  /** Whether New Project is offered. */
+  projects: boolean;
   onBack: () => void;
   onPick: (kind: MenuKind) => void;
 }) {
@@ -308,7 +308,7 @@ function MenuStep({
   const [active, setActive] = useState(0);
   const q = query.trim().toLowerCase();
   const shown = menu
-    .filter((m) => spaces || m.kind !== "space")
+    .filter((m) => projects || m.kind !== "project")
     .map((m) =>
       computers && m.kind === "browse"
         ? { ...m, detail: "Add a repository that's already on one of your computers" }

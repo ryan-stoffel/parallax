@@ -252,7 +252,7 @@ function stylesOf(parts: Parts): CellStyle[] {
       fonts[Number(xf.getAttribute("fontId") ?? 0)],
       fills[Number(xf.getAttribute("fillId") ?? 0)],
       horizontal && ["left", "center", "right"].includes(horizontal) && `text-align:${horizontal}`,
-      align?.getAttribute("wrapText") === "1" && "white-space:pre-wrap",
+      align?.getAttribute("wrapText") === "1" && "white-project:pre-wrap",
     ]
       .filter(Boolean)
       .join(";");

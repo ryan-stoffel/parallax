@@ -201,13 +201,11 @@ const openProjectsPage = () =>
       .find((b) => b.textContent === "Projects")!
       .click(),
   );
-// Each orchestrator's card, by name, on the orchestrators page, which this opens (0090).
-const orchestratorRows = () => {
-  openProjectsPage();
-  return [...document.querySelectorAll("main li[data-project] [data-title]")].map(
+// Each orchestrator's row, by name, in its repo's folder in the Traditional sidebar (0093).
+const orchestratorRows = () =>
+  [...document.querySelectorAll('#sidebar li[data-kind="orchestrator"] [data-title]')].map(
     (t) => t.textContent,
   );
-};
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
 const dialog = () => document.querySelector<HTMLDialogElement>('dialog[aria-label="New project"]')!;
@@ -384,18 +382,18 @@ test("a failed clone says why above the folders, where a long list can't push it
   expect(dialog().open).toBe(true);
 });
 
-/** An orchestrator's card on the orchestrators page, which this opens, by its name (0090). */
-const rowButton = (name: string) => {
-  openProjectsPage();
-  return [...document.querySelectorAll<HTMLButtonElement>("main li[data-project] > button")].find(
-    (b) => b.querySelector("[data-title]")?.textContent === name,
-  )!;
-};
-// An orchestrator card's menu after Pin, which a right-click on it opens.
+/** An orchestrator's row in the Traditional sidebar, by its name (0093). */
+const rowButton = (name: string) =>
+  [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      '#sidebar li[data-kind="orchestrator"] button[data-row]',
+    ),
+  ].find((b) => b.querySelector("[data-title]")?.textContent === name)!;
+// An orchestrator row's menu, which a right-click on it opens.
 const menuItems = (name: string) => {
   const card = rowButton(name).closest("li")!;
   act(() => void card.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
-  return [...card.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')].slice(1);
+  return [...card.querySelectorAll<HTMLButtonElement>('[role="menu"] [role="menuitem"]')];
 };
 const menuItem = (name: string, item: string) =>
   menuItems(name).find((b) => b.textContent === item);
@@ -871,13 +869,26 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
 });
 
 test("a card's menu shows a hidden sidebar before it opens a dialog the sidebar holds", async () => {
-  capabilities = { orchestratorEdit: {} };
+  const essays: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    project: true,
+    createdAt: "2026-09-29T11:00:00Z",
+  };
+  capabilities = { projects: {} };
+  answers["thread/list"] = () => ({ result: { repos: [essays], threads: [], seq: 7 } });
   await renderApp();
-  openProjectsPage();
+  const card = projectCard("Essays").closest("li")!;
   await click(document.querySelector('button[aria-label="Hide sidebar"]'));
   const hidden = () => !!document.getElementById("sidebar")!.closest("[hidden]");
   expect(hidden()).toBe(true);
-  await click(menuItem("ember", "Rename…"));
+  act(() => void card.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+  await click(
+    [...card.querySelectorAll('[role="menu"] [role="menuitem"]')].find(
+      (b) => b.textContent === "Rename…",
+    ),
+  );
   expect(hidden()).toBe(false);
   expect([...document.querySelectorAll("dialog")].some((d) => d.open)).toBe(true);
 });
@@ -905,13 +916,30 @@ test("without orchestratorDelete there's no Delete…, and another client's orch
   expect(orchestratorRows()).toEqual(["photon"]);
 });
 
+/** A Project's card on the Projects page, which this opens, by its name (0090, 0093). */
+const projectCard = (name: string) => {
+  openProjectsPage();
+  return [...document.querySelectorAll<HTMLButtonElement>("main li[data-project] > button")].find(
+    (b) => b.querySelector("[data-title]")?.textContent === name,
+  )!;
+};
+
 /** A sidebar button, by its text. */
 const sidebarButton = (text: string) =>
   [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")].find(
     (b) => b.textContent === text,
   );
 
-test("Usage waits under More until Settings shows it in the head, and pinned orchestrators list by name", async () => {
+test("Usage waits under More until Settings shows it in the head, and pinned Projects list by name", async () => {
+  const essays: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    project: true,
+    createdAt: "2026-09-29T11:00:00Z",
+  };
+  capabilities = { projects: {} };
+  answers["thread/list"] = () => ({ result: { repos: [essays], threads: [], seq: 7 } });
   await renderApp();
   // Folded under More, out of reach until it opens.
   const fold = () => sidebarButton("Usage")!.closest<HTMLElement>("[aria-controls], [id]")!;
@@ -925,55 +953,57 @@ test("Usage waits under More until Settings shows it in the head, and pinned orc
   await act(async () => sidebarNav.set({ ...sidebarNav.get(), usage: true }));
   expect(sidebarButton("Usage")!.closest("[inert]")).toBeNull();
 
-  // Pinning an orchestrator from its card lists it as a card with the pinned threads, out of its folder,
-  // and its row opens it. Under Pinned in the head are only Spaces.
+  // Pinning a Project from its card lists it under Pinned in the head, and its row opens it. A
+  // pinned orchestrator lists as a card with the pinned threads, out of its folder.
   openProjectsPage();
-  await click(document.querySelector('main button[aria-label="Pin ember"]'));
-  expect(pinnedProjects.get()).toEqual(["local/p-ember"]);
-  expect(document.querySelector('#sidebar section[aria-label="Pinned"]')).toBeNull();
-  const pinned = document.querySelector('#sidebar ul[aria-label="Pinned orchestrator threads"]')!;
-  expect([...pinned.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual(["ember"]);
+  await click(document.querySelector('main button[aria-label="Pin Essays"]'));
+  expect(pinnedProjects.get()).toEqual(["local/s-essays"]);
+  const pinned = document.querySelector('#sidebar section[aria-label="Pinned"]')!;
+  expect([...pinned.querySelectorAll("li > button")].map((b) => b.textContent)).toEqual(["Essays"]);
+  await click(pinned.querySelector("li > button"));
+  expect(crumbs()).toEqual(["This Mac", "Essays"]);
+  await act(async () => pinnedProjects.set([...pinnedProjects.get(), "local/p-ember"]));
+  const cards = document.querySelector('#sidebar ul[aria-label="Pinned orchestrator threads"]')!;
+  expect([...cards.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual(["ember"]);
   expect(
     [
       ...document.querySelectorAll(
-        '#sidebar ul[aria-label="Threads"] li[data-kind="project"] [data-title]',
+        '#sidebar ul[aria-label="Threads"] li[data-kind="orchestrator"] [data-title]',
       ),
     ].map((t) => t.textContent),
   ).not.toContain("ember");
-  await click(pinned.querySelector("button[data-row]"));
+  await click(cards.querySelector("button[data-row]"));
   expect(crumbs()).toEqual(["This Mac", "ember"]);
 });
 
-test("a Space is made from the Projects page, opens to New thread in it, and keeps its icon, instructions, and files", async () => {
-  capabilities = { spaces: {}, spaceContext: {}, threadAttention: {} };
-  const space: Repo = {
+test("a Project is made from the Projects page, opens to New thread in it, and keeps its icon, instructions, and files", async () => {
+  capabilities = { projects: {}, projectContext: {}, threadAttention: {} };
+  const project: Repo = {
     id: "s-essays",
     name: "Essays",
     path: "/data/spaces/s-essays",
-    space: true,
+    project: true,
     createdAt: "2026-09-29T11:00:00Z",
     files: ["/data/uploads/a/brief.pdf", "/data/uploads/b/notes.md"],
   };
-  answers["space/create"] = (p) => ({ result: { repo: { ...space, id: p["id"], files: [] } } });
+  answers["project/create"] = (p) => ({ result: { repo: { ...project, id: p["id"], files: [] } } });
   answers["repo/update"] = (p) => ({
-    result: { repo: { ...space, ...p, id: p["repo"] } },
+    result: { repo: { ...project, ...p, id: p["repo"] } },
   });
   await renderApp();
   openProjectsPage();
   const create = [...document.querySelectorAll("dialog")].find(
-    (d) => d.querySelector("h2")?.textContent === "Create Space",
+    (d) => d.querySelector("h2")?.textContent === "Create Project",
   )!;
   await click(
-    [...document.querySelectorAll('main [role="menuitem"]')].find((b) =>
-      b.textContent?.startsWith("Space"),
-    ),
+    [...document.querySelectorAll("main button")].find((b) => b.textContent === "New project"),
   );
   typeInto(create.querySelector<HTMLInputElement>('input[aria-label="Name"]')!, " Essays ");
   await act(async () => create.querySelector("form")!.requestSubmit());
   await settle();
-  const [made] = calls("space/create");
+  const [made] = calls("project/create");
   expect(made).toEqual({ id: expect.stringMatching(/^[0-9a-f-]{36}$/), name: "Essays" });
-  // A Space's page is the Space, so its crumbs end there.
+  // A Project's page is the Project, so its crumbs end there.
   expect(crumbs()).toEqual(["This Mac", "Essays"]);
   // Its icon in the header opens the icon picker under it.
   const icon = document.querySelector<HTMLElement>('main button[aria-label="Change icon"]')!;
@@ -1013,13 +1043,13 @@ test("a Space is made from the Projects page, opens to New thread in it, and kee
   });
 });
 
-test("Add puts this computer's other threads in a Space, and each archives from its card", async () => {
-  capabilities = { spaces: {}, spaceThreads: {} };
-  const space: Repo = {
+test("Add puts this computer's other threads in a Project, and each archives from its card", async () => {
+  capabilities = { projects: {}, projectThreads: {} };
+  const project: Repo = {
     id: "s-essays",
     name: "Essays",
     path: "/data/spaces/s-essays",
-    space: true,
+    project: true,
     createdAt: "2026-09-29T10:00:00Z",
   };
   const scratch: Repo = {
@@ -1038,30 +1068,30 @@ test("Add puts this computer's other threads in a Space, and each archives from 
   };
   const outline: Thread = {
     id: "t-outline",
-    repo: space.id,
+    repo: project.id,
     createdAt: "2026-09-29T10:30:00Z",
     title: "Outline",
   };
   answers["thread/list"] = () => ({
-    result: { repos: [parallax, scratch, space], threads: [fix, draft, outline], seq: 7 },
+    result: { repos: [parallax, scratch, project], threads: [fix, draft, outline], seq: 7 },
   });
-  answers["thread/setSpace"] = (p) => ({
+  answers["thread/setProject"] = (p) => ({
     result: {
       threads: (p["threads"] as string[]).map((id) => ({
         ...[fix, draft].find((t) => t.id === id)!,
-        ...(p["space"] ? { space: p["space"] as string } : {}),
+        ...(p["project"] ? { project: p["project"] as string } : {}),
       })),
     },
   });
   await renderApp();
-  await click(rowButton("Essays"));
+  await click(projectCard("Essays"));
   const threads = () =>
     [...document.querySelectorAll('main section[aria-label="Threads"] > ul > li')].map(
       (li) => li.querySelector("button span.font-semibold")?.textContent,
     );
   expect(threads()).toEqual(["Outline"]);
 
-  // The picker lists the threads outside the Space, newest first, but not one started in it.
+  // The picker lists the threads outside the Project, newest first, but not one started in it.
   await click(document.querySelector('main button[aria-label="Add threads"]'));
   const picker = document.querySelector('ul[aria-label="Threads to add"]')!.closest("dialog")!;
   expect(picker.open).toBe(true);
@@ -1074,13 +1104,13 @@ test("Add puts this computer's other threads in a Space, and each archives from 
   expect(picker.querySelector('button[type="submit"]')!.textContent).toBe("Add");
   await act(async () => picker.querySelector("form")!.requestSubmit());
   await settle();
-  expect(calls("thread/setSpace")).toEqual([{ threads: ["t-draft"], space: "s-essays" }]);
+  expect(calls("thread/setProject")).toEqual([{ threads: ["t-draft"], project: "s-essays" }]);
   expect(picker.open).toBe(false);
   expect(threads()).toEqual(["Draft the intro", "Outline"]);
 
   // Each card archives as the sidebar's does.
   answers["thread/archive"] = (p) => ({
-    result: { thread: { ...draft, space: space.id, archived: p["archived"] as boolean } },
+    result: { thread: { ...draft, project: project.id, archived: p["archived"] as boolean } },
   });
   const row = document.querySelector('main section[aria-label="Threads"] > ul > li')!;
   await click(row.querySelector('button[title="Archive (E)"]'));
@@ -1088,13 +1118,13 @@ test("Add puts this computer's other threads in a Space, and each archives from 
   expect(threads()).toEqual(["Outline"]);
 });
 
-test("Thread details adds the open thread to a Space, which its crumbs then name, and takes it out", async () => {
-  capabilities = { spaces: {}, spaceThreads: {} };
-  const space: Repo = {
+test("Thread details adds the open thread to a Project, which its crumbs then name, and takes it out", async () => {
+  capabilities = { projects: {}, projectThreads: {} };
+  const project: Repo = {
     id: "s-essays",
     name: "Essays",
     path: "/data/spaces/s-essays",
-    space: true,
+    project: true,
     createdAt: "2026-09-29T10:00:00Z",
   };
   const draft: Thread = {
@@ -1104,38 +1134,40 @@ test("Thread details adds the open thread to a Space, which its crumbs then name
     title: "Draft the intro",
   };
   answers["thread/list"] = () => ({
-    result: { repos: [parallax, space], threads: [draft], seq: 7 },
+    result: { repos: [parallax, project], threads: [draft], seq: 7 },
   });
-  answers["thread/setSpace"] = (p) => ({
-    result: { threads: [{ ...draft, ...(p["space"] ? { space: p["space"] as string } : {}) }] },
+  answers["thread/setProject"] = (p) => ({
+    result: {
+      threads: [{ ...draft, ...(p["project"] ? { project: p["project"] as string } : {}) }],
+    },
   });
   await renderApp();
   await click(document.querySelector('#sidebar li[data-kind="thread"] button'));
   expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
 
   const details = document.getElementById("thread-details")!;
-  await click(details.querySelector('button[aria-label="Add to a Space"]'));
-  const spaces = () => [
-    ...details.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Spaces"] button'),
+  await click(details.querySelector('button[aria-label="Add to a Project"]'));
+  const projects = () => [
+    ...details.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Projects"] button'),
   ];
-  expect(spaces().map((b) => b.textContent)).toEqual(["Essays"]);
-  await click(spaces()[0]);
-  expect(calls("thread/setSpace")).toEqual([{ threads: ["t-draft"], space: "s-essays" }]);
+  expect(projects().map((b) => b.textContent)).toEqual(["Essays"]);
+  await click(projects()[0]);
+  expect(calls("thread/setProject")).toEqual([{ threads: ["t-draft"], project: "s-essays" }]);
   expect(crumbs()).toEqual(["This Mac", "Essays", "Draft the intro"]);
-  expect(details.querySelector('button[aria-label="Space: Essays"]')).not.toBeNull();
+  expect(details.querySelector('button[aria-label="Project: Essays"]')).not.toBeNull();
 
-  await click(spaces().find((b) => b.textContent === "Remove from Space"));
-  expect(calls("thread/setSpace").at(-1)).toEqual({ threads: ["t-draft"] });
+  await click(projects().find((b) => b.textContent === "Remove from Project"));
+  expect(calls("thread/setProject").at(-1)).toEqual({ threads: ["t-draft"] });
   expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
 });
 
-test("a sidebar row's actions add its thread to a Space", async () => {
-  capabilities = { spaces: {}, spaceThreads: {} };
-  const space: Repo = {
+test("a sidebar row's actions add its thread to a Project", async () => {
+  capabilities = { projects: {}, projectThreads: {} };
+  const essays: Repo = {
     id: "s-essays",
     name: "Essays",
     path: "/data/spaces/s-essays",
-    space: true,
+    project: true,
     createdAt: "2026-09-29T10:00:00Z",
   };
   const draft: Thread = {
@@ -1145,10 +1177,10 @@ test("a sidebar row's actions add its thread to a Space", async () => {
     title: "Draft the intro",
   };
   answers["thread/list"] = () => ({
-    result: { repos: [parallax, space], threads: [draft], seq: 7 },
+    result: { repos: [parallax, essays], threads: [draft], seq: 7 },
   });
-  answers["thread/setSpace"] = (p) => ({
-    result: { threads: [{ ...draft, space: p["space"] as string }] },
+  answers["thread/setProject"] = (p) => ({
+    result: { threads: [{ ...draft, project: p["project"] as string }] },
   });
   await renderApp();
   const row = document.querySelector('#sidebar li[data-kind="thread"]')!;
@@ -1159,11 +1191,11 @@ test("a sidebar row's actions add its thread to a Space", async () => {
       .dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" })),
   );
   const item = [...row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
-    (b) => b.textContent === "Add to Space…",
+    (b) => b.textContent === "Add to Project…",
   );
   await click(item);
-  await click(row.querySelector('[role="menu"][aria-label="Spaces"] button'));
-  expect(calls("thread/setSpace")).toEqual([{ threads: ["t-draft"], space: "s-essays" }]);
+  await click(row.querySelector('[role="menu"][aria-label="Projects"] button'));
+  expect(calls("thread/setProject")).toEqual([{ threads: ["t-draft"], project: "s-essays" }]);
 });
 
 test("a row counts unpushed commits for a repo's thread, and none for a thread with no repo", async () => {
@@ -1229,22 +1261,22 @@ test("Inbox has a Projects button beside its search and Pull requests in the foo
   expect(sidebarButton("Projects")).toBeDefined();
 });
 
-test("the add palette offers New Space first where the host makes Spaces, and it opens Create Space; New orchestrator thread is in New thread's picker", async () => {
+test("the add palette offers New Project first where the host makes Projects, and it opens Create Project; New orchestrator thread is in New thread's picker", async () => {
   await renderApp();
   await openPalette();
-  expect(paletteOption("New Space")).toBeUndefined();
+  expect(paletteOption("New Project")).toBeUndefined();
   act(() => dialog().close());
 
-  capabilities = { spaces: {} };
+  capabilities = { projects: {} };
   unmount();
   await renderApp();
   await openPalette();
-  expect(paletteOptions().indexOf(paletteOption("New Space")!)).toBe(0);
-  expect(paletteOption("New Project")).toBeUndefined();
-  await click(paletteOption("New Space"));
+  expect(paletteOptions().indexOf(paletteOption("New Project")!)).toBe(0);
+  expect(paletteOption("New orchestrator thread")).toBeUndefined();
+  await click(paletteOption("New Project"));
   expect(dialog().open).toBe(false);
   const create = [...document.querySelectorAll("dialog")].find(
-    (d) => d.querySelector("h2")?.textContent === "Create Space",
+    (d) => d.querySelector("h2")?.textContent === "Create Project",
   )!;
   expect(create.open).toBe(true);
 });

@@ -1,5 +1,5 @@
-// Thread details' Space row (0090): the Space a thread is in, and a menu to add it to one, move it
-// to another, or take it out. The sidebar row's Add to Space opens the same menu.
+// Thread details' Project row (0090): the Project a thread is in, and a menu to add it to one, move
+// it to another, or take it out. The sidebar row's Add to Project opens the same menu.
 import { ChevronDown, MessagesSquare, X } from "lucide-react";
 import { type RefObject, useId, useRef } from "react";
 
@@ -10,31 +10,32 @@ import type { ThreadsView } from "./threads";
 import { Menu, menuItem, ToolbarMenuRow, toolbarMenuDivider } from "./ui";
 
 /**
- * Where `thread` can be added to a Space: this computer's Spaces, and the Space it was started in,
- * which it stays in. Undefined for an orchestrator's thread, or where plxd can't add threads to
- * Spaces or has none.
+ * Where `thread` can be added to a Project: this computer's Projects, and the Project it was
+ * started in, which it stays in. Undefined for an orchestrator's thread, or where plxd can't add
+ * threads to Projects or has none.
  */
-export function spaceChoices(
+export function projectChoices(
   thread: Thread,
   view: ThreadsView,
-): { spaces: Repo[]; startedIn?: Repo } | undefined {
+): { projects: Repo[]; startedIn?: Repo } | undefined {
   const { repos } = view.state;
   const home = repos.find((r) => r.id === thread.repo);
-  const spaces = repos.filter((r) => r.space);
-  if (!home || !("spaceThreads" in view.capabilities) || spaces.length === 0) return undefined;
-  return { spaces, startedIn: home.space ? home : undefined };
+  const projects = repos.filter((r) => r.project);
+  if (!home || !("projectThreads" in view.capabilities) || projects.length === 0) return undefined;
+  return { projects, startedIn: home.project ? home : undefined };
 }
 
 /**
- * The thread's Space, or Add to a Space, opening a menu of this computer's Spaces. A thread started in
- * a Space lives there, so its row only names it. Nothing shows where spaceChoices has none.
+ * The thread's Project, or Add to a Project, opening a menu of this computer's Projects. A thread
+ * started in a Project lives there, so its row only names it. Nothing shows where projectChoices
+ * has none.
  */
-export function SpaceMenu({ thread, view }: { thread: Thread; view: ThreadsView }) {
+export function ThreadProjectMenu({ thread, view }: { thread: Thread; view: ThreadsView }) {
   const id = useId();
-  const choices = spaceChoices(thread, view);
+  const choices = projectChoices(thread, view);
   if (!choices) return null;
-  const { spaces, startedIn } = choices;
-  const current = startedIn ?? spaces.find((s) => s.id === thread.space);
+  const { projects, startedIn } = choices;
+  const current = startedIn ?? projects.find((s) => s.id === thread.project);
   const label = (
     <>
       {current ? (
@@ -42,12 +43,12 @@ export function SpaceMenu({ thread, view }: { thread: Thread; view: ThreadsView 
       ) : (
         <MessagesSquare aria-hidden className="text-muted-foreground" />
       )}
-      <span className="min-w-0 flex-1 truncate">{current ? current.name : "Add to a Space"}</span>
+      <span className="min-w-0 flex-1 truncate">{current ? current.name : "Add to a Project"}</span>
     </>
   );
   if (startedIn)
     return (
-      <div title="Started in this Space, so it stays here" className={menuItem}>
+      <div title="Started in this Project, so it stays here" className={menuItem}>
         {label}
       </div>
     );
@@ -57,43 +58,46 @@ export function SpaceMenu({ thread, view }: { thread: Thread; view: ThreadsView 
         type="button"
         popoverTarget={id}
         aria-haspopup="menu"
-        aria-label={current ? `Space: ${current.name}` : "Add to a Space"}
+        aria-label={current ? `Project: ${current.name}` : "Add to a Project"}
         className={menuItem}
       >
         {label}
         <ChevronDown aria-hidden className="text-muted-foreground" />
       </button>
-      <SpacePicker id={id} thread={thread} view={view} spaces={spaces} />
+      <ProjectPicker id={id} thread={thread} view={view} projects={projects} />
     </>
   );
 }
 
-/** The menu of `spaces` to add `thread` to, checking its own, with Remove from Space while in one. */
-export function SpacePicker({
+/**
+ * The menu of `projects` to add `thread` to, checking its own, with Remove from Project while in
+ * one.
+ */
+export function ProjectPicker({
   id,
   thread,
   view,
-  spaces,
+  projects,
   ref,
 }: {
   id: string;
   thread: Thread;
   view: ThreadsView;
-  spaces: Repo[];
+  projects: Repo[];
   ref?: RefObject<HTMLDivElement | null>;
 }) {
   const own = useRef<HTMLDivElement>(null);
   const menu = ref ?? own;
-  const move = async (space?: string) => {
+  const move = async (project?: string) => {
     menu.current?.hidePopover();
-    if (space === thread.space) return;
-    const failed = await view.setSpace([thread.id], space);
+    if (project === thread.project) return;
+    const failed = await view.setProject([thread.id], project);
     if (failed)
-      notify({ tone: "error", title: "Couldn't change the thread's Space", body: failed });
+      notify({ tone: "error", title: "Couldn't change the thread's Project", body: failed });
   };
   return (
-    <Menu ref={menu} id={id} label="Spaces" align="end" className="min-w-52 p-1.5">
-      {spaces.map((s) => (
+    <Menu ref={menu} id={id} label="Projects" align="end" className="min-w-52 p-1.5">
+      {projects.map((s) => (
         <ToolbarMenuRow
           key={s.id}
           // Wrapped, so the row doesn't mute it as it does a bare icon.
@@ -103,16 +107,16 @@ export function SpacePicker({
             </span>
           }
           label={s.name}
-          checked={s.id === thread.space}
+          checked={s.id === thread.project}
           onClick={() => void move(s.id)}
         />
       ))}
-      {spaces.some((s) => s.id === thread.space) && (
+      {projects.some((s) => s.id === thread.project) && (
         <>
           <hr className={toolbarMenuDivider} />
           <ToolbarMenuRow
             icon={<X aria-hidden />}
-            label="Remove from Space"
+            label="Remove from Project"
             onClick={() => void move()}
           />
         </>

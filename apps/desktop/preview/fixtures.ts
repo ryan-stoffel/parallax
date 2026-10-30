@@ -30,7 +30,7 @@ import type {
 
 export const HOME = "/Users/ryan";
 export const PARALLAX_PATH = `${HOME}/Developer/personal/parallax`;
-/** The files a Space's fixture holds, as uploads the mock serves, by path: base64. */
+/** The files a Project's fixture holds, as uploads the mock serves, by path: base64. */
 export const uploadSeeds: Record<string, string> = {
   [`${HOME}/.parallax/uploads/0199a6f0-a001/syllabus.pdf`]:
     "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA2MTIgNzkyXSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA2MzcgPj4Kc3RyZWFtCkJUCi9GMSAyMiBUZgo1NiA3MjAgVGQKKENTQ0kgNDIzMDogRGF0YSBNaW5pbmcpIFRqCi9GMSAxMSBUZgowIC0yMCBUZAooRmFsbCAyMDI2ICB8ICBUdWUvVGh1IDEwOjMwKSBUagowIC0yMCBUZAooKSBUagowIC0yMCBUZAooQ291cnNlIGdvYWxzKSBUagowIC0yMCBUZAooLSBQcmVwcm9jZXNzIGFuZCBleHBsb3JlIHJlYWwgZGF0YXNldHMpIFRqCjAgLTIwIFRkCigtIENsYXNzaWZpY2F0aW9uLCBjbHVzdGVyaW5nLCBhc3NvY2lhdGlvbiBydWxlcykgVGoKMCAtMjAgVGQKKC0gRXZhbHVhdGUgbW9kZWxzIGhvbmVzdGx5KSBUagowIC0yMCBUZAooKSBUagowIC0yMCBUZAooR3JhZGluZykgVGoKMCAtMjAgVGQKKEhvbWV3b3JrIDQwJSAgIE1pZHRlcm0gMjUlICAgUHJvamVjdCAzNSUpIFRqCjAgLTIwIFRkCigpIFRqCjAgLTIwIFRkCihTY2hlZHVsZSkgVGoKMCAtMjAgVGQKKFdlZWsgMSAgIERhdGEgYW5kIHByZXByb2Nlc3NpbmcpIFRqCjAgLTIwIFRkCihXZWVrIDQgICBEZWNpc2lvbiB0cmVlcykgVGoKMCAtMjAgVGQKKFdlZWsgNyAgIENsdXN0ZXJpbmcpIFRqCjAgLTIwIFRkCihXZWVrIDEwICBBc3NvY2lhdGlvbiBydWxlcykgVGoKMCAtMjAgVGQKKFdlZWsgMTMgIFByb2plY3QgcHJlc2VudGF0aW9ucykgVGoKRVQKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDA5MjkgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo5OTkKJSVFT0YK",
@@ -135,9 +135,9 @@ export const ids = {
   physics: uuid(123),
   essay: uuid(124),
   names: uuid(125),
-  spaceCoursework: uuid(130),
-  spaceEssays: uuid(131),
-  spaceApartment: uuid(132),
+  projectCoursework: uuid(130),
+  projectEssays: uuid(131),
+  projectApartment: uuid(132),
   repoLearnRust: uuid(140),
   rcLifetimes: uuid(141),
   rcClap: uuid(142),
@@ -196,10 +196,10 @@ export function createFixtures(now = Date.now()): Fixtures {
     },
     // Chat orchestrators (0090).
     {
-      id: ids.spaceCoursework,
+      id: ids.projectCoursework,
       name: "CSCI4230 · Data Mining",
-      path: `${HOME}/.parallax/spaces/${ids.spaceCoursework}`,
-      space: true,
+      path: `${HOME}/.parallax/spaces/${ids.projectCoursework}`,
+      project: true,
       icon: { name: "graduation-cap", color: "sky" },
       createdAt: ago(60 * 24 * 30),
       instructions:
@@ -207,18 +207,18 @@ export function createFixtures(now = Date.now()): Fixtures {
       files: Object.keys(uploadSeeds),
     },
     {
-      id: ids.spaceEssays,
+      id: ids.projectEssays,
       name: "Essays",
-      path: `${HOME}/.parallax/spaces/${ids.spaceEssays}`,
-      space: true,
+      path: `${HOME}/.parallax/spaces/${ids.projectEssays}`,
+      project: true,
       icon: { name: "feather", color: "orange" },
       createdAt: ago(60 * 24 * 20),
     },
     {
-      id: ids.spaceApartment,
+      id: ids.projectApartment,
       name: "Moving into my own apartment",
-      path: `${HOME}/.parallax/spaces/${ids.spaceApartment}`,
-      space: true,
+      path: `${HOME}/.parallax/spaces/${ids.projectApartment}`,
+      project: true,
       createdAt: ago(60 * 24 * 14),
     },
   ];
@@ -1665,7 +1665,7 @@ export function createFixtures(now = Date.now()): Fixtures {
     .finish(ago(12), { status: "completed" });
   chat({
     id: ids.homework,
-    repo: ids.spaceCoursework,
+    repo: ids.projectCoursework,
     title: "Linear algebra: eigenvalues walkthrough",
     slug: "eigenvalues",
     prompt:
@@ -1676,7 +1676,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   chat({
     id: ids.physics,
-    repo: ids.spaceCoursework,
+    repo: ids.projectCoursework,
     title: "Physics: torque and angular momentum",
     slug: "torque",
     prompt: "Explain torque and angular momentum like I'm studying for Thursday's exam.",
@@ -1687,7 +1687,7 @@ export function createFixtures(now = Date.now()): Fixtures {
   });
   chat({
     id: ids.essay,
-    repo: ids.spaceEssays,
+    repo: ids.projectEssays,
     title: "Essay outline: AI tutors and academic honesty",
     slug: "essay-outline",
     prompt: "Help me outline a 1,500 word essay on AI tutors and academic honesty.",

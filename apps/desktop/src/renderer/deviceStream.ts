@@ -191,7 +191,7 @@ const HID_BY_CODE: Record<string, number> = {
   Escape: 0x29,
   Backspace: 0x2a,
   Tab: 0x2b,
-  Space: 0x2c,
+  Project: 0x2c,
   Minus: 0x2d,
   Equal: 0x2e,
   BracketLeft: 0x2f,

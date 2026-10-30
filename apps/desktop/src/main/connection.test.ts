@@ -377,7 +377,7 @@ test("resyncRequired ends the subscription with a resync", () => {
 test("events/resync ends only its subscription, and the connection stays up", () => {
   const connection = connect();
   expect(child().request("initialize").params).toMatchObject({
-    capabilities: { resyncNotice: {}, orchestrators: {} },
+    capabilities: { resyncNotice: {}, projects: {} },
   });
   child().handshake();
   const lagging = vi.fn();

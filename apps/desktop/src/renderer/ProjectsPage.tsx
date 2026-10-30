@@ -1,11 +1,9 @@
-// The Projects page (0090): every host's orchestrators and Spaces as cards, pinned ones
-// first, with a search, a sort, and New orchestrator or Space.
+// The Projects page (0090): every host's orchestrators and Projects as cards, pinned ones
+// first, with a search, a sort, and New orchestrator or Project.
 import {
   ArrowDownUp,
   Check,
   Ellipsis,
-  GitBranch,
-  Layers,
   MessageSquare,
   MessagesSquare,
   Paperclip,
@@ -37,7 +35,7 @@ import { stored } from "./stored";
 import { AttentionBadge } from "./AttentionMark";
 import { toolButton } from "./PullRequestsPage";
 import { age } from "./Sidebar";
-import { IconButton, Menu, menuItem, openOnContextMenu, Segmented } from "./ui";
+import { IconButton, Menu, menuItem, openOnContextMenu } from "./ui";
 
 const sorts: { value: ProjectSort; label: string }[] = [
   { value: "activity", label: "Recent" },
@@ -50,28 +48,27 @@ const projectSort = stored<ProjectSort>("parallax.projectSort", "activity", (raw
 );
 
 /**
- * A project's color, as a CSS value: an uploaded image's own (`imageTint`), its icon's, else the
- * accent, or gray for a Space.
+ * A Project's color, as a CSS value: an uploaded image's own (`imageTint`), its icon's, else gray.
  */
-function tint(entry: Pick<ProjectEntry, "icon" | "kind">, imageTint?: string) {
+function tint(entry: Pick<ProjectEntry, "icon">, imageTint?: string) {
   if (entry.icon?.image) return imageTint ?? "var(--faint-foreground)";
   if (entry.icon?.color) return `var(--project-${entry.icon.color})`;
-  return entry.kind === "space" && !entry.icon ? "var(--project-gray)" : "var(--accent)";
+  return entry.icon ? "var(--accent)" : "var(--project-gray)";
 }
 
 /**
- * A project's icon on a tile tinted with its color: its uploaded image, its glyph, or Layers for an
- * orchestrator and a chat bubble for a Space when it has none.
+ * A Project's icon on a tile tinted with its color: its uploaded image, its glyph, or a chat
+ * bubble when it has none.
  */
 export function ProjectTile({
   entry,
   size = "md",
 }: {
-  entry: Pick<ProjectEntry, "icon" | "kind">;
+  entry: Pick<ProjectEntry, "icon">;
   /**
    * `glyph` draws only its glyph, the size of an icon beside text, with its color as `--tint`
    * for the row to show when it chooses. `mark` draws only its glyph, large and in its color, as a
-   * Space's header shows it.
+   * Project's header shows it.
    */
   size?: "glyph" | "mark" | "sm" | "md" | "lg";
 }) {
@@ -94,7 +91,7 @@ export function ProjectTile({
       />
     );
   const { Icon } = iconLook(entry.icon);
-  const Glyph = entry.icon ? Icon : entry.kind === "space" ? MessagesSquare : Layers;
+  const Glyph = entry.icon ? Icon : MessagesSquare;
   const color = tint(entry);
   if (size === "mark")
     return <Glyph aria-hidden style={{ color }} className={`${glyph} shrink-0`} />;
@@ -168,21 +165,13 @@ const wash =
 const glow =
   "radial-gradient(120% 100% at 0% 0%, color-mix(in srgb, var(--tint) 16%, transparent), transparent 70%)";
 
-type KindFilter = "all" | ProjectEntry["kind"];
-const kinds: { value: KindFilter; name: string }[] = [
-  { value: "all", name: "All" },
-  { value: "orchestrator", name: "Orchestrators" },
-  { value: "space", name: "Spaces" },
-];
-
 export function ProjectsPage({
   entries,
   pins,
   onOpen,
   onTogglePin,
   actionsFor,
-  onNewOrchestrator,
-  onNewChatProject,
+  onNewProject,
 }: {
   entries: ProjectEntry[];
   /** Pinned keys, in the order pinned. */
@@ -191,28 +180,19 @@ export function ProjectsPage({
   onTogglePin: (key: string) => void;
   /** A project's menu: Rename, Change icon, Delete, and what else its plxd allows. */
   actionsFor: (entry: ProjectEntry) => FavoriteAction[];
-  /** Opens New orchestrator thread, on a repository. */
-  onNewOrchestrator: () => void;
-  /** Opens Create Space, or undefined where no host makes Spaces. */
-  onNewChatProject?: () => void;
+  /** Opens Create Project, or undefined where no host makes Projects. */
+  onNewProject?: () => void;
 }) {
   const sort = projectSort.use();
   const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<KindFilter>("all");
   const sortMenu = useId();
-  const newMenu = useId();
   const words = query.trim().toLowerCase();
   const shown = sortProjects(
-    entries.filter(
-      (e) =>
-        (kind === "all" || e.kind === kind) && (!words || e.name.toLowerCase().includes(words)),
-    ),
+    entries.filter((e) => !words || e.name.toLowerCase().includes(words)),
     sort,
   );
   const pinned = pins.flatMap((key) => shown.filter((e) => e.key === key));
   const others = shown.filter((e) => !pins.includes(e.key));
-  const bothKinds =
-    entries.some((e) => e.kind === "space") && entries.some((e) => e.kind === "orchestrator");
   const card = (e: ProjectEntry) => (
     <ProjectCard
       key={e.key}
@@ -228,28 +208,12 @@ export function ProjectsPage({
       <div className="mx-auto max-w-5xl px-8 pt-6 pb-16">
         <header className="flex items-center gap-2">
           <h1 className="mr-auto text-heading font-semibold">Projects</h1>
-          <button type="button" popoverTarget={newMenu} aria-haspopup="menu" className={toolButton}>
-            <Plus aria-hidden />
-            New orchestrator or Space
-          </button>
-          <Menu id={newMenu} label="New orchestrator or Space" align="end" className="w-72 p-1">
-            <NewChoice
-              menu={newMenu}
-              kind="orchestrator"
-              title="Orchestrator thread"
-              detail="Plans work in a repository and hands it to agents."
-              onClick={onNewOrchestrator}
-            />
-            {onNewChatProject && (
-              <NewChoice
-                menu={newMenu}
-                kind="space"
-                title="Space"
-                detail="Threads that share your instructions and files, with no repository."
-                onClick={onNewChatProject}
-              />
-            )}
-          </Menu>
+          {onNewProject && (
+            <button type="button" onClick={onNewProject} className={toolButton}>
+              <Plus aria-hidden />
+              New project
+            </button>
+          )}
         </header>
 
         {entries.length > 0 && (
@@ -266,9 +230,6 @@ export function ProjectsPage({
                 className="min-w-0 flex-1 bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none"
               />
             </label>
-            {bothKinds && (
-              <Segmented label="Kind" options={kinds} value={kind} onChange={setKind} />
-            )}
             <button
               type="button"
               popoverTarget={sortMenu}
@@ -306,19 +267,15 @@ export function ProjectsPage({
 
         {entries.length === 0 ? (
           <div className="mt-24 flex flex-col items-center text-center">
-            <div className="flex -space-x-2">
-              <ProjectTile entry={{ kind: "orchestrator" }} size="lg" />
-              <ProjectTile entry={{ kind: "space" }} size="lg" />
-            </div>
+            <ProjectTile entry={{}} size="lg" />
             <h2 className="mt-5 text-reading font-semibold">No projects yet</h2>
             <p className="mt-1 max-w-sm text-body text-muted-foreground">
-              An orchestrator thread runs work in a repository. A Space keeps threads together with
-              the instructions and files they share.
+              A Project keeps threads together with the instructions and files they share.
             </p>
           </div>
         ) : shown.length === 0 ? (
           <p className="mt-16 text-center text-body text-muted-foreground">
-            {words ? `No projects match “${query.trim()}”.` : "None of this kind yet."}
+            No projects match “{query.trim()}”.
           </p>
         ) : (
           <>
@@ -335,37 +292,6 @@ export function ProjectsPage({
   );
 }
 
-function NewChoice({
-  menu,
-  kind,
-  title,
-  detail,
-  onClick,
-}: {
-  menu: string;
-  kind: ProjectEntry["kind"];
-  title: string;
-  detail: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      popoverTarget={menu}
-      popoverTargetAction="hide"
-      onClick={onClick}
-      className="flex w-full items-start gap-3 rounded-md p-2 text-left hover:bg-hover"
-    >
-      <ProjectTile entry={{ kind }} size="md" />
-      <span className="min-w-0 pt-0.5">
-        <span className="block text-body font-medium">{title}</span>
-        <span className="block text-meta text-muted-foreground">{detail}</span>
-      </span>
-    </button>
-  );
-}
-
 function Section({ title, children }: { title?: string; children: ReactNode }) {
   return (
     <section aria-label={title ?? "Projects"} className="mt-8">
@@ -377,7 +303,7 @@ function Section({ title, children }: { title?: string; children: ReactNode }) {
 
 /**
  * A project's card: its tile and its status or age, its name, what its latest thread is, then its
- * branch or a Space's files and instructions, and how many threads it has. It's washed in its own
+ * branch or a Project's files and instructions, and how many threads it has. It's washed in its own
  * color, which lights up from the corner on hover, and Pin and its menu show then.
  */
 function ProjectCard({
@@ -430,30 +356,21 @@ function ProjectCard({
             {entry.name}
           </span>
           <span className="mt-0.5 block truncate text-body text-muted-foreground">
-            {entry.latest ?? (entry.kind === "space" ? "No threads yet" : "No work yet")}
+            {entry.latest ?? "No threads yet"}
           </span>
         </span>
         <span className="relative mt-4 flex items-center gap-3 border-t border-border/60 pt-3 text-meta text-faint-foreground [&_svg]:size-3.5 [&_svg]:shrink-0">
-          {entry.kind === "orchestrator" ? (
-            <span className="flex min-w-0 items-center gap-1.5">
-              <GitBranch aria-hidden />
-              <span className="truncate">{entry.branch ?? "No branch"}</span>
+          <span className="flex items-center gap-1.5">
+            <Paperclip aria-hidden />
+            {entry.files === 0
+              ? "No files"
+              : `${entry.files} ${entry.files === 1 ? "file" : "files"}`}
+          </span>
+          {entry.instructions && (
+            <span className="flex items-center gap-1.5">
+              <ScrollText aria-hidden />
+              Instructions
             </span>
-          ) : (
-            <>
-              <span className="flex items-center gap-1.5">
-                <Paperclip aria-hidden />
-                {entry.files === 0
-                  ? "No files"
-                  : `${entry.files} ${entry.files === 1 ? "file" : "files"}`}
-              </span>
-              {entry.instructions && (
-                <span className="flex items-center gap-1.5">
-                  <ScrollText aria-hidden />
-                  Instructions
-                </span>
-              )}
-            </>
           )}
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             <MessageSquare aria-hidden />
@@ -551,8 +468,8 @@ export function ProjectMenu({
 }
 
 /**
- * Create Space: a name and an icon, then `space/create` on the open host. Resolves through
- * `onCreated` with the new Space.
+ * Create Project: a name and an icon, then `project/create` on the open host. Resolves through
+ * `onCreated` with the new Project.
  */
 export function NewChatProject({
   ref,
@@ -563,7 +480,7 @@ export function NewChatProject({
   ref: Ref<HTMLDialogElement>;
   create: (name: string, icon?: ChosenIcon) => Promise<Repo | string>;
   maxImageBytes?: number;
-  onCreated: (space: Repo) => void;
+  onCreated: (project: Repo) => void;
 }) {
   const [name, setName] = useState("");
   const [icon, setIcon] = useState<ChosenIcon>();
@@ -589,16 +506,16 @@ export function NewChatProject({
           const dialog = e.currentTarget.closest("dialog")!;
           setCreating(true);
           setError(undefined);
-          const space = await create(name.trim(), icon);
+          const project = await create(name.trim(), icon);
           setCreating(false);
-          if (typeof space === "string") return setError(space);
+          if (typeof project === "string") return setError(project);
           dialog.close();
-          onCreated(space);
+          onCreated(project);
         }}
       >
         <div className="flex items-center justify-between px-5 pt-4">
           <h2 id={titleId} className="text-reading font-semibold">
-            Create Space
+            Create Project
           </h2>
           <button
             type="button"
@@ -621,7 +538,7 @@ export function NewChatProject({
             title="Choose icon"
             className="rounded-xl hover:opacity-80"
           >
-            <ProjectTile entry={{ kind: "space", ...(icon && { icon }) }} size="lg" />
+            <ProjectTile entry={{ ...(icon && { icon }) }} size="lg" />
           </button>
           <input
             aria-label="Name"

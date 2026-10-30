@@ -8,7 +8,7 @@ import { LineageSection } from "./Lineage";
 import { OpenMenu } from "./OpenMenu";
 import { LinkedPullRequests } from "./PullRequests";
 import { hostIcon } from "./RunTargetMenu";
-import { SpaceMenu } from "./SpaceMenu";
+import { ThreadProjectMenu } from "./ThreadProjectMenu";
 import type { Host } from "./hosts";
 import { IconButton } from "./ui";
 
@@ -87,7 +87,7 @@ export function ThreadDetailsButton({ open, onToggle }: { open: boolean; onToggl
 }
 
 /**
- * The thread's host, Open in, repository actions, its Space, Git status, linked pull requests, and
+ * The thread's host, Open in, repository actions, its Project, Git status, linked pull requests, and
  * lineage, docked at the thread's right, left of the side panel, or floating over the thread.
  * A Claude Remote Control thread's session takes the place of the host, Open in, actions, and Git,
  * which are this computer's (PLX-1140). Mounted while hidden, so the Open and action shortcuts
@@ -102,7 +102,7 @@ export function ThreadDetails({
   git,
   prs,
   lineage,
-  space,
+  project,
   remoteControl,
 }: {
   mode: ThreadDetailsMode;
@@ -113,7 +113,7 @@ export function ThreadDetails({
   git?: ComponentProps<typeof GitMenu>;
   prs?: ComponentProps<typeof LinkedPullRequests>;
   lineage?: Omit<ComponentProps<typeof LineageSection>, "visible">;
-  space?: ComponentProps<typeof SpaceMenu>;
+  project?: ComponentProps<typeof ThreadProjectMenu>;
   /** A Claude Remote Control thread's session, once read. */
   remoteControl?: ComponentProps<typeof RemoteControlSection>;
 }) {
@@ -138,7 +138,7 @@ export function ThreadDetails({
       </div>
       <OpenMenu hostId={host.id} folder={folder} />
       {actions && <Actions {...actions} />}
-      {space && <SpaceMenu {...space} />}
+      {project && <ThreadProjectMenu {...project} />}
     </section>
   );
   return (
@@ -161,9 +161,9 @@ export function ThreadDetails({
         {/* A Remote Control thread works on another computer, which its section names: no folder,
             apps, actions, or Git of this one's. */}
         {remoteControl
-          ? space && (
-              <section aria-label="Space" className="p-2">
-                <SpaceMenu {...space} />
+          ? project && (
+              <section aria-label="Project" className="p-2">
+                <ThreadProjectMenu {...project} />
               </section>
             )
           : workspace}

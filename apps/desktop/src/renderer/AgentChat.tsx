@@ -1414,7 +1414,7 @@ export function TranscriptView({
           onKeyDown={(e) => {
             ending.current = false;
             if (editable(e.target)) return;
-            // Space pages down, and up with Shift.
+            // Project pages down, and up with Shift.
             const key = e.key === " " ? (e.shiftKey ? "PageUp" : "PageDown") : e.key;
             if (upKeys.has(key) && e.currentTarget.scrollTop > 0) scrolled(true);
             else if (downKeys.has(key)) scrolled(false);

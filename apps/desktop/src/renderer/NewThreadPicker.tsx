@@ -69,7 +69,7 @@ export function NewThreadPicker({
         value: g.id,
         name: g.id === noRepo ? "No repo" : g.name,
         icon: <RepoIcon repo={repo} />,
-        hint: repo && g.id !== noRepo && !g.space ? `${hostName} · ${repo.path}` : undefined,
+        hint: repo && g.id !== noRepo && !g.project ? `${hostName} · ${repo.path}` : undefined,
         pick: () => onPick(g.id),
       };
     }),

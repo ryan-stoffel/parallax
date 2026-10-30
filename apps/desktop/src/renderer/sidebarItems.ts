@@ -114,12 +114,12 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
 }
 
 /**
- * Where a row lives, for its place and its folder: the Space a thread was added to (0090), else its
+ * Where a row lives, for its place and its folder: the Project a thread was added to (0090), else its
  * repo, or none for No repo.
  */
 export function placeOf(item: Item): Repo | undefined {
-  const space = item.kind === "thread" ? item.thread.space : undefined;
-  const repo = (space && item.view.state.repos.find((r) => r.id === space)) || item.repo;
+  const project = item.kind === "thread" ? item.thread.project : undefined;
+  const repo = (project && item.view.state.repos.find((r) => r.id === project)) || item.repo;
   return repo && !repo.scratch ? repo : undefined;
 }
 
@@ -210,7 +210,7 @@ export function todayGroups(
 
 /**
  * Traditional's folders (0094), as Codex groups threads: one per `host/repo`, a thread added
- * to a Space under that Space, each holding its rows in `rows`' order. Folders sort by name, then
+ * to a Project under that Project, each holding its rows in `rows`' order. Folders sort by name, then
  * computer, so they don't move as threads do, with No repo last. The computer shows only when
  * there are `many`.
  */

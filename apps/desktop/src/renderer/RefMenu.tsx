@@ -105,7 +105,7 @@ export function RefMenu({
         <GitBranch />
         {/* Cut in the middle, so a long branch keeps its end: `From bug/PLX-781-sweep…worktrees`. */}
         <span className="flex min-w-0">
-          {/* `whitespace-pre` keeps a space the cut lands after, as in `From main`. */}
+          {/* `whitespace-pre` keeps a project the cut lands after, as in `From main`. */}
           <span className="overflow-hidden text-ellipsis whitespace-pre">
             {label.slice(0, tail)}
           </span>

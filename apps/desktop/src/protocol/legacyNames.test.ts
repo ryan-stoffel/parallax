@@ -99,3 +99,32 @@ test("an old error kind takes its new name", () => {
     errorFromLegacy({ code: -32000, message: "m", data: { kind: "projectNotFound" } }),
   ).toEqual({ code: -32000, message: "m", data: { kind: "orchestratorNotFound" } });
 });
+
+test("a Project goes to an old plxd as a Space, and comes back as a Project", () => {
+  expect(requestToLegacy("project/create", { id: "p1", name: "Coursework" })).toEqual([
+    "space/create",
+    { id: "p1", name: "Coursework" },
+  ]);
+  expect(requestToLegacy("project/delete", { project: "p1" })).toEqual([
+    "space/delete",
+    { space: "p1" },
+  ]);
+  expect(requestToLegacy("thread/setProject", { threads: ["t1"], project: "p1" })).toEqual([
+    "thread/setSpace",
+    { threads: ["t1"], space: "p1" },
+  ]);
+  const listed = {
+    repos: [{ id: "p1", name: "Coursework", path: "/s", space: true, createdAt: "t" }],
+    threads: [{ id: "t1", repo: "r", createdAt: "t", space: "p1" }],
+    runs: [{ id: "t1", project: "r", createdAt: "t" }],
+  };
+  expect(resultFromLegacy("thread/list", listed)).toEqual({
+    repos: [{ id: "p1", name: "Coursework", path: "/s", project: true, createdAt: "t" }],
+    threads: [{ id: "t1", repo: "r", createdAt: "t", project: "p1" }],
+    runs: [{ id: "t1", project: "r", createdAt: "t" }],
+  });
+  expect(
+    eventFromLegacy({ event: { kind: "repo.added", repo: { id: "p1", space: true } } }),
+  ).toEqual({ event: { kind: "repo.added", repo: { id: "p1", project: true } } });
+  expect(capabilitiesFromLegacy({ coordinator: {}, spaces: {} })).toMatchObject({ projects: {} });
+});

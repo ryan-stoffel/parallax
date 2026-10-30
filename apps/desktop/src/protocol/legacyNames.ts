@@ -1,10 +1,11 @@
-// 0093 renamed a Project and its coordinator to an orchestrator. A plxd from before it doesn't
-// advertise `orchestrator` and speaks the old names; these map between the two for one release,
-// as plxd's `legacy` module does for an app from before it. The desktop's connection and the
-// web bridge use them, and remove them when the window ends.
+// 0093 renamed a Project and its coordinator to an orchestrator (step 1), then a Space to a
+// Project (step 2). A plxd from before it doesn't advertise `orchestrator` and speaks the old
+// names; these map between the two for one release, as plxd's `legacy` module does for an app from
+// before it. To such a plxd `project/*` is an orchestrator's, so a Project's goes as `space/*`.
+// The desktop's connection and the web bridge use them, and remove them when the window ends.
 
-/** The client capability that asks plxd for the new names. */
-export const CLIENT_CAPABILITY = "orchestrators";
+/** The client capability that asks plxd for the new names, `project/*` for a Project included. */
+export const CLIENT_CAPABILITY = "projects";
 
 const METHODS: Record<string, string> = {
   "orchestrator/list": "project/list",
@@ -14,6 +15,9 @@ const METHODS: Record<string, string> = {
   "orchestrator/start": "project/start",
   "orchestrator/fromThreads": "project/fromThreads",
   "orchestrator/fresh": "coordinator/fresh",
+  "project/create": "space/create",
+  "project/delete": "space/delete",
+  "thread/setProject": "thread/setSpace",
 };
 
 const EVENTS: Record<string, string> = {
@@ -34,6 +38,9 @@ const CAPABILITIES: Record<string, string> = {
   projectPermission: "orchestratorPermission",
   projectPlacement: "orchestratorPlacement",
   projectTasks: "orchestratorTasks",
+  spaces: "projects",
+  spaceContext: "projectContext",
+  spaceThreads: "projectThreads",
 };
 
 /** Keys under which an agent's own JSON sits, which no mapping touches. */
@@ -79,7 +86,11 @@ const copy = <T>(value: T): T => (value === undefined ? value : structuredClone(
 /** `method` and its `params` in the old names, for a plxd from before 0093. */
 export function requestToLegacy(method: string, params: unknown): [string, unknown] {
   const memory = method.startsWith("memory/");
-  const mapped = walk(copy(params), (object) => {
+  const sent = copy(params);
+  // A Project's id was a Space's, before step 1's `project` came back for an orchestrator.
+  if ((method === "project/delete" || method === "thread/setProject") && isObject(sent))
+    move(sent, "project", "space");
+  const mapped = walk(sent, (object) => {
     if (typeof object["orchestrator"] === "string") move(object, "orchestrator", "project");
     move(object, "orchestratorThread", "coordinatorThread");
     if (object["role"] === "orchestrator") object["role"] = "coordinator";
@@ -125,7 +136,14 @@ export function resultFromLegacy(method: string, result: unknown): unknown {
       if (object["forScope"] === "project") object["forScope"] = "orchestrator";
       if (object["to"] === "coordinator") object["to"] = "orchestrator";
     }
+    spaceFromLegacy(object);
   });
+}
+
+/** A repo entry's "is a Space", and the Space a thread was added to, are now `project`. */
+function spaceFromLegacy(object: Json) {
+  if (typeof object["space"] === "boolean" || ("repo" in object && "createdAt" in object))
+    move(object, "space", "project");
 }
 
 /**
@@ -142,6 +160,13 @@ export function eventFromLegacy<T>(params: T): T {
     renamed["kind"] = EVENTS[kind];
     orchestrator(renamed["project"]);
     move(renamed, "project", "orchestrator");
+    return next as T;
+  }
+  const entry = event["repo"] ?? event["thread"];
+  if (isObject(entry) && "space" in entry) {
+    const next = copy(params) as Json;
+    const renamed = next["event"] as Json;
+    spaceFromLegacy((renamed["repo"] ?? renamed["thread"]) as Json);
     return next as T;
   }
   if (kind === "agent.started" && isObject(event["run"]) && "coordinatorThread" in event["run"]) {

@@ -23,7 +23,7 @@ const repo = (id: string, name: string, extra: Partial<Repo> = {}): Repo => ({
 const zeta = repo("r-zeta", "zeta");
 const alpha = repo("r-alpha", "Alpha");
 const scratch = repo("r-scratch", "scratch", { scratch: true });
-const essays = repo("s-essays", "Essays", { space: true });
+const essays = repo("s-essays", "Essays", { project: true });
 const thread = (
   id: string,
   repoId: string,
@@ -108,7 +108,7 @@ test("draftItems keeps drafts on listed hosts in scope that hold every word, key
   expect(draftItems(list, hosts, "all", ["flaky", "fix"]).map((d) => d.key)).toEqual(["draft:d1"]);
 });
 
-test("folderGroups makes a folder per host and repo, by name, puts a Space's added threads under it, and No repo last", () => {
+test("folderGroups makes a folder per host and repo, by name, puts a Project's added threads under it, and No repo last", () => {
   const hosts = [
     listed(
       "local",
@@ -117,7 +117,7 @@ test("folderGroups makes a folder per host and repo, by name, puts a Space's add
         thread("t-1", zeta.id, 1),
         thread("t-2", scratch.id, 2),
         thread("t-3", alpha.id, 3),
-        thread("t-4", zeta.id, 4, { space: essays.id }),
+        thread("t-4", zeta.id, 4, { project: essays.id }),
         thread("t-5", zeta.id, 5),
       ],
     ),

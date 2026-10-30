@@ -67,7 +67,7 @@ export function FileCard({
   progress?: number;
   failed?: boolean;
   /**
-   * As a page in a frame, its column's width, as in a Space's Files (0090): a PDF's first page or a
+   * As a page in a frame, its column's width, as in a Project's Files (0090): a PDF's first page or a
    * text file's first lines on a sheet that runs off the bottom, rather than a small square.
    */
   fill?: boolean;
