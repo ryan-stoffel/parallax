@@ -1,5 +1,6 @@
 // The sidebar's favorites (pins.ts, 0075): pinned threads moved up, as squares that fill the row,
-// above the pinned threads, as Arc's favorites sit above its tabs. Projects list as rows (PLX-1043).
+// above the pinned threads, as Arc's favorites sit above its tabs. Orchestrators list as rows
+// (PLX-1043).
 import { ArrowLeft, ArrowRight, ArrowUpRight, StarOff } from "lucide-react";
 import {
   useId,
@@ -33,7 +34,7 @@ export interface Favorite {
   onKeys?: (e: ReactKeyboardEvent<HTMLElement>) => void;
 }
 
-/** One item in a favorite's, pin's, or Project row's menu, run with its square or row. */
+/** One item in a favorite's, pin's, or orchestrator row's menu, run with its square or row. */
 export interface FavoriteAction {
   label: string;
   icon: ReactNode;

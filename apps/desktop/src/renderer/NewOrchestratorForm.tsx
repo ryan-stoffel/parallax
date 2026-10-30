@@ -2,11 +2,11 @@ import { ArrowLeft, LockOpen } from "lucide-react";
 import { useId, useRef, useState } from "react";
 
 import type {
-  Project,
-  ProjectAutonomy,
-  ProjectCreateParams,
-  ProjectIcon as ProjectIconValue,
-  ProjectPermission,
+  Orchestrator,
+  OrchestratorAutonomy,
+  OrchestratorCreateParams,
+  ChosenIcon,
+  OrchestratorPermission,
   Repo,
 } from "../protocol/generated/protocol";
 import { useConnection } from "./ConnectionStatus";
@@ -14,7 +14,7 @@ import { describeError } from "./errors";
 import { type Host } from "./hosts";
 import { IconPicker } from "./IconPicker";
 import { iconImageBytes } from "./images";
-import { autonomyLevels } from "./ProjectPermission";
+import { autonomyLevels } from "./OrchestratorPermission";
 import { ProjectIcon } from "./Sidebar";
 import { isRepository, type ThreadsView } from "./threads";
 import { IconButton, Segmented } from "./ui";
@@ -22,15 +22,15 @@ import { uuidv7 } from "./uuidv7";
 import { WorkspaceMenu, type Workspace, type WorkspaceSource } from "./WorkspaceMenu";
 
 /**
- * Create Project, the add palette's last step (AddDialog), laid out like Cursor's: the Project's
- * icon and name, then its Workspace, a repository on any host, then its autonomy and full access.
- * Creating closes the dialog and calls `onCreated` with the host it was made on, and plxd's error
- * stays in the form. The icon is a button that opens the icon picker where the Workspace's host
- * can keep one (`projectEdit`, 0032). Autonomy (0043) and full access (Bypass, 0042) show only
- * where that host keeps them, full access on by default. The Workspace menu's ways to add a
- * repository call `onAdd`, and the palette comes back with it as `chosen`.
+ * Create orchestrator, the add palette's last step (AddDialog), laid out like Cursor's: the
+ * orchestrator's icon and name, then its Workspace, a repository on any host, then its autonomy and
+ * full access. Creating closes the dialog and calls `onCreated` with the host it was made on, and
+ * plxd's error stays in the form. The icon is a button that opens the icon picker where the
+ * Workspace's host can keep one (`orchestratorEdit`, 0032). Autonomy (0043) and full access
+ * (Bypass, 0042) show only where that host keeps them, full access on by default. The Workspace
+ * menu's ways to add a repository call `onAdd`, and the palette comes back with it as `chosen`.
  */
-export function NewProjectForm({
+export function NewOrchestratorForm({
   hosts,
   hostId,
   repos,
@@ -47,12 +47,12 @@ export function NewProjectForm({
   /** The open host's repo entries. The scratch one isn't offered. */
   repos: Repo[];
   /** Creates it on the open host, whose list then has it at once. */
-  create: ThreadsView["createProject"];
+  create: ThreadsView["createOrchestrator"];
   chosen?: Workspace;
   onChoose: (workspace: Workspace) => void;
   onAdd: (source: WorkspaceSource) => void;
   onBack: () => void;
-  onCreated: (hostId: string, project: Project) => void;
+  onCreated: (hostId: string, orchestrator: Orchestrator) => void;
 }) {
   const first = repos.find(isRepository);
   // The open host's first repository until another is chosen, or if its host was removed.
@@ -62,26 +62,26 @@ export function NewProjectForm({
   const [typed, setTyped] = useState<string>();
   const name = (typed ?? workspace?.repo.name ?? "").trim();
   const pickerId = useId();
-  const [chosenIcon, setChosenIcon] = useState<ProjectIconValue>();
+  const [chosenIcon, setChosenIcon] = useState<ChosenIcon>();
   const [fullAccess, setFullAccess] = useState(true);
-  const [chosenAutonomy, setAutonomy] = useState<ProjectAutonomy>("routine");
-  // The Workspace's host decides, since the Project is made there. Without `projectEdit` its plxd
-  // would drop an icon, so none is shown or sent.
+  const [chosenAutonomy, setAutonomy] = useState<OrchestratorAutonomy>("routine");
+  // The Workspace's host decides, since the orchestrator is made there. Without `orchestratorEdit`
+  // its plxd would drop an icon, so none is shown or sent.
   const connection = useConnection(workspace?.hostId ?? hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : {};
-  const iconable = "projectEdit" in capabilities;
+  const iconable = "orchestratorEdit" in capabilities;
   const maxImageBytes = iconImageBytes(connection);
   let icon = iconable ? chosenIcon : undefined;
   // Nor an image where it would drop that (0038), after a Workspace on another host.
   if (icon?.image && maxImageBytes === undefined) icon = { ...icon, image: undefined };
-  const permission: ProjectPermission | undefined =
-    "projectPermission" in capabilities ? (fullAccess ? "bypass" : "auto") : undefined;
-  const autonomy = "projectAutonomy" in capabilities ? chosenAutonomy : undefined;
+  const permission: OrchestratorPermission | undefined =
+    "orchestratorPermission" in capabilities ? (fullAccess ? "bypass" : "auto") : undefined;
+  const autonomy = "orchestratorAutonomy" in capabilities ? chosenAutonomy : undefined;
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
   // The last try's params, whose id a retry with the same host, name, path, icon, mode, and
   // autonomy sends again (0007).
-  const attempt = useRef<ProjectCreateParams & { hostId: string }>(undefined);
+  const attempt = useRef<OrchestratorCreateParams & { hostId: string }>(undefined);
 
   const submit = async (dialog: HTMLDialogElement) => {
     if (!workspace || !name) return;
@@ -108,7 +108,7 @@ export function NewProjectForm({
     attempt.current = params;
     setCreating(true);
     setError(undefined);
-    const project =
+    const orchestrator =
       params.hostId === hostId
         ? await create(
             params.id,
@@ -122,9 +122,9 @@ export function NewProjectForm({
     setCreating(false);
     // Closed while it was creating, as with Escape: drop the late answer.
     if (!dialog.open) return;
-    if (typeof project === "string") return setError(project);
+    if (typeof orchestrator === "string") return setError(orchestrator);
     dialog.close();
-    onCreated(params.hostId, project);
+    onCreated(params.hostId, orchestrator);
   };
 
   return (
@@ -140,8 +140,8 @@ export function NewProjectForm({
           <IconButton label="Back" onClick={onBack}>
             <ArrowLeft />
           </IconButton>
-          <h2 id="new-project-title" className="text-reading font-medium">
-            Create Project
+          <h2 id="new-orchestrator-title" className="text-reading font-medium">
+            Create orchestrator
           </h2>
           <p className="truncate text-body text-muted-foreground">
             A focused chat where agents coordinate work.
@@ -168,7 +168,7 @@ export function NewProjectForm({
             // The native attribute, so showModal focuses the name when the palette opens here.
             ref={(el) => el?.setAttribute("autofocus", "")}
             aria-label="Name"
-            placeholder="New Project"
+            placeholder="New orchestrator"
             value={typed ?? workspace?.repo.name ?? ""}
             onChange={(e) => setTyped(e.target.value)}
             spellCheck={false}
@@ -214,7 +214,7 @@ export function NewProjectForm({
             <span className="flex-1">
               <span className="block text-body font-medium">Full access</span>
               <span className="block text-meta text-muted-foreground">
-                Agents in this Project run commands and edit files without asking.
+                Agents in this orchestrator run commands and edit files without asking.
               </span>
             </span>
             <input
@@ -237,11 +237,11 @@ export function NewProjectForm({
             disabled={!workspace || !name || creating}
             className="ml-auto shrink-0 whitespace-nowrap rounded-md bg-primary px-3 py-1.5 text-body font-medium text-primary-foreground enabled:hover:opacity-90 disabled:opacity-50"
           >
-            {creating ? "Creating…" : "Create Project"}
+            {creating ? "Creating…" : "Create orchestrator"}
           </button>
         </div>
       </form>
-      {/* Outside the form, so Enter in the picker never creates the Project. */}
+      {/* Outside the form, so Enter in the picker never creates the orchestrator. */}
       {iconable && (
         <IconPicker
           id={pickerId}
@@ -257,12 +257,12 @@ export function NewProjectForm({
 
 const iconTile = "grid size-16 place-items-center rounded-xl border border-border bg-background";
 
-/** `project/create` on a host that isn't open. Its list has the Project once it's opened. */
+/** `orchestrator/create` on a host that isn't open. Its list has the orchestrator once it's opened. */
 async function createOn(
   hostId: string,
-  { id, name, repoPath, icon, permission, autonomy }: ProjectCreateParams,
-): Promise<Project | string> {
-  const answer = await window.parallax.request(hostId, "project/create", {
+  { id, name, repoPath, icon, permission, autonomy }: OrchestratorCreateParams,
+): Promise<Orchestrator | string> {
+  const answer = await window.parallax.request(hostId, "orchestrator/create", {
     id,
     name,
     repoPath,
@@ -270,5 +270,5 @@ async function createOn(
     ...(permission && { permission }),
     ...(autonomy && { autonomy }),
   });
-  return "error" in answer ? describeError(answer.error) : answer.result.project;
+  return "error" in answer ? describeError(answer.error) : answer.result.orchestrator;
 }

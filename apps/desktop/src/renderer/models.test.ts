@@ -12,7 +12,7 @@ const info = (instance: Partial<ProviderInstance>, rest: Partial<ProviderInfo> =
     models: [],
     permissions: ["edit"],
     efforts: false,
-    coordinator: false,
+    orchestrator: false,
     ...rest,
   }) as ProviderInfo;
 

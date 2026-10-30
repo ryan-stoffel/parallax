@@ -93,7 +93,7 @@ const SignInTerminal = lazy(() =>
 
 interface SettingsProps {
   section: SettingsSection;
-  /** Every host's threads and Projects, as App loads them for the sidebar: Scripts' repositories. */
+  /** Every host's threads and orchestrators, as App loads them for the sidebar: Scripts' repositories. */
   listed: { host: Host; view: ThreadsView }[];
   theme: ThemePreference;
   onThemeChange: (theme: ThemePreference) => void;

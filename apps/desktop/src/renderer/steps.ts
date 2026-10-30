@@ -303,7 +303,7 @@ const list = {
 };
 
 // A thread's plxd tools (0041), by what they're doing and what they did (PLX-843), then the 0019
-// coordinator tools older transcripts hold.
+// orchestrator tools older transcripts hold.
 const plxdLabels: Partial<Record<string, readonly [doing: string, done: string]>> = {
   thread_launch: ["Starting a child thread", "Started a child thread"],
   thread_fork: ["Forking a thread", "Forked a thread"],
@@ -367,7 +367,7 @@ const plxdLabels: Partial<Record<string, readonly [doing: string, done: string]>
   preview_set_appearance: ["Setting the preview's appearance", "Set the preview's appearance"],
   preview_recording_start: ["Recording the preview", "Started a recording"],
   preview_recording_stop: ["Stopping the recording", "Stopped the recording"],
-  ask: ["Asking the coordinator", "Asked the coordinator"],
+  ask: ["Asking the orchestrator", "Asked the orchestrator"],
   answer: ["Answering a question", "Answered a question"],
   escalate: ["Passing a question to you", "Passed a question to you"],
   land: ["Queuing a thread to land", "Queued a thread to land"],

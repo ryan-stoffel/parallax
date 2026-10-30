@@ -1,5 +1,5 @@
-// The Projects page (0090): every host's Projects and Spaces as cards, pinned ones
-// first, with a search, a sort, and New project for either kind.
+// The Projects page (0090): every host's orchestrators and Spaces as cards, pinned ones
+// first, with a search, a sort, and New orchestrator or Space.
 import {
   ArrowDownUp,
   Check,
@@ -27,7 +27,7 @@ import {
   type RefObject,
 } from "react";
 
-import type { ProjectIcon as ProjectIconValue, Repo } from "../protocol/generated/protocol";
+import type { ChosenIcon, Repo } from "../protocol/generated/protocol";
 import type { FavoriteAction } from "./Favorites";
 import { IconPicker } from "./IconPicker";
 import { imageUrl } from "./images";
@@ -60,8 +60,8 @@ function tint(entry: Pick<ProjectEntry, "icon" | "kind">, imageTint?: string) {
 }
 
 /**
- * A project's icon on a tile tinted with its color: its uploaded image, its glyph, or Layers for a
- * Project and a chat bubble for a chat project when it has none.
+ * A project's icon on a tile tinted with its color: its uploaded image, its glyph, or Layers for an
+ * orchestrator and a chat bubble for a Space when it has none.
  */
 export function ProjectTile({
   entry,
@@ -125,7 +125,7 @@ const imageTints = new Map<string, string>();
  * vivid it is, so a logo's color wins over its white or black. Undefined until it's read, or for
  * no image.
  */
-function useImageTint(icon?: ProjectIconValue): string | undefined {
+function useImageTint(icon?: ChosenIcon): string | undefined {
   const url = icon?.image ? imageUrl(icon.image) : undefined;
   const [read, setRead] = useState<{ url: string; color: string }>();
   useEffect(() => {
@@ -171,7 +171,7 @@ const glow =
 type KindFilter = "all" | ProjectEntry["kind"];
 const kinds: { value: KindFilter; name: string }[] = [
   { value: "all", name: "All" },
-  { value: "project", name: "Projects" },
+  { value: "orchestrator", name: "Orchestrators" },
   { value: "space", name: "Spaces" },
 ];
 
@@ -181,7 +181,7 @@ export function ProjectsPage({
   onOpen,
   onTogglePin,
   actionsFor,
-  onNewProject,
+  onNewOrchestrator,
   onNewChatProject,
 }: {
   entries: ProjectEntry[];
@@ -191,8 +191,8 @@ export function ProjectsPage({
   onTogglePin: (key: string) => void;
   /** A project's menu: Rename, Change icon, Delete, and what else its plxd allows. */
   actionsFor: (entry: ProjectEntry) => FavoriteAction[];
-  /** Opens Create Project, a coordinator on a repository. */
-  onNewProject: () => void;
+  /** Opens New orchestrator thread, on a repository. */
+  onNewOrchestrator: () => void;
   /** Opens Create Space, or undefined where no host makes Spaces. */
   onNewChatProject?: () => void;
 }) {
@@ -212,7 +212,7 @@ export function ProjectsPage({
   const pinned = pins.flatMap((key) => shown.filter((e) => e.key === key));
   const others = shown.filter((e) => !pins.includes(e.key));
   const bothKinds =
-    entries.some((e) => e.kind === "space") && entries.some((e) => e.kind === "project");
+    entries.some((e) => e.kind === "space") && entries.some((e) => e.kind === "orchestrator");
   const card = (e: ProjectEntry) => (
     <ProjectCard
       key={e.key}
@@ -230,15 +230,15 @@ export function ProjectsPage({
           <h1 className="mr-auto text-heading font-semibold">Projects</h1>
           <button type="button" popoverTarget={newMenu} aria-haspopup="menu" className={toolButton}>
             <Plus aria-hidden />
-            New project or Space
+            New orchestrator or Space
           </button>
-          <Menu id={newMenu} label="New project or Space" align="end" className="w-72 p-1">
+          <Menu id={newMenu} label="New orchestrator or Space" align="end" className="w-72 p-1">
             <NewChoice
               menu={newMenu}
-              kind="project"
-              title="Project"
-              detail="A coordinator plans and runs work in a repository."
-              onClick={onNewProject}
+              kind="orchestrator"
+              title="Orchestrator thread"
+              detail="Plans work in a repository and hands it to agents."
+              onClick={onNewOrchestrator}
             />
             {onNewChatProject && (
               <NewChoice
@@ -307,13 +307,13 @@ export function ProjectsPage({
         {entries.length === 0 ? (
           <div className="mt-24 flex flex-col items-center text-center">
             <div className="flex -space-x-2">
-              <ProjectTile entry={{ kind: "project" }} size="lg" />
+              <ProjectTile entry={{ kind: "orchestrator" }} size="lg" />
               <ProjectTile entry={{ kind: "space" }} size="lg" />
             </div>
             <h2 className="mt-5 text-reading font-semibold">No projects yet</h2>
             <p className="mt-1 max-w-sm text-body text-muted-foreground">
-              A Project runs work in a repository with a coordinator. A Space keeps threads together
-              with the instructions and files they share.
+              An orchestrator thread runs work in a repository. A Space keeps threads together with
+              the instructions and files they share.
             </p>
           </div>
         ) : shown.length === 0 ? (
@@ -434,7 +434,7 @@ function ProjectCard({
           </span>
         </span>
         <span className="relative mt-4 flex items-center gap-3 border-t border-border/60 pt-3 text-meta text-faint-foreground [&_svg]:size-3.5 [&_svg]:shrink-0">
-          {entry.kind === "project" ? (
+          {entry.kind === "orchestrator" ? (
             <span className="flex min-w-0 items-center gap-1.5">
               <GitBranch aria-hidden />
               <span className="truncate">{entry.branch ?? "No branch"}</span>
@@ -561,12 +561,12 @@ export function NewChatProject({
   onCreated,
 }: {
   ref: Ref<HTMLDialogElement>;
-  create: (name: string, icon?: ProjectIconValue) => Promise<Repo | string>;
+  create: (name: string, icon?: ChosenIcon) => Promise<Repo | string>;
   maxImageBytes?: number;
   onCreated: (space: Repo) => void;
 }) {
   const [name, setName] = useState("");
-  const [icon, setIcon] = useState<ProjectIconValue>();
+  const [icon, setIcon] = useState<ChosenIcon>();
   const [error, setError] = useState<string>();
   const [creating, setCreating] = useState(false);
   const picker = useId();

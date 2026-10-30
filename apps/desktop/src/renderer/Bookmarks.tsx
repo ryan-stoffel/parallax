@@ -27,7 +27,7 @@ import {
 import { ConfirmDialog, Menu, menuItem, menuPanel, openOnContextMenu } from "./ui";
 
 // The browser's bookmarks (PLX-968): one tree, shared by every browser, a thread's and a
-// Project's, and kept on this computer. Its top level is the bookmarks bar, and a
+// orchestrator's, and kept on this computer. Its top level is the bookmarks bar, and a
 // folder holds bookmarks and other folders, as Chrome's do.
 
 /** A bookmarked page, with its title and icon as they were when it was added. */

@@ -58,7 +58,7 @@ const gitEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: "0" });
 
 /**
  * New Repository: `<home>/.parallax/projects/<name>` with `git init` and an empty first commit,
- * which a thread's worktree and a Project's coordinator need. A failure removes the folder it
+ * which a thread's worktree and an orchestrator need. A failure removes the folder it
  * made. Resolves to its path, or an error for people.
  */
 export async function createRepo(

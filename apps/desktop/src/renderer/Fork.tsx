@@ -159,7 +159,7 @@ export interface ForkTarget {
   onFork: (turnId: string, choice: ForkChoice) => Promise<RpcError | undefined>;
 }
 
-/** Set by a thread's chat, so its messages offer Fork; a Project's chats leave it unset. */
+/** Set by a thread's chat, so its messages offer Fork; an orchestrator's chats leave it unset. */
 export const ForkContext = createContext<ForkTarget | undefined>(undefined);
 
 /**

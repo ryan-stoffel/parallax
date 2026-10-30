@@ -1,9 +1,9 @@
 // Opens a view from the URL's hash, since the app's views are plain state with no routes:
 // it clicks through the UI as a person would, once each step's button is on screen.
 //
-//   #project=parallax                     a Project, by its favorite's name
-//   #project=parallax&panel=Agents        and a side panel view, by its name
-//   #project=parallax&agent=Scheduler     and a child's chat, by the start of its Overview row
+//   #orchestrator=parallax                an orchestrator, by its favorite's name
+//   #orchestrator=parallax&panel=Agents  and a side panel view, by its name
+//   #orchestrator=parallax&agent=Scheduler and a child's chat, by the start of its Overview row
 //   #thread=Rework the updater            a plain thread, by its title
 //   #settings                             Settings; #usage, the Usage page
 //   #connect                              with Parallax Connect set up on three computers
@@ -56,8 +56,8 @@ export function openFromHash() {
   const steps: Step[] = [];
   if (params.has("settings")) steps.push(() => byLabel("Settings"));
   if (params.has("usage")) steps.push(() => byLabel("Usage"));
-  const project = params.get("project");
-  if (project)
+  const orchestrator = params.get("orchestrator");
+  if (orchestrator)
     steps.push(
       // The Projects drawer (PLX-1043), opened unless it is.
       () => {
@@ -69,11 +69,12 @@ export function openFromHash() {
       () =>
         [
           ...document.querySelectorAll<HTMLElement>(
-            '#sidebar li[data-kind="project"] button[data-row]',
+            '#sidebar li[data-kind="orchestrator"] button[data-row]',
           ),
         ].find(
           (el) =>
-            el.querySelector("[data-title]")?.textContent?.toLowerCase() === project.toLowerCase(),
+            el.querySelector("[data-title]")?.textContent?.toLowerCase() ===
+            orchestrator.toLowerCase(),
         ),
     );
   const thread = params.get("thread");

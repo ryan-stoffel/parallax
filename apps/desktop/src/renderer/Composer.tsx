@@ -72,7 +72,7 @@ import type {
   AgentEffort,
   AgentPermission,
   AgentRun,
-  ProjectPermission,
+  OrchestratorPermission,
   PromptImage,
 } from "../protocol/generated/protocol";
 import { lastPrompt } from "./attention";
@@ -199,14 +199,14 @@ const MentionNode = chipNode("mention", { token: "" }, ({ node }) => (
   }),
 });
 
-/** An attached thread where it was picked: its project's icon, its title, and its provider. */
+/** An attached thread where it was picked: its orchestrator's icon, its title, and its provider. */
 function ThreadRef({ runId, title }: { runId: string; title: string }) {
   const { threads } = useContext(RefsContext);
   const look = lookOf(threads, runId);
   const repoId = threads?.threads.find((t) => t.id === runId)?.repo;
   const repo = threads?.repos.find((r) => r.id === repoId);
   const shown = look.known ? look.title : title || look.title;
-  // A chat bubble says it's a thread; its project and provider follow its title.
+  // A chat bubble says it's a thread; its orchestrator and provider follow its title.
   return (
     <Chip
       tone="thread"
@@ -686,7 +686,7 @@ interface MenuEntry {
   detail?: string;
   hint?: string;
   icon?: ReactNode;
-  /** Where it comes from, at the row's end: a skill's plugin, or a thread's project. */
+  /** Where it comes from, at the row's end: a skill's plugin, or a thread's orchestrator. */
   badge?: ReactNode;
   /** Muted text at the row's end, such as how long ago a thread was prompted. */
   meta?: string;
@@ -697,8 +697,9 @@ interface MenuEntry {
 /**
  * The host's threads for the `@` menu, best first. With nothing typed, its newest, as the sidebar
  * orders them. Otherwise those whose title starts with `query`, then has a word starting with it,
- * then contains it, then whose title and project hold every word of it, newest first within each,
- * then the ones `found` (`thread/search`, which reads their messages) that none of those caught. Archived threads only show for a query, after the rest.
+ * then contains it, then whose title and orchestrator hold every word of it, newest first within
+ * each, then the ones `found` (`thread/search`, which reads their messages) that none of those
+ * caught. Archived threads only show for a query, after the rest.
  */
 export function rankThreads(
   state: ThreadsState,
@@ -839,10 +840,10 @@ export interface ComposerProps {
   /** What the empty box says, in place of New thread's or a reply's hint. */
   placeholder?: string;
   /**
-   * The Project's permission mode, where plxd keeps one (0042): every run in the Project runs in
-   * it, so it shows in place of Access, and no permission is sent.
+   * The orchestrator's permission mode, where plxd keeps one (0042): every run in the orchestrator
+   * runs in it, so it shows in place of Access, and no permission is sent.
    */
-  projectMode?: ProjectPermission;
+  orchestratorMode?: OrchestratorPermission;
   /**
    * Text to add at the end of the box, which takes focus, such as a pull request's URL. Each new
    * value is added once.
@@ -927,7 +928,7 @@ export function Composer({
   inlineFiles = false,
   manualDenied,
   placeholder: hint,
-  projectMode,
+  orchestratorMode,
   insert,
   cite,
   history = [],
@@ -973,8 +974,8 @@ export function Composer({
   const [pickedPermission, setPermission] = useState<AgentPermission>();
   const [pickedContext, setContext] = useState<number>();
   const [pickedFast, setFast] = useState<boolean>();
-  // A new thread's composer starts from Settings > General's defaults. A Project's coordinator
-  // chat keeps its coordinator's backend, so it doesn't.
+  // A new thread's composer starts from Settings > General's defaults. An orchestrator
+  // chat keeps its orchestrator's backend, so it doesn't.
   const defaults = newThreadPrefs.use();
   const fresh = !started && !!newThread;
   // What `backend` can honor: another backend's pick falls back to its first model and `edit`.
@@ -1014,8 +1015,8 @@ export function Composer({
   const targetBackend = instanceOf(target);
   // Plan is legacy: listed only when Settings turns it on, or the thread already started in it.
   const legacyPlan = accessPrefs.use().legacyPlan;
-  // A Project's mode isn't a choice here.
-  const permissions = projectMode
+  // An orchestrator's mode isn't a choice here.
+  const permissions = orchestratorMode
     ? []
     : (targetBackend?.permissions ?? []).filter(
         (p) => p !== "plan" || legacyPlan || started?.permission === "plan",
@@ -1071,7 +1072,7 @@ export function Composer({
       ...(hasFast && { fast }),
       ...(target !== backend && { account }),
     };
-  if (projectMode) delete options.permission;
+  if (orchestratorMode) delete options.permission;
   // The `/` and `@` menus: what's typed, the lists, and the highlighted row. Esc closes the menu
   // until its `/` or `@` goes.
   const [trigger, setTrigger] = useState<Trigger>();

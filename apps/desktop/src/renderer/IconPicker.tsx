@@ -1,7 +1,7 @@
 import { Check, ImageUp, Search } from "lucide-react";
 import { useId, useRef, useState, type KeyboardEvent, type Ref, type ToggleEvent } from "react";
 
-import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
+import type { ChosenIcon } from "../protocol/generated/protocol";
 import { imageUrl, readIcon } from "./images";
 import { notify } from "./notifications";
 import { defaultIcon, iconColors, iconLook, projectIcons } from "./projectIcons";
@@ -17,13 +17,13 @@ const steps: Partial<Record<string, number>> = {
 };
 
 /**
- * A Project's icon picker, a native popover like the menus: a search box, the colors (the accent,
- * then the palette), and a grid of icons drawn in the chosen color. Open it with
+ * An orchestrator's icon picker, a native popover like the menus: a search box, the colors (the
+ * accent, then the palette), and a grid of icons drawn in the chosen color. Open it with
  * `popoverTarget={id}`, or with `showPopover({ source })` to sit under another element. It starts
  * at `value` each time it opens and keeps its own pick from then on. Every pick, a color or an
  * icon, calls `onPick` with both, since an icon replaces the whole icon (0032), and the picker
- * stays open so both can be set. Arrow keys move in the grid, Enter picks, and Escape closes.
- * With `maxImageBytes`, where the host keeps icon images (0038), Upload image beside the search box
+ * stays open so both can be set. Arrow keys move in the grid, Enter picks, and Escape closes. With
+ * `maxImageBytes`, where the host keeps icon images (0038), Upload image beside the search box
  * picks an image file instead, shown selected on that button. A glyph or color picked after it
  * replaces it, and a file that can't be used says why in the picker.
  */
@@ -37,9 +37,9 @@ export function IconPicker({
 }: {
   ref?: Ref<HTMLDivElement>;
   id: string;
-  /** Where it starts: the Project's icon, or none for the default. */
-  value?: ProjectIconValue;
-  onPick: (icon: ProjectIconValue) => void;
+  /** Where it starts: the orchestrator's icon, or none for the default. */
+  value?: ChosenIcon;
+  onPick: (icon: ChosenIcon) => void;
   /** `center`: centered under what opened it. */
   align?: "start" | "center";
   /** The host's `iconImages` cap, or none where its plxd keeps no icon images. */
@@ -48,7 +48,7 @@ export function IconPicker({
   const colorGroup = useId();
   const searchBox = useRef<HTMLInputElement>(null);
   const grid = useRef<HTMLDivElement>(null);
-  // Its content is drawn only while it's open, so a sidebar of Projects holds no hidden grids.
+  // Its content is drawn only while it's open, so a sidebar of orchestrators holds no hidden grids.
   const [open, setOpen] = useState(false);
   const [pick, setPick] = useState(value ?? defaultIcon);
   const [query, setQuery] = useState("");
@@ -61,7 +61,7 @@ export function IconPicker({
   // The one icon Tab stops at in the grid: the current one, or the first shown.
   const tabStop = shown.find((i) => i.name === pick.name) ?? shown[0];
 
-  const choose = (next: ProjectIconValue) => {
+  const choose = (next: ChosenIcon) => {
     setPick(next);
     onPick(next);
   };
@@ -72,7 +72,12 @@ export function IconPicker({
   const upload = async (file: File) => {
     const image = await readIcon(file, maxImageBytes!);
     if (typeof image === "string")
-      notify({ key: "project-icon", tone: "error", title: "Couldn't use that image", body: image });
+      notify({
+        key: "orchestrator-icon",
+        tone: "error",
+        title: "Couldn't use that image",
+        body: image,
+      });
     else choose({ ...withColor(pick.color), image });
   };
 
@@ -93,7 +98,7 @@ export function IconPicker({
       id={id}
       popover="auto"
       role="dialog"
-      aria-label="Project icon"
+      aria-label="Orchestrator icon"
       onBeforeToggle={(e: ToggleEvent<HTMLDivElement>) => {
         if (e.newState !== "open") return;
         setPick(value ?? defaultIcon);

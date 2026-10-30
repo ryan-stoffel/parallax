@@ -174,7 +174,7 @@
   --chart-2: color-mix(in oklab, var(--accent) 65%, var(--surface));
   --chart-3: color-mix(in oklab, var(--foreground) 20%, var(--surface));
   --shadow-composer: 0 10px 30px -16px rgb(30 27 75 / 22%);
-  /* A Project icon's colors (projectIcons.ts), by the key plxd keeps. Each keeps at least 3:1
+  /* An orchestrator icon's colors (projectIcons.ts), by the key plxd keeps. Each keeps at least 3:1
      on the sidebar, the dialogs, and a selected row, in both themes. */
   --project-red: #dc2626;
   --project-orange: #ea580c;
@@ -1215,7 +1215,7 @@ body {
 .context-doc .markdown > .contains-task-list {
   padding-left: 0;
 }
-/* The status board on the Project tab (ContextBody), set like a project page: small headings, and
+/* The status board on the orchestrator tab (ContextBody), set like an orchestrator page: small headings, and
    each item a bold lead and its detail, a little apart. */
 .context-board {
   padding-top: 1.25rem;

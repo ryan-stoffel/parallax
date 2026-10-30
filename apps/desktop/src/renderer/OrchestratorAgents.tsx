@@ -7,12 +7,12 @@ import { describeError } from "./errors";
 import { dismiss, notify } from "./notifications";
 import { instanceName } from "./providers";
 import { backendLogo, statusLooks } from "./Sidebar";
-import { projectRuns, titleOf, type ThreadsState } from "./threads";
+import { orchestratorRuns, titleOf, type ThreadsState } from "./threads";
 import { accountLabel, statusLabel, type Approval } from "./transcript";
 import { uuidv7 } from "./uuidv7";
 
-/** A Project's runs, oldest first, kept live, and a way to start one by hand. */
-export interface ProjectAgentsView {
+/** An orchestrator's runs, oldest first, kept live, and a way to start one by hand. */
+export interface OrchestratorAgentsView {
   runs: AgentRun[];
   /** By run id: the permission requests each run waits on, oldest first (PLX-196). */
   waiting: Readonly<Record<string, readonly Approval[]>>;
@@ -24,24 +24,24 @@ export interface ProjectAgentsView {
 }
 
 /**
- * A Project's runs, coordinator included, with the threads in it, oldest first, and the
+ * An orchestrator's runs, orchestrator included, with the threads in it, oldest first, and the
  * permission requests each waits on, from the host's shell (`useThreads`, 0059), and a way to
- * start one by hand. Empty with no Project. With `approvals`, the host's plxd advertises them,
+ * start one by hand. Empty with no orchestrator. With `approvals`, the host's plxd advertises them,
  * and a subagent started here forwards its requests (PLX-196, 0031).
  */
-export function useProjectAgents(
+export function useOrchestratorAgents(
   hostId: string,
-  project: string | undefined,
+  orchestrator: string | undefined,
   state: ThreadsState,
-  inProject: ReadonlyMap<string, string>,
+  inOrchestrator: ReadonlyMap<string, string>,
   approvals = false,
-): ProjectAgentsView {
+): OrchestratorAgentsView {
   const start = useCallback(
     async (runId: string, prompt: string) => {
-      if (!project) return "No Project is open.";
+      if (!orchestrator) return "No orchestrator is open.";
       const answer = await window.parallax.request(hostId, "agent/start", {
         runId,
-        project,
+        project: orchestrator,
         prompt,
         policy: "workspaceWrite",
         ...(approvals && { approvals }),
@@ -49,11 +49,11 @@ export function useProjectAgents(
       // Its `agent.started` reaches the shell, which lists it.
       return "error" in answer ? describeError(answer.error) : undefined;
     },
-    [hostId, project, approvals],
+    [hostId, orchestrator, approvals],
   );
   return useMemo(() => {
-    if (!project) return { runs: [], waiting: {}, start };
-    const runs = projectRuns(state, project, inProject).toSorted((a, b) =>
+    if (!orchestrator) return { runs: [], waiting: {}, start };
+    const runs = orchestratorRuns(state, orchestrator, inOrchestrator).toSorted((a, b) =>
       a.createdAt.localeCompare(b.createdAt),
     );
     const waiting: Record<string, Approval[]> = {};
@@ -63,13 +63,13 @@ export function useProjectAgents(
         waiting[r.id] = items.filter((item): item is Approval => item.kind === "approval");
     }
     return { runs, waiting, start };
-  }, [project, state, inProject, start]);
+  }, [orchestrator, state, inOrchestrator, start]);
 }
 
 /**
- * The side panel's Agents view for a Project: the coordinator's children, without the coordinator
- * (0024), ordered Needs you, Working, Done, Failed, newest first within each (0042), each opening
- * its chat in place; then a box that starts one by hand.
+ * The side panel's Agents view for an orchestrator: the orchestrator's children, without the
+ * orchestrator (0024), ordered Needs you, Working, Done, Failed, newest first within each (0042),
+ * each opening its chat in place; then a box that starts one by hand.
  */
 export function AgentsPanel({
   agents,
@@ -78,7 +78,7 @@ export function AgentsPanel({
   onOpen,
   disabledReason,
 }: {
-  agents: ProjectAgentsView;
+  agents: OrchestratorAgentsView;
   /** By run id: a child's thread title from plxd (0041), over its prompt's. */
   titles?: Readonly<Record<string, string>>;
   /** The subagent whose chat is open. */
@@ -113,7 +113,7 @@ export function AgentsPanel({
           <Workflow aria-hidden className="mb-1 size-5 text-faint-foreground" />
           <p className="text-body font-medium text-foreground">No agents yet</p>
           <p className="text-body text-muted-foreground">
-            Subagents the coordinator starts show up here.
+            Subagents the orchestrator starts show up here.
           </p>
         </div>
       )}
@@ -157,7 +157,7 @@ function AgentRow({
           )}
           <span className="min-w-0 flex-1 truncate text-body">{title}</span>
           <span className="shrink-0 text-meta text-faint-foreground">
-            {run.coordinatorThread ? "by coordinator" : "by you"}
+            {run.orchestratorThread ? "by orchestrator" : "by you"}
           </span>
         </span>
         <span className="flex w-full items-center gap-2 pl-5.5 text-meta text-faint-foreground [&_svg]:size-3 [&_svg]:shrink-0">
@@ -193,7 +193,7 @@ function StartAgent({
   start,
   disabledReason,
 }: {
-  start: ProjectAgentsView["start"];
+  start: OrchestratorAgentsView["start"];
   disabledReason?: string;
 }) {
   const [text, setText] = useState("");

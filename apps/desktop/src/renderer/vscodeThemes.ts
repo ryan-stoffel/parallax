@@ -116,8 +116,8 @@ const blueOrange = {
 
 /**
  * Parallax's tokens from a VS Code theme, over `defaults`, Parallax's own for `mode`. Text keeps
- * 4.5:1 on the background and sidebar and Project colors 3:1 on the sidebar, moved toward white
- * or black where the theme's fall short.
+ * 4.5:1 on the background and sidebar and orchestrator colors 3:1 on the sidebar, moved toward
+ * white or black where the theme's fall short.
  */
 export function tokensOf(
   { colors = {}, tokenColors = [] }: VscodeTheme,

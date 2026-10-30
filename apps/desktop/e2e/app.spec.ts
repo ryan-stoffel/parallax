@@ -195,16 +195,16 @@ test("choosing a window background leaves Settings in view (PLX-1078)", async ()
   expect(await settings.evaluate((dialog) => dialog.scrollTop)).toBe(0);
 });
 
-test("creates a project on a repository it adds, and opens it (PLX-166)", async () => {
+test("creates an orchestrator on a repository it adds, and opens it (PLX-166)", async () => {
   const repo = path.join(mkdtempSync(path.join(tmpdir(), "parallax-e2e-repo-")), "ember");
   mkdirSync(repo);
   execFileSync("git", ["init", "-q", repo]);
-  // A coordinator runs on a copy of the latest commit, so the repository needs one (0024).
+  // An orchestrator runs on a copy of the latest commit, so the repository needs one (0024).
   const identity = ["-c", "user.name=parallax", "-c", "user.email=parallax@localhost"];
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Close settings" }).click();
-  // A Project, an orchestrator thread from 0093 on, starts from New thread's picker.
+  // An orchestrator thread starts from New thread's picker.
   await page.locator("#sidebar").getByRole("button", { name: "New thread", exact: true }).click();
   await page
     .getByRole("dialog", { name: "New thread in" })
@@ -218,12 +218,12 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   await dialog.getByRole("button", { name: /^Add/ }).click();
   await expect(dialog.getByRole("button", { name: /^Workspace: ember on / })).toBeVisible();
   await expect(dialog.getByRole("textbox", { name: "Name" })).toHaveValue("ember");
-  await dialog.getByRole("button", { name: "Create Project" }).click();
+  await dialog.getByRole("button", { name: "Create orchestrator" }).click();
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  // One card for the Project, on the Projects page, which the classic sidebar opens from the
-  // button beside its search (0094). Opening the card goes back to the Project.
+  // One card for the orchestrator, on the orchestrators page, which the classic sidebar opens from
+  // the button beside its search (0094). Opening the card goes back to the orchestrator.
   await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
   const cards = page.locator("li[data-project]");
   await expect(cards).toHaveCount(1);
@@ -232,43 +232,44 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
 });
 
-test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (PLX-46)", async () => {
+test("chats with the orchestrator, whose transcript outlives a reload and a plxd restart (PLX-46)", async () => {
   // Reconnecting after the restart waits out the app's backoff.
   test.slow();
-  // As for threads: the fake runs coordinators once it's their default.
+  // As for threads: the fake runs orchestrators once it's their default.
   const set = await page.evaluate(`window.parallax.request("local", "accounts/defaults/set", {
-    role: "coordinator",
+    role: "orchestrator",
     account: { kind: "subscription", backend: "fake" },
   })`);
   expect(set).not.toHaveProperty("error");
-  // The project chat reads the default again as Settings closes, to offer its backend's models.
+  // The orchestrator chat reads the default again as Settings closes, to offer its backend's
+  // models.
   await page.getByRole("button", { name: "Profile", exact: true }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Close settings" }).click();
 
-  // The last test left the ember project open. Every message goes to its coordinator.
+  // The last test left the ember orchestrator open. Every message goes to its orchestrator.
   const message = page.getByRole("textbox", { name: "Message" });
-  const toCoordinator = async (text: string) => {
+  const toOrchestrator = async (text: string) => {
     await message.fill(text);
     await page.getByRole("button", { name: "Send", exact: true }).click();
   };
-  await toCoordinator("Plan the ember release");
+  await toOrchestrator("Plan the ember release");
   const transcript = page.getByRole("log", { name: "Transcript" });
   await expect(transcript.getByText("Plan the ember release")).toBeVisible();
   await expect(transcript.getByText("The fake agent is on it.")).toBeVisible();
 
   await page.getByRole("button", { name: "Stop" }).click();
   await expect(transcript.getByText("Stopped")).toBeVisible();
-  await toCoordinator("Start with the changelog");
+  await toOrchestrator("Start with the changelog");
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
 
   await page.reload();
-  // Back to the Project from the Projects page.
+  // Back to the orchestrator from the orchestrators page.
   await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
   await page.locator("li[data-project]").first().getByRole("button").first().click();
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 
-  // Stop plxd with the coordinator running. The app reconnects through a new `serve`, which
+  // Stop plxd with the orchestrator running. The app reconnects through a new `serve`, which
   // marks the run interrupted, and the transcript loads again.
   const [pid] = servePids(launched.dataDir);
   expect(pid).toBeGreaterThan(1);
@@ -281,24 +282,26 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 });
 
-test("shows the project's tasks over its composer and on its Project tab, opens their chats, and marks the coordinator's wake-up (PLX-47)", async () => {
-  // The last test left ember's coordinator open, interrupted by the restart, with its side panel
-  // on the Project tab.
+test("shows the orchestrator's tasks over its composer and on its orchestrator tab, opens their chats, and marks the orchestrator's wake-up (PLX-47)", async () => {
+  // The last test left ember's orchestrator open, interrupted by the restart, with its side panel
+  // on the orchestrator tab.
   const panel = page.getByRole("complementary", { name: "Side panel" });
-  await expect(panel.getByRole("button", { name: /^Project/ })).toHaveAttribute(
+  await expect(panel.getByRole("button", { name: /^Orchestrator/ })).toHaveAttribute(
     "aria-current",
     "true",
   );
 
-  const listed = (await page.evaluate(`window.parallax.request("local", "project/list", {})`)) as {
-    result: { projects: { id: string; coordinator: string }[] };
+  const listed = (await page.evaluate(
+    `window.parallax.request("local", "orchestrator/list", {})`,
+  )) as {
+    result: { orchestrators: { id: string; run: string }[] };
   };
-  const ember = listed.result.projects[0]!;
-  // A task the Project starts, on the worker default the thread test set (0042).
+  const ember = listed.result.orchestrators[0]!;
+  // A task the orchestrator starts, on the worker default the thread test set (0042).
   const task = await page.evaluate(
     `window.parallax.request("local", "thread/start", ${JSON.stringify({
       runId: uuidv7(),
-      project: ember.id,
+      orchestrator: ember.id,
       prompt: "Write the changelog",
     })})`,
   );
@@ -309,13 +312,13 @@ test("shows the project's tasks over its composer and on its Project tab, opens 
   const working = panel.getByRole("region", { name: "Running" });
   await expect(working.getByRole("button", { name: /^Write the changelog/ })).toBeVisible();
 
-  // One the coordinator started, as `plxd mcp`'s spawn_agent does (0019): it arrives by event.
+  // One the orchestrator started, as `plxd mcp`'s spawn_agent does (0019): it arrives by event.
   const params = {
     runId: uuidv7(),
     project: ember.id,
     prompt: "Tag the release",
     policy: "workspaceWrite",
-    coordinatorThread: ember.coordinator,
+    orchestratorThread: ember.run,
   };
   const started = await page.evaluate(
     `window.parallax.request("local", "agent/start", ${JSON.stringify(params)})`,
@@ -325,7 +328,7 @@ test("shows the project's tasks over its composer and on its Project tab, opens 
   await expect(tag).toBeVisible();
   await expect(bar).toContainText("2 working");
 
-  // Its chat, with the project still open. Stopping it wakes the coordinator (0025).
+  // Its chat, with the orchestrator still open. Stopping it wakes the orchestrator (0025).
   await tag.click();
   const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
   await expect(crumbs).toContainText("Tag the release");
@@ -335,7 +338,7 @@ test("shows the project's tasks over its composer and on its Project tab, opens 
   await expect(transcript.getByText("Stopped")).toBeVisible();
   await expect(tag).toBeHidden();
 
-  // The child's strip goes back to the coordinator.
+  // The child's strip goes back to the orchestrator.
   await page
     .getByRole("region", { name: "Child thread" })
     .getByRole("button", { name: /^Open parent/ })

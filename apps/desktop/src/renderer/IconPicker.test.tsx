@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, test, vi } from "vite-plus/test";
 
-import type { ProjectIcon as ProjectIconValue } from "../protocol/generated/protocol";
+import type { ChosenIcon } from "../protocol/generated/protocol";
 import { IconPicker } from "./IconPicker";
 import { Notifications } from "./notifications";
 
@@ -23,7 +23,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-function render(value: ProjectIconValue | undefined, onPick = vi.fn(), maxImageBytes?: number) {
+function render(value: ChosenIcon | undefined, onPick = vi.fn(), maxImageBytes?: number) {
   root ??= createRoot(document.body.appendChild(document.createElement("div")));
   act(() =>
     root!.render(

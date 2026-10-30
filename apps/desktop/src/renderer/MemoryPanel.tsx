@@ -25,28 +25,29 @@ const kindGroups: { kind: MemoryKind; label: string; one: string }[] = [
 const scopeLabels: Record<MemoryScope["kind"], string> = {
   you: "You",
   repo: "Repo",
-  project: "Project",
+  orchestrator: "Orchestrator",
 };
 
 /** The scopes a view shows, You first, as plxd orders its index (0044). */
-function scopesOf(project?: string, repo?: string): MemoryScope[] {
+function scopesOf(orchestrator?: string, repo?: string): MemoryScope[] {
   return [
     { kind: "you" },
     ...(repo ? [{ kind: "repo", id: repo } as const] : []),
-    ...(project ? [{ kind: "project", id: project } as const] : []),
+    ...(orchestrator ? [{ kind: "orchestrator", id: orchestrator } as const] : []),
   ];
 }
 
 /**
- * Sorts listed files into the view's sections: the Project's brief, the entries to review (marked
- * stale, or unread by agents for 60 days, PLX-943), the other entries by kind (by their folder,
- * `memory/<kind>/`), knowledge, and the proposals waiting for the user. A child's proposal in a
- * Project's folder (writer `thread <run id>`) is its coordinator's to curate, so it isn't one.
+ * Sorts listed files into the view's sections: the orchestrator's brief, the entries to review
+ * (marked stale, or unread by agents for 60 days, PLX-943), the other entries by kind (by their
+ * folder, `memory/<kind>/`), knowledge, and the proposals waiting for the user. A child's proposal
+ * in a orchestrator's folder (writer `thread <run id>`) is its orchestrator's to curate, so it
+ * isn't one.
  */
 export function sectionsOf(files: readonly Memory[]) {
   const review = (f: Memory) => f.stale || f.unused;
   return {
-    brief: files.find((f) => f.scope.kind === "project" && f.path === "brief.md"),
+    brief: files.find((f) => f.scope.kind === "orchestrator" && f.path === "brief.md"),
     review: files.filter((f) => f.path.startsWith("memory/") && review(f)),
     entries: kindGroups.map((g) => ({
       ...g,
@@ -56,19 +57,19 @@ export function sectionsOf(files: readonly Memory[]) {
     proposals: files.filter(
       (f) =>
         f.path.startsWith("proposals/") &&
-        !(f.scope.kind === "project" && f.writer?.startsWith("thread ")),
+        !(f.scope.kind === "orchestrator" && f.writer?.startsWith("thread ")),
     ),
   };
 }
 
-/** Where Promote moves a file from `scope`: Project to Repo to You, skipping a missing Repo. */
+/** Where Promote moves a file from `scope`: Orchestrator to Repo to You, skipping a missing Repo. */
 export function nextScope(scope: MemoryScope, repo?: string): MemoryScope | undefined {
-  if (scope.kind === "project") return repo ? { kind: "repo", id: repo } : { kind: "you" };
+  if (scope.kind === "orchestrator") return repo ? { kind: "repo", id: repo } : { kind: "you" };
   if (scope.kind === "repo") return { kind: "you" };
   return undefined;
 }
 
-/** The message the box sends the coordinator for a change in plain words. */
+/** The message the box sends the orchestrator for a change in plain words. */
 export const changeMessage = (text: string) =>
   `From the Memory tab, the user asks for this change to memory:\n\n> ${text.split("\n").join("\n> ")}\n\nFind the entries it affects, and propose your rewrite for the user to save or discard there, rather than writing it yourself.`;
 
@@ -97,7 +98,7 @@ export function sourceOf(
 ): string | undefined {
   const source = file.source;
   if (!source || source === "user") return undefined;
-  const id = source.replace(/^(?:run|thread|coordinator) /, "");
+  const id = source.replace(/^(?:run|thread|orchestratorRun) /, "");
   if (titles[id]) return titles[id];
   const runId = id !== source || /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id);
   return runId ? undefined : source;
@@ -112,11 +113,14 @@ interface Target {
 /**
  * Where a proposal saves: an entry, the one it `replaces` or else `memory/<kind>/<slug>.md`, at the
  * scope it names (`forScope`, with `repo` the Repo scope's entry) or else the folder it waits in;
- * or, for a coordinator's with no kind, the Project's brief. Undefined for anything else.
+ * or, for an orchestrator's with no kind, the orchestrator's brief. Undefined for anything else.
  */
 export function savedAs(file: Memory, repo?: string): Target | undefined {
   if (!file.kind) {
-    const brief = file.scope.kind === "project" && file.writer?.startsWith("coordinator ");
+    // `coordinator` is the writer's name before 0093.
+    const brief =
+      file.scope.kind === "orchestrator" &&
+      (file.writer?.startsWith("orchestrator ") || file.writer?.startsWith("coordinator "));
     return brief ? { scope: file.scope, path: "brief.md" } : undefined;
   }
   const scope: MemoryScope =
@@ -186,9 +190,10 @@ function memoryCalls(hostId: string) {
 
 /**
  * The listed memory of `scopes`, kept live: `memory/list` for each, read again on a
- * `context.changed` event in the Repo or Project folder (You's isn't watched), and on `reload`.
+ * `context.changed` event in the Repo or orchestrator folder (You's isn't watched), and on
+ * `reload`.
  */
-function useMemory(hostId: string, project: string | undefined, repo: string | undefined) {
+function useMemory(hostId: string, orchestrator: string | undefined, repo: string | undefined) {
   const [files, setFiles] = useState<Memory[]>();
   const [error, setError] = useState<string>();
   // Bumped to list and subscribe again: after a change here, or a `resync`.
@@ -197,7 +202,7 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
   useEffect(() => {
     let stopped = false;
     const unsubscribes: (() => void)[] = [];
-    const scopes = scopesOf(project, repo);
+    const scopes = scopesOf(orchestrator, repo);
     const list = async () => {
       const lists = await Promise.all(
         scopes.map((scope) => window.parallax.request(hostId, "memory/list", { scope })),
@@ -213,7 +218,9 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
     };
     // Subscribes after `agent/list`'s `seq`, as ContextPanel does, since `memory/list` has none.
     const watch = async (folder: string) => {
-      const position = await window.parallax.request(hostId, "agent/list", { project: folder });
+      const position = await window.parallax.request(hostId, "agent/list", {
+        project: folder,
+      });
       if (stopped || "error" in position) return;
       // `shell` leaves out the runs' output, which only the transcript reads (PLX-453).
       const since = {
@@ -237,13 +244,13 @@ function useMemory(hostId: string, project: string | undefined, repo: string | u
       stopped = true;
       for (const unsubscribe of unsubscribes) unsubscribe();
     };
-  }, [hostId, project, repo, generation]);
+  }, [hostId, orchestrator, repo, generation]);
 
   return { files, error, reload: () => setGeneration((g) => g + 1) };
 }
 
 // A section's heading, and its rows grouped in one rounded list with hairlines between them, as
-// the Project tab's are.
+// the orchestrator tab's are.
 const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
 
 /**
@@ -300,35 +307,36 @@ function useEditing() {
 }
 
 /**
- * The side panel's Memory view (0044, 0083) for a Project, or for a thread's repository, from the
- * You, Repo, and Project scopes: the proposals waiting for the user first, then the Project's
- * brief in place, the entries by kind, the ones to review (unused for 60 days, or stale), and
- * knowledge documents. Every row is a mark, a title, one muted line, and one thing at its end, and
- * opens to its text and actions. Show it only on a plxd with `memory`, and key it by host and
- * folder. `titles` names the threads a source's run id points at. `start` and `footer` are the
- * Knowledge view's: what it shows before the list, given the listed files, and the box under it.
+ * The side panel's Memory view (0044, 0083) for an orchestrator, or for a thread's repository, from
+ * the You, Repo, and orchestrator scopes: the proposals waiting for the user first, then the
+ * orchestrator's brief in place, the entries by kind, the ones to review (unused for 60 days, or
+ * stale), and knowledge documents. Every row is a mark, a title, one muted line, and one thing at
+ * its end, and opens to its text and actions. Show it only on a plxd with `memory`, and key it by
+ * host and folder. `titles` names the threads a source's run id points at. `start` and `footer` are
+ * the Knowledge view's: what it shows before the list, given the listed files, and the box under
+ * it.
  */
 export function MemoryPanel({
   hostId,
-  project,
+  orchestrator,
   repo,
   titles,
   start,
   footer,
 }: {
   hostId: string;
-  /** The open Project, or absent for a thread outside one. */
-  project?: string;
+  /** The open orchestrator, or absent for a thread outside one. */
+  orchestrator?: string;
   /** The repo entry whose memory is the Repo scope, if there is one. */
   repo?: string;
   /** Threads' titles by run id. */
   titles?: Readonly<Record<string, string>>;
   /** Before everything, scrolling with it, given the listed files (none until they load). */
   start?: (files: readonly Memory[]) => ReactNode;
-  /** Under the list, such as a box that sends a change to the coordinator. */
+  /** Under the list, such as a box that sends a change to the orchestrator. */
   footer?: ReactNode;
 }) {
-  const { files, error, reload } = useMemory(hostId, project, repo);
+  const { files, error, reload } = useMemory(hostId, orchestrator, repo);
   const calls = useMemo(() => memoryCalls(hostId), [hostId]);
   const sections = files && sectionsOf(files);
   const taken = ({ scope, path }: Target) =>
@@ -368,8 +376,13 @@ export function MemoryPanel({
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
         {start?.(files ?? [])}
         {list("To review", sections?.proposals, "proposal")}
-        {project && sections && (
-          <Brief project={project} file={sections.brief} calls={calls} onChanged={reload} />
+        {orchestrator && sections && (
+          <Brief
+            orchestrator={orchestrator}
+            file={sections.brief}
+            calls={calls}
+            onChanged={reload}
+          />
         )}
         {entries.length > 0 && (
           <section aria-label="Memory">
@@ -409,16 +422,16 @@ const field =
   "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-body placeholder:text-faint-foreground focus-visible:border-ring focus-visible:outline-none disabled:opacity-50";
 
 /**
- * The Project's brief, in place: its text, under a heading with the day it was edited and an Edit
- * button. With none yet, a button opens an empty one to write.
+ * The orchestrator's brief, in place: its text, under a heading with the day it was edited and an
+ * Edit button. With none yet, a button opens an empty one to write.
  */
 function Brief({
-  project,
+  orchestrator,
   file,
   calls,
   onChanged,
 }: {
-  project: string;
+  orchestrator: string;
   file?: Memory;
   calls: ReturnType<typeof memoryCalls>;
   onChanged: () => void;
@@ -440,7 +453,7 @@ function Brief({
       stopped = true;
     };
   }, [file, calls]);
-  const scope: MemoryScope = { kind: "project", id: project };
+  const scope: MemoryScope = { kind: "orchestrator", id: orchestrator };
   const brief: Memory = file ?? { scope, path: "brief.md", size: 0, modifiedAt: "" };
   const edited = file && `Edited ${dayWords(Date.parse(file.modifiedAt))}`;
 
@@ -488,7 +501,7 @@ function Brief({
           }}
           className="px-1 text-body text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
-          Write the Project's goal, scope, and constraints
+          Write the orchestrator's goal, scope, and constraints
         </button>
       )}
       {error && (

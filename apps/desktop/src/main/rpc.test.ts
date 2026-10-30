@@ -52,9 +52,9 @@ test("closes on a frame over maxFrameBytes before its newline arrives", async ()
 test("matches responses to requests by id, in any order", async () => {
   const { client, sent } = setup();
   const health = client.request("host/health", {}, 1000);
-  const list = client.request("project/list", {}, 1000);
+  const list = client.request("orchestrator/list", {}, 1000);
   const [healthId, listId] = sent.map((message) => message["id"]);
-  client.receive(line({ jsonrpc: "2.0", id: listId, result: { projects: [], seq: 4 } }));
+  client.receive(line({ jsonrpc: "2.0", id: listId, result: { orchestrators: [], seq: 4 } }));
   client.receive(
     line({
       jsonrpc: "2.0",
@@ -62,14 +62,14 @@ test("matches responses to requests by id, in any order", async () => {
       error: { code: -32000, message: "no", data: { kind: "internal" } },
     }),
   );
-  expect(await list).toEqual({ result: { projects: [], seq: 4 } });
+  expect(await list).toEqual({ result: { orchestrators: [], seq: 4 } });
   expect(await health).toMatchObject({ error: { code: -32000, data: { kind: "internal" } } });
 });
 
 test("a timed-out request sends $/cancelRequest and ignores its late answer", async () => {
   vi.useFakeTimers();
   const { client, sent } = setup();
-  const list = client.request("project/list", {}, 1000);
+  const list = client.request("orchestrator/list", {}, 1000);
   const id = sent[0]?.["id"];
   vi.advanceTimersByTime(1000);
   expect(sent[1]).toEqual({ jsonrpc: "2.0", method: "$/cancelRequest", params: { id } });

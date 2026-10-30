@@ -1,24 +1,30 @@
-// What the sidebar lists (0094): every host's threads and Projects as rows, the unsent New Thread
-// drafts, and how rows group, as pure functions, so a sidebar mode is mostly its grouping.
-import type { AgentRun, Project, Repo, Thread } from "../protocol/generated/protocol";
-import { activeAt, attentionOf, projectAttention, type Attention } from "./attention";
+// What the sidebar lists (0094): every host's threads and orchestrators as rows, the unsent New
+// Thread drafts, and how rows group, as pure functions, so a sidebar mode is mostly its grouping.
+import type { AgentRun, Orchestrator, Repo, Thread } from "../protocol/generated/protocol";
+import { activeAt, attentionOf, orchestratorAttention, type Attention } from "./attention";
 import type { Draft } from "./drafts";
 import { numberOf } from "./github";
 import type { Host } from "./hosts";
 import { parseScope, type Scope } from "./scope";
-import { asksOf, projectRuns, threadProjects, waitingOf, type ThreadsView } from "./threads";
+import {
+  asksOf,
+  orchestratorRuns,
+  threadOrchestrators,
+  waitingOf,
+  type ThreadsView,
+} from "./threads";
 import { isRunning } from "./transcript";
 
-/** A host and its threads and Projects, as the sidebar merges them. */
+/** A host and its threads and orchestrators, as the sidebar merges them. */
 export interface HostThreads {
   host: Host;
   view: ThreadsView;
 }
 
-/** One row of the list: a thread, or a Project, with its host and what it asks of the user. */
+/** One row of the list: a thread, or an orchestrator, with its host and what it asks of the user. */
 export type Item = (
   | { kind: "thread"; thread: Thread; run?: AgentRun }
-  | { kind: "project"; project: Project; runs: AgentRun[] }
+  | { kind: "orchestrator"; orchestrator: Orchestrator; runs: AgentRun[] }
 ) & {
   key: string;
   host: Host;
@@ -44,16 +50,16 @@ export const markedUnread = (attention: Attention, run: AgentRun | undefined, ma
     : attention;
 
 /**
- * Every host's threads and Projects as rows, unsorted. A Project's threads don't list apart from
- * it (0042); `unread` holds the keys of threads marked unread.
+ * Every host's threads and orchestrators as rows, unsorted. An orchestrator's threads don't list
+ * apart from it (0042); `unread` holds the keys of threads marked unread.
  */
 export function sidebarItems(hosts: readonly HostThreads[], unread: readonly string[]): Item[] {
   return hosts.flatMap(({ host: h, view }) => {
     const { state } = view;
     const repoOf = (id: string) => state.repos.find((r) => r.id === id);
-    const inProject = threadProjects(state);
+    const inOrchestrator = threadOrchestrators(state);
     const threads = state.threads
-      .filter((t) => !inProject.get(t.id))
+      .filter((t) => !inOrchestrator.get(t.id))
       .map((t): Item => {
         const run = state.runs[t.id];
         const repo = repoOf(t.repo);
@@ -81,17 +87,17 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
           ].join(" "),
         };
       });
-    const projects = state.projects.map((p): Item => {
-      const runs = projectRuns(state, p.id, inProject);
+    const orchestrators = state.orchestrators.map((p): Item => {
+      const runs = orchestratorRuns(state, p.id, inOrchestrator);
       return {
-        kind: "project",
-        project: p,
+        kind: "orchestrator",
+        orchestrator: p,
         runs,
         key: `${h.id}/${p.id}`,
         host: h,
         view,
         repo: state.repos.find((r) => r.path === p.repoPath),
-        attention: projectAttention(runs, (id) => asksOf(state, id)),
+        attention: orchestratorAttention(runs, (id) => asksOf(state, id)),
         // Its last change, or when one of its runs last stopped, so finished work raises it too.
         at: runs.reduce((at, r) => {
           const stopped = state.stoppedAt[r.id];
@@ -103,7 +109,7 @@ export function sidebarItems(hosts: readonly HostThreads[], unread: readonly str
         text: p.name,
       };
     });
-    return [...threads, ...projects];
+    return [...threads, ...orchestrators];
   });
 }
 

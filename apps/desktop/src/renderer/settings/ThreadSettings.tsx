@@ -256,7 +256,7 @@ function Resuming() {
           error ??
           (connection?.status === "connected" && !supported
             ? "This host's plxd can't resume threads after a usage limit."
-            : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. A Project's threads always do.")
+            : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. An orchestrator's threads always do.")
         }
       >
         <Switch

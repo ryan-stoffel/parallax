@@ -22,14 +22,14 @@ import {
 import { flushSync } from "react-dom";
 
 import { githubSlug, isFolderName, type FolderListing } from "../preload/bridge";
-import type { Project, Repo } from "../protocol/generated/protocol";
+import type { Orchestrator, Repo } from "../protocol/generated/protocol";
 import { cloneOn, type CloneAsk } from "./clone";
 import { CloneProgress } from "./CloneProgress";
 import { describeError } from "./errors";
 import { localId, type Host } from "./hosts";
 
 import { GitHubLogo } from "./logos";
-import { NewProjectForm } from "./NewProjectForm";
+import { NewOrchestratorForm } from "./NewOrchestratorForm";
 import { connection, hostIcon } from "./RunTargetMenu";
 
 import type { ThreadsView } from "./threads";
@@ -40,7 +40,7 @@ import type { Workspace, WorkspaceSource } from "./WorkspaceMenu";
 const kbd = "rounded-md bg-selected px-1.5 py-0.5 font-sans text-meta text-foreground";
 
 type Step =
-  | { kind: "menu" | "create" | "clone" | "computer" | "project" }
+  | { kind: "menu" | "create" | "clone" | "computer" | "orchestrator" }
   | { kind: "browse"; hostId?: string }
   | { kind: "cloneTo"; slug: string };
 
@@ -50,16 +50,16 @@ type Step =
  */
 type Cloning = { url: string; name: string; slug?: string };
 
-/** Opens the palette, at its menu or straight at Create Project. */
-export type AddDialogHandle = { open: (start?: "project") => void };
+/** Opens the palette, at its menu or straight at Create orchestrator. */
+export type AddDialogHandle = { open: (start?: "orchestrator") => void };
 
 /**
  * The sidebar's add palette, a native modal <dialog> laid out like a command palette. Its menu
- * offers New Space (0090), New repository, Local folder, and Clone from GitHub; `open("project")`
- * starts on Create Project, which New thread's picker opens (0093). New Space hands off to `onNewSpace`'s dialog; the rest open a step of their own in the same dialog,
+ * offers New Space (0090), New repository, Local folder, and Clone from GitHub; `open("orchestrator")`
+ * starts on Create orchestrator, which New thread's picker opens (0093). New Space hands off to `onNewSpace`'s dialog; the rest open a step of their own in the same dialog,
  * and Back returns to the step before. With more than one computer,
  * Local folder first asks which (PLX-769). The first three make or find a repository and
- * register it with its computer's plxd (`repo/add`), then close, or, when Create Project's
+ * register it with its computer's plxd (`repo/add`), then close, or, when Create orchestrator's
  * Workspace menu asked for it, return there with it chosen.
  */
 export function AddDialog({
@@ -76,13 +76,13 @@ export function AddDialog({
   hosts: Host[];
   /** Why Local folder can't browse a computer, by id: offline, or a plxd without `hostFolders`. */
   unbrowsable: ReadonlyMap<string, string>;
-  /** The open host, whose first repository is Create Project's default. */
+  /** The open host, whose first repository is Create orchestrator's default. */
   hostId: string;
   /** The open host's repo entries. */
   repos: Repo[];
-  /** Creates a Project on the open host. */
-  create: ThreadsView["createProject"];
-  onCreated: (hostId: string, project: Project) => void;
+  /** Creates an orchestrator on the open host. */
+  create: ThreadsView["createOrchestrator"];
+  onCreated: (hostId: string, orchestrator: Orchestrator) => void;
   /** Opens Create Space, or undefined where the open host's plxd makes no Spaces. */
   onNewSpace?: () => void;
 }) {
@@ -101,9 +101,9 @@ export function AddDialog({
     },
   }));
 
-  // Back on Create Project, from its own Workspace's step or on opening there: its name.
+  // Back on Create orchestrator, from its own Workspace's step or on opening there: its name.
   useEffect(() => {
-    if (step.kind === "project")
+    if (step.kind === "orchestrator")
       dialog.current?.querySelector<HTMLInputElement>('input[aria-label="Name"]')?.focus();
   }, [step.kind]);
 
@@ -111,10 +111,10 @@ export function AddDialog({
   const back = () =>
     stack.length > 1 ? setStack((all) => all.slice(0, -1)) : dialog.current?.close();
   const added = (hostId: string, repo: Repo) => {
-    const project = stack.findIndex((s) => s.kind === "project");
-    if (project < 0) return dialog.current?.close();
+    const orchestrator = stack.findIndex((s) => s.kind === "orchestrator");
+    if (orchestrator < 0) return dialog.current?.close();
     setWorkspace({ hostId, repo });
-    setStack((all) => all.slice(0, project + 1));
+    setStack((all) => all.slice(0, orchestrator + 1));
   };
   const steps = { onBack: back, onAdded: added };
 
@@ -177,9 +177,9 @@ export function AddDialog({
         />
       )}
       {/* Kept while its Workspace's step is open, so what's typed in it stays. */}
-      {stack.some((s) => s.kind === "project") && (
-        <div hidden={step.kind !== "project"}>
-          <NewProjectForm
+      {stack.some((s) => s.kind === "orchestrator") && (
+        <div hidden={step.kind !== "orchestrator"}>
+          <NewOrchestratorForm
             key={session}
             hosts={hosts}
             hostId={hostId}
@@ -254,8 +254,7 @@ export function CloneDialog({
 type StepProps = { onBack: () => void; onAdded: (hostId: string, repo: Repo) => void };
 
 /**
- * What the menu step picks: New Space or a way to add a repository. A Project, an orchestrator
- * thread from 0093 on, starts from New thread's picker, which opens this palette on its step.
+ * What the menu step picks: New Space or a way to add a repository. An orchestrator thread starts from New thread's picker, which opens this palette on its step.
  */
 type MenuKind = WorkspaceSource | "space";
 
@@ -335,7 +334,7 @@ function MenuStep({
             list.onKeyDown(e);
             const picked = shown[list.active];
             if (e.key !== "Enter" || !picked) return;
-            // Else the Enter would go on to submit Create Project's form, which it focuses.
+            // Else the Enter would go on to submit Create orchestrator's form, which it focuses.
             e.preventDefault();
             onPick(picked.kind);
           }}

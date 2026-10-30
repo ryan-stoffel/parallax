@@ -16,7 +16,7 @@ const codex = (id: string, name: string): Instance => ({
   enabled: true,
   permissions: [],
   efforts: true,
-  coordinator: false,
+  orchestrator: false,
 });
 const model = (provider: string, id: string): Model => ({
   id,

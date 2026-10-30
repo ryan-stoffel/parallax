@@ -82,7 +82,7 @@ export function AttentionBadge({
   attention: Attention;
   /** When the user last sent the thread a message, for Working's clock (PLX-1012). */
   since?: string;
-  /** For a Project: how many of its runs work. */
+  /** For an orchestrator: how many of its runs work. */
   count?: number;
 }) {
   // Done animates only on a change from another state, never on the first render.

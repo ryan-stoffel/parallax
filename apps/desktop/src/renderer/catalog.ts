@@ -212,9 +212,9 @@ export const effortLevels: { value: AgentEffort; name: string; blurb: string; sp
 ];
 
 // One set of access levels for every provider (0054), from most to least supervised. Each backend
-// maps the ones it can honor, and a thread is full Claude Code in every mode (0034). A project's
-// worker keeps its sandbox in every mode but Full access (0013). What would prompt comes to the
-// chat as approval cards (PLX-196), unless the run can't send them (`manualDenied`).
+// maps the ones it can honor, and a thread is full Claude Code in every mode (0034). An
+// orchestrator's worker keeps its sandbox in every mode but Full access (0013). What would prompt
+// comes to the chat as approval cards (PLX-196), unless the run can't send them (`manualDenied`).
 export const accessLevels: Record<AgentPermission, { label: string; description: string }> = {
   manual: { label: "Supervised", description: "Asks you before commands and file changes." },
   edit: {

@@ -15,7 +15,7 @@ import type {
   AgentOutputItem,
   AgentRun,
   LoggedEvent,
-  Project,
+  Orchestrator,
   Repo,
   Thread,
 } from "../protocol/generated/protocol";
@@ -65,7 +65,7 @@ const parallax: Repo = {
   path: "/src/parallax",
   createdAt: "2026-09-29T09:00:00Z",
 };
-const project = (name: string, updatedAt: string): Project => ({
+const orchestrator = (name: string, updatedAt: string): Orchestrator => ({
   id: `p-${name}`,
   name,
   repoPath: `/src/${name}`,
@@ -119,11 +119,11 @@ beforeEach(() => {
   answers = {
     "thread/list": () => ({ result: { repos: [parallax], threads: [], seq: 7 } }),
     "agent/list": () => ({ result: { runs: [], seq: 7 } }),
-    "project/list": () => ({
+    "orchestrator/list": () => ({
       result: {
-        projects: [
-          project("ember", "2026-09-26T12:00:00Z"),
-          project("photon", "2026-09-29T09:00:00Z"),
+        orchestrators: [
+          orchestrator("ember", "2026-09-26T12:00:00Z"),
+          orchestrator("photon", "2026-09-29T09:00:00Z"),
         ],
         seq: 7,
       },
@@ -194,15 +194,15 @@ const click = async (element: Element | null | undefined) => {
   await act(async () => (element as HTMLElement).click());
   await settle();
 };
-/** Opens the Projects page from its sidebar row (0090). */
+/** Opens the orchestrators page from its sidebar row (0090). */
 const openProjectsPage = () =>
   act(() =>
     [...document.querySelectorAll<HTMLButtonElement>("#sidebar button")]
       .find((b) => b.textContent === "Projects")!
       .click(),
   );
-// Each project's card, by name, on the Projects page, which this opens (0090).
-const projectRows = () => {
+// Each orchestrator's card, by name, on the orchestrators page, which this opens (0090).
+const orchestratorRows = () => {
   openProjectsPage();
   return [...document.querySelectorAll("main li[data-project] [data-title]")].map(
     (t) => t.textContent,
@@ -252,8 +252,8 @@ const openPalette = async () => {
     [...document.querySelectorAll("#sidebar button")].find((b) => b.textContent === "New project"),
   );
 };
-// A Project, an orchestrator thread from 0093 on, starts from New thread's picker.
-const openNewProject = async () => {
+// An orchestrator thread starts from New thread's picker.
+const openNewOrchestrator = async () => {
   await click(
     [...document.querySelectorAll("#sidebar button")].find((b) =>
       b.textContent?.startsWith("New thread"),
@@ -269,9 +269,9 @@ const openNewProject = async () => {
 const workspaceButton = () =>
   dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");
 
-test("lists plxd's Projects as rows, most recently active first, and adds one from project.created", async () => {
+test("lists plxd's orchestrators as rows, most recently active first, and adds one from orchestrator.created", async () => {
   await renderApp();
-  expect(projectRows()).toEqual(["photon", "ember"]);
+  expect(orchestratorRows()).toEqual(["photon", "ember"]);
 
   await act(async () =>
     deliver({
@@ -280,15 +280,18 @@ test("lists plxd's Projects as rows, most recently active first, and adds one fr
         subscription: "s-1",
         seq: 8,
         time: "2026-09-29T12:00:00Z",
-        event: { kind: "project.created", project: project("parallax", "2026-09-29T12:00:00Z") },
+        event: {
+          kind: "orchestrator.created",
+          orchestrator: orchestrator("parallax", "2026-09-29T12:00:00Z"),
+        },
       },
     }),
   );
-  expect(projectRows()).toEqual(["parallax", "photon", "ember"]);
+  expect(orchestratorRows()).toEqual(["parallax", "photon", "ember"]);
 });
 
-test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
-  answers["project/create"] = () => ({
+test("Create orchestrator names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
+  answers["orchestrator/create"] = () => ({
     error: {
       code: -32000,
       message: "/src/parallax is not the top folder of a git repository: it has no .git.",
@@ -296,39 +299,40 @@ test("Create Project names it after its repository, shows plxd's error, retries 
     },
   });
   await renderApp();
-  await openNewProject();
+  await openNewOrchestrator();
   expect(dialog().open).toBe(true);
-  // A large name under the Project's icon, then the Workspace: the open host's first repository.
+  // A large name under the orchestrator's icon, then the Workspace: the open host's first
+  // repository.
   expect(nameBox().value).toBe("parallax");
-  expect(nameBox().placeholder).toBe("New Project");
+  expect(nameBox().placeholder).toBe("New orchestrator");
   expect(workspaceButton()).toBe("Workspace: parallax on This Mac");
-  // The coordinator's model is picked per message (PLX-46), not here.
+  // The orchestrator's model is picked per message (PLX-46), not here.
   expect(dialog().querySelector('[aria-label^="Model"]')).toBeNull();
   typeInto(nameBox(), "");
-  expect(inDialog("Create Project")!.disabled).toBe(true);
+  expect(inDialog("Create orchestrator")!.disabled).toBe(true);
   typeInto(nameBox(), "parallax");
 
-  await click(inDialog("Create Project"));
+  await click(inDialog("Create orchestrator"));
   expect(dialog().querySelector('[role="alert"]')?.textContent).toBe(
     "/src/parallax is not the top folder of a git repository: it has no .git.",
   );
   expect(dialog().open).toBe(true);
 
-  answers["project/create"] = (p) => ({
-    result: { project: { ...project("parallax", "2026-09-29T12:00:00Z"), id: p["id"] } },
+  answers["orchestrator/create"] = (p) => ({
+    result: { orchestrator: { ...orchestrator("parallax", "2026-09-29T12:00:00Z"), id: p["id"] } },
   });
-  await click(inDialog("Create Project"));
-  const [first, retry] = calls("project/create");
+  await click(inDialog("Create orchestrator"));
+  const [first, retry] = calls("orchestrator/create");
   expect(first).toEqual({
     id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7/),
     name: "parallax",
     repoPath: "/src/parallax",
   });
   expect(retry).toEqual(first);
-  expect(hostsOf("project/create")).toEqual(["local", "local"]);
+  expect(hostsOf("orchestrator/create")).toEqual(["local", "local"]);
   expect(dialog().open).toBe(false);
   expect(crumbs()).toEqual(["This Mac", "parallax"]);
-  expect(projectRows()).toContain("parallax");
+  expect(orchestratorRows()).toContain("parallax");
 });
 
 /** A folder listing for `listFolders`, under /Users/me. */
@@ -380,14 +384,14 @@ test("a failed clone says why above the folders, where a long list can't push it
   expect(dialog().open).toBe(true);
 });
 
-/** A Project's card on the Projects page, which this opens, by its name (0090). */
+/** An orchestrator's card on the orchestrators page, which this opens, by its name (0090). */
 const rowButton = (name: string) => {
   openProjectsPage();
   return [...document.querySelectorAll<HTMLButtonElement>("main li[data-project] > button")].find(
     (b) => b.querySelector("[data-title]")?.textContent === name,
   )!;
 };
-// A Project card's menu after Pin, which a right-click on it opens.
+// An orchestrator card's menu after Pin, which a right-click on it opens.
 const menuItems = (name: string) => {
   const card = rowButton(name).closest("li")!;
   act(() => void card.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
@@ -414,18 +418,22 @@ test("a press on the add palette's backdrop closes it, and one inside it doesn't
   expect(dialog().open).toBe(false);
 });
 
-test("with projectPermission and projectAutonomy, Create Project asks for full access, on by default, and autonomy, the same on a retry", async () => {
-  capabilities = { projectPermission: {}, projectAutonomy: {} };
+test("with orchestratorPermission and orchestratorAutonomy, Create orchestrator asks for full access, on by default, and autonomy, the same on a retry", async () => {
+  capabilities = { orchestratorPermission: {}, orchestratorAutonomy: {} };
   let fails = 1;
-  answers["project/create"] = (p) =>
+  answers["orchestrator/create"] = (p) =>
     fails-- > 0
       ? { error: { code: -32000, message: "not a repository" } }
-      : { result: { project: { ...project("parallax", "2026-09-29T12:00:00Z"), id: p["id"] } } };
+      : {
+          result: {
+            orchestrator: { ...orchestrator("parallax", "2026-09-29T12:00:00Z"), id: p["id"] },
+          },
+        };
   await renderApp();
-  await openNewProject();
+  await openNewOrchestrator();
   expect(modeChoice(dialog())).toEqual([]);
   expect(dialog().textContent).toContain(
-    "Agents in this Project run commands and edit files without asking.",
+    "Agents in this orchestrator run commands and edit files without asking.",
   );
   const fullAccess = dialog().querySelector<HTMLInputElement>('input[role="switch"]')!;
   expect(fullAccess.checked).toBe(true);
@@ -435,11 +443,11 @@ test("with projectPermission and projectAutonomy, Create Project asks for full a
     )!;
   expect(autonomy("routine").checked).toBe(true);
 
-  await click(inDialog("Create Project"));
+  await click(inDialog("Create orchestrator"));
   await click(fullAccess);
   await click(autonomy("ask"));
-  await click(inDialog("Create Project"));
-  const [first, second] = calls("project/create");
+  await click(inDialog("Create orchestrator"));
+  const [first, second] = calls("orchestrator/create");
   expect(first).toEqual({
     id: expect.any(String),
     name: "parallax",
@@ -452,20 +460,23 @@ test("with projectPermission and projectAutonomy, Create Project asks for full a
   expect(dialog().open).toBe(false);
 });
 
-test("with projectPermission, a Project not in Bypass offers Full access…, a one-way move to Bypass, and one in Bypass offers no mode", async () => {
-  capabilities = { projectPermission: {} };
-  answers["project/list"] = () => ({
+test("with orchestratorPermission, an orchestrator not in Bypass offers Full access…, a one-way move to Bypass, and one in Bypass offers no mode", async () => {
+  capabilities = { orchestratorPermission: {} };
+  answers["orchestrator/list"] = () => ({
     result: {
-      projects: [
-        { ...project("ember", "2026-09-26T12:00:00Z"), permission: "auto" },
-        { ...project("photon", "2026-09-29T09:00:00Z"), permission: "bypass" },
+      orchestrators: [
+        { ...orchestrator("ember", "2026-09-26T12:00:00Z"), permission: "auto" },
+        { ...orchestrator("photon", "2026-09-29T09:00:00Z"), permission: "bypass" },
       ],
       seq: 7,
     },
   });
-  answers["project/update"] = (p) => ({
+  answers["orchestrator/update"] = (p) => ({
     result: {
-      project: { ...project("ember", "2026-09-26T12:00:00Z"), permission: p["permission"] },
+      orchestrator: {
+        ...orchestrator("ember", "2026-09-26T12:00:00Z"),
+        permission: p["permission"],
+      },
     },
   });
   await renderApp();
@@ -482,12 +493,12 @@ test("with projectPermission, a Project not in Bypass offers Full access…, a o
     [...access.querySelectorAll("button")].find((b) => b.textContent === "Give full access"),
   );
   expect(access.open).toBe(false);
-  expect(calls("project/update")).toEqual([{ project: "p-ember", permission: "bypass" }]);
+  expect(calls("orchestrator/update")).toEqual([{ orchestrator: "p-ember", permission: "bypass" }]);
   expect(menuItem("ember", "Full access…")).toBeUndefined();
 });
 
-/** A Project's coordinator run, as `project/start` answers it (0024). */
-const coordinatorRun = (id: string, prompt: string): AgentRun => ({
+/** An orchestrator run, as `orchestrator/start` answers it (0024). */
+const orchestratorRun = (id: string, prompt: string): AgentRun => ({
   id,
   project: "p-ember",
   prompt,
@@ -495,7 +506,7 @@ const coordinatorRun = (id: string, prompt: string): AgentRun => ({
   status: "running",
   backend: "claude",
   accountId: "claude",
-  coordinatorThread: id,
+  orchestratorThread: id,
   createdAt: "2026-09-29T12:00:00Z",
   updatedAt: "2026-09-29T12:00:00Z",
 });
@@ -522,26 +533,26 @@ const button = (label: string) =>
   document.querySelector<HTMLButtonElement>(`main button[aria-label="${label}"]`);
 const transcript = () => document.querySelector('[role="log"]')?.textContent ?? "";
 
-test("a Project's first message starts its coordinator and shows at once; ones sent meanwhile, later ones, and Stop go to its run", async () => {
-  capabilities = { coordinator: {} };
+test("an orchestrator's first message starts its orchestrator and shows at once; ones sent meanwhile, later ones, and Stop go to its run", async () => {
+  capabilities = { orchestrator: {} };
   let started: AgentRun | undefined;
   answers["accounts/defaults/get"] = () => ({
-    result: { coordinator: { kind: "subscription", backend: "claude" } },
+    result: { orchestrator: { kind: "subscription", backend: "claude" } },
   });
   let release = () => {};
-  answers["project/start"] = async (p) => {
+  answers["orchestrator/start"] = async (p) => {
     await new Promise<void>((resolve) => (release = resolve));
-    started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
+    started = orchestratorRun(p["runId"] as string, p["prompt"] as string);
     return { result: { run: started } };
   };
   answers["agent/events"] = serveEvents(() => [started]);
   answers["orchestration/dispatch"] = () => ({ result: { seq: 1 } });
   await renderApp();
   await openEmber();
-  // Claude's models and permission modes: a coordinator runs in the mode it's given (0027).
+  // Claude's models and permission modes: an orchestrator runs in the mode it's given (0027).
   expect(button("Model: Claude Opus 5.5")).not.toBeNull();
   expect(button("Access: Auto-accept edits")).not.toBeNull();
-  // Every message goes to the coordinator, with no target to pick.
+  // Every message goes to the orchestrator, with no target to pick.
   expect(document.querySelector('main button[aria-label^="Sends to: "]')).toBeNull();
 
   type("Add a dark mode");
@@ -557,9 +568,9 @@ test("a Project's first message starts its coordinator and shows at once; ones s
   expect(sentMessages()).toEqual([]);
   await act(async () => release());
   await settle();
-  expect(calls("project/start")).toEqual([
+  expect(calls("orchestrator/start")).toEqual([
     {
-      project: "p-ember",
+      orchestrator: "p-ember",
       runId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-7/),
       prompt: "Add a dark mode",
       model: "claude-opus-5-5",
@@ -583,24 +594,24 @@ test("a Project's first message starts its coordinator and shows at once; ones s
   ]);
   await click(button("Stop"));
   expect(stops()).toEqual([{ runId: started!.id }]);
-  expect(calls("project/start")).toHaveLength(1);
+  expect(calls("orchestrator/start")).toHaveLength(1);
 });
 
-test("with projectPermission, a Project's composers have no permission picker or mode, and send no permission", async () => {
-  capabilities = { coordinator: {}, projectPermission: {} };
+test("with orchestratorPermission, an orchestrator's composers have no permission picker or mode, and send no permission", async () => {
+  capabilities = { orchestrator: {}, orchestratorPermission: {} };
   let started: AgentRun | undefined;
-  answers["project/list"] = () => ({
+  answers["orchestrator/list"] = () => ({
     result: {
-      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), permission: "bypass" }],
+      orchestrators: [{ ...orchestrator("ember", "2026-09-26T12:00:00Z"), permission: "bypass" }],
       seq: 7,
     },
   });
   answers["accounts/defaults/get"] = () => ({
-    result: { coordinator: { kind: "subscription", backend: "claude" } },
+    result: { orchestrator: { kind: "subscription", backend: "claude" } },
   });
-  answers["project/start"] = (p) => {
+  answers["orchestrator/start"] = (p) => {
     started = {
-      ...coordinatorRun(p["runId"] as string, p["prompt"] as string),
+      ...orchestratorRun(p["runId"] as string, p["prompt"] as string),
       permission: "edit",
     };
     return { result: { run: started } };
@@ -616,10 +627,10 @@ test("with projectPermission, a Project's composers have no permission picker or
 
   type("Add a dark mode");
   await click(button("Send"));
-  expect(calls("project/start")).toEqual([
+  expect(calls("orchestrator/start")).toEqual([
     expect.not.objectContaining({ permission: expect.anything() }),
   ]);
-  // The coordinator's chat too, though its run says another mode.
+  // The orchestrator's chat too, though its run says another mode.
   expect(access()).toBeNull();
   expect(main()).not.toContain("Bypass");
   type("Start with the settings page");
@@ -629,15 +640,15 @@ test("with projectPermission, a Project's composers have no permission picker or
   ]);
 });
 
-const coordinatorId = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
-/** A subagent of ember's coordinator, which started it unless `coordinatorThread` is cleared. */
+const orchestratorRunId = "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b";
+/** A subagent of ember's orchestrator, which started it unless `orchestratorThread` is cleared. */
 const subagent = (id: string, prompt: string, more: Partial<AgentRun> = {}): AgentRun => ({
-  ...coordinatorRun(id, prompt),
+  ...orchestratorRun(id, prompt),
   policy: "workspaceWrite",
-  coordinatorThread: coordinatorId,
+  orchestratorThread: orchestratorRunId,
   ...more,
 });
-/** Opens a side panel view from its list, as + does. A Project opens the panel on its own tab. */
+/** Opens a side panel view from its list, as + does. An orchestrator opens the panel on its own tab. */
 async function openView(name: string) {
   await click(document.querySelector('#side-panel button[aria-label="Open a view"]'));
   await click(
@@ -651,7 +662,7 @@ const agentRow = (title: string) =>
     b.textContent?.startsWith(title),
   );
 
-// --- PLX-196: permission requests in a Project ---
+// --- PLX-196: permission requests in an orchestrator ---
 
 const bashAsk = (approvalId: string): AgentOutputItem => ({
   kind: "approvalRequested",
@@ -662,24 +673,29 @@ const bashAsk = (approvalId: string): AgentOutputItem => ({
   expiresAt: "2026-09-29T12:30:00Z",
 });
 /**
- * Ember open on its coordinator, if it has one, with `runs` after it. Each run's log is its start,
+ * Ember open on its orchestrator, if it has one, with `runs` after it. Each run's log is its start,
  * then `items` for it as one output. plxd advertises approvals, and allows what's answered.
  */
 async function openEmberAsking(
-  coordinator: AgentRun | undefined,
+  orchestratorRun: AgentRun | undefined,
   runs: AgentRun[],
   items: Record<string, AgentOutputItem[]>,
 ) {
-  capabilities = { coordinator: {}, approvals: {} };
-  const all = [...(coordinator ? [coordinator] : []), ...runs];
-  answers["project/list"] = () => ({
+  capabilities = { orchestrator: {}, approvals: {} };
+  const all = [...(orchestratorRun ? [orchestratorRun] : []), ...runs];
+  answers["orchestrator/list"] = () => ({
     result: {
-      projects: [{ ...project("ember", "2026-09-26T12:00:00Z"), coordinator: coordinator?.id }],
+      orchestrators: [
+        { ...orchestrator("ember", "2026-09-26T12:00:00Z"), run: orchestratorRun?.id },
+      ],
       seq: 7,
     },
   });
   answers["agent/list"] = (p) => ({
-    result: { runs: [undefined, "p-ember"].includes(p["project"] as string) ? all : [], seq: 7 },
+    result: {
+      runs: [undefined, "p-ember"].includes(p["orchestrator"] as string) ? all : [],
+      seq: 7,
+    },
   });
   answers["agent/events"] = (params) => {
     const r = all.find((run) => run.id === params["runId"])!;
@@ -709,14 +725,14 @@ const pinnedButton = (name: string) =>
   [...(pinned()?.querySelectorAll("button") ?? [])].find((b) => b.textContent === name);
 const asking = (run: AgentRun): AgentRun => ({ ...run, approvals: true });
 
-test("with approvals, a coordinator and a subagent started here ask plxd to forward their requests", async () => {
-  capabilities = { coordinator: {}, approvals: {} };
+test("with approvals, an orchestrator and a subagent started here ask plxd to forward their requests", async () => {
+  capabilities = { orchestrator: {}, approvals: {} };
   answers["accounts/defaults/get"] = () => ({
-    result: { coordinator: { kind: "subscription", backend: "claude" } },
+    result: { orchestrator: { kind: "subscription", backend: "claude" } },
   });
   let started: AgentRun | undefined;
-  answers["project/start"] = (p) => {
-    started = coordinatorRun(p["runId"] as string, p["prompt"] as string);
+  answers["orchestrator/start"] = (p) => {
+    started = orchestratorRun(p["runId"] as string, p["prompt"] as string);
     return { result: { run: started } };
   };
   answers["agent/start"] = (p) => ({
@@ -727,7 +743,7 @@ test("with approvals, a coordinator and a subagent started here ask plxd to forw
   await openEmber();
   type("Add a dark mode");
   await click(button("Send"));
-  expect(calls("project/start")).toEqual([expect.objectContaining({ approvals: true })]);
+  expect(calls("orchestrator/start")).toEqual([expect.objectContaining({ approvals: true })]);
 
   await openView("Agents");
   const box = document.querySelector<HTMLTextAreaElement>(
@@ -746,9 +762,9 @@ test("with approvals, a coordinator and a subagent started here ask plxd to forw
   ]);
 });
 
-test("a subagent's request is pinned in the coordinator's chat by name, its row says it waits, and Open its chat goes there", async () => {
+test("a subagent's request is pinned in the orchestrator's chat by name, its row says it waits, and Open its chat goes there", async () => {
   const docs = asking(subagent("01a0d391-0000-7000-8000-000000000002", "Write the docs"));
-  await openEmberAsking(asking(coordinatorRun(coordinatorId, "Plan the release")), [docs], {
+  await openEmberAsking(asking(orchestratorRun(orchestratorRunId, "Plan the release")), [docs], {
     [docs.id]: [bashAsk("s1")],
   });
   expect(pinned()!.textContent).toContain("Subagent: Write the docs");
@@ -762,7 +778,7 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
   expect(pinned()!.textContent).not.toContain("Subagent:");
   await click(document.querySelector('[aria-label="Breadcrumb"] button'));
 
-  // Answered from the coordinator's chat, for the subagent's run.
+  // Answered from the orchestrator's chat, for the subagent's run.
   await click(pinnedButton("Approve"));
   expect(calls("agent/approve")).toEqual([{ runId: docs.id, approvalId: "s1", decision: "allow" }]);
   expect(pinned()).toBeNull();
@@ -784,16 +800,16 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
   expect(agentRow("Write the docs")!.textContent).not.toContain("Needs approval");
 });
 
-// The sidebar's Projects section (PLX-340).
+// The sidebar's orchestrators section (PLX-340).
 const flaky: Thread = { id: "t-flaky", repo: parallax.id, createdAt: "2026-09-29T11:00:00Z" };
-/** A thread, newer than either Project, and ember's two finished subagents. */
+/** A thread, newer than either orchestrator, and ember's two finished subagents. */
 const withThread = () => {
   const done = { status: "completed" as const };
   answers["thread/list"] = () => ({ result: { repos: [parallax], threads: [flaky], seq: 7 } });
   answers["agent/list"] = () => ({
     result: {
       runs: [
-        { ...coordinatorRun(flaky.id, "Fix the flaky test"), ...done, project: parallax.id },
+        { ...orchestratorRun(flaky.id, "Fix the flaky test"), ...done, project: parallax.id },
         subagent("a-1", "Plan", done),
         subagent("a-2", "Ship", done),
       ],
@@ -812,11 +828,11 @@ const deleteDialog = () =>
     d.querySelector("h2")?.textContent?.startsWith("Delete this"),
   )!;
 
-test("Delete… asks first, shows plxd's error in the dialog, then deletes the open Project and leaves its page", async () => {
-  capabilities = { projectEdit: {}, projectDelete: {} };
+test("Delete… asks first, shows plxd's error in the dialog, then deletes the open orchestrator and leaves its page", async () => {
+  capabilities = { orchestratorEdit: {}, orchestratorDelete: {} };
   withThread();
-  answers["project/delete"] = () => ({
-    error: { code: -32000, message: "The project's worktree is locked." },
+  answers["orchestrator/delete"] = () => ({
+    error: { code: -32000, message: "The orchestrator's worktree is locked." },
   });
   await renderApp();
   await click(rowButton("ember"));
@@ -830,7 +846,7 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
 
   await click(menuItem("ember", "Delete…"));
   expect(deleteDialog().open).toBe(true);
-  expect(deleteDialog().querySelector("h2")!.textContent).toBe("Delete this Project?");
+  expect(deleteDialog().querySelector("h2")!.textContent).toBe("Delete this orchestrator?");
   expect(deleteDialog().querySelector("p")!.textContent).toBe(
     "“ember” goes for good, with its 2 agents' transcripts, worktrees, and branches. Running agents are stopped first.",
   );
@@ -838,21 +854,24 @@ test("Delete… asks first, shows plxd's error in the dialog, then deletes the o
     [...deleteDialog().querySelectorAll("button")].find((b) => b.textContent === "Delete");
   await click(confirm());
   expect(deleteDialog().querySelector('[role="alert"]')!.textContent).toBe(
-    "The project's worktree is locked.",
+    "The orchestrator's worktree is locked.",
   );
   expect(deleteDialog().open).toBe(true);
 
-  answers["project/delete"] = () => ({ result: {} });
+  answers["orchestrator/delete"] = () => ({ result: {} });
   await click(confirm());
-  expect(calls("project/delete")).toEqual([{ project: "p-ember" }, { project: "p-ember" }]);
+  expect(calls("orchestrator/delete")).toEqual([
+    { orchestrator: "p-ember" },
+    { orchestrator: "p-ember" },
+  ]);
   expect(deleteDialog().open).toBe(false);
   expect(crumbs().at(-1)).toBe("New thread");
   expect(sidebarTitles()).toEqual(["Fix the flaky test"]);
-  expect(projectRows()).toEqual(["photon"]);
+  expect(orchestratorRows()).toEqual(["photon"]);
 });
 
 test("a card's menu shows a hidden sidebar before it opens a dialog the sidebar holds", async () => {
-  capabilities = { projectEdit: {} };
+  capabilities = { orchestratorEdit: {} };
   await renderApp();
   openProjectsPage();
   await click(document.querySelector('button[aria-label="Hide sidebar"]'));
@@ -863,8 +882,8 @@ test("a card's menu shows a hidden sidebar before it opens a dialog the sidebar 
   expect([...document.querySelectorAll("dialog")].some((d) => d.open)).toBe(true);
 });
 
-test("without projectDelete there's no Delete…, and another client's project.deleted removes the open Project's row and leaves its page", async () => {
-  capabilities = { projectEdit: {} };
+test("without orchestratorDelete there's no Delete…, and another client's orchestrator.deleted removes the open orchestrator's row and leaves its page", async () => {
+  capabilities = { orchestratorEdit: {} };
   await renderApp();
   expect(menuItem("ember", "Delete…")).toBeUndefined();
   await click(rowButton("ember"));
@@ -877,13 +896,13 @@ test("without projectDelete there's no Delete…, and another client's project.d
         subscription: "s-1",
         seq: 8,
         time: "",
-        event: { kind: "project.deleted", project: "p-ember" },
+        event: { kind: "orchestrator.deleted", orchestrator: "p-ember" },
       },
     }),
   );
   await settle();
   expect(crumbs().at(-1)).toBe("New thread");
-  expect(projectRows()).toEqual(["photon"]);
+  expect(orchestratorRows()).toEqual(["photon"]);
 });
 
 /** A sidebar button, by its text. */
@@ -892,7 +911,7 @@ const sidebarButton = (text: string) =>
     (b) => b.textContent === text,
   );
 
-test("Usage waits under More until Settings shows it in the head, and pinned projects list by name", async () => {
+test("Usage waits under More until Settings shows it in the head, and pinned orchestrators list by name", async () => {
   await renderApp();
   // Folded under More, out of reach until it opens.
   const fold = () => sidebarButton("Usage")!.closest<HTMLElement>("[aria-controls], [id]")!;
@@ -906,7 +925,7 @@ test("Usage waits under More until Settings shows it in the head, and pinned pro
   await act(async () => sidebarNav.set({ ...sidebarNav.get(), usage: true }));
   expect(sidebarButton("Usage")!.closest("[inert]")).toBeNull();
 
-  // Pinning a Project from its card lists it as a card with the pinned threads, out of its folder,
+  // Pinning an orchestrator from its card lists it as a card with the pinned threads, out of its folder,
   // and its row opens it. Under Pinned in the head are only Spaces.
   openProjectsPage();
   await click(document.querySelector('main button[aria-label="Pin ember"]'));
@@ -1163,8 +1182,8 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   answers["agent/list"] = () => ({
     result: {
       runs: [
-        { ...coordinatorRun(flaky.id, "Fix the flaky test"), ...done, project: parallax.id },
-        { ...coordinatorRun(chat.id, "NFA to DFA help"), ...done, project: scratch.id },
+        { ...orchestratorRun(flaky.id, "Fix the flaky test"), ...done, project: parallax.id },
+        { ...orchestratorRun(chat.id, "NFA to DFA help"), ...done, project: scratch.id },
       ],
       seq: 7,
     },
@@ -1181,7 +1200,7 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
-test("Inbox has a Projects button beside its search and Pull requests in the footer but no Projects drawer, and Traditional lists each Project as a row in its folder with Projects in its head", async () => {
+test("Inbox has a Projects button beside its search and Pull requests in the footer but no Projects drawer, and Traditional lists each orchestrator as a row in its folder with Projects in its head", async () => {
   sidebarMode.set("inbox");
   await renderApp();
   const sidebar = document.getElementById("sidebar")!;
@@ -1190,8 +1209,10 @@ test("Inbox has a Projects button beside its search and Pull requests in the foo
       s.textContent?.startsWith("Projects"),
     ),
   ).toBe(false);
-  expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
-  expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
+  expect(sidebar.querySelector('li[data-kind="orchestrator"]')).toBeNull();
+  expect(
+    sidebar.querySelector('button[aria-label="New orchestrator or repository"]'),
+  ).not.toBeNull();
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
   const projectsButton = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Projects"]')!;
   await click(projectsButton);
@@ -1201,7 +1222,9 @@ test("Inbox has a Projects button beside its search and Pull requests in the foo
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
   const list = sidebar.querySelector('ul[aria-label="Threads"]')!;
   expect(
-    [...list.querySelectorAll('li[data-kind="project"] [data-title]')].map((t) => t.textContent),
+    [...list.querySelectorAll('li[data-kind="orchestrator"] [data-title]')].map(
+      (t) => t.textContent,
+    ),
   ).toEqual(["photon", "ember"]);
   expect(sidebarButton("Projects")).toBeDefined();
 });

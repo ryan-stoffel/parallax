@@ -39,15 +39,18 @@ export function attentionOf(
   return run.status === "failed" ? "failed" : "done";
 }
 
-/** A Project's attention, from its runs: any waiting on the user, else any working. */
-export function projectAttention(runs: AgentRun[], asks: (runId: string) => number): Attention {
+/** An orchestrator's attention, from its runs: any waiting on the user, else any working. */
+export function orchestratorAttention(
+  runs: AgentRun[],
+  asks: (runId: string) => number,
+): Attention {
   if (runs.some((r) => asks(r.id) > 0)) return "needsYou";
   return runs.some((r) => isRunning(r.status)) ? "working" : "settled";
 }
 
 /**
- * A Project child's attention in its side panel (0042): it waits on the user, it's working, or it
- * stopped, done or failed. It has no seen state, so it never settles.
+ * An orchestrator child's attention in its side panel (0042): it waits on the user, it's working,
+ * or it stopped, done or failed. It has no seen state, so it never settles.
  */
 export function runAttention(run: AgentRun, asks: number): Attention {
   if (asks > 0) return "needsYou";
@@ -55,7 +58,7 @@ export function runAttention(run: AgentRun, asks: number): Attention {
   return run.status === "failed" ? "failed" : "done";
 }
 
-/** The side panel's order for a Project's children (0042). */
+/** The side panel's order for an orchestrator's children (0042). */
 export const childOrder: Attention[] = ["needsYou", "working", "done", "failed"];
 
 // Most urgent first: what waits on the user, then news, then work still going.

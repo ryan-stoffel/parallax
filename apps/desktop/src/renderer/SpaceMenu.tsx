@@ -11,8 +11,8 @@ import { Menu, menuItem, ToolbarMenuRow, toolbarMenuDivider } from "./ui";
 
 /**
  * Where `thread` can be added to a Space: this computer's Spaces, and the Space it was started in,
- * which it stays in. Undefined for a Project's thread, or where plxd can't add threads to Spaces or
- * has none.
+ * which it stays in. Undefined for an orchestrator's thread, or where plxd can't add threads to
+ * Spaces or has none.
  */
 export function spaceChoices(
   thread: Thread,

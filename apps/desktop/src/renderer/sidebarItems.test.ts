@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
 
-import type { AgentRun, Project, Repo, Thread } from "../protocol/generated/protocol";
+import type { AgentRun, Orchestrator, Repo, Thread } from "../protocol/generated/protocol";
 import type { Draft } from "./drafts";
 import type { Host } from "./hosts";
 import {
@@ -40,7 +40,7 @@ const listed = (
   id: string,
   repos: Repo[],
   threads: Thread[],
-  extra: { projects?: Project[]; runs?: Record<string, AgentRun> } = {},
+  extra: { orchestrators?: Orchestrator[]; runs?: Record<string, AgentRun> } = {},
 ): HostThreads => ({
   host: host(id),
   view: {
@@ -48,21 +48,21 @@ const listed = (
       ...emptyThreads,
       repos,
       threads,
-      projects: extra.projects ?? [],
+      orchestrators: extra.orchestrators ?? [],
       runs: extra.runs ?? {},
     },
     capabilities: {},
   } as unknown as ThreadsView,
 });
 
-test("sidebarItems lists threads and Projects with their repo, keeps a Project's threads inside it, and reads a marked-unread finished thread as done", () => {
-  const project: Project = {
+test("sidebarItems lists threads and orchestrators with their repo, keeps an orchestrator's threads inside it, and reads a marked-unread finished thread as done", () => {
+  const orchestrator: Orchestrator = {
     id: "p-ember",
     name: "ember",
     repoPath: zeta.path,
     createdAt: "2026-10-01T09:00:00Z",
     updatedAt: "2026-10-29T11:00:00Z",
-  } as Project;
+  } as Orchestrator;
   const runs = {
     "t-done": {
       id: "t-done",
@@ -80,14 +80,14 @@ test("sidebarItems lists threads and Projects with their repo, keeps a Project's
         "local",
         [zeta],
         [thread("t-done", zeta.id, 30, seen), thread("t-child", zeta.id, 10)],
-        { projects: [project], runs },
+        { orchestrators: [orchestrator], runs },
       ),
     ],
     ["local/t-done"],
   );
   expect(items.map((i) => [i.kind, i.key, i.repo?.name])).toEqual([
     ["thread", "local/t-done", "zeta"],
-    ["project", "local/p-ember", "zeta"],
+    ["orchestrator", "local/p-ember", "zeta"],
   ]);
   expect(items[0]!.attention).toBe("done");
   expect(items[0]!.text).toBe("Thread zeta fix/flaky #12");

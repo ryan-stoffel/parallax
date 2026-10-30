@@ -41,8 +41,8 @@ const untrusted: ConnectionState = {
 
 let states: Record<string, ConnectionState>;
 const listsNothing = async (_host: string, method: string): Promise<unknown> =>
-  method === "thread/list" || method === "agent/list" || method === "project/list"
-    ? { result: { repos: [], threads: [], runs: [], projects: [], seq: 1 }, logId: "log" }
+  method === "thread/list" || method === "agent/list" || method === "orchestrator/list"
+    ? { result: { repos: [], threads: [], runs: [], orchestrators: [], seq: 1 }, logId: "log" }
     : { error: { code: -32601, message: `${method} isn't faked` } };
 const request = vi.fn(listsNothing);
 
@@ -135,8 +135,8 @@ test("every connected host's threads are one list, newest prompt first, each ope
       ? { result: lists[host], logId: "log" }
       : method === "agent/list"
         ? { result: { runs: runs[host], seq: 1 }, logId: "log" }
-        : method === "project/list"
-          ? { result: { projects: [], seq: 1 }, logId: "log" }
+        : method === "orchestrator/list"
+          ? { result: { orchestrators: [], seq: 1 }, logId: "log" }
           : { error: { code: -32601, message: `${method} isn't faked` } },
   );
   await renderApp();

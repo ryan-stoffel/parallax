@@ -35,6 +35,15 @@ import type {
   WatchMessage,
   WatchParams,
 } from "../preload/bridge";
+import {
+  capabilitiesFromLegacy,
+  CLIENT_CAPABILITY,
+  errorFromLegacy,
+  eventFromLegacy,
+  isLegacy,
+  requestToLegacy,
+  resultFromLegacy,
+} from "../protocol/legacyNames";
 import { RpcClient } from "./rpc";
 
 // 0007's client rules.
@@ -59,8 +68,8 @@ const RECEIPTED_METHODS = new Set([
   "land/queue",
   "land/approve",
   "land/sendBack",
-  "project/start",
-  "project/delete",
+  "orchestrator/start",
+  "orchestrator/delete",
   "thread/delete",
   "orchestration/dispatch",
 ]);
@@ -78,9 +87,9 @@ const MUTATING_METHODS = new Set([
   "thread/fork",
   "thread/archive",
   "thread/update",
-  "project/create",
-  "project/update",
-  "project/fromThreads",
+  "orchestrator/create",
+  "orchestrator/update",
+  "orchestrator/fromThreads",
   "inbox/seen",
   "pr/link",
   "pr/unlink",
@@ -235,6 +244,8 @@ export class Connection {
   private child?: ChildProcessWithoutNullStreams;
   private client?: RpcClient;
   private logId?: LogId;
+  /** plxd is from before 0093, so requests and answers go through `legacyNames`. */
+  private legacy = false;
   private failures = 0;
   private retryTimer?: NodeJS.Timeout;
   private heartbeatTimer?: NodeJS.Timeout;
@@ -297,9 +308,21 @@ export class Connection {
         error: { code: ErrorCodes.InternalError, message: "not connected" },
       });
     }
-    const outgoing = withCommandId(method, params);
+    const legacy = this.legacy;
+    const [sent, outgoing] = legacy
+      ? requestToLegacy(method, withCommandId(method, params))
+      : [method, withCommandId(method, params)];
+    type Answer = RpcResponse<ParallaxRequests[M]["result"]>;
+    const named = (response: Answer): Answer => {
+      if (!legacy) return response;
+      if ("error" in response) return { ...response, error: errorFromLegacy(response.error) };
+      return { ...response, result: resultFromLegacy(method, response.result) } as Answer;
+    };
+    const send = (to: RpcClient) =>
+      to.request(sent as M, outgoing as ParallaxRequests[M]["params"], timeoutMs);
     // Keep each attempt's log id with its response.
-    return client.request(method, outgoing, timeoutMs).then(async (first) => {
+    return send(client).then(async (answer) => {
+      const first = named(answer);
       let response = first;
       let responseLogId = logId;
       if (RECEIPTED_METHODS.has(method) && "error" in first) {
@@ -312,7 +335,7 @@ export class Connection {
               : undefined;
         if (retryClient && this.logId !== undefined) {
           responseLogId = this.logId;
-          response = await retryClient.request(method, outgoing, timeoutMs);
+          response = named(await send(retryClient));
         }
       }
       return "result" in response ? { ...response, logId: responseLogId } : response;
@@ -566,8 +589,9 @@ export class Connection {
       {
         protocol: { min: PROTOCOL_VERSION, max: PROTOCOL_VERSION },
         client: { name: "parallax", version: this.options.clientVersion },
-        // A subscription that falls behind ends with `events/resync`, not the connection.
-        capabilities: { resyncNotice: {} },
+        // A subscription that falls behind ends with `events/resync`, not the connection, and
+        // plxd speaks 0093's names.
+        capabilities: { resyncNotice: {}, [CLIENT_CAPABILITY]: {} },
       },
       HANDSHAKE_TIMEOUT_MS,
       (response) => {
@@ -610,13 +634,14 @@ export class Connection {
   private onInitialized(client: RpcClient, result: InitializeResult): void {
     client.maxFrameBytes = Math.min(MAX_FRAME_BYTES, result.maxFrameBytes);
     this.logId = result.logId;
+    this.legacy = isLegacy(result.capabilities);
     this.failures = 0;
     this.heartbeatTimer = setInterval(() => this.heartbeat(), HEARTBEAT_MS);
     this.setState({
       status: "connected",
       plxd: result.plxd,
       protocol: result.protocol,
-      capabilities: result.capabilities,
+      capabilities: this.legacy ? capabilitiesFromLegacy(result.capabilities) : result.capabilities,
     });
     for (const done of this.reconnectWaiters) done();
     for (const subscription of this.subscriptions) this.sendSubscribe(subscription);
@@ -674,7 +699,12 @@ export class Connection {
         return watch.listener({ type: "error", error: response.error });
       }
       watch.id = response.result.subscription;
-      const { snapshot } = response.result;
+      const { snapshot } = this.legacy
+        ? (resultFromLegacy(
+            "orchestration/subscribeShell",
+            response.result,
+          ) as typeof response.result)
+        : response.result;
       if (!snapshot) return;
       watch.seq = snapshot.seq;
       watch.logId = this.logId;
@@ -725,7 +755,7 @@ export class Connection {
       return;
     }
     if (method !== "events/event") return;
-    const event = params as EventsEventParams;
+    const event = eventFromLegacy(params as EventsEventParams);
     for (const watch of this.watches) {
       if (watch.id !== event.subscription) continue;
       if (watch.seq !== undefined && event.seq <= watch.seq) return; // Already seen.

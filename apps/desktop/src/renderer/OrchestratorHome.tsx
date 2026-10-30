@@ -9,16 +9,22 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import type { AgentRun, InboxItem, Project, Question } from "../protocol/generated/protocol";
+import type { AgentRun, InboxItem, Orchestrator, Question } from "../protocol/generated/protocol";
 import { runAttention, type Attention } from "./attention";
 import { WorkingMark } from "./AttentionMark";
-import { AllFiles, board, ContextBody, ContextReader, type ProjectContext } from "./ContextPanel";
+import {
+  AllFiles,
+  board,
+  ContextBody,
+  ContextReader,
+  type OrchestratorContext,
+} from "./ContextPanel";
 import { questionOf, type InboxView } from "./Inbox";
 import { dayLabel, locale } from "./locale";
 import { notify } from "./notifications";
 import { OpenHint } from "./OpenHint";
 import { clockOptions } from "./prefs";
-import type { ProjectAgentsView } from "./ProjectAgents";
+import type { OrchestratorAgentsView } from "./OrchestratorAgents";
 import { age, ProjectIcon } from "./Sidebar";
 import { titleOf } from "./threads";
 import { IconButton } from "./ui";
@@ -41,19 +47,19 @@ interface Row {
 const dayMs = 24 * 60 * 60 * 1000;
 
 /**
- * A Project's home in the side panel, set like Cursor's project page. Its head is the Project's
- * icon, name, and how many of its threads are open, a chip for each open state, and a book that
- * opens All files, its context folder as a tree. Then where it stands: the coordinator's status
- * board, its tasks as circles and its pull requests, issues, and other files linked. Then Running:
- * the children working or waiting on the user, each with what it last said, a question taking its
- * answer in place. Then the log: each finished child once, newest first, under its day, with its
- * diff and the time it finished. A finish is bright until it's opened, which marks what it reported
- * read (0043).
+ * An orchestrator's home in the side panel, set like Cursor's orchestrator page. Its head is the
+ * orchestrator's icon, name, and how many of its threads are open, a chip for each open state, and
+ * a book that opens All files, its context folder as a tree. Then where it stands: the
+ * orchestrator's status board, its tasks as circles and its pull requests, issues, and other files
+ * linked. Then Running: the children working or waiting on the user, each with what it last said, a
+ * question taking its answer in place. Then the log: each finished child once, newest first, under
+ * its day, with its diff and the time it finished. A finish is bright until it's opened, which
+ * marks what it reported read (0043).
  */
-export function ProjectHome({
+export function OrchestratorHome({
   hostId,
   context,
-  project,
+  orchestrator,
   agents,
   titles = {},
   inbox,
@@ -61,10 +67,10 @@ export function ProjectHome({
   onOpen,
 }: {
   hostId: string;
-  /** The Project's context files: its status board, and all of them behind the book. */
-  context: ProjectContext;
-  project: Project;
-  agents: ProjectAgentsView;
+  /** The orchestrator's context files: its status board, and all of them behind the book. */
+  context: OrchestratorContext;
+  orchestrator: Orchestrator;
+  agents: OrchestratorAgentsView;
   titles?: Readonly<Record<string, string>>;
   inbox: InboxView;
   answerable: boolean;
@@ -72,7 +78,7 @@ export function ProjectHome({
 }) {
   const [openPath, setOpenPath] = useState<string>();
   const [browsing, setBrowsing] = useState(false);
-  const rows = rowsOf(project, agents, inbox, answerable, titles);
+  const rows = rowsOf(orchestrator, agents, inbox, answerable, titles);
   const live = rows.filter((r) => r.group === "working" || r.group === "waiting");
   const log = rows.filter((r) => r.group === "ready" || r.group === "resolved");
   const open = (row: Row) => {
@@ -97,7 +103,7 @@ export function ProjectHome({
     return (
       <ContextReader
         hostId={hostId}
-        project={project.id}
+        orchestrator={orchestrator.id}
         files={files}
         file={opened}
         onOpen={setOpenPath}
@@ -113,7 +119,7 @@ export function ProjectHome({
           className="mx-2 flex min-w-0 items-center gap-1 self-start rounded-lg py-1 pr-2 pl-1 text-body text-muted-foreground hover:bg-hover hover:text-foreground"
         >
           <ChevronLeft aria-hidden className="size-4 shrink-0" />
-          <span className="truncate">{project.name}</span>
+          <span className="truncate">{orchestrator.name}</span>
         </button>
         <div className="min-h-0 flex-1 overflow-y-auto px-2">
           <h3 className={`${sectionHeading} px-2.5`}>All files</h3>
@@ -125,11 +131,11 @@ export function ProjectHome({
     <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-6">
       <header className="flex items-center gap-3 px-1 pt-5">
         <span className="grid size-10 shrink-0 place-items-center rounded-xl border border-border bg-surface">
-          <ProjectIcon icon={project.icon} className="size-5" />
+          <ProjectIcon icon={orchestrator.icon} className="size-5" />
         </span>
         <div className="min-w-0">
           <h2 className="truncate text-heading leading-tight font-semibold tracking-tight">
-            {project.name}
+            {orchestrator.name}
           </h2>
           <p className="mt-0.5 text-body text-muted-foreground">{openLine(rows)}</p>
         </div>
@@ -146,14 +152,14 @@ export function ProjectHome({
         {notes ? (
           <ContextBody
             hostId={hostId}
-            project={project.id}
+            orchestrator={orchestrator.id}
             files={files}
             file={notes}
             onOpen={setOpenPath}
           />
         ) : (
           <p className="pt-5 text-body text-muted-foreground">
-            The coordinator keeps a status board here once it starts on the work.
+            The orchestrator keeps a status board here once it starts on the work.
           </p>
         )}
         {error && (
@@ -192,8 +198,8 @@ const sectionHeading =
 const group = "divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface";
 
 /**
- * How many of a Project's threads are open, working, waiting, or done but unread, and how many
- * finished in the last week.
+ * How many of an orchestrator's threads are open, working, waiting, or done but unread, and how
+ * many finished in the last week.
  */
 export function openLine(rows: readonly Pick<Row, "group" | "run">[], now = Date.now()): string {
   const open = rows.filter((r) => r.group !== "resolved").length;
@@ -264,19 +270,19 @@ export const plainTitle = (title: string) =>
   )?.[1] ?? title;
 
 /**
- * Each child of `project` once, newest first, with its group: waiting on the user (a question, an
- * approval, or an unread failure) or working, which the Project tab shows in Running; or finished,
- * ready while its news is unread and resolved once read, which it shows in the log.
+ * Each child of `orchestrator` once, newest first, with its group: waiting on the user (a question,
+ * an approval, or an unread failure) or working, which the orchestrator tab shows in Running; or
+ * finished, ready while its news is unread and resolved once read, which it shows in the log.
  */
 function rowsOf(
-  project: Project,
-  agents: ProjectAgentsView,
+  orchestrator: Orchestrator,
+  agents: OrchestratorAgentsView,
   inbox: InboxView,
   answerable: boolean,
   titles: Readonly<Record<string, string>>,
 ): Row[] {
   return agents.runs
-    .filter((r) => r.id !== project.coordinator && r.policy !== "noWrite")
+    .filter((r) => r.id !== orchestrator.run && r.policy !== "noWrite")
     .map((run) => {
       const items = inbox.items.filter((i) => i.run === run.id);
       const unread = items.filter((i) => !i.seenAt);
@@ -307,9 +313,12 @@ function rowsOf(
     .toSorted((a, b) => b.run.updatedAt.localeCompare(a.run.updatedAt));
 }
 
-/** How many children wait on the user, as the Project tab's header and its badge count them. */
-export const waitingCount = (project: Project, agents: ProjectAgentsView, inbox: InboxView) =>
-  rowsOf(project, agents, inbox, false, {}).filter((r) => r.group === "waiting").length;
+/** How many children wait on the user, as the orchestrator tab's header and its badge count them. */
+export const waitingCount = (
+  orchestrator: Orchestrator,
+  agents: OrchestratorAgentsView,
+  inbox: InboxView,
+) => rowsOf(orchestrator, agents, inbox, false, {}).filter((r) => r.group === "waiting").length;
 
 /** What a child last reported, without its title, which plxd's text leads with. */
 function subjectOf(row: Row): string | undefined {

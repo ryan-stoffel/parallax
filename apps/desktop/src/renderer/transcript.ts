@@ -25,10 +25,10 @@ export type Item = ItemBody & { at?: string };
 type ItemBody =
   /**
    * `text` is null for a follow-up logged by a plxd from before it recorded the text. `wake` marks
-   * a turn plxd sent a coordinator itself, when runs it started finished (0025). `from` is the run
-   * id of the thread that sent it with its Parallax tools, not the user (0041). `images` are the
-   * ids of the images sent with it, for `agent/image` (PLX-193), and `threads` the run ids of the
-   * threads attached to it as context (PLX-378).
+   * a turn plxd sent an orchestrator itself, when runs it started finished (0025). `from` is the
+   * run id of the thread that sent it with its Parallax tools, not the user (0041). `images` are
+   * the ids of the images sent with it, for `agent/image` (PLX-193), and `threads` the run ids of
+   * the threads attached to it as context (PLX-378).
    */
   | {
       kind: "user";
@@ -45,7 +45,7 @@ type ItemBody =
   | { kind: "reasoning"; key: string; text: string }
   /**
    * `status` is absent until its result arrives; `name` is null for a result with no call.
-   * `subagent` is the first line of the prompt of the subagent a coordinator's plxd tool names.
+   * `subagent` is the first line of the prompt of the subagent an orchestrator's plxd tool names.
    * `images` are the ids of the images the tool returned, such as a device screenshot, for
    * `agent/image` (PLX-640).
    */
@@ -101,7 +101,7 @@ type ItemBody =
   | { kind: "modelSwitch"; key: string; from: string; to: string }
   /** The agent compacting its context: under way, then `done` (PLX-584). */
   | { kind: "compaction"; key: string; done: boolean }
-  /** A coordinator's new session, picked up from the Project's state (PLX-937, 0079). */
+  /** An orchestrator's new session, picked up from the orchestrator's state (PLX-937, 0079). */
   | { kind: "epoch"; key: string; epoch: number }
   /** A page the agent showed with html_render (PLX-639), kept with run `runId`'s images. */
   | ({ kind: "htmlRender"; key: string; runId: string } & HtmlRenderRef)
@@ -502,7 +502,7 @@ function applyEventsInner(t: Transcript, events: LoggedEvent[], runId: string): 
           kind: "notice",
           key: key(),
           tone: "info",
-          text: "Wake-ups are paused: finished subagents won't wake the coordinator. Your next message resumes them.",
+          text: "Wake-ups are paused: finished subagents won't wake the orchestrator. Your next message resumes them.",
         });
         break;
       case "thread.script": {
@@ -904,10 +904,10 @@ export const waitingApprovals = (items: readonly Item[]): Approval[] =>
 export type ApprovalsByRun = Readonly<Record<string, Transcript>>;
 
 /**
- * Applies a Project's events to each run's waiting permission and secret requests: a request joins, and its
- * resolution or its run's next `agent.finished` takes it out, as `applyEvents` reads them. Repeats
- * are skipped by each run's `seq`, so pages of a run's log and the Project's subscription can
- * overlap.
+ * Applies an orchestrator's events to each run's waiting permission and secret requests: a request
+ * joins, and its resolution or its run's next `agent.finished` takes it out, as `applyEvents` reads
+ * them. Repeats are skipped by each run's `seq`, so pages of a run's log and the orchestrator's
+ * subscription can overlap.
  */
 export function trackApprovals(
   byRun: ApprovalsByRun,

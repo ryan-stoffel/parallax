@@ -51,10 +51,10 @@ import { useOnboarding } from "./firstRun";
 import { localId, useHosts } from "./hosts";
 import { iconImageBytes } from "./images";
 import { ThreadDetails, ThreadDetailsButton, useThreadDetails } from "./ThreadDetails";
-import { AgentsPanel, useProjectAgents } from "./ProjectAgents";
-import { useProjectContext } from "./ContextPanel";
-import { ProjectChat } from "./ProjectChat";
-import { ProjectHome, waitingCount } from "./ProjectHome";
+import { AgentsPanel, useOrchestratorAgents } from "./OrchestratorAgents";
+import { useOrchestratorContext } from "./ContextPanel";
+import { OrchestratorChat } from "./OrchestratorChat";
+import { OrchestratorHome, waitingCount } from "./OrchestratorHome";
 import { linkedPr, PullRequestList, PullRequestView, usePullRequests } from "./PullRequests";
 import { PullRequestsPage } from "./PullRequestsPage";
 import { NewChatProject, ProjectsPage } from "./ProjectsPage";
@@ -106,7 +106,7 @@ import {
   repoless,
   sharedRepoIcons,
   rootOf,
-  threadProjects,
+  threadOrchestrators,
   titleOf,
   useThreads,
   type ForkChoice,
@@ -124,7 +124,7 @@ import { SplitTiles } from "./SplitTiles";
 import { draggedThread, threadDragType } from "./threadDrag";
 
 /**
- * The main pane: a Project's coordinator chat, or with `agentId` one of its subagents' chats, a
+ * The main pane: an orchestrator chat, or with `agentId` one of its subagents' chats, a
  * thread (its id is its run's; `started` when New Thread just started it, until anything else is
  * selected; `subagent` when one of its agent's own subagents is open, by its call's id; `pr` when
  * its sidebar row's PR number opened it, which shows that pull request in the side panel), a new
@@ -132,7 +132,7 @@ import { draggedThread, threadDragType } from "./threadDrag";
  * it reopens one, by id, PLX-788).
  */
 export type Selection =
-  | { kind: "project"; projectId: string; agentId?: string }
+  | { kind: "orchestrator"; orchestratorId: string; agentId?: string }
   | { kind: "thread"; threadId: string; started?: boolean; subagent?: string; pr?: string }
   | { kind: "new"; groupId?: string; draft?: string };
 
@@ -185,16 +185,16 @@ export function App() {
   }>({ list: [], at: -1 });
   // Shown while the selection is one of its threads, which is the focused one.
   const [split, setSplit] = useState<Split>();
-  // A Project just created on another host, opened once that host is open and lists it: the
-  // check below drops a Project selection the open host's list doesn't have.
-  const [opening, setOpening] = useState<{ hostId: string; projectId: string }>();
+  // An orchestrator just created on another host, opened once that host is open and lists it: the
+  // check below drops an orchestrator selection the open host's list doesn't have.
+  const [opening, setOpening] = useState<{ hostId: string; orchestratorId: string }>();
   const [settings, setSettings] = useState<SettingsSection | null>(null);
   // The host Set up GitHub opened Source control on (PLX-423).
   const [settingsHost, setSettingsHost] = useState<string>();
   // The setting Settings' search picked last, to scroll to; a new object each pick.
   const [settingsFocus, setSettingsFocus] = useState<{ anchor: string }>();
-  // How many times Settings has closed. New thread and a Project's chat read the default account
-  // again each time, since it may have changed there.
+  // How many times Settings has closed. New thread and an orchestrator's chat read the default
+  // account again each time, since it may have changed there.
   const [settingsClosed, setSettingsClosed] = useState({ open: false, count: 0 });
   if (settingsClosed.open !== (settings !== null))
     setSettingsClosed(({ count }) => ({
@@ -204,9 +204,9 @@ export function App() {
   // The page shown in place of the chat, if any: Projects, Pull requests, or Usage. Opening a
   // thread closes it.
   const [mainPage, setMainPage] = useState<"projects" | "pullRequests" | "usage">();
-  // The sidebar's project menus, which the Projects page's cards open (0090).
-  const projectMenu = useRef<ProjectMenuHandle>(null);
-  const newChatProject = useRef<HTMLDialogElement>(null);
+  // The sidebar's orchestrator menus, which the orchestrators page's cards open (0090).
+  const orchestratorMenu = useRef<ProjectMenuHandle>(null);
+  const newChatOrchestrator = useRef<HTMLDialogElement>(null);
   const pins = pinnedProjects.use();
 
   useEffect(() => setMainPage(undefined), [selection]);
@@ -223,10 +223,10 @@ export function App() {
     if (askedSettings.title) setSettingsFocus({ anchor: anchorOf(askedSettings.title) });
   }, [askedSettings]);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // A project's menu items, from the sidebar, which holds their dialogs and icon picker. Each
+  // An orchestrator's menu items, from the sidebar, which holds their dialogs and icon picker. Each
   // shows the sidebar first, since a modal in a hidden sidebar would leave the window inert.
-  const projectActions = (entry: ProjectEntry) =>
-    (projectMenu.current?.actionsFor(entry) ?? []).map((action) => ({
+  const orchestratorActions = (entry: ProjectEntry) =>
+    (orchestratorMenu.current?.actionsFor(entry) ?? []).map((action) => ({
       ...action,
       run: (square: HTMLElement) => {
         if (!sidebarOpen) flushSync(() => setSidebarOpen(true));
@@ -241,8 +241,8 @@ export function App() {
     selection.kind,
     selection.kind === "thread"
       ? selection.threadId
-      : selection.kind === "project"
-        ? selection.projectId
+      : selection.kind === "orchestrator"
+        ? selection.orchestratorId
         : selection.groupId,
   ]);
   const pane = openPanes[panelKey];
@@ -291,7 +291,8 @@ export function App() {
     setPanelOpen(true);
     setShowDevice({ deviceId });
   };
-  // Each new one shows the open Project's Project tab, when the sidebar opens a Project.
+  // Each new one shows the open orchestrator's Orchestrator tab, when the sidebar opens an
+  // orchestrator.
   const [showHome, setShowHome] = useState<object>();
   // The pull request the side panel last opened, or with no URL its Pull requests view.
   const [showPr, setShowPr] = useState<{ url?: string }>();
@@ -317,7 +318,7 @@ export function App() {
   const connected = connection?.status === "connected";
   // Runs started here forward their permission requests, only to a plxd that takes the flag.
   const approvals = connected && "approvals" in connection.capabilities;
-  // Every host's threads and Projects, loaded side by side for the sidebar's one list (0033).
+  // Every host's threads and orchestrators, loaded side by side for the sidebar's one list (0033).
   const [views, setViews] = useState<Readonly<Record<string, ThreadsView>>>({});
   const report = useCallback(
     (id: string, view: ThreadsView) =>
@@ -354,11 +355,11 @@ export function App() {
   );
   // Each repository's icon by name, for its copies on other computers that have none.
   const repoIcons = useMemo(() => sharedRepoIcons(hosts, views), [hosts, views]);
-  // Every thread and Project the open host has listed, so a selection is dropped only once what it
-  // opened leaves the list: a just-started one reaches the list a render after it opens.
+  // Every thread and orchestrator the open host has listed, so a selection is dropped only once
+  // what it opened leaves the list: a just-started one reaches the list a render after it opens.
   const known = useRef(new Set<string>());
   for (const t of threads.state.threads) known.current.add(t.id);
-  for (const p of threads.state.projects) known.current.add(p.id);
+  for (const p of threads.state.orchestrators) known.current.add(p.id);
   // Closes a thread's tile. The rest stay tiled, or the last one stays open alone, and a closed
   // focused tile hands focus to the one before it.
   const closePane = (threadId: string) => {
@@ -419,40 +420,56 @@ export function App() {
 
   if (
     opening?.hostId === host.id &&
-    threads.state.projects.some((p) => p.id === opening.projectId)
+    threads.state.orchestrators.some((p) => p.id === opening.orchestratorId)
   ) {
     setOpening(undefined);
-    setSelection({ kind: "project", projectId: opening.projectId });
+    setSelection({ kind: "orchestrator", orchestratorId: opening.orchestratorId });
   }
-  // The open Project. Once its host is removed, the next host's list doesn't have it.
-  const project =
-    selection.kind === "project"
-      ? threads.state.projects.find((p) => p.id === selection.projectId)
+  // The open orchestrator. Once its host is removed, the next host's list doesn't have it.
+  const orchestrator =
+    selection.kind === "orchestrator"
+      ? threads.state.orchestrators.find((p) => p.id === selection.orchestratorId)
       : undefined;
-  if (selection.kind === "project" && !project && known.current.has(selection.projectId))
+  if (
+    selection.kind === "orchestrator" &&
+    !orchestrator &&
+    known.current.has(selection.orchestratorId)
+  )
     setSelection({ kind: "new" });
-  // With the threads in the Project, as its sidebar row counts them.
-  const inProject = useMemo(() => threadProjects(threads.state), [threads.state]);
-  const agents = useProjectAgents(host.id, project?.id, threads.state, inProject, approvals);
-  // The open subagent, whose chat takes the coordinator's place while the Project stays selected.
-  const agentId = selection.kind === "project" ? selection.agentId : undefined;
-  // Entering a Project shows its inbox in the side panel.
-  const projectPanelKey = project ? panelKey : undefined;
-  const [panelProject, setPanelProject] = useState(projectPanelKey);
-  if (projectPanelKey !== panelProject) {
-    setPanelProject(projectPanelKey);
-    if (project) setPanelOpen(true);
+  // With the threads in the orchestrator, as its sidebar row counts them.
+  const inOrchestrator = useMemo(() => threadOrchestrators(threads.state), [threads.state]);
+  const agents = useOrchestratorAgents(
+    host.id,
+    orchestrator?.id,
+    threads.state,
+    inOrchestrator,
+    approvals,
+  );
+  // The open subagent, whose chat takes the orchestrator's place while the orchestrator stays
+  // selected.
+  const agentId = selection.kind === "orchestrator" ? selection.agentId : undefined;
+  // Entering an orchestrator shows its inbox in the side panel.
+  const orchestratorPanelKey = orchestrator ? panelKey : undefined;
+  const [panelOrchestrator, setPanelOrchestrator] = useState(orchestratorPanelKey);
+  if (orchestratorPanelKey !== panelOrchestrator) {
+    setPanelOrchestrator(orchestratorPanelKey);
+    if (orchestrator) setPanelOpen(true);
   }
-  // The Project's inbox (0043), on a plxd with `inbox`, and the children whose questions wait in it.
+  // The orchestrator's inbox (0043), on a plxd with `inbox`, and the children whose questions wait
+  // in it.
   const answerable = connected && "questions" in connection.capabilities;
   const inbox = useInbox(
     host.id,
-    project?.id ?? "",
-    connected && !!project && "inbox" in connection.capabilities,
+    orchestrator?.id ?? "",
+    connected && !!orchestrator && "inbox" in connection.capabilities,
     answerable,
   );
-  // The Project's context files, which its Project tab reads.
-  const context = useProjectContext(host.id, project?.id ?? "", connected && !!project);
+  // The orchestrator's context files, which its orchestrator tab reads.
+  const context = useOrchestratorContext(
+    host.id,
+    orchestrator?.id ?? "",
+    connected && !!orchestrator,
+  );
   const needs = useMemo(
     () => new Set(inbox.items.filter((i) => !i.seenAt && i.kind === "needsYou").map((i) => i.run)),
     [inbox.items],
@@ -463,15 +480,15 @@ export function App() {
     ? (threads.state.titles[agentId] ?? (agent ? titleOf(agent) : "Subagent"))
     : undefined;
   // Whose memory the side panel's Knowledge view shows, on a plxd with `memory` (0044): the open
-  // Project's, with its repository's, or the open thread's repository's.
-  // ponytail: a repo entry's path is canonical and a Project's is as created, so a Project made
-  // through a symlink finds no Repo scope; match canonical paths if that shows up.
-  const memoryRepo = project
-    ? threads.state.repos.find((r) => isRepository(r) && r.path === project.repoPath)?.id
+  // orchestrator's, with its repository's, or the open thread's repository's. ponytail: a repo
+  // entry's path is canonical and an orchestrator's is as created, so an orchestrator made through
+  // a symlink finds no Repo scope; match canonical paths if that shows up.
+  const memoryRepo = orchestrator
+    ? threads.state.repos.find((r) => isRepository(r) && r.path === orchestrator.repoPath)?.id
     : selection.kind === "thread" && group.id !== noRepo
       ? group.id
       : undefined;
-  const memory = connected && "memory" in connection.capabilities && (project || memoryRepo);
+  const memory = connected && "memory" in connection.capabilities && (orchestrator || memoryRepo);
   // The run whose folder the side panel's Files view browses: the open thread or subagent.
   const filesRunId = selection.kind === "thread" ? selection.threadId : agentId;
   // The open thread's linked pull requests, on a plxd that links them (PLX-318).
@@ -545,19 +562,19 @@ export function App() {
   }, [selection]);
   // Shrinks an expanded side panel, which hides the main pane the chat opens in.
   const openAgent = (id?: string) => {
-    if (!project) return;
-    setSelection({ kind: "project", projectId: project.id, agentId: id });
+    if (!orchestrator) return;
+    setSelection({ kind: "orchestrator", orchestratorId: orchestrator.id, agentId: id });
     setPanelExpanded(false);
   };
-  // The permission requests the Project's other runs wait on, pinned in whichever of its chats is
-  // open, each named and with a way to its own chat (PLX-196).
+  // The permission requests the orchestrator's other runs wait on, pinned in whichever of its chats
+  // is open, each named and with a way to its own chat (PLX-196).
   const othersAsked = (open: string | undefined): Asked[] =>
     agents.runs.flatMap((run) => {
-      if (run.id === open || !project) return [];
-      const coordinator = run.id === project.coordinator;
+      if (run.id === open || !orchestrator) return [];
+      const orchestratorRun = run.id === orchestrator.run;
       const from = {
-        label: coordinator ? "Coordinator" : `Subagent: ${titleOf(run)}`,
-        open: () => openAgent(coordinator ? undefined : run.id),
+        label: orchestratorRun ? "Orchestrator" : `Subagent: ${titleOf(run)}`,
+        open: () => openAgent(orchestratorRun ? undefined : run.id),
       };
       return (agents.waiting[run.id] ?? []).map((approval) => ({ runId: run.id, approval, from }));
     });
@@ -604,7 +621,7 @@ export function App() {
     });
   }, [host.id, openedThread]);
   // Where Back (-1) or Forward (1) goes, skipping deleted threads. Away from the thread at `at`,
-  // as on New Thread or a Project, Back goes to that thread itself.
+  // as on New Thread or an orchestrator, Back goes to that thread itself.
   const here = history.list[history.at];
   const onStep = here?.hostId === host.id && here.threadId === openedThread;
   const stepTo = (step: -1 | 1) => {
@@ -635,8 +652,8 @@ export function App() {
   useHostUpdateAlarms(hosts);
   useAccountAlarms();
   useUpdateAlarms();
-  const needsYou = useNeedsYouAlarm(listed, (hostId, projectId) =>
-    openOnHost(hostId, { kind: "project", projectId }),
+  const needsYou = useNeedsYouAlarm(listed, (hostId, orchestratorId) =>
+    openOnHost(hostId, { kind: "orchestrator", orchestratorId }),
   );
 
   // The open thread's parent and children or siblings, on a plxd that keeps them (0041).
@@ -679,15 +696,16 @@ export function App() {
     return lineage.chips[next]?.id;
   };
 
-  // The Project or repository crumb wears its sidebar icon. Under a subagent, the Project's goes
-  // back to the coordinator. In a thread, the repository's opens New thread on that repository.
+  // The orchestrator or repository crumb wears its sidebar icon. Under a subagent, the
+  // orchestrator's goes back to the orchestrator. In a thread, the repository's opens New thread on
+  // that repository.
   let crumbs: Crumb[];
-  if (project) {
+  if (orchestrator) {
     crumbs = [
       { label: host.name },
       {
-        label: project.name,
-        icon: <ProjectIcon icon={project.icon} />,
+        label: orchestrator.name,
+        icon: <ProjectIcon icon={orchestrator.icon} />,
         onClick: agentId ? () => openAgent() : undefined,
       },
     ];
@@ -759,13 +777,13 @@ export function App() {
     return undefined;
   };
 
-  // A Project created on the open host is in its list already. Another host's list loads once
+  // An orchestrator created on the open host is in its list already. Another host's list loads once
   // that host is open.
-  const openProject = (hostId: string, projectId: string) => {
-    if (hostId === host.id) return setSelection({ kind: "project", projectId });
+  const openOrchestrator = (hostId: string, orchestratorId: string) => {
+    if (hostId === host.id) return setSelection({ kind: "orchestrator", orchestratorId });
     setHostId(hostId);
     setSelection({ kind: "new" });
-    setOpening({ hostId, projectId });
+    setOpening({ hostId, orchestratorId });
   };
 
   // New Thread's draft, which picking where it runs keeps (PLX-788). A fresh New thread gets its
@@ -835,7 +853,7 @@ export function App() {
 
   // A New thread. It opens on the computer new threads start on, in the repository of the same
   // name there, or Chat when it has none.
-  const newThread = (groupId = selection.kind === "project" ? undefined : group.id) => {
+  const newThread = (groupId = selection.kind === "orchestrator" ? undefined : group.id) => {
     if (start.id !== host.id) {
       const name = groups.find((g) => g.id === groupId)?.name;
       return openOnHost(start.id, {
@@ -848,11 +866,11 @@ export function App() {
   };
   // Mod+N's picker of the repository a new thread goes in.
   const picker = useRef<HTMLDialogElement>(null);
-  // Mod+K's command menu (PLX-993), and the sidebar's add palette, which its New Project and Add
-  // repository open. The palette shows with the thread list, so Settings closes first.
+  // Mod+K's command menu (PLX-993), and the sidebar's add palette, which its New orchestrator and
+  // Add repository open. The palette shows with the thread list, so Settings closes first.
   const commandMenu = useRef<CommandMenuHandle>(null);
   const addDialog = useRef<AddDialogHandle>(null);
-  const openAdd = (start?: "project") => {
+  const openAdd = (start?: "orchestrator") => {
     // Inside a hidden sidebar, the palette would open with no size.
     flushSync(() => {
       setSettings(null);
@@ -861,10 +879,11 @@ export function App() {
     });
     addDialog.current?.open(start);
   };
-  // Create Space (0090), from the Projects page or the add palette, where the open host makes them.
+  // Create Space (0090), from the orchestrators page or the add palette, where the open host makes
+  // them.
   const newSpace =
     connected && "spaces" in connection.capabilities
-      ? () => newChatProject.current?.showModal()
+      ? () => newChatOrchestrator.current?.showModal()
       : undefined;
   const openMainPage = (next: NonNullable<typeof mainPage>) => {
     setSettings(null);
@@ -872,15 +891,17 @@ export function App() {
   };
   // The orchestrator threads New thread's picker offers to continue, on every computer listed, most
   // recently active first (0093): orchestrators start and continue from New thread.
-  const pickerOrchestrators: PickerOrchestrator[] = projectEntries(listed)
-    .filter((e) => e.kind === "project")
-    .sort((a, b) => Date.parse(b.activeAt) - Date.parse(a.activeAt))
-    .map((e) => ({
-      key: e.key,
-      name: e.name,
-      icon: <ProjectIcon icon={e.icon} className="size-4 shrink-0" />,
-      hint: [listed.length > 1 ? e.host.name : undefined, e.branch].filter(Boolean).join(" · "),
-      open: () => openProject(e.host.id, e.id),
+  const pickerOrchestrators: PickerOrchestrator[] = listed
+    .flatMap(({ host, view }) => view.state.orchestrators.map((o) => ({ host, o })))
+    .sort((a, b) => Date.parse(b.o.updatedAt) - Date.parse(a.o.updatedAt))
+    .map(({ host, o }) => ({
+      key: `${host.id}/${o.id}`,
+      name: o.name,
+      icon: <ProjectIcon icon={o.icon} className="size-4 shrink-0" />,
+      hint: [listed.length > 1 ? host.name : undefined, o.integrationBranch ?? o.branch]
+        .filter(Boolean)
+        .join(" · "),
+      open: () => openOrchestrator(host.id, o.id),
     }));
   // The repositories a new thread can start in, the computer new threads start on's first.
   const menuRepos: MenuItem[] = [
@@ -910,7 +931,7 @@ export function App() {
   ];
   // The open thread's or New thread's repository, which the first action starts a thread in.
   const hereRepo =
-    selection.kind !== "project" && !repoless(group) && !settings ? group : undefined;
+    selection.kind !== "orchestrator" && !repoless(group) && !settings ? group : undefined;
   const menuActions: MenuItem[] = [
     ...(hereRepo
       ? [
@@ -962,12 +983,12 @@ export function App() {
       page: "contents",
     },
     {
-      id: "newProject",
-      label: "New Project",
-      text: "New Project",
-      keywords: "create coordinator",
+      id: "newOrchestrator",
+      label: "New orchestrator thread",
+      text: "New orchestrator thread",
+      keywords: "create orchestrator",
       icon: <FolderPlus />,
-      run: () => openAdd("project"),
+      run: () => openAdd("orchestrator"),
     },
     {
       id: "addRepo",
@@ -1060,7 +1081,7 @@ export function App() {
 
   // Where the open thread's or New thread's terminals open (folderOf).
   const folder =
-    selection.kind === "project"
+    selection.kind === "orchestrator"
       ? undefined
       : folderOf(
           host.id,
@@ -1125,7 +1146,7 @@ export function App() {
         !dialog &&
         (command === "parentThread" || command === "nextThread" || command === "previousThread")
       ) {
-        // In a Project, Go to parent goes from a child back to the coordinator, and from an
+        // In an orchestrator, Go to parent goes from a child back to the orchestrator, and from an
         // agent's own subagent, back to its thread.
         if (command === "parentThread" && agentId && !settings) openAgent();
         else if (
@@ -1217,7 +1238,7 @@ export function App() {
         threadRun.worktreePath !== threads.state.repos.find((repo) => repo.id === group.id)?.path
       }
       actions={
-        selection.kind !== "project" && !repoless(group)
+        selection.kind !== "orchestrator" && !repoless(group)
           ? {
               hostId: host.id,
               repoId: group.id,
@@ -1232,7 +1253,7 @@ export function App() {
         (selection.kind === "new" && !repoless(group) && !group.space)
           ? {
               hostId: host.id,
-              // A Project's child thread has one too, as its composer's tab had.
+              // An orchestrator's child thread has one too, as its composer's tab had.
               run: threadRun ?? agent,
               repo: selection.kind === "new" ? (group.id as RepoId) : undefined,
               title:
@@ -1345,9 +1366,9 @@ export function App() {
           setMainPage(undefined);
           openHostThread(hostId, threadId);
         }}
-        onOpenProject={(hostId, projectId) => {
+        onOpenOrchestrator={(hostId, orchestratorId) => {
           setSettings(null);
-          openProject(hostId, projectId);
+          openOrchestrator(hostId, orchestratorId);
           setShowHome({});
         }}
         // A document or media file opens as presented files do; any other, such as code, in the
@@ -1362,7 +1383,7 @@ export function App() {
         }}
       />
       <NewChatProject
-        ref={newChatProject}
+        ref={newChatOrchestrator}
         create={threads.createSpace}
         maxImageBytes={threads.iconImageBytes}
         onCreated={(space) => {
@@ -1381,7 +1402,7 @@ export function App() {
         }
         onPickElsewhere={pickRepoOn}
         orchestrators={pickerOrchestrators}
-        onNewOrchestrator={() => openAdd("project")}
+        onNewOrchestrator={() => openAdd("orchestrator")}
       />
       {settings && (
         <SettingsDialog
@@ -1416,10 +1437,10 @@ export function App() {
             // The open row, picked again, leaves Pull requests or the browser too.
             setMainPage(undefined);
             openOnHost(hostId, next);
-            // A Project opens on its coordinator's chat and the Project tab (0083).
-            if (next.kind === "project") setShowHome({});
+            // An orchestrator opens on its orchestrator's chat and the orchestrator tab (0083).
+            if (next.kind === "orchestrator") setShowHome({});
           }}
-          onOpenProject={openProject}
+          onOpenOrchestrator={openOrchestrator}
           onOpenSettings={openSettings}
           page={mainPage}
           onOpenPage={openMainPage}
@@ -1428,7 +1449,7 @@ export function App() {
               ? `${host.id}/${group.id}`
               : undefined
           }
-          projectMenu={projectMenu}
+          orchestratorMenu={orchestratorMenu}
           onNewSpace={newSpace}
           onDelete={deleteThread}
           addDialog={addDialog}
@@ -1453,12 +1474,12 @@ export function App() {
                 pins={pins}
                 onOpen={(entry) => {
                   setMainPage(undefined);
-                  if (entry.kind === "project") openProject(entry.host.id, entry.id);
+                  if (entry.kind === "orchestrator") openOrchestrator(entry.host.id, entry.id);
                   else openOnHost(entry.host.id, { kind: "new", groupId: entry.id });
                 }}
                 onTogglePin={togglePinnedProject}
-                actionsFor={projectActions}
-                onNewProject={() => openAdd("project")}
+                actionsFor={orchestratorActions}
+                onNewOrchestrator={() => openAdd("orchestrator")}
                 onNewChatProject={newSpace}
               />
             </>
@@ -1735,7 +1756,7 @@ export function App() {
                             onBack={() => openMainPage("projects")}
                             pinned={pins.includes(spaceEntry.key)}
                             onTogglePin={() => togglePinnedProject(spaceEntry.key)}
-                            actionsFor={() => projectActions(spaceEntry)}
+                            actionsFor={() => orchestratorActions(spaceEntry)}
                           />
                         )
                       }
@@ -1777,22 +1798,28 @@ export function App() {
                       hostId={host.id}
                       runId={agentId}
                       prompt={agent?.prompt}
-                      // A Project's subagents are kept current.
+                      // An orchestrator's subagents are kept current.
                       going={isRunning(agent?.status)}
                       others={othersAsked(agentId)}
-                      projectMode={project?.permission}
+                      orchestratorMode={orchestrator?.permission}
                       threadLinks={threadLinks}
                       strip={
-                        project && {
+                        orchestrator && {
                           key: "parent",
                           node: (
                             <ChildStrip
-                              name={project.name}
+                              name={orchestrator.name}
                               icon={
-                                <ProjectIcon icon={project.icon} className="size-3.5 shrink-0" />
+                                <ProjectIcon
+                                  icon={orchestrator.icon}
+                                  className="size-3.5 shrink-0"
+                                />
                               }
                               onOpenName={() =>
-                                setSelection({ kind: "project", projectId: project.id })
+                                setSelection({
+                                  kind: "orchestrator",
+                                  orchestratorId: orchestrator.id,
+                                })
                               }
                               onBack={() => openAgent()}
                             />
@@ -1801,23 +1828,21 @@ export function App() {
                       }
                     />
                   ) : (
-                    project && (
-                      <ProjectChat
-                        key={`${host.id}/${project.id}`}
+                    orchestrator && (
+                      <OrchestratorChat
+                        key={`${host.id}/${orchestrator.id}`}
                         hostId={host.id}
-                        project={project}
-                        prompt={
-                          project.coordinator && threads.state.runs[project.coordinator]?.prompt
-                        }
-                        startCoordinator={threads.startCoordinator}
-                        updateProject={threads.updateProject}
+                        orchestrator={orchestrator}
+                        prompt={orchestrator.run && threads.state.runs[orchestrator.run]?.prompt}
+                        startOrchestrator={threads.startOrchestrator}
+                        updateOrchestrator={threads.updateOrchestrator}
                         host={host}
-                        repo={threads.state.repos.find((r) => r.path === project.repoPath)?.id}
-                        others={othersAsked(project.coordinator)}
+                        repo={threads.state.repos.find((r) => r.path === orchestrator.repoPath)?.id}
+                        others={othersAsked(orchestrator.run)}
                         agents={agents}
                         titles={threads.state.titles}
                         needs={needs}
-                        onOpenRun={(id) => openAgent(id === project.coordinator ? undefined : id)}
+                        onOpenRun={(id) => openAgent(id === orchestrator.run ? undefined : id)}
                         threadLinks={threadLinks}
                         settingsClosed={settingsClosed.count}
                       />
@@ -1859,7 +1884,7 @@ export function App() {
         }
         pullRequest={showPr}
         showDevice={showDevice}
-        showProject={showHome}
+        showOrchestrator={showHome}
         showFiles={showFiles}
         device={(shown) => (
           <DevicePanel hostId={host.id} runId={threadRun?.id} shown={shown} request={showDevice} />
@@ -1871,15 +1896,15 @@ export function App() {
             <DocumentView key={`${host.id}/${doc.runId}/${doc.path}`} hostId={host.id} doc={doc} />
           ),
         }}
-        project={
-          project && {
-            waiting: waitingCount(project, agents, inbox),
+        orchestrator={
+          orchestrator && {
+            waiting: waitingCount(orchestrator, agents, inbox),
             home: (
-              <ProjectHome
-                key={`${host.id}/${project.id}`}
+              <OrchestratorHome
+                key={`${host.id}/${orchestrator.id}`}
                 hostId={host.id}
                 context={context}
-                project={project}
+                orchestrator={orchestrator}
                 agents={agents}
                 titles={threads.state.titles}
                 inbox={inbox}
@@ -1916,10 +1941,10 @@ export function App() {
             : undefined
         }
         agents={
-          project && (
+          orchestrator && (
             <AgentsPanel
-              // Another Project's start box starts empty, with its own retry id.
-              key={`${host.id}/${project.id}`}
+              // Another orchestrator's start box starts empty, with its own retry id.
+              key={`${host.id}/${orchestrator.id}`}
               agents={agents}
               titles={threads.state.titles}
               openId={agentId}
@@ -1973,16 +1998,14 @@ export function App() {
           )
         }
         knowledge={
-          (project || memory) && (
+          (orchestrator || memory) && (
             <KnowledgePanel
-              key={`${host.id}/${project?.id ?? memoryRepo}`}
+              key={`${host.id}/${orchestrator?.id ?? memoryRepo}`}
               hostId={host.id}
-              project={project?.id}
+              orchestrator={orchestrator?.id}
               repo={memoryRepo}
-              coordinator={
-                project?.coordinator
-                  ? agents.runs.find((r) => r.id === project.coordinator)
-                  : undefined
+              orchestratorRun={
+                orchestrator?.run ? agents.runs.find((r) => r.id === orchestrator.run) : undefined
               }
               titles={threads.state.titles}
               memory={!!memory}
@@ -2008,7 +2031,7 @@ export function App() {
 const stepButton =
   "grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-35 [&_svg]:size-4";
 
-/** Loads one host's threads and Projects and hands them up, whenever they change. */
+/** Loads one host's threads and orchestrators and hands them up, whenever they change. */
 function HostLoader({
   hostId,
   onView,
@@ -2016,12 +2039,15 @@ function HostLoader({
 }: {
   hostId: string;
   onView: (hostId: string, view: ThreadsView) => void;
-  onNeedsYou: (hostId: string, projectId: string, item: InboxItem) => void;
+  onNeedsYou: (hostId: string, orchestratorId: string, item: InboxItem) => void;
 }) {
   const connection = useConnection(hostId);
   const capabilities = connection?.status === "connected" ? connection.capabilities : undefined;
-  const view = useThreads(hostId, capabilities, iconImageBytes(connection), (projectId, item) =>
-    onNeedsYou(hostId, projectId, item),
+  const view = useThreads(
+    hostId,
+    capabilities,
+    iconImageBytes(connection),
+    (orchestratorId, item) => onNeedsYou(hostId, orchestratorId, item),
   );
   useEffect(() => onView(hostId, view), [hostId, view, onView]);
   return null;

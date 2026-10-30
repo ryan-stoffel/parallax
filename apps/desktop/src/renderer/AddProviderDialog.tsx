@@ -115,7 +115,7 @@ export function AddProviderDialog({
 
   const ids = taken;
   // A built-in agent takes its kind's id while it's free, which plxd's startup backend, the
-  // coordinator, and the host's API keys go by.
+  // orchestrator, and the host's API keys go by.
   const builtIn = draft && ["claude", "codex", "cursor"].includes(draft.kind);
   const base = builtIn && !ids.includes(draft.kind) ? draft.kind : slug(name);
   const id = pickedId ?? unique(base, ids, "-");

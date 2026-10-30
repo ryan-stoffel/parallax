@@ -63,27 +63,30 @@ export function useSnoozeAlarms(
 }
 
 /**
- * A notification for a Project's new Needs you inbox item (0043). Its action opens the Project,
- * whose coordinator chat shows the item. Returns what each host's thread list calls with the item
- * (`useThreads`'s `onNeedsYou`).
+ * A notification for an orchestrator's new Needs you inbox item (0043). Its action opens the
+ * orchestrator, whose orchestrator chat shows the item. Returns what each host's thread list calls
+ * with the item (`useThreads`'s `onNeedsYou`).
  */
 export function useNeedsYouAlarm(
   hosts: HostThreads[],
-  onOpen: (hostId: string, projectId: string) => void,
+  onOpen: (hostId: string, orchestratorId: string) => void,
 ) {
   const latest = useRef({ hosts, onOpen });
   useEffect(() => {
     latest.current = { hosts, onOpen };
   });
-  return useCallback((hostId: string, projectId: string, item: InboxItem) => {
-    const project = latest.current.hosts
+  return useCallback((hostId: string, orchestratorId: string, item: InboxItem) => {
+    const orchestrator = latest.current.hosts
       .find((h) => h.host.id === hostId)
-      ?.view.state.projects.find((p) => p.id === projectId);
+      ?.view.state.orchestrators.find((p) => p.id === orchestratorId);
     notify({
       tone: "attention",
-      title: project?.name ?? "Project",
+      title: orchestrator?.name ?? "Orchestrator",
       body: `Needs you: ${item.text}`,
-      action: { label: "Open Project", run: () => latest.current.onOpen(hostId, projectId) },
+      action: {
+        label: "Open orchestrator",
+        run: () => latest.current.onOpen(hostId, orchestratorId),
+      },
       system: true,
     });
   }, []);

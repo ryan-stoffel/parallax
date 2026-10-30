@@ -51,7 +51,7 @@ export function SpaceHeader({
   pinned: boolean;
   onTogglePin: () => void;
   actionsFor: () => FavoriteAction[];
-  /** Opens the Projects page. */
+  /** Opens the orchestrators page. */
   onBack: () => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
@@ -219,7 +219,8 @@ export function SpaceThreads({
 
 /**
  * Add threads: this computer's threads outside the Space, newest first, to search and check, then
- * add. A thread started in a Space lives there, and a Project's in its Project, so neither shows.
+ * add. A thread started in a Space lives there, and an orchestrator's in its orchestrator, so
+ * neither shows.
  */
 function AddThreads({
   ref,

@@ -70,7 +70,7 @@ export function SidebarNav({
   onNewThread: () => void;
   onOpen: (row: NavRow) => void;
   onOpenProject: (entry: ProjectEntry) => void;
-  /** Opens the add palette: a new Project, Space, or repository. */
+  /** Opens the add palette: a new orchestrator thread, Space, or repository. */
   onAdd: () => void;
   /** A pinned project's menu items after Unpin. */
   pinActions: (entry: ProjectEntry) => FavoriteAction[];

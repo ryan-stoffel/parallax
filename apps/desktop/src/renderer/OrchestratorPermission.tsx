@@ -1,34 +1,34 @@
 import { useId } from "react";
 
-import type { ProjectAutonomy } from "../protocol/generated/protocol";
+import type { OrchestratorAutonomy } from "../protocol/generated/protocol";
 
 /** Each autonomy level (0043), with a line on who answers. */
-export const autonomyLevels: { value: ProjectAutonomy; name: string; detail: string }[] = [
+export const autonomyLevels: { value: OrchestratorAutonomy; name: string; detail: string }[] = [
   {
     value: "ask",
     name: "Ask me",
-    detail: "The coordinator answers nothing. Every question waits on you.",
+    detail: "The orchestrator answers nothing. Every question waits on you.",
   },
   {
     value: "routine",
     name: "Routine",
     detail:
-      "The coordinator answers what memory or the code clearly settles, and asks you the rest.",
+      "The orchestrator answers what memory or the code clearly settles, and asks you the rest.",
   },
   {
     value: "full",
     name: "Full",
-    detail: "The coordinator answers everything it can justify.",
+    detail: "The orchestrator answers everything it can justify.",
   },
 ];
 
-/** A Project's autonomy (0043), in its Autonomy… dialog: radio cards, with a line of detail on each. */
+/** An orchestrator's autonomy (0043), in its Autonomy… dialog: radio cards, with a line of detail on each. */
 export function AutonomyChoice({
   value,
   onChange,
 }: {
-  value: ProjectAutonomy;
-  onChange: (value: ProjectAutonomy) => void;
+  value: OrchestratorAutonomy;
+  onChange: (value: OrchestratorAutonomy) => void;
 }) {
   const name = useId();
   return (
@@ -36,7 +36,7 @@ export function AutonomyChoice({
       <legend className="mb-1 text-body font-medium">Autonomy</legend>
       <p className="text-body text-muted-foreground">
         A child never waits on a question: it goes on with what it assumed. This decides who answers
-        it. Every answer shows on the Project tab.
+        it. Every answer shows on the orchestrator tab.
       </p>
       {autonomyLevels.map((m) => (
         <label

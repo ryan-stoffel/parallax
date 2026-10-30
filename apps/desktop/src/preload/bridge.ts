@@ -781,7 +781,7 @@ export const withheldMethods = [
   // `pr/unwatch` stays callable: the waiting bar's Stop ends a watch (PLX-777).
   "pr/watch",
   "pr/watches",
-  "project/fromThreads",
+  "orchestrator/fromThreads",
   "question/ask",
   "question/escalate",
   // Carry the account's token, which only main may send (PLX-652): see `registerRelay`. Only
@@ -838,7 +838,7 @@ export type SubscriptionMessage =
   | { type: "event"; event: EventsEventParams }
   /** The subscription ended because plxd can't replay what was missed. */
   | { type: "resync" }
-  /** The subscription ended with an error, such as `projectNotFound`. */
+  /** The subscription ended with an error, such as `orchestratorNotFound`. */
   | { type: "error"; error: RpcError };
 
 /** How updating a remote host's plxd to the app's version went (PLX-700). */
