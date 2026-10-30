@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 import type { DeviceHost } from "../preload/bridge";
 import { spacedCode } from "./AccountPrompts";
-import { useConnection } from "./ConnectionStatus";
+import { statusLabel, useConnection } from "./ConnectionStatus";
 import { DeviceIcon } from "./DeviceIcon";
 import { primaryButton, quietButton } from "./settings/parts";
 import { IconButton } from "./ui";
@@ -132,8 +132,7 @@ export function ConnectWizard({
 function ComputerRow({ device, onEnterCode }: { device: DeviceHost; onEnterCode: () => void }) {
   const state = useConnection(device.id);
   const { access } = device;
-  const status =
-    access?.step === "needsCode" ? undefined : (accessLabel(device) ?? statusText(state?.status));
+  const status = accessLabel(device) ?? (state ? statusLabel(state) : "Connecting…");
   return (
     <li className="flex items-center gap-3 border-border px-3 py-2.5 not-last:border-b">
       <DeviceIcon icon={device.icon} className="size-5 shrink-0 text-muted-foreground" />
@@ -153,9 +152,6 @@ function ComputerRow({ device, onEnterCode }: { device: DeviceHost; onEnterCode:
     </li>
   );
 }
-
-const statusText = (status?: string) =>
-  status === "failed" ? "Can't reach it" : status === "connected" ? "Connected" : "Connecting…";
 
 /** What an account computer's sign-in says while it isn't connected, or undefined. */
 export function accessLabel({ access }: Pick<DeviceHost, "access">): string | undefined {
