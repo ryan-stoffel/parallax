@@ -1229,46 +1229,62 @@ mod tests {
 
     /// A relay from before 0091, on loopback: `/connect` without a ticket is 401, `POST
     /// /tickets` with the token answers `t1`, and `/connect?ticket=t1` says `ready` and echoes.
-    /// Each request's first line goes to `seen`.
+    /// Each request's first line goes to `seen`. Like a real server, it reads a request whole
+    /// before answering and closes only after the client does: closing with unread bytes resets
+    /// the connection, and on Windows the client then loses the answer.
     async fn ticket_only_relay(seen: Arc<Mutex<Vec<String>>>) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         tokio::spawn(async move {
             loop {
-                let (mut tcp, _) = listener.accept().await.unwrap();
-                let mut head = vec![0; 4096];
-                let read = tcp.peek(&mut head).await.unwrap();
-                let head = String::from_utf8_lossy(&head[..read]).into_owned();
-                let line = head.lines().next().unwrap_or_default().to_owned();
-                seen.lock().unwrap().push(line.clone());
-                if line.starts_with("POST /v1/hosts/h/tickets ") {
-                    let mut drain = vec![0; read];
-                    tcp.read_exact(&mut drain).await.unwrap();
-                    let (status, body) = if head.contains("Authorization: Bearer tok\r\n") {
-                        ("200 OK", r#"{"ticket":"t1"}"#)
-                    } else {
-                        ("401 Unauthorized", r#"{"error":"unauthorized"}"#)
-                    };
-                    let answer = format!(
-                        "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n{body}",
-                        body.len()
-                    );
-                    tcp.write_all(answer.as_bytes()).await.unwrap();
-                } else if line.starts_with("GET /v1/hosts/h/connect?ticket=t1 ") {
-                    let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
-                    socket.send(Message::text("ready")).await.unwrap();
-                    while let Some(Ok(frame)) = socket.next().await {
-                        if frame.is_binary() {
-                            socket.send(frame).await.unwrap();
-                        }
-                    }
-                } else {
-                    let answer = "HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n";
-                    tcp.write_all(answer.as_bytes()).await.unwrap();
-                }
+                let (tcp, _) = listener.accept().await.unwrap();
+                tokio::spawn(answer_like_a_ticket_relay(tcp, Arc::clone(&seen)));
             }
         });
         url
+    }
+
+    /// One request to [`ticket_only_relay`]. The client's requests here have no body.
+    async fn answer_like_a_ticket_relay(mut tcp: TcpStream, seen: Arc<Mutex<Vec<String>>>) {
+        // Peeked, not read, so a WebSocket handshake can still read it.
+        let mut buffer = vec![0; 8192];
+        let head = loop {
+            let peeked = tcp.peek(&mut buffer).await.unwrap();
+            let text = String::from_utf8_lossy(&buffer[..peeked]);
+            if let Some(end) = text.find("\r\n\r\n") {
+                break text[..end + 4].to_owned();
+            }
+            assert!(peeked > 0, "the client closed mid-request");
+            time::sleep(Duration::from_millis(1)).await;
+        };
+        let line = head.lines().next().unwrap_or_default().to_owned();
+        seen.lock().unwrap().push(line.clone());
+        if line.starts_with("GET /v1/hosts/h/connect?ticket=t1 ") {
+            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            socket.send(Message::text("ready")).await.unwrap();
+            while let Some(Ok(frame)) = socket.next().await {
+                if frame.is_binary() {
+                    socket.send(frame).await.unwrap();
+                }
+            }
+            return;
+        }
+        tcp.read_exact(&mut vec![0; head.len()]).await.unwrap();
+        let (status, body) = if !line.starts_with("POST /v1/hosts/h/tickets ") {
+            ("401 Unauthorized", "")
+        } else if head.contains("Authorization: Bearer tok\r\n") {
+            ("200 OK", r#"{"ticket":"t1"}"#)
+        } else {
+            ("401 Unauthorized", r#"{"error":"unauthorized"}"#)
+        };
+        let answer = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        tcp.write_all(answer.as_bytes()).await.unwrap();
+        let _ = tcp.shutdown().await;
+        // Until the client closes its side.
+        let _ = tcp.read_to_end(&mut Vec::new()).await;
     }
 
     #[tokio::test]
