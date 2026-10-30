@@ -218,9 +218,14 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
 
   await expect(dialog).toBeHidden();
   await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
-  // One card for the Project, in the classic sidebar's Projects drawer (0087).
-  await page.locator("#sidebar summary", { hasText: "Projects" }).click();
-  await expect(page.locator('#sidebar li[data-kind="project"] [data-title]')).toHaveText(["ember"]);
+  // One card for the Project, on the Projects page, which the classic sidebar opens from the
+  // button beside its search (0091). Opening the card goes back to the Project.
+  await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
+  const cards = page.locator("li[data-project]");
+  await expect(cards).toHaveCount(1);
+  await expect(cards).toContainText("ember");
+  await cards.getByRole("button").first().click();
+  await expect(page.getByRole("navigation", { name: "Breadcrumb" })).toContainText("ember");
 });
 
 test("chats with the project's coordinator, whose transcript outlives a reload and a plxd restart (PLX-46)", async () => {
@@ -254,8 +259,9 @@ test("chats with the project's coordinator, whose transcript outlives a reload a
   await expect(transcript.getByText("The fake agent is on it.")).toHaveCount(2);
 
   await page.reload();
-  // The Projects drawer stays open across the reload.
-  await page.locator('#sidebar li[data-kind="project"] button[data-row]').first().click();
+  // Back to the Project from the Projects page.
+  await page.locator("#sidebar").getByRole("button", { name: "Projects", exact: true }).click();
+  await page.locator("li[data-project]").first().getByRole("button").first().click();
   await expect(transcript.getByText("Start with the changelog")).toBeVisible();
 
   // Stop plxd with the coordinator running. The app reconnects through a new `serve`, which
