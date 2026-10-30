@@ -2,11 +2,10 @@
 // self-signed one: trusted only when its SHA-256 matches the fingerprint pairing pinned, or, for an
 // account's host, when its key is the host id (0091, Pinning.swift). React Native's fetch and
 // WebSocket can't pin a certificate, so the app reaches plxd through this, directly or through a
-// Parallax Relay stream (RelayBridge.swift). It also opens Parallax Connect's plain TCP
-// connections over Tailscale (0056), finds hosts over mDNS, signs in to the Parallax account as
-// the desktop does (0067), reports network changes, keeps the app running briefly in the
-// background, shows a file in Quick Look, and supplies secure random bytes, a backup-free file
-// location, this phone's tailnet address, and the build's version.
+// Parallax Relay stream (RelayBridge.swift). It also finds hosts over mDNS, signs in to the
+// Parallax account as the desktop does (0067), reports network changes, keeps the app running
+// briefly in the background, shows a file in Quick Look, and supplies secure random bytes, a
+// backup-free file location, and the build's version.
 import AuthenticationServices
 import ExpoModulesCore
 import Foundation
@@ -47,10 +46,8 @@ private final class AuthAnchor: NSObject, ASWebAuthenticationPresentationContext
 
 public class PinnedTlsModule: Module {
   private var sockets: [String: (task: URLSessionWebSocketTask, session: URLSession)] = [:]
-  /// Connect's TCP connections, with the bytes received since their last newline.
-  private var tcp: [String: (connection: NWConnection, pending: Data)] = [:]
   private let lock = NSLock()
-  private let queue = DispatchQueue(label: "parallax.tcp")
+  private let queue = DispatchQueue(label: "parallax.network")
   /// The sign-in sheet under way, and what it shows over.
   private var auth: ASWebAuthenticationSession?
   private let anchor = AuthAnchor()
@@ -265,53 +262,7 @@ public class PinnedTlsModule: Module {
       ) { [weak self] _ in self?.releaseBackground() }
     }
 
-    /// This phone's Tailscale IPv4 address (100.64.0.0/10), or nil while Tailscale isn't connected.
-    Function("tailnetAddress") { () -> String? in
-      var list: UnsafeMutablePointer<ifaddrs>?
-      guard getifaddrs(&list) == 0 else { return nil }
-      defer { freeifaddrs(list) }
-      var next = list
-      while let entry = next {
-        next = entry.pointee.ifa_next
-        guard let address = entry.pointee.ifa_addr, address.pointee.sa_family == sa_family_t(AF_INET)
-        else { continue }
-        let ip = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
-          UInt32(bigEndian: $0.pointee.sin_addr.s_addr)
-        }
-        if ip & 0xFFC0_0000 == 0x6440_0000 {
-          return "\(ip >> 24).\((ip >> 16) & 255).\((ip >> 8) & 255).\(ip & 255)"
-        }
-      }
-      return nil
-    }
-
-    /// Opens Connect's plain TCP connection `id` to plxd at `host`:`port` (0056), which Tailscale
-    /// encrypts and plxd checks with `tailscale whois`. It reports `open`, each newline-delimited
-    /// `message`, and one `close` as `onSocket`, as a WebSocket does, and gives up after 10 s.
-    Function("openTcp") { (id: String, host: String, port: Int) in
-      guard let port = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return }
-      let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
-      lock.withLock { tcp[id] = (connection, Data()) }
-      connection.stateUpdateHandler = { [weak self] state in
-        switch state {
-        case .ready: self?.sendEvent("onSocket", ["id": id, "type": "open"])
-        case .failed, .cancelled: self?.closed(id)
-        default: break
-        }
-      }
-      queue.asyncAfter(deadline: .now() + 10) { [weak self] in
-        if connection.state != .ready { self?.closed(id) }
-      }
-      receiveTcp(id, connection)
-      connection.start(queue: queue)
-    }
-
     Function("send") { (id: String, text: String) in
-      if let line = lock.withLock({ tcp[id]?.connection }) {
-        return line.send(
-          content: Data((text + "\n").utf8),
-          completion: .contentProcessed { [weak self] error in if error != nil { self?.closed(id) } })
-      }
       guard let socket = lock.withLock({ sockets[id] }) else { return }
       socket.task.send(.string(text)) { [weak self] error in
         if error != nil { self?.closed(id) }
@@ -319,9 +270,6 @@ public class PinnedTlsModule: Module {
     }
 
     Function("close") { (id: String) in
-      if let line = lock.withLock({ tcp.removeValue(forKey: id) }) {
-        return line.connection.cancel()
-      }
       guard let socket = lock.withLock({ sockets.removeValue(forKey: id) }) else { return }
       socket.task.cancel(with: .normalClosure, reason: nil)
       socket.session.invalidateAndCancel()
@@ -360,42 +308,9 @@ public class PinnedTlsModule: Module {
     background = .invalid
   }
 
-  /// Reads TCP connection `id`, sending each whole line as a message.
-  private func receiveTcp(_ id: String, _ connection: NWConnection) {
-    connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) {
-      [weak self] data, _, done, error in
-      guard let self else { return }
-      if let data, !data.isEmpty {
-        let lines: [Data] = lock.withLock {
-          guard var entry = self.tcp[id] else { return [] }
-          entry.pending.append(data)
-          var lines: [Data] = []
-          while let end = entry.pending.firstIndex(of: 0x0A) {
-            lines.append(entry.pending[entry.pending.startIndex..<end])
-            entry.pending = entry.pending[(end + 1)...]
-          }
-          // A copy, so the buffer's indices start at zero again.
-          entry.pending = Data(entry.pending)
-          self.tcp[id] = entry
-          return lines
-        }
-        for line in lines {
-          sendEvent(
-            "onSocket", ["id": id, "type": "message", "data": String(decoding: line, as: UTF8.self)])
-        }
-      }
-      if done || error != nil { return closed(id) }
-      receiveTcp(id, connection)
-    }
-  }
-
   /// Reports socket `id` closed, once, with the HTTP `status` that refused its upgrade if one
-  /// did, and lets its session or connection go.
+  /// did, and lets its session go.
   private func closed(_ id: String, status: Int? = nil) {
-    if let line = lock.withLock({ tcp.removeValue(forKey: id) }) {
-      line.connection.cancel()
-      return sendEvent("onSocket", ["id": id, "type": "close"])
-    }
     guard let socket = lock.withLock({ sockets.removeValue(forKey: id) }) else { return }
     socket.session.invalidateAndCancel()
     var event: [String: Any] = ["id": id, "type": "close"]

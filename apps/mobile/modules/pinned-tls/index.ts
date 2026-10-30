@@ -1,6 +1,5 @@
 // The JS side of PinnedTlsModule.swift: HTTPS and WebSocket to plxd, pinned to its certificate or,
-// for an account's host, its key (0091), directly or inside a Parallax Relay stream, and Parallax
-// Connect's TCP over Tailscale.
+// for an account's host, its key (0091), directly or inside a Parallax Relay stream.
 import { requireNativeModule } from "expo";
 
 type SocketEvent = {
@@ -27,8 +26,6 @@ const native = requireNativeModule<{
   relayOpen(id: string, url: string, token: string): Promise<number>;
   relayRefused(id: string): number | null;
   relayClose(id: string): void;
-  openTcp(id: string, host: string, port: number): void;
-  tailnetAddress(): string | null;
   authorize(url: string): Promise<string>;
   appVersion(): { version: string; build: string };
   preview(url: string): Promise<void>;
@@ -54,9 +51,6 @@ export const preview = (url: string) => native.preview(url);
 
 /** This build's version and build number. */
 export const appVersion = () => native.appVersion();
-
-/** This phone's Tailscale address, or null while Tailscale isn't connected. */
-export const tailnetAddress = () => native.tailnetAddress();
 
 /** The computers showing a pairing code on this network, by name, found over mDNS in `seconds`. */
 export const discover = (seconds: number) => native.discover(seconds);
@@ -128,8 +122,7 @@ let nextId = 0;
 
 /**
  * A WebSocket, as much of one as `WebHost` uses: to `url`, trusting only the certificate `pin`
- * (as `request` takes it), with `headers` on the upgrade, or with `tcp`, Connect's
- * newline-delimited JSON-RPC to plxd's port 7340 on a tailnet address.
+ * (as `request` takes it), with `headers` on the upgrade.
  *
  * A handler set after the socket opened or closed still runs, once, so a caller can wait for it
  * to open before handing it on.
@@ -145,16 +138,9 @@ export class PinnedSocket {
   private opened?: () => void;
   private closed?: () => void;
 
-  constructor(url: string, pin: string, headers?: Record<string, string>);
-  constructor(tcp: { host: string; port: number });
-  constructor(
-    target: string | { host: string; port: number },
-    pin?: string,
-    headers: Record<string, string> = {},
-  ) {
+  constructor(url: string, pin: string, headers: Record<string, string> = {}) {
     sockets.set(this.id, this);
-    if (typeof target === "string") native.open(this.id, target, pin!, headers);
-    else native.openTcp(this.id, target.host, target.port);
+    native.open(this.id, url, pin, headers);
   }
 
   get onopen() {

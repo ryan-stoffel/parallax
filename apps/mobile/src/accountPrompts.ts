@@ -2,6 +2,8 @@
 
 import { Alert } from "react-native";
 
+import type { AccountHosts } from "./accountHosts";
+
 /** A 6-digit code as both ends show it: `482 915`. */
 export const formatCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
 
@@ -21,6 +23,36 @@ export function askSetupCode(name: string, onCode: (code: string) => void, onAsk
     "plain-text",
     "",
     "number-pad",
+  );
+}
+
+/**
+ * Sets up the account computer `hostId`, named `name`, from the code dialog: with the code typed,
+ * or by asking a device that already uses it, which waits there with `onWaiting`'s code. Calls
+ * `done` once this phone may use it, or `failed` with a message for people.
+ */
+export function setUpComputer(
+  accounts: AccountHosts,
+  { hostId, name, routes }: { hostId: string; name: string; routes: string[] },
+  handlers: { onWaiting: (code: string) => void; done: () => void; failed: (message: string) => void },
+) {
+  const failed = (e: unknown) => {
+    Alert.alert(`Couldn't set up ${name}`, (e as Error).message);
+    handlers.failed((e as Error).message);
+  };
+  askSetupCode(
+    name,
+    (code) => {
+      if (code.length !== 6) return failed(new Error("The code has 6 digits."));
+      accounts.setup(hostId, routes, code).then(handlers.done, failed);
+    },
+    () =>
+      void accounts
+        .ask(hostId, routes, (code) => {
+          handlers.onWaiting(code);
+          showWaiting(name, code);
+        })
+        .then(handlers.done, failed),
   );
 }
 

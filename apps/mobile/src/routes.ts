@@ -1,7 +1,8 @@
+
 // How the phone reaches an account's host (0091 "Routes" and "Speed"), as `plxd dial` does in
-// daemon/src/remote.rs: its LAN addresses first, then its Tailscale address, then the relay. The
-// direct routes start together and the relay 200 ms later, unless every direct one already failed,
-// and the first to answer wins. Pure, so it's tested without React Native.
+// daemon/src/remote.rs: its LAN addresses, then the relay. The LAN routes start together and the
+// relay 200 ms later, unless every LAN one already failed, and the first to answer wins. The phone
+// doesn't use Tailscale. Pure, so it's tested without React Native.
 
 /** A route through Parallax Relay: `relay:<hostId>`. */
 export const RELAY = "relay:";
@@ -19,26 +20,22 @@ export const isRelay = (route: string) => route.startsWith(RELAY);
 /** `route` with plxd's port when it has none: `10.0.0.2` is `10.0.0.2:7341`. */
 export const withPort = (route: string) => (route.includes(":") ? route : `${route}:${PORT}`);
 
-/** Whether `route` is a Tailscale address: in 100.64.0.0/10. */
-export function isTailnet(route: string): boolean {
-  const [a, b] = withPort(route).split(":")[0]!.split(".").map(Number);
-  return a === 100 && b !== undefined && b >= 64 && b < 128;
+/** Whether `route` is a LAN address: IPv4, as plxd reports them, and not in 100.64.0.0/10, the
+ *  range plxd's Tailscale address comes from. */
+function isLan(route: string): boolean {
+  if (isRelay(route) || route.split(":").length > 2) return false;
+  const [a, b] = route.split(":")[0]!.split(".").map(Number);
+  return !(a === 100 && b !== undefined && b >= 64 && b < 128);
 }
 
 /**
- * The routes to try for host `hostId`, best first: the LAN ones `learned` lists, then its
- * Tailscale ones, then the relay, each once. Another host's relay route is dropped.
+ * The routes to try for host `hostId`, best first: the LAN ones `learned` lists, then the relay,
+ * each once. Another host's relay route and any other address are dropped.
  */
-export function ordered(hostId: string, learned: string[]): string[] {
-  // plxd reports IPv4 addresses, with a port only when it isn't 7341.
-  const ipv4 = (r: string) => !isRelay(r) && r.split(":").length <= 2;
-  const direct = [...new Set(learned.filter(ipv4).map(withPort))];
-  return [
-    ...direct.filter((r) => !isTailnet(r)),
-    ...direct.filter(isTailnet),
-    `${RELAY}${hostId}`,
-  ];
-}
+export const ordered = (hostId: string, learned: string[]): string[] => [
+  ...new Set(learned.filter(isLan).map(withPort)),
+  `${RELAY}${hostId}`,
+];
 
 /** The routes worth trying at `now`: none of those that failed after answering within `COOL_DOWN_MS`. */
 export const usable = (routes: string[], failedAt: Record<string, number>, now: number) =>

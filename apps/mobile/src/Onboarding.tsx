@@ -1,37 +1,25 @@
-// First run, after sign-in: Tailscale on this phone, one of the user's computers to find the
-// rest, the default computer for new threads, and notifications. "Add computer" in Settings
-// runs the middle step again.
+// First run, after signing in to the Parallax account: the account's computers, each set up once
+// with the code `plx connect` shows on it (0091), or how to add one when there are none, then
+// notifications. Settings › Add computer shows how to add one too.
 import { useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Linking,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from "react-native";
+import { ActivityIndicator, AppState, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
-import { tailnetAddress } from "../modules/pinned-tls";
+import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
+import { formatCode, setUpComputer } from "./accountPrompts";
 import type { Saved } from "./host";
-import { pairedId, probe, type Machine, type Setup } from "./machines";
+import { pairedId, withListed, type Machine, type Setup } from "./machines";
 import { Pairing } from "./PairScreen";
 import { askForNotifications } from "./push";
 import { font } from "./theme";
-import { BellRing, Circle, CircleCheck, CircleArrowDown, SquareArrowOutUpRight } from "lucide-react-native";
+import { BellRing, ChevronRight } from "lucide-react-native";
 
-import { Button, DeviceIcon, Dot, Icon, Mark, T, useColors } from "./ui";
+import { Button, DeviceIcon, Dot, Icon, T, useColors } from "./ui";
 
-const TAILSCALE_APP = "https://apps.apple.com/app/tailscale/id1470499037";
+/** The command that adds a computer to the account (0091 "Setup"). */
+export const CONNECT_COMMAND = "npx plx-cli connect";
 
 /** A LAN-paired computer as a machine (0065). */
-const pairedMachine = (saved: Saved): Machine => ({
-  id: pairedId(saved),
-  name: saved.name,
-  os: "",
-  address: saved.routes[0] ?? "",
-  paired: saved,
-});
+const pairedMachine = (saved: Saved): Machine => ({ id: pairedId(saved), name: saved.name, paired: saved });
 
 function Step({
   index,
@@ -46,20 +34,11 @@ function Step({
 }) {
   const c = useColors();
   return (
-    // The scroll view is the root, which a sheet (Settings › Add computer) needs to size it, and
-    // keeps clear of the keyboard itself.
-    <ScrollView
-      style={{ flex: 1, backgroundColor: c.background }}
-      contentContainerStyle={styles.page}
-      keyboardShouldPersistTaps="handled"
-      automaticallyAdjustKeyboardInsets
-    >
+    // The scroll view is the root, which a sheet (Settings › Add computer) needs to size it.
+    <ScrollView style={{ flex: 1, backgroundColor: c.background }} contentContainerStyle={styles.page}>
       <View style={styles.progress}>
-        {[0, 1, 2, 3].map((i) => (
-          <View
-            key={i}
-            style={[styles.bar, { backgroundColor: i <= index ? c.accent : c.selected }]}
-          />
+        {[0, 1].map((i) => (
+          <View key={i} style={[styles.bar, { backgroundColor: i <= index ? c.accent : c.selected }]} />
         ))}
       </View>
       <View style={{ gap: 8, marginBottom: 8 }}>
@@ -73,225 +52,149 @@ function Step({
   );
 }
 
-/**
- * Finds the user's computers from any one of them. `onFound` gets every Parallax computer. With
- * `onSkip`, it can be left with none, for one added later in Settings › Add computer.
- */
-export function FindComputers({
-  onFound,
-  onSkip,
-}: {
-  onFound: (machines: Machine[]) => void;
-  onSkip?: () => void;
-}) {
+/** How to add a computer to the account: the command to run on it, and what follows. */
+export function AddInstructions() {
   const c = useColors();
-  const [address, setAddress] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [pairing, setPairing] = useState(false);
-
-  async function find() {
-    if (busy || !address.trim()) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      const found = await probe(address.trim());
-      if (found.length) onFound(found);
-      else setError("That computer answered, but lists no computer with Parallax Connect on.");
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (pairing) return <Pairing onPaired={(saved) => onFound([pairedMachine(saved)])} onCancel={() => setPairing(false)} />;
   return (
-    <Step
-      index={1}
-      title="Find your computers"
-      subtitle="Enter any computer that has Parallax with Connect on. Parallax finds the rest of your computers from it."
-    >
-      <TextInput
-        accessibilityLabel="Computer name or address"
-        placeholder="ryans-mac-mini or 100.64.0.1"
-        placeholderTextColor={c.faintForeground}
-        value={address}
-        onChangeText={setAddress}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        returnKeyType="search"
-        onSubmitEditing={() => void find()}
-        style={[styles.input, { color: c.foreground, borderColor: c.border, backgroundColor: c.surface }]}
-      />
-      <T faint style={{ fontSize: 13, lineHeight: 18 }}>
-        Your computers' names are listed in the Tailscale app. On a computer, turn on Parallax
-        Connect in Settings › Connections.
+    <View style={[styles.card, { backgroundColor: c.surface, borderColor: c.border }]}>
+      <T muted style={{ fontSize: 14 }}>
+        On the computer, run
       </T>
-      <Button
-        label={busy ? "Looking…" : "Find computers"}
-        primary
-        disabled={busy || !address.trim()}
-        onPress={() => void find()}
-      />
-      {error && (
-        <T alert style={{ color: c.danger, fontSize: 14 }}>
-          {error}
-        </T>
-      )}
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => setPairing(true)}
-        style={{ alignSelf: "center", padding: 10 }}
-      >
-        <T style={{ fontSize: 14, color: c.accent }}>No Tailscale? Pair on this Wi‑Fi instead</T>
-      </Pressable>
-      {onSkip && (
-        <Button label="Skip for now" onPress={onSkip} />
-      )}
-    </Step>
+      <T selectable style={{ fontFamily: font.mono, fontSize: 15, color: c.foreground }}>
+        {CONNECT_COMMAND}
+      </T>
+      <T muted style={{ fontSize: 14, lineHeight: 20 }}>
+        It signs in to your Parallax account, then shows a 6-digit code. Tap the computer here and
+        type the code.
+      </T>
+    </View>
   );
 }
 
-/** A computer to pick, with its symbol and whether it's chosen. */
-function ComputerChoice({
-  machine,
-  chosen,
-  onPress,
-}: {
-  machine: Machine;
-  chosen: boolean;
-  onPress: () => void;
-}) {
+/** One of the account's computers, with whether it's ready, and set up on a tap when it isn't. */
+function ComputerRow({ listed, gate, onPress }: { listed: Listed; gate?: Gate; onPress: () => void }) {
   const c = useColors();
+  const status = !gate
+    ? "Ready"
+    : gate.kind === "waiting"
+      ? `Waiting for approval · ${formatCode(gate.code)}`
+      : listed.online
+        ? "Tap to set up"
+        : "Offline · Set up when it's on";
   return (
     <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected: chosen }}
+      accessibilityRole="button"
       onPress={onPress}
-      style={[
-        styles.choice,
-        { borderColor: chosen ? c.accent : c.border, backgroundColor: c.surface },
-      ]}
+      disabled={!gate}
+      style={[styles.choice, { borderColor: c.border, backgroundColor: c.surface }]}
     >
       <View style={[styles.symbol, { backgroundColor: c.selected }]}>
-        <DeviceIcon name={machine.name} size={22} color={c.accent} />
+        <DeviceIcon name={listed.name} size={22} color={c.accent} />
       </View>
       <View style={{ flex: 1 }}>
-        <T medium>{machine.name}</T>
+        <T medium>{listed.name}</T>
         <T muted style={{ fontSize: 13 }}>
-          {[machine.os, machine.address].filter(Boolean).join(" · ")}
+          {status}
         </T>
       </View>
-      <Icon
-        icon={chosen ? CircleCheck : Circle}
-        size={22}
-        color={chosen ? c.accent : c.faintForeground}
-      />
+      {gate ? (
+        <Icon icon={ChevronRight} size={18} color={c.faintForeground} />
+      ) : (
+        <Dot color={c.added} size={10} />
+      )}
     </Pressable>
   );
 }
 
-export function Onboarding({ onDone }: { onDone: (setup: Setup) => void }) {
+export function Onboarding({
+  accounts,
+  token,
+  onDone,
+}: {
+  /** The account's computers' sessions and approvals, unless they couldn't be read. */
+  accounts?: AccountHosts;
+  token: () => Promise<string | undefined>;
+  onDone: (setup: Setup) => void;
+}) {
   const c = useColors();
-  const [step, setStep] = useState<"tailscale" | "find" | "default" | "notify">("tailscale");
-  const [address, setAddress] = useState(() => tailnetAddress());
-  const [machines, setMachines] = useState<Machine[]>([]);
-  const [chosen, setChosen] = useState<string>();
+  const [step, setStep] = useState<"computers" | "pair" | "notify">("computers");
+  const [listed, setListed] = useState<Listed[]>();
+  const [paired, setPaired] = useState<Machine[]>([]);
+  const [gates, setGates] = useState<Record<string, Gate>>({});
 
-  // Tailscale connects in its own app: check again while this step shows.
-  useEffect(() => {
-    if (step !== "tailscale") return;
-    const timer = setInterval(() => setAddress(tailnetAddress()), 1500);
-    return () => clearInterval(timer);
-  }, [step]);
-
-  if (step === "tailscale")
-    return (
-      <Step
-        index={0}
-        title="Connect with Tailscale"
-        subtitle="Parallax reaches your computers over your own Tailscale network, encrypted end to end. Install Tailscale on this phone and sign in with the account your computers use."
-      >
-        <View style={[styles.status, { backgroundColor: c.surface, borderColor: c.border }]}>
-          <Mark size={28} />
-          <View style={{ flex: 1 }}>
-            <T medium>{address ? "Tailscale is connected" : "Tailscale isn't connected"}</T>
-            <T muted style={{ fontSize: 13 }}>
-              {address ? `This phone is ${address}` : "Open Tailscale and turn it on."}
-            </T>
-          </View>
-          <Dot color={address ? c.added : c.faintForeground} size={10} />
-        </View>
-        {!address && (
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            <Button
-              label="Get Tailscale"
-              icon={CircleArrowDown}
-              style={{ flex: 1 }}
-              onPress={() => void Linking.openURL(TAILSCALE_APP)}
-            />
-            <Button
-              label="Open Tailscale"
-              icon={SquareArrowOutUpRight}
-              style={{ flex: 1 }}
-              onPress={() =>
-                void Linking.openURL("tailscale://").catch(() => Linking.openURL(TAILSCALE_APP))
-              }
-            />
-          </View>
-        )}
-        <Button label="Continue" primary onPress={() => setStep("find")} />
-        {!address && (
-          <T faint style={{ fontSize: 13, textAlign: "center" }}>
-            You can continue without it to pair a computer on this Wi‑Fi.
-          </T>
-        )}
-      </Step>
+  const look = async () => {
+    const bearer = await token();
+    const found = (bearer && (await listHosts(bearer))) || [];
+    setListed(found);
+    setGates((g) =>
+      Object.fromEntries(
+        found
+          .filter((l) => !accounts?.trusts(l.hostId))
+          .map((l) => [l.hostId, g[l.hostId]?.kind === "waiting" ? g[l.hostId]! : { kind: "setup" as const }]),
+      ),
     );
+  };
+  // Lists them now, and again on coming back from the computer that ran `plx connect`.
+  useEffect(() => {
+    void look();
+    const sub = AppState.addEventListener("change", (s) => s === "active" && void look());
+    return () => sub.remove();
+  }, []);
 
-  if (step === "find")
+  const setUp = (l: Listed) => {
+    if (!accounts) return;
+    const ready = () => setGates(({ [l.hostId]: _, ...rest }) => rest);
+    setUpComputer(accounts, { hostId: l.hostId, name: l.name, routes: [] }, {
+      onWaiting: (code) => setGates((g) => ({ ...g, [l.hostId]: { kind: "waiting", code } })),
+      done: ready,
+      failed: () => setGates((g) => ({ ...g, [l.hostId]: { kind: "setup" } })),
+    });
+  };
+
+  if (step === "pair")
     return (
-      <FindComputers
-        onFound={(found) => {
-          setMachines(found);
-          setChosen(found[0]?.id);
-          setStep("default");
+      <Pairing
+        onPaired={(saved) => {
+          setPaired([pairedMachine(saved)]);
+          setStep("computers");
         }}
-        onSkip={() => {
-          setMachines([]);
-          setChosen(undefined);
-          setStep("notify");
-        }}
+        onCancel={() => setStep("computers")}
       />
     );
 
-  if (step === "default")
+  if (step === "computers")
     return (
       <Step
-        index={2}
-        title="Choose your default computer"
-        subtitle={`Found ${machines.length} computer${machines.length === 1 ? "" : "s"}. You'll see threads from all of them, and new threads start on this one.`}
+        index={0}
+        title="Your computers"
+        subtitle="The computers on your Parallax account. Set each one up once with the code it shows."
       >
-        <View style={{ gap: 10 }}>
-          {machines.map((m) => (
-            <ComputerChoice
-              key={m.id}
-              machine={m}
-              chosen={chosen === m.id}
-              onPress={() => setChosen(m.id)}
-            />
-          ))}
-        </View>
-        <Button label="Continue" primary disabled={!chosen} onPress={() => setStep("notify")} />
+        {!listed ? (
+          <ActivityIndicator color={c.accent} style={{ marginVertical: 24 }} />
+        ) : (
+          <View style={{ gap: 10 }}>
+            {listed.map((l) => (
+              <ComputerRow key={l.hostId} listed={l} gate={gates[l.hostId]} onPress={() => setUp(l)} />
+            ))}
+            {paired.map((m) => (
+              <ComputerRow key={m.id} listed={{ hostId: m.id, name: m.name, online: true }} onPress={() => {}} />
+            ))}
+            {!listed.length && !paired.length && <AddInstructions />}
+          </View>
+        )}
+        <Button label="Continue" primary onPress={() => setStep("notify")} />
+        {listed?.length === 0 && <Button label="Look again" onPress={() => void look()} />}
+        <Pressable accessibilityRole="button" onPress={() => setStep("pair")} style={{ alignSelf: "center", padding: 10 }}>
+          <T style={{ fontSize: 14, color: c.accent }}>Pair a computer on this Wi‑Fi instead</T>
+        </Pressable>
       </Step>
     );
 
-  const finish = () => onDone({ machines, defaultId: chosen, onboarded: true });
+  const finish = () =>
+    onDone({ machines: [...withListed([], listed ?? []), ...paired], onboarded: true });
   return (
     <Step
-      index={3}
+      index={1}
       title="Stay in the loop"
       subtitle="Get a notification when a thread needs your approval, finishes, or fails, on any of your computers."
     >
@@ -327,14 +230,7 @@ const styles = StyleSheet.create({
   page: { padding: 24, paddingTop: 76, gap: 14, flexGrow: 1 },
   progress: { flexDirection: "row", gap: 6, marginBottom: 18 },
   bar: { flex: 1, height: 4, borderRadius: 2 },
-  input: {
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontFamily: font.regular,
-    fontSize: 16,
-  },
+  card: { borderWidth: 1, borderRadius: 16, padding: 16, gap: 8 },
   status: {
     flexDirection: "row",
     alignItems: "center",

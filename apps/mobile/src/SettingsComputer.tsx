@@ -37,7 +37,7 @@ import {
 import { isRepository } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Choices } from "./Choices";
-import { useComputer, type Computer } from "./fleet";
+import { useComputer, useFleet, type Computer } from "./fleet";
 import { ago, type SettingsScreens } from "./nav";
 import { NewThreadsSection, PhoneConnections } from "./Settings";
 import { choiceKey, pages, type SettingsPage } from "./settingsLogic";
@@ -783,6 +783,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
   const id = m.machine.id;
   const { settings, error, set } = useHostSettings(m);
   const [status, setStatus] = useState<RemoteSessionsResult>();
+  const { revoke: revokeSession } = useFleet();
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [picking, setPicking] = useState(false);
   const connect = can(m, "connect");
@@ -830,9 +831,9 @@ function ConnectionsPage({ m }: { m: Computer }) {
   };
   const revoke = (s: { id: string; name: string }) =>
     confirm(`Revoke ${s.name || "Unnamed computer"}?`, "It can't reach this computer until it pairs again.", "Revoke", async () => {
-      const answer = await window.parallax.request(id, "remote/revoke", { id: s.id });
+      const answer = await revokeSession(id, s.id);
       if ("error" in answer) fail("Couldn't revoke the computer", answer.error);
-      else setStatus(answer.result);
+      else setStatus(answer);
     });
 
   if (!connect && !remote)
@@ -874,7 +875,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
               title="Open in a browser"
               detail={`Serves Parallax at ${(showing?.addresses ?? ["this computer's address"])
                 .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
-                .join(", ")} for a browser, which pairs with a code from Pair a device. Use the tailnet address where you can: Tailscale vouches for this computer. On this network the browser warns about this computer's certificate. Continue only if the SHA-256 fingerprint it shows is the one below.${status?.fingerprint ? `\n${fingerprint(status.fingerprint)}` : ""}`}
+                .join(", ")} for a browser, which pairs with a code from Pair a device. On this network the browser warns about this computer's certificate. Continue only if the SHA-256 fingerprint it shows is the one below.${status?.fingerprint ? `\n${fingerprint(status.fingerprint)}` : ""}`}
               value={settings.remoteWeb}
               onChange={(remoteWeb) => void set({ remoteWeb }, `Couldn't turn Open in a browser ${remoteWeb ? "on" : "off"}`)}
             />
@@ -1003,7 +1004,7 @@ const bodies: Record<SettingsPage, ComponentType<{ m: Computer }>> = {
 /**
  * One of a computer's settings pages, with the computer it applies to at the top, under this
  * phone's own settings of that section: Threads' computer for new threads, and Connections'
- * computers and Tailscale.
+ * computers.
  */
 export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenProps<SettingsScreens, "ComputerSettings">) {
   const { id, page } = route.params;
