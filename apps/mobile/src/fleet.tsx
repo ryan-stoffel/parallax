@@ -42,7 +42,6 @@ const FleetContext = createContext<FleetValue | null>(null);
 
 export const useFleet = () => useContext(FleetContext)!;
 
-/** The computer with `id`, if the phone still has it. */
 /**
  * The default computer's id: `defaultId` while it's one of `machines`, else the first. A default
  * whose computer is gone, as a paired one whose session ended, doesn't hold a new one off.
@@ -50,6 +49,7 @@ export const useFleet = () => useContext(FleetContext)!;
 const defaultOf = (machines: Machine[], defaultId?: string) =>
   machines.some((m) => m.id === defaultId) ? defaultId : machines[0]?.id;
 
+/** The computer with `id`, if the phone still has it. */
 export const useComputer = (id: string) => useFleet().computers.find((c) => c.machine.id === id);
 
 /** One computer's outbox, saved out of backups. */
