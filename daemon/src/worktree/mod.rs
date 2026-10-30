@@ -141,8 +141,9 @@ const WORKTREES_DIR: &str = "worktrees";
 /// The folder under the data directory holding each orchestrator's integration worktree (0045).
 const INTEGRATION_DIR: &str = "integration";
 
-/// The folder under the data directory holding each orchestrator's worktree (0042).
-const ORCHESTRATORS_DIR: &str = "orchestrators";
+/// The folder under the data directory holding each orchestrator's worktree (0042). It keeps its
+/// name from before 0093, since existing orchestrators' worktrees are there.
+const ORCHESTRATORS_DIR: &str = "coordinators";
 
 /// Environment variables scrubbed from every git invocation, on top of
 /// [`crate::backend::process::ALWAYS_SCRUBBED`]: anything that could redirect git to a different

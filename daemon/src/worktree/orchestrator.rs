@@ -1,5 +1,5 @@
 //! An orchestrator's worktree (PLX-397, decision 0042): a detached worktree of the orchestrator's
-//! repository at `<data dir>/orchestrators/<orchestrator id>`, which plxd moves to the integration
+//! repository at `<data dir>/coordinators/<orchestrator id>`, which plxd moves to the integration
 //! branch's tip before each of the orchestrator's CLI processes, as PLX-171's was moved to `HEAD`
 //! (0024). It is never committed, so nothing the orchestrator writes there reaches the user's
 //! checkout or the integration branch.

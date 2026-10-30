@@ -87,7 +87,7 @@ pub(crate) fn start_params(orchestrator: ScopeId, prompt: &str) -> OrchestratorS
 fn orchestrator_worktree(host: &Host, orchestrator: ScopeId) -> PathBuf {
     host.dir
         .path()
-        .join("orchestrators")
+        .join("coordinators")
         .join(orchestrator.to_string())
 }
 
