@@ -103,14 +103,15 @@ const iconButtonSizes = {
  * current shortcut beside it in the tooltip; `aria-pressed` shows it on. `size` sets the button
  * and its icon together: sm (24px, 14px icon) in rows and chips, md (28px, 16px) in toolbars, the
  * default, and lg (32px, 20px) in the browser's toolbar and on its own. `reveal` hides it until
- * the pointer is over the nearest `group` (a row), or it's focused, open, or pressed. A
- * `className` replaces its classes, size included.
+ * the pointer is over the nearest `group` (a row), or it's focused, open, or pressed.
+ * `className` adds to its classes.
  */
 export function IconButton({
   label,
   command,
   size = "md",
   reveal,
+  className = "",
   children,
   ...props
 }: {
@@ -126,7 +127,7 @@ export function IconButton({
       aria-label={label}
       title={label}
       data-keys={keys}
-      className={`grid shrink-0 place-items-center rounded-md text-muted-foreground transition-[color,background-color,opacity] enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 aria-pressed:bg-selected aria-pressed:text-foreground ${iconButtonSizes[size]} ${reveal ? "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 aria-expanded:opacity-100 aria-pressed:opacity-100" : ""}`}
+      className={`grid shrink-0 place-items-center rounded-md text-muted-foreground transition-[color,background-color,opacity] enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-50 aria-pressed:bg-selected aria-pressed:text-foreground ${iconButtonSizes[size]} ${reveal ? "opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 aria-pressed:opacity-100" : ""} ${className}`}
       {...props}
     >
       {children}
@@ -135,8 +136,8 @@ export function IconButton({
 }
 
 /**
- * A browser toolbar's button, at Helium's size: 32 px, with a 20 px icon (PLX-981). It goes in an
- * IconButton's `className`, which replaces its own.
+ * A browser toolbar button's look, at Helium's size: 32 px, with a 20 px icon (PLX-981), for a
+ * button that isn't an IconButton. An IconButton takes `size="lg"` instead.
  */
 export const toolbarButton =
   "grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-5";

@@ -77,12 +77,13 @@ Reduced motion is one rule: under `.reduce-motion`, every CSS animation and tran
 
 - `--radius-prompt` is 16px. PLX-1089 lowered it from 24px, which read too round, after 0085 was written.
 - Menu items draw their icons at 16px, as 0085's icon table says for menu items.
-- Text on a danger fill uses `--danger-foreground`, black or white as on the accent. `ui/` and `ui.tsx` use no raw palette classes.
+- Text on a danger fill uses `--danger-foreground`, black or white as on the accent. `ui/` and `ui.tsx` use no raw palette classes. Two fixed colors are exempt, since they're the same in every theme: a dialog's black backdrop at 50% (`backdrop:bg-black/50`) and a switch's white thumb (`bg-white`).
 - The z-index scale: `z-raised` 10 (sticky headings), `z-overlay` 20 (a bar or card over a pane), `z-divider` 30 (resize handles), `z-popover` 50 (fixed cards over the window), `z-tooltip` 1000. Menus and dialogs are in the top layer and need none.
 
 ## Consequences
 
 - Call sites still draw their own buttons, dialogs, spinners, and dots. PLX-1156 moves them onto these components and icons, file by file.
 - A new size, width, duration, or easing between two steps takes the nearer one, or changes this record.
+- The tokens replace Tailwind's own `--ease-out`, `--ease-in`, and `--ease-in-out`, so every existing `ease-out`, `ease-in`, and `ease-in-out` class takes the new curves, and every `transition-*` without a duration is now 120ms, not 150ms.
 - Every dialog in the app now animates, including those not yet on `Dialog`, since the motion is on the `<dialog>` element.
 - `settings/parts.tsx` and `ConnectionStatus.tsx` still have their own `StatusDot` until their callers move.

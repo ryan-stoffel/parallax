@@ -116,12 +116,19 @@ const show = (stack: HTMLDivElement | null) => stack?.showPopover();
 /**
  * A toast's exit. The store drops a notice at once, so `notify`, `dismiss`, and the tests stay
  * synchronous; a copy of the toast stays where it was, in a top-layer popover of its own, and
- * slides out to the right. Nothing plays for a toast with no box (a test's DOM) or under reduced
- * motion.
+ * slides out to the right. Nothing plays for a toast with no box (a test's DOM), under reduced
+ * motion, or for one still on the page after the commit, as StrictMode's re-attached refs are.
  */
 function leave(toast: HTMLElement) {
+  // Measured now, while it's still in place; React removes it within this commit.
   const box = toast.getBoundingClientRect();
   if (!box.width || reducedMotion()) return;
+  queueMicrotask(() => {
+    if (!toast.isConnected) slideOut(toast, box);
+  });
+}
+
+function slideOut(toast: HTMLElement, box: DOMRect) {
   const ghost = toast.cloneNode(true) as HTMLElement;
   ghost.removeAttribute("role");
   ghost.classList.remove("toast-in");

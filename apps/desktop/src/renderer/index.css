@@ -520,6 +520,10 @@ svg.lucide[stroke-width="2"] * {
     transition-timing-function: var(--ease-in);
     opacity: 0;
   }
+  /* Closing, it fades out without taking clicks meant for what's under it. */
+  dialog:not([open]) {
+    pointer-events: none;
+  }
   dialog {
     scale: 0.97;
   }
@@ -553,6 +557,7 @@ svg.lucide[stroke-width="2"] * {
     transition-timing-function: var(--ease-in);
     opacity: 0;
     scale: 0.97;
+    pointer-events: none;
   }
   @starting-style {
     .menu-motion:popover-open {

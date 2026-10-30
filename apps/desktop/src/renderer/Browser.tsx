@@ -66,14 +66,7 @@ import {
   Tab as TabIcon,
   ZoomIn,
 } from "./symbols";
-import {
-  IconButton,
-  Menu,
-  shortcut,
-  toolbarButton,
-  toolbarMenuDivider,
-  ToolbarMenuRow,
-} from "./ui";
+import { IconButton, Menu, shortcut, toolbarMenuDivider, ToolbarMenuRow } from "./ui";
 
 /** The search engine's results page for `query` (Settings › Browser), Google's by default. */
 export const searchUrl = (query: string) => searchUrlFor(searchEngine.get(), query);
@@ -826,7 +819,7 @@ function Tab({
   const navBar = (
     <>
       <IconButton
-        className={toolbarButton}
+        size="lg"
         label="Back"
         disabled={!history.back}
         onClick={() => view.current?.goBack()}
@@ -834,7 +827,7 @@ function Tab({
         <ArrowBack />
       </IconButton>
       <IconButton
-        className={toolbarButton}
+        size="lg"
         label="Forward"
         disabled={!history.forward}
         onClick={() => view.current?.goForward()}
@@ -842,16 +835,11 @@ function Tab({
         <ArrowForward />
       </IconButton>
       {loading ? (
-        <IconButton className={toolbarButton} label="Stop" onClick={() => view.current?.stop()}>
+        <IconButton size="lg" label="Stop" onClick={() => view.current?.stop()}>
           <Close />
         </IconButton>
       ) : (
-        <IconButton
-          className={toolbarButton}
-          label="Reload"
-          disabled={!src}
-          onClick={() => view.current?.reload()}
-        >
+        <IconButton size="lg" label="Reload" disabled={!src} onClick={() => view.current?.reload()}>
           <Refresh />
         </IconButton>
       )}
@@ -859,7 +847,7 @@ function Tab({
       {homePage.show && (
         <IconButton
           label="Home"
-          className={toolbarButton}
+          size="lg"
           onClick={() => (homePage.url.trim() ? open(homePage.url) : ask({ kind: "newTab" }))}
         >
           <Home />
@@ -994,12 +982,7 @@ function Tab({
       <DownloadsButton />
       <Extensions tab={contentsId} onOpen={(url) => ask({ kind: "open", url })} />
       <ProfileButton onOpen={(url) => ask({ kind: "open", url })} />
-      <IconButton
-        label="More"
-        className={toolbarButton}
-        popoverTarget={menuId}
-        aria-haspopup="menu"
-      >
+      <IconButton label="More" size="lg" popoverTarget={menuId} aria-haspopup="menu">
         <MoreVert />
       </IconButton>
       <Menu ref={menu} id={menuId} label="More" align="end" className="w-72 p-1.5">
@@ -1312,7 +1295,7 @@ export function BrowserTabBar({ scope }: { scope: string }) {
             />
           ))}
         </div>
-        <IconButton label="New tab" className={toolbarButton} onClick={browser.newTab}>
+        <IconButton label="New tab" size="lg" onClick={browser.newTab}>
           <Add />
         </IconButton>
       </div>

@@ -4,7 +4,7 @@ import type { ExtensionInfo } from "../preload/bridge";
 import { browserSettingsAsked } from "./browserSettings";
 import { memory, stored } from "./stored";
 import { Close, Delete, Extension, Keep, KeepOff, MoreVert, Settings, Storefront } from "./symbols";
-import { IconButton, Menu, toolbarButton, toolbarMenuDivider, ToolbarMenuRow } from "./ui";
+import { IconButton, Menu, toolbarMenuDivider, ToolbarMenuRow } from "./ui";
 
 // The installed extensions, shared by every tab's toolbar, read once and after each change.
 const installed = memory<ExtensionInfo[] | undefined>(undefined);
@@ -122,12 +122,7 @@ export function Extensions({ tab, onOpen }: { tab?: number; onOpen: (url: string
           class: "browser-action",
         }),
       )}
-      <IconButton
-        label="Extensions"
-        className={toolbarButton}
-        popoverTarget={menuId}
-        aria-haspopup="menu"
-      >
+      <IconButton label="Extensions" size="lg" popoverTarget={menuId} aria-haspopup="menu">
         <Extension />
       </IconButton>
       <Menu
