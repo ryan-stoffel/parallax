@@ -1,6 +1,6 @@
-# 0091: Parallax Connect runs over Parallax Relay and account sign-in, without Tailscale
+# 0091: Parallax Connect runs over Parallax Relay and account sign-in, with Tailscale optional
 
-- Status: proposed, waiting on Ryan's four calls below; once accepted it replaces [0056](0056-parallax-connect.md)'s transport, discovery, and plx-connect sections, amends [0068](0068-relay.md)'s identity and Cloudflare sections and [0065](0065-remote-reach.md)'s mobile amendment (PLX-983), and keeps [0072](0072-connect-stays-up.md)
+- Status: accepted 2026-10-30, with Ryan's four calls below. It replaces [0056](0056-parallax-connect.md)'s transport, discovery, and plx-connect sections, amends [0068](0068-relay.md)'s identity and Cloudflare sections and [0065](0065-remote-reach.md)'s mobile amendment (PLX-983), and keeps [0072](0072-connect-stays-up.md)
 - Date: 2026-10-29
 - Issue: PLX-1148
 
@@ -29,12 +29,12 @@ What's missing: reaching a computer through the relay needs a SPAKE2 pairing cod
 
 ### Ryan's calls
 
-These change the result and wait on Ryan. The rest of this record assumes the recommended answer to each.
+Ryan answered these on 2026-10-30.
 
-1. **Trust.** Recommended: account sign-in plus a one-time approval of each new device and each new computer with a 6-digit code (below, "Access"). A token a compromised relay catches then gets no session. The other choices are sign-in alone, as in T3, which has no approval step but lets a compromised relay that catches a token get a session on the user's hosts, and a pairing code per client and host (0065), with the account used only to list computers.
-2. **Tailscale.** Recommended: remove it from Connect entirely, after one release of migration. The other choice keeps a computer's Tailscale address as an extra direct route.
-3. **Delivery.** Recommended: this record first, then one issue and one PR per part (below, "Work").
-4. **The npm name.** Recommended: publish the CLI as `plx`, so setup is `npx plx connect` (below, "Setup"). `plx` on npm is held by another user's placeholder (0.0.1, "Coming soon", last changed 2022-06-24), so Ryan asks its owner for it, then npm support under its package name dispute policy. The fallback is `plx-cli` with a `plx` command (`npx plx-cli connect`), which is free today.
+1. **Trust.** Account sign-in plus a one-time approval of each new device and each new computer with a 6-digit code (below, "Access"). A token a compromised relay catches then gets no session. The choices not taken were sign-in alone, as in T3, which lets a compromised relay that catches a token get a session on the user's hosts, and a pairing code per client and host (0065).
+2. **Tailscale.** Tailscale stays as an optional direct route (below, "Tailscale becomes an optional route"). The account and the relay replace it for finding and admitting computers. The choice not taken removed it entirely.
+3. **Delivery.** One Linear issue per part, and one pull request for all of them (below, "Work").
+4. **The npm name.** The CLI is `plx`, so setup is `npx plx connect` (below, "Setup"). `plx` on npm is held by another user's placeholder (0.0.1, "Coming soon", last changed 2022-06-24), so Ryan asks its owner for it, then npm support under its package name dispute policy. Until it transfers, the CLI publishes as `plx-cli` with a `plx` command (`npx plx-cli connect`).
 
 ### Setup: `plx connect`, like `t3 connect`
 
@@ -72,7 +72,7 @@ These change the result and wait on Ryan. The rest of this record assumes the re
 
 ### Routes: the LAN first, the relay always
 
-- An `account:` host's routes are its learned LAN addresses first, then `relay:<hostId>`. The LAN addresses come from its descriptor, as 0065 has it, and are dropped when the host stops reporting them. Each route is checked against the pinned id before any credential is sent.
+- An `account:` host's routes are its learned LAN addresses first, then its Tailscale address when plxd reports one, then `relay:<hostId>`. A Tailscale route is a direct TLS connection to plxd's port 7341 at its 100.x address, which 0065's listener already admits as a CGNAT address, with the same pin. It answers only for a client on the same tailnet, and it keeps that client's traffic away from home off the relay and its daily budget. The LAN and Tailscale addresses come from its descriptor, as 0065 has it, and are dropped when the host stops reporting them. Each route is checked against the pinned id before any credential is sent.
 - The app tries the routes as "Speed" below has it and keeps the first that connects. While on the relay, it re-checks the LAN routes every minute, on a network change, and when the app is focused, and moves the connection over when one answers with the pinned key. A route that fails after answering waits 5 minutes before the next try, as T3's supervisor does, so a flaky network can't bounce the connection.
 - This is what makes Connect faster than ssh at home: a direct TLS connection on the LAN, the relay only when away, no sshd, no keys to copy, and no ports to open.
 - Direct connections across the internet (UDP hole punching) are not in this record. The relay's traffic budget (0068: 2 GiB a host a day) is the reason to add them later.
@@ -93,10 +93,11 @@ That leaves the trip to the relay and the TLS handshake inside it, about what a 
 
 - Agent CLI installs and sign-ins on an `account:` host run in that host's plxd terminals (0064), as its shell already does. `sshOf`'s Connect branch goes away.
 
-### Removing Tailscale
+### Tailscale becomes an optional route
 
-- First release: for a host whose `connect` is on, plxd turns on `relay` and `remote` unless the user chose either one before, as 0068's "one turned off stays off" and `on_unless_chosen` already do, and the signed-in app registers it as PLX-1146 does. Turning on `remote` opens port 7341, which admits only private, link-local, loopback, and CGNAT addresses (0065) and only paired or signed-in clients. A host the user kept off stays on its `tailnet:` connection, and Settings asks to turn on Reach from anywhere for it before Tailscale goes. The app adds `account:` connections beside `tailnet:` ones and drops a `tailnet:` connection once the same host answers as `account:`. A client already connected over `tailnet:` is approved over that connection, so migration asks for no codes. A `tailnet:` connection is plain TCP inside Tailscale, with no certificate to match, so the app asks plxd for its relay host id over that connection (a new `relay/id` call), which Tailscale already authenticates, and matches the two by it.
-- The release after both the desktop and the phone reach account hosts (Work 3 and 5): plxd's port 7340 listener, the `connect` setting, `connect/devices`, `plxd dial`'s tailnet addresses, `plxd connect on|off`, `daemon/src/tailnet.rs` and `server/tailnet.rs`, the old plx-connect's `tailscale.mjs`, and the phone's tailnet route go. The phone uses the same account routes as the desktop.
+- First release: for a host whose `connect` is on, plxd turns on `relay` and `remote` unless the user chose either one before, as 0068's "one turned off stays off" and `on_unless_chosen` already do, and the signed-in app registers it as PLX-1146 does. Turning on `remote` opens port 7341, which admits only private, link-local, loopback, and CGNAT addresses (0065) and only paired or signed-in clients. A host the user kept off stays on its `tailnet:` connection, and Settings asks to turn on Reach from anywhere for it before the Tailscale-only path goes. The app adds `account:` connections beside `tailnet:` ones and drops a `tailnet:` connection once the same host answers as `account:`. A client already connected over `tailnet:` is approved over that connection, so migration asks for no codes. A `tailnet:` connection is plain TCP inside Tailscale, with no certificate to match, so the app asks plxd for its relay host id over that connection (a new `relay/id` call), which Tailscale already authenticates, and matches the two by it.
+- Every release from the first: plxd finds its own Tailscale address with `daemon/src/tailnet.rs`, as today, and reports it in its descriptor as a route. A computer on a tailnet is still found through the account, and the tailnet is only one more way to reach it.
+- The release after the first, so hosts and apps on the old version keep working through one update: the Tailscale-only path goes. That is plxd's port 7340 listener and its `tailscale whois` admission in `server/tailnet.rs`, the `connect` setting, `connect/devices`, `tailnet:` connection ids, `plxd connect on|off`, the old plx-connect's `tailscale.mjs`, and ssh to a Tailscale IP. The phone uses the same account routes as the desktop, its Tailscale route included.
 
 ### Limits
 
@@ -104,31 +105,32 @@ That leaves the trip to the relay and the TLS handshake inside it, about what a 
 
 ## Work
 
-Each is one issue and one PR, in this order once Ryan accepts:
+Each is one Linear issue. All seven land in one pull request, built in this order:
 
 1. plxd: account id at registration, `/api/auth/account` with Clerk verification, approved and removed keys and host ids with pending requests and their committed codes, and host-id pinning in `plxd dial`.
 2. `plx connect`: rename `packages/plx-connect` to `packages/plx`, then sign-in with PKCE (loopback, or a code pasted from the relay's new `/connect/code` page), the code that ends setup, `approve`, `unlink`, `remove`, `status`, and `add` over ssh.
 3. Desktop: account discovery, `account:` connections, LAN and relay routes started 200 ms apart with re-checks, approving devices and computers, and the Add computer wizard.
 4. Desktop: installs and sign-ins on `account:` hosts through plxd terminals.
 5. Phone: TLS inside a relay stream in `apps/mobile/modules/pinned-tls`, which today does only pinned HTTPS and WebSockets over URLSession and raw TCP over the tailnet. 0068 lists this as the phone's prerequisite for the relay. Then account routes in place of the tailnet, and approving devices.
-6. Remove Tailscale, one release after 3 and 5 ship. Without 5 the phone has no way to reach a computer away from home.
+6. Tailscale as a route: plxd reports its Tailscale address, and the desktop and the phone try it after the LAN and before the relay. Deleting the Tailscale-only path waits one release for migration, as its own issue then.
 7. Speed, after 1: `/v1/hosts/<hostId>/connect` with a Clerk token in a header, the spare stream, a Durable Object per stream, and the proof on the `/ws` upgrade. Connect time and time to the first streamed event over the relay go into `scripts/bench/budgets.json`, and the issue records one comparison with T3 Connect from the same network.
 
 ## Alternatives
 
 | Alternative | Why it lost |
 | --- | --- |
-| Keep Tailscale | Every computer and phone needs a Tailscale account and app, and Parallax controls none of discovery, access, or transport. |
+| Tailscale as the only way to connect | Every computer and phone needs a Tailscale account and app, and Parallax controls none of discovery, access, or transport. |
 | A Cloudflare Tunnel per host, exactly as T3 | Cloudflare ends TLS, so it reads every thread, against 0068. It adds a pinned `cloudflared` per host, tunnel and DNS provisioning, a reaper, and Cloudflare API calls Ryan pays for. The relay already carries end-to-end TLS. |
 | Sign-in alone, as T3 | No approval step, but a compromised relay that catches a token gets a session on the user's hosts. One of the other answers to Ryan's first call. |
 | A pairing code per client and host, with the account only listing computers | Keeps the relay untrusted, but every new computer needs a code from every other one, which is the step T3 Connect removes. One of the other answers to Ryan's first call. |
 | Clerk's device authorization grant for SSH sign-in, as T3 | The CLI shows a code, the user confirms it matches in the browser, and the CLI polls, so nothing is pasted. Ryan chose a code shown in the browser and pasted into the CLI, which needs no device grant on the OAuth application and no polling. |
 | The relay mints a bootstrap credential, as T3 | A relay's own key could then mint access to every host at any time. With plxd checking Clerk's signature, a compromised relay also needs a fresh token from a client of that user. |
+| Removing Tailscale entirely | Users already on a tailnet would lose a direct route away from home that costs no relay traffic. Ryan kept it. |
 | Our own WireGuard mesh with hole punching | That is rebuilding Tailscale: a coordination server, key distribution, NAT traversal, and a userspace network stack on three OSes. The relay plus the LAN route covers the need now. |
 
 ## Consequences
 
-- Setting up a computer takes one command and a sign-in, with no Tailscale, sshd, keys, or open ports, and every signed-in computer and phone sees it.
+- Setting up a computer takes one command and a sign-in, with no Tailscale required, and no sshd, keys, or open ports, and every signed-in computer and phone sees it.
 - plxd verifies Clerk tokens in Rust: RS256 and a JWKS fetch. `ring` already verifies RSA, so no new crypto crate is needed.
 - Connect depends on the relay and Clerk being up. A computer that loses the internet is reachable only on the LAN, and only by a client that already holds a session for it.
 - Away from home every byte crosses a Cloudflare Durable Object and counts against the host's daily budget. The measured trip was about level with Tailscale's direct path ("Speed").
