@@ -581,7 +581,7 @@ export type TerminalTarget =
   | { hostId: string; connect: ConnectAdd };
 
 /**
- * What Add computer sets up with `plx-connect add` (0056): a Tailscale IP, an ssh user, and with
+ * What Add computer sets up with `plx add` (0056): a Tailscale IP, an ssh user, and with
  * `headless`, plxd alone, without the app.
  */
 type ConnectAdd = { device: string; user?: string; headless?: boolean };
@@ -686,7 +686,7 @@ export type ConnectState = {
   on?: boolean;
   /** This computer's icon. */
   icon: DeviceIcon;
-  /** The channel `plx-connect add` installs: this app's own (0028). */
+  /** The channel `plx add` installs: this app's own (0028). */
   channel: "stable" | "nightly";
 };
 

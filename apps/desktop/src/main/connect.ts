@@ -3,7 +3,7 @@ import type { TailnetDevice } from "../protocol/generated/protocol";
 import { quote, type Command } from "./terminal";
 
 // Parallax Connect's pieces in main (0056) that need no Electron: what hosts.ts keeps of each
-// device, and the command that runs plx-connect.
+// device, and the command that runs plx.
 
 /** A Connect device as `settings.json` keeps it, so it's listed and retried while offline. */
 export type SavedDevice = {
@@ -51,33 +51,33 @@ export function mergeFound(
   return { devices, changed };
 }
 
-/** A Tailscale IP or host name `plx-connect add` may get, which no shell can read as more. */
+/** A Tailscale IP or host name `plx add` may get, which no shell can read as more. */
 export const isDeviceAddress = (value: unknown): value is string =>
   typeof value === "string" && /^[\w][\w.:-]{0,252}$/.test(value);
 
-/** An ssh user name `plx-connect add` may get. */
+/** An ssh user name `plx add` may get. */
 export const isSshUser = (value: unknown): value is string =>
   typeof value === "string" && /^[\w][\w.-]{0,63}$/.test(value);
 
 /**
- * How main runs plx-connect: the copy in this build, `script`, or `PLX_CONNECT_PATH`, run by the
+ * How main runs plx: the copy in this build, `script`, or `PLX_CONNECT_PATH`, run by the
  * app's own Electron as Node (`ELECTRON_RUN_AS_NODE`; the app sets no fuses), so this computer
- * needs no Node or npm, and plx-connect always matches the app.
+ * needs no Node or npm, and plx always matches the app.
  */
 export type ConnectProgram = {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   /** The app's Electron, `process.execPath`. */
   execPath: string;
-  /** `bin/plx-connect.mjs` in the app's resources, which package-app copies, or the repo's in a dev build. */
+  /** `bin/plx.mjs` in the app's resources, which package-app copies, or the repo's in a dev build. */
   script: string;
 };
 
 /**
- * What sets up `device` for Connect: `plx-connect add` in a terminal, where ssh can ask for a
+ * What sets up `device` for Connect: `plx add` in a terminal, where ssh can ask for a
  * password, through the login shell, so ssh is found where the user would find it, or PowerShell
  * on Windows. Electron is a GUI program there, which PowerShell doesn't wait for unless its output
- * is piped, so it's piped to the host, read as UTF-8 for plx-connect's ✓ and ✗. Its paths are
+ * is piped, so it's piped to the host, read as UTF-8 for plx's ✓ and ✗. Its paths are
  * PowerShell string literals, in which `$` and backticks are plain characters.
  */
 export function addCommand(

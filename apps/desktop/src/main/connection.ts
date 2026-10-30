@@ -113,7 +113,7 @@ export const backoffMs = (failures: number, cap = 10_000) => Math.min(1000 * 2 *
 /**
  * Runs `plxd attach` on a macOS or Linux host from `~/.parallax-plxd`, where the app installs plxd
  * at its own version (`installPlxd`, PLX-642); else from PATH, where it may have been added since;
- * else from where Parallax and plx-connect put plxd (PLX-580): `~/.local/bin`, or inside the app
+ * else from where Parallax and plx put plxd (PLX-580): `~/.local/bin`, or inside the app
  * in `/Applications` or `~/Applications`, either channel. A computer with Parallax from the dmg
  * has no plxd on PATH. Exits 127 when none is there. It's one argument to ssh, which the host's
  * login shell runs.

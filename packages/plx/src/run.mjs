@@ -1,8 +1,10 @@
 // @ts-check
-// Running a script on the target: over the system ssh for `add`, or here for `setup`.
+// Running a script, or `plxd attach`, on the target: over the system ssh for `add` and
+// `connect add`, or here for `setup` and `connect`.
 
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { POWERSHELL_ARGS } from "./scripts.mjs";
@@ -17,8 +19,23 @@ import { POWERSHELL_ARGS } from "./scripts.mjs";
  * @property {(shell: Shell, script: string, capture: boolean) => Promise<Result>} script Runs
  *   `script` with `sh -s` or PowerShell, from stdin. With `capture`, keeps stdout; without, prints
  *   stdout and stderr indented as they arrive.
+ * @property {(os: import("./releases.mjs").Os) => import("node:child_process").ChildProcess} attach
+ *   Starts `plxd attach` from `~/.parallax-plxd` there, where the install put it (0072), with
+ *   stdin and stdout piped for plxd's JSON-RPC.
  * @property {() => void} close Ends what the runner keeps open.
  */
+
+/** Where the install puts plxd on this computer (0072). */
+export const localPlxd = () =>
+  path.join(os.homedir(), ".parallax-plxd", process.platform === "win32" ? "plxd.exe" : "plxd");
+
+/**
+ * The remote command that starts `plxd attach` from `~/.parallax-plxd` on an `os` computer: in
+ * sh, or on Windows in cmd, OpenSSH's default shell there, which expands `%USERPROFILE%`.
+ * @param {import("./releases.mjs").Os} os
+ */
+export const remoteAttach = (os) =>
+  os === "windows" ? `cmd /c "%USERPROFILE%\\.parallax-plxd\\plxd.exe" attach` : `"$HOME/.parallax-plxd/plxd" attach`;
 
 /**
  * ssh's arguments to run `command` on `destination`. Host keys are accepted the first time,
@@ -56,6 +73,7 @@ export function sshRunner(destination, options) {
   return {
     command: (command) => exec(ssh, args([command]), { capture: true }),
     script: (shell, script, capture) => exec(ssh, args(remoteReader(shell)), { input: script, capture }),
+    attach: (os) => spawn(ssh, args([remoteAttach(os)]), { stdio: ["pipe", "pipe", "ignore"] }),
     close() {
       if (!controlDir) return;
       spawn(ssh, ["-O", "exit", ...args([])], { stdio: "ignore" }).once("close", () =>
@@ -73,6 +91,7 @@ export function localRunner() {
       shell === "sh"
         ? exec("sh", ["-s"], { input: script, capture })
         : exec("powershell.exe", POWERSHELL_ARGS, { input: script, capture }),
+    attach: () => spawn(localPlxd(), ["attach"], { stdio: ["pipe", "pipe", "ignore"] }),
     close() {},
   };
 }

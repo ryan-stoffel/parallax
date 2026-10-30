@@ -1761,7 +1761,7 @@ const fakeSetup = [
   "\x1b[1m~/.parallax/worktrees/docs-links\x1b[0m % ",
 ];
 
-/** What `plx-connect add` prints, a line at a time with a pause after each. */
+/** What `plx add` prints, a line at a time with a pause after each. */
 function fakeAdd(device: TailnetDevice, user: string | undefined): [string, number][] {
   const who = `${user ?? "ryan"}@${device.ip}`;
   const name = device.hostName;
@@ -1812,7 +1812,7 @@ function fakeAdd(device: TailnetDevice, user: string | undefined): [string, numb
           ],
         ]
       : [[`  Installing plxd's login service`, 500]]) as [string, number][]),
-    [`  Installed plx-connect in ~/.local`, 600],
+    [`  Installed plx-cli in ~/.local`, 600],
     [`✓ Installed ${app} ${version} and turned on Parallax Connect`, 300],
     [`→ Waiting for ${name} to answer on port 7340`, 900],
     [`✓ ${name} is connected to Parallax.`, 300],

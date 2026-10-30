@@ -88,7 +88,7 @@ test("the SHA-256 is GitHub's digest, else the .sha256 asset's, else nothing ins
 
   const neither = pickAsset({ tag_name: "v1.0.0", prerelease: false, assets: [asset(name)] }, "linux", "x64");
   await assert.rejects(withSha256(neither, fetchText), {
-    message: `The release has no SHA-256 for ${name}, so plx-connect won't install it.`,
+    message: `The release has no SHA-256 for ${name}, so plx won't install it.`,
   });
   // A .sha256 that doesn't list the file is no checksum either.
   await assert.rejects(withSha256(withSums, async () => `${hex}  something-else\n`), /no SHA-256/);

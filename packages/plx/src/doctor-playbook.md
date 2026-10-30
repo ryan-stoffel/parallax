@@ -6,7 +6,7 @@ start or hang, an app that can't reach plxd, agents that fail to sign in, Connec
 that won't connect, slow or broken updates, or anything else. Find out what went wrong, unblock the
 user if you can, and turn what you learned into a well written GitHub issue when one is warranted.
 
-`plx-connect doctor` already ran its checks and wrote a context file, named above, with this
+`plx doctor` already ran its checks and wrote a context file, named above, with this
 computer's versions, paths, plxd's health, its agents, its settings, and plxd's recent warnings and
 errors. Everything machine-specific lives there, not here.
 
@@ -22,15 +22,15 @@ Good repro steps are the most valuable thing you can get.
 Read it before investigating. Its checks marked ✗ or ! are leads, not conclusions: a failed check
 may be unrelated to what the user describes.
 
-The doctor version in it is plx-connect's, the CLI that ran the checks. It is not Parallax's
+The doctor version in it is plx's, the CLI that ran the checks. It is not Parallax's
 version. The running version is plxd's own answer, and it can differ from the binary on disk (see
 "Running binary") until plxd restarts.
 
 ## 3. Check for a newer playbook
 
-Fetch https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/packages/plx-connect/src/doctor-playbook.md.
+Fetch https://raw.githubusercontent.com/ryan-stoffel/parallax/develop/packages/plx/src/doctor-playbook.md.
 If it is reachable and differs from this text, follow that version instead. The user may be on an
-older plx-connect.
+older plx.
 
 ## 4. Know the shape of Parallax
 
@@ -127,7 +127,7 @@ Check these against the evidence before going deeper.
 | Connect doesn't reach another computer | `connect/devices` shows Tailscale `missing` or `stopped`, or `listening: false`; `could not listen on …` or `refused a tailnet connection` in the log | Start Tailscale on both, signed in as the same Tailscale user and not tagged; on Windows, allow TCP 7340 in the firewall |
 | plxd stops at logout on Linux | Linger is off | `sudo loginctl enable-linger $USER` |
 | The disk fills up | Free space in the context file; `du -sh` on `worktrees/` and `plxd.log` | Worktrees go only after their PR merges with `cleanWorktrees` on; offer to delete worktrees of finished, archived threads, after listing them for the user |
-| SSH host fails | Exit 127: no plxd found; exit 255: ssh itself failed; output from shell startup files corrupts the connection | Install plxd there with `npx plx-connect add <host>`; make startup files quiet for non-interactive shells |
+| SSH host fails | Exit 127: no plxd found; exit 255: ssh itself failed; output from shell startup files corrupts the connection | Install plxd there with `npx plx-cli add <host>`; make startup files quiet for non-interactive shells |
 | Windows threads don't run | `workerUnavailable`: Windows runs no workers | Run threads on a Mac or Linux host, or WSL2, through Connect or SSH |
 
 ## 7. Get the source
@@ -161,8 +161,8 @@ installed or signed in. Then check whether a newer release fixes it: compare ver
 release notes and recent commits that touch the relevant code.
 
 If the user is behind and the fix likely shipped, say so plainly. The app updates itself from its
-menu; plxd in `~/.parallax-plxd` is updated by the app. For a computer set up with plx-connect,
-`npx plx-connect setup` installs the newest release again.
+menu; plxd in `~/.parallax-plxd` is updated by the app. For a computer set up with plx,
+`npx plx-cli setup` installs the newest release again.
 
 ## 9. Offer outcomes
 
@@ -181,7 +181,7 @@ request, use a separate clean clone of `develop`, never the tag-pinned clone.
   diagnosis, steps to reproduce, version, environment, evidence, related issues, fix applied or
   workaround, and filed by.
 - Under Version, give the version the problem happened on, or say it's unknown. Name
-  plx-connect's version only as the doctor's.
+  plx's version only as the doctor's.
 - Label it `via-doctor`. Use a plain, specific title with no prefix.
 - Show the user the complete issue and get an explicit yes before posting. Never post without it.
 - Under Filed by, name the agent and model that wrote it.

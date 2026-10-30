@@ -1,5 +1,5 @@
 // @ts-check
-// `plx-connect doctor`: checks Parallax on this computer, asking the running plxd itself, offers
+// `plx doctor`: checks Parallax on this computer, asking the running plxd itself, offers
 // the fixes it knows, then hands the rest to the user's own coding agent (claude or codex) with
 // a context file and the playbook in `doctor-playbook.md`, as T3 Code's `t3 triage` does. The
 // agent asks what went wrong, investigates, and helps file an issue; the agent's own permission
@@ -127,7 +127,7 @@ export function signInFix(provider) {
 
 /**
  * Where plxd may be, in the desktop app's `LOCATE_PLXD` order: `~/.parallax-plxd`
- * (`%USERPROFILE%\.parallax-plxd` on Windows), where plx-connect and the app's SSH install put it;
+ * (`%USERPROFILE%\.parallax-plxd` on Windows), where plx and the app's SSH install put it;
  * inside the app on macOS; `~/.local/bin` and the app's copy in `~/.local/share/parallax/app` on
  * Linux (`command.ts`); and the app's `resources` folder under `%LOCALAPPDATA%\Programs` on
  * Windows. PATH comes after these.
@@ -323,14 +323,14 @@ function probePipe(dataDir) {
  * plxd when none runs, so this is only called when one does. Resolves when every request is
  * answered, or after `timeoutMs` with what was.
  * @param {string} plxd
- * @param {string} version plx-connect's, for the `initialize` request.
+ * @param {string} version plx's, for the `initialize` request.
  * @param {number} timeoutMs
  * @returns {Promise<Answers>}
  */
 function askPlxd(plxd, version, timeoutMs = 15_000) {
   /** @type {[keyof Answers, string, object][]} */
   const requests = [
-    ["initialize", "initialize", { protocol: { min: 1, max: 1 }, client: { name: "plx-connect doctor", version }, capabilities: {} }],
+    ["initialize", "initialize", { protocol: { min: 1, max: 1 }, client: { name: "plx doctor", version }, capabilities: {} }],
     ["hostVersion", "host/version", {}],
     ["health", "host/health", {}],
     ["providers", "providers/list", {}],
@@ -382,7 +382,7 @@ function askPlxd(plxd, version, timeoutMs = 15_000) {
 
 /**
  * Gathers the facts the checks read.
- * @param {string} version plx-connect's.
+ * @param {string} version plx's.
  * @param {{ stable?: string, nightly?: string, error?: string }} [newest] The release versions
  *   from an earlier gather, so a recheck doesn't fetch them again.
  * @returns {Promise<Facts>}
@@ -473,7 +473,7 @@ export function evaluate(facts) {
     "plxd",
     plxd
       ? { state: facts.plxdVersion ? "ok" : "fail", detail: facts.plxdVersion ? `${facts.plxdVersion} at ${plxd}` : `${plxd} --version printed no version` }
-      : { state: "fail", detail: `not found. Install Parallax from ${REPO}/releases, or run npx plx-connect setup.` },
+      : { state: "fail", detail: `not found. Install Parallax from ${REPO}/releases, or run npx plx-cli setup.` },
   );
 
   /** @type {Fix | undefined} */
@@ -640,10 +640,10 @@ function runFolder(facts, now) {
 }
 
 /** How this command was run, for the agent to tell the user how to update it. */
-const launchedAs = () => (process.env.npm_command === "exec" ? "npx plx-connect doctor" : `${process.argv[1] ?? "plx-connect"} doctor`);
+const launchedAs = () => (process.env.npm_command === "exec" ? "npx plx-cli doctor" : `${process.argv[1] ?? "plx"} doctor`);
 
 /**
- * `plx-connect doctor`. Prints each check. In a terminal, offers the fix for each failed one and
+ * `plx doctor`. Prints each check. In a terminal, offers the fix for each failed one and
  * checks again. Then writes the context and prompt files and hands them to claude or codex:
  * asked first, unless `--agent` names one. Resolves to the agent's exit code when it ran, else 1
  * when a check still fails.
@@ -655,7 +655,7 @@ export async function doctor(options) {
   const newPrompt = () => createInterface({ input: process.stdin, output: process.stdout });
   let prompt = interactive ? newPrompt() : undefined;
   try {
-    console.log(`Parallax doctor (plx-connect ${pkg.version})\n`);
+    console.log(`Parallax doctor (plx ${pkg.version})\n`);
     let facts = await gather(pkg.version);
     let results = evaluate(facts);
     for (const checked of results) console.log(line(checked));

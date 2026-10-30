@@ -466,7 +466,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
 
 /**
  * How a host's command terminals reach it from this computer: an SSH host by its destination, a
- * Connect device (0056) by ssh to its Tailscale IP, as `plx-connect add` did. Undefined for
+ * Connect device (0056) by ssh to its Tailscale IP, as `plx add` did. Undefined for
  * `local` and for a LAN computer, whose commands run on its own plxd (`isLanHost`), so neither
  * needs ssh, and a remote host's command never runs here.
  */
@@ -1161,18 +1161,18 @@ let connectOn: boolean | undefined;
 let localIcon: DeviceIcon | undefined;
 const DISCOVERY_MS = 15_000;
 
-/** plx-connect in this build: package-app's copy in the resources, or a dev build's repo's. */
+/** plx in this build: package-app's copy in the resources, or a dev build's repo's. */
 const connectProgram = (): ConnectProgram => ({
   platform: process.platform,
   env: process.env,
   execPath: process.execPath,
   script: app.isPackaged
-    ? path.join(process.resourcesPath, "plx-connect", "bin", "plx-connect.mjs")
-    : path.join(app.getAppPath(), "..", "..", "packages", "plx-connect", "bin", "plx-connect.mjs"),
+    ? path.join(process.resourcesPath, "plx", "bin", "plx.mjs")
+    : path.join(app.getAppPath(), "..", "..", "packages", "plx", "bin", "plx.mjs"),
 });
 
 /**
- * The channel `plx-connect add` installs: this app's own (0028). A development build follows
+ * The channel `plx add` installs: this app's own (0028). A development build follows
  * nightly, the channel with releases.
  */
 const channel = () => (isNightly(app.getVersion()) || !app.isPackaged ? "nightly" : "stable");

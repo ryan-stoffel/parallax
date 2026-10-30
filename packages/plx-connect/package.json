@@ -1,0 +1,21 @@
+{
+  "name": "plx-connect",
+  "version": "0.5.0",
+  "description": "Moved to plx-cli: run npx plx-cli connect.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "plx-connect": "bin/plx-connect.mjs"
+  },
+  "files": [
+    "bin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ryan-stoffel/parallax.git",
+    "directory": "packages/plx-connect"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

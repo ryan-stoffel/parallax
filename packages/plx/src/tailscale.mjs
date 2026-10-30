@@ -34,7 +34,7 @@ const TAILSCALE_PATHS = [
  */
 
 /**
- * @typedef {object} TailnetNode The fields plx-connect reads from a node in `tailscale status --json`.
+ * @typedef {object} TailnetNode The fields plx reads from a node in `tailscale status --json`.
  * @property {string} [ID]
  * @property {string} [HostName]
  * @property {string} [DNSName]

@@ -6,7 +6,7 @@
 /** @typedef {"arm64" | "x64"} Arch */
 
 /**
- * @typedef {object} Release The fields plx-connect reads from GitHub's release list.
+ * @typedef {object} Release The fields plx reads from GitHub's release list.
  * @property {string} tag_name
  * @property {boolean} prerelease
  * @property {boolean} [draft]
@@ -46,7 +46,7 @@ export const appName = (channel) => (channel === "nightly" ? "Parallax (Nightly)
 /** The release list, newest first, from GitHub's API. */
 export async function fetchReleases() {
   const response = await fetch(RELEASES_URL, {
-    headers: { accept: "application/vnd.github+json", "user-agent": "plx-connect" },
+    headers: { accept: "application/vnd.github+json", "user-agent": "plx-cli" },
     signal: AbortSignal.timeout(20_000),
   });
   if (!response.ok) throw new Error(`GitHub answered ${response.status} ${response.statusText} for the release list.`);
@@ -121,13 +121,13 @@ export async function withSha256({ sha256Url, ...found }, fetchText = fetchUrl) 
         .map((line) => /^([0-9a-f]{64}) [ *]?(.+)$/i.exec(line.trim()))
         .find((m) => m?.[2] === found.name)?.[1]
     : undefined;
-  if (!listed) throw new Error(`The release has no SHA-256 for ${found.name}, so plx-connect won't install it.`);
+  if (!listed) throw new Error(`The release has no SHA-256 for ${found.name}, so plx won't install it.`);
   return { ...found, sha256: listed.toLowerCase() };
 }
 
 /** The text at `url`. @param {string} url */
 async function fetchUrl(url) {
-  const response = await fetch(url, { headers: { "user-agent": "plx-connect" }, signal: AbortSignal.timeout(20_000) });
+  const response = await fetch(url, { headers: { "user-agent": "plx-cli" }, signal: AbortSignal.timeout(20_000) });
   if (!response.ok) throw new Error(`GitHub answered ${response.status} ${response.statusText} for ${url}.`);
   return response.text();
 }

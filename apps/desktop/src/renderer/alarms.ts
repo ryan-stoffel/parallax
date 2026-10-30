@@ -251,7 +251,7 @@ export function useOutdatedAlarms(hosts: HostThreads[]) {
           key,
           tone: "error",
           title: `${host.name}'s plxd is out of date`,
-          body: "Its threads can't load. Update Parallax there, or run npx plx-connect setup on a Linux computer that runs only plxd.",
+          body: "Its threads can't load. Update Parallax there, or run npx plx-cli setup on a Linux computer that runs only plxd.",
         });
       } else if (!view.outdated && !view.loading && outdated.current.delete(host.id)) {
         notify({ key, tone: "success", title: `${host.name}'s plxd is up to date` });
