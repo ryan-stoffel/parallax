@@ -182,6 +182,22 @@ async fn fake_relay(answer: String) -> String {
 }
 
 #[tokio::test]
+async fn relay_id_reports_the_routes_the_descriptor_does() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    let id = client.call::<RelayId>(RelayIdParams {}).await.unwrap();
+    assert_eq!(id.host_id, host_id);
+    assert_eq!(id.routes, std::slice::from_ref(&route));
+    let port = route.rsplit_once(':').unwrap().1.parse().unwrap();
+    let (status, _, body) = https(port, "GET", "/.well-known/parallax", &[], "").await;
+    assert_eq!(status, 200);
+    let descriptor: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(descriptor["routes"], json!(id.routes));
+    server.stop().await;
+}
+
+#[tokio::test]
 async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
     let issuer = clerk().await;
     let dir = temp_dir();

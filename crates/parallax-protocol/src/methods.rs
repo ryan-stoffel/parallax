@@ -577,7 +577,8 @@ method_table! {
         /// answers with the rest.
         RelayRemove = "relay/remove": RelayRemoveParams => RelayHostsResult;
         /// `relay/id`: this host's relay id, so a client on another route, such as a `tailnet:`
-        /// connection, can match it to the account's host list (0091). Gated on the
+        /// connection, can match it to the account's host list (0091), and its current routes,
+        /// so a client can refresh a changed LAN or Tailscale address. Gated on the
         /// `accountAccess` capability, like every `access/*` method.
         RelayId = "relay/id": RelayIdParams => RelayIdResult;
         /// `access/get`: who may sign in with this host's account, and a new device's request

@@ -74,7 +74,7 @@ pub(crate) async fn relay_sign(
         .map_err(ErrorObject::invalid_params)
 }
 
-/// `relay/id`: this host's relay id.
+/// `relay/id`: this host's relay id and its routes, as its descriptor reports them.
 pub(crate) async fn relay_id(
     context: &Context,
     _: RelayIdParams,
@@ -84,6 +84,7 @@ pub(crate) async fn relay_id(
         .map_err(|e| ErrorObject::internal_error(e.to_string()))?;
     Ok(RelayIdResult {
         host_id: key.host_id(),
+        routes: remote::routes(&context.daemon).await,
     })
 }
 
