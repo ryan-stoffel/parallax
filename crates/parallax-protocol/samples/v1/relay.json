@@ -78,5 +78,47 @@
         { "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE", "name": "Ryan's Mac Mini", "online": true, "thisComputer": true }
       ]
     }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "relay/sign",
+    "params": { "tokenHash": "n4bQgYhMfWWaL-qgxVrQFaO_TxsrC4Is0V1sFbDwCgg" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {
+      "hostId": "alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+      "name": "Ryan's Mac Mini",
+      "signature": "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "relay/register",
+    "params": {
+      "token": "<clerk session token>",
+      "signed": {
+        "hostId": "alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o",
+        "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+        "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+        "name": "Ryan's Mac Mini",
+        "signature": "DtEhU3ljbEg8L38VWAfUAqOyKAM6-Xx-F4GawxaepmXFCgfTjDxw5djxLa8ISlSApmWQxfKTUJqPP3-Kg6NU1Q"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {
+      "sessions": [],
+      "listening": false,
+      "pairing": false,
+      "relay": { "connected": true, "hookUrl": "https://relay.parallax.codes/v1/hooks/tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE" }
+    }
   }
 ]

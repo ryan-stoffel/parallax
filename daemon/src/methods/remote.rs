@@ -1,11 +1,12 @@
 //! `remote/pair`, `remote/sessions`, and `remote/revoke` (PLX-641, 0065): pairing codes and the
-//! sessions of clients paired with this host. And `relay/register`, `relay/hosts`, and
-//! `relay/remove` (PLX-652, 0068).
+//! sessions of clients paired with this host. And `relay/register`, `relay/sign` (PLX-1146),
+//! `relay/hosts`, and `relay/remove` (PLX-652, 0068).
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    RelayHostsParams, RelayHostsResult, RelayRegisterParams, RelayRemoveParams, RemotePairParams,
-    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
+    RelayHostsParams, RelayHostsResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
+    RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
+    RemoteSessionsResult,
 };
 
 use super::Context;
@@ -51,10 +52,20 @@ pub(crate) async fn register_relay(
     context: &Context,
     params: RelayRegisterParams,
 ) -> Result<RemoteSessionsResult, ErrorObject> {
-    crate::relay::register(&context.daemon, &params.token)
+    crate::relay::register(&context.daemon, &params.token, params.signed)
         .await
         .map_err(ErrorObject::invalid_params)?;
     sessions(context, RemoteSessionsParams {}).await
+}
+
+/// `relay/sign`: this host's relay registration, signed over a token's hash (PLX-1146).
+pub(crate) async fn relay_sign(
+    context: &Context,
+    params: RelaySignParams,
+) -> Result<RelaySignResult, ErrorObject> {
+    crate::relay::sign(&context.daemon, &params.token_hash)
+        .await
+        .map_err(ErrorObject::invalid_params)
 }
 
 /// `relay/hosts`: the user's hosts on the relay.

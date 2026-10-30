@@ -654,6 +654,12 @@ export type ParallaxRequests = {
 	 */
 	"relay/register": { params: RelayRegisterParams, result: RemoteSessionsResult },
 	/**
+	 * `relay/sign`: signs this host's relay registration over a token's hash, for the
+	 * computer that holds the token to post with `relay/register` (PLX-1146). Turns `relay`
+	 * on unless it was ever set.
+	 */
+	"relay/sign": { params: RelaySignParams, result: RelaySignResult },
+	/**
 	 * `relay/hosts`: the hosts the signed-in user has on Parallax Relay (PLX-652, 0068).
 	 */
 	"relay/hosts": { params: RelayHostsParams, result: RelayHostsResult },
@@ -1140,6 +1146,7 @@ export const REQUEST_METHODS = [
 	"remote/sessions",
 	"remote/revoke",
 	"relay/register",
+	"relay/sign",
 	"relay/hosts",
 	"relay/remove",
 	"inbox/list",
@@ -7808,9 +7815,10 @@ export type HostSettings = {
 	 */
 	remoteWeb?: boolean,
 	/**
-	 * Whether plxd keeps a connection to Parallax Relay while `remote` is on, so this user's
-	 * other devices reach it from anywhere and its webhooks have a public URL (PLX-652, 0068).
-	 * Off by default. An older plxd, without the `relay` capability, leaves it out.
+	 * Whether plxd keeps a connection to Parallax Relay, for phone notifications and its
+	 * webhooks' public URL, and while `remote` is on too, so this user's other devices reach it
+	 * from anywhere (PLX-652, 0068, PLX-1146). Off until set, or until the host first registers.
+	 * An older plxd, without the `relay` capability, leaves it out.
 	 */
 	relay?: boolean,
 	/**
@@ -8057,13 +8065,55 @@ export type RemoteRevokeParams = {
 };
 
 /**
- * Params of `relay/register`: registers this host with Parallax Relay under the signed-in user.
+ * Params of `relay/register`: registers a host with Parallax Relay under the signed-in user.
  */
 export type RelayRegisterParams = {
 	/**
 	 * The user's Clerk session token. plxd sends it to the relay once and keeps nothing of it.
 	 */
 	token: string,
+	/**
+	 * Another computer's registration, from its `relay/sign` over this token's hash, to post in
+	 * its place (PLX-1146). Absent registers this host.
+	 */
+	signed?: RelaySignResult,
+};
+
+/**
+ * Result of `relay/sign`: what `relay/register`'s `signed` takes.
+ */
+export type RelaySignResult = {
+	/**
+	 * Its relay id: its host key's JWK thumbprint.
+	 */
+	hostId: string,
+	/**
+	 * Its host key's P-256 public x coordinate, in base64url.
+	 */
+	x: string,
+	/**
+	 * Its y coordinate.
+	 */
+	y: string,
+	/**
+	 * Its name.
+	 */
+	name: string,
+	/**
+	 * Its ES256 signature over the registration message, in base64url.
+	 */
+	signature: string,
+};
+
+/**
+ * Params of `relay/sign` (PLX-1146): signs this host's relay registration for a token that stays
+ * on another computer.
+ */
+export type RelaySignParams = {
+	/**
+	 * The token's SHA-256, in base64url without padding.
+	 */
+	tokenHash: string,
 };
 
 /**

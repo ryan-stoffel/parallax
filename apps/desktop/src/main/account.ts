@@ -94,6 +94,8 @@ export function passwordStore(
 export type Account = {
   accessToken(): Promise<string | undefined>;
   currentToken(): string | undefined;
+  /** Calls `listener` each time someone signs in here. */
+  onSignIn(listener: () => void): void;
 };
 
 /**
@@ -247,6 +249,7 @@ export function startAccount(): Account {
     if (session && Date.now() - fetchedAt > 60_000) void refreshProfile();
   });
 
+  const signedIn: (() => void)[] = [];
   // The sign-in waiting for the browser, if any.
   let page: Callback | undefined;
 
@@ -272,6 +275,7 @@ export function startAccount(): Account {
       save({ refreshToken: fresh.refreshToken, user });
       fetchedAt = Date.now();
       show(user);
+      for (const listener of signedIn) listener();
       return undefined;
     });
     page = current;
@@ -333,5 +337,6 @@ export function startAccount(): Account {
       void accessToken();
       return undefined;
     },
+    onSignIn: (listener) => void signedIn.push(listener),
   };
 }

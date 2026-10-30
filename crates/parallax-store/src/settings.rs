@@ -240,8 +240,8 @@ impl Store {
         self.set_flag(REMOTE_WEB, on)
     }
 
-    /// Whether plxd keeps a connection to Parallax Relay while `remote` is on (PLX-652, 0068). Off
-    /// unless set on.
+    /// Whether plxd keeps a connection to Parallax Relay (PLX-652, 0068), for pushes and webhooks,
+    /// and for streams while `remote` is on too (PLX-1146). Off unless set on.
     ///
     /// # Errors
     ///
@@ -257,6 +257,16 @@ impl Store {
     /// A database error.
     pub fn set_relay(&self, on: bool) -> Result<(), StoreError> {
         self.set_flag(RELAY, on)
+    }
+
+    /// Whether the host's relay setting was ever set, on or off, so registering turns it on only
+    /// for a host whose user never chose (PLX-1146).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn relay_chosen(&self) -> Result<bool, StoreError> {
+        Ok(self.text(RELAY)?.is_some())
     }
 
     /// The remote clients' sessions, as plxd stored them, if any.

@@ -1,10 +1,10 @@
 //! Parallax Relay's plxd side (PLX-652, decision 0068).
 //!
-//! While the host's `relay` and `remote` settings are both on, plxd keeps one WebSocket open to
-//! the relay ([`run`]), opened with the time signed by its host key. Then:
+//! While the host's `relay` setting is on, plxd keeps one WebSocket open to the relay ([`run`]),
+//! opened with the time signed by its host key. Then:
 //!
-//! - For each client the relay announces, plxd opens a WebSocket for that client's stream and
-//!   joins it to a loopback connection to its own remote listener. The client's TLS ends in plxd,
+//! - While `remote` is on too, for each client the relay announces, plxd opens a WebSocket for
+//!   that client's stream and joins it to a loopback connection to its own remote listener. The client's TLS ends in plxd,
 //!   at the certificate it pinned while pairing (0065), so the relay carries only ciphertext.
 //! - It answers the webhooks the relay forwards, held ones included, with the same check as
 //!   `/api/hooks` ([`crate::schedules::hook`]), keyed by the relay's delivery id so a redelivery
@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt as _, StreamExt as _};
 use parallax_protocol::{
-    AgentOutcome, AgentOutputItem, ParallaxEvent, RelayHost, RelayStatus, RunId,
+    AgentOutcome, AgentOutputItem, ParallaxEvent, RelayHost, RelaySignResult, RelayStatus, RunId,
 };
 use rustls::pki_types::ServerName;
 use serde::Deserialize;
@@ -457,15 +457,61 @@ impl Relay {
     }
 }
 
-/// Whether plxd should be connected: `relay` and `remote` both on.
+/// Whether plxd should be connected: `relay` on. Pushes and webhooks need nothing else
+/// (PLX-1146).
 pub(crate) async fn wanted(daemon: &Daemon) -> bool {
     daemon
         .reader
         .run(&CancellationToken::new(), |db| {
-            Ok(db.relay().unwrap_or(false) && db.remote().unwrap_or(false))
+            Ok(db.relay().unwrap_or(false))
         })
         .await
         .unwrap_or(false)
+}
+
+/// Whether plxd serves clients' streams: `remote` on, since they end at its remote listener.
+async fn serving(daemon: &Daemon) -> bool {
+    daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            Ok(db.remote().unwrap_or(false))
+        })
+        .await
+        .unwrap_or(false)
+}
+
+/// Turns `relay` on for a host whose user never set it, so signing in is enough for phone
+/// notifications (PLX-1146), and reconnects. One turned off stays off.
+async fn on_unless_chosen(daemon: &Daemon) {
+    let turned = daemon
+        .store
+        .run(&CancellationToken::new(), |db| {
+            Ok(!db.relay_chosen().unwrap_or(true) && db.set_relay(true).is_ok())
+        })
+        .await
+        .unwrap_or(false);
+    if turned {
+        info!("turned the relay on for this computer");
+    }
+    daemon.relay.changed.notify_one();
+}
+
+/// `relay/sign`: this host's registration with the relay, signed with its key over `token_hash`,
+/// the SHA-256 of a Clerk session token that stays on another computer, which posts it with
+/// [`register`] (PLX-1146). Turns `relay` on unless its user chose.
+pub(crate) async fn sign(daemon: &Daemon, token_hash: &str) -> Result<RelaySignResult, String> {
+    let key = signer(daemon).await.map_err(|e| e.to_string())?;
+    let host_id = key.thumbprint();
+    let (x, y) = key.coordinates();
+    let signature = key.sign(register_message(&host_id, token_hash).as_bytes());
+    on_unless_chosen(daemon).await;
+    Ok(RelaySignResult {
+        host_id,
+        x,
+        y,
+        name: crate::server::remote::host_name(daemon).await,
+        signature: remote::base64url(&signature),
+    })
 }
 
 /// The host key as the relay knows it.
@@ -475,26 +521,46 @@ async fn signer(daemon: &Daemon) -> Result<DpopKey, Error> {
         .ok_or_else(|| Error::Protocol("the host key isn't P-256".to_owned()))
 }
 
-/// `relay/register`: registers this host's key with the relay under the user of the Clerk
-/// session `token`, signed with that key, and reconnects. Answers why it couldn't.
-pub(crate) async fn register(daemon: &Daemon, token: &str) -> Result<(), String> {
-    let key = signer(daemon).await.map_err(|e| e.to_string())?;
-    let host_id = key.thumbprint();
-    let (x, y) = key.coordinates();
-    let token_hash = remote::base64url(&remote::sha256(token.as_bytes()));
-    let signature = key.sign(register_message(&host_id, &token_hash).as_bytes());
+/// `relay/register`: registers a host's key with the relay under the user of the Clerk session
+/// `token`: `signed`, another computer's from its `relay/sign`, else this host's, signed now. This
+/// host's turns `relay` on unless its user chose, and reconnects. Answers why it couldn't.
+pub(crate) async fn register(
+    daemon: &Daemon,
+    token: &str,
+    signed: Option<RelaySignResult>,
+) -> Result<(), String> {
+    let own = signed.is_none();
+    let signed = match signed {
+        Some(signed) => signed,
+        None => {
+            sign(
+                daemon,
+                &remote::base64url(&remote::sha256(token.as_bytes())),
+            )
+            .await?
+        }
+    };
+    let RelaySignResult {
+        host_id,
+        x,
+        y,
+        name,
+        signature,
+    } = signed;
     let body = json!({
         "hostId": host_id,
         "jwk": { "kty": "EC", "crv": "P-256", "x": x, "y": y },
-        "name": crate::server::remote::host_name(daemon).await,
-        "signature": remote::base64url(&signature),
+        "name": name,
+        "signature": signature,
     });
     let relay = &daemon.relay;
     let answered = http(&relay.url, "POST", "/v1/hosts", token, Some(&body)).await;
     match answered {
         Ok((200, _)) => {
-            info!(%host_id, "registered with the relay");
-            relay.changed.notify_one();
+            info!(%host_id, own, "registered with the relay");
+            if own {
+                relay.changed.notify_one();
+            }
             Ok(())
         }
         Ok((401, _)) => Err(SIGN_IN_REFUSED.to_owned()),
@@ -558,11 +624,11 @@ pub(crate) async fn remove(daemon: &Daemon, token: &str, host_id: &str) -> Resul
 enum Ended {
     /// plxd is shutting down.
     Stopped,
-    /// `relay` or `remote` turned off.
+    /// `relay` turned off.
     Off,
 }
 
-/// Keeps plxd connected to the relay while `relay` and `remote` are on, until `stop`.
+/// Keeps plxd connected to the relay while `relay` is on, until `stop`.
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let relay = &daemon.relay;
     let mut failures = 0_u32;
@@ -579,14 +645,16 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
         let wait = match ended {
             Ok(Ended::Stopped) => return,
             Ok(Ended::Off) => continue,
-            // Waits for `relay/register`.
+            // Waits for `relay/register` here, or tries again on backoff, since another computer
+            // may register this one with its `relay/sign` (PLX-1146).
             Err(Error::Refused) => {
                 let problem = "This computer isn't registered with the relay yet. Sign in to Parallax to register it.";
                 relay.set(Status {
                     connected: None,
                     problem: Some(problem.to_owned()),
                 });
-                None
+                failures += 1;
+                Some(backoff(failures))
             }
             Err(error) => {
                 warn!(%error, "lost the relay connection");
@@ -782,7 +850,7 @@ async fn serve(
                 match frame {
                     Some(Ok(Message::Text(text))) => {
                         let message: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
-                        if message["t"] == "open" {
+                        if message["t"] == "open" && serving(daemon).await {
                             let url = daemon.relay.url.clone();
                             let host_id = host_id.to_owned();
                             tokio::spawn(stream(url, host_id, message, local, streams.clone()));

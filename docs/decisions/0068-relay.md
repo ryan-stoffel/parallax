@@ -14,7 +14,7 @@ plxd already has what end-to-end encryption needs (0065): a self-signed P-256 ce
 
 ### The relay is a byte pipe for plxd's TLS
 
-- plxd keeps one outbound WebSocket to the relay while its `relay` and `remote` settings are both on. Off by default.
+- plxd keeps one outbound WebSocket to the relay while its `relay` setting is on, for pushes and webhooks. It serves clients' streams only while `remote` is on too (PLX-1146). `relay` is off until set, or until the host first registers.
 - A client asks the relay for a stream to a host. The relay tells plxd over that WebSocket, and plxd opens a second WebSocket for the stream and joins it to a loopback connection to its own remote listener. The relay passes binary frames between the two.
 - The client runs TLS to plxd's certificate inside the stream, pinned as on the LAN. Pairing (SPAKE2 with the code), sessions, tickets, and `/ws` are 0065's, unchanged. The relay carries TLS records only, so it can't read or change a thread, and it can't stand in for the host: a client that pinned the host's fingerprint refuses any other certificate.
 - A client that has never paired pairs through the relay too, with the code from Settings, over the same stream. SPAKE2 gives a relay in the middle one online guess per code and no fingerprint.
@@ -28,6 +28,7 @@ plxd already has what end-to-end encryption needs (0065): a self-signed P-256 ce
 - **A wrong clock is corrected, not locked out.** A signed proof outside that window gets a 401 that carries the relay's time, in the `x-parallax-relay-time` header and the body. plxd logs that its clock is off, keeps the difference, signs again by the relay's clock at once, and keeps signing by it.
 - **A client must be the host's own user.** It needs a Clerk token for the user that registered the host, checked by `packages/clerk-verify` (0067): a session token from the web or Expo SDK, or the desktop app's OAuth access token. With it, the client gets a ticket for one stream, valid once for 30 seconds. Another user's host answers as if it didn't exist. plxd's side of the stream joins with a one-time token the relay sent only over plxd's authenticated connection.
 - The desktop app registers the host from Settings > Connections > Reach from anywhere. Main sends the token straight to plxd (`relay/register`), so it never reaches a renderer, and plxd keeps nothing of it.
+- While signed in, the desktop app also registers its own computer and every Parallax Connect computer it connects to, so signing in is the only step for phone notifications (PLX-1146). Another computer's plxd signs the registration over the token's SHA-256 (`relay/sign`), and this computer's plxd posts it with the token (`relay/register`'s `signed`), so the token stays on the computer the user signed in on. Registering turns `relay` on for a host whose user never set it. One turned off stays off. A host the relay refuses as unregistered tries again on backoff, since another computer may register it.
 
 ### Cloudflare
 
@@ -60,6 +61,6 @@ plxd already has what end-to-end encryption needs (0065): a self-signed P-256 ce
 - Webhooks are different. The relay sees them, as any public webhook endpoint does, and it sees their tokens. A compromised relay can fire any webhook task that has no signature secret, and replay a signed request under a new delivery id, so it fires again. A task that must not be fired by the relay's operator needs a signature and a sender-side check of what it acts on.
 - A mobile client reaches a host through the relay only once it runs TLS over a WebSocket and pairs with SPAKE2 or a QR code, and a web client only with JavaScript the relay's operator doesn't serve. Until then they use the tailnet route, as 0065 has it.
 - Relay traffic goes through Cloudflare's edge and the host's Durable Object both ways, so a stream adds a round trip to its nearest point of presence. Cloudflare bills its bytes as Durable Object WebSocket messages.
-- plxd needs `remote` on to use the relay, since streams end at the remote listener. That listener also answers on the LAN.
+- Reaching a host through the relay needs `remote` on, since streams end at the remote listener. That listener also answers on the LAN. Pushes and webhooks don't need it.
 - plxd gains `webpki-roots` for the relay's public certificate.
 - A user removes a host of theirs with `DELETE /v1/hosts/<id>`, from Settings > Connections, which lists the account's hosts on the relay through plxd (`relay/hosts`, `relay/remove`) with Remove on each. Removing it closes its connections, deletes everything the relay keeps for it, and frees its slot, so a user whose plxd lost its data (a new key, a new host id) can always free the old one. Turning the switch off only disconnects a host, and its registration stays so webhook URLs don't change.
