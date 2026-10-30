@@ -1189,6 +1189,10 @@ pub const APPROVAL_WAIT: Duration = Duration::from_secs(25);
 /// How long a new device's request waits for approval before it lapses (0091).
 pub const REQUEST_LIFETIME: Duration = Duration::from_mins(10);
 
+/// At most this many new requests a client starts with one host an hour (0091), since a fake
+/// host sets no limit of its own.
+pub const MAX_CLIENT_REQUESTS: usize = 5;
+
 /// The random value a client sent for a request, kept while the request can wait, so a reconnect
 /// sends the same one and a host that then answers with another commitment fails (0091).
 #[derive(Serialize, Deserialize)]
@@ -1205,8 +1209,15 @@ fn committed_path(data_dir: &Path, host_id: &str) -> PathBuf {
     credential_path(data_dir, &format!("{host_id}.request"))
 }
 
-/// This client's value for `request` at `host_id`: the one it kept, unless that one is for an
-/// earlier request or lapsed, else a new one, kept now.
+/// Where a client keeps when it started requests with `host_id` within the last hour.
+fn requests_path(data_dir: &Path, host_id: &str) -> PathBuf {
+    credential_path(data_dir, &format!("{host_id}.requests"))
+}
+
+/// This client's value for `request` at `host_id`: the one it kept while its request can wait,
+/// else a new one, kept now. While one is kept, any other request id or commitment from that host
+/// id fails as [`Error::WrongHost`], so a host that answers each reconnect with a new request gets
+/// no new value to try. A new one counts against [`MAX_CLIENT_REQUESTS`] an hour.
 fn client_value(
     data_dir: &Path,
     host_id: &str,
@@ -1214,18 +1225,34 @@ fn client_value(
     commitment: &str,
 ) -> Result<Vec<u8>, Error> {
     let path = committed_path(data_dir, host_id);
+    let now = now_seconds();
     let kept = fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Committed>(&bytes).ok())
-        .filter(|kept| kept.request == request && kept.until > now_seconds());
+        .filter(|kept| kept.until > now);
     if let Some(kept) = kept {
-        if kept.commitment != commitment {
+        if kept.request != request || kept.commitment != commitment {
             return Err(Error::WrongHost);
         }
         return BASE64URL_NOPAD
             .decode(kept.value.as_bytes())
             .map_err(|_| Error::Protocol("the kept request is damaged".to_owned()));
     }
+    let counted = requests_path(data_dir, host_id);
+    let mut starts: Vec<i64> = fs::read(&counted)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    starts.retain(|at| now - at < 3600);
+    if starts.len() >= MAX_CLIENT_REQUESTS {
+        return Err(Error::Protocol(
+            "this computer asked that one for approval 5 times this hour; try again later"
+                .to_owned(),
+        ));
+    }
+    starts.push(now);
+    let _ = fs::remove_file(&counted);
+    create_once(&counted, &serde_json::to_vec(&starts).expect("plain JSON"))?;
     let mut value = vec![0; APPROVAL_VALUE_BYTES];
     getrandom::fill(&mut value).map_err(|e| Error::Protocol(e.to_string()))?;
     let committed = Committed {
@@ -1377,9 +1404,14 @@ pub async fn await_approval(
     let body = json!({ "request": request, "wait": true });
     loop {
         let step = approval_step(route, &pin, &key, &body);
-        let (status, answer) = tokio::time::timeout(APPROVAL_WAIT + REQUEST_TIMEOUT, step)
+        let answered = tokio::time::timeout(APPROVAL_WAIT + REQUEST_TIMEOUT, step)
             .await
-            .map_err(|_| timed_out(route))??;
+            .map_err(|_| timed_out(route))?;
+        // Denied or lapsed: the user may ask again, which starts a new request, counted.
+        if let Err(Error::Refused) = answered {
+            let _ = fs::remove_file(committed_path(data_dir, host_id));
+        }
+        let (status, answer) = answered?;
         if status == 200 {
             return approved(route, host_id, &key, data_dir, &answer);
         }
@@ -1598,6 +1630,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_client_keeps_one_value_per_host_while_its_request_waits_and_asks_five_times_an_hour() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("remote-hosts")).unwrap();
+        let host = "h".repeat(43);
+        let value = client_value(dir.path(), &host, "r1", "c1").unwrap();
+        assert_eq!(client_value(dir.path(), &host, "r1", "c1").unwrap(), value);
+        // Another commitment, or another request id, from that host id fails while it waits.
+        assert!(matches!(
+            client_value(dir.path(), &host, "r1", "c2"),
+            Err(Error::WrongHost)
+        ));
+        assert!(matches!(
+            client_value(dir.path(), &host, "r2", "c1"),
+            Err(Error::WrongHost)
+        ));
+        assert!(matches!(
+            client_value(dir.path(), &host, "r2", "c2"),
+            Err(Error::WrongHost)
+        ));
+        // Once the request ends, new ones start, at most five an hour.
+        for i in 1..MAX_CLIENT_REQUESTS {
+            fs::remove_file(committed_path(dir.path(), &host)).unwrap();
+            client_value(dir.path(), &host, &format!("n{i}"), "c").unwrap();
+        }
+        fs::remove_file(committed_path(dir.path(), &host)).unwrap();
+        assert!(matches!(
+            client_value(dir.path(), &host, "n9", "c"),
+            Err(Error::Protocol(_))
+        ));
+        let other = "o".repeat(43);
+        assert!(
+            client_value(dir.path(), &other, "r1", "c1").is_ok(),
+            "per host"
+        );
+    }
 
     #[test]
     fn spake2_agrees_only_on_the_same_code_and_certificate() {
