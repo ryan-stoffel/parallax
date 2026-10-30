@@ -92,10 +92,27 @@ test("connect signs in, installs, registers, turns relay and remote on, and ends
 });
 
 test("a setup code that lapses is replaced, and the next one is shown", async () => {
-  const fake = fakes({ expiresInMs: 0, pairAfterCodes: 2 });
+  // Each code outlives the 30 ms pairing, or code 2 could lapse before its device pairs.
+  const fake = fakes({ expiresInMs: 300, pairAfterCodes: 2 });
   const { code, out } = await printed(() => connect.connect(options, fake.deps));
   assert.equal(code, 0, out);
   assert.match(out, /^ {2}482911$[\s\S]*The code lapsed\. Here's a new one\.[\s\S]*^ {2}482912$/m);
+  assert.match(out, /✓ Approved MacBook Air\./);
+  fake.done();
+});
+
+/**
+ * Opens the fake plxd with a short keepalive, for a fake that closes a silent connection.
+ * @param {ReturnType<typeof fakes>} fake
+ */
+const keptAlive = (fake) => async () =>
+  attach(spawn(process.execPath, [FAKE], { stdio: ["pipe", "pipe", "inherit"], env: fake.env }), { keepaliveMs: 50 });
+
+test("connect keeps plxd's connection open while it waits longer than plxd's idle limit", async () => {
+  const fake = fakes({ idleMs: 200, pairInMs: 600 });
+  fake.deps.plxd = keptAlive(fake);
+  const { code, out } = await printed(() => connect.connect(options, fake.deps));
+  assert.equal(code, 0, out);
   assert.match(out, /✓ Approved MacBook Air\./);
   fake.done();
 });
@@ -128,6 +145,16 @@ test("approve approves a waiting device's request with Enter, after showing its 
   assert.match(out, /iPhone asks to sign in to this computer, with the code 071344\./);
   assert.match(fake.asked[0] ?? "", /Enter approves, n denies/);
   assert.deepEqual(fake.calls(), ["access/get {}", `access/approve {"request":"${pending.id}"}`]);
+  assert.match(out, /✓ Approved iPhone\./);
+  fake.done();
+});
+
+test("approve keeps plxd's connection open while the prompt waits longer than plxd's idle limit", async () => {
+  const fake = fakes({ relay: true, remote: true, registered: true, pending, idleMs: 200 });
+  fake.deps.plxd = keptAlive(fake);
+  fake.deps.prompt = () => new Promise((resolve) => setTimeout(() => resolve(""), 600));
+  const { code, out } = await printed(() => connect.approve(fake.deps));
+  assert.equal(code, 0, out);
   assert.match(out, /✓ Approved iPhone\./);
   fake.done();
 });
