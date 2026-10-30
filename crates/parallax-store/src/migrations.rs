@@ -890,13 +890,20 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX board_items_orchestrator ON board_items (orchestrator_id);
         UPDATE role_defaults SET role = 'orchestrator' WHERE role = 'coordinator';",
     },
+    // A Space is a Project (0093 step 2, PLX-1175): the repo entry's flag and the Project a thread
+    // was added to take the new name. The folders under `spaces/` keep theirs, which rows name.
+    Migration {
+        version: 57,
+        sql: "ALTER TABLE repos RENAME COLUMN space TO project;
+        ALTER TABLE threads RENAME COLUMN space_id TO project_id;",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
 /// WAL database consistently where a file copy could miss the WAL (0059). There is no downgrade,
 /// so the copy is the way back. It is `<database>.pre-<version>`, written once: before the
 /// oldest of these a store is missing, so one copy covers a jump over several.
-const BACKUP_BEFORE: &[i64] = &[39, 41, 56];
+const BACKUP_BEFORE: &[i64] = &[39, 41, 56, 57];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
 /// version isn't recorded, in order. A missing version below the newest
@@ -1138,6 +1145,26 @@ mod tests {
         assert!(store.get_role_default("orchestrator").unwrap().is_some());
         assert!(store.get_role_default("coordinator").unwrap().is_none());
         assert!(dir.path().join("plxd.sqlite3.pre-56").exists());
+    }
+
+    /// Migration 57 (0093 step 2) keeps a Space as a Project.
+    #[test]
+    fn a_version_56_database_keeps_its_spaces_as_projects() {
+        let id = uuid::Uuid::parse_str("01a0f8a0-0000-7000-8000-000000000057").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let conn = migrated_through(&path, 56);
+        conn.execute(
+            "INSERT INTO repos (id, name, path, scratch, space, created_at)
+             VALUES (?1, 'Coursework', '/data/spaces/c', 0, 1, '2026-10-30T12:00:00Z')",
+            [id.to_string()],
+        )
+        .unwrap();
+        drop(conn);
+        let store = crate::Store::open(&path).unwrap();
+        let repo = store.get_repo(id).unwrap().unwrap();
+        assert!(repo.fields.project);
+        assert_eq!(repo.fields.name, "Coursework");
     }
 
     /// A backup that fails partway, here on a corrupt page, leaves no partial copy or journal

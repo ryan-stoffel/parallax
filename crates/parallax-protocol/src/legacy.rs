@@ -1,18 +1,25 @@
 //! The names decision 0093 renamed, which plxd still speaks for one release: a Project and its
-//! coordinator became an orchestrator thread.
+//! coordinator became an orchestrator thread (step 1), and a Space became a Project (step 2).
 //!
 //! Every renamed field and enum value in this crate has a serde `alias` for its old name, so a
-//! message in the old names still decodes. Going out, a client that declares [`CLIENT_CAPABILITY`]
-//! in `initialize` gets the new names; any other client is an app or phone from before 0093, and
-//! [`to_legacy`] rewrites what plxd sends it. The desktop app's `legacyNames.ts` does the reverse
-//! for a plxd from before 0093. Remove both, and the aliases, when the window ends.
+//! message in the old names still decodes. A client that declares [`CLIENT_CAPABILITY`] in
+//! `initialize` speaks the new names. Any other client is an app or phone from before 0093:
+//! [`to_legacy`] rewrites what plxd sends it, and [`new_method`] reads its method names.
+//!
+//! `project/*` names both an old client's Projects (now orchestrators) and a new client's Projects
+//! (once Spaces), so the client's capability decides: for an old client `project/create` is
+//! `orchestrator/create`, and for a new one it is a Project's. `space/*` is always a Project's.
+//!
+//! The desktop app's `legacyNames.ts` does the reverse for a plxd from before 0093. Remove both,
+//! and the aliases, when the window ends.
 
 use serde_json::{Map, Value};
 
 use crate::Capabilities;
 
-/// The client capability that asks for the new names.
-pub const CLIENT_CAPABILITY: &str = "orchestrators";
+/// The client capability that asks for the new names, `project/*` for a Project (once a Space)
+/// included.
+pub const CLIENT_CAPABILITY: &str = "projects";
 
 /// A client's capabilities with only [`CLIENT_CAPABILITY`], for a client in this crate's version.
 #[must_use]
@@ -24,7 +31,7 @@ pub fn client_capabilities() -> Capabilities {
     capabilities
 }
 
-/// Each renamed method, old name first.
+/// Each method step 1 renamed, old name first. Only an old client's `project/*` means these.
 pub const METHODS: &[(&str, &str)] = &[
     ("project/list", "orchestrator/list"),
     ("project/create", "orchestrator/create"),
@@ -33,6 +40,13 @@ pub const METHODS: &[(&str, &str)] = &[
     ("project/start", "orchestrator/start"),
     ("project/fromThreads", "orchestrator/fromThreads"),
     ("coordinator/fresh", "orchestrator/fresh"),
+];
+
+/// Each method step 2 renamed, old name first, which any client may still call.
+pub const SPACE_METHODS: &[(&str, &str)] = &[
+    ("space/create", "project/create"),
+    ("space/delete", "project/delete"),
+    ("thread/setSpace", "thread/setProject"),
 ];
 
 /// Each renamed event kind, old name first.
@@ -55,15 +69,24 @@ pub const CAPABILITIES: &[(&str, &str)] = &[
     ("projectPermission", "orchestratorPermission"),
     ("projectPlacement", "orchestratorPlacement"),
     ("projectTasks", "orchestratorTasks"),
+    ("spaces", "projects"),
+    ("spaceContext", "projectContext"),
+    ("spaceThreads", "projectThreads"),
 ];
 
 /// Each renamed error kind, old name first.
 pub const ERROR_KINDS: &[(&str, &str)] = &[("projectNotFound", "orchestratorNotFound")];
 
-/// The new name of method `old`, if 0093 renamed it.
+/// The new name of method `old` from a client, if 0093 renamed it: for an old client (`legacy`),
+/// `project/*` is an orchestrator's; for a new one it is a Project's and stays.
 #[must_use]
-pub fn new_method(old: &str) -> Option<&'static str> {
-    METHODS.iter().find(|(o, _)| *o == old).map(|(_, new)| *new)
+pub fn new_method(old: &str, legacy: bool) -> Option<&'static str> {
+    let step1 = if legacy { METHODS } else { &[] };
+    step1
+        .iter()
+        .chain(SPACE_METHODS)
+        .find(|(o, _)| *o == old)
+        .map(|(_, new)| *new)
 }
 
 /// The old name of error kind `new`, if 0093 renamed it.
@@ -112,6 +135,12 @@ fn walk(value: &mut Value, rule: &impl Fn(&mut Map<String, Value>)) {
 }
 
 fn rename(object: &mut Map<String, Value>, memory: bool, defaults: bool) {
+    // Step 2 first, since step 1 then takes `project` back for an orchestrator: a repo entry's
+    // "is a Project", and the Project a thread was added to, were `space`.
+    let thread = object.contains_key("repo") && object.contains_key("createdAt");
+    if thread || matches!(object.get("project"), Some(Value::Bool(_))) {
+        move_key(object, "project", "space");
+    }
     let scope = memory && object.contains_key("id");
     if let Some(Value::String(kind)) = object.get_mut("kind") {
         if let Some((old, _)) = EVENTS.iter().find(|(_, new)| new == kind) {
@@ -235,6 +264,34 @@ mod tests {
         assert_eq!(
             proposal,
             json!({"scope": {"kind": "project", "id": "o1"}, "to": "coordinator", "forScope": "project"})
+        );
+    }
+
+    #[test]
+    fn a_project_once_a_space_takes_its_old_name_and_project_names_an_orchestrator_again() {
+        let mut listed = json!({
+            "repos": [{"id": "p1", "name": "Coursework", "path": "/s", "project": true, "createdAt": "t"}],
+            "threads": [{"id": "r1", "repo": "x", "createdAt": "t", "project": "p1"}],
+            "runs": [{"id": "r1", "project": "x", "createdAt": "t"}]
+        });
+        to_legacy("thread/list", &mut listed);
+        assert_eq!(listed["repos"][0]["space"], true);
+        assert_eq!(listed["threads"][0]["space"], "p1");
+        assert_eq!(listed["runs"][0]["project"], "x", "a run's scope stays");
+    }
+
+    #[test]
+    fn project_methods_mean_an_orchestrator_only_to_an_old_client() {
+        assert_eq!(
+            new_method("project/create", true),
+            Some("orchestrator/create")
+        );
+        assert_eq!(new_method("project/create", false), None);
+        assert_eq!(new_method("space/create", true), Some("project/create"));
+        assert_eq!(new_method("space/delete", false), Some("project/delete"));
+        assert_eq!(
+            new_method("thread/setSpace", false),
+            Some("thread/setProject")
         );
     }
 

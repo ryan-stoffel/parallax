@@ -37,11 +37,11 @@ mod files;
 mod fork;
 mod from_threads;
 mod orchestrator;
+mod projects;
 mod schedules;
 mod scripts;
 #[cfg(unix)]
 mod sessions;
-mod spaces;
 
 fn real_repo(dir: &Path, name: &str) -> PathBuf {
     named_repo(dir, name).canonicalize().unwrap()

@@ -139,6 +139,10 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("sendModel".to_owned(), serde_json::Map::new()),
             ("sendOptions".to_owned(), serde_json::Map::new()),
             ("setupScripts".to_owned(), serde_json::Map::new()),
+            ("projectContext".to_owned(), serde_json::Map::new()),
+            ("projectThreads".to_owned(), serde_json::Map::new()),
+            ("projects".to_owned(), serde_json::Map::new()),
+            // 0093 step 2's old names, for one release.
             ("spaceContext".to_owned(), serde_json::Map::new()),
             ("spaceThreads".to_owned(), serde_json::Map::new()),
             ("spaces".to_owned(), serde_json::Map::new()),

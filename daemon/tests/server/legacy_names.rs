@@ -29,7 +29,7 @@ async fn call(client: &mut Client, id: i64, method: &str, params: Value) -> (Val
             Message::Response(response) => {
                 let answer = match response.result {
                     Ok(result) => result,
-                    Err(error) => json!({"error": error.data}),
+                    Err(error) => json!({"error": error.data, "code": error.code}),
                 };
                 return (answer, events);
             }
@@ -84,6 +84,15 @@ async fn an_app_from_before_0093_keeps_its_names() {
     let unknown = json!({"project": "01a0f755-f200-74dd-8cfc-06d0b225c5ea"});
     let (missing, _) = call(&mut client, 5, "project/delete", unknown).await;
     assert_eq!(missing["error"]["kind"], "projectNotFound");
+
+    // Its Space is a Project now, in its old names.
+    let space = json!({"id": "01a0f755-f200-74dd-8cfc-06d0b225c5eb", "name": "Coursework"});
+    let (made, mut events) = call(&mut client, 6, "space/create", space).await;
+    assert_eq!(made["repo"]["space"], true, "{made}");
+    assert!(made["repo"].get("project").is_none(), "{made}");
+    let added = next_event(&mut client, &mut events).await;
+    assert_eq!(added["event"]["kind"], "repo.added");
+    assert_eq!(added["event"]["repo"]["space"], true);
 }
 
 #[tokio::test]
@@ -96,7 +105,21 @@ async fn an_app_from_0093_on_gets_the_new_names() {
     assert_eq!(created["orchestrator"]["name"], "formula fly");
     let (listed, _) = call(&mut client, 2, "orchestrator/list", json!({})).await;
     assert_eq!(listed["orchestrators"].as_array().map(Vec::len), Some(1));
-    // An old name still works for it too.
+    // To it, `project/*` is a Project's (once a Space), never an orchestrator's.
     let (old, _) = call(&mut client, 3, "project/list", json!({})).await;
-    assert_eq!(old["orchestrators"], listed["orchestrators"]);
+    assert_eq!(old["code"], -32601, "{old}");
+    let project = json!({"id": "01a0f755-f200-74dd-8cfc-06d0b225c5eb", "name": "Coursework"});
+    let (made, _) = call(&mut client, 4, "project/create", project).await;
+    assert_eq!(made["repo"]["project"], true, "{made}");
+    let (spaced, _) = call(
+        &mut client,
+        5,
+        "space/create",
+        json!({"id": made["repo"]["id"], "name": "Coursework"}),
+    )
+    .await;
+    assert_eq!(
+        spaced["repo"]["project"], true,
+        "space/create still works: {spaced}"
+    );
 }

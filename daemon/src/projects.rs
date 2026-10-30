@@ -1,21 +1,21 @@
-//! Spaces (0069, PLX-732): `space/create` and `space/delete`, behind the `spaces` capability.
+//! Projects (0069, PLX-732): `project/create` and `project/delete`, behind the `projects` capability.
 //!
-//! A Space is a repo entry with `space` true, whose repository plxd made at
-//! `<data folder>/spaces/<id>`. A chat in it is an ordinary thread started with that entry as its
-//! `repo`, so it runs in a worktree of the Space's repository and shares the Space's context
-//! folder. `repo/update` renames a Space and sets its instructions and files
+//! A Project is a repo entry with `project` true, whose repository plxd made at
+//! `<data folder>/projects/<id>`. A chat in it is an ordinary thread started with that entry as its
+//! `repo`, so it runs in a worktree of the Project's repository and shares the Project's context
+//! folder. `repo/update` renames a Project and sets its instructions and files
 //! ([`crate::threads::update_repo`]), which every thread in it gets in its system prompt (0090).
-//! `thread/setSpace` adds a thread started elsewhere to a Space, where it keeps working where it
-//! was, and gets the Space's instructions and files too.
+//! `thread/setProject` adds a thread started elsewhere to a Project, where it keeps working where it
+//! was, and gets the Project's instructions and files too.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, MAX_SPACE_FILES, MAX_SPACE_INSTRUCTIONS_BYTES, MAX_SPACE_NAME_BYTES, ParallaxEvent,
-    RepoId, ScopeId, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
-    ThreadSetSpaceParams, ThreadSetSpaceResult,
+    ErrorKind, MAX_PROJECT_FILES, MAX_PROJECT_INSTRUCTIONS_BYTES, MAX_PROJECT_NAME_BYTES,
+    ParallaxEvent, ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams,
+    ProjectDeleteResult, RepoId, ScopeId, ThreadSetProjectParams, ThreadSetProjectResult,
 };
 use parallax_store::RepoFields;
 use tracing::{info, warn};
@@ -24,25 +24,26 @@ use uuid::Uuid;
 use crate::server::Daemon;
 use crate::threads::{self, repo_entry, store, store_error};
 
-/// The folder under plxd's data folder that holds Spaces' repositories.
-const SPACES_DIR: &str = "spaces";
+/// The folder under plxd's data folder that holds Projects' repositories. It keeps its name from
+/// when Projects were Spaces (0093), since stored repo entries name paths in it.
+const PROJECTS_DIR: &str = "spaces";
 
-/// A Space's name as `space/create` and `repo/update` take it: trimmed, 1 to
-/// [`MAX_SPACE_NAME_BYTES`] bytes.
+/// A Project's name as `project/create` and `repo/update` take it: trimmed, 1 to
+/// [`MAX_PROJECT_NAME_BYTES`] bytes.
 pub(crate) fn check_name(name: &str) -> Result<String, ErrorObject> {
     let name = name.trim();
-    if name.is_empty() || name.len() > MAX_SPACE_NAME_BYTES {
+    if name.is_empty() || name.len() > MAX_PROJECT_NAME_BYTES {
         return Err(ErrorObject::invalid_params(format!(
-            "a Space's name must be 1 to {MAX_SPACE_NAME_BYTES} bytes"
+            "a Project's name must be 1 to {MAX_PROJECT_NAME_BYTES} bytes"
         )));
     }
     Ok(name.to_owned())
 }
 
-/// A Space's repository folder under the canonical spaces folder, made if missing, so the path
+/// A Project's repository folder under the canonical spaces folder, made if missing, so the path
 /// stored is the one git and the sandbox see.
-fn space_dir(daemon: &Daemon, id: RepoId) -> Result<PathBuf, ErrorObject> {
-    let root = daemon.data_dir.root().join(SPACES_DIR);
+fn project_dir(daemon: &Daemon, id: RepoId) -> Result<PathBuf, ErrorObject> {
+    let root = daemon.data_dir.root().join(PROJECTS_DIR);
     std::fs::create_dir_all(&root)
         .and_then(|()| root.canonicalize())
         .map(|root| root.join(id.to_string()))
@@ -54,25 +55,25 @@ fn space_dir(daemon: &Daemon, id: RepoId) -> Result<PathBuf, ErrorObject> {
         })
 }
 
-/// A Space's instructions as `repo/update` takes them: trimmed, at most
-/// [`MAX_SPACE_INSTRUCTIONS_BYTES`] bytes. Empty clears them.
+/// A Project's instructions as `repo/update` takes them: trimmed, at most
+/// [`MAX_PROJECT_INSTRUCTIONS_BYTES`] bytes. Empty clears them.
 pub(crate) fn check_instructions(instructions: &str) -> Result<String, ErrorObject> {
     let instructions = instructions.trim();
-    if instructions.len() > MAX_SPACE_INSTRUCTIONS_BYTES {
+    if instructions.len() > MAX_PROJECT_INSTRUCTIONS_BYTES {
         return Err(ErrorObject::invalid_params(format!(
-            "a Space's instructions must be at most {MAX_SPACE_INSTRUCTIONS_BYTES} bytes"
+            "a Project's instructions must be at most {MAX_PROJECT_INSTRUCTIONS_BYTES} bytes"
         )));
     }
     Ok(instructions.to_owned())
 }
 
-/// A Space's files as `repo/update` takes them: at most [`MAX_SPACE_FILES`], each a file inside
+/// A Project's files as `repo/update` takes them: at most [`MAX_PROJECT_FILES`], each a file inside
 /// `uploads` once links are followed, so a thread's sandbox can read it (0071). Returns their
 /// canonical paths, in order, without repeats.
 pub(crate) fn check_files(uploads: &Path, files: &[String]) -> Result<Vec<String>, ErrorObject> {
-    if files.len() > MAX_SPACE_FILES {
+    if files.len() > MAX_PROJECT_FILES {
         return Err(ErrorObject::invalid_params(format!(
-            "a Space keeps at most {MAX_SPACE_FILES} files"
+            "a Project keeps at most {MAX_PROJECT_FILES} files"
         )));
     }
     let refuse = |path: &str| {
@@ -102,26 +103,26 @@ pub(crate) fn check_files(uploads: &Path, files: &[String]) -> Result<Vec<String
     Ok(checked)
 }
 
-/// The system prompt a thread in a Space gets for the Space's instructions and files (0090), or
+/// The system prompt a thread in a Project gets for the Project's instructions and files (0090), or
 /// `None` when it has neither.
-pub(crate) fn thread_instructions(space: &parallax_store::Repo) -> Option<String> {
-    if !space.fields.space || (space.instructions.is_none() && space.files.is_empty()) {
+pub(crate) fn thread_instructions(project: &parallax_store::Repo) -> Option<String> {
+    if !project.fields.project || (project.instructions.is_none() && project.files.is_empty()) {
         return None;
     }
     let mut text = format!(
-        "This thread is in the Space \"{}\". The user set what follows for every thread in it.",
-        space.fields.name
+        "This thread is in the Project \"{}\". The user set what follows for every thread in it.",
+        project.fields.name
     );
-    if let Some(instructions) = &space.instructions {
-        text.push_str("\n\n<space_instructions>\n");
+    if let Some(instructions) = &project.instructions {
+        text.push_str("\n\n<project_instructions>\n");
         text.push_str(instructions);
-        text.push_str("\n</space_instructions>");
+        text.push_str("\n</project_instructions>");
     }
-    if !space.files.is_empty() {
+    if !project.files.is_empty() {
         text.push_str(
-            "\n\nThe Space's files, which you can read when they help with the user's request:",
+            "\n\nThe Project's files, which you can read when they help with the user's request:",
         );
-        for file in &space.files {
+        for file in &project.files {
             text.push_str("\n- ");
             text.push_str(file);
         }
@@ -130,15 +131,15 @@ pub(crate) fn thread_instructions(space: &parallax_store::Repo) -> Option<String
 }
 
 fn not_found(id: RepoId) -> ErrorObject {
-    ErrorObject::parallax(ErrorKind::RepoNotFound, format!("no Space has id {id}"))
+    ErrorObject::parallax(ErrorKind::RepoNotFound, format!("no Project has id {id}"))
 }
 
-/// `space/create`: idempotent on the id.
+/// `project/create`: idempotent on the id.
 pub(crate) async fn create(
     daemon: &Arc<Daemon>,
-    params: SpaceCreateParams,
-) -> Result<SpaceCreateResult, ErrorObject> {
-    let SpaceCreateParams { id, name, icon } = params;
+    params: ProjectCreateParams,
+) -> Result<ProjectCreateResult, ErrorObject> {
+    let ProjectCreateParams { id, name, icon } = params;
     let name = check_name(&name)?;
     let icon = icon
         .map(|icon| {
@@ -146,7 +147,7 @@ pub(crate) async fn create(
             Ok::<_, ErrorObject>(crate::store::stored_icon(icon))
         })
         .transpose()?;
-    let dir = space_dir(daemon, id)?;
+    let dir = project_dir(daemon, id)?;
     daemon
         .agents
         .worktrees()
@@ -155,15 +156,15 @@ pub(crate) async fn create(
         .map_err(|error| {
             ErrorObject::parallax(
                 ErrorKind::WorktreeFailed,
-                format!("could not make the Space's repository: {error}"),
+                format!("could not make the Project's repository: {error}"),
             )
         })?;
     let path = dir.to_string_lossy().into_owned();
     store(daemon, move |db| {
         let key: Uuid = id.into();
         if let Some(existing) = db.get_repo(key).map_err(|e| store_error(&e))? {
-            if existing.fields.space && existing.fields.name == name {
-                return Ok(SpaceCreateResult {
+            if existing.fields.project && existing.fields.name == name {
+                return Ok(ProjectCreateResult {
                     repo: repo_entry(existing)?,
                 });
             }
@@ -176,7 +177,7 @@ pub(crate) async fn create(
             name,
             path,
             scratch: false,
-            space: true,
+            project: true,
         };
         db.add_repo(key, &fields).map_err(|e| store_error(&e))?;
         if let Some(icon) = &icon {
@@ -192,32 +193,32 @@ pub(crate) async fn create(
             None,
             ParallaxEvent::RepoAdded { repo: repo.clone() },
         );
-        info!(space = %repo.id, "made a Space");
-        Ok(SpaceCreateResult { repo })
+        info!(project = %repo.id, "made a Project");
+        Ok(ProjectCreateResult { repo })
     })
     .await
 }
 
-/// `thread/setSpace`: adds each thread to the Space, or takes it out of its Space, appending
-/// `thread.updated` for each that changed. A thread started in a Space lives in its repository, and
+/// `thread/setProject`: adds each thread to the Project, or takes it out of its Project, appending
+/// `thread.updated` for each that changed. A thread started in a Project lives in its repository, and
 /// an orchestrator's thread in its orchestrator, so neither moves.
-pub(crate) async fn set_space(
+pub(crate) async fn set_project(
     daemon: &Arc<Daemon>,
-    params: ThreadSetSpaceParams,
-) -> Result<ThreadSetSpaceResult, ErrorObject> {
-    let ThreadSetSpaceParams { threads, space } = params;
+    params: ThreadSetProjectParams,
+) -> Result<ThreadSetProjectResult, ErrorObject> {
+    let ThreadSetProjectParams { threads, project } = params;
     if threads.is_empty() {
         return Err(ErrorObject::invalid_params(
-            "thread/setSpace needs a thread",
+            "thread/setProject needs a thread",
         ));
     }
     store(daemon, move |db| {
         let error = |e| store_error(&e);
-        if let Some(space) = space {
-            db.get_repo(space.into())
+        if let Some(project) = project {
+            db.get_repo(project.into())
                 .map_err(error)?
-                .filter(|repo| repo.fields.space)
-                .ok_or_else(|| not_found(space))?;
+                .filter(|repo| repo.fields.project)
+                .ok_or_else(|| not_found(project))?;
         }
         let mut changed = Vec::with_capacity(threads.len());
         for run in &threads {
@@ -227,20 +228,20 @@ pub(crate) async fn set_space(
                 .ok_or_else(|| threads::thread_not_found(*run))?;
             let home = db.get_repo(thread.repo_id).map_err(error)?;
             match home {
-                Some(home) if home.fields.space => {
+                Some(home) if home.fields.project => {
                     return Err(ErrorObject::invalid_params(format!(
-                        "thread {run} started in a Space, so it stays there"
+                        "thread {run} started in a Project, so it stays there"
                     )));
                 }
                 None => {
                     return Err(ErrorObject::invalid_params(format!(
-                        "thread {run} is an orchestrator's, so it can't join a Space"
+                        "thread {run} is an orchestrator's, so it can't join a Project"
                     )));
                 }
                 Some(_) => {}
             }
             let (thread, moved) = db
-                .set_thread_space(thread.id, space.map(Uuid::from))
+                .set_thread_project(thread.id, project.map(Uuid::from))
                 .map_err(error)?;
             let thread = threads::thread_entry(&thread)?;
             if moved {
@@ -254,23 +255,23 @@ pub(crate) async fn set_space(
             }
             changed.push(thread);
         }
-        Ok(ThreadSetSpaceResult { threads: changed })
+        Ok(ThreadSetProjectResult { threads: changed })
     })
     .await
 }
 
-/// `space/delete`: deletes each chat in the Space through `thread/delete`, takes the threads added
+/// `project/delete`: deletes each chat in the Project through `thread/delete`, takes the threads added
 /// to it out, then deletes the entry and its folders. Run it detached, as `thread/delete` is, so a dropped connection can't leave it half
 /// done: deleting again finishes the job.
 pub(crate) async fn delete(
     daemon: &Arc<Daemon>,
-    params: SpaceDeleteParams,
-) -> Result<SpaceDeleteResult, ErrorObject> {
-    let id = params.space;
+    params: ProjectDeleteParams,
+) -> Result<ProjectDeleteResult, ErrorObject> {
+    let id = params.project;
     let chats = store(daemon, move |db| {
         db.get_repo(id.into())
             .map_err(|e| store_error(&e))?
-            .filter(|repo| repo.fields.space)
+            .filter(|repo| repo.fields.project)
             .ok_or_else(|| not_found(id))?;
         Ok(db
             .list_threads()
@@ -288,15 +289,15 @@ pub(crate) async fn delete(
         threads::delete(daemon, run, None).await?;
     }
     store(daemon, move |db| {
-        // A thread added to it goes back to working where it was, in no Space.
+        // A thread added to it goes back to working where it was, in no Project.
         let added = db
             .list_threads()
             .map_err(|e| store_error(&e))?
             .into_iter()
-            .filter(|thread| thread.space_id == Some(Uuid::from(id)));
+            .filter(|thread| thread.project_id == Some(Uuid::from(id)));
         for thread in added {
             let (thread, _) = db
-                .set_thread_space(thread.id, None)
+                .set_thread_project(thread.id, None)
                 .map_err(|e| store_error(&e))?;
             db.stage(
                 jiff::Timestamp::now(),
@@ -315,16 +316,16 @@ pub(crate) async fn delete(
         Ok(())
     })
     .await?;
-    if let Ok(dir) = space_dir(daemon, id)
+    if let Ok(dir) = project_dir(daemon, id)
         && let Err(error) = std::fs::remove_dir_all(&dir)
     {
-        warn!(space = %id, %error, "could not remove a deleted Space's repository");
+        warn!(project = %id, %error, "could not remove a deleted Project's repository");
     }
     if let Ok(scope) = ScopeId::try_from(Uuid::from(id)) {
         threads::remove_context(daemon, scope);
     }
-    info!(space = %id, "deleted a Space");
-    Ok(SpaceDeleteResult {})
+    info!(project = %id, "deleted a Project");
+    Ok(ProjectDeleteResult {})
 }
 
 #[cfg(test)]
@@ -335,7 +336,7 @@ mod tests {
     use super::{check_files, thread_instructions};
 
     #[test]
-    fn a_space_takes_only_files_uploaded_to_this_host() {
+    fn a_project_takes_only_files_uploaded_to_this_host() {
         let data = tempfile::tempdir().unwrap();
         let uploads = data.path().join("uploads");
         std::fs::create_dir_all(uploads.join("a")).unwrap();
@@ -361,35 +362,39 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_in_a_space_gets_its_instructions_and_files() {
-        let mut space = Repo {
+    fn a_thread_in_a_project_gets_its_instructions_and_files() {
+        let mut project = Repo {
             id: Uuid::now_v7(),
             fields: RepoFields {
                 name: "Thesis".to_owned(),
-                path: "/data/spaces/x".to_owned(),
+                path: "/data/projects/x".to_owned(),
                 scratch: false,
-                space: true,
+                project: true,
             },
             icon: None,
             created_at: jiff::Timestamp::now(),
             instructions: None,
             files: Vec::new(),
         };
-        assert_eq!(thread_instructions(&space), None, "nothing to add");
+        assert_eq!(thread_instructions(&project), None, "nothing to add");
 
-        space.instructions = Some("Answer in British English.".to_owned());
-        space.files = vec!["/data/uploads/a/brief.pdf".to_owned()];
-        let text = thread_instructions(&space).unwrap();
+        project.instructions = Some("Answer in British English.".to_owned());
+        project.files = vec!["/data/uploads/a/brief.pdf".to_owned()];
+        let text = thread_instructions(&project).unwrap();
         assert!(text.contains("\"Thesis\""), "{text}");
         assert!(
             text.contains(
-                "<space_instructions>\nAnswer in British English.\n</space_instructions>"
+                "<project_instructions>\nAnswer in British English.\n</project_instructions>"
             ),
             "{text}"
         );
         assert!(text.contains("\n- /data/uploads/a/brief.pdf"), "{text}");
 
-        space.fields.space = false;
-        assert_eq!(thread_instructions(&space), None, "only a Space's threads");
+        project.fields.project = false;
+        assert_eq!(
+            thread_instructions(&project),
+            None,
+            "only a Project's threads"
+        );
     }
 }

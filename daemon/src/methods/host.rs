@@ -137,9 +137,9 @@ pub(crate) fn initialize(
 /// repo entry, each with its own worktree. `pins` (PLX-789): `pinned` on `Thread` and
 /// `thread/update`, and `snippets` on `thread/search`, which an older plxd would silently drop.
 /// `board` (PLX-940, 0081): `board/list`, `board/add`, `board/update`, and `board/remove`, and
-/// `notes.md` and `archived.md` rendered from the items, which `context/write` refuses. `spaces`
-/// (PLX-732, 0069): `space/create`, `space/delete`, `repo.removed`, `name` on `repo/update`, and
-/// `space` on `Repo`. `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`,
+/// `notes.md` and `archived.md` rendered from the items, which `context/write` refuses. `projects`
+/// (PLX-732, 0069): `project/create`, `project/delete`, `repo.removed`, `name` on `repo/update`, and
+/// `project` on `Repo`. `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`,
 /// `repo.updated`, and `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on
 /// `Repo`. `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on
 /// `Thread`, `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`,
@@ -373,6 +373,9 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "pins",
     "prDiff",
     "prWatch",
+    "projectContext",
+    "projectThreads",
+    "projects",
     "providerUpdates",
     "providers",
     "pullRequests",
@@ -392,9 +395,6 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "sendModel",
     "sendOptions",
     "setupScripts",
-    "spaceContext",
-    "spaceThreads",
-    "spaces",
     "terminals",
     "threadAttention",
     "threadFork",

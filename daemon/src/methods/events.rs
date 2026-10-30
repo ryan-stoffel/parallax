@@ -75,13 +75,17 @@ impl Cursor {
 
 const AGENT_OUTPUT: &str = "agent.output";
 
-/// The event kinds that carry a name 0093 renamed: the orchestrator's own, and a new run's
-/// `orchestratorThread`.
+/// The event kinds that carry a name 0093 renamed: the orchestrator's own, a new run's
+/// `orchestratorThread`, and a repo entry's or thread's `project`, once `space`.
 const LEGACY_KINDS: &[&str] = &[
     "orchestrator.created",
     "orchestrator.updated",
     "orchestrator.deleted",
     "agent.started",
+    "repo.added",
+    "repo.updated",
+    "thread.started",
+    "thread.updated",
 ];
 
 /// One event for one subscription.

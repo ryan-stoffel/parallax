@@ -42,7 +42,7 @@ enum Command {
     Dial(DialArgs),
     /// Turn Parallax Connect on or off. A running plxd follows within 10 seconds.
     Connect(ConnectArgs),
-    /// Use Parallax in this terminal: the same threads, Spaces, and Orchestrators as the app, live.
+    /// Use Parallax in this terminal: the same threads, Projects, and Orchestrators as the app, live.
     /// Starts plxd if it isn't running.
     Tui(TuiArgs),
     /// Manage the per-user service that keeps plxd running: a `LaunchAgent` on macOS, a systemd

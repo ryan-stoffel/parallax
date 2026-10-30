@@ -271,7 +271,7 @@ pub enum ParallaxEvent {
         /// The entry as it stands.
         repo: Repo,
     },
-    /// `space/delete` removed a Space (0069), after its threads' `thread.deleted`. Host-level.
+    /// `project/delete` removed a Project (0069), after its threads' `thread.deleted`. Host-level.
     #[serde(rename = "repo.removed")]
     RepoRemoved {
         /// The removed entry's id.

@@ -1,16 +1,16 @@
 //! `plxd tui`: Parallax in a terminal (PLX-740), laid out like Claude Code and Codex: one column
 //! with the transcript under a header, the prompt between two rules, and a status line. It is
-//! another client of the plxd the app attaches to, so its threads, Spaces, Orchestrators, and
+//! another client of the plxd the app attaches to, so its threads, Projects, Orchestrators, and
 //! messages are the app's, live, both ways.
 //!
 //! - Threads come from `orchestration/subscribeShell`; ← on an empty prompt or `/threads` opens
-//!   them in a sidebar, by repo and Space, as the app lists them.
+//!   them in a sidebar, by repo and Project, as the app lists them.
 //! - The open thread is `orchestration/subscribeThread`, folded by [`transcript`] and drawn by
 //!   [`draw`], with each run of tool calls folded into one line that a click opens.
 //! - A message is `message.dispatch`, queued after the turn under way, carrying any `/provider`,
 //!   `/model`, `/effort`, or `/mode` change made since the last one, as the app's composer does.
 //!   The first message of a new thread is `thread/start`: in the git checkout `plxd tui` ran in,
-//!   in place, as Claude Code works; otherwise in a repo, Space, or Chats. Esc is
+//!   in place, as Claude Code works; otherwise in a repo, Project, or Chats. Esc is
 //!   `run.interrupt`.
 //! - While a turn runs, the terminal's own progress bar moves (`OSC 9;4`), as for Claude Code.
 //! - `host/health` every 10 s keeps the connection open and finds one that dropped; its
@@ -92,11 +92,11 @@ const PROGRESS_OFF: &str = "\x1b]9;4;0\x07";
 const COMMANDS: [(&str, &str); 11] = [
     (
         "/new",
-        "start a new thread here, or in the repo or Space named",
+        "start a new thread here, or in the repo or Project named",
     ),
     (
         "/threads",
-        "open the sidebar of threads by repo and Space (also ←)",
+        "open the sidebar of threads by repo and Project (also ←)",
     ),
     (
         "/provider",
@@ -306,7 +306,7 @@ fn progress(on: bool) {
 enum Draft {
     /// With no repo: Chats.
     Chats,
-    /// A repo or Space, in a worktree of its own, as the app starts one.
+    /// A repo or Project, in a worktree of its own, as the app starts one.
     Repo(RepoId),
     /// The git checkout `plxd tui` ran in, worked in place, as Claude Code works in its folder.
     /// The first message adds it to plxd if plxd doesn't list it yet.
@@ -318,7 +318,7 @@ enum Draft {
 enum Pick {
     /// Opens a thread, or an orchestrator.
     Run(RunId),
-    /// Starts a thread in this repo or Space, or with `None`, in none.
+    /// Starts a thread in this repo or Project, or with `None`, in none.
     Group(Option<RepoId>),
     Provider(String),
     Model(String),
@@ -1247,7 +1247,7 @@ impl App {
                     self.pick(pick).await;
                 }
             }
-            // In the sidebar: a new thread in the selected row's repo or Space.
+            // In the sidebar: a new thread in the selected row's repo or Project.
             KeyCode::Char('n') if menu.sidebar() => {
                 let repo = menu
                     .items
@@ -1312,7 +1312,7 @@ impl App {
     }
 
     /// Where a new thread in `repo` starts: in place in the checkout `plxd tui` is in, as Claude
-    /// Code works; in a worktree of its own in another repo or a Space, as the app starts one;
+    /// Code works; in a worktree of its own in another repo or a Project, as the app starts one;
     /// and in Chats for none.
     fn draft_for(&self, repo: Option<RepoId>) -> Draft {
         let Some(repo) = repo.and_then(|id| self.repo(id)) else {
@@ -1468,7 +1468,7 @@ impl App {
                 let draft = match named {
                     Some(Some(repo)) => self.draft_for(Some(repo)),
                     Some(None) => {
-                        self.error = Some(format!("no repo or Space is named {argument}"));
+                        self.error = Some(format!("no repo or Project is named {argument}"));
                         return;
                     }
                     // Where the open thread works, or where the next one was going to.
@@ -1557,7 +1557,7 @@ impl App {
         }
     }
 
-    /// The sidebar, as the app lists threads: each repo and Space with its threads, newest
+    /// The sidebar, as the app lists threads: each repo and Project with its threads, newest
     /// first, each with its age. Orchestrators aren't threads, and stay out.
     fn threads_menu(&self) -> Menu {
         let open = self.open.as_ref().map(|open| open.run);
@@ -1592,7 +1592,7 @@ impl App {
             threads.sort_by_key(|thread| {
                 std::cmp::Reverse(thread.last_prompt_at.unwrap_or(thread.created_at))
             });
-            let folder = if repo.scratch || repo.space {
+            let folder = if repo.scratch || repo.project {
                 String::new()
             } else {
                 tilde(Path::new(&repo.path))
@@ -1757,7 +1757,7 @@ impl App {
         let listed = self
             .repos
             .iter()
-            .find(|repo| !repo.scratch && !repo.space && Path::new(&repo.path) == path);
+            .find(|repo| !repo.scratch && !repo.project && Path::new(&repo.path) == path);
         if let Some(repo) = listed {
             return Ok(repo.id);
         }
@@ -1878,7 +1878,7 @@ impl App {
             .to_owned()
     }
 
-    /// Where the open thread, or the next one, works: its repo or Space, or its orchestrator.
+    /// Where the open thread, or the next one, works: its repo or Project, or its orchestrator.
     fn place(&self) -> String {
         if let Some(open) = &self.open {
             if let Some(project) = self
@@ -1905,7 +1905,7 @@ impl App {
 
     /// The folder on this computer the open thread, or the next one, works in: the thread's
     /// worktree or its repo's checkout, or the checkout `plxd tui` ran in. None for Chats and
-    /// Spaces, whose folders are plxd's.
+    /// Projects, whose folders are plxd's.
     fn folder(&self) -> Option<PathBuf> {
         let repo = match &self.open {
             Some(_) => self.open_thread().and_then(|thread| self.repo(thread.repo)),
@@ -1915,7 +1915,7 @@ impl App {
                 Draft::Chats => None,
             },
         }?;
-        if repo.scratch || repo.space {
+        if repo.scratch || repo.project {
             return None;
         }
         let worktree = self.open_run().and_then(|run| run.worktree_path.as_deref());
@@ -2171,7 +2171,7 @@ fn effort_name(effort: AgentEffort) -> &'static str {
     }
 }
 
-/// A repo's or Space's name, with plxd's entry for threads with no repo as Chats.
+/// A repo's or Project's name, with plxd's entry for threads with no repo as Chats.
 fn group_name(repo: &Repo) -> String {
     if repo.scratch {
         "Chats".to_owned()

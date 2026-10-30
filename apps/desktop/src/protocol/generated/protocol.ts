@@ -494,21 +494,21 @@ export type ParallaxRequests = {
 	 */
 	"repo/update": { params: RepoUpdateParams, result: RepoUpdateResult },
 	/**
-	 * `space/create`: makes a Space, a named group for chats with no repository, backed by a
+	 * `project/create`: makes a Project, a named group for chats with no repository, backed by a
 	 * repository plxd makes (0069). Idempotent on its client-generated id. Gated on the
-	 * `spaces` capability.
+	 * `projects` capability.
 	 */
-	"space/create": { params: SpaceCreateParams, result: SpaceCreateResult },
+	"project/create": { params: ProjectCreateParams, result: ProjectCreateResult },
 	/**
-	 * `space/delete`: deletes a Space and the chats in it (0069). Gated on the `spaces`
+	 * `project/delete`: deletes a Project and the chats in it (0069). Gated on the `projects`
 	 * capability.
 	 */
-	"space/delete": { params: SpaceDeleteParams, result: SpaceDeleteResult },
+	"project/delete": { params: ProjectDeleteParams, result: ProjectDeleteResult },
 	/**
-	 * `thread/setSpace`: adds threads to a Space, or takes them out of one, leaving where
-	 * each works as it is (0090). Gated on the `spaceThreads` capability.
+	 * `thread/setProject`: adds threads to a Project, or takes them out of one, leaving where
+	 * each works as it is (0090). Gated on the `projectThreads` capability.
 	 */
-	"thread/setSpace": { params: ThreadSetSpaceParams, result: ThreadSetSpaceResult },
+	"thread/setProject": { params: ThreadSetProjectParams, result: ThreadSetProjectResult },
 	/**
 	 * `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
 	 * stopping its CLI first if it runs.
@@ -1152,9 +1152,9 @@ export const REQUEST_METHODS = [
 	"thread/archive",
 	"thread/update",
 	"repo/update",
-	"space/create",
-	"space/delete",
-	"thread/setSpace",
+	"project/create",
+	"project/delete",
+	"thread/setProject",
 	"thread/delete",
 	"orchestrator/start",
 	"orchestrator/fresh",
@@ -4737,10 +4737,10 @@ export type Repo = {
 	 */
 	scratch?: boolean,
 	/**
-	 * True for a Space (0069): a group of chats the user made, with no repository of theirs.
-	 * `path` is the repository plxd made for it. Behind the `spaces` capability.
+	 * True for a Project (0069): a group of chats the user made, with no repository of theirs.
+	 * `path` is the repository plxd made for it. Behind the `projects` capability.
 	 */
-	space?: boolean,
+	project?: boolean,
 	/**
 	 * The icon the user chose, in a project's shape (0032), behind the `threadAttention`
 	 * capability (0033). Absent means the app's default: the name's initials.
@@ -4751,13 +4751,13 @@ export type Repo = {
 	 */
 	createdAt: string,
 	/**
-	 * A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
-	 * behind the `spaceContext` capability. Absent when it has none.
+	 * A Project's instructions, which plxd pins to the system prompt of every thread in it (0090),
+	 * behind the `projectContext` capability. Absent when it has none.
 	 */
 	instructions?: string,
 	/**
-	 * The files a Space gives every thread in it (0090), as absolute paths on the host, such as
-	 * `host/upload` answers, behind `spaceContext`. Each thread's system prompt lists them.
+	 * The files a Project gives every thread in it (0090), as absolute paths on the host, such as
+	 * `host/upload` answers, behind `projectContext`. Each thread's system prompt lists them.
 	 */
 	files?: Array<string>,
 };
@@ -4844,11 +4844,11 @@ export type Thread = {
 	 */
 	pinned?: boolean,
 	/**
-	 * The Space the user added it to with `thread/setSpace` (0090), where it works elsewhere.
-	 * Absent for a thread in no Space, and for one started in a Space, whose `repo` is the
-	 * Space.
+	 * The Project the user added it to with `thread/setProject` (0090), where it works elsewhere.
+	 * Absent for a thread in no Project, and for one started in a Project, whose `repo` is the
+	 * Project.
 	 */
-	space?: RepoId,
+	project?: RepoId,
 };
 
 /**
@@ -6822,10 +6822,10 @@ export type ThreadUpdateResult = {
 
 /**
  * Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
- * behind the `threadAttention` capability, renames a Space (0069), behind `spaces`, or sets a
- * Space's instructions and files (0090), behind `spaceContext`. A change appends
+ * behind the `threadAttention` capability, renames a Project (0069), behind `projects`, or sets a
+ * Project's instructions and files (0090), behind `projectContext`. A change appends
  * `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
- * `name`, `instructions`, or `files` on an entry that isn't a Space.
+ * `name`, `instructions`, or `files` on an entry that isn't a Project.
  */
 export type RepoUpdateParams = {
 	/**
@@ -6837,16 +6837,16 @@ export type RepoUpdateParams = {
 	 */
 	icon?: ChosenIcon,
 	/**
-	 * A Space's new name, trimmed, 1 to 128 bytes.
+	 * A Project's new name, trimmed, 1 to 128 bytes.
 	 */
 	name?: string,
 	/**
-	 * A Space's new instructions, up to [`MAX_SPACE_INSTRUCTIONS_BYTES`] once trimmed. Empty
+	 * A Project's new instructions, up to [`MAX_PROJECT_INSTRUCTIONS_BYTES`] once trimmed. Empty
 	 * clears them.
 	 */
 	instructions?: string,
 	/**
-	 * A Space's files in full, replacing the list: at most [`MAX_SPACE_FILES`] absolute paths
+	 * A Project's files in full, replacing the list: at most [`MAX_PROJECT_FILES`] absolute paths
 	 * inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
 	 */
 	files?: Array<string>,
@@ -6863,18 +6863,18 @@ export type RepoUpdateResult = {
 };
 
 /**
- * Params of `space/create` (0069), behind the `spaces` capability: makes a Space, a named group
+ * Params of `project/create` (0069), behind the `projects` capability: makes a Project, a named group
  * for chats with no repository, backed by a repository plxd makes. Idempotent on `id`: a retry
  * with the same name returns the entry, another name fails with `idConflict`. Appends
  * `repo.added`.
  */
-export type SpaceCreateParams = {
+export type ProjectCreateParams = {
 	/**
-	 * The Space's id, a version 7 UUID generated by the client.
+	 * The Project's id, a version 7 UUID generated by the client.
 	 */
 	id: RepoId,
 	/**
-	 * Its name, trimmed, 1 to [`MAX_SPACE_NAME_BYTES`] bytes.
+	 * Its name, trimmed, 1 to [`MAX_PROJECT_NAME_BYTES`] bytes.
 	 */
 	name: string,
 	/**
@@ -6884,55 +6884,55 @@ export type SpaceCreateParams = {
 };
 
 /**
- * Result of `space/create`.
+ * Result of `project/create`.
  */
-export type SpaceCreateResult = {
+export type ProjectCreateResult = {
 	/**
-	 * The Space, new or existing, as a repo entry with `space` true.
+	 * The Project, new or existing, as a repo entry with `project` true.
 	 */
 	repo: Repo,
 };
 
 /**
- * Params of `space/delete` (0069), behind the `spaces` capability: deletes a Space and every
+ * Params of `project/delete` (0069), behind the `projects` capability: deletes a Project and every
  * chat in it, as `thread/delete` deletes each, then its repository. Appends `repo.removed`.
- * Fails with `repoNotFound` for an unknown id or an entry that isn't a Space.
+ * Fails with `repoNotFound` for an unknown id or an entry that isn't a Project.
  */
-export type SpaceDeleteParams = {
+export type ProjectDeleteParams = {
 	/**
-	 * The Space's id.
+	 * The Project's id.
 	 */
-	space: RepoId,
+	project: RepoId,
 };
 
 /**
- * Result of `space/delete`.
+ * Result of `project/delete`.
  */
-export type SpaceDeleteResult = Record<symbol, never>;
+export type ProjectDeleteResult = Record<symbol, never>;
 
 /**
- * Params of `thread/setSpace` (0090), behind the `spaceThreads` capability: adds threads to a
- * Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
- * and transcript, and its next CLI process gets the Space's instructions and files. Appends
+ * Params of `thread/setProject` (0090), behind the `projectThreads` capability: adds threads to a
+ * Project, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+ * and transcript, and its next CLI process gets the Project's instructions and files. Appends
  * `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
- * thread started in a Space or an orchestrator, and with `repoNotFound` for a `space` that isn't
+ * thread started in a Project or an orchestrator, and with `repoNotFound` for a `project` that isn't
  * one.
  */
-export type ThreadSetSpaceParams = {
+export type ThreadSetProjectParams = {
 	/**
 	 * The threads, by run id.
 	 */
 	threads: Array<RunId>,
 	/**
-	 * The Space to add them to. Absent takes them out of their Space.
+	 * The Project to add them to. Absent takes them out of their Project.
 	 */
-	space?: RepoId,
+	project?: RepoId,
 };
 
 /**
- * Result of `thread/setSpace`.
+ * Result of `thread/setProject`.
  */
-export type ThreadSetSpaceResult = {
+export type ThreadSetProjectResult = {
 	/**
 	 * The threads as they stand, in the order asked.
 	 */

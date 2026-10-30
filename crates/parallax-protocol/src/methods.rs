@@ -76,35 +76,35 @@ use crate::{
     OrchestratorUpdateResult, PrActParams, PrDiffResult, PrMergeWhenReadyParams, PrStatusResult,
     PrViewParams, PrWatchResult, PrWatchesParams, PrWatchesResult, PrWriteParams, PrWriteResult,
     PreviewCallParams, PreviewCallResult, PreviewFrameParams, PreviewFrameResult,
-    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult, PromptImage,
-    ProvidersListParams, ProvidersListResult, ProvidersRemoveParams, ProvidersSaveParams,
-    ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams, ProvidersUpgradeResult,
-    PullRequest, QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams,
-    QuestionListParams, QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams,
-    QueueListParams, QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams,
-    RelayHostsResult, RelayIdParams, RelayIdResult, RelayRegisterParams, RelayRemoveParams,
-    RelaySignParams, RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams,
-    RemoteSessionsParams, RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams,
-    RepoCloneProgressParams, RepoCloneProgressResult, RepoFilesParams, RepoFilesResult,
-    RepoGitStatusParams, RepoGrepParams, RepoGrepResult, RepoMatchParams, RepoMatchResult,
-    RepoRefsParams, RepoRefsResult, RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams,
-    RepoScriptsParams, RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult,
-    ScheduleIdParams, ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask,
-    SecretAnswerParams, SecretAnswerResult, SecretRequestParams, SecretRequestResult,
-    SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
-    SubscribeShellParams, SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult,
-    TaskDelegateParams, TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams,
-    TerminalListResult, TerminalOpenParams, TerminalOutputParams, TerminalResizeParams,
-    TerminalResult, TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult,
-    ThreadDeleteParams, ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams,
-    ThreadHistoryResult, ThreadImportChatParams, ThreadImportParams, ThreadImportableParams,
-    ThreadImportableResult, ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams,
-    ThreadListResult, ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams,
-    ThreadRunsResult, ThreadSearchParams, ThreadSearchResult, ThreadSetSpaceParams,
-    ThreadSetSpaceResult, ThreadStartParams, ThreadStartResult, ThreadUpdateParams,
-    ThreadUpdateResult, TurnDiffParams, TurnDiffResult, UsageDailyParams, UsageDailyResult,
-    UsageGetParams, UsageGetResult, UsageHistoryParams, UsageHistoryResult, UsageLimitsParams,
-    UsageLimitsResult,
+    PreviewInputParams, PreviewInputResult, PreviewListParams, PreviewListResult,
+    ProjectCreateParams, ProjectCreateResult, ProjectDeleteParams, ProjectDeleteResult,
+    PromptImage, ProvidersListParams, ProvidersListResult, ProvidersRemoveParams,
+    ProvidersSaveParams, ProvidersUpdatesParams, ProvidersUpdatesResult, ProvidersUpgradeParams,
+    ProvidersUpgradeResult, PullRequest, QuestionAnswerParams, QuestionAskParams,
+    QuestionEscalateParams, QuestionListParams, QuestionListResult, QuestionResult,
+    QueueCancelParams, QueueEditParams, QueueListParams, QueueReorderParams, QueueResult,
+    QueueSteerParams, RelayHostsParams, RelayHostsResult, RelayIdParams, RelayIdResult,
+    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams,
+    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
+    RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
+    RepoCloneProgressResult, RepoFilesParams, RepoFilesResult, RepoGitStatusParams, RepoGrepParams,
+    RepoGrepResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
+    RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
+    RepoScriptsResult, RepoUpdateParams, RepoUpdateResult, ScheduleDeleteResult, ScheduleIdParams,
+    ScheduleListParams, ScheduleListResult, ScheduleSaveParams, ScheduledTask, SecretAnswerParams,
+    SecretAnswerResult, SecretRequestParams, SecretRequestResult, SubscribeShellParams,
+    SubscribeShellResult, SubscribeThreadParams, SubscribeThreadResult, TaskDelegateParams,
+    TaskStatusParams, TerminalExitParams, TerminalKey, TerminalListParams, TerminalListResult,
+    TerminalOpenParams, TerminalOutputParams, TerminalResizeParams, TerminalResult,
+    TerminalWriteParams, ThreadArchiveParams, ThreadArchiveResult, ThreadDeleteParams,
+    ThreadDeleteResult, ThreadForkParams, ThreadHistoryParams, ThreadHistoryResult,
+    ThreadImportChatParams, ThreadImportParams, ThreadImportableParams, ThreadImportableResult,
+    ThreadImportedChatsParams, ThreadImportedChatsResult, ThreadListParams, ThreadListResult,
+    ThreadMergeBackParams, ThreadMergeBackResult, ThreadRunsParams, ThreadRunsResult,
+    ThreadSearchParams, ThreadSearchResult, ThreadSetProjectParams, ThreadSetProjectResult,
+    ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnDiffParams,
+    TurnDiffResult, UsageDailyParams, UsageDailyResult, UsageGetParams, UsageGetResult,
+    UsageHistoryParams, UsageHistoryResult, UsageLimitsParams, UsageLimitsResult,
 };
 use crate::{
     BundleApplyParams, BundleBeginParams, BundleBeginResult, BundleDropParams, BundleOkResult,
@@ -469,16 +469,16 @@ method_table! {
         /// `repo/update`: sets a repo entry's icon (0033). Gated on the `threadAttention`
         /// capability.
         RepoUpdate = "repo/update": RepoUpdateParams => RepoUpdateResult;
-        /// `space/create`: makes a Space, a named group for chats with no repository, backed by a
+        /// `project/create`: makes a Project, a named group for chats with no repository, backed by a
         /// repository plxd makes (0069). Idempotent on its client-generated id. Gated on the
-        /// `spaces` capability.
-        SpaceCreate = "space/create": SpaceCreateParams => SpaceCreateResult;
-        /// `space/delete`: deletes a Space and the chats in it (0069). Gated on the `spaces`
+        /// `projects` capability.
+        ProjectCreate = "project/create": ProjectCreateParams => ProjectCreateResult;
+        /// `project/delete`: deletes a Project and the chats in it (0069). Gated on the `projects`
         /// capability.
-        SpaceDelete = "space/delete": SpaceDeleteParams => SpaceDeleteResult;
-        /// `thread/setSpace`: adds threads to a Space, or takes them out of one, leaving where
-        /// each works as it is (0090). Gated on the `spaceThreads` capability.
-        ThreadSetSpace = "thread/setSpace": ThreadSetSpaceParams => ThreadSetSpaceResult;
+        ProjectDelete = "project/delete": ProjectDeleteParams => ProjectDeleteResult;
+        /// `thread/setProject`: adds threads to a Project, or takes them out of one, leaving where
+        /// each works as it is (0090). Gated on the `projectThreads` capability.
+        ThreadSetProject = "thread/setProject": ThreadSetProjectParams => ThreadSetProjectResult;
         /// `thread/delete`: deletes a normal thread with its run, worktree, and stored events,
         /// stopping its CLI first if it runs.
         ThreadDelete = "thread/delete": ThreadDeleteParams => ThreadDeleteResult;

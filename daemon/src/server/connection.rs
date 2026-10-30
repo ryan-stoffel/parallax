@@ -225,16 +225,14 @@ impl<S: AsyncRead + AsyncWrite + Send + 'static> Reader<S> {
         if self.session.is_none() {
             return self.before_initialize(request).await;
         }
-        // 0093's old method names run as the new ones.
-        if let Some(new) = legacy::new_method(&request.method) {
+        let old_client = self.session.as_ref().is_some_and(|session| session.legacy);
+        // 0093's old method names run as the new ones: an old client's `project/*` is an
+        // orchestrator's, and a new client's is a Project's.
+        if let Some(new) = legacy::new_method(&request.method, old_client) {
             new.clone_into(&mut request.method);
         }
         // For a client from before 0093, the method its reply's names depend on.
-        let legacy = self
-            .session
-            .as_ref()
-            .is_some_and(|session| session.legacy)
-            .then(|| request.method.clone());
+        let legacy = old_client.then(|| request.method.clone());
         if lock(&self.in_flight).contains_key(&request.id) {
             let error = ErrorObject::new(
                 INVALID_REQUEST,

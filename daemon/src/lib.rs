@@ -83,6 +83,7 @@ mod pr_media;
 mod pr_watch;
 mod pr_write;
 pub(crate) mod preview;
+mod projects;
 pub mod providers;
 #[cfg(unix)]
 mod public_proxy;
@@ -98,7 +99,6 @@ pub mod self_update;
 pub mod server;
 pub mod service;
 mod setup_scripts;
-mod spaces;
 #[cfg(unix)]
 mod spawn;
 mod store;

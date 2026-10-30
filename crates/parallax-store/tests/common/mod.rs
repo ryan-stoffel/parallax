@@ -1,5 +1,8 @@
-/// Rolls back migration 56 (0093), for a test that rolls back past it.
-pub const UNDO_56: &str = "ALTER TABLE orchestrators RENAME TO projects;
+/// Rolls back migrations 57 and 56 (0093), for a test that rolls back past them.
+pub const UNDO_56: &str = "ALTER TABLE repos RENAME COLUMN project TO space;
+    ALTER TABLE threads RENAME COLUMN project_id TO space_id;
+    DELETE FROM schema_version WHERE version = 57;
+    ALTER TABLE orchestrators RENAME TO projects;
     ALTER TABLE orchestrator_sessions RENAME TO coordinator_sessions;
     ALTER TABLE runs RENAME COLUMN orchestrator_thread TO coordinator_thread;
     ALTER TABLE inbox RENAME COLUMN orchestrator_id TO project_id;

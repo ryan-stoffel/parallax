@@ -9,7 +9,7 @@
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    RepoAddResult, RepoCloneParams, SpaceDeleteParams, SpaceDeleteResult, ThreadDeleteParams,
+    ProjectDeleteParams, ProjectDeleteResult, RepoAddResult, RepoCloneParams, ThreadDeleteParams,
     ThreadDeleteResult, ThreadForkParams, ThreadImportChatParams, ThreadImportParams,
     ThreadStartParams, ThreadStartResult,
 };
@@ -78,11 +78,11 @@ pub(super) async fn delete(
         .await
 }
 
-pub(super) async fn space_delete(
+pub(super) async fn project_delete(
     context: &Context,
-    params: SpaceDeleteParams,
-) -> Result<SpaceDeleteResult, ErrorObject> {
+    params: ProjectDeleteParams,
+) -> Result<ProjectDeleteResult, ErrorObject> {
     context
-        .detached(|daemon| async move { crate::spaces::delete(&daemon, params).await })
+        .detached(|daemon| async move { crate::projects::delete(&daemon, params).await })
         .await
 }

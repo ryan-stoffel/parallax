@@ -19,7 +19,7 @@ fn repo_fields(path: &str) -> RepoFields {
         name: path.rsplit('/').next().unwrap().to_owned(),
         path: path.to_owned(),
         scratch: false,
-        space: false,
+        project: false,
     }
 }
 
@@ -550,12 +550,12 @@ fn deleting_a_parent_leaves_its_children_with_no_parent() {
 }
 
 #[test]
-fn a_space_keeps_its_instructions_and_files_until_cleared() {
+fn a_project_keeps_its_instructions_and_files_until_cleared() {
     let (_dir, mut store) = open();
     let id = Uuid::now_v7();
     let fields = RepoFields {
-        space: true,
-        ..repo_fields("/data/spaces/essays")
+        project: true,
+        ..repo_fields("/data/projects/essays")
     };
     store.add_repo(id, &fields).unwrap();
     let files = vec![
@@ -564,19 +564,19 @@ fn a_space_keeps_its_instructions_and_files_until_cleared() {
     ];
 
     let (repo, changed) = store
-        .set_space_context(id, Some("Cite every source."), Some(&files))
+        .set_project_context(id, Some("Cite every source."), Some(&files))
         .unwrap();
     assert!(changed);
     assert_eq!(repo.instructions.as_deref(), Some("Cite every source."));
     assert_eq!(repo.files, files);
     // Only what's given changes, and the same values again change nothing.
-    let (_, changed) = store.set_space_context(id, None, Some(&files)).unwrap();
+    let (_, changed) = store.set_project_context(id, None, Some(&files)).unwrap();
     assert!(!changed);
     let reopened = store.get_repo(id).unwrap().unwrap();
     assert_eq!(reopened.instructions.as_deref(), Some("Cite every source."));
     assert_eq!(reopened.files, files);
 
-    let (repo, changed) = store.set_space_context(id, Some(""), Some(&[])).unwrap();
+    let (repo, changed) = store.set_project_context(id, Some(""), Some(&[])).unwrap();
     assert!(changed);
     assert_eq!(repo.instructions, None);
     assert!(repo.files.is_empty());

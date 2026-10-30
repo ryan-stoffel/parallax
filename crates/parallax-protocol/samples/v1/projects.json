@@ -1,0 +1,91 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "project/create",
+    "params": {
+      "id": "01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+      "name": "Research",
+      "icon": { "name": "book-open", "color": "blue" }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "repo": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+        "name": "Research",
+        "path": "/Users/me/.parallax/spaces/01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+        "project": true,
+        "icon": { "name": "book-open", "color": "blue" },
+        "createdAt": "2026-10-12T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "repo/update",
+    "params": { "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5f0", "name": "Reading" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "repo": {
+        "id": "01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+        "name": "Reading",
+        "path": "/Users/me/.parallax/spaces/01a0f755-f200-74dd-8cfc-06d0b225c5f0",
+        "project": true,
+        "icon": { "name": "book-open", "color": "blue" },
+        "createdAt": "2026-10-12T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "thread/setProject",
+    "params": {
+      "threads": ["01a0f755-f300-7000-8000-000000000001"],
+      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5f0"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "threads": [
+        {
+          "id": "01a0f755-f300-7000-8000-000000000001",
+          "repo": "01a0f755-f100-7000-8000-000000000001",
+          "createdAt": "2026-10-12T11:00:00Z",
+          "lastPromptAt": "2026-10-12T11:30:00Z",
+          "project": "01a0f755-f200-74dd-8cfc-06d0b225c5f0"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "project/delete",
+    "params": { "project": "01a0f755-f200-74dd-8cfc-06d0b225c5f0" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "method": "events/event",
+    "params": {
+      "subscription": "01a0f755-f5e8-74c2-993d-c1660d1cd77b",
+      "seq": 3,
+      "time": "2026-10-12T12:05:00Z",
+      "event": { "kind": "repo.removed", "repo": "01a0f755-f200-74dd-8cfc-06d0b225c5f0" }
+    }
+  }
+]

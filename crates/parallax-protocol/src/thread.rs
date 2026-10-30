@@ -52,10 +52,10 @@ pub struct Repo {
     /// folder that holds each such thread's own scratch repository.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub scratch: bool,
-    /// True for a Space (0069): a group of chats the user made, with no repository of theirs.
-    /// `path` is the repository plxd made for it. Behind the `spaces` capability.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub space: bool,
+    /// True for a Project (0069): a group of chats the user made, with no repository of theirs.
+    /// `path` is the repository plxd made for it. Behind the `projects` capability.
+    #[serde(default, alias = "space", skip_serializing_if = "std::ops::Not::not")]
+    pub project: bool,
     /// The icon the user chose, in a project's shape (0032), behind the `threadAttention`
     /// capability (0033). Absent means the app's default: the name's initials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -63,13 +63,13 @@ pub struct Repo {
     pub icon: Option<ChosenIcon>,
     /// When the entry was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
-    /// A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
-    /// behind the `spaceContext` capability. Absent when it has none.
+    /// A Project's instructions, which plxd pins to the system prompt of every thread in it (0090),
+    /// behind the `projectContext` capability. Absent when it has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub instructions: Option<String>,
-    /// The files a Space gives every thread in it (0090), as absolute paths on the host, such as
-    /// `host/upload` answers, behind `spaceContext`. Each thread's system prompt lists them.
+    /// The files a Project gives every thread in it (0090), as absolute paths on the host, such as
+    /// `host/upload` answers, behind `projectContext`. Each thread's system prompt lists them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[ts(as = "Option<Vec<String>>", optional)]
     pub files: Vec<String>,
@@ -129,12 +129,12 @@ pub struct Thread {
     /// Whether the user pinned it to the top of the sidebar (PLX-789), behind `pins`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pinned: bool,
-    /// The Space the user added it to with `thread/setSpace` (0090), where it works elsewhere.
-    /// Absent for a thread in no Space, and for one started in a Space, whose `repo` is the
-    /// Space.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The Project the user added it to with `thread/setProject` (0090), where it works elsewhere.
+    /// Absent for a thread in no Project, and for one started in a Project, whose `repo` is the
+    /// Project.
+    #[serde(default, alias = "space", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub space: Option<RepoId>,
+    pub project: Option<RepoId>,
 }
 
 /// Where a thread was forked from: a run, and the turn of it the fork continues after (0041).
@@ -190,10 +190,10 @@ pub struct ThreadUpdateResult {
 }
 
 /// Params of `repo/update`: sets a repo entry's icon, which replaces the whole icon (0033),
-/// behind the `threadAttention` capability, renames a Space (0069), behind `spaces`, or sets a
-/// Space's instructions and files (0090), behind `spaceContext`. A change appends
+/// behind the `threadAttention` capability, renames a Project (0069), behind `projects`, or sets a
+/// Project's instructions and files (0090), behind `projectContext`. A change appends
 /// `repo.updated`. Fails with `repoNotFound` for an unknown entry, and `invalidParams` for
-/// `name`, `instructions`, or `files` on an entry that isn't a Space.
+/// `name`, `instructions`, or `files` on an entry that isn't a Project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoUpdateParams {
@@ -203,41 +203,41 @@ pub struct RepoUpdateParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub icon: Option<ChosenIcon>,
-    /// A Space's new name, trimmed, 1 to 128 bytes.
+    /// A Project's new name, trimmed, 1 to 128 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub name: Option<String>,
-    /// A Space's new instructions, up to [`MAX_SPACE_INSTRUCTIONS_BYTES`] once trimmed. Empty
+    /// A Project's new instructions, up to [`MAX_PROJECT_INSTRUCTIONS_BYTES`] once trimmed. Empty
     /// clears them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub instructions: Option<String>,
-    /// A Space's files in full, replacing the list: at most [`MAX_SPACE_FILES`] absolute paths
+    /// A Project's files in full, replacing the list: at most [`MAX_PROJECT_FILES`] absolute paths
     /// inside plxd's uploads folder, as `host/upload` answers. Empty clears them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub files: Option<Vec<String>>,
 }
 
-/// The longest Space name `space/create` and `repo/update` take, in bytes once trimmed.
-pub const MAX_SPACE_NAME_BYTES: usize = 128;
+/// The longest Project name `project/create` and `repo/update` take, in bytes once trimmed.
+pub const MAX_PROJECT_NAME_BYTES: usize = 128;
 
-/// The longest instructions a Space keeps (0090), in bytes once trimmed.
-pub const MAX_SPACE_INSTRUCTIONS_BYTES: usize = 32 * 1024;
+/// The longest instructions a Project keeps (0090), in bytes once trimmed.
+pub const MAX_PROJECT_INSTRUCTIONS_BYTES: usize = 32 * 1024;
 
-/// The most files a Space keeps (0090).
-pub const MAX_SPACE_FILES: usize = 50;
+/// The most files a Project keeps (0090).
+pub const MAX_PROJECT_FILES: usize = 50;
 
-/// Params of `space/create` (0069), behind the `spaces` capability: makes a Space, a named group
+/// Params of `project/create` (0069), behind the `projects` capability: makes a Project, a named group
 /// for chats with no repository, backed by a repository plxd makes. Idempotent on `id`: a retry
 /// with the same name returns the entry, another name fails with `idConflict`. Appends
 /// `repo.added`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SpaceCreateParams {
-    /// The Space's id, a version 7 UUID generated by the client.
+pub struct ProjectCreateParams {
+    /// The Project's id, a version 7 UUID generated by the client.
     pub id: RepoId,
-    /// Its name, trimmed, 1 to [`MAX_SPACE_NAME_BYTES`] bytes.
+    /// Its name, trimmed, 1 to [`MAX_PROJECT_NAME_BYTES`] bytes.
     pub name: String,
     /// Its icon, checked as `orchestrator/create` checks a project's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,53 +245,54 @@ pub struct SpaceCreateParams {
     pub icon: Option<ChosenIcon>,
 }
 
-/// Result of `space/create`.
+/// Result of `project/create`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SpaceCreateResult {
-    /// The Space, new or existing, as a repo entry with `space` true.
+pub struct ProjectCreateResult {
+    /// The Project, new or existing, as a repo entry with `project` true.
     pub repo: Repo,
 }
 
-/// Params of `space/delete` (0069), behind the `spaces` capability: deletes a Space and every
+/// Params of `project/delete` (0069), behind the `projects` capability: deletes a Project and every
 /// chat in it, as `thread/delete` deletes each, then its repository. Appends `repo.removed`.
-/// Fails with `repoNotFound` for an unknown id or an entry that isn't a Space.
+/// Fails with `repoNotFound` for an unknown id or an entry that isn't a Project.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SpaceDeleteParams {
-    /// The Space's id.
-    pub space: RepoId,
+pub struct ProjectDeleteParams {
+    /// The Project's id.
+    #[serde(alias = "space")]
+    pub project: RepoId,
 }
 
-/// Params of `thread/setSpace` (0090), behind the `spaceThreads` capability: adds threads to a
-/// Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
-/// and transcript, and its next CLI process gets the Space's instructions and files. Appends
+/// Params of `thread/setProject` (0090), behind the `projectThreads` capability: adds threads to a
+/// Project, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
+/// and transcript, and its next CLI process gets the Project's instructions and files. Appends
 /// `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
-/// thread started in a Space or an orchestrator, and with `repoNotFound` for a `space` that isn't
+/// thread started in a Project or an orchestrator, and with `repoNotFound` for a `project` that isn't
 /// one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadSetSpaceParams {
+pub struct ThreadSetProjectParams {
     /// The threads, by run id.
     pub threads: Vec<RunId>,
-    /// The Space to add them to. Absent takes them out of their Space.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The Project to add them to. Absent takes them out of their Project.
+    #[serde(default, alias = "space", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub space: Option<RepoId>,
+    pub project: Option<RepoId>,
 }
 
-/// Result of `thread/setSpace`.
+/// Result of `thread/setProject`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ThreadSetSpaceResult {
+pub struct ThreadSetProjectResult {
     /// The threads as they stand, in the order asked.
     pub threads: Vec<Thread>,
 }
 
-/// Result of `space/delete`.
+/// Result of `project/delete`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SpaceDeleteResult {}
+pub struct ProjectDeleteResult {}
 
 /// Result of `repo/update`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]

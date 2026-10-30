@@ -95,7 +95,7 @@ pub(crate) fn repo_entry(row: parallax_store::Repo) -> Result<Repo, ErrorObject>
         name: row.fields.name,
         path: row.fields.path,
         scratch: row.fields.scratch,
-        space: row.fields.space,
+        project: row.fields.project,
         icon: row.icon.map(crate::store::protocol_icon),
         created_at: row.created_at,
         instructions: row.instructions,
@@ -130,8 +130,8 @@ pub(crate) fn thread_entry(row: &parallax_store::Thread) -> Result<Thread, Error
         title: row.fields.title.clone(),
         settled: row.settled,
         pinned: row.pinned,
-        space: row
-            .space_id
+        project: row
+            .project_id
             .map(|id| RepoId::try_from(id).map_err(|_| corrupt("thread", row.id)))
             .transpose()?,
     })
@@ -321,7 +321,7 @@ pub(crate) async fn add_repo(
             name,
             path: canonical,
             scratch: false,
-            space: false,
+            project: false,
         };
         let (repo, created) = add(db, id.into(), &fields)?;
         let repo = repo_entry(repo)?;
@@ -383,7 +383,7 @@ async fn scratch_entry(daemon: &Arc<Daemon>) -> Result<parallax_store::Repo, Err
             name: SCRATCH_NAME.to_owned(),
             path: root.to_string_lossy().into_owned(),
             scratch: true,
-            space: false,
+            project: false,
         };
         let (row, created) = add(db, RepoId::generate().into(), &fields)?;
         if created {
@@ -1188,7 +1188,7 @@ pub(crate) fn prompted(db: &mut crate::store::Tx, run_id: Uuid) -> Result<(), Er
     Ok(())
 }
 
-/// `repo/update`: sets a repo entry's icon (0033), renames a Space (0069), or sets a Space's
+/// `repo/update`: sets a repo entry's icon (0033), renames a Project (0069), or sets a Project's
 /// instructions and files (0090), appending `repo.updated` when something changed.
 pub(crate) async fn update_repo(
     daemon: &Arc<Daemon>,
@@ -1212,13 +1212,16 @@ pub(crate) async fn update_repo(
             Ok::<_, ErrorObject>(crate::store::stored_icon(icon))
         })
         .transpose()?;
-    let name = name.as_deref().map(crate::spaces::check_name).transpose()?;
+    let name = name
+        .as_deref()
+        .map(crate::projects::check_name)
+        .transpose()?;
     let instructions = instructions
         .as_deref()
-        .map(crate::spaces::check_instructions)
+        .map(crate::projects::check_instructions)
         .transpose()?;
     let files = files
-        .map(|files| crate::spaces::check_files(&daemon.data_dir.uploads_dir(), &files))
+        .map(|files| crate::projects::check_files(&daemon.data_dir.uploads_dir(), &files))
         .transpose()?;
     store(daemon, move |db| {
         let not_found = |error: parallax_store::StoreError| match error {
@@ -1231,9 +1234,9 @@ pub(crate) async fn update_repo(
                 .get_repo(repo.into())
                 .map_err(|e| store_error(&e))?
                 .ok_or_else(|| repo_not_found(repo))?;
-            if !current.fields.space {
+            if !current.fields.project {
                 return Err(ErrorObject::invalid_params(
-                    "only a Space has a name, instructions, or files to change",
+                    "only a Project has a name, instructions, or files to change",
                 ));
             }
         }
@@ -1242,7 +1245,7 @@ pub(crate) async fn update_repo(
         }
         if instructions.is_some() || files.is_some() {
             changed |= db
-                .set_space_context(repo.into(), instructions.as_deref(), files.as_deref())
+                .set_project_context(repo.into(), instructions.as_deref(), files.as_deref())
                 .map_err(not_found)?
                 .1;
         }

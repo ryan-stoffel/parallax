@@ -1,9 +1,9 @@
-//! `thread/setSpace` (0090, PLX-1108): a thread added to a Space keeps working where it was, gets
-//! the Space's instructions in its next CLI process, and leaves the Space when it's deleted.
+//! `thread/setProject` (0090, PLX-1108): a thread added to a Project keeps working where it was, gets
+//! the Project's instructions in its next CLI process, and leaves the Project when it's deleted.
 
-use parallax_protocol::methods::{RepoUpdate, SpaceCreate, SpaceDelete, ThreadSetSpace};
+use parallax_protocol::methods::{ProjectCreate, ProjectDelete, RepoUpdate, ThreadSetProject};
 use parallax_protocol::{
-    RepoUpdateParams, SpaceCreateParams, SpaceDeleteParams, Thread, ThreadSetSpaceParams,
+    ProjectCreateParams, ProjectDeleteParams, RepoUpdateParams, Thread, ThreadSetProjectParams,
 };
 
 use super::*;
@@ -30,19 +30,19 @@ impl Backend for WithInstructions {
 }
 
 impl Conn {
-    async fn set_space(
+    async fn set_project(
         &mut self,
         threads: Vec<RunId>,
-        space: Option<RepoId>,
+        project: Option<RepoId>,
     ) -> Result<Vec<Thread>, ErrorObject> {
-        self.call::<ThreadSetSpace>(ThreadSetSpaceParams { threads, space })
+        self.call::<ThreadSetProject>(ThreadSetProjectParams { threads, project })
             .await
             .map(|result| result.threads)
     }
 }
 
 #[tokio::test]
-async fn a_thread_added_to_a_space_gets_its_instructions_and_leaves_when_it_goes() {
+async fn a_thread_added_to_a_project_gets_its_instructions_and_leaves_when_it_goes() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let mut backends = BackendRegistry::new();
     backends.register(
@@ -62,8 +62,8 @@ async fn a_thread_added_to_a_space_gets_its_instructions_and_leaves_when_it_goes
     let mut runs = host.client().await;
     runs.subscribe(0, Some(scope(chat.repo))).await;
     runs.until(updated_to(AgentStatus::Completed)).await;
-    let space = client
-        .call::<SpaceCreate>(SpaceCreateParams {
+    let project = client
+        .call::<ProjectCreate>(ProjectCreateParams {
             id: RepoId::generate(),
             name: "Travel".to_owned(),
             icon: None,
@@ -73,7 +73,7 @@ async fn a_thread_added_to_a_space_gets_its_instructions_and_leaves_when_it_goes
         .repo;
     client
         .call::<RepoUpdate>(RepoUpdateParams {
-            repo: space.id,
+            repo: project.id,
             icon: None,
             name: None,
             instructions: Some("Answer in French.".to_owned()),
@@ -83,16 +83,16 @@ async fn a_thread_added_to_a_space_gets_its_instructions_and_leaves_when_it_goes
         .unwrap();
 
     let added = client
-        .set_space(vec![chat.id], Some(space.id))
+        .set_project(vec![chat.id], Some(project.id))
         .await
         .unwrap();
-    assert_eq!(added[0].space, Some(space.id));
+    assert_eq!(added[0].project, Some(project.id));
     assert_eq!(added[0].repo, chat.repo, "it keeps working where it was");
     let listed = client.list().await;
     let listed = listed.threads.iter().find(|t| t.id == chat.id).unwrap();
-    assert_eq!(listed.space, Some(space.id));
+    assert_eq!(listed.project, Some(project.id));
 
-    // Its next CLI process gets the Space's instructions; its first had none.
+    // Its next CLI process gets the Project's instructions; its first had none.
     client
         .call::<AgentSend>(message(chat.id, "And a packing list"))
         .await
@@ -109,32 +109,34 @@ async fn a_thread_added_to_a_space_gets_its_instructions_and_leaves_when_it_goes
         "{seen:?}"
     );
 
-    // A thread started in the Space lives there, and no thread or no Space is refused.
+    // A thread started in the Project lives there, and no thread or no Project is refused.
     let inside = client
-        .call::<ThreadStart>(start_params(Some(space.id), "Book a hotel"))
+        .call::<ThreadStart>(start_params(Some(project.id), "Book a hotel"))
         .await
         .unwrap()
         .thread;
-    let refused = client.set_space(vec![inside.id], None).await.unwrap_err();
+    let refused = client.set_project(vec![inside.id], None).await.unwrap_err();
     assert_eq!(refused.code, INVALID_PARAMS);
     let none = client
-        .set_space(Vec::new(), Some(space.id))
+        .set_project(Vec::new(), Some(project.id))
         .await
         .unwrap_err();
     assert_eq!(none.code, INVALID_PARAMS);
     let unknown = client
-        .set_space(vec![chat.id], Some(RepoId::generate()))
+        .set_project(vec![chat.id], Some(RepoId::generate()))
         .await
         .unwrap_err();
     assert_eq!(kind(&unknown), ErrorKind::RepoNotFound);
 
-    // Deleting the Space deletes what started there and takes the added thread out.
+    // Deleting the Project deletes what started there and takes the added thread out.
     client
-        .call::<SpaceDelete>(SpaceDeleteParams { space: space.id })
+        .call::<ProjectDelete>(ProjectDeleteParams {
+            project: project.id,
+        })
         .await
         .unwrap();
     let listed = client.list().await;
     assert!(listed.threads.iter().all(|t| t.id != inside.id));
     let chat = listed.threads.iter().find(|t| t.id == chat.id).unwrap();
-    assert_eq!(chat.space, None);
+    assert_eq!(chat.project, None);
 }

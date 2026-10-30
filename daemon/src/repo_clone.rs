@@ -155,7 +155,7 @@ pub(crate) async fn remote(
 }
 
 /// `repo/match` (0057): the oldest repo entry whose `origin` names the same repository as
-/// `params.origin`, as [`repo_key`] compares them. Spaces and the scratch entry have none.
+/// `params.origin`, as [`repo_key`] compares them. Projects and the scratch entry have none.
 pub(crate) async fn matching(
     daemon: &Arc<Daemon>,
     params: RepoMatchParams,
@@ -183,7 +183,7 @@ pub(crate) async fn with_origin(
     // ponytail: one `git config` per entry, one at a time; fine for a host's handful of repos.
     for entry in entries
         .into_iter()
-        .filter(|entry| !entry.fields.scratch && !entry.fields.space)
+        .filter(|entry| !entry.fields.scratch && !entry.fields.project)
     {
         if origin(daemon, Path::new(&entry.fields.path))
             .await

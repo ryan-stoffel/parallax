@@ -145,7 +145,7 @@ impl Transcript<'_> {
 
     fn request(&mut self, request: Request) {
         let at = &self.at;
-        let method = match crate::legacy::new_method(&request.method) {
+        let method = match crate::legacy::new_method(&request.method, true) {
             Some(new) if !self.exact => new,
             _ => &request.method,
         };
