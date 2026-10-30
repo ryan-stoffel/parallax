@@ -28,10 +28,12 @@ export interface Machine {
   paired?: Saved;
 }
 
-/** What the phone keeps: its computers, and the one new threads start on. */
+/** What the phone keeps: its computers, the one new threads start on, and whether onboarding is done. */
 export interface Setup {
   machines: Machine[];
   defaultId?: string;
+  /** Onboarding finished, with or without a computer: skipping Find computers finishes it too. */
+  onboarded: boolean;
 }
 
 const setupFile = new File(privateFile("machines.json"));
@@ -44,9 +46,13 @@ export const pairedId = (saved: Saved) => `paired-${saved.fingerprint.slice(0, 1
  * `saveSetup` leaves it. A paired computer whose session is gone, as after a revoke, drops out.
  */
 export async function loadSetup(): Promise<Setup> {
-  let setup: Setup = { machines: [] };
+  let setup: Setup = { machines: [], onboarded: false };
   try {
-    if (setupFile.exists) setup = JSON.parse(setupFile.textSync()) as Setup;
+    if (setupFile.exists) {
+      const read = JSON.parse(setupFile.textSync()) as Omit<Setup, "onboarded"> & { onboarded?: boolean };
+      // A setup saved before `onboarded` finished onboarding if it has a computer.
+      setup = { ...read, onboarded: read.onboarded ?? read.machines.length > 0 };
+    }
   } catch {}
   const saved = await loadSaved().catch(() => null);
   const machines = setup.machines.flatMap((m) =>

@@ -196,10 +196,16 @@ export function FleetProvider({
     computers: list,
     defaultId: setup.defaultId ?? setup.machines[0]?.id,
     setDefault: (id) => update((s) => ({ ...s, defaultId: id })),
-    add: (found) => update((s) => ({ ...s, machines: merge(s.machines, found) })),
+    // A computer added with none set as the default becomes it.
+    add: (found) =>
+      update((s) => {
+        const machines = merge(s.machines, found);
+        return { ...s, machines, defaultId: s.defaultId ?? machines[0]?.id };
+      }),
     remove: (id) => {
       fleet.remove(id);
       update((s) => ({
+        ...s,
         machines: s.machines.filter((m) => m.id !== id),
         defaultId: s.defaultId === id ? undefined : s.defaultId,
       }));
