@@ -68,7 +68,7 @@ const confirm = (title: string, message: string, action: string, run: () => void
   ]);
 
 /**
- * Accounts: the host's default account for threads and for a Project's coordinator, as New
+ * Accounts: the host's default account for threads and for an orchestrator, as New
  * thread sets them, and its API keys, kept in its keychain.
  */
 function AccountsPage({ m }: { m: Computer }) {
@@ -137,7 +137,7 @@ function AccountsPage({ m }: { m: Computer }) {
     });
   const roles: [Role, string, string][] = [
     ["worker", "Threads", "New threads run on it unless they pick another."],
-    ["coordinator", "Projects", "A Project's coordinator runs on it."],
+    ["orchestrator", "Orchestrators", "An orchestrator thread runs on it."],
   ];
 
   return (
@@ -177,7 +177,7 @@ function AccountsPage({ m }: { m: Computer }) {
         </Section>
       ))}
       <Choices
-        title={picking === "coordinator" ? "Projects" : "Threads"}
+        title={picking === "orchestrator" ? "Orchestrators" : "Threads"}
         open={!!picking}
         value={choiceKey(picking && defaults?.[picking])}
         options={[
@@ -207,7 +207,7 @@ function ThreadsPage({ m }: { m: Computer }) {
             error ??
             (!supported
               ? "This host's plxd can't resume threads after a usage limit."
-              : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. A Project's threads always do.")
+              : "A thread a usage limit stopped continues once the limit resets. Each thread's menu can override this. An orchestrator's threads always do.")
           }
           value={settings?.autoResume ?? false}
           disabled={!supported || !settings}
@@ -319,7 +319,7 @@ function SchedulesPage({ m }: { m: Computer }) {
               enabled: !task.enabled,
               schedule: task.schedule,
               thread: task.thread,
-              project: task.project,
+              orchestrator: task.orchestrator,
               repo: task.repo,
               account: task.account,
               model: task.model,

@@ -18,8 +18,8 @@ export interface Offer {
   models: Model[];
   efforts: boolean;
   permissions: AgentPermission[];
-  /** Whether it can run a Project's coordinator. */
-  coordinator: boolean;
+  /** Whether it can run an orchestrator. */
+  orchestrator: boolean;
 }
 
 export const allAccess: AgentPermission[] = ["manual", "edit", "auto", "plan", "bypass"];
@@ -45,11 +45,11 @@ export function useOffers(computer: Computer | undefined): Offer[] {
         models: instanceModels(info),
         efforts: info.efforts,
         permissions: info.permissions,
-        coordinator: info.coordinator,
+        orchestrator: info.orchestrator,
       }));
   return [
-    { id: "claude", name: "Claude", efforts: true, permissions: allAccess, coordinator: true },
-    { id: "codex", name: "Codex", efforts: true, permissions: ["manual", "edit", "auto", "bypass"], coordinator: false },
-    { id: "cursor", name: "Cursor", efforts: false, permissions: ["edit", "plan", "auto", "bypass"], coordinator: false },
+    { id: "claude", name: "Claude", efforts: true, permissions: allAccess, orchestrator: true },
+    { id: "codex", name: "Codex", efforts: true, permissions: ["manual", "edit", "auto", "bypass"], orchestrator: false },
+    { id: "cursor", name: "Cursor", efforts: false, permissions: ["edit", "plan", "auto", "bypass"], orchestrator: false },
   ].map((o) => ({ ...o, kind: o.id, models: builtIn.filter((m) => m.provider === o.id) }) as Offer);
 }

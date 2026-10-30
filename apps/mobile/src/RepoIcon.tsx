@@ -1,4 +1,4 @@
-// Repository and Project icons, as the desktop's Sidebar.tsx draws them (0032, 0033, 0038): an
+// Repository and orchestrator icons, as the desktop's Sidebar.tsx draws them (0032, 0033, 0038): an
 // uploaded image, else the chosen lucide glyph in its palette color, else for a repository its
 // initials on a tile in a color picked from its name. A repository with no icon of its own wears
 // its namesake's from another computer (`sharedRepoIcons`).
@@ -6,7 +6,7 @@ import * as Lucide from "lucide-react-native";
 import { useMemo } from "react";
 import { Image, Text, View } from "react-native";
 
-import type { ProjectIcon as ProjectIconValue, Repo } from "../../desktop/src/protocol/generated/protocol";
+import type { ChosenIcon, Repo } from "../../desktop/src/protocol/generated/protocol";
 import { initials } from "../../desktop/src/renderer/attention";
 import { isRepository, repoIconOf } from "../../desktop/src/renderer/threads";
 import { useFleet } from "./fleet";
@@ -21,8 +21,8 @@ const tone = (c: Colors, key?: string) =>
     ? c[`project${key[0]!.toUpperCase()}${key.slice(1)}` as keyof Colors]
     : undefined;
 
-/** A Project's icon: its image, or its glyph (kebab-case lucide name) in its color. */
-export function ProjectGlyph({ icon, size = 18 }: { icon?: ProjectIconValue; size?: number }) {
+/** An orchestrator's icon: its image, or its glyph (kebab-case lucide name) in its color. */
+export function OrchestratorGlyph({ icon, size = 18 }: { icon?: ChosenIcon; size?: number }) {
   const c = useColors();
   if (icon?.image)
     return (
@@ -43,14 +43,14 @@ export function RepoIcon({
   size = 18,
 }: {
   repo?: Repo;
-  shared?: ReadonlyMap<string, ProjectIconValue>;
+  shared?: ReadonlyMap<string, ChosenIcon>;
   size?: number;
 }) {
   const c = useColors();
   if (!repo || repo.scratch)
     return <Lucide.SquareDashed size={size} color={c.faintForeground} strokeWidth={2} />;
   const icon = repoIconOf(repo, shared ?? new Map());
-  if (icon) return <ProjectGlyph icon={icon} size={size} />;
+  if (icon) return <OrchestratorGlyph icon={icon} size={size} />;
   let hash = 0;
   for (let i = 0; i < repo.name.length; i++) hash = (hash * 31 + repo.name.charCodeAt(i)) | 0;
   const color = tone(c, palette[Math.abs(hash) % palette.length]) as string;
@@ -74,7 +74,7 @@ export function RepoIcon({
 export function useSharedIcons() {
   const { computers } = useFleet();
   return useMemo(() => {
-    const icons = new Map<string, ProjectIconValue>();
+    const icons = new Map<string, ChosenIcon>();
     for (const m of computers)
       for (const repo of m.view.state.repos)
         if (isRepository(repo) && repo.icon && !icons.has(repo.name)) icons.set(repo.name, repo.icon);

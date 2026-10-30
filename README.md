@@ -24,7 +24,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/readme/demo.gif" alt="Parallax: a Project's coordinator chat, approving a subagent's command, then a thread with its diff in the side panel" width="900">
+  <img src="docs/images/readme/demo.gif" alt="Parallax: an orchestrator thread, approving a subagent's command, then a thread with its diff in the side panel" width="900">
 </p>
 
 Parallax is a desktop app for the coding agents you already pay for: Claude Code, Codex, Cursor, OpenCode, Ollama Cloud, and any agent that speaks ACP. You give an agent a task, it works in its own git worktree, and you review the diff when it's done. Run one agent on one task, or hand a whole feature to a coordinator that splits it across several.
@@ -40,13 +40,13 @@ A thread is one agent working on one task. Pick a repository, say what you want,
   <img src="docs/images/readme/thread.png" alt="A thread that reworked the app's updater, with the diff of its three files in the side panel">
 </picture>
 
-## Projects
+## Orchestrator threads
 
-A Project is for work bigger than one chat. Its coordinator plans the work, starts a subagent for each piece in its own worktree, and keeps a status board in the Project's shared notes. It answers routine questions itself and brings you only what needs you: an approval, a decision, a failed test.
+An orchestrator thread is for work bigger than one chat. It plans the work, starts a subagent for each piece in its own worktree, and keeps a status board in its shared notes. It answers routine questions itself and brings you only what needs you: an approval, a decision, a failed test.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/images/readme/project-light.png">
-  <img src="docs/images/readme/project.png" alt="A Project's coordinator chat beside its status panel: three items waiting on you, two subagents working, two done">
+  <img src="docs/images/readme/project.png" alt="An orchestrator thread beside its status panel: three items waiting on you, two subagents working, two done">
 </picture>
 
 ## Your computers
@@ -71,7 +71,7 @@ In Settings > Connections, turn on Pair computers on this network, then choose P
 
 ## In a terminal
 
-`parallax` runs Parallax in your terminal, laid out like Claude Code, with the same threads, Spaces, and Projects as the app, live in both. Run it in a git checkout and new threads work there in place. `/settings` signs in to providers and GitHub, adds API keys, and changes this computer's settings, so the terminal works without the app. `/login` jumps to the first provider that isn't signed in. It comes with the app, or installs on its own (see [Terminal only](#terminal-only)).
+`parallax` runs Parallax in your terminal, laid out like Claude Code, with the same threads, Spaces, and orchestrators as the app, live in both. Run it in a git checkout and new threads work there in place. `/settings` signs in to providers and GitHub, adds API keys, and changes this computer's settings, so the terminal works without the app. `/login` jumps to the first provider that isn't signed in. It comes with the app, or installs on its own (see [Terminal only](#terminal-only)).
 
 <p align="center">
   <img src="docs/images/readme/tui.png" alt="Parallax in a terminal: a Claude Code thread that added an imperial option to a forecast formatter, its tool calls folded into one line" width="720">

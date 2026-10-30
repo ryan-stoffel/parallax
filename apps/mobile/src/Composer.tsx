@@ -502,7 +502,7 @@ export function Composer({
     models: [],
     efforts: true,
     permissions: allAccess,
-    coordinator: true,
+    orchestrator: true,
   };
   const offer = offers.find((o) => o.id === shownProvider) ?? offers[0] ?? fallback;
   // Another provider takes a message only on a plxd that moves runs (`sendAccount`), as on the desktop.
@@ -928,12 +928,12 @@ export function Composer({
           setEffort(undefined);
           setPermission(undefined);
         }}
-        // As on the desktop: another provider only where plxd moves runs, and for a Project's
-        // coordinator (a `noWrite` run), only one that can run a coordinator.
+        // As on the desktop: another provider only where plxd moves runs, and for an orchestrator's
+        // orchestrator (a `noWrite` run), only one that can run an orchestrator.
         canMove={(id) =>
           !!onStart ||
           id === run?.backend ||
-          (moves && (run?.policy !== "noWrite" || !!offers.find((o) => o.id === id)?.coordinator))
+          (moves && (run?.policy !== "noWrite" || !!offers.find((o) => o.id === id)?.orchestrator))
         }
         models={offer.models}
         model={shownModel}
