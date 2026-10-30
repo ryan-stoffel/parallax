@@ -136,13 +136,6 @@ export function IconButton({
 }
 
 /**
- * A browser toolbar button's look, at Helium's size: 32 px, with a 20 px icon (PLX-981), for a
- * button that isn't an IconButton. An IconButton takes `size="lg"` instead.
- */
-export const toolbarButton =
-  "grid size-8 shrink-0 place-items-center rounded-lg text-muted-foreground enabled:hover:bg-hover enabled:hover:text-foreground disabled:opacity-40 aria-pressed:bg-selected aria-pressed:text-foreground [&_svg]:size-5";
-
-/**
  * Set up GitHub, beside a pull request action that failed because `gh` is missing or signed out
  * on the host (PLX-423). It opens Settings > Source control on that host.
  */
