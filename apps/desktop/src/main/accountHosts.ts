@@ -94,7 +94,9 @@ export function countPairRun(runs: number[] | undefined, now: number): number[] 
 
 /** How often a connection on the relay checks its direct routes again (0091). */
 export const RECHECK_MS = 60_000;
-/** How long a direct route waits after its connection ended (0091), as T3's supervisor does. */
+/**
+ * How long a direct route waits after it failed having answered (0091), as T3's supervisor does.
+ */
 export const BENCH_MS = 5 * 60_000;
 
 /**
@@ -102,13 +104,18 @@ export const BENCH_MS = 5 * 60_000;
  * learned direct routes not waiting out a failure, then the relay; `plxd dial` races them, the
  * relay 200 ms after the direct ones. While the connection is on the relay, `recheck` probes the
  * direct routes, every `RECHECK_MS` and when hosts.ts calls it on a network change or focus, and
- * `move` reconnects once one answers with the pinned key. A direct route whose connection ends
- * waits `BENCH_MS`, so a flaky network can't bounce the connection.
+ * `move` reconnects once one answers with the pinned key.
+ *
+ * A direct route that answered, a probe's or the dial's, but whose connection then never came up
+ * over it waits `BENCH_MS`, so a flaky network can't bounce the connection. A connection that came
+ * up and later ended, as on sleep, a network change, or the host restarting, holds nothing back.
  */
 export class Routes {
-  /** The route the current connection went over, from `plxd dial`'s stderr. */
+  /** The route the current attempt went over, from `plxd dial`'s stderr. */
   route?: string;
   private connected = false;
+  /** The direct route a re-check found answering, until the connection it moved to comes up. */
+  private probed?: string;
   private readonly benched = new Map<string, number>();
   private timer?: ReturnType<typeof setInterval>;
   private checking = false;
@@ -144,13 +151,21 @@ export class Routes {
   /** The connection's status changed. */
   onStatus(status: "connecting" | "connected" | "failed"): void {
     if (status === "connected") {
+      // Moved for a route that answered a probe, but came up over another.
+      if (this.probed && this.route !== this.probed) this.bench(this.probed);
+      this.probed = undefined;
       this.connected = true;
       if (this.onRelay) this.timer ??= setInterval(() => void this.recheck(), RECHECK_MS);
       else this.stop();
       return;
     }
-    if (this.connected && this.route && !this.route.startsWith("relay:"))
-      this.benched.set(this.route, (this.options.now ?? Date.now)() + BENCH_MS);
+    if (!this.connected) {
+      // The dial reached this route, then the connection failed before it came up.
+      if (status === "failed" && this.route) this.bench(this.route);
+      // The dial after a move failed altogether.
+      if (status === "failed" && this.probed) this.bench(this.probed);
+      if (status === "failed") this.probed = undefined;
+    }
     this.connected = false;
     this.route = undefined;
     this.stop();
@@ -164,10 +179,19 @@ export class Routes {
     this.checking = true;
     try {
       const answered = await this.options.probe(routes);
-      if (answered && this.onRelay) this.options.move();
+      if (answered && this.onRelay) {
+        this.probed = answered;
+        this.options.move();
+      }
     } finally {
       this.checking = false;
     }
+  }
+
+  /** Holds direct route `route` back for `BENCH_MS`. The relay is never held back. */
+  private bench(route: string): void {
+    if (!route.startsWith("relay:"))
+      this.benched.set(route, (this.options.now ?? Date.now)() + BENCH_MS);
   }
 
   dispose(): void {

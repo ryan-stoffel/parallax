@@ -66,29 +66,58 @@ test("a direct connection is never re-checked", async () => {
   expect(probe).not.toHaveBeenCalled();
 });
 
-test("a direct route whose connection ended waits 5 minutes, and the relay never does", () => {
-  let now = 1_000_000;
+/** `studio`'s routes on a clock the test moves, with a probe answering `answer`. */
+function clocked(answer?: string) {
+  const clock = { now: 1_000_000 };
   const kept = new Routes({
     hostId: studio,
     learned: () => ["192.168.1.20:7341", "100.74.190.83:7341"],
-    probe: async () => undefined,
+    probe: async () => answer,
     move: () => {},
-    now: () => now,
+    now: () => clock.now,
   });
+  return { kept, clock };
+}
+
+test("a direct route that answered but never came up waits 5 minutes, and the relay never does", () => {
+  const { kept, clock } = clocked();
+  // The dial reached the LAN, then the handshake over it failed.
+  kept.onStatus("connecting");
+  kept.route = "192.168.1.20:7341";
+  kept.onStatus("failed");
+  expect(kept.dial()).toEqual(["100.74.190.83:7341", `relay:${studio}`]);
+  clock.now += BENCH_MS - 1;
+  expect(kept.dial()).toHaveLength(2);
+  clock.now += 1;
+  expect(kept.dial()).toHaveLength(3);
+
+  // The relay failing the same way holds nothing back.
+  kept.route = `relay:${studio}`;
+  kept.onStatus("failed");
+  expect(kept.dial()).toHaveLength(3);
+});
+
+test("a route a re-check found, whose move came up over another, waits 5 minutes", async () => {
+  const { kept } = clocked("192.168.1.20:7341");
+  kept.route = `relay:${studio}`;
+  kept.onStatus("connected");
+  await kept.recheck();
+  // The move: the relay connection ends, and the new dial lands on the relay again.
+  kept.onStatus("connecting");
+  kept.route = `relay:${studio}`;
+  kept.onStatus("connected");
+  expect(kept.dial()).toEqual(["100.74.190.83:7341", `relay:${studio}`]);
+  kept.dispose();
+});
+
+test("a direct connection that came up and later ended holds no route back", () => {
+  const { kept } = clocked();
+  // Sleep, a network change, or the host restarting: up over the LAN, then gone.
   kept.route = "192.168.1.20:7341";
   kept.onStatus("connected");
   kept.onStatus("failed");
-  expect(kept.dial()).toEqual(["100.74.190.83:7341", `relay:${studio}`]);
-  now += BENCH_MS - 1;
-  expect(kept.dial()).toHaveLength(2);
-  now += 1;
-  expect(kept.dial()).toHaveLength(3);
-
-  // Ending a relay connection, as moving off it does, benches nothing.
-  kept.route = `relay:${studio}`;
-  kept.onStatus("connected");
   kept.onStatus("connecting");
-  expect(kept.dial()).toHaveLength(3);
+  expect(kept.dial()).toEqual(["192.168.1.20:7341", "100.74.190.83:7341", `relay:${studio}`]);
 });
 
 test("the account's list adds and drops computers, keeping what this app learned of each", () => {
