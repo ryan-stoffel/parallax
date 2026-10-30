@@ -12,17 +12,19 @@
 //!   host locks the code after a few wrong tries.
 //! - Pairing ends with a session token bound to the client's [`DpopKey`], as T3 Code's `DPoP`
 //!   sessions are, so a stolen token is useless without the key.
-//! - A paired client gets a 30 s ticket at `/api/auth/websocket-ticket` with the token and a
-//!   `DPoP` proof, then opens `/ws` with it, which carries 0007's JSON-RPC, one message per frame.
+//! - A paired client opens `/ws`, which carries 0007's JSON-RPC, one message per frame, with the
+//!   token and a `DPoP` proof on the upgrade itself (0091). A host from before 0091 refuses that,
+//!   and the client then gets a 30 s ticket at `/api/auth/websocket-ticket` and opens `/ws` with it.
 //!
 //! - An `account:` host (0091) is pinned by its relay id, the JWK thumbprint of its certificate's
 //!   key ([`Pin::HostId`]). This computer signs in to it with a Clerk token ([`sign_in`]) and one
 //!   [`device_key`] for every such host, which the host approves once ([`await_approval`]), or
 //!   pairs with its setup code ([`pair_account`]).
 //!
-//! [`dial`] tries a host's routes in order, as T3's connection driver does, and [`bridge`] joins
-//! the WebSocket to `plxd dial`'s stdio. Its credential stays in its data folder, readable only by
-//! this user.
+//! [`dial`] races a host's routes ([`race`], 0091): the direct ones (LAN, Tailscale) at once, the
+//! relay [`RELAY_HEAD_START`] later, and only the first to present the pinned certificate gets the
+//! credential. [`bridge`] joins the WebSocket to `plxd dial`'s stdio. Its credential stays in its
+//! data folder, readable only by this user.
 
 use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
@@ -1189,6 +1191,10 @@ pub const APPROVAL_WAIT: Duration = Duration::from_secs(25);
 /// How long a new device's request waits for approval before it lapses (0091).
 pub const REQUEST_LIFETIME: Duration = Duration::from_mins(10);
 
+/// At most this many new requests a client starts with one host an hour (0091), since a fake
+/// host sets no limit of its own.
+pub const MAX_CLIENT_REQUESTS: usize = 5;
+
 /// The random value a client sent for a request, kept while the request can wait, so a reconnect
 /// sends the same one and a host that then answers with another commitment fails (0091).
 #[derive(Serialize, Deserialize)]
@@ -1205,8 +1211,15 @@ fn committed_path(data_dir: &Path, host_id: &str) -> PathBuf {
     credential_path(data_dir, &format!("{host_id}.request"))
 }
 
-/// This client's value for `request` at `host_id`: the one it kept, unless that one is for an
-/// earlier request or lapsed, else a new one, kept now.
+/// Where a client keeps when it started requests with `host_id` within the last hour.
+fn requests_path(data_dir: &Path, host_id: &str) -> PathBuf {
+    credential_path(data_dir, &format!("{host_id}.requests"))
+}
+
+/// This client's value for `request` at `host_id`: the one it kept while its request can wait,
+/// else a new one, kept now. While one is kept, any other request id or commitment from that host
+/// id fails as [`Error::WrongHost`], so a host that answers each reconnect with a new request gets
+/// no new value to try. A new one counts against [`MAX_CLIENT_REQUESTS`] an hour.
 fn client_value(
     data_dir: &Path,
     host_id: &str,
@@ -1214,18 +1227,34 @@ fn client_value(
     commitment: &str,
 ) -> Result<Vec<u8>, Error> {
     let path = committed_path(data_dir, host_id);
+    let now = now_seconds();
     let kept = fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<Committed>(&bytes).ok())
-        .filter(|kept| kept.request == request && kept.until > now_seconds());
+        .filter(|kept| kept.until > now);
     if let Some(kept) = kept {
-        if kept.commitment != commitment {
+        if kept.request != request || kept.commitment != commitment {
             return Err(Error::WrongHost);
         }
         return BASE64URL_NOPAD
             .decode(kept.value.as_bytes())
             .map_err(|_| Error::Protocol("the kept request is damaged".to_owned()));
     }
+    let counted = requests_path(data_dir, host_id);
+    let mut starts: Vec<i64> = fs::read(&counted)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    starts.retain(|at| now - at < 3600);
+    if starts.len() >= MAX_CLIENT_REQUESTS {
+        return Err(Error::Protocol(
+            "this computer asked that one for approval 5 times this hour; try again later"
+                .to_owned(),
+        ));
+    }
+    starts.push(now);
+    let _ = fs::remove_file(&counted);
+    create_once(&counted, &serde_json::to_vec(&starts).expect("plain JSON"))?;
     let mut value = vec![0; APPROVAL_VALUE_BYTES];
     getrandom::fill(&mut value).map_err(|e| Error::Protocol(e.to_string()))?;
     let committed = Committed {
@@ -1377,9 +1406,14 @@ pub async fn await_approval(
     let body = json!({ "request": request, "wait": true });
     loop {
         let step = approval_step(route, &pin, &key, &body);
-        let (status, answer) = tokio::time::timeout(APPROVAL_WAIT + REQUEST_TIMEOUT, step)
+        let answered = tokio::time::timeout(APPROVAL_WAIT + REQUEST_TIMEOUT, step)
             .await
-            .map_err(|_| timed_out(route))??;
+            .map_err(|_| timed_out(route))?;
+        // Denied or lapsed: the user may ask again, which starts a new request, counted.
+        if let Err(Error::Refused) = answered {
+            let _ = fs::remove_file(committed_path(data_dir, host_id));
+        }
+        let (status, answer) = answered?;
         if status == 200 {
             return approved(route, host_id, &key, data_dir, &answer);
         }
@@ -1443,18 +1477,117 @@ pub fn discover(wait: Duration) -> Result<Vec<Found>, Error> {
     Ok(found)
 }
 
-/// Opens the host with `fingerprint`'s `/ws` over the first of `routes` that presents its
-/// certificate, in order. A route that doesn't answer, or where another computer answers, moves
-/// on to the next. A refusal stops, since every route reaches the same host.
+/// How long `relay:` routes wait for a direct route to answer before they start too (0091).
+pub const RELAY_HEAD_START: Duration = Duration::from_millis(200);
+
+/// A TLS connection to a host's pinned certificate: the route it went over, the stream, and the
+/// certificate's fingerprint.
+pub type Opened = (String, TlsStream<crate::relay::Stream>, String);
+
+/// Opens TLS to the first of `routes` that presents a certificate `pin` accepts (0091): the direct
+/// ones (LAN, Tailscale) at once, `relay:` ones [`RELAY_HEAD_START`] later, or as soon as every
+/// direct one failed. Nothing is sent over any of them before its certificate checks out, and the
+/// others are dropped once one does.
+///
+/// # Errors
+///
+/// The last route's error when none answered with the pinned certificate.
+pub async fn race(routes: &[String], pin: &Pin) -> Result<Opened, Error> {
+    let opened = first(
+        routes,
+        |route| async move { open_pinned(&route, pin).await },
+    )
+    .await?;
+    let (route, (tls, fingerprint)) = opened;
+    Ok((route, tls, fingerprint))
+}
+
+/// The first of `routes` that `open` opens, in [`race`]'s order, with the route.
+async fn first<T, F, Opening>(routes: &[String], open: F) -> Result<(String, T), Error>
+where
+    F: Fn(String) -> Opening,
+    Opening: Future<Output = Result<T, Error>>,
+{
+    use futures_util::stream::FuturesUnordered;
+    let attempt = |route: String| {
+        let opening = open(route.clone());
+        async move {
+            let opened = tokio::time::timeout(REQUEST_TIMEOUT, opening).await;
+            let opened = opened
+                .map_err(|_| timed_out(&route))
+                .and_then(|opened| opened);
+            (route, opened)
+        }
+    };
+    let (relayed, direct): (Vec<String>, Vec<String>) = routes
+        .iter()
+        .cloned()
+        .partition(|route| route.starts_with(RELAY_ROUTE));
+    let mut running: FuturesUnordered<_> = direct.into_iter().map(attempt).collect();
+    let head_start = if running.is_empty() {
+        Duration::ZERO
+    } else {
+        RELAY_HEAD_START
+    };
+    let head_start = tokio::time::sleep(head_start);
+    tokio::pin!(head_start);
+    let mut later = Some(relayed);
+    let mut last = Error::Protocol("no routes".to_owned());
+    loop {
+        if running.is_empty() {
+            match later.take() {
+                Some(relayed) if !relayed.is_empty() => {
+                    running.extend(relayed.into_iter().map(attempt));
+                }
+                _ => return Err(last),
+            }
+        }
+        tokio::select! {
+            () = &mut head_start, if later.is_some() => {
+                running.extend(later.take().unwrap_or_default().into_iter().map(attempt));
+            }
+            Some((route, opened)) = running.next() => match opened {
+                Ok(opened) => return Ok((route, opened)),
+                Err(error) => last = error,
+            },
+        }
+    }
+}
+
+/// The first of `routes` that presents the certificate `pin` accepts, raced as [`race`] does and
+/// sent nothing: what `plxd dial --probe` answers, for the app's re-checks of the direct routes
+/// while it's on the relay (0091).
+///
+/// # Errors
+///
+/// As [`race`]'s.
+pub async fn probe(routes: &[String], pin: &Pin) -> Result<String, Error> {
+    race(routes, pin).await.map(|(route, ..)| route)
+}
+
+/// A host's `/ws`, opened, and the route it went over.
+pub struct Dialed {
+    /// The WebSocket.
+    pub socket: WebSocketStream<TlsStream<crate::relay::Stream>>,
+    /// The route that answered first.
+    pub route: String,
+}
+
+impl std::fmt::Debug for Dialed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Dialed")
+            .field("route", &self.route)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Opens the host with `fingerprint`'s `/ws` over the first of `routes` to present its
+/// certificate ([`race`]).
 ///
 /// # Errors
 ///
 /// [`Error::Refused`] without a credential or with a revoked one, or the last route's error.
-pub async fn dial(
-    routes: &[String],
-    fingerprint: &str,
-    data_dir: &Path,
-) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+pub async fn dial(routes: &[String], fingerprint: &str, data_dir: &Path) -> Result<Dialed, Error> {
     let pin = Pin::Fingerprint(fingerprint.to_owned());
     dial_pinned(routes, &pin, fingerprint, data_dir).await
 }
@@ -1470,7 +1603,7 @@ pub async fn dial_account(
     routes: &[String],
     host_id: &str,
     data_dir: &Path,
-) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+) -> Result<Dialed, Error> {
     if !is_host_id(host_id) {
         return Err(Error::Protocol(format!("{host_id} isn't a relay id")));
     }
@@ -1483,7 +1616,7 @@ async fn dial_pinned(
     pin: &Pin,
     saved_as: &str,
     data_dir: &Path,
-) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+) -> Result<Dialed, Error> {
     let credential: Credential = match fs::read(credential_path(data_dir, saved_as)) {
         Ok(bytes) => json(&bytes)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(Error::Refused),
@@ -1494,17 +1627,47 @@ async fn dial_pinned(
         .ok()
         .and_then(|pkcs8| DpopKey::from_pkcs8(&pkcs8))
         .ok_or_else(|| Error::Protocol("the saved DPoP key is damaged".to_owned()))?;
-    let mut last = Error::Protocol("no routes".to_owned());
-    for route in routes {
-        let attempt = dial_at(route, pin, &credential.token, &key);
-        match tokio::time::timeout(REQUEST_TIMEOUT, attempt).await {
-            Ok(Ok(socket)) => return Ok(socket),
-            Ok(Err(Error::Refused)) => return Err(Error::Refused),
-            Ok(Err(error)) => last = error,
-            Err(_) => last = timed_out(route),
+    let (route, tls, _) = race(routes, pin).await?;
+    let token = &credential.token;
+    let upgraded = tokio::time::timeout(REQUEST_TIMEOUT, upgrade(&route, tls, token, &key));
+    let socket = match upgraded.await.map_err(|_| timed_out(&route))? {
+        // A host from before 0091 takes only a ticket, and says whether the session still works.
+        Err(Error::Refused) => {
+            let ticketed = tokio::time::timeout(REQUEST_TIMEOUT, dial_at(&route, pin, token, &key));
+            ticketed.await.map_err(|_| timed_out(&route))??
         }
+        other => other?,
+    };
+    Ok(Dialed { socket, route })
+}
+
+/// Opens `/ws` over `tls` with the session `token` and a `DPoP` proof on the upgrade (0091).
+async fn upgrade(
+    route: &str,
+    tls: TlsStream<crate::relay::Stream>,
+    token: &str,
+    key: &DpopKey,
+) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let bad = |e: &dyn std::fmt::Display| Error::Protocol(format!("the WebSocket failed: {e}"));
+    let mut request = format!("wss://{}/ws", with_port(route))
+        .into_client_request()
+        .map_err(|e| bad(&e))?;
+    let proof = key.proof("GET", &url(route, "/ws"), Some(token));
+    let headers = request.headers_mut();
+    for (name, value) in [("authorization", format!("DPoP {token}")), ("dpop", proof)] {
+        headers.insert(name, value.parse().map_err(|_| bad(&"a bad header"))?);
     }
-    Err(last)
+    let config = Some(websocket_config());
+    let (socket, _) = tokio_tungstenite::client_async_with_config(request, tls, config)
+        .await
+        .map_err(|e| match e {
+            tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 401 => {
+                Error::Refused
+            }
+            other => bad(&other),
+        })?;
+    Ok(socket)
 }
 
 async fn dial_at(
@@ -1598,6 +1761,107 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Races `routes` with each answering `(after ms, ok)` from `answers`, by route, and records
+    /// when each started: the winner and the start times.
+    async fn race_of(
+        answers: &[(&str, u64, bool)],
+    ) -> (Result<String, String>, Vec<(String, u64)>) {
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let t0 = tokio::time::Instant::now();
+        let routes: Vec<String> = answers.iter().map(|(r, ..)| (*r).to_owned()).collect();
+        let won = first(&routes, |route| {
+            let (_, after, ok) = *answers.iter().find(|(r, ..)| *r == route).unwrap();
+            let at = u64::try_from(t0.elapsed().as_millis()).unwrap();
+            started.lock().unwrap().push((route.clone(), at));
+            async move {
+                tokio::time::sleep(Duration::from_millis(after)).await;
+                if ok {
+                    Ok(())
+                } else {
+                    Err(Error::Protocol(format!("{route} failed")))
+                }
+            }
+        })
+        .await;
+        let started = started.lock().unwrap().clone();
+        (
+            won.map(|(route, ())| route).map_err(|e| e.to_string()),
+            started,
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn direct_routes_start_together_and_the_relay_200_ms_later_unless_they_all_failed() {
+        let starts = |list: &[(&str, u64)]| -> Vec<(String, u64)> {
+            list.iter().map(|(r, at)| ((*r).to_owned(), *at)).collect()
+        };
+        // LAN and Tailscale start at once; the relay, which would answer at once, never starts.
+        let (won, started) = race_of(&[
+            ("192.168.1.5", 50, true),
+            ("100.64.0.7", 30, true),
+            ("relay:h", 0, true),
+        ])
+        .await;
+        assert_eq!(won.as_deref(), Ok("100.64.0.7"), "the first to answer");
+        assert_eq!(started, starts(&[("192.168.1.5", 0), ("100.64.0.7", 0)]));
+
+        // Direct routes that don't answer leave the relay to start at 200 ms and win.
+        let (won, started) = race_of(&[("192.168.1.5", 5_000, true), ("relay:h", 40, true)]).await;
+        assert_eq!(won.as_deref(), Ok("relay:h"));
+        assert_eq!(started, starts(&[("192.168.1.5", 0), ("relay:h", 200)]));
+
+        // Direct routes that all failed start the relay at once.
+        let (won, started) = race_of(&[
+            ("192.168.1.5", 10, false),
+            ("100.64.0.7", 20, false),
+            ("relay:h", 0, true),
+        ])
+        .await;
+        assert_eq!(won.as_deref(), Ok("relay:h"));
+        assert_eq!(started.last(), Some(&("relay:h".to_owned(), 20)));
+
+        // Nothing answers: the last error.
+        let (won, _) = race_of(&[("192.168.1.5", 10, false), ("relay:h", 0, false)]).await;
+        assert_eq!(won, Err("relay:h failed".to_owned()));
+    }
+
+    #[test]
+    fn a_client_keeps_one_value_per_host_while_its_request_waits_and_asks_five_times_an_hour() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("remote-hosts")).unwrap();
+        let host = "h".repeat(43);
+        let value = client_value(dir.path(), &host, "r1", "c1").unwrap();
+        assert_eq!(client_value(dir.path(), &host, "r1", "c1").unwrap(), value);
+        // Another commitment, or another request id, from that host id fails while it waits.
+        assert!(matches!(
+            client_value(dir.path(), &host, "r1", "c2"),
+            Err(Error::WrongHost)
+        ));
+        assert!(matches!(
+            client_value(dir.path(), &host, "r2", "c1"),
+            Err(Error::WrongHost)
+        ));
+        assert!(matches!(
+            client_value(dir.path(), &host, "r2", "c2"),
+            Err(Error::WrongHost)
+        ));
+        // Once the request ends, new ones start, at most five an hour.
+        for i in 1..MAX_CLIENT_REQUESTS {
+            fs::remove_file(committed_path(dir.path(), &host)).unwrap();
+            client_value(dir.path(), &host, &format!("n{i}"), "c").unwrap();
+        }
+        fs::remove_file(committed_path(dir.path(), &host)).unwrap();
+        assert!(matches!(
+            client_value(dir.path(), &host, "n9", "c"),
+            Err(Error::Protocol(_))
+        ));
+        let other = "o".repeat(43);
+        assert!(
+            client_value(dir.path(), &other, "r1", "c1").is_ok(),
+            "per host"
+        );
+    }
 
     #[test]
     fn spake2_agrees_only_on_the_same_code_and_certificate() {

@@ -5,12 +5,13 @@
 use std::path::Path;
 
 use parallax_protocol::methods::{
-    AccessApprove, AccessGet, AccessMerge, AccessRemove, AccessSetupCode, HostSettingsSet, RelayId,
-    RelaySign,
+    AccessApprove, AccessDeny, AccessGet, AccessMerge, AccessRemove, AccessSetupCode,
+    HostSettingsSet, RelayId, RelayRegister, RelaySign, RemoteRevoke, RemoteSessions,
 };
 use parallax_protocol::{
     AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequestParams,
-    AccessSetupCodeParams, HostSettingsSetParams, RelayIdParams, RelaySignParams,
+    AccessSetupCodeParams, HostSettingsSetParams, RelayIdParams, RelayRegisterParams,
+    RelaySignParams, RemoteRevokeParams, RemoteSessionsParams,
 };
 use plxd::remote::{self, SignIn};
 use ring::rand::SystemRandom;
@@ -20,7 +21,7 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpListener;
 
 use crate::connect::free_port;
-use crate::remote::{LOOPBACK, set_remote, wait_listening};
+use crate::remote::{LOOPBACK, https, set_remote, wait_listening};
 use crate::support::{Client, InProcess, temp_dir};
 
 const USER: &str = "user_1";
@@ -54,9 +55,13 @@ async fn clerk() -> String {
 
 /// A fresh session token of `user` from the Clerk instance at `issuer`.
 fn token(issuer: &str, user: &str) -> String {
-    let now = remote::now_seconds();
+    token_at(issuer, user, remote::now_seconds())
+}
+
+/// A session token of `user` from the Clerk instance at `issuer`, issued at `now`.
+fn token_at(issuer: &str, user: &str, now: i64) -> String {
     let header = json!({ "alg": "RS256", "kid": "k1" });
-    let claims = json!({ "iss": issuer, "sub": user, "sid": "sess", "iat": now, "exp": now + 60 });
+    let claims = json!({ "iss": issuer, "sub": user, "sid": "sess", "iat": now, "exp": now + 600 });
     let input = format!(
         "{}.{}",
         remote::base64url(header.to_string().as_bytes()),
@@ -74,20 +79,30 @@ fn token(issuer: &str, user: &str) -> String {
     format!("{input}.{}", remote::base64url(&signature))
 }
 
-/// A host with `relay` and `remote` on, signed in to [`USER`]'s account, trusting `issuer`: the
-/// server, a client on its socket, its route, and its host id.
-async fn host(dir: &Path, issuer: &str) -> (InProcess, Client, String, String) {
-    let port = free_port();
+/// A host's config: its listener on loopback `port`, the relay at `relay`, trusting `issuer`.
+fn config(dir: &Path, issuer: &str, relay: &str, port: u16) -> plxd::server::Config {
     let mut config = InProcess::config(dir);
     config.remote_address = Some(LOOPBACK);
     config.remote_port = port;
-    // Nothing answers here, so no relay is reached.
-    "http://127.0.0.1:9".clone_into(&mut config.relay_url);
+    relay.clone_into(&mut config.relay_url);
     config.clerk = plxd::clerk::Config {
         issuer: issuer.to_owned(),
         client_ids: Vec::new(),
         authorized_parties: Vec::new(),
     };
+    config
+}
+
+/// A host with `relay` and `remote` on, signed in to [`USER`]'s account, trusting `issuer`: the
+/// server, a client on its socket, its route, and its host id.
+async fn host(dir: &Path, issuer: &str) -> (InProcess, Client, String, String) {
+    // Nothing answers here, so no relay is reached.
+    host_at(config(dir, issuer, "http://127.0.0.1:9", free_port())).await
+}
+
+/// [`host`], from `config`.
+async fn host_at(config: plxd::server::Config) -> (InProcess, Client, String, String) {
+    let port = config.remote_port;
     let server = InProcess::start(config);
     let mut client = Client::ready(&server.socket).await;
     // The signing computer's app names the account; the relay never does.
@@ -139,6 +154,33 @@ async fn sign_in(
     remote::sign_in(routes, host_id, &token(issuer, user), name, dir).await
 }
 
+/// `POST /api/auth/account` at `route` with `token`, from a new key: its status and why.
+async fn post_account(route: &str, token: &str) -> (u16, String) {
+    let port: u16 = route.rsplit(':').next().unwrap().parse().unwrap();
+    let key = remote::DpopKey::generate();
+    let path = "/api/auth/account";
+    let proof = key.proof("POST", &format!("https://{route}{path}"), Some(token));
+    let body = json!({ "token": token, "clientLabel": "x" }).to_string();
+    let (status, _, answer) = https(port, "POST", path, &[("DPoP", &proof)], &body).await;
+    let answer: serde_json::Value = serde_json::from_slice(&answer).unwrap();
+    let why = answer["error_description"].as_str().unwrap_or_default();
+    (status, why.to_owned())
+}
+
+/// A relay on loopback that answers every request with `answer`.
+async fn fake_relay(answer: String) -> String {
+    let listener = TcpListener::bind((LOOPBACK, 0)).await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            let mut request = [0; 8192];
+            let _ = stream.read(&mut request).await;
+            let _ = stream.write_all(answer.as_bytes()).await;
+        }
+    });
+    url
+}
+
 #[tokio::test]
 async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
     let issuer = clerk().await;
@@ -158,12 +200,20 @@ async fn a_signed_in_device_is_approved_once_and_a_removed_one_never_again() {
         Err(remote::Error::Refused | remote::Error::WrongHost)
     ));
 
-    // Another account's token, and any token while `relay` is off, get nothing.
+    // Another account's token, a stale one, and any token while `relay` is off, get nothing.
     let stranger = sign_in(&issuer, &routes, &host_id, "user_2", "x", phone.path()).await;
     assert!(matches!(stranger, Err(remote::Error::Refused)));
+    let stranger = post_account(&route, &token(&issuer, "user_2")).await;
+    assert_eq!(stranger, (401, "a token for another account".to_owned()));
+    let old = token_at(&issuer, USER, remote::now_seconds() - 400);
+    let old = post_account(&route, &old).await;
+    assert_eq!(old, (401, "a token issued too long ago".to_owned()));
     set_relay(&mut client, false).await;
     let unlinked = sign_in(&issuer, &routes, &host_id, USER, "x", phone.path()).await;
     assert!(matches!(unlinked, Err(remote::Error::Refused)));
+    let unlinked = post_account(&route, &token(&issuer, USER)).await;
+    let off = "Reach from anywhere is off on this computer".to_owned();
+    assert_eq!(unlinked, (403, off));
     set_relay(&mut client, true).await;
 
     // A new key gets a request, not a session, and both ends show its code.
@@ -284,6 +334,249 @@ async fn a_setup_code_approves_the_device_that_types_it_within_five_runs_an_hour
     assert!(
         matches!(right.await, Err(remote::Error::Refused)),
         "the sixth run this hour"
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_removal_beats_an_approval_not_yet_used_and_revoking_a_session_removes_its_key() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    let routes = [route.clone()];
+    let phone = temp_dir();
+
+    // Approved, then removed before the phone's next step: no session.
+    let (_, signed_in) = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    let SignIn::Pending { request, .. } = signed_in else {
+        panic!("{signed_in:?}");
+    };
+    client
+        .call::<AccessApprove>(AccessRequestParams {
+            request: request.clone(),
+        })
+        .await
+        .unwrap();
+    client
+        .call::<AccessRemove>(AccessRemoveParams {
+            thumbprint: thumbprint(phone.path()),
+        })
+        .await
+        .unwrap();
+    let late = remote::await_approval(&route, &host_id, &request, phone.path()).await;
+    assert!(matches!(late, Err(remote::Error::Refused)), "{late:?}");
+    assert!(access(&mut client).await.pending.is_none());
+
+    // Revoking an approved device's session removes its key, so it can't sign straight back in.
+    let tablet = temp_dir();
+    let (_, signed_in) = sign_in(&issuer, &routes, &host_id, USER, "tablet", tablet.path())
+        .await
+        .unwrap();
+    let SignIn::Pending { request, .. } = signed_in else {
+        panic!("{signed_in:?}");
+    };
+    let waiting = {
+        let (route, request, dir) = (route.clone(), request.clone(), tablet.path().to_owned());
+        let host_id = host_id.clone();
+        tokio::spawn(async move { remote::await_approval(&route, &host_id, &request, &dir).await })
+    };
+    client
+        .call::<AccessApprove>(AccessRequestParams { request })
+        .await
+        .unwrap();
+    assert!(matches!(
+        waiting.await.unwrap(),
+        Ok(SignIn::Approved { .. })
+    ));
+    let sessions = client
+        .call::<RemoteSessions>(RemoteSessionsParams {})
+        .await
+        .unwrap()
+        .sessions;
+    let session = sessions.iter().find(|s| s.name == "tablet").unwrap();
+    client
+        .call::<RemoteRevoke>(RemoteRevokeParams {
+            id: session.id.clone(),
+        })
+        .await
+        .unwrap();
+    let state = access(&mut client).await;
+    assert!(state.removed_clients.contains(&thumbprint(tablet.path())));
+    assert!(state.approved_clients.is_empty(), "{state:?}");
+    let again = sign_in(&issuer, &routes, &host_id, USER, "tablet", tablet.path()).await;
+    assert!(matches!(again, Err(remote::Error::Refused)), "{again:?}");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn unlinking_drops_a_waiting_request_and_a_browser_cant_pair_with_a_setup_code() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let (server, mut client, route, host_id) = host(dir.path(), &issuer).await;
+    let routes = [route.clone()];
+    let phone = temp_dir();
+    let (_, signed_in) = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    let SignIn::Pending { request, .. } = signed_in else {
+        panic!("{signed_in:?}");
+    };
+    set_relay(&mut client, false).await;
+    let approval = remote::await_approval(&route, &host_id, &request, phone.path()).await;
+    assert!(
+        matches!(approval, Err(remote::Error::Refused)),
+        "{approval:?}"
+    );
+    assert!(access(&mut client).await.pending.is_none(), "dropped");
+
+    // A setup code is for SPAKE2 only, so a browser typing it gets nothing.
+    client
+        .call::<HostSettingsSet>(HostSettingsSetParams {
+            remote_web: Some(true),
+            ..HostSettingsSetParams::default()
+        })
+        .await
+        .unwrap();
+    let code = client
+        .call::<AccessSetupCode>(AccessSetupCodeParams {})
+        .await
+        .unwrap()
+        .code;
+    let port: u16 = route.rsplit(':').next().unwrap().parse().unwrap();
+    let key = remote::DpopKey::generate();
+    let path = "/api/pair/browser";
+    let proof = key.proof("POST", &format!("https://{route}{path}"), None);
+    let body = json!({ "code": code, "clientLabel": "browser" }).to_string();
+    let (status, _, answer) = https(port, "POST", path, &[("DPoP", &proof)], &body).await;
+    let answer: serde_json::Value = serde_json::from_slice(&answer).unwrap();
+    assert_eq!(
+        (status, answer["error_description"].as_str()),
+        (401, Some("no pairing code is waiting"))
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn a_clock_the_relay_says_is_off_refuses_sign_ins_and_registering_records_the_account() {
+    let issuer = clerk().await;
+    // A relay whose clock is 10 minutes ahead of this computer's.
+    let ahead = (remote::now_seconds() + 600) * 1000;
+    let relay = fake_relay(format!(
+        "HTTP/1.1 401 Unauthorized\r\nx-parallax-relay-time: {ahead}\r\nContent-Length: 0\r\n\r\n"
+    ))
+    .await;
+    let dir = temp_dir();
+    let (server, _client, route, _) =
+        host_at(config(dir.path(), &issuer, &relay, free_port())).await;
+    let deadline = tokio::time::Instant::now() + crate::support::PATIENCE;
+    loop {
+        let (status, why) = post_account(&route, &token(&issuer, USER)).await;
+        if why.contains("clock") {
+            assert_eq!(status, 401);
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "{status} {why}");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    server.stop().await;
+
+    // This host's own registration records the token's user as its account.
+    let relay = fake_relay(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+            .to_owned(),
+    )
+    .await;
+    let dir = temp_dir();
+    let server = InProcess::start(config(dir.path(), &issuer, &relay, free_port()));
+    let mut client = Client::ready(&server.socket).await;
+    assert_eq!(access(&mut client).await.account, None);
+    client
+        .call::<RelayRegister>(RelayRegisterParams {
+            token: token(&issuer, "user_registered"),
+            signed: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        access(&mut client).await.account.as_deref(),
+        Some("user_registered")
+    );
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn request_and_setup_limits_and_a_waiting_request_survive_a_restart() {
+    let issuer = clerk().await;
+    let dir = temp_dir();
+    let port = free_port();
+    let start = || host_at(config(dir.path(), &issuer, "http://127.0.0.1:9", port));
+    let (server, mut client, route, host_id) = start().await;
+    let routes = [route.clone()];
+    // Four requests started and denied, and a fifth waiting.
+    for i in 0..4 {
+        let device = temp_dir();
+        let (_, signed_in) = sign_in(&issuer, &routes, &host_id, USER, "x", device.path())
+            .await
+            .unwrap();
+        let SignIn::Pending { request, .. } = signed_in else {
+            panic!("{i}: {signed_in:?}");
+        };
+        client
+            .call::<AccessDeny>(AccessRequestParams { request })
+            .await
+            .unwrap();
+    }
+    let phone = temp_dir();
+    let (_, waiting) = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    // And five setup runs.
+    let code = client
+        .call::<AccessSetupCode>(AccessSetupCodeParams {})
+        .await
+        .unwrap()
+        .code;
+    let wrong = if code == "000000" { "000001" } else { "000000" };
+    for _ in 0..5 {
+        let laptop = temp_dir();
+        let guess = remote::pair_account(&routes, &host_id, wrong, "x", laptop.path()).await;
+        assert!(matches!(guess, Err(remote::Error::Refused)));
+    }
+    let before = access(&mut client).await.pending.unwrap();
+    server.stop().await;
+
+    let (server, mut client, _, _) = start().await;
+    let after = access(&mut client).await.pending.expect("still waiting");
+    assert_eq!((after.id, after.code), (before.id, before.code));
+    // The same phone finds its request, with the same code.
+    let (_, again) = sign_in(&issuer, &routes, &host_id, USER, "phone", phone.path())
+        .await
+        .unwrap();
+    assert_eq!(again, waiting);
+    let SignIn::Pending { request, .. } = waiting else {
+        panic!("{waiting:?}");
+    };
+    client
+        .call::<AccessDeny>(AccessRequestParams { request })
+        .await
+        .unwrap();
+    let sixth = post_account(&route, &token(&issuer, USER)).await;
+    assert_eq!(
+        sixth,
+        (429, "too many new devices asked this hour".to_owned())
+    );
+    let code = client
+        .call::<AccessSetupCode>(AccessSetupCodeParams {})
+        .await
+        .unwrap()
+        .code;
+    let laptop = temp_dir();
+    let right = remote::pair_account(&routes, &host_id, &code, "x", laptop.path()).await;
+    assert!(
+        matches!(right, Err(remote::Error::Refused)),
+        "the sixth run"
     );
     server.stop().await;
 }

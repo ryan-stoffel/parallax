@@ -245,13 +245,22 @@ struct KeySet {
     keys: Keys,
 }
 
+/// The signing keys last fetched, and when a fetch last failed.
+#[derive(Default)]
+struct Cache {
+    set: Option<KeySet>,
+    failed: Option<Instant>,
+}
+
 /// Checks account tokens against the Clerk instance's JWKS, which it fetches when a check first
-/// needs it and keeps for [`TTL`]. A token naming a key it lacks refetches it, at most once per
-/// [`REFETCH`]. While the JWKS is out of reach, the keys it has still count.
+/// needs it and keeps for its `max-age`, at least [`REFETCH`], or [`TTL`] without one, as
+/// `packages/clerk-verify` does. A token naming a key it lacks refetches it, at most once per
+/// [`REFETCH`]. While the JWKS is out of reach, the keys it has still count, and a failed fetch
+/// isn't tried again for [`REFETCH`] even with none, so strangers' tokens can't keep the lock busy.
 pub(crate) struct Clerk {
     config: Config,
     /// Held across a fetch, so checks waiting on it share it.
-    keys: Mutex<Option<KeySet>>,
+    keys: Mutex<Cache>,
 }
 
 impl std::fmt::Debug for Clerk {
@@ -266,7 +275,7 @@ impl Clerk {
     pub(crate) fn new(config: Config) -> Self {
         Self {
             config,
-            keys: Mutex::new(None),
+            keys: Mutex::default(),
         }
     }
 
@@ -279,39 +288,44 @@ impl Clerk {
 
     /// The signing keys, fetched again when they're old, or lack `kid` and weren't just fetched.
     async fn keys(&self, kid: &str) -> Result<Keys, &'static str> {
-        let mut cached = self.keys.lock().await;
-        let stale = cached.as_ref().is_none_or(|set| {
-            let age = set.at.elapsed();
-            age >= set.ttl || (!set.keys.contains_key(kid) && age >= REFETCH)
-        });
+        let mut cache = self.keys.lock().await;
+        let stale = match &cache.set {
+            Some(set) => {
+                let age = set.at.elapsed();
+                age >= set.ttl || (!set.keys.contains_key(kid) && age >= REFETCH)
+            }
+            None => cache.failed.is_none_or(|at| at.elapsed() >= REFETCH),
+        };
         if stale {
             match fetch(&self.config.issuer).await {
-                Ok(keys) => {
-                    *cached = Some(KeySet {
+                Ok((keys, max_age)) => {
+                    cache.failed = None;
+                    cache.set = Some(KeySet {
                         at: Instant::now(),
-                        ttl: TTL,
+                        ttl: max_age.map_or(TTL, |age| age.max(REFETCH)),
                         keys,
                     });
                 }
                 Err(error) => {
                     warn!(%error, "could not fetch the account's signing keys");
-                    let Some(set) = cached.as_mut() else {
-                        return Err("the account's signing keys are out of reach");
-                    };
-                    set.at = Instant::now();
-                    set.ttl = REFETCH;
+                    cache.failed = Some(Instant::now());
+                    if let Some(set) = cache.set.as_mut() {
+                        set.at = Instant::now();
+                        set.ttl = REFETCH;
+                    }
                 }
             }
         }
-        Ok(cached
+        cache
+            .set
             .as_ref()
             .map(|set| set.keys.clone())
-            .unwrap_or_default())
+            .ok_or("the account's signing keys are out of reach")
     }
 }
 
-/// The RSA keys of the JWKS at `<issuer>/.well-known/jwks.json`.
-async fn fetch(issuer: &str) -> Result<Keys, String> {
+/// The RSA keys of the JWKS at `<issuer>/.well-known/jwks.json`, and its `max-age`.
+async fn fetch(issuer: &str) -> Result<(Keys, Option<Duration>), String> {
     let after_scheme = issuer.split_once("://").map_or(issuer, |(_, rest)| rest);
     let prefix = after_scheme
         .find('/')
@@ -324,9 +338,9 @@ async fn fetch(issuer: &str) -> Result<Keys, String> {
     )
     .await
     .map_err(|_| "the JWKS didn't answer in time".to_owned())?;
-    let body = match fetched {
-        Ok((200, body)) => body,
-        Ok((status, _)) => return Err(format!("the JWKS answered {status}")),
+    let (body, max_age) = match fetched {
+        Ok((200, body, max_age)) => (body, max_age),
+        Ok((status, ..)) => return Err(format!("the JWKS answered {status}")),
         Err(error) => return Err(error.to_string()),
     };
     let decode = |field: &Value| {
@@ -334,7 +348,7 @@ async fn fetch(issuer: &str) -> Result<Keys, String> {
             .as_str()
             .and_then(|text| BASE64URL_NOPAD.decode(text.as_bytes()).ok())
     };
-    Ok(body["keys"]
+    let keys = body["keys"]
         .as_array()
         .into_iter()
         .flatten()
@@ -343,7 +357,8 @@ async fn fetch(issuer: &str) -> Result<Keys, String> {
             let kid = jwk["kid"].as_str()?.to_owned();
             Some((kid, (decode(&jwk["n"])?, decode(&jwk["e"])?)))
         })
-        .collect())
+        .collect();
+    Ok((keys, max_age))
 }
 
 #[cfg(test)]
@@ -517,5 +532,63 @@ mod tests {
             check_sign_in(&at(Some(NOW + 301.0)), "user_1", NOW),
             Err("a token issued in the future")
         );
+    }
+
+    /// A JWKS server on loopback that answers every request with `answer`, and counts them.
+    async fn jwks_server(
+        answer: std::sync::Arc<std::sync::Mutex<String>>,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = std::sync::Arc::clone(&hits);
+        tokio::spawn(async move {
+            while let Ok((mut tcp, _)) = listener.accept().await {
+                counted.fetch_add(1, Ordering::SeqCst);
+                let mut head = Vec::new();
+                let mut byte = [0; 1];
+                while !head.ends_with(b"\r\n\r\n") && tcp.read(&mut byte).await.unwrap_or(0) == 1 {
+                    head.push(byte[0]);
+                }
+                let answer = answer.lock().unwrap().clone();
+                let _ = tcp.write_all(answer.as_bytes()).await;
+            }
+        });
+        (url, hits)
+    }
+
+    #[tokio::test]
+    async fn a_failed_key_fetch_waits_before_the_next_even_with_no_keys_and_max_age_counts() {
+        use std::sync::atomic::Ordering;
+        let answer = std::sync::Arc::new(std::sync::Mutex::new(
+            "HTTP/1.1 500 Oops\r\nContent-Length: 0\r\n\r\n".to_owned(),
+        ));
+        let (issuer, hits) = jwks_server(std::sync::Arc::clone(&answer)).await;
+        let clerk = Clerk::new(Config { issuer, ..config() });
+        for _ in 0..3 {
+            assert_eq!(
+                clerk.keys("k1").await.err(),
+                Some("the account's signing keys are out of reach")
+            );
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "one fetch a minute");
+
+        let public: PublicKeyComponents<Vec<u8>> = key().public().into();
+        let body = json!({ "keys": [{
+            "kty": "RSA", "kid": "k1",
+            "n": BASE64URL_NOPAD.encode(&public.n), "e": BASE64URL_NOPAD.encode(&public.e),
+        }] })
+        .to_string();
+        *answer.lock().unwrap() = format!(
+            "HTTP/1.1 200 OK\r\nCache-Control: public, max-age=7200\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        clerk.keys.lock().await.failed = Instant::now().checked_sub(REFETCH);
+        assert!(clerk.keys("k1").await.unwrap().contains_key("k1"));
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        let ttl = clerk.keys.lock().await.set.as_ref().map(|set| set.ttl);
+        assert_eq!(ttl, Some(Duration::from_secs(7200)), "the JWKS's max-age");
     }
 }

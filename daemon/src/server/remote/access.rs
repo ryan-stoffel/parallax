@@ -14,7 +14,9 @@
 //!
 //! One request waits at a time, at most [`MAX_REQUESTS`] start an hour, and each lapses after
 //! [`remote::REQUEST_LIFETIME`]. A new one doesn't replace a waiting one unless the user denies
-//! it, so nobody can wear the user down with prompts.
+//! it, so nobody can wear the user down with prompts. The hourly counts, setup codes' runs among
+//! them, and the waiting request are kept in `host_settings.account_limits` ([`persist`]), so a
+//! restart resets none of it.
 //!
 //! The host keeps the approved and removed client keys and the account's approved host ids, and
 //! approved clients copy them between hosts (`access/merge`). A removed key is never approved
@@ -22,7 +24,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{AccessMergeParams, AccessRequest, AccessState};
@@ -48,9 +50,9 @@ pub(crate) const MAX_REQUESTS: usize = 5;
 /// Who may sign in with the account, as `host_settings.account_access` keeps it.
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Lists {
-    approved_clients: BTreeSet<String>,
-    removed_clients: BTreeSet<String>,
+pub(super) struct Lists {
+    pub approved_clients: BTreeSet<String>,
+    pub removed_clients: BTreeSet<String>,
     approved_hosts: BTreeSet<String>,
 }
 
@@ -81,18 +83,27 @@ impl Default for Access {
     }
 }
 
-#[derive(Debug, Default)]
+/// What waits and what counts, by this computer's clock, as [`persist`] keeps it.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct State {
     /// A new device's request, while it waits.
+    #[serde(default)]
     pending: Option<Pending>,
     /// When requests started, within the last hour.
-    started: VecDeque<Instant>,
+    #[serde(default)]
+    started: VecDeque<jiff::Timestamp>,
+    /// When setup codes' SPAKE2 runs started, within the last hour.
+    #[serde(default)]
+    setup_runs: VecDeque<jiff::Timestamp>,
     /// The name of the device the latest setup code approved.
+    #[serde(skip)]
     setup_approved: Option<String>,
 }
 
 /// A new device's request.
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Pending {
     id: String,
     /// The `DPoP` key thumbprint it is for.
@@ -101,10 +112,29 @@ struct Pending {
     host_value: [u8; remote::APPROVAL_VALUE_BYTES],
     /// The client's value, once it sent it. Only then does the request have a code.
     client_value: Option<[u8; remote::APPROVAL_VALUE_BYTES]>,
-    expires: Instant,
     expires_at: jiff::Timestamp,
     /// A device approved it, so the client's next call gets its session.
     approved: bool,
+}
+
+/// The hour [`MAX_REQUESTS`] and [`super::MAX_SETUP_RUNS`] are counted in.
+fn hour() -> jiff::SignedDuration {
+    jiff::SignedDuration::try_from(HOUR).unwrap_or_default()
+}
+
+/// Counts one more start in `starts` at `now`, unless `max` started within the hour.
+fn count_start(starts: &mut VecDeque<jiff::Timestamp>, max: usize, now: jiff::Timestamp) -> bool {
+    while starts
+        .front()
+        .is_some_and(|at| now.duration_since(*at) >= hour())
+    {
+        starts.pop_front();
+    }
+    if starts.len() >= max {
+        return false;
+    }
+    starts.push_back(now);
+    true
 }
 
 /// Where a request stands for the client that made it.
@@ -128,7 +158,7 @@ impl Access {
         if state
             .pending
             .as_ref()
-            .is_some_and(|p| Instant::now() >= p.expires)
+            .is_some_and(|p| jiff::Timestamp::now() >= p.expires_at)
         {
             state.pending = None;
             self.changed();
@@ -147,18 +177,10 @@ impl Access {
             let commitment = remote::approval_commitment(&pending.host_value);
             return Ok((pending.id.clone(), commitment));
         }
-        let now = Instant::now();
-        while state
-            .started
-            .front()
-            .is_some_and(|at| now.duration_since(*at) >= HOUR)
-        {
-            state.started.pop_front();
-        }
-        if state.started.len() >= MAX_REQUESTS {
+        let now = jiff::Timestamp::now();
+        if !count_start(&mut state.started, MAX_REQUESTS, now) {
             return Err("too many new devices asked this hour");
         }
-        state.started.push_back(now);
         let mut host_value = [0; remote::APPROVAL_VALUE_BYTES];
         getrandom::fill(&mut host_value).map_err(|_| "no random numbers")?;
         let id = remote::random_token(16);
@@ -169,8 +191,7 @@ impl Access {
             name: name.to_owned(),
             host_value,
             client_value: None,
-            expires: now + remote::REQUEST_LIFETIME,
-            expires_at: jiff::Timestamp::now() + lifetime,
+            expires_at: now + lifetime,
             approved: false,
         });
         drop(state);
@@ -250,6 +271,40 @@ impl Access {
         self.changed();
     }
 
+    /// Drops the request waiting for a key in `removed`, approved or not, so a removed device
+    /// can't take a session it was approved for before the removal.
+    fn drop_removed(&self, removed: &BTreeSet<String>) {
+        let mut state = self.live();
+        if state
+            .pending
+            .as_ref()
+            .is_some_and(|p| removed.contains(&p.thumbprint))
+        {
+            state.pending = None;
+        }
+    }
+
+    /// Counts a setup code's SPAKE2 run: false when [`super::MAX_SETUP_RUNS`] started within the
+    /// hour.
+    pub(super) fn setup_run(&self) -> bool {
+        let counted = count_start(
+            &mut lock(&self.state).setup_runs,
+            super::MAX_SETUP_RUNS,
+            jiff::Timestamp::now(),
+        );
+        if counted {
+            self.changed();
+        }
+        counted
+    }
+
+    /// Drops the waiting request, as unlinking (`relay` off) does.
+    pub(crate) fn clear(&self) {
+        if lock(&self.state).pending.take().is_some() {
+            self.changed();
+        }
+    }
+
     /// Drops request `id`, so another can start.
     fn deny(&self, id: &str) -> Result<(), &'static str> {
         let mut state = self.live();
@@ -285,7 +340,54 @@ impl Access {
     }
 }
 
-fn read_lists(db: &Store) -> Result<Lists, ErrorObject> {
+/// Brings back the counts and waiting request [`persist`] kept, as the server starts.
+pub(crate) async fn restore(daemon: &Daemon) {
+    let kept = daemon
+        .reader
+        .run(&CancellationToken::new(), |db| {
+            db.account_limits().map_err(|e| store_error(&e))
+        })
+        .await;
+    let Some(state) = kept
+        .ok()
+        .flatten()
+        .and_then(|json| serde_json::from_str::<State>(&json).ok())
+    else {
+        return;
+    };
+    *lock(&daemon.remote.access.state) = state;
+    daemon.remote.access.changed();
+}
+
+/// Keeps the counts and waiting request in the store after each change, until `stop`.
+pub(crate) async fn persist(daemon: std::sync::Arc<Daemon>, stop: CancellationToken) {
+    let access = &daemon.remote.access;
+    let mut versions = access.version.subscribe();
+    let mut written = String::new();
+    loop {
+        versions.borrow_and_update();
+        let json = serde_json::to_string(&*access.live()).unwrap_or_default();
+        if json != written {
+            let kept = json.clone();
+            let stored = daemon
+                .store
+                .run(&CancellationToken::new(), move |db| {
+                    db.set_account_limits(&kept).map_err(|e| store_error(&e))
+                })
+                .await;
+            match stored {
+                Ok(()) => written = json,
+                Err(error) => warn!(error = %error.message, "could not keep the sign-in limits"),
+            }
+        }
+        tokio::select! {
+            changed = versions.changed() => if changed.is_err() { return },
+            () = stop.cancelled() => return,
+        }
+    }
+}
+
+pub(super) fn read_lists(db: &Store) -> Result<Lists, ErrorObject> {
     let Some(json) = db.account_access().map_err(|e| store_error(&e))? else {
         return Ok(Lists::default());
     };
@@ -357,6 +459,7 @@ async fn update(
         info!(session = %session.id, "ended a removed device's session");
         daemon.remote.revoke(&session.id);
     }
+    daemon.remote.access.drop_removed(&lists.removed_clients);
     daemon.remote.access.changed();
     Ok(lists)
 }
@@ -501,7 +604,7 @@ pub(super) async fn approve_by_setup(
     Ok(())
 }
 
-fn removed(why: &str) -> (u16, serde_json::Value) {
+pub(super) fn removed(why: &str) -> (u16, serde_json::Value) {
     (
         403,
         json!({ "error": "access_denied", "error_description": why }),
@@ -517,8 +620,9 @@ fn limited(why: &str) -> (u16, serde_json::Value) {
 
 /// A new session for `proven`'s key, named `label`, as pairing answers with it.
 async fn session(daemon: &Daemon, proven: &Proven, label: &str) -> (u16, serde_json::Value) {
-    let Some(token) = new_session(daemon, proven, label, false).await else {
-        return (500, json!({ "error": "server_error" }));
+    let token = match new_session(daemon, proven, label, false).await {
+        Ok(token) => token,
+        Err(refusal) => return refusal,
     };
     (
         200,
@@ -622,6 +726,11 @@ pub(super) async fn approval(
         Some(Some(value)) => Some(value),
         None => None,
     };
+    // Unlinking stops account sign-ins, a request already waiting included.
+    if !crate::relay::wanted(daemon).await {
+        daemon.remote.access.clear();
+        return removed("Reach from anywhere is off on this computer");
+    }
     let proven = match request.proof(None) {
         Ok(proven) => proven,
         Err(why) => return refused(why),
