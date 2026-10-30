@@ -670,7 +670,8 @@ export type ParallaxRequests = {
 	"relay/remove": { params: RelayRemoveParams, result: RelayHostsResult },
 	/**
 	 * `relay/id`: this host's relay id, so a client on another route, such as a `tailnet:`
-	 * connection, can match it to the account's host list (0091). Gated on the
+	 * connection, can match it to the account's host list (0091), and its current routes,
+	 * so a client can refresh a changed LAN or Tailscale address. Gated on the
 	 * `accountAccess` capability, like every `access/*` method.
 	 */
 	"relay/id": { params: RelayIdParams, result: RelayIdResult },
@@ -8224,13 +8225,20 @@ export type RelayIdParams = Record<symbol, never>;
 
 /**
  * Result of `relay/id` (0091): this host's relay id, the JWK thumbprint of its host key, which an
- * `account:` connection pins.
+ * `account:` connection pins, and its current routes, so a client can refresh them.
  */
 export type RelayIdResult = {
 	/**
 	 * Its relay id.
 	 */
 	hostId: string,
+	/**
+	 * Where the host can be reached now, best first, as its `/.well-known/parallax` descriptor
+	 * lists them: its LAN address, its Tailscale address, then `relay:<hostId>` while plxd is
+	 * connected to the relay. Each address is an IP, with `:port` when plxd listens on another
+	 * port than 7341. An older plxd leaves it out.
+	 */
+	routes?: Array<string>,
 };
 
 /**

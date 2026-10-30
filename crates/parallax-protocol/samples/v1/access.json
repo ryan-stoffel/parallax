@@ -25,7 +25,10 @@
   {
     "jsonrpc": "2.0",
     "id": 2,
-    "result": { "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE" }
+    "result": {
+      "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+      "routes": ["192.168.1.5", "100.64.0.7", "relay:tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE"]
+    }
   },
   {
     "jsonrpc": "2.0",

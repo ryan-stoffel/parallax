@@ -181,12 +181,19 @@ pub struct RemoteRevokeParams {
 pub struct RelayIdParams {}
 
 /// Result of `relay/id` (0091): this host's relay id, the JWK thumbprint of its host key, which an
-/// `account:` connection pins.
+/// `account:` connection pins, and its current routes, so a client can refresh them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayIdResult {
     /// Its relay id.
     pub host_id: String,
+    /// Where the host can be reached now, best first, as its `/.well-known/parallax` descriptor
+    /// lists them: its LAN address, its Tailscale address, then `relay:<hostId>` while plxd is
+    /// connected to the relay. Each address is an IP, with `:port` when plxd listens on another
+    /// port than 7341. An older plxd leaves it out.
+    #[serde(default)]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub routes: Vec<String>,
 }
 
 /// Params of `access/get`.
