@@ -160,6 +160,7 @@ const bridge: ParallaxBridge = {
   askAgain: (hostId) => ipcRenderer.invoke("parallax:askAgain", hostId),
   onAccessRequests: (listener) => follow("parallax:accessRequests", listener),
   answerAccess: (id, allow) => ipcRenderer.invoke("parallax:answerAccess", id, allow),
+  revokeDevice: (id) => ipcRenderer.invoke("parallax:revokeDevice", id),
 
   acpRegistry: () => ipcRenderer.invoke("parallax:acpRegistry"),
 

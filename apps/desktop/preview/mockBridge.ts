@@ -750,10 +750,6 @@ const handlers: { [M in Method]?: Handler<M> } = {
     pairing: lan.on && !lan.sessions.length,
     ...(lan.relay && { relay: relayStatus() }),
   }),
-  "remote/revoke": (p) => {
-    lan.sessions = lan.sessions.filter((s) => s.id !== p.id);
-    return { sessions: lan.sessions, listening: lan.on, pairing: false };
-  },
   "connect/devices": () => ({
     tailscale: "running",
     port: 7340,
@@ -2244,6 +2240,10 @@ export const mockBridge: ParallaxBridge = {
     return undefined;
   },
   askAgain: () => delay(undefined),
+  revokeDevice: (id) => {
+    lan.sessions = lan.sessions.filter((s) => s.id !== id);
+    return delay({ sessions: lan.sessions, listening: lan.on, pairing: false });
+  },
   onAccessRequests: (listener) => {
     listener([...accessRequests]);
     accessListeners.add(listener);

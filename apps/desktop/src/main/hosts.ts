@@ -15,6 +15,7 @@ import {
   type CliKind,
   type DeviceStreamParams,
   type RelayHost,
+  type RemoteSessionsResult,
 } from "../protocol/generated/protocol";
 import {
   HOME_VARS,
@@ -248,6 +249,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       return signIn(accountId(saved.hostId));
   });
   ipcMain.handle("parallax:accessRequests", () => accessRequests());
+  ipcMain.handle("parallax:revokeDevice", (_event, id: unknown) => revokeDevice(id));
   ipcMain.handle("parallax:answerAccess", (_event, id: unknown, allow: unknown) =>
     typeof id === "string" && typeof allow === "boolean"
       ? answerAccess(id, allow)
@@ -1716,16 +1718,23 @@ function followAccess(hostId: string, state: ConnectionState): void {
 }
 
 /**
- * The relay ids the user's computers vouch for (0091): each connected one's `approvedHosts`, and
- * the `tailnet:` devices', which Tailscale vouches for. Undefined until the local plxd answers.
+ * The user's computers this app has a session with, connected, whose plxd keeps who may sign in
+ * (`accountAccess`): this computer, the account's, and the tailnet's.
  */
-async function vouchedHosts(): Promise<Set<string> | undefined> {
-  const asked = [...connections].filter(
+const accessHosts = () =>
+  [...connections].filter(
     ([id, each]) =>
       (id === "local" || relayIdOf(id) || id.startsWith("tailnet:")) &&
       each.state.status === "connected" &&
       each.state.capabilities["accountAccess"],
   );
+
+/**
+ * The relay ids the user's computers vouch for (0091): each connected one's `approvedHosts`, and
+ * the `tailnet:` devices', which Tailscale vouches for. Undefined until the local plxd answers.
+ */
+async function vouchedHosts(): Promise<Set<string> | undefined> {
+  const asked = accessHosts();
   if (!asked.some(([id]) => id === "local")) return undefined;
   const answers = await Promise.all(asked.map(([, each]) => each.request("access/get", {})));
   const vouched = new Set(tailnetRelayIds.values());
@@ -2012,14 +2021,8 @@ async function answerAccess(id: string, allow: boolean): Promise<string | undefi
  * each that lacks any. A computer that was offline catches up the next time it connects.
  */
 const syncAccess = coalesced(async () => {
-  const hosts = [...connections].filter(
-    ([id, each]) =>
-      (id === "local" || relayIdOf(id) || id.startsWith("tailnet:")) &&
-      each.state.status === "connected" &&
-      each.state.capabilities["accountAccess"],
-  );
   const read = await Promise.all(
-    hosts.map(async ([, host]) => {
+    accessHosts().map(async ([, host]) => {
       const [state, own] = await Promise.all([
         host.request("access/get", {}),
         host.request("relay/id", {}),
@@ -2041,6 +2044,39 @@ const syncAccess = coalesced(async () => {
       .map((each) => each.host.request("access/merge", union)),
   );
 });
+
+/** The key thumbprints host `host` keeps as removed; none when it can't say. */
+async function removedKeys(host: Connection): Promise<Set<string>> {
+  if (host.state.status !== "connected" || !host.state.capabilities["accountAccess"])
+    return new Set();
+  const answer = await host.request("access/get", {});
+  return new Set("result" in answer ? answer.result.removedClients : []);
+}
+
+/**
+ * `window.parallax.revokeDevice`: ends a device's session on this computer (`remote/revoke`).
+ * A device signed in with the account then has its key removed here, which plxd does with the
+ * revoke, and on every other computer this app has a session with (`access/remove`), so it gets
+ * a session nowhere (0091). A computer offline now learns of it from `syncAccess` once it
+ * connects. Answers this computer's sessions, or why not, for people.
+ */
+async function revokeDevice(id: unknown): Promise<RemoteSessionsResult | string> {
+  if (typeof id !== "string") return "invalid session";
+  const local = connections.get("local");
+  if (local?.state.status !== "connected")
+    return "Parallax isn't connected to this computer's plxd.";
+  const before = await removedKeys(local);
+  const answer = await local.request("remote/revoke", { id });
+  if ("error" in answer) return answer.error.message;
+  const removed = [...(await removedKeys(local))].filter((key) => !before.has(key));
+  const others = accessHosts().filter(([hostId]) => hostId !== "local");
+  await Promise.all(
+    others.flatMap(([, host]) =>
+      removed.map((thumbprint) => host.request("access/remove", { thumbprint })),
+    ),
+  );
+  return answer.result;
+}
 
 function connection(hostId: unknown): Connection {
   const found = typeof hostId === "string" ? connections.get(hostId) : undefined;

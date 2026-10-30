@@ -599,3 +599,94 @@ test("an account computer's agent install and CLI sign-in run in its own plxd's 
     rmSync(fake.userData, { recursive: true, force: true });
   }
 });
+
+/** Lists a connection answers `access/get` with, by connection; a wait never answers. */
+function listsBy(of: (connection: unknown) => object | undefined) {
+  return (params: { after?: number }, connection: unknown) =>
+    params.after !== undefined
+      ? new Promise(() => {})
+      : {
+          result: {
+            version: 1,
+            approvedClients: [],
+            removedClients: [],
+            approvedHosts: [],
+            ...of(connection),
+          },
+        };
+}
+
+test("a connecting computer and this one copy approved and removed keys and host ids both ways", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const local = await start({ accounts: [{ hostId: studio, name: "studio", routes: [] }] });
+    const connection = accountConnection(studio)!;
+    fake.answers.set(
+      "access/get",
+      listsBy((c) =>
+        c === local
+          ? { approvedClients: ["k1", "k2"] }
+          : { approvedClients: ["k3"], removedClients: ["k2"], approvedHosts: [buildBox] },
+      ),
+    );
+    fake.answers.set("relay/id", (_p: unknown, c: unknown) => ({
+      result: { hostId: c === local ? "self" : studio },
+    }));
+    const merged = new Map<unknown, unknown>();
+    fake.answers.set("access/merge", (params: unknown, c: unknown) => {
+      merged.set(c, params);
+      return { result: {} };
+    });
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(merged.size).toBe(0);
+
+    connection.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    const union = {
+      approvedClients: ["k1", "k3"],
+      removedClients: ["k2"],
+      approvedHosts: [buildBox, "self", studio].sort(),
+    };
+    expect(merged.get(local)).toEqual(union);
+    expect(merged.get(connection)).toEqual(union);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("revoking a signed-in device here removes its key on every other computer this app reaches", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const local = await start({ accounts: [{ hostId: studio, name: "studio", routes: [] }] });
+    const connection = accountConnection(studio)!;
+    let revoked = false;
+    fake.answers.set(
+      "access/get",
+      listsBy((c) => (c === local && revoked ? { removedClients: ["phone-key"] } : {})),
+    );
+    const sessions = { sessions: [], listening: true, pairing: false };
+    fake.answers.set("remote/revoke", (params: { id: string }, c: unknown) => {
+      revoked = c === local && params.id === "s1";
+      return { result: sessions };
+    });
+    const removed: [unknown, unknown][] = [];
+    fake.answers.set("access/remove", (params: unknown, c: unknown) => {
+      removed.push([c, params]);
+      return { result: {} };
+    });
+    local.set(connected({ accountAccess: {} }));
+    connection.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const answer = await fake.handlers.get("parallax:revokeDevice")!({}, "s1");
+    expect(answer).toEqual(sessions);
+    expect(removed).toEqual([[connection, { thumbprint: "phone-key" }]]);
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});

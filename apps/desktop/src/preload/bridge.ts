@@ -13,6 +13,7 @@ import type {
   ParallaxRequests,
   ProviderKind,
   RelayHost,
+  RemoteSessionsResult,
 } from "../protocol/generated/protocol";
 
 /** The Appearance setting: follow the OS, or force a theme. */
@@ -442,6 +443,12 @@ export interface ParallaxBridge {
   onAccessRequests(listener: (requests: AccessPrompt[]) => void): () => void;
   /** Allows or denies a new device's request. Resolves to an error for people, or undefined. */
   answerAccess(id: string, allow: boolean): Promise<string | undefined>;
+  /**
+   * Revokes session `id` on this computer. A device signed in with the account also loses its key
+   * here and on every other computer this app reaches (0091). Resolves to this computer's sessions,
+   * or an error for people.
+   */
+  revokeDevice(id: string): Promise<RemoteSessionsResult | string>;
 
   /**
    * The agents in the ACP Registry, fetched once while the app runs. Resolves to an error for
@@ -782,6 +789,8 @@ export const withheldMethods = [
   "access/deny",
   "access/remove",
   "access/setupCode",
+  // Revoking goes through `revokeDevice`, which also removes the device's key everywhere (0091).
+  "remote/revoke",
   "terminal/open",
   "terminal/close",
   // A window's device streams go through `openDeviceStream`, which routes what plxd relays.
