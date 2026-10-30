@@ -46,7 +46,7 @@ import {
   Settings,
   ShieldCheck,
   MessagesSquare,
-  Laptop,
+  SquareDashed,
   SquarePen,
   SquareTerminal,
   Trash2,
@@ -135,6 +135,7 @@ import {
   type NavRow,
 } from "./sidebarPrefs";
 import { SidebarNav, navRow } from "./SidebarNav";
+import { spaceChoices, SpacePicker } from "./SpaceMenu";
 import { projectEntries, type ProjectEntry } from "./projectList";
 import { stored } from "./stored";
 
@@ -363,13 +364,13 @@ function repoColor(repo: Repo, icon: ProjectIconValue | undefined) {
 /**
  * A repo's icon: the one the user chose, in a Project's shape (0033), or its namesake's on
  * another computer, or else its initials on a tile in a color picked from its name. No repo is a
- * laptop, and a Space with no icon of its own two speech bubbles (0090).
+ * dashed square, and a Space with no icon of its own two speech bubbles (0090).
  */
 export function RepoIcon({ repo }: { repo?: Repo }) {
   const shared = useContext(SharedRepoIcons);
   const size = "size-4";
   if (!repo || repo.scratch)
-    return <Laptop aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
+    return <SquareDashed aria-hidden className={`${size} shrink-0 text-faint-foreground`} />;
   const icon = repoIconOf(repo, shared);
   if (icon) return <ProjectIcon icon={icon} className={`${size} shrink-0`} />;
   // A Space with no icon draws the Space glyph, as on the Projects page (0090).
@@ -1242,6 +1243,7 @@ export function ThreadList({
     const selected = item.key === openKey;
     const { thread: t, view } = item;
     const pinnable = pinsOn(view) && !t.parent;
+    const spaces = t.parent ? undefined : spaceChoices(t, view);
     return (
       <ThreadRow
         key={item.key}
@@ -1307,6 +1309,7 @@ export function ThreadList({
               }
             : undefined
         }
+        spacePicker={spaces && !spaces.startedIn ? { view, spaces: spaces.spaces } : undefined}
         onAutoResume={async (autoResume) => {
           const answer = await window.parallax.request(item.host.id, "agent/autoResume", {
             runId: t.id,
@@ -2492,7 +2495,7 @@ function ScopeMenu({
           {!q && fixedRow("all", <Layers aria-hidden />, "All threads")}
           {(repos.length > 0 || !q) && heading("Repos")}
           {repos.map(row)}
-          {!q && fixedRow("none", <Laptop aria-hidden />, "No repo")}
+          {!q && fixedRow("none", <SquareDashed aria-hidden />, "No repo")}
           {q && repos.length === 0 && (
             <p className="px-2 py-1.5 text-body text-faint-foreground">No repos match</p>
           )}
@@ -3183,6 +3186,7 @@ function ThreadRow({
   onDelete,
   onOpenBeside,
   onFork,
+  spacePicker,
   onAutoResume,
   onRest,
   onLeave,
@@ -3248,6 +3252,8 @@ function ThreadRow({
   onOpenBeside?: () => void;
   /** Forks it at its latest turn and opens the fork (0050), where its plxd forks threads. */
   onFork?: (choice: ForkChoice) => Promise<RpcError | undefined>;
+  /** The Spaces it can be added to (SpaceMenu.tsx), for Add to Space. */
+  spacePicker?: { view: ThreadsView; spaces: Repo[] };
   /** Sets its run's auto-resume override, or clears it with undefined. */
   onAutoResume: (autoResume?: boolean) => void;
   onRest: (row: HTMLElement) => void;
@@ -3256,8 +3262,10 @@ function ThreadRow({
   const menuId = useId();
   const snoozeId = useId();
   const forkId = useId();
+  const spaceId = useId();
   const menu = useRef<HTMLDivElement>(null);
   const forkMenu = useRef<HTMLDivElement>(null);
+  const spaceMenu = useRef<HTMLDivElement>(null);
   const snoozeMenu = useRef<HTMLDivElement>(null);
   const actions = useRef<HTMLButtonElement>(null);
   const [custom, setCustom] = useState("");
@@ -3287,9 +3295,9 @@ function ThreadRow({
   const prs = usePullRequests(hostId, run?.id, run?.pullRequests ?? [], false, false);
   const prLook = majorityLook(prs);
   // A worktree's or checkout's status is read, for what's unpushed and uncommitted, again as its
-  // run's status changes. A plxd without `git` leaves it out.
+  // run's status changes. A plxd without `git` leaves it out, and a thread with no repo skips it.
   const [git, setGit] = useState<GitStatus | null>(null);
-  const statusRun = run?.checkout || run?.branch ? run.id : undefined;
+  const statusRun = (run?.checkout || run?.branch) && !repo?.scratch ? run.id : undefined;
   const runStatus = run?.status;
   useEffect(() => {
     if (!statusRun) return;
@@ -3446,7 +3454,7 @@ function ThreadRow({
       >
         {look === "compact" ? (
           <RowHead
-            icon={oneLine && <RepoIcon repo={repo} />}
+            icon={oneLine && <RepoIcon repo={space ?? repo} />}
             title={titleText}
             titleColor={titleColor}
             status={shownStatus}
@@ -3713,6 +3721,20 @@ function ThreadRow({
                 Fork…
               </button>
             )}
+            {spacePicker && (
+              // The Spaces' menu opens under the actions button, as Fork's does.
+              <button
+                type="button"
+                role="menuitem"
+                className={menuItem}
+                onClick={choose(() =>
+                  spaceMenu.current?.showPopover({ source: actions.current ?? undefined }),
+                )}
+              >
+                <MessagesSquare aria-hidden />
+                {thread.space ? "Move to Space…" : "Add to Space…"}
+              </button>
+            )}
             {autoResumable && run && (
               // Choosing the host's setting clears the override, so the thread follows the host again.
               <button
@@ -3751,6 +3773,15 @@ function ThreadRow({
           run={run}
           onFork={onFork}
           align="end"
+        />
+      )}
+      {spacePicker && (
+        <SpacePicker
+          ref={spaceMenu}
+          id={spaceId}
+          thread={thread}
+          view={spacePicker.view}
+          spaces={spacePicker.spaces}
         />
       )}
     </li>

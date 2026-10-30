@@ -1095,7 +1095,7 @@ test("Thread details adds the open thread to a Space, which its crumbs then name
   const details = document.getElementById("thread-details")!;
   await click(details.querySelector('button[aria-label="Add to a Space"]'));
   const spaces = () => [
-    ...document.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Spaces"] button'),
+    ...details.querySelectorAll<HTMLButtonElement>('[role="menu"][aria-label="Spaces"] button'),
   ];
   expect(spaces().map((b) => b.textContent)).toEqual(["Essays"]);
   await click(spaces()[0]);
@@ -1106,6 +1106,77 @@ test("Thread details adds the open thread to a Space, which its crumbs then name
   await click(spaces().find((b) => b.textContent === "Remove from Space"));
   expect(calls("thread/setSpace").at(-1)).toEqual({ threads: ["t-draft"] });
   expect(crumbs()).toEqual(["This Mac", "parallax", "Draft the intro"]);
+});
+
+test("a sidebar row's actions add its thread to a Space", async () => {
+  capabilities = { spaces: {}, spaceThreads: {} };
+  const space: Repo = {
+    id: "s-essays",
+    name: "Essays",
+    path: "/data/spaces/s-essays",
+    space: true,
+    createdAt: "2026-09-29T10:00:00Z",
+  };
+  const draft: Thread = {
+    id: "t-draft",
+    repo: parallax.id,
+    createdAt: "2026-09-29T11:30:00Z",
+    title: "Draft the intro",
+  };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, space], threads: [draft], seq: 7 },
+  });
+  answers["thread/setSpace"] = (p) => ({
+    result: { threads: [{ ...draft, space: p["space"] as string }] },
+  });
+  await renderApp();
+  const row = document.querySelector('#sidebar li[data-kind="thread"]')!;
+  // happy-dom has no popovers: send the actions menu the event a browser sends as it opens.
+  await act(async () =>
+    row
+      .querySelector('[role="menu"][aria-label="Thread actions"]')!
+      .dispatchEvent(Object.assign(new Event("beforetoggle"), { newState: "open" })),
+  );
+  const item = [...row.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+    (b) => b.textContent === "Add to Space…",
+  );
+  await click(item);
+  await click(row.querySelector('[role="menu"][aria-label="Spaces"] button'));
+  expect(calls("thread/setSpace")).toEqual([{ threads: ["t-draft"], space: "s-essays" }]);
+});
+
+test("a row counts unpushed commits for a repo's thread, and none for a thread with no repo", async () => {
+  const scratch: Repo = {
+    id: "r-scratch",
+    name: "scratch",
+    path: "/data/scratch",
+    scratch: true,
+    createdAt: "2026-09-29T09:00:00Z",
+  };
+  const chat: Thread = { id: "t-chat", repo: scratch.id, createdAt: "2026-09-29T11:30:00Z" };
+  const done = { status: "completed" as const, branch: "parallax/work" };
+  answers["thread/list"] = () => ({
+    result: { repos: [parallax, scratch], threads: [flaky, chat], seq: 7 },
+  });
+  answers["agent/list"] = () => ({
+    result: {
+      runs: [
+        { ...coordinatorRun(flaky.id, "Fix the flaky test"), ...done, project: parallax.id },
+        { ...coordinatorRun(chat.id, "NFA to DFA help"), ...done, project: scratch.id },
+      ],
+      seq: 7,
+    },
+  });
+  answers["agent/gitStatus"] = () => ({
+    result: { branch: "parallax/work", changes: 0, upstream: null, ahead: 2, behind: 0 },
+  });
+  await renderApp();
+  const unpushed = (title: string) =>
+    [...document.querySelectorAll('#sidebar li[data-kind="thread"]')]
+      .find((li) => li.querySelector("[data-title]")?.textContent === title)
+      ?.querySelector('[title="2 commits not pushed"]');
+  expect(unpushed("Fix the flaky test")).not.toBeNull();
+  expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
 test("the classic sidebar keeps Projects in a drawer and Pull requests in the footer until Beta turns on the new one", async () => {
