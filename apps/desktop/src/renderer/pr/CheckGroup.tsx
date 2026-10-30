@@ -127,9 +127,12 @@ export function CheckRow({
           name
         )}
         {check.required && <Badge>Required</Badge>}
-        <span className="w-28 shrink-0 truncate text-right text-meta text-faint-foreground tabular-nums">
-          {checkStatus(check)}
-          {time && ` · ${time}`}
+        {/* How long it ran: the icon already says how it ended. */}
+        <span
+          title={`${checkStatus(check)}${time ? ` in ${time}` : ""}`}
+          className="w-16 shrink-0 truncate text-right text-meta text-faint-foreground tabular-nums"
+        >
+          {time ?? checkStatus(check)}
         </span>
         <span className="flex w-14 shrink-0 justify-end">
           {actions.onRerun && check.state !== "pending" && (check.jobId || check.runId) && (

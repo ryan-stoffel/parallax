@@ -1,6 +1,7 @@
 // A `window.parallax` for the browser preview: every ParallaxBridge member, answering plxd methods
 // from fixtures.ts held in memory. Writes that are cheap to fake change that state and emit the
 // events plxd would, so a sent message or an answered question shows up as it does in the app.
+import { pullRequestHandlers } from "./pullRequests";
 import {
   iconFor,
   type AccessPrompt,
@@ -89,6 +90,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "orchestration",
     "pins",
     "prDiff",
+    "prWatch",
     "orchestratorAutonomy",
     "orchestratorDelete",
     "orchestratorEdit",
@@ -1186,69 +1188,8 @@ const handlers: { [M in Method]?: Handler<M> } = {
     });
     return run ? { run } : fail("no such run", "runNotFound");
   },
-  // A made-up read of a linked pull request, for the Pull requests page.
-  "pr/view": (p) => {
-    const number = Number(p.url.split("/").pop());
-    const titles: Record<number, string> = {
-      588: "Follow nightlies from a nightly build, and keep the channel in the build's own metadata",
-      591: "Plainer copy on the first-run screens",
-    };
-    return {
-      number,
-      title: titles[number] ?? `Pull request ${number}`,
-      url: p.url,
-      repo: "ryan-stoffel/parallax",
-      state: number === 591 ? "merged" : "open",
-      draft: false,
-      author: "ryan-stoffel",
-      updatedAt: new Date(Date.now() - number * 60_000).toISOString(),
-      baseBranch: "develop",
-      headBranch: `feature/${number}`,
-      changedFiles: 6,
-      additions: 211,
-      deletions: 88,
-      files: [
-        { path: "apps/desktop/src/renderer/PullRequests.tsx", additions: 120, deletions: 40 },
-        { path: "daemon/src/worktree/pull_request.rs", additions: 18, deletions: 4 },
-        { path: "apps/desktop/src/renderer/PullRequests.test.tsx", additions: 44, deletions: 1 },
-        {
-          path: "crates/parallax-protocol/samples/v1/pull-requests.json",
-          additions: 21,
-          deletions: 19,
-        },
-        { path: "docs/decisions/0070-line-breakdown.md", additions: 6, deletions: 0 },
-        { path: "apps/desktop/pnpm-lock.yaml", additions: 2, deletions: 24 },
-      ],
-      body: "",
-      comments: [],
-      reviewRequests: [],
-      labels: number === 591 ? ["docs"] : ["feature", "app"],
-      // Seven CI jobs: all passed, one failed, or three still running.
-      checks: [
-        "lint",
-        "types",
-        "test (macos)",
-        "test (linux)",
-        "test (windows)",
-        "e2e",
-        "bench",
-      ].map((name, i) => {
-        const state =
-          number === 591 || number === 612
-            ? "passed"
-            : number === 41
-              ? i === 2
-                ? "failed"
-                : "passed"
-              : i < 4
-                ? "passed"
-                : "pending";
-        return { name, state, workflow: "CI" } as const;
-      }),
-      checksState:
-        number === 591 || number === 612 ? "passed" : number === 41 ? "failed" : "pending",
-    };
-  },
+  // Made-up pull requests, as plxd reports them (pullRequests.ts).
+  ...pullRequestHandlers,
   "agent/approve": (p) => {
     const decision = p.decision === "allow" ? "allowed" : "denied";
     output(p.runId, {

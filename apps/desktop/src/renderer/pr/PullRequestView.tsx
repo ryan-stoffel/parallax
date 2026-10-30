@@ -328,8 +328,8 @@ export function PullRequestView({
 
       {tab === "overview" && (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="grid gap-5 px-4 py-4 @min-[900px]:grid-cols-[minmax(0,1fr)_18rem] @min-[900px]:gap-8 @min-[900px]:px-6">
-            <aside className="flex min-w-0 flex-col gap-5 @min-[900px]:order-2">
+          <div className="grid gap-5 px-4 py-4 @min-[900px]:grid-cols-[minmax(0,1fr)_18rem] @min-[900px]:gap-8">
+            <aside className="flex min-w-0 flex-col gap-5 @min-[900px]:sticky @min-[900px]:top-4 @min-[900px]:order-2 @min-[900px]:self-start">
               <MergeBox
                 pr={pr}
                 status={status}
@@ -340,7 +340,7 @@ export function PullRequestView({
               />
               <People pr={pr} />
               <section aria-label="Labels">
-                <GroupHeading className="px-0">Labels</GroupHeading>
+                <GroupHeading className="px-0!">Labels</GroupHeading>
                 {pr.labels.length ? (
                   <div className="flex flex-wrap gap-1">
                     {pr.labels.map((l) => (
@@ -628,7 +628,7 @@ function People({ pr }: { pr: PullRequest }) {
   };
   return (
     <section aria-label="Reviewers">
-      <GroupHeading className="px-0">Reviewers</GroupHeading>
+      <GroupHeading className="px-0!">Reviewers</GroupHeading>
       {latest.size + waiting.length === 0 ? (
         <p className="text-meta text-faint-foreground">None</p>
       ) : (
@@ -816,7 +816,7 @@ function Activity({
       <div className="flex flex-col gap-5 px-4 pt-3 pb-6">
         {unresolved.length > 0 && (
           <section aria-label="Unresolved threads">
-            <GroupHeading className="px-0">Unresolved threads · {unresolved.length}</GroupHeading>
+            <GroupHeading className="px-0!">Unresolved threads · {unresolved.length}</GroupHeading>
             <div className="flex flex-col gap-2">
               {unresolved.map((t, i) => (
                 <Fragment key={t.id ?? i}>{renderThread(t)}</Fragment>
@@ -826,7 +826,7 @@ function Activity({
         )}
         <section aria-label="Timeline">
           <GroupHeading
-            className="px-0"
+            className="px-0!"
             action={
               <Button size="sm" onClick={() => setOldestFirst(!oldestFirst)}>
                 <icons.expand aria-hidden className={oldestFirst ? "rotate-180" : ""} />

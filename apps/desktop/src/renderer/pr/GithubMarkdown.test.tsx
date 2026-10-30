@@ -42,8 +42,14 @@ test("GitHub's HTML renders: a details fold, centered and sized images, picture,
       '<picture><source media="(prefers-color-scheme: dark)" srcset="https://x.dev/d.png"><img src="https://x.dev/l.png" alt="Shot"></picture>',
       "",
       '<script>alert(1)</script><img src="http://x.dev/plain.png" alt="Plain"><span onclick="x()">ok</span>',
+      "",
+      "A note[^a].",
+      "",
+      "[^a]: Its text.",
     ].join("\n"),
   );
+  // Footnotes keep their look though the HTML was parsed again.
+  expect(el.querySelector("section.border-t")!.textContent).toContain("Its text.");
   const logo = el.querySelector<HTMLImageElement>('p[align="center"] img')!;
   expect([logo.src, logo.getAttribute("width")]).toEqual(["https://x.dev/logo.png", "120"]);
   const details = el.querySelector("details")!;

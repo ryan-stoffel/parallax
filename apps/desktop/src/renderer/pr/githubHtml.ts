@@ -110,7 +110,13 @@ function fromDom(node: ChildNode): Node[] {
     } else if (name === "id") {
       // A page's own ids can't be taken, as GitHub prefixes them.
       properties["id"] = value.startsWith("user-content-") ? value : `user-content-${value}`;
-    } else properties[name] = BOOLEAN.has(name) ? true : value;
+    } else {
+      // hast names data and aria attributes in camel case, as remark-gfm's own nodes have them.
+      const key = /^(data|aria)-/.test(name)
+        ? name.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase())
+        : name;
+      properties[key] = BOOLEAN.has(name) ? true : value;
+    }
   }
   if (tag === "input") properties["disabled"] = true;
   return [{ type: "element", tagName: tag, properties, children }];

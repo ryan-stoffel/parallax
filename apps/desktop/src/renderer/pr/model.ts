@@ -122,7 +122,8 @@ export function span(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
-  return m < 60 ? `${m}m ${s % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+  if (m < 60) return s % 60 ? `${m}m ${s % 60}s` : `${m}m`;
+  return m % 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 60)}h`;
 }
 
 /** How long a check ran, or has run so far, or undefined when GitHub didn't say when it started. */
