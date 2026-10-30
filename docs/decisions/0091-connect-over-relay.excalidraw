@@ -22,12 +22,12 @@
       "frameId": null,
       "index": "a0",
       "roundness": null,
-      "seed": 593572232,
+      "seed": 1820412310,
       "version": 2,
-      "versionNonce": 347415288,
+      "versionNonce": 32212170,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Parallax Connect over Parallax Relay (proposed, 0091)",
@@ -59,12 +59,12 @@
       "frameId": null,
       "index": "a1",
       "roundness": null,
-      "seed": 598379256,
+      "seed": 239223498,
       "version": 2,
-      "versionNonce": 383559816,
+      "versionNonce": 135496918,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Sign in on each computer. No Tailscale, no sshd, no open ports. TLS stays end to end, pinned to the host's key.",
@@ -98,17 +98,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 710000776,
+      "seed": 537896662,
       "version": 2,
-      "versionNonce": 1359348728,
+      "versionNonce": 1484020618,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "k2GH5rV_KjI2O0eENxKTv"
+          "id": "q-OnBtyM3zRdfsFTZhEOe"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -133,12 +133,12 @@
       "roundness": {
         "type": 3
       },
-      "seed": 755919864,
+      "seed": 1732467082,
       "version": 2,
-      "versionNonce": 759584648,
+      "versionNonce": 1547205142,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -161,12 +161,12 @@
       "frameId": null,
       "index": "a4",
       "roundness": null,
-      "seed": 1113091976,
+      "seed": 610294806,
       "version": 2,
-      "versionNonce": 1922221304,
+      "versionNonce": 2100582986,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Computer A: client",
@@ -200,12 +200,12 @@
       "roundness": {
         "type": 3
       },
-      "seed": 21900536,
+      "seed": 359897162,
       "version": 2,
-      "versionNonce": 1218586248,
+      "versionNonce": 1653393238,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -228,12 +228,12 @@
       "frameId": null,
       "index": "a6",
       "roundness": null,
-      "seed": 598818440,
+      "seed": 1600678230,
       "version": 2,
-      "versionNonce": 652174840,
+      "versionNonce": 1862697226,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Phone",
@@ -267,12 +267,12 @@
       "roundness": {
         "type": 3
       },
-      "seed": 435015160,
+      "seed": 2024668938,
       "version": 2,
-      "versionNonce": 1168905608,
+      "versionNonce": 1264938134,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -295,12 +295,12 @@
       "frameId": null,
       "index": "a8",
       "roundness": null,
-      "seed": 521678216,
+      "seed": 813485718,
       "version": 2,
-      "versionNonce": 1257236216,
+      "versionNonce": 426102730,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Parallax Relay (relay.parallax.codes)",
@@ -334,12 +334,12 @@
       "roundness": {
         "type": 3
       },
-      "seed": 535908088,
+      "seed": 1030589898,
       "version": 2,
-      "versionNonce": 161490056,
+      "versionNonce": 1953982934,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -362,12 +362,12 @@
       "frameId": null,
       "index": "aA",
       "roundness": null,
-      "seed": 231292040,
+      "seed": 1146260438,
       "version": 2,
-      "versionNonce": 2068334584,
+      "versionNonce": 1080903306,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Computer B: host (headless is fine)",
@@ -401,17 +401,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 2078060536,
+      "seed": 1221411978,
       "version": 2,
-      "versionNonce": 1916425096,
+      "versionNonce": 1020772118,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "LXYQT_n6wd_Xw-_ZkWwXS"
+          "id": "5zKZ7rg7kNAgpHnU6uHXj"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -434,17 +434,17 @@
       "frameId": null,
       "index": "aC",
       "roundness": null,
-      "seed": 1098935176,
+      "seed": 1761517846,
       "version": 2,
-      "versionNonce": 602704120,
+      "versionNonce": 1826088266,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "yKGXHXEBise9ARf6iCA1U"
+          "id": "6E3WVAkeiZsoJeusEzPIP"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -485,17 +485,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 1706291448,
+      "seed": 612901706,
       "version": 2,
-      "versionNonce": 1169597064,
+      "versionNonce": 1492872278,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "TngngfNNE-FZG5aBS8kB3"
+          "id": "H2EPR-2tAqIkK5r2qRii6"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -520,17 +520,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 1954134664,
+      "seed": 1643515478,
       "version": 2,
-      "versionNonce": 274770424,
+      "versionNonce": 1476439050,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "KOSSJDg3xVqof0b9s8ezm"
+          "id": "MZfzYD7ITSHVEenhEuu2j"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -540,7 +540,7 @@
       "x": 770,
       "y": 400,
       "width": 580,
-      "height": 140,
+      "height": 162,
       "angle": 0,
       "strokeColor": "#7c3aed",
       "backgroundColor": "#d0bfff",
@@ -555,17 +555,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 1962611192,
+      "seed": 1794714122,
       "version": 2,
-      "versionNonce": 584126856,
+      "versionNonce": 649556374,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "Uhinwu1DcwSNOBMw1cfga"
+          "id": "8sSQK3hvgiUvR5sBBN_Tg"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -573,7 +573,7 @@
       "id": "userdo",
       "type": "rectangle",
       "x": 770,
-      "y": 570,
+      "y": 585,
       "width": 270,
       "height": 120,
       "angle": 0,
@@ -590,17 +590,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 963717512,
+      "seed": 1007539094,
       "version": 2,
-      "versionNonce": 2074651384,
+      "versionNonce": 1474468554,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "yx9WbINDn8g8xP7jMj9FA"
+          "id": "ZAS1PlKASJbPyr_Ci-7Rr"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -608,7 +608,7 @@
       "id": "hostdo",
       "type": "rectangle",
       "x": 1060,
-      "y": 570,
+      "y": 585,
       "width": 290,
       "height": 185,
       "angle": 0,
@@ -625,17 +625,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 817238776,
+      "seed": 857430218,
       "version": 2,
-      "versionNonce": 1891999880,
+      "versionNonce": 21024470,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "QXfaH4q_KEHlbXqhnx0C5"
+          "id": "zvuYbQAxJHkOZdrQ6_NyO"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -660,17 +660,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 1805826184,
+      "seed": 561705174,
       "version": 2,
-      "versionNonce": 541625336,
+      "versionNonce": 1259909514,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "mjl5hmmuO3prJ9Mlh9ll_"
+          "id": "4AwZW4C5LK0Sb0Dw7xcsE"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -693,12 +693,12 @@
       "frameId": null,
       "index": "aJ",
       "roundness": null,
-      "seed": 526971896,
+      "seed": 2089398154,
       "version": 2,
-      "versionNonce": 1330663304,
+      "versionNonce": 355238934,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Sees: ticket tokens (T1), the host list, who is online\nand when. Never thread content.",
@@ -717,7 +717,7 @@
       "x": 1510,
       "y": 400,
       "width": 580,
-      "height": 160,
+      "height": 175,
       "angle": 0,
       "strokeColor": "#15803d",
       "backgroundColor": "#b2f2bb",
@@ -732,17 +732,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 516581256,
+      "seed": 768763414,
       "version": 2,
-      "versionNonce": 1212435704,
+      "versionNonce": 81653834,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "km98tkn8LcRT6f2zkO_p6"
+          "id": "B3UXenb_xNXWTMO5pK7wn"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -767,17 +767,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 1461171448,
+      "seed": 461319754,
       "version": 2,
-      "versionNonce": 112008840,
+      "versionNonce": 879726934,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "MY8CBA8FXdrjZ5V02xsA2"
+          "id": "zlkWbSafOiZUX4CDPvIFe"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -800,17 +800,17 @@
       "frameId": null,
       "index": "aM",
       "roundness": null,
-      "seed": 254031496,
+      "seed": 1107899222,
       "version": 2,
-      "versionNonce": 1562373624,
+      "versionNonce": 957175562,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "2Op2rIcqP4t4NKmLvMj8L"
+          "id": "uEvd_bzmmnIQBEOwgODNm"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -853,17 +853,17 @@
       "frameId": null,
       "index": "aN",
       "roundness": null,
-      "seed": 222713336,
+      "seed": 618059018,
       "version": 2,
-      "versionNonce": 2006453640,
+      "versionNonce": 710866582,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "yh6kYN8JPQx8lbiOAr49-"
+          "id": "9PYuWwH8tq7SFuAv-VSge"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -906,17 +906,17 @@
       "frameId": null,
       "index": "aO",
       "roundness": null,
-      "seed": 292300168,
+      "seed": 1484019862,
       "version": 2,
-      "versionNonce": 2011131640,
+      "versionNonce": 1747051978,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "GFvLWINnYbf_MidO2C-FL"
+          "id": "YLglDgZ6DFZXxazcyK_7j"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -963,12 +963,12 @@
       "frameId": null,
       "index": "aP",
       "roundness": null,
-      "seed": 653842168,
+      "seed": 1510712266,
       "version": 2,
-      "versionNonce": 189602952,
+      "versionNonce": 263173078,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1015,12 +1015,12 @@
       "frameId": null,
       "index": "aQ",
       "roundness": null,
-      "seed": 48116872,
+      "seed": 1489556950,
       "version": 2,
-      "versionNonce": 1896271864,
+      "versionNonce": 1261870218,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "hosts,\ntickets\n(T1)",
@@ -1052,17 +1052,17 @@
       "frameId": null,
       "index": "aR",
       "roundness": null,
-      "seed": 1219704824,
+      "seed": 356031114,
       "version": 2,
-      "versionNonce": 596134792,
+      "versionNonce": 511101206,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "iy4SGRvtoDzgMgNDjs9BP"
+          "id": "3-ru7VmsUP6Ac3NfokMzO"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1101,17 +1101,17 @@
       "frameId": null,
       "index": "aS",
       "roundness": null,
-      "seed": 959865736,
+      "seed": 1813752598,
       "version": 2,
-      "versionNonce": 1889145080,
+      "versionNonce": 1074166602,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "O1oYzLRljVwpDHWZwFSIE"
+          "id": "pWJNm15_f6aVjaNitwR8R"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1150,12 +1150,12 @@
       "frameId": null,
       "index": "aT",
       "roundness": null,
-      "seed": 1719236856,
+      "seed": 890812746,
       "version": 2,
-      "versionNonce": 176528008,
+      "versionNonce": 103364182,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1202,12 +1202,12 @@
       "frameId": null,
       "index": "aU",
       "roundness": null,
-      "seed": 1924182664,
+      "seed": 1356978262,
       "version": 2,
-      "versionNonce": 2115842552,
+      "versionNonce": 887915018,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "TLS 1.3\nto hostId",
@@ -1239,17 +1239,17 @@
       "frameId": null,
       "index": "aV",
       "roundness": null,
-      "seed": 1406114296,
+      "seed": 151453706,
       "version": 2,
-      "versionNonce": 1661012360,
+      "versionNonce": 1067187094,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "_b9j7vk_sygb6LB1v_Vqz"
+          "id": "5_56jdbam7Sctw1cviXSB"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1288,12 +1288,12 @@
       "frameId": null,
       "index": "aW",
       "roundness": null,
-      "seed": 1175003528,
+      "seed": 787504534,
       "version": 2,
-      "versionNonce": 278147832,
+      "versionNonce": 350466250,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1340,12 +1340,12 @@
       "frameId": null,
       "index": "aX",
       "roundness": null,
-      "seed": 1404672760,
+      "seed": 1023307466,
       "version": 2,
-      "versionNonce": 406231176,
+      "versionNonce": 1627658454,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "TLS in\nstream",
@@ -1377,12 +1377,12 @@
       "frameId": null,
       "index": "aY",
       "roundness": null,
-      "seed": 310096008,
+      "seed": 1803303638,
       "version": 2,
-      "versionNonce": 511906808,
+      "versionNonce": 864487306,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1433,12 +1433,12 @@
       "frameId": null,
       "index": "aZ",
       "roundness": null,
-      "seed": 683375608,
+      "seed": 1167721866,
       "version": 2,
-      "versionNonce": 1306675080,
+      "versionNonce": 1911983638,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "LAN route, tried first: direct TLS to B's :7341, same pin, no relay",
@@ -1472,17 +1472,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 1875140488,
+      "seed": 2098884630,
       "version": 2,
-      "versionNonce": 770561272,
+      "versionNonce": 957449802,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "QDmzlbLJYTesdIMG6P-Fc"
+          "id": "KxRz1yXpvmKJ5ctg7P5y5"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -1507,17 +1507,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 618216696,
+      "seed": 1276429386,
       "version": 2,
-      "versionNonce": 1346377352,
+      "versionNonce": 1063803734,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "YEnA9nYgNF8OpSCAj00gG"
+          "id": "dNBF5XvX1_7NV09mA2_Se"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -1542,17 +1542,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 505360008,
+      "seed": 1069546838,
       "version": 2,
-      "versionNonce": 1683518968,
+      "versionNonce": 241052938,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "GmKk1WoxE2xKvmN0HRUnr"
+          "id": "r5h1zLUppjH2wbF1dT9W6"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -1577,17 +1577,17 @@
       "roundness": {
         "type": 3
       },
-      "seed": 966188536,
+      "seed": 441035530,
       "version": 2,
-      "versionNonce": 67896712,
+      "versionNonce": 799965334,
       "isDeleted": false,
       "boundElements": [
         {
           "type": "text",
-          "id": "2WByrOwzlBpf0U1kEAF8E"
+          "id": "5SitAKqP7ZZxWTIiGNw_l"
         }
       ],
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false
     },
@@ -1610,12 +1610,12 @@
       "frameId": null,
       "index": "ae",
       "roundness": null,
-      "seed": 1984437640,
+      "seed": 1220666006,
       "version": 2,
-      "versionNonce": 382138104,
+      "versionNonce": 1223162826,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Legend",
@@ -1647,12 +1647,12 @@
       "frameId": null,
       "index": "af",
       "roundness": null,
-      "seed": 133717752,
+      "seed": 112441802,
       "version": 2,
-      "versionNonce": 1451365512,
+      "versionNonce": 377355734,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1691,12 +1691,12 @@
       "frameId": null,
       "index": "ag",
       "roundness": null,
-      "seed": 1501244552,
+      "seed": 987045846,
       "version": 2,
-      "versionNonce": 1505581048,
+      "versionNonce": 382333578,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "end-to-end TLS data",
@@ -1728,12 +1728,12 @@
       "frameId": null,
       "index": "ah",
       "roundness": null,
-      "seed": 1887551480,
+      "seed": 1617817738,
       "version": 2,
-      "versionNonce": 761152392,
+      "versionNonce": 149672726,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1772,12 +1772,12 @@
       "frameId": null,
       "index": "ai",
       "roundness": null,
-      "seed": 561273736,
+      "seed": 437171478,
       "version": 2,
-      "versionNonce": 289380600,
+      "versionNonce": 717164874,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "control and API calls",
@@ -1809,12 +1809,12 @@
       "frameId": null,
       "index": "aj",
       "roundness": null,
-      "seed": 590807288,
+      "seed": 1530089290,
       "version": 2,
-      "versionNonce": 1457296008,
+      "versionNonce": 829227094,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1853,12 +1853,12 @@
       "frameId": null,
       "index": "ak",
       "roundness": null,
-      "seed": 275753608,
+      "seed": 535011926,
       "version": 2,
-      "versionNonce": 13744632,
+      "versionNonce": 673339402,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "Clerk sign-in and tokens",
@@ -1890,12 +1890,12 @@
       "frameId": null,
       "index": "al",
       "roundness": null,
-      "seed": 798761464,
+      "seed": 2069812746,
       "version": 2,
-      "versionNonce": 2042167688,
+      "versionNonce": 601261462,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "points": [
@@ -1934,12 +1934,12 @@
       "frameId": null,
       "index": "am",
       "roundness": null,
-      "seed": 1093212552,
+      "seed": 254338966,
       "version": 2,
-      "versionNonce": 1534573304,
+      "versionNonce": 250529482,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396864,
+      "updated": 1793336890386,
       "link": null,
       "locked": false,
       "text": "key fetch, cached",
@@ -1953,7 +1953,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "k2GH5rV_KjI2O0eENxKTv",
+      "id": "q-OnBtyM3zRdfsFTZhEOe",
       "type": "text",
       "x": 873.6279296875,
       "y": 135,
@@ -1971,26 +1971,26 @@
       "frameId": null,
       "index": "an",
       "roundness": null,
-      "seed": 87003272,
+      "seed": 828203734,
       "version": 3,
-      "versionNonce": 235940744,
+      "versionNonce": 1632563478,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
-      "text": "Clerk (production instance, PLX-1049)\nOAuth app: PKCE, device authorization grant\nJWKS: the RS256 keys tokens are signed with",
+      "text": "Clerk (production instance, PLX-1049)\nOAuth app: authorization code + PKCE\nJWKS: the RS256 keys tokens are signed with",
       "fontSize": 20,
       "fontFamily": 5,
       "textAlign": "center",
       "verticalAlign": "top",
       "containerId": "clerk",
-      "originalText": "Clerk (production instance, PLX-1049)\nOAuth app: PKCE, device authorization grant\nJWKS: the RS256 keys tokens are signed with",
+      "originalText": "Clerk (production instance, PLX-1049)\nOAuth app: authorization code + PKCE\nJWKS: the RS256 keys tokens are signed with",
       "autoResize": true,
       "lineHeight": 1.25
     },
     {
-      "id": "LXYQT_n6wd_Xw-_ZkWwXS",
+      "id": "5zKZ7rg7kNAgpHnU6uHXj",
       "type": "text",
       "x": 55,
       "y": 405,
@@ -2008,12 +2008,12 @@
       "frameId": null,
       "index": "ao",
       "roundness": null,
-      "seed": 553402248,
+      "seed": 1016502294,
       "version": 3,
-      "versionNonce": 989868280,
+      "versionNonce": 1411699530,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " Desktop app (main process)\n - Clerk sign-in: PKCE, then refresh\n - relay/hosts via plxd A on sign-in, focus,\n   network back, and Settings (no timer)\n - One account:<hostId> connection per host\n - Routes: learned LAN first, then relay\n - Re-checks LAN every 60 s and on network change,\n   moves back when it answers",
@@ -2027,7 +2027,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "yKGXHXEBise9ARf6iCA1U",
+      "id": "6E3WVAkeiZsoJeusEzPIP",
       "type": "text",
       "x": 299.0947265625,
       "y": 602.75,
@@ -2045,12 +2045,12 @@
       "frameId": null,
       "index": "ap",
       "roundness": null,
-      "seed": 492506760,
+      "seed": 225912150,
       "version": 3,
-      "versionNonce": 420575880,
+      "versionNonce": 196894294,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": "plxd attach",
@@ -2064,7 +2064,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "TngngfNNE-FZG5aBS8kB3",
+      "id": "H2EPR-2tAqIkK5r2qRii6",
       "type": "text",
       "x": 55,
       "y": 635,
@@ -2082,12 +2082,12 @@
       "frameId": null,
       "index": "aq",
       "roundness": null,
-      "seed": 1661468040,
+      "seed": 626264726,
       "version": 3,
-      "versionNonce": 1455378936,
+      "versionNonce": 1669323274,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " plxd A (local, trusted socket)\n - relay/hosts, relay/register, relay/sign\n - plxd dial: accepts B's certificate only\n   if its key's JWK thumbprint == hostId\n - DPoP key; one session per host after\n   the first sign-in",
@@ -2101,7 +2101,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "KOSSJDg3xVqof0b9s8ezm",
+      "id": "MZfzYD7ITSHVEenhEuu2j",
       "type": "text",
       "x": 55,
       "y": 920,
@@ -2119,12 +2119,12 @@
       "frameId": null,
       "index": "ar",
       "roundness": null,
-      "seed": 1665076360,
+      "seed": 316819414,
       "version": 3,
-      "versionNonce": 1964042632,
+      "versionNonce": 2022318998,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " Phone (Expo app)\n - Clerk OAuth (PKCE), then refresh\n - pinned-tls + TLS inside a relay stream (Work 5),\n   same account routes",
@@ -2138,12 +2138,12 @@
       "lineHeight": 1.25
     },
     {
-      "id": "Uhinwu1DcwSNOBMw1cfga",
+      "id": "8sSQK3hvgiUvR5sBBN_Tg",
       "type": "text",
       "x": 775,
       "y": 405,
-      "width": 313.4970703125,
-      "height": 112.5,
+      "width": 363.90234375,
+      "height": 135,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -2156,29 +2156,29 @@
       "frameId": null,
       "index": "as",
       "roundness": null,
-      "seed": 129776520,
+      "seed": 1178000662,
       "version": 3,
-      "versionNonce": 1341281016,
+      "versionNonce": 1196165322,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
-      "text": " Worker (router)\n POST /v1/hosts: register, key-signed\n GET /v1/hosts: the account's host list\n POST /v1/hosts/:id/tickets: 30 s, used once\n DELETE /v1/hosts/:id: remove a host",
+      "text": " Worker (router)\n POST /v1/hosts: register, key-signed\n GET /v1/hosts: the account's host list\n POST /v1/hosts/:id/tickets: 30 s, used once\n DELETE /v1/hosts/:id: remove a host\n GET /connect/code: shows a sign-in code to paste",
       "fontSize": 18,
       "fontFamily": 5,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": "worker",
-      "originalText": " Worker (router)\n POST /v1/hosts: register, key-signed\n GET /v1/hosts: the account's host list\n POST /v1/hosts/:id/tickets: 30 s, used once\n DELETE /v1/hosts/:id: remove a host",
+      "originalText": " Worker (router)\n POST /v1/hosts: register, key-signed\n GET /v1/hosts: the account's host list\n POST /v1/hosts/:id/tickets: 30 s, used once\n DELETE /v1/hosts/:id: remove a host\n GET /connect/code: shows a sign-in code to paste",
       "autoResize": true,
       "lineHeight": 1.25
     },
     {
-      "id": "yx9WbINDn8g8xP7jMj9FA",
+      "id": "ZAS1PlKASJbPyr_Ci-7Rr",
       "type": "text",
       "x": 775,
-      "y": 575,
+      "y": 590,
       "width": 132.99609375,
       "height": 90,
       "angle": 0,
@@ -2193,12 +2193,12 @@
       "frameId": null,
       "index": "at",
       "roundness": null,
-      "seed": 582716040,
+      "seed": 1690749526,
       "version": 3,
-      "versionNonce": 491419784,
+      "versionNonce": 703414486,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " User object\n - host ids, max 10\n - push devices\n - request budget",
@@ -2212,10 +2212,10 @@
       "lineHeight": 1.25
     },
     {
-      "id": "QXfaH4q_KEHlbXqhnx0C5",
+      "id": "zvuYbQAxJHkOZdrQ6_NyO",
       "type": "text",
       "x": 1065,
-      "y": 575,
+      "y": 590,
       "width": 191.4521484375,
       "height": 157.5,
       "angle": 0,
@@ -2230,12 +2230,12 @@
       "frameId": null,
       "index": "au",
       "roundness": null,
-      "seed": 1593375112,
+      "seed": 493293462,
       "version": 3,
-      "versionNonce": 220017656,
+      "versionNonce": 656695178,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " Host object (one per host)\n - owner key (JWK)\n - plxd's control socket\n - tickets, max 16 streams\n - 2 GiB a day\n - held webhooks, 24 h\n - pushes, no content",
@@ -2249,7 +2249,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "mjl5hmmuO3prJ9Mlh9ll_",
+      "id": "4AwZW4C5LK0Sb0Dw7xcsE",
       "type": "text",
       "x": 921.88427734375,
       "y": 805,
@@ -2267,12 +2267,12 @@
       "frameId": null,
       "index": "av",
       "roundness": null,
-      "seed": 800098440,
+      "seed": 2085399766,
       "version": 3,
-      "versionNonce": 1165633416,
+      "versionNonce": 326809110,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": "Stream pipe: /connect <-> /streams/:id\nBinary frames of TLS records only.\nThe relay can't read or change them.",
@@ -2286,12 +2286,12 @@
       "lineHeight": 1.25
     },
     {
-      "id": "km98tkn8LcRT6f2zkO_p6",
+      "id": "B3UXenb_xNXWTMO5pK7wn",
       "type": "text",
       "x": 1515,
       "y": 405,
       "width": 340.751953125,
-      "height": 135,
+      "height": 157.5,
       "angle": 0,
       "strokeColor": "#1e1e1e",
       "backgroundColor": "transparent",
@@ -2304,26 +2304,26 @@
       "frameId": null,
       "index": "aw",
       "roundness": null,
-      "seed": 1084110728,
+      "seed": 1057792534,
       "version": 3,
-      "versionNonce": 71562488,
+      "versionNonce": 2135154250,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
-      "text": " npx plx connect (run once on B)\n 1. Sign in: PKCE, or --device-code over SSH\n 2. Install ~/.parallax-plxd + service (0072)\n 3. relay/register; plxd records account sub\n 4. Turn on relay and remote, wait for online\n Also: plx connect unlink | remove | status | add",
+      "text": " npx plx connect (run once on B)\n 1. Sign in: browser, or over SSH open the link\n    anywhere, allow, paste the code shown\n 2. Install ~/.parallax-plxd + service (0072)\n 3. relay/register; plxd records account sub\n 4. Turn on relay and remote, wait for online\n Also: plx connect unlink | remove | status | add",
       "fontSize": 18,
       "fontFamily": 5,
       "textAlign": "left",
       "verticalAlign": "top",
       "containerId": "plxc",
-      "originalText": " npx plx connect (run once on B)\n 1. Sign in: PKCE, or --device-code over SSH\n 2. Install ~/.parallax-plxd + service (0072)\n 3. relay/register; plxd records account sub\n 4. Turn on relay and remote, wait for online\n Also: plx connect unlink | remove | status | add",
+      "originalText": " npx plx connect (run once on B)\n 1. Sign in: browser, or over SSH open the link\n    anywhere, allow, paste the code shown\n 2. Install ~/.parallax-plxd + service (0072)\n 3. relay/register; plxd records account sub\n 4. Turn on relay and remote, wait for online\n Also: plx connect unlink | remove | status | add",
       "autoResize": true,
       "lineHeight": 1.25
     },
     {
-      "id": "MY8CBA8FXdrjZ5V02xsA2",
+      "id": "zlkWbSafOiZUX4CDPvIFe",
       "type": "text",
       "x": 1515,
       "y": 595,
@@ -2341,12 +2341,12 @@
       "frameId": null,
       "index": "ax",
       "roundness": null,
-      "seed": 1711146632,
+      "seed": 681307990,
       "version": 3,
-      "versionNonce": 1239152264,
+      "versionNonce": 1848083286,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " plxd B\n - Host key P-256: hostId = JWK thumbprint\n - Control WebSocket to the relay, opened\n   with a signed, single-use time proof\n - Listener :7341, TLS, private ranges only\n - POST /api/auth/account, only while\n   relay is on:\n     every clerk-verify check (RS256, iss,\n     aud, client_id, sid, azp, exp, nbf)\n     sub == this host's account\n     iat within 60 s, own clock, 5 min skew\n - Issues a DPoP-bound admin session\n   -> /ws JSON-RPC (0007)\n - Terminals: shell, installs, CLI sign-ins\n - Reports LAN addresses as routes",
@@ -2360,7 +2360,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "2Op2rIcqP4t4NKmLvMj8L",
+      "id": "uEvd_bzmmnIQBEOwgODNm",
       "type": "text",
       "x": 227.6640625,
       "y": 280,
@@ -2378,12 +2378,12 @@
       "frameId": null,
       "index": "ay",
       "roundness": null,
-      "seed": 210498952,
+      "seed": 1431278742,
       "version": 3,
-      "versionNonce": 1256887800,
+      "versionNonce": 210076938,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": "PKCE, refresh: T1 for the relay,\nT2 fresh, only for plxd",
@@ -2397,11 +2397,11 @@
       "lineHeight": 1.25
     },
     {
-      "id": "yh6kYN8JPQx8lbiOAr49-",
+      "id": "9PYuWwH8tq7SFuAv-VSge",
       "type": "text",
-      "x": 1958.48046875,
+      "x": 2005.34765625,
       "y": 290,
-      "width": 183.0390625,
+      "width": 89.3046875,
       "height": 20,
       "angle": 0,
       "strokeColor": "#c2410c",
@@ -2415,26 +2415,26 @@
       "frameId": null,
       "index": "az",
       "roundness": null,
-      "seed": 696517768,
+      "seed": 249336278,
       "version": 3,
-      "versionNonce": 522970504,
+      "versionNonce": 206088342,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
-      "text": "device code or PKCE (once)",
+      "text": "sign-in (once)",
       "fontSize": 16,
       "fontFamily": 5,
       "textAlign": "center",
       "verticalAlign": "middle",
       "containerId": "a_clerkB",
-      "originalText": "device code or PKCE (once)",
+      "originalText": "sign-in (once)",
       "autoResize": true,
       "lineHeight": 1.25
     },
     {
-      "id": "GFvLWINnYbf_MidO2C-FL",
+      "id": "YLglDgZ6DFZXxazcyK_7j",
       "type": "text",
       "x": 2112.90625,
       "y": 420,
@@ -2452,12 +2452,12 @@
       "frameId": null,
       "index": "b00",
       "roundness": null,
-      "seed": 715273096,
+      "seed": 542631702,
       "version": 3,
-      "versionNonce": 638916344,
+      "versionNonce": 946099146,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": "JWKS, cached",
@@ -2471,7 +2471,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "iy4SGRvtoDzgMgNDjs9BP",
+      "id": "3-ru7VmsUP6Ac3NfokMzO",
       "type": "text",
       "x": 1389.5703125,
       "y": 450,
@@ -2489,12 +2489,12 @@
       "frameId": null,
       "index": "b01",
       "roundness": null,
-      "seed": 1713537672,
+      "seed": 708219990,
       "version": 3,
-      "versionNonce": 1118172296,
+      "versionNonce": 764618198,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": "register\n(key-signed)",
@@ -2508,7 +2508,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "O1oYzLRljVwpDHWZwFSIE",
+      "id": "pWJNm15_f6aVjaNitwR8R",
       "type": "text",
       "x": 1384.45703125,
       "y": 640,
@@ -2526,12 +2526,12 @@
       "frameId": null,
       "index": "b02",
       "roundness": null,
-      "seed": 180416904,
+      "seed": 1984797078,
       "version": 3,
-      "versionNonce": 440891384,
+      "versionNonce": 83577482,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": "control WS\n(signed proof)",
@@ -2545,7 +2545,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "_b9j7vk_sygb6LB1v_Vqz",
+      "id": "5_56jdbam7Sctw1cviXSB",
       "type": "text",
       "x": 1401.78125,
       "y": 830,
@@ -2563,12 +2563,12 @@
       "frameId": null,
       "index": "b03",
       "roundness": null,
-      "seed": 263815304,
+      "seed": 1272051414,
       "version": 3,
-      "versionNonce": 705045384,
+      "versionNonce": 1394342678,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": "joined to\n:7341",
@@ -2582,7 +2582,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "QDmzlbLJYTesdIMG6P-Fc",
+      "id": "KxRz1yXpvmKJ5ctg7P5y5",
       "type": "text",
       "x": 25,
       "y": 1155,
@@ -2600,12 +2600,12 @@
       "frameId": null,
       "index": "b04",
       "roundness": null,
-      "seed": 617099144,
+      "seed": 1129884694,
       "version": 3,
-      "versionNonce": 2072361208,
+      "versionNonce": 2030397770,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " First connection, A to B\n 1. A signs in to Clerk and holds T1.\n 2. plxd A asks the relay for the account's hosts (T1): B's hostId.\n 3. A tries B's learned LAN routes. None answer, so it gets a\n    ticket (T1) and opens /connect.\n 4. The relay tells B, and B opens /streams/:id to its :7341.\n 5. TLS 1.3 inside: B's key thumbprint must equal hostId.\n 6. A gets a fresh T2 and posts it with a DPoP proof to\n    /api/auth/account. The relay never sees T2.\n 7. B checks T2 against Clerk's JWKS and sub == its account.\n 8. B issues a DPoP session. Later connections reuse it.",
@@ -2619,7 +2619,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "YEnA9nYgNF8OpSCAj00gG",
+      "id": "dNBF5XvX1_7NV09mA2_Se",
       "type": "text",
       "x": 1095,
       "y": 1155,
@@ -2637,12 +2637,12 @@
       "frameId": null,
       "index": "b05",
       "roundness": null,
-      "seed": 573111944,
+      "seed": 450279766,
       "version": 3,
-      "versionNonce": 864580232,
+      "versionNonce": 324544598,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " Trust (Ryan's call 1)\n The relay can't: read or change a stream (pinned TLS),\n set B's account (only a trusted local caller does), or\n mint a session with a key of its own.\n The relay can: drop or delay streams, see who is online,\n and if compromised, list a fake host of its own, catch\n the T2 a client sends it, and use it on the real hosts\n within about 6 minutes.\n Accepted as T3 accepts its relay. A client that must not\n trust the relay pairs with a code instead (0065).",
@@ -2656,7 +2656,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "GmKk1WoxE2xKvmN0HRUnr",
+      "id": "r5h1zLUppjH2wbF1dT9W6",
       "type": "text",
       "x": 25,
       "y": 1460,
@@ -2674,12 +2674,12 @@
       "frameId": null,
       "index": "b06",
       "roundness": null,
-      "seed": 2023222664,
+      "seed": 161554070,
       "version": 3,
-      "versionNonce": 2102647288,
+      "versionNonce": 199077898,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " Removed one release after Work 3 and 5 ship\n - Tailscale listener :7340 and tailscale whois\n - connect setting, connect/devices, plxd connect on|off\n - tailnet: routes on the desktop and the phone\n - ssh to a Tailscale IP for installs and sign-ins",
@@ -2693,7 +2693,7 @@
       "lineHeight": 1.25
     },
     {
-      "id": "2WByrOwzlBpf0U1kEAF8E",
+      "id": "5SitAKqP7ZZxWTIiGNw_l",
       "type": "text",
       "x": 1095,
       "y": 1460,
@@ -2711,12 +2711,12 @@
       "frameId": null,
       "index": "b07",
       "roundness": null,
-      "seed": 558955656,
+      "seed": 342678486,
       "version": 3,
-      "versionNonce": 367583624,
+      "versionNonce": 1847373206,
       "isDeleted": false,
       "boundElements": null,
-      "updated": 1793335396866,
+      "updated": 1793336890387,
       "link": null,
       "locked": false,
       "text": " Migration, first release\n - connect on: relay and remote turn on, unless the user chose\n - The signed-in app registers B (PLX-1146)\n - A tailnet: connection drops once the same key answers as\n   account:, matched by the JWK thumbprint of the reached cert",
