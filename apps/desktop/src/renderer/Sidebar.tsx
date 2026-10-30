@@ -31,6 +31,7 @@ import {
   HardDrive,
   Keyboard,
   Layers,
+  LayoutGrid,
   ListFilter,
   LoaderCircle,
   MessageSquare,
@@ -1836,20 +1837,32 @@ export function ThreadList({
   return (
     <>
       {classic ? (
-        <div className="flex items-center gap-1 px-2">
-          <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
-            <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-            {searchInput(
-              "min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none",
-            )}
-          </label>
-          {scopeMenu}
-          <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
-            <FolderPlus />
-          </IconButton>
-          <IconButton label="New thread" command="newThread" onClick={onNewThread}>
-            <SquarePen />
-          </IconButton>
+        <div className="flex flex-col gap-1 px-2">
+          <div className="flex items-center gap-1">
+            <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+              <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+              {searchInput(
+                "min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none",
+              )}
+            </label>
+            {scopeMenu}
+            <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
+              <FolderPlus />
+            </IconButton>
+            <IconButton label="New thread" command="newThread" onClick={onNewThread}>
+              <SquarePen />
+            </IconButton>
+          </div>
+          {/* The Projects page, as Beta's head has it, under Classic's search row. */}
+          <button
+            type="button"
+            aria-current={page === "projects" ? "page" : undefined}
+            onClick={() => onOpenPage("projects")}
+            className={`${navRow} aria-[current=page]:bg-selected aria-[current=page]:text-foreground aria-[current=page]:[&>svg]:text-foreground`}
+          >
+            <LayoutGrid />
+            Projects
+          </button>
         </div>
       ) : (
         <SidebarNav

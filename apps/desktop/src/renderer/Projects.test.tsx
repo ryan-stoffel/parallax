@@ -1179,7 +1179,7 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
-test("Classic keeps Projects in a drawer and Pull requests in the footer, Beta lists neither, and Folders lists each Project as a row in its folder", async () => {
+test("Classic keeps Projects in a drawer, a Projects row under its search, and Pull requests in the footer, Beta lists neither, and Folders lists each Project as a row in its folder", async () => {
   sidebarMode.set("classic");
   sectionsStore.set({ all: { projects: true } });
   await renderApp();
@@ -1192,7 +1192,7 @@ test("Classic keeps Projects in a drawer and Pull requests in the footer, Beta l
   ).toEqual(["photon", "ember"]);
   expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
-  expect(sidebarButton("Projects")).toBeUndefined();
+  expect(sidebarButton("Projects")).toBeDefined();
 
   await act(async () => sidebarMode.set("beta"));
   expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
