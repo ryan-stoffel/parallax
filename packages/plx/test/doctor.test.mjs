@@ -68,7 +68,7 @@ test("the context file names the paths and never a provider's env", () => {
   const claude = /** @type {any} */ (facts.answers?.providers?.providers[0]);
   claude.instance.env = [{ name: "ANTHROPIC_API_KEY", value: "sk-secret" }];
   claude.loginEnv = [{ name: "OLLAMA_API_KEY", value: "ollama-secret" }];
-  const context = buildContext({ generatedAt: "now", version: "0.4.0", launchedAs: "npx plx-connect doctor", facts, results: evaluate(facts), sourceCache: "/src" });
+  const context = buildContext({ generatedAt: "now", version: "0.4.0", launchedAs: "npx plx-cli doctor", facts, results: evaluate(facts), sourceCache: "/src" });
   for (const part of ["/Users/me/.parallax", "plxd.log", "plxd.sqlite3", "Claude Code (claude): installed 2.1.303, signed in (max)", "/src"]) {
     assert.ok(context.includes(part), part);
   }

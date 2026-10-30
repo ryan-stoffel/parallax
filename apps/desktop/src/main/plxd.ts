@@ -128,7 +128,7 @@ const WEB_CLIENT = path.join("app.asar.unpacked", "dist", "renderer");
  * login service runs (0072): written when it's missing or older than `bundled`, never over a
  * newer one, such as `host/update`'s. The web client plxd serves from beside itself (`WEB_CLIENT`)
  * is kept the same way on its own, by the version in `renderer.version` beside it, since
- * `host/update` and plx-connect install plxd without it. Each is copied into a temp folder there,
+ * `host/update` and plx install plxd without it. Each is copied into a temp folder there,
  * then renamed into place: the web client and its version, then plxd, then `plxd.version` (0066).
  * Windows can't replace a running `plxd.exe` but can rename it, so it moves aside first. Answers
  * the copy and its version.

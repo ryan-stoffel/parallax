@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { findDevice, parseStatus } from "../src/tailscale.mjs";
 
-// Shaped like `tailscale status --json`, trimmed to the fields plx-connect reads.
+// Shaped like `tailscale status --json`, trimmed to the fields plx reads.
 const ME = 526036588648688;
 const status = {
   Self: {

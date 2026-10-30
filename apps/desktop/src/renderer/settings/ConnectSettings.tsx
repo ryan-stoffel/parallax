@@ -17,7 +17,7 @@ import { primaryButton, quietButton, RenameForm, Row, Section, Switch } from "./
 
 /**
  * Settings > Connections' Parallax Connect section (0056): a switch turns Connect on, which opens
- * Add computer, which runs the plx-connect inside the app. While it's on, this computer and every
+ * Add computer, which runs the plx inside the app. While it's on, this computer and every
  * device found on the tailnet are listed as cards with their health. A device's switch says
  * whether this app uses it, and its menu changes its icon, renames it on the device's own plxd,
  * or removes it from this app's list.

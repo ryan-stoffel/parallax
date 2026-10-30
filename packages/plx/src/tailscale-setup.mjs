@@ -1,11 +1,13 @@
 // @ts-check
-// `add` and `setup`: install Parallax on a computer and connect it (0056). Each step prints a
-// line as it starts, then a ✓ or ✗ line as it ends.
+// `plx add` and `plx setup`: install Parallax on a computer and connect it over Tailscale (0056),
+// until the Tailscale-only path goes (0091). Each step prints a line as it starts, then a ✓ or ✗
+// line as it ends.
 
 import net from "node:net";
 
-import { parseDetails, parseUname, POSIX_DETAILS, UNAME_COMMAND, WINDOWS_DETAILS } from "./detect.mjs";
-import { appName, fetchReleases, pickAsset, pickRelease, withSha256 } from "./releases.mjs";
+import { UNAME_COMMAND } from "./detect.mjs";
+import { findInstaller as findRelease, localOs, product as productOf, readDetails, sshTarget, step, StepFailed } from "./install.mjs";
+import { appName } from "./releases.mjs";
 import { localRunner, sshArgs, sshRunner } from "./run.mjs";
 import { installScript } from "./scripts.mjs";
 import { findDevice, parseStatus, PLXD_PORT, probe, readStatus, TAGGED } from "./tailscale.mjs";
@@ -25,54 +27,14 @@ import { findDevice, parseStatus, PLXD_PORT, probe, readStatus, TAGGED } from ".
  *   installing anything. Only the release list is fetched.
  */
 
-/** A step failed. Its ✗ line is already printed. */
-class StepFailed extends Error {}
-
-/**
- * Prints `title`, runs `run`, then prints its ✓ line, or ✗ with the error's message.
- * @template T
- * @param {string} title
- * @param {() => Promise<[string, T]>} run Resolves to the ✓ line's text and the step's value.
- * @returns {Promise<T>}
- */
-async function step(title, run) {
-  console.log(`→ ${title}`);
-  try {
-    const [done, value] = await run();
-    console.log(`✓ ${done}`);
-    return value;
-  } catch (error) {
-    console.log(`✗ ${error instanceof Error ? error.message : String(error)}`);
-    throw new StepFailed();
-  }
-}
-
-/** The target's OS and details, with the runner's shell. @param {Runner} runner @param {Os} os */
-async function readDetails(runner, os) {
-  const windows = os === "windows";
-  const { code, stdout } = await runner.script(windows ? "powershell" : "sh", windows ? WINDOWS_DETAILS : POSIX_DETAILS, true);
-  if (code !== 0) throw new Error(`Couldn't read the computer's details (exit ${code}).`);
-  return parseDetails(os, stdout);
-}
-
 /** Whether `os` gets plxd alone: with `--headless`, and always on Linux. @param {Os} os @param {Options} options */
 const plxdOnly = (os, options) => os === "linux" || !!options.headless;
 
-/** What plx-connect installs: the app, or plxd alone. @param {Os} os @param {Options} options */
-const product = (os, options) => (plxdOnly(os, options) ? "plxd" : appName(options.channel));
+/** What this installs: the app, or plxd alone. @param {Os} os @param {Options} options */
+const product = (os, options) => productOf(plxdOnly(os, options), options.channel);
 
-/**
- * The newest release's asset for `target`, with the SHA-256 the script checks it against.
- * @param {Target} target
- * @param {Options} options
- */
-function findInstaller(target, options) {
-  return step(`Finding the newest ${options.channel} release`, async () => {
-    const found = pickAsset(pickRelease(await fetchReleases(), options.channel), target.os, target.arch, plxdOnly(target.os, options));
-    const installer = await withSha256(found);
-    return [`${product(target.os, options)} ${installer.version}: ${installer.name}`, installer];
-  });
-}
+/** The newest release's asset for `target`. @param {Target} target @param {Options} options */
+const findInstaller = (target, options) => findRelease(target, options.channel, plxdOnly(target.os, options));
 
 /**
  * Installs on `target` through `runner`, prints the script in a dry run, then waits for plxd to
@@ -134,14 +96,14 @@ async function resolveTarget(query) {
   }
   const device = tailnet && findDevice(tailnet.devices, query);
   if (device?.ip) return { name: device.name, ip: device.ip, online: device.online };
-  if (tailnet && findDevice([tailnet.self], query)) throw new Error("That's this computer. Run npx plx-connect setup instead.");
+  if (tailnet && findDevice([tailnet.self], query)) throw new Error("That's this computer. Run npx plx-cli setup instead.");
   if (tailnet?.self.tagged) throw new Error(TAGGED);
   if (net.isIP(query)) return { name: query, ip: query, online: true };
-  throw new Error(`No device named ${query} in your tailnet. Run npx plx-connect devices to see them.`);
+  throw new Error(`No device named ${query} in your tailnet. Run npx plx-cli devices to see them.`);
 }
 
 /**
- * `plx-connect add`: installs Parallax on the device `query` names over ssh, turns on Parallax
+ * `plx add`: installs Parallax on the device `query` names over ssh, turns on Parallax
  * Connect there, and waits for it to answer. Resolves to the exit code.
  * @param {string} query
  * @param {Options} options
@@ -163,19 +125,7 @@ export async function add(query, options) {
 
   const runner = sshRunner(destination, { port: options.port });
   try {
-    const os = await step(`Connecting to ${name} (${destination}) over SSH`, async () => {
-      const { code, stdout } = await runner.command(UNAME_COMMAND);
-      if (code === 255) {
-        throw new Error(
-          `SSH couldn't connect to ${destination}. Turn on Remote Login (macOS), OpenSSH Server (Windows), or sshd (Linux) there, or run npx plx-connect setup on it.`,
-        );
-      }
-      return [`Connected to ${name}`, parseUname(stdout, code)];
-    });
-    const target = await step(`Finding ${name}'s OS`, async () => {
-      const target = await readDetails(runner, os);
-      return [`${target.label}: ${target.version} (${target.arch})`, target];
-    });
+    const target = await sshTarget(runner, name, destination, "npx plx-cli setup");
     await install(runner, target, name, ip, options);
     return 0;
   } catch (error) {
@@ -216,13 +166,12 @@ async function dryRunAdd(query, name, ip, destination, options) {
 }
 
 /**
- * `plx-connect setup`: the same install on this computer, without ssh, for a device that can't
+ * `plx setup`: the same install on this computer, without ssh, for a device that can't
  * take SSH. Resolves to the exit code.
  * @param {Options} options
  */
 export async function setup(options) {
-  /** @type {Os | undefined} */
-  const os = process.platform === "darwin" ? "macos" : process.platform === "linux" ? "linux" : process.platform === "win32" ? "windows" : undefined;
+  const os = localOs();
   const runner = localRunner();
   try {
     if (!os) throw new Error(`Parallax doesn't run on ${process.platform}.`);

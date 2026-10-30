@@ -1,12 +1,12 @@
 name: Doctor report
-description: Filed with `npx plx-connect doctor`, where a coding agent investigated the computer. The agent follows this structure.
+description: Filed with `npx plx-cli doctor`, where a coding agent investigated the computer. The agent follows this structure.
 labels:
   - via-doctor
 body:
   - type: markdown
     attributes:
       value: |
-        `plx-connect doctor` agents follow this structure. Keep one problem per issue, and
+        `plx doctor` agents follow this structure. Keep one problem per issue, and
         redact keys, tokens, and home folder paths from anything you paste.
 
   - type: textarea
@@ -37,7 +37,7 @@ body:
     id: version
     attributes:
       label: Version
-      description: The Parallax or plxd version the problem happened on, not plx-connect's, or unknown.
+      description: The Parallax or plxd version the problem happened on, not plx's, or unknown.
       placeholder: 2610.11822.14456-nightly
     validations:
       required: true
@@ -75,4 +75,4 @@ body:
     attributes:
       label: Filed by
       description: Which agent and model wrote this report.
-      placeholder: Claude Code (claude-opus-5-5) via plx-connect doctor
+      placeholder: Claude Code (claude-opus-5-5) via plx doctor

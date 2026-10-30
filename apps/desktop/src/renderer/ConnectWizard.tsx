@@ -49,7 +49,7 @@ type Step =
 
 /**
  * Add computer (0056), a modal dialog open while it's mounted: the user's devices on the tailnet,
- * from the local plxd's `connect/devices`; then, for one, what `plx-connect add` will do there,
+ * from the local plxd's `connect/devices`; then, for one, what `plx add` will do there,
  * with a Headless switch for plxd alone, which Linux always gets; then that command in a terminal,
  * where ssh can ask for a password; then whether it worked, with Add another computer and Done. A
  * device that already runs Connect but this app doesn't use, because it was turned off or removed
@@ -163,7 +163,7 @@ export function ConnectWizard({
                   title={alone(step.device) ? "Installs plxd" : `Installs ${app} and plxd`}
                 >
                   The newest {channel} build for its OS, {alone(step.device) && "without the app, "}
-                  and plx-connect when npm is there.
+                  and plx-cli when npm is there.
                 </Plan>
                 <Plan icon={<Network aria-hidden />} title="Turns on Parallax Connect">
                   So every computer sees its threads, and it sees theirs.
@@ -327,7 +327,7 @@ function Footer({ children, start }: { children: ReactNode; start?: ReactNode })
   );
 }
 
-/** One thing `plx-connect add` does, in Set up's list. */
+/** One thing `plx add` does, in Set up's list. */
 export function Plan({
   icon,
   title,

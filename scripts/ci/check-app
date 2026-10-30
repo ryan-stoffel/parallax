@@ -11,8 +11,8 @@ pnpm check
 pnpm test
 pnpm build
 
-# plx-connect, the npm package that sets up Parallax Connect on a device (0056).
-cd ../../packages/plx-connect
+# plx, the npm package (plx-cli) that sets up Parallax Connect on a computer (0091).
+cd ../../packages/plx
 npm ci
 npm run check
 npm test

@@ -8,7 +8,7 @@ import path from "node:path";
 import test from "node:test";
 
 import { sshArgs } from "../src/run.mjs";
-import { linuxScript, macScript, psQuote, shQuote, windowsScript } from "../src/scripts.mjs";
+import { installScript, linuxScript, macScript, psQuote, shQuote, windowsScript } from "../src/scripts.mjs";
 
 const SHA256 = "5f".repeat(32);
 const installer = (/** @type {string} */ name, sha256 = SHA256) => ({
@@ -81,7 +81,7 @@ test("a checked plxd goes in ~/.parallax-plxd, and the service is installed from
   assert.deepEqual(done.files, { plxd, "plxd.version": "2610.10522.11930-nightly\n" });
   assert.equal(
     done.log.replaceAll(done.home, "~"),
-    "~/.parallax-plxd/plxd connect on\n~/.parallax-plxd/plxd service install --replace\nnpm install -g --prefix ~/.local plx-connect\n",
+    "~/.parallax-plxd/plxd connect on\n~/.parallax-plxd/plxd service install --replace\nnpm install -g --prefix ~/.local plx-cli\n",
   );
 
   // On a Mac whose service didn't start, the LaunchAgent's file is written either way, and
@@ -110,12 +110,12 @@ test("a checked plxd goes in ~/.parallax-plxd, and the service is installed from
   assert.doesNotMatch(noPlxd.log, /npm install/);
 });
 
-test("macOS and Linux turn Connect on, install the service and plx-connect, and Linux lingers", () => {
+test("macOS and Linux turn Connect on, install the service and plx-cli, and Linux lingers", () => {
   for (const script of [mac, macPlxd, linux]) {
     assert.match(script, /^"\$plxd" connect on$/m);
     assert.match(script, /^if ! out=\$\("\$plxd" service install --replace <\/dev\/null 2>&1\); then$/m);
     assert.match(script, /^ {2}"\$plxd" attach <\/dev\/null >\/dev\/null$/m);
-    assert.match(script, /install -g --prefix "\$HOME\/\.local" plx-connect/);
+    assert.match(script, /install -g --prefix "\$HOME\/\.local" plx-cli/);
   }
   assert.match(linux, /loginctl enable-linger/);
 });
@@ -130,12 +130,28 @@ test("Windows checks the download, opens the firewall for its own plxd only, and
   assert.match(windows, /^& \$plxd connect on$/m);
 });
 
+test("plx connect's scripts leave Tailscale Connect off, and Windows opens the remote listener's port", () => {
+  const relayed = [
+    installScript("macos", installer("parallax-plxd-1-mac-arm64"), "nightly", true, false),
+    installScript("linux", installer("parallax-plxd-1-linux-x64"), "nightly", true, false),
+  ];
+  for (const script of relayed) {
+    assert.doesNotMatch(script, /connect on/);
+    assert.match(script, /^if ! out=\$\("\$plxd" service install --replace <\/dev\/null 2>&1\); then$/m);
+  }
+  const windowsRelayed = installScript("windows", installer("parallax-plxd-1-win-x64.exe"), "nightly", true, false);
+  assert.doesNotMatch(windowsRelayed, /connect on/);
+  assert.match(windowsRelayed, /New-NetFirewallRule .*-Protocol TCP -LocalPort 7341 -Program \$plxd/);
+});
+
 test("every install script parses", { skip: !hasSh }, (t) => {
-  for (const script of [mac, macPlxd, linux]) execFileSync("sh", ["-n"], { input: script });
+  const relayed = installScript("linux", installer("parallax-plxd-1-linux-x64"), "nightly", true, false);
+  for (const script of [mac, macPlxd, linux, relayed]) execFileSync("sh", ["-n"], { input: script });
   if (!hasPwsh) return t.skip("no pwsh for the Windows scripts");
   const parse =
     "$e = $null; [void][System.Management.Automation.Language.Parser]::ParseInput([Console]::In.ReadToEnd(), [ref]$null, [ref]$e); $e | ForEach-Object { $_.Message }";
-  for (const script of [windows, windowsPlxd])
+  const windowsRelayed = installScript("windows", installer("parallax-plxd-1-win-x64.exe"), "nightly", true, false);
+  for (const script of [windows, windowsPlxd, windowsRelayed])
     assert.equal(execFileSync("pwsh", ["-NoProfile", "-Command", parse], { input: script, encoding: "utf8" }).trim(), "");
 });
 

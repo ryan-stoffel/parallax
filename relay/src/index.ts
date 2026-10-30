@@ -18,6 +18,7 @@
  * Every route but the WebSockets plxd opens and the webhooks needs a Clerk session token.
  */
 import { verifySession } from "./clerk";
+import { connectCode } from "./connect-code";
 import { sha256 } from "./crypto";
 import { forwarded, HOOK_METHODS, type HookReply, HostRelay, readCapped } from "./host";
 import { StreamRelay } from "./stream";
@@ -110,6 +111,7 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const parts = new URL(request.url).pathname.split("/").slice(1);
     const [version, kind, id = "", action] = parts;
+    if (parts.length === 2 && version === "connect" && kind === "code") return connectCode(request);
     if (version !== "v1") return json(404, { error: "not_found" });
     const host = (hostId: string) => env.HOSTS.get(env.HOSTS.idFromName(hostId));
 

@@ -1,0 +1,30 @@
+{
+  "name": "plx-cli",
+  "version": "0.5.0",
+  "description": "Parallax's command line: set up a computer for Parallax Connect with one sign-in.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "plx": "bin/plx.mjs"
+  },
+  "files": [
+    "bin",
+    "src"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ryan-stoffel/parallax.git",
+    "directory": "packages/plx"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "check": "tsc -p .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2"
+  }
+}

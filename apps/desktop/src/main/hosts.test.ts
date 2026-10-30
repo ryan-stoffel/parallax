@@ -11,7 +11,7 @@ import type { ConnectionOptions } from "./connection";
 // shared by every host, an answer or a function of the params that makes one, and records its
 // retries and whether it was dropped.
 const fake = vi.hoisted(() => {
-  process.env["PLX_CONNECT_PATH"] = "/nonexistent/plx-connect";
+  process.env["PLX_CONNECT_PATH"] = "/nonexistent/plx";
   const answers = new Map<string, unknown>();
   class FakeConnection {
     state: ConnectionState = { status: "connecting" };

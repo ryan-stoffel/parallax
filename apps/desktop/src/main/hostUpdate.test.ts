@@ -131,7 +131,7 @@ test("without host/update, an SSH host installs over ssh and another host is tol
       hostId: "tailnet:thinkpad",
       status: "failed",
       error:
-        "plxd 0.1.0 there is too old to update itself. On that computer, run: npx plx-connect setup --channel nightly",
+        "plxd 0.1.0 there is too old to update itself. On that computer, run: npx plx-cli setup --channel nightly",
     },
     {
       hostId: "tailnet:mac",
