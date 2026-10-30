@@ -1179,20 +1179,21 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
-test("Classic keeps Projects in a drawer, a Projects row under its search, and Pull requests in the footer, Beta lists neither, and Folders lists each Project as a row in its folder", async () => {
+test("Classic has a Projects button beside its search and Pull requests in the footer but no Projects drawer, Beta lists neither, and Folders lists each Project as a row in its folder", async () => {
   sidebarMode.set("classic");
-  sectionsStore.set({ all: { projects: true } });
   await renderApp();
   const sidebar = document.getElementById("sidebar")!;
-  const drawer = [...sidebar.querySelectorAll("details")].find((d) =>
-    d.querySelector("summary")?.textContent?.startsWith("Projects"),
-  )!;
   expect(
-    [...drawer.querySelectorAll('li[data-kind="project"] [data-title]')].map((t) => t.textContent),
-  ).toEqual(["photon", "ember"]);
+    [...sidebar.querySelectorAll("details summary")].some((s) =>
+      s.textContent?.startsWith("Projects"),
+    ),
+  ).toBe(false);
+  expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
   expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
-  expect(sidebarButton("Projects")).toBeDefined();
+  const projectsButton = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Projects"]')!;
+  await click(projectsButton);
+  expect(projectsButton.getAttribute("aria-pressed")).toBe("true");
 
   await act(async () => sidebarMode.set("beta"));
   expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();

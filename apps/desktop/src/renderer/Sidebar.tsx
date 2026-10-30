@@ -396,12 +396,10 @@ export function RepoIcon({ repo }: { repo?: Repo }) {
 const cardDelay = 450;
 
 /**
- * A scope's drawers, by whether each is open. Working stays tucked away until asked for. Projects
- * is the classic sidebar's (0090).
+ * A scope's drawers, by whether each is open. Working stays tucked away until asked for.
  */
-type Sections = Record<"projects" | "working" | "snoozed" | "archived", boolean>;
+type Sections = Record<"working" | "snoozed" | "archived", boolean>;
 const sectionDefaults: Sections = {
-  projects: false,
   working: false,
   snoozed: false,
   archived: false,
@@ -715,8 +713,8 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // Projects, most recently active first, as threads are (PLX-1043). Classic keeps them in their
-  // drawer, except one that needs the user, or matches a search, which shows atop Today. Folders
+  // Projects, most recently active first, as threads are (PLX-1043). Classic lists only one that
+  // needs the user, or matches a search, atop Today; the rest are on the Projects page. Folders
   // lists each as one row in its repo's folder (0091). Beta lists them only under Pinned and on the
   // Projects page (0090).
   const allProjects =
@@ -724,7 +722,6 @@ export function ThreadList({
   const projects = classic
     ? allProjects.filter((p) => p.attention === "needsYou" || words.length > 0)
     : [];
-  const drawerProjects = classic ? allProjects.filter((p) => !projects.includes(p)) : [];
   // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
   const favRank = (key: string) => {
@@ -1837,32 +1834,28 @@ export function ThreadList({
   return (
     <>
       {classic ? (
-        <div className="flex flex-col gap-1 px-2">
-          <div className="flex items-center gap-1">
-            <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
-              <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
-              {searchInput(
-                "min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none",
-              )}
-            </label>
-            {scopeMenu}
-            <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
-              <FolderPlus />
-            </IconButton>
-            <IconButton label="New thread" command="newThread" onClick={onNewThread}>
-              <SquarePen />
-            </IconButton>
-          </div>
-          {/* The Projects page, as Beta's head has it, under Classic's search row. */}
-          <button
-            type="button"
-            aria-current={page === "projects" ? "page" : undefined}
+        <div className="flex items-center gap-1 px-2">
+          <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
+            <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
+            {searchInput(
+              "min-w-0 flex-1 truncate bg-transparent text-body placeholder:text-faint-foreground focus-visible:outline-none",
+            )}
+          </label>
+          {scopeMenu}
+          {/* The Projects page, which Classic has instead of a Projects drawer; pressed while open. */}
+          <IconButton
+            label="Projects"
+            aria-pressed={page === "projects"}
             onClick={() => onOpenPage("projects")}
-            className={`${navRow} aria-[current=page]:bg-selected aria-[current=page]:text-foreground aria-[current=page]:[&>svg]:text-foreground`}
           >
             <LayoutGrid />
-            Projects
-          </button>
+          </IconButton>
+          <IconButton label="New project or repository" onClick={() => addDialog.current?.open()}>
+            <FolderPlus />
+          </IconButton>
+          <IconButton label="New thread" command="newThread" onClick={onNewThread}>
+            <SquarePen />
+          </IconButton>
         </div>
       ) : (
         <SidebarNav
@@ -1942,19 +1935,6 @@ export function ThreadList({
         onDrop={dropOn("archived")}
         pageSize={pageArchived ? archivePageSize : undefined}
       />
-      {/* Projects aren't a thread state, so a rule sets their drawer apart (PLX-1087). */}
-      {drawerProjects.length > 0 && (
-        <div aria-hidden className="mx-4 my-1 border-t border-border" />
-      )}
-      {classic && (
-        <Drawer
-          label="Projects"
-          items={drawerProjects}
-          row={(p) => (p.kind === "project" ? projectCard(p) : null)}
-          open={sections.projects}
-          onOpenChange={(o) => toggleSection("projects", o)}
-        />
-      )}
       {pickedItems.length > 0 && (
         <BulkBar
           count={pickedItems.length}
