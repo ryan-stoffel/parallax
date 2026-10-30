@@ -201,8 +201,8 @@ export const settingsIndex: SettingEntry[] = [
   ...entries("appearance", "Sidebar", [
     [
       "Layout",
-      "Classic, Beta, or Folders, which groups threads by repo",
-      "sidebar classic beta new folders repos group nav pinned projects",
+      "Inbox, by activity, or Traditional, in a folder per repo",
+      "sidebar inbox traditional classic beta folders repos group nav pinned projects",
     ],
     ["Projects", "In the sidebar's head, or under More", "sidebar nav pages edit"],
     ["Pull requests", "In the sidebar's head, or under More", "sidebar nav pages edit prs"],

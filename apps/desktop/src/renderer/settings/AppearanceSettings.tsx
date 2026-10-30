@@ -393,13 +393,12 @@ export function AppearanceSettings({
 }
 
 const modes: { value: SidebarMode; name: string }[] = [
-  { value: "classic", name: "Classic" },
-  { value: "beta", name: "Beta" },
-  { value: "folders", name: "Folders" },
+  { value: "inbox", name: "Inbox" },
+  { value: "traditional", name: "Traditional" },
 ];
 
 /**
- * Appearance's Sidebar (0091): which sidebar shows, where Beta's and Folders' pages show (0090), and
+ * Appearance's Sidebar (0091): which sidebar shows, where Traditional's pages show (0090), and
  * the Working and Archived drawers' behavior.
  */
 function SidebarSettings() {
@@ -410,7 +409,7 @@ function SidebarSettings() {
     <Section title="Sidebar">
       <Row
         title="Layout"
-        description="Classic lists your threads under Search. Beta adds New thread, Search, and Projects as rows. Folders groups threads by repo."
+        description="Inbox lists your threads by activity, newest first. Traditional groups them in a folder per repo."
       >
         <Segmented
           label="Sidebar layout"
@@ -419,7 +418,7 @@ function SidebarSettings() {
           onChange={(next) => sidebarMode.set(next)}
         />
       </Row>
-      {mode !== "classic" &&
+      {mode === "traditional" &&
         navChoices.map(({ id, label }) => (
           <Row
             key={id}

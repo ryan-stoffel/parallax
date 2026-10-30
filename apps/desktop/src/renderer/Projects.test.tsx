@@ -104,8 +104,8 @@ beforeEach(() => {
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
   sidebarNav.set(navDefaults);
-  // These tests are the Beta sidebar's (0090); one below covers Classic and Folders (0091).
-  sidebarMode.set("beta");
+  // These tests are Traditional's head (0090); one below covers Inbox and Traditional's list (0091).
+  sidebarMode.set("traditional");
   pinnedProjects.set([]);
   moreShown.set(false);
   sectionsStore.set({});
@@ -278,18 +278,6 @@ test("lists plxd's Projects as rows, most recently active first, and adds one fr
     }),
   );
   expect(projectRows()).toEqual(["parallax", "photon", "ember"]);
-});
-
-test("Projects live on the Projects page, not in the sidebar's list, even when one matches a search or needs the user", async () => {
-  await renderApp();
-  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
-  expect(
-    [...document.querySelectorAll("#sidebar summary")].map((s) => s.textContent),
-  ).not.toContain("Projects2");
-  const search = document.querySelector<HTMLInputElement>('#sidebar input[type="search"]')!;
-  typeInto(search, "emb");
-  await settle();
-  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
 });
 
 test("Create Project names it after its repository, shows plxd's error, retries with the same id, then opens it", async () => {
@@ -758,8 +746,6 @@ test("a subagent's request is pinned in the coordinator's chat by name, its row 
   });
   expect(pinned()!.textContent).toContain("Subagent: Write the docs");
   expect(pinned()!.textContent).toContain("git tag v1.2.0");
-  // Waiting on the user, ember still stays out of the list unless pinned (0090).
-  expect(document.querySelector('#sidebar li[data-kind="project"]')).toBeNull();
   await openView("Agents");
   expect(agentRow("Write the docs")!.textContent).toContain("Needs approval");
 
@@ -1179,8 +1165,8 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
-test("Classic has a Projects button beside its search and Pull requests in the footer but no Projects drawer, Beta lists neither, and Folders lists each Project as a row in its folder", async () => {
-  sidebarMode.set("classic");
+test("Inbox has a Projects button beside its search and Pull requests in the footer but no Projects drawer, and Traditional lists each Project as a row in its folder with Projects in its head", async () => {
+  sidebarMode.set("inbox");
   await renderApp();
   const sidebar = document.getElementById("sidebar")!;
   expect(
@@ -1195,12 +1181,8 @@ test("Classic has a Projects button beside its search and Pull requests in the f
   await click(projectsButton);
   expect(projectsButton.getAttribute("aria-pressed")).toBe("true");
 
-  await act(async () => sidebarMode.set("beta"));
-  expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
+  await act(async () => sidebarMode.set("traditional"));
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
-  expect(sidebarButton("Projects")).toBeDefined();
-
-  await act(async () => sidebarMode.set("folders"));
   const list = sidebar.querySelector('ul[aria-label="Threads"]')!;
   expect(
     [...list.querySelectorAll('li[data-kind="project"] [data-title]')].map((t) => t.textContent),

@@ -174,7 +174,7 @@ export function dayOf(at: string, now: number): string {
 }
 
 /**
- * Today's rows grouped as View says (Classic and Beta): under each repo, or each day, a group
+ * Today's rows grouped as View says (Inbox): under each repo, or each day, a group
  * where its newest row falls, so `rows` should come newest first. A repo's group shows its host
  * when there are `many`.
  */
@@ -203,7 +203,7 @@ export function todayGroups(
 }
 
 /**
- * The Folders mode's folders (0091), as Codex groups threads: one per `host/repo`, a thread added
+ * Traditional's folders (0091), as Codex groups threads: one per `host/repo`, a thread added
  * to a Space under that Space, each holding its rows in `rows`' order. Folders sort by name, then
  * computer, so they don't move as threads do, with No repo last. The computer shows only when
  * there are `many`.

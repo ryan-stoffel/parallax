@@ -520,11 +520,11 @@ export function ThreadList({
   // The Space the delete dialog asks about, and its host's view.
   const [spaceToDelete, setSpaceToDelete] = useState<ProjectEntry>();
   const pins = pinnedProjects.use();
-  // Which sidebar shows (0091): Classic's head is the search box and its buttons, Beta's and
-  // Folders' are rows; Folders lists the threads by repo.
+  // Which sidebar shows (0091): Inbox's head is the search box and its buttons, and its threads one
+  // list; Traditional's head is rows, and it lists the threads in a folder per repo.
   const mode = sidebarMode.use();
-  const classic = mode === "classic";
-  const folders = mode === "folders";
+  const inbox = mode === "inbox";
+  const folders = mode === "traditional";
   // The thread or Project the delete dialog asks about.
   const [toDelete, setToDelete] = useState<Item>();
   const [deleting, setDeleting] = useState(false);
@@ -713,13 +713,11 @@ export function ThreadList({
     .filter((i) => inScope(i, scope) && matched.has(i.key) && !doomed.has(i.key))
     .filter((i) => !(i.kind === "thread" && i.thread.parent))
     .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // Projects, most recently active first, as threads are (PLX-1043). Classic lists only one that
-  // needs the user, or matches a search, atop Today; the rest are on the Projects page. Folders
-  // lists each as one row in its repo's folder (0091). Beta lists them only under Pinned and on the
-  // Projects page (0090).
-  const allProjects =
-    mode === "beta" ? [] : shown.flatMap((i) => (i.kind === "project" ? [i] : []));
-  const projects = classic
+  // Projects, most recently active first, as threads are (PLX-1043). Inbox lists only one that
+  // needs the user, or matches a search, atop Today; the rest are on the Projects page.
+  // Traditional lists each as one row in its repo's folder (0091).
+  const allProjects = shown.flatMap((i) => (i.kind === "project" ? [i] : []));
+  const projects = inbox
     ? allProjects.filter((p) => p.attention === "needsYou" || words.length > 0)
     : [];
   // The favorite threads stay in the order they're moved into (pins.ts).
@@ -773,7 +771,7 @@ export function ThreadList({
     if (selectedKey && unread.includes(selectedKey))
       pinUnread.set(pinUnread.get().filter((k) => k !== selectedKey));
   }, [selectedKey, unread.includes(selectedKey ?? "")]);
-  // Today, grouped as its View says, under each repo or each day (Classic and Beta), or Folders'
+  // Today, grouped as its View says, under each repo or each day (Inbox), or Traditional's
   // folders, a repo's threads and Projects in each, by name (0091). Each kind folds in its own store.
   const todayBy = todayGroup.use();
   const compact = compactRows.use();
@@ -794,7 +792,7 @@ export function ThreadList({
   // Today's rows in the order they show, none from a folded group.
   const todayRows = groups ? groups.flatMap((g) => (isFolded(g.key) ? [] : g.rows)) : topThreads;
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
-  // pinned threads' rows, Classic's Projects' rows, then Today's, then Working's, while it's open.
+  // pinned threads' rows, Inbox's Projects' rows, then Today's, then Working's, while it's open.
   const listed = [
     ...pinnedRows,
     ...projects,
@@ -1137,7 +1135,7 @@ export function ThreadList({
     return (
       <ThreadRow
         key={item.key}
-        look={compact ? "compact" : undefined}
+        look={compact ? "compact" : folders && nested ? "dense" : undefined}
         at={item.at}
         {...(pinDrag && { pinDrag })}
         rowKey={item.key}
@@ -1422,10 +1420,10 @@ export function ThreadList({
   }, [openKey, mode]);
   // A row of the list: a thread's, or in Folders, a Project's.
   const rowOf = (i: Item, nested = false) =>
-    i.kind === "project" ? projectCard(i) : row(i, nested);
+    i.kind === "project" ? projectCard(i, nested) : row(i, nested);
   // Each group under a heading that folds it, which while folded shows whether anything in it
   // finished or failed, and sticks to the top while its rows scroll under it. Alt-click folds or
-  // opens them all. Today's headings are quiet labels on a rule; Folders' are rows, as a repo's
+  // opens them all. Today's headings are quiet labels on a rule; Traditional's are rows, as a repo's
   // folder is in Codex, with its rows set in under it.
   const groupList = (list: Group[]) => {
     const keys = list.map((g) => g.key);
@@ -1496,7 +1494,7 @@ export function ThreadList({
           </div>
           <Fold open={open}>
             {/* Under its repo's heading, a row needn't name the repo: title and status, then details. */}
-            <ul className={`${cardGap} ${folders ? "py-0.5 pl-3" : ""}`}>
+            <ul className={folders ? "flex flex-col gap-0.5 py-0.5 pl-3" : cardGap}>
               {g.rows.map((i) => rowOf(i, g.byRepo))}
             </ul>
           </Fold>
@@ -1702,14 +1700,15 @@ export function ThreadList({
       };
     })
     .sort((a, b) => favRank(a.key) - favRank(b.key));
-  // A Project's card in the classic sidebar (PLX-1043).
-  const projectCard = (p: Item & { kind: "project" }) => {
+  // A Project's card in the Inbox sidebar (PLX-1043).
+  // A Project's card. `nested`, under a Traditional folder, it's dense: its icon and name on one line.
+  const projectCard = (p: Item & { kind: "project" }, nested = false) => {
     const n = modHeld ? listed.indexOf(p) : -1;
     return (
       <ProjectRow
         key={p.key}
         rowKey={p.key}
-        look={compact ? "compact" : undefined}
+        look={compact ? "compact" : folders && nested ? "dense" : undefined}
         project={p.project}
         runs={p.runs}
         device={many && p.host.icon ? p.host : undefined}
@@ -1727,10 +1726,10 @@ export function ThreadList({
       />
     );
   };
-  // Classic's Projects that need the user, or match a search, atop Today.
+  // Inbox's Projects that need the user, or match a search, atop Today.
   const projectList = projects.length > 0 && (
     <ul aria-label="Projects" className={`mb-1 ${cardGap}`}>
-      {projects.map(projectCard)}
+      {projects.map((p) => projectCard(p))}
     </ul>
   );
   // In every mode (0091): the drafts, then the favorites and pinned threads, each under a line, then
@@ -1780,7 +1779,7 @@ export function ThreadList({
     !archived.length &&
     !draftRows.length;
 
-  // The search box and the filter, which the classic head and the new Search row each lay out.
+  // The search box and the filter, which Inbox's head and Traditional's Search row each lay out.
   const searchInput = (className: string) => (
     <input
       ref={search}
@@ -1817,7 +1816,7 @@ export function ThreadList({
       many={many}
       needs={needsIn}
       outside={outside}
-      tucked={!classic}
+      tucked={!inbox}
       view={
         <ViewOptions
           autoHours={autoHours}
@@ -1833,7 +1832,7 @@ export function ThreadList({
 
   return (
     <>
-      {classic ? (
+      {inbox ? (
         <div className="flex items-center gap-1 px-2">
           <label className="sky-search flex h-8 min-w-0 flex-1 items-center gap-2 rounded-lg border border-border/60 bg-hover/50 px-2.5 transition-colors hover:bg-hover focus-within:border-transparent focus-within:bg-hover focus-within:outline-2 focus-within:outline-ring">
             <Search aria-hidden className="size-4 shrink-0 text-faint-foreground" />
@@ -1842,7 +1841,7 @@ export function ThreadList({
             )}
           </label>
           {scopeMenu}
-          {/* The Projects page, which Classic has instead of a Projects drawer; pressed while open. */}
+          {/* The Projects page, which Inbox has instead of a Projects drawer; pressed while open. */}
           <IconButton
             label="Projects"
             aria-pressed={page === "projects"}
@@ -1992,7 +1991,7 @@ export function ThreadList({
         <Footer
           listed={hosts}
           onOpenSettings={onOpenSettings}
-          onOpenPage={classic ? onOpenPage : undefined}
+          onOpenPage={inbox ? onOpenPage : undefined}
         />
       </div>
     </>
@@ -2470,7 +2469,7 @@ function Footer({
   onOpenPage,
 }: Pick<ThreadListProps, "onOpenSettings"> & {
   listed: HostThreads[];
-  /** The classic sidebar's Pull requests and Usage buttons, which the new one lists in its head. */
+  /** Inbox's Pull requests and Usage buttons, which Traditional lists in its head. */
   onOpenPage?: (page: NavRow) => void;
 }) {
   return (
@@ -2710,7 +2709,7 @@ export const backendLogos: Partial<Record<string, ComponentType<SVGProps<SVGSVGE
 export const backendLogo = (backend: string) => backendLogos[backend] ?? instanceLogo(backend);
 
 /**
- * A Project's card (PLX-1043, 0090), in Classic's list and drawer and in its repo's folder: its
+ * A Project's card (PLX-1043, 0090), in Inbox's list and in its repo's folder in Traditional: its
  * icon, "Project", and how many threads it holds, with its status at the end (what it asks of the
  * user, how many of its runs work, or how long ago it was last active), then its name, then its
  * branch, its computer, and its coordinator's provider, in color while it's open. Hovering or
@@ -2734,8 +2733,9 @@ function ProjectRow({
 }: {
   /** Its key in the list, for keyboard moves and sliding when the list moves. */
   rowKey: string;
-  /** Today's one-line look (pins.ts): its icon, name, and status. */
-  look?: "compact";
+  /** Today's one-line look (pins.ts): its icon, name, and status. Dense, under a Traditional folder,
+   *  is that line with its details under it. */
+  look?: "compact" | "dense";
   project: Project;
   /** Its coordinator's and children's runs (0042). */
   runs: readonly AgentRun[];
@@ -2772,8 +2772,9 @@ function ProjectRow({
       rowKey={rowKey}
       kind="project"
       compact={oneLine}
+      dense={look === "dense"}
       place={
-        oneLine ? (
+        oneLine || look === "dense" ? (
           icon
         ) : (
           <span className="flex min-w-0 items-center gap-1.5">
@@ -2925,7 +2926,7 @@ function Rule() {
 /** Today's group heading: a quiet label on a rule. */
 const groupHeading =
   "group/heading flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-meta font-medium text-muted-foreground transition-colors outline-none enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring [&_svg]:size-3.5 [&_svg]:shrink-0";
-/** A Folders folder's heading: a row with its repo's icon and name, its count, and a chevron. */
+/** A Traditional folder's heading: a row with its repo's icon and name, its count, and a chevron. */
 const folderHeading =
   "flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-body font-medium text-foreground/90 transition-colors outline-none enabled:hover:bg-hover enabled:hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
 
@@ -3059,8 +3060,9 @@ function ThreadRow({
   onLeave,
   pinDrag,
 }: {
-  /** Today's one-line look (pins.ts): where it is, its title, and its status. */
-  look?: "compact";
+  /** Today's one-line look (pins.ts): where it is, its title, and its status. Dense is a card with
+   *  less padding, under a Traditional folder's heading. */
+  look?: "compact" | "dense";
   /** A pinned row's move among the pins (PinList.tsx). */
   pinDrag?: PinDrag;
   /** When it was last active (`activeAt`), for its age. */
@@ -3289,6 +3291,7 @@ function ThreadRow({
       rowKey={rowKey}
       kind="thread"
       compact={compact}
+      dense={look === "dense"}
       place={
         compact
           ? !nested && <RepoIcon repo={space ?? repo} />

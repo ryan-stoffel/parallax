@@ -25,12 +25,14 @@ function watchTools(el: HTMLElement | null) {
  * slides and fades as the list changes (flip.ts), and its `data-row`, which the arrow keys and
  * focus after a change move through. `main` goes on the button that opens it, a plain box while
  * `editing` (an input can't sit in a button); `li` on the row itself. `children` follow the button,
- * as its menus.
+ * as its menus. A `dense` row, as under a Traditional folder, is a card with less padding whose
+ * first line is `place` (an icon, or nothing), the title, and the status.
  */
 export function RowCard({
   rowKey,
   kind,
   compact = false,
+  dense = false,
   place,
   status,
   title,
@@ -52,6 +54,8 @@ export function RowCard({
   rowKey: string;
   kind: "thread" | "project" | "draft";
   compact?: boolean;
+  /** Less padding, for a card under a Traditional folder's heading (0091). */
+  dense?: boolean;
   place?: ReactNode;
   status?: ReactNode;
   title: ReactNode;
@@ -89,8 +93,8 @@ export function RowCard({
   const statusLook = `shrink-0 ${actions ? "group-has-[:focus-visible]/row:hidden group-hover/row:hidden" : ""}`;
   const titleColor =
     selected || !dim ? "text-foreground" : "text-foreground/70 group-hover/row:text-foreground";
-  // A compact row, or a card with no place (under its repo's heading), leads with its title.
-  const oneLine = compact || !place;
+  // A compact or dense row, or a card with no place (under its repo's heading), leads with its title.
+  const oneLine = compact || dense || !place;
   const titleText = (
     <span
       data-title
@@ -118,7 +122,7 @@ export function RowCard({
         data-row={rowKey}
         data-kind={kind}
         {...main}
-        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${compact ? "py-[5px]" : "py-2"}`}
+        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${compact ? "py-[5px]" : dense ? "py-1.5" : "py-2"}`}
       >
         {oneLine ? (
           <span className={`flex w-full items-center gap-2 ${clear}`}>
