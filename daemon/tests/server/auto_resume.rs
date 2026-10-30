@@ -29,10 +29,13 @@ const CONTINUE: &str = "Your usage limit has reset. Continue where you left off.
 const KILLED: &str = "Your CLI was killed by a signal Parallax didn't send, and any background \
     tasks it ran were stopped with it. Continue where you left off, restarting any you still need.";
 
+/// The scripts a [`Sequence`] has yet to play, which a test can replace once plxd is up.
+type Scripts = Arc<Mutex<VecDeque<FakeBackend>>>;
+
 /// The fake backend playing one script per CLI it starts, the last one again once they run out,
 /// and keeping every request.
 struct Sequence {
-    scripts: Mutex<VecDeque<FakeBackend>>,
+    scripts: Scripts,
     seen: Arc<Mutex<Vec<RunRequest>>>,
 }
 
@@ -63,15 +66,24 @@ impl Backend for Sequence {
 }
 
 fn sequence(scripts: Vec<Vec<Step>>, seen: &Arc<Mutex<Vec<RunRequest>>>) -> BackendRegistry {
+    sequence_of(&self::scripts(scripts), seen)
+}
+
+/// [`sequence`], playing `scripts`, which the caller can still replace.
+fn sequence_of(scripts: &Scripts, seen: &Arc<Mutex<Vec<RunRequest>>>) -> BackendRegistry {
     let mut backends = BackendRegistry::new();
     backends.register(
         Provider::Anthropic,
         Arc::new(Sequence {
-            scripts: Mutex::new(scripts.into_iter().map(fake_backend).collect()),
+            scripts: Arc::clone(scripts),
             seen: Arc::clone(seen),
         }),
     );
     backends
+}
+
+fn scripts(scripts: Vec<Vec<Step>>) -> Scripts {
+    Arc::new(Mutex::new(scripts.into_iter().map(fake_backend).collect()))
 }
 
 /// An in-process plxd with no jitter, and a backoff of `backoff` with no reset known.
@@ -130,8 +142,8 @@ async fn status(client: &mut Conn, run: RunId) -> AgentStatus {
     runs.into_iter().find(|r| r.id == run).unwrap().status
 }
 
-/// A reset `seconds` from now. Tests use at least 3: creating an orchestrator and starting its run
-/// cut worktrees (PLX-409), which can take over a second on a busy runner.
+/// A reset `seconds` from now. Tests use at least 3: starting a run cuts a worktree (PLX-409),
+/// which can take over a second on a busy runner.
 fn in_seconds(seconds: i64) -> Timestamp {
     Timestamp::now() + SignedDuration::from_secs(seconds)
 }
@@ -156,10 +168,20 @@ fn turns(events: &[EventsEventParams]) -> Vec<(String, bool)> {
 #[tokio::test]
 async fn a_limited_run_resumes_at_its_reset_after_a_restart() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let reset = in_seconds(3);
-    let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], &seen);
-    let host = host(temp_dir(), backends, Duration::from_secs(600));
+    let played = scripts(vec![resumed()]);
+    let host = host(
+        temp_dir(),
+        sequence_of(&played, &seen),
+        Duration::from_secs(600),
+    );
     let (mut client, project) = host.orchestrator_client().await;
+    // The reset is set once plxd and the orchestrator are up, so their start, which grows with
+    // each migration a new store applies, isn't spent from it.
+    let reset = in_seconds(3);
+    *played.lock().unwrap() = [limited("s-1", Some(reset)), resumed()]
+        .into_iter()
+        .map(fake_backend)
+        .collect();
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
