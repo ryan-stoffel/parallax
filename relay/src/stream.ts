@@ -26,11 +26,12 @@ type Side = "client" | "host";
  *
  * It counts each frame as at least [`MIN_FRAME_BYTES`] and reports its count to the host's object
  * every [`REPORT_BYTES`] and when it closes; the host's object answers whether the day's budget
- * has room, and closes every stream's object when it doesn't.
+ * has room, and closes every stream's object when it doesn't. The count not yet reported is kept
+ * in each WebSocket's attachment too, which survives hibernation without a storage write.
  */
 export class StreamRelay extends DurableObject<Env> {
-  /** Bytes counted since the last report. A hibernated object loses at most [`REPORT_BYTES`]. */
-  private unreported = 0;
+  /** Bytes counted since the last report, read back from the WebSockets' attachments on wake. */
+  private unreported?: number;
   private reported = false;
 
   private armed() {
@@ -39,6 +40,20 @@ export class StreamRelay extends DurableObject<Env> {
 
   private side(side: Side) {
     return this.ctx.getWebSockets(side).find((ws) => ws.readyState === WebSocket.OPEN);
+  }
+
+  /** The bytes not yet reported: in memory, or after hibernation, the most any of `sockets` kept. */
+  private pending(sockets = this.ctx.getWebSockets()) {
+    const kept = sockets.map((ws) => (ws.deserializeAttachment() as number | null) ?? 0);
+    this.unreported ??= Math.max(0, ...kept);
+    return this.unreported;
+  }
+
+  /** Sets the bytes not yet reported, in memory and on each open end. */
+  private keep(bytes: number) {
+    this.unreported = bytes;
+    for (const ws of this.ctx.getWebSockets())
+      if (ws.readyState === WebSocket.OPEN) ws.serializeAttachment(bytes);
   }
 
   /** Called by the host's object before it tells plxd or a client about this stream. */
@@ -91,11 +106,13 @@ export class StreamRelay extends DurableObject<Env> {
     // Sent before any report is awaited, since another frame may be handled during the wait and
     // must not pass this one.
     peer.send(message);
-    this.unreported += Math.max(message.byteLength, MIN_FRAME_BYTES);
-    if (this.unreported >= REPORT_BYTES) await this.report(false);
+    this.keep(this.pending() + Math.max(message.byteLength, MIN_FRAME_BYTES));
+    if (this.pending() >= REPORT_BYTES) await this.report(false);
   }
 
   async webSocketClose(ws: WebSocket) {
+    // Read before the ends close, in case this woke the object.
+    this.pending([ws, ...this.ctx.getWebSockets()]);
     // Completes the closing handshake the other end started, and ends the other side.
     for (const other of this.ctx.getWebSockets()) {
       try {
@@ -125,8 +142,9 @@ export class StreamRelay extends DurableObject<Env> {
   private async report(closed: boolean): Promise<boolean> {
     const armed = await this.armed();
     if (!armed) return false;
-    const bytes = this.unreported;
-    this.unreported = 0;
+    const bytes = this.pending();
+    if (closed) this.unreported = 0;
+    else this.keep(0);
     const host = this.env.HOSTS.get(this.env.HOSTS.idFromName(armed.hostId));
     const within = await host.report(armed.stream, bytes, closed);
     if (!within && !closed) for (const ws of this.ctx.getWebSockets()) ws.close(4429, "daily limit");
