@@ -27,6 +27,7 @@ import { type RepoAction } from "./Actions";
 import type { AddDialogHandle } from "./AddDialog";
 import { CommandMenu, type CommandMenuHandle, type MenuItem } from "./CommandMenu";
 import { AgentChat } from "./AgentChat";
+import { AccountPrompts } from "./AccountPrompts";
 import { ChangesPanel, type ChangesRequest } from "./ChangesPanel";
 import { ChildStrip } from "./ChildStrip";
 import { ClaudeLogo } from "./logos";
@@ -1288,6 +1289,7 @@ export function App() {
         <HostLoader key={h.id} hostId={h.id} onView={report} onNeedsYou={needsYou} />
       ))}
       <Notifications />
+      {!onboarding && <AccountPrompts />}
       {onboarding && <Onboarding onStart={() => picker.current?.showModal()} />}
       {moveDialog && (
         <MoveRemoteControl

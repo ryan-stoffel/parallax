@@ -1,333 +1,176 @@
-import {
-  ArrowLeft,
-  CircleCheck,
-  CircleX,
-  Download,
-  KeyRound,
-  Network,
-  RefreshCw,
-  Smartphone,
-  X,
-} from "lucide-react";
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { Check, CircleCheck, Copy, Download, Hash, KeyRound, RefreshCw, X } from "lucide-react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { iconFor, type DeviceHost } from "../preload/bridge";
-import type { ConnectDevicesResult, TailnetDevice } from "../protocol/generated/protocol";
+import type { DeviceHost } from "../preload/bridge";
+import { spacedCode } from "./AccountPrompts";
+import { statusLabel, useConnection } from "./ConnectionStatus";
 import { DeviceIcon } from "./DeviceIcon";
-import { localId } from "./hosts";
-import { primaryButton, quietButton, rowField, Switch } from "./settings/parts";
+import { primaryButton, quietButton } from "./settings/parts";
 import { IconButton } from "./ui";
-
-const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
-
-/** The OSes Parallax runs on, as Tailscale names them. */
-const installable = new Set(["macOS", "windows", "linux"]);
 
 /** Tailscale's OS name for people. */
 export const osName = (os: string) =>
   ({ macOS: "macOS", windows: "Windows", linux: "Linux", iOS: "iOS", android: "Android" })[os] ??
   os;
 
-/** An install's device and ssh user, and with `headless`, plxd alone, without the app. */
-type Install = { device: TailnetDevice; user?: string; headless: boolean; run: number };
-
-type Step =
-  | { kind: "list" }
-  | { kind: "confirm"; device: TailnetDevice }
-  | ({ kind: "install" } & Install)
-  | { kind: "done"; device: TailnetDevice; headless: boolean }
-  | ({ kind: "failed"; why?: string } & Install);
+/** The command that adds a computer to the account (0091), for this app's channel. */
+export const connectCommand = (channel: "stable" | "nightly") =>
+  `npx plx-cli connect${channel === "nightly" ? " --channel nightly" : ""}`;
 
 /**
- * Add computer (0056), a modal dialog open while it's mounted: the user's devices on the tailnet,
- * from the local plxd's `connect/devices`; then, for one, what `plx add` will do there,
- * with a Headless switch for plxd alone, which Linux always gets; then that command in a terminal,
- * where ssh can ask for a password; then whether it worked, with Add another computer and Done. A
- * device that already runs Connect but this app doesn't use, because it was turned off or removed
- * here, gets Add instead of Set up.
+ * Add computer (0091), a modal dialog open while it's mounted: the command to run on the computer
+ * to add, which signs it in to the account and shows a code, then this account's computers as
+ * they show up, each connected, waiting for its code, or waiting for approval. Opening it asks the
+ * account for its computers.
  */
 export function ConnectWizard({
   channel,
   devices,
   onClose,
+  onEnterCode,
 }: {
   /** The channel it installs, this app's own. */
   channel: "stable" | "nightly";
   /** The devices this app lists. */
   devices: DeviceHost[];
   onClose: () => void;
+  /** Opens the code dialog for a new computer. */
+  onEnterCode: (device: DeviceHost) => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  const [step, setStep] = useState<Step>({ kind: "list" });
-  const [found, setFound] = useState<ConnectDevicesResult | string>();
-  const [user, setUser] = useState("");
-  const [headless, setHeadless] = useState(false);
-
-  const look = useCallback(async () => {
-    setFound(undefined);
-    const answer = await window.parallax.request(localId, "connect/devices", {});
-    setFound("error" in answer ? answer.error.message : answer.result);
-  }, []);
+  const [copied, setCopied] = useState(false);
   useEffect(() => dialog.current?.showModal(), []);
-  useEffect(() => void look(), [look]);
-
-  const close = () => dialog.current?.close();
-  const app = channel === "nightly" ? "Parallax (Nightly)" : "Parallax";
-  const alone = (device: TailnetDevice) => device.os === "linux" || headless;
-  const start = (device: TailnetDevice, run = 0) =>
-    setStep({
-      kind: "install",
-      device,
-      ...(user.trim() && { user: user.trim() }),
-      headless: alone(device),
-      run,
-    });
-  const back = () => setStep({ kind: "list" });
-  const device = step.kind === "list" ? undefined : step.device;
+  useEffect(() => void window.parallax.discoverAccount(), []);
+  const command = connectCommand(channel);
+  const computers = devices.filter((d) => d.id.startsWith("account:"));
 
   return (
     <dialog
       ref={dialog}
       aria-labelledby={titleId}
       onClose={onClose}
-      className="m-auto w-[36rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
+      className="m-auto w-[32rem] rounded-xl border border-border bg-surface text-foreground shadow-composer backdrop:bg-black/50"
     >
       <div className="flex max-h-[85vh] flex-col">
         <header className="flex items-start gap-3 px-5 pt-4 pb-3">
-          {(step.kind === "confirm" || step.kind === "failed") && (
-            <IconButton label="Back" onClick={back}>
-              <ArrowLeft aria-hidden />
-            </IconButton>
-          )}
-          {device && step.kind !== "done" && (
-            <DeviceIcon
-              icon={iconFor(device.hostName)}
-              className="mt-0.5 size-5 shrink-0 text-muted-foreground"
-            />
-          )}
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="truncate text-reading font-semibold">
-              {!device
-                ? "Add a computer"
-                : step.kind === "done"
-                  ? `${device.hostName} is set up`
-                  : `Set up ${device.hostName}`}
+              Add a computer
             </h2>
             <p className="mt-0.5 text-body text-muted-foreground">
-              {device
-                ? `${osName(device.os)} · ${device.ip}`
-                : "Your computers on Tailscale. Pick one to set up Parallax there."}
+              Run this in a terminal on the computer you want to add.
             </p>
           </div>
-          <IconButton label="Close" onClick={close}>
+          <IconButton label="Close" onClick={() => dialog.current?.close()}>
             <X aria-hidden />
           </IconButton>
         </header>
-
-        {step.kind === "list" && (
-          <DeviceList
-            found={found}
-            devices={devices}
-            onRefresh={() => void look()}
-            onPick={(d) => setStep({ kind: "confirm", device: d })}
-            onAdd={(d) => void window.parallax.setDeviceEnabled(`tailnet:${d.id}`, true)}
-          />
-        )}
-
-        {step.kind === "confirm" && (
-          <form
-            className="contents"
-            onSubmit={(e) => {
-              e.preventDefault();
-              start(step.device);
-            }}
-          >
-            <div className="flex flex-col gap-3 px-5 pb-4">
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto px-5 pb-4">
+          <div className="flex items-center gap-2 rounded-lg border border-border bg-background py-1.5 pr-1.5 pl-3">
+            <code aria-label="Command" className="min-w-0 flex-1 truncate font-mono text-body">
+              {command}
+            </code>
+            <IconButton
+              label={copied ? "Copied" : "Copy command"}
+              onClick={() => {
+                void navigator.clipboard.writeText(command);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1_500);
+              }}
+            >
+              {copied ? <Check aria-hidden /> : <Copy aria-hidden />}
+            </IconButton>
+          </div>
+          <ul className="rounded-lg border border-border">
+            <Plan icon={<KeyRound aria-hidden />} title="Signs in to your Parallax account">
+              In a browser there, or with a link you open on any device.
+            </Plan>
+            <Plan icon={<Download aria-hidden />} title="Installs plxd">
+              Parallax's service, which starts at login, so your other computers reach it.
+            </Plan>
+            <Plan icon={<Hash aria-hidden />} title="Shows a 6-digit code">
+              Type it here when Parallax asks, to let this computer in.
+            </Plan>
+          </ul>
+          <section aria-label="Your computers">
+            <h3 className="mb-1.5 text-body font-medium">Your computers</h3>
+            {computers.length ? (
               <ul className="rounded-lg border border-border">
-                <Plan icon={<KeyRound aria-hidden />} title="Signs in over SSH">
-                  To {step.device.ip}. If it asks for a password, type it in the terminal. It goes
-                  only to {step.device.hostName}.
-                </Plan>
-                <Plan
-                  icon={<Download aria-hidden />}
-                  title={alone(step.device) ? "Installs plxd" : `Installs ${app} and plxd`}
-                >
-                  The newest {channel} build for its OS, {alone(step.device) && "without the app, "}
-                  and plx-cli when npm is there.
-                </Plan>
-                <Plan icon={<Network aria-hidden />} title="Turns on Parallax Connect">
-                  So every computer sees its threads, and it sees theirs.
-                </Plan>
+                {computers.map((d) => (
+                  <ComputerRow key={d.id} device={d} onEnterCode={() => onEnterCode(d)} />
+                ))}
               </ul>
-              <div className="flex items-center justify-between gap-4 text-body">
-                <span>
-                  <span className="block font-medium">Headless</span>
-                  <span className="block text-body text-muted-foreground">
-                    {step.device.os === "linux"
-                      ? "Linux always gets plxd only, since the app's AppImage doesn't run everywhere."
-                      : "Install plxd only, without the app."}
-                  </span>
-                </span>
-                <Switch
-                  label="Headless"
-                  checked={alone(step.device)}
-                  disabled={step.device.os === "linux"}
-                  onChange={setHeadless}
-                />
-              </div>
-              <label className="flex items-center justify-between gap-4 text-body">
-                <span>
-                  <span className="block font-medium">SSH user</span>
-                  <span className="block text-body text-muted-foreground">
-                    Empty uses your ssh config's, or your name here.
-                  </span>
-                </span>
-                <input
-                  name="user"
-                  value={user}
-                  onChange={(e) => setUser(e.target.value)}
-                  placeholder="Optional"
-                  spellCheck={false}
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  className={rowField}
-                />
-              </label>
-            </div>
-            <Footer>
-              <button type="button" className={quietButton} onClick={back}>
-                Back
-              </button>
-              <button type="submit" className={primaryButton}>
-                Install
-              </button>
-            </Footer>
-          </form>
-        )}
-
-        {(step.kind === "install" || step.kind === "failed") && (
-          <>
-            <div className="flex flex-col gap-3 px-5 pb-4">
-              {step.kind === "failed" && (
-                <p
-                  role="alert"
-                  className="flex items-center gap-2 text-body text-danger [&_svg]:size-4"
-                >
-                  <CircleX aria-hidden />
-                  {step.why ?? `${step.device.hostName} wasn't set up. The terminal says why.`}
-                </p>
-              )}
-              {/* The fit addon sizes the terminal to the inner box, so the padding goes outside it. */}
-              <div className="h-72 rounded-md border border-border bg-surface p-2">
-                <Suspense>
-                  <TerminalView
-                    key={`${step.device.id}-${step.run}`}
-                    id="connect-add"
-                    target={{
-                      hostId: localId,
-                      connect: {
-                        device: step.device.ip,
-                        ...(step.user && { user: step.user }),
-                        ...(step.headless && { headless: true }),
-                      },
-                    }}
-                    label={`Setting up ${step.device.hostName}`}
-                    onEnd={(why, exitCode) => {
-                      if (step.kind !== "install") return;
-                      if (!why && exitCode === 0)
-                        return setStep({
-                          kind: "done",
-                          device: step.device,
-                          headless: step.headless,
-                        });
-                      setStep({ ...step, kind: "failed", ...(why && { why }) });
-                    }}
-                  />
-                </Suspense>
-              </div>
-            </div>
-            <Footer>
-              {step.kind === "failed" ? (
-                <button
-                  type="button"
-                  className={primaryButton}
-                  onClick={() => start(step.device, step.run + 1)}
-                >
-                  Try again
-                </button>
-              ) : (
-                <span className="text-body text-muted-foreground">Setting up…</span>
-              )}
-            </Footer>
-          </>
-        )}
-
-        {step.kind === "done" && (
-          <>
-            <div className="flex flex-col gap-3 px-5 pb-4">
-              <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3">
-                <DeviceIcon
-                  icon={iconFor(step.device.hostName)}
-                  className="size-5 shrink-0 text-muted-foreground"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-body font-medium">{step.device.hostName}</p>
-                  <p className="truncate text-body text-muted-foreground">
-                    {step.headless ? "plxd" : `${app} · plxd`} · Parallax Connect on
-                  </p>
-                </div>
-                <span className="flex items-center gap-1 text-body text-added [&_svg]:size-3.5">
-                  <CircleCheck aria-hidden />
-                  Connected
-                </span>
-              </div>
+            ) : (
               <p className="text-body text-muted-foreground">
-                Its threads show up in your sidebar, and this computer's show up there.
+                A computer shows up here once it's signed in.
               </p>
-            </div>
-            <Footer>
-              <button
-                type="button"
-                className={quietButton}
-                onClick={() => {
-                  back();
-                  void look();
-                }}
-              >
-                Add another computer
-              </button>
-              <button type="button" className={primaryButton} onClick={close}>
-                Done
-              </button>
-            </Footer>
-          </>
-        )}
+            )}
+          </section>
+        </div>
+        <footer className="flex items-center gap-2 border-t border-border px-5 py-3">
+          <div className="flex-1">
+            <button
+              type="button"
+              onClick={() => void window.parallax.discoverAccount()}
+              className={`${quietButton} -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
+            >
+              <RefreshCw aria-hidden />
+              Refresh
+            </button>
+          </div>
+          <button type="button" className={primaryButton} onClick={() => dialog.current?.close()}>
+            Done
+          </button>
+        </footer>
       </div>
     </dialog>
   );
 }
 
-/** The wizard's footer: `start` on the left, its buttons on the right, under a rule. */
-function Footer({ children, start }: { children: ReactNode; start?: ReactNode }) {
+/** One account computer in Add computer: its name and where it stands. */
+function ComputerRow({ device, onEnterCode }: { device: DeviceHost; onEnterCode: () => void }) {
+  const state = useConnection(device.id);
+  const { access } = device;
+  const status = accessLabel(device) ?? (state ? statusLabel(state) : "Connecting…");
   return (
-    <footer className="flex items-center gap-2 border-t border-border px-5 py-3">
-      <div className="flex-1">{start}</div>
-      {children}
-    </footer>
+    <li className="flex items-center gap-3 border-border px-3 py-2.5 not-last:border-b">
+      <DeviceIcon icon={device.icon} className="size-5 shrink-0 text-muted-foreground" />
+      <p className="min-w-0 flex-1 truncate text-body font-medium">{device.name}</p>
+      {access?.step === "needsCode" ? (
+        <button type="button" className={primaryButton} onClick={onEnterCode}>
+          Enter code
+        </button>
+      ) : state?.status === "connected" ? (
+        <span className="flex items-center gap-1 text-body text-added [&_svg]:size-3.5">
+          <CircleCheck aria-hidden />
+          Connected
+        </span>
+      ) : (
+        <span className="text-body text-muted-foreground">{status}</span>
+      )}
+    </li>
   );
 }
 
-/** One thing `plx add` does, in Set up's list. */
+/** What an account computer's sign-in says while it isn't connected, or undefined. */
+export function accessLabel({ access }: Pick<DeviceHost, "access">): string | undefined {
+  switch (access?.step) {
+    case "needsCode":
+      return "Needs the code it shows";
+    case "pairing":
+    case "signingIn":
+      return "Connecting…";
+    case "pending":
+      return `Allow this computer on another device · ${spacedCode(access.code)}`;
+    case "ask":
+      return access.why;
+    default:
+      return undefined;
+  }
+}
+
+/** One thing a setup does, in a list of what it will do. */
 export function Plan({
   icon,
   title,
@@ -345,118 +188,5 @@ export function Plan({
         <span className="block text-body text-muted-foreground">{children}</span>
       </span>
     </li>
-  );
-}
-
-/**
- * The tailnet's devices: online ones Parallax can run on first, each with Set up, or Connected
- * when this app uses it, or Add when it runs Connect but this app doesn't use it.
- */
-function DeviceList({
-  found,
-  devices,
-  onRefresh,
-  onPick,
-  onAdd,
-}: {
-  found?: ConnectDevicesResult | string;
-  devices: DeviceHost[];
-  onRefresh: () => void;
-  onPick: (device: TailnetDevice) => void;
-  onAdd: (device: TailnetDevice) => void;
-}) {
-  const note = (text: string) => (
-    <p className="px-5 pb-5 text-body text-muted-foreground">{text}</p>
-  );
-  if (found === undefined) return note("Looking for your computers…");
-  if (typeof found === "string") return note(`Parallax couldn't ask Tailscale: ${found}`);
-  if (found.tailscale === "missing")
-    return note(
-      "Tailscale isn't installed on this computer. Install it from tailscale.com, sign in, then come back.",
-    );
-  if (found.tailscale !== "running")
-    return note("Tailscale isn't running on this computer. Open it and sign in, then come back.");
-  const rank = (d: TailnetDevice) => (d.online && installable.has(d.os) ? 0 : d.online ? 1 : 2);
-  const sorted = [...found.devices].sort((a, b) => rank(a) - rank(b));
-  // Connected only when this app uses it; one turned off or removed here gets Add.
-  const listed = (d: TailnetDevice) => devices.some((h) => h.id === `tailnet:${d.id}` && h.enabled);
-  return (
-    <>
-      <ul
-        aria-label="Your computers"
-        className="mx-5 mb-4 min-h-0 overflow-y-auto rounded-lg border border-border"
-      >
-        {sorted.map((device) => {
-          const canRun = installable.has(device.os);
-          const tone = device.online ? "text-muted-foreground" : "text-faint-foreground";
-          return (
-            <li
-              key={device.id}
-              className="flex items-center gap-3 border-border px-3 py-2.5 not-last:border-b"
-            >
-              {/* A phone or tablet gets a phone; Parallax only runs on the others. */}
-              {canRun ? (
-                <DeviceIcon icon={iconFor(device.hostName)} className={`size-5 shrink-0 ${tone}`} />
-              ) : (
-                <Smartphone aria-hidden className={`size-5 shrink-0 ${tone}`} />
-              )}
-              <div className="min-w-0 flex-1">
-                <p
-                  className={`truncate text-body font-medium ${device.online ? "" : "text-muted-foreground"}`}
-                >
-                  {device.hostName}
-                </p>
-                <p className="truncate text-meta text-muted-foreground">
-                  {osName(device.os)} · {device.ip}
-                  {!device.online && " · Offline"}
-                </p>
-              </div>
-              {device.parallax && listed(device) ? (
-                <span className="flex items-center gap-1 text-body text-added [&_svg]:size-3.5">
-                  <CircleCheck aria-hidden />
-                  Connected
-                </span>
-              ) : device.parallax ? (
-                <button type="button" className={primaryButton} onClick={() => onAdd(device)}>
-                  Add
-                </button>
-              ) : !canRun ? (
-                <span className="text-body text-faint-foreground">Can't run Parallax</span>
-              ) : (
-                <button
-                  type="button"
-                  disabled={!device.online}
-                  className={primaryButton}
-                  onClick={() => onPick(device)}
-                >
-                  Set up
-                </button>
-              )}
-            </li>
-          );
-        })}
-        {!sorted.length && (
-          <li className="px-3 py-6 text-center text-body text-muted-foreground">
-            No other computers on your tailnet yet.
-          </li>
-        )}
-      </ul>
-      <Footer
-        start={
-          <button
-            type="button"
-            onClick={onRefresh}
-            className={`${quietButton} -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
-          >
-            <RefreshCw aria-hidden />
-            Refresh
-          </button>
-        }
-      >
-        <span className="text-meta text-faint-foreground">
-          {found.self ? `This computer: ${found.self.hostName}` : ""}
-        </span>
-      </Footer>
-    </>
   );
 }
