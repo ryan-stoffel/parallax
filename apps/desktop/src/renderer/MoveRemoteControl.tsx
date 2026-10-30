@@ -1,45 +1,43 @@
 import {
-  ArrowLeft,
-  ArrowRight,
   ChevronRight,
   CircleCheck,
   CircleX,
   Cloud,
-  Download,
   Image,
   ImageOff,
   KeyRound,
   Network,
   Octagon,
+  Plus,
   RefreshCw,
   ShieldQuestion,
   SquareTerminal,
   X,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
-import { iconFor } from "../preload/bridge";
-import type {
-  ImportableSession,
-  RemoteControlOrigin,
-  TailnetDevice,
-} from "../protocol/generated/protocol";
-import { useConnections } from "./ConnectionStatus";
-import { osName, Plan } from "./ConnectWizard";
+import type { DeviceHost } from "../preload/bridge";
+import type { ImportableSession, RemoteControlOrigin } from "../protocol/generated/protocol";
+import { NewComputerDialog } from "./AccountPrompts";
+import { statusLabel, useConnection, useConnections } from "./ConnectionStatus";
+import { accessLabel, ConnectWizard } from "./ConnectWizard";
 import { DeviceIcon } from "./DeviceIcon";
 import { describeError } from "./errors";
-import { localId, useConnect, useHosts } from "./hosts";
+import { useConnect, useHosts } from "./hosts";
 import { ClaudeLogo } from "./logos";
-import { primaryButton, quietButton, rowField } from "./settings/parts";
+import { useProfile } from "./profile";
+import { primaryButton, quietButton } from "./settings/parts";
 import { stored } from "./stored";
 import { IconButton } from "./ui";
 
-const TerminalView = lazy(() => import("./Terminal").then((m) => ({ default: m.TerminalView })));
+/** The kind of computer each platform Claude Code reports is, as Node names them. */
+const computerOf: Record<string, string> = {
+  darwin: "a Mac",
+  win32: "a Windows computer",
+  linux: "a Linux computer",
+};
 
-/** Tailscale's name for each platform Claude Code reports, as Node names them. */
-const tailscaleOs: Record<string, string> = { darwin: "macOS", win32: "windows", linux: "linux" };
-
-/** How long a computer just set up has to connect and answer. */
+/** How long a computer has to connect and answer once it's picked. */
 const CONNECT_WAIT_MS = 120_000;
 
 /**
@@ -55,14 +53,11 @@ export const keptRemoteControl = stored<string[]>(
 type Step =
   | { kind: "choose" }
   | { kind: "finding"; what: string }
-  | { kind: "pick"; os: string; devices: TailnetDevice[] }
-  | { kind: "confirm"; device: TailnetDevice }
-  | { kind: "install"; device: TailnetDevice; user?: string; run: number }
-  | { kind: "connecting"; device: TailnetDevice }
-  | { kind: "missing"; device: TailnetDevice; os: string; devices: TailnetDevice[] }
+  | { kind: "signIn"; error?: string }
+  /** The account's computers, with the name of the one just found without the session. */
+  | { kind: "pick"; missing?: string }
+  | { kind: "connecting"; device: DeviceHost }
   | { kind: "moving"; where: string }
-  | { kind: "noTailnet"; installed: boolean }
-  | { kind: "noComputer"; os: string }
   | { kind: "done"; hostId: string; threadId: string; where: string }
   | { kind: "failed"; why: string };
 
@@ -70,10 +65,11 @@ type Step =
  * A Claude Remote Control thread's choice (PLX-1143), a modal dialog open while it's mounted: keep
  * it, sending through `claude.ai`, or move it to the computer its session runs on, through Parallax
  * Connect. Moving reads where the session runs from `claude.ai`, which doesn't name the computer,
- * then looks for the session on each connected computer. When none has it, it turns Connect on and
- * lists the tailnet's computers of the session's OS, to set one up as Add computer does or add one
- * that runs Connect. Once that computer answers with the session, it imports it there, brings it
- * out of the archive, and archives the Remote Control thread.
+ * then looks for the session on each connected computer. When none has it, it lists the Parallax
+ * account's computers (0091), reached through Parallax Relay with no inbound port, so a computer
+ * whose user can't open its firewall works too (PLX-1178). Add a computer shows the command that
+ * adds one. Once the picked computer answers with the session, it imports it there, brings it out
+ * of the archive, and archives the Remote Control thread.
  */
 export function MoveRemoteControl({
   hostId,
@@ -82,7 +78,6 @@ export function MoveRemoteControl({
   onKeep,
   onClose,
   onOpen,
-  onAddWithSsh,
 }: {
   /** The Remote Control thread's host and run. */
   hostId: string;
@@ -92,21 +87,24 @@ export function MoveRemoteControl({
   onClose: () => void;
   /** Opens the moved thread. */
   onOpen: (hostId: string, threadId: string) => void;
-  /** Opens Settings > Connections, to add the computer as an SSH host. */
-  onAddWithSsh: () => void;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const [step, setStep] = useState<Step>({ kind: "choose" });
-  const [user, setUser] = useState("");
+  const [devices, setDevices] = useState<DeviceHost[]>([]);
+  const [adding, setAdding] = useState(false);
+  const [entering, setEntering] = useState<DeviceHost>();
   const origin = useRef<RemoteControlOrigin>(undefined);
   const live = useRef(true);
   const connect = useConnect();
+  const profile = useProfile();
   const hosts = useHosts();
   const states = useConnections(hosts.map((h) => h.id));
-  // The latest hosts and states, for steps that run across renders.
-  const now = useRef({ hosts, states, connect });
-  now.current = { hosts, states, connect };
+  // The latest hosts, states, and sign-in, for steps that run across renders.
+  const now = useRef({ hosts, states, profile });
+  now.current = { hosts, states, profile };
+  useEffect(() => window.parallax.onDevices(setDevices), []);
+  const computers = devices.filter((d) => d.id.startsWith("account:"));
 
   useEffect(() => {
     live.current = true;
@@ -159,30 +157,15 @@ export function MoveRemoteControl({
     show({ kind: "done", hostId: target, threadId: thread, where });
   };
 
-  /** Lists the tailnet's computers of the session's OS, turning Connect on first. */
-  const lookOnTailnet = async () => {
-    // Closed while it looked: Connect stays as it was.
+  /** Lists the account's computers, asking the account for them. */
+  const listComputers = () => {
+    // Closed while it looked: the account isn't asked.
     if (!live.current) return;
-    if (!now.current.connect?.on) {
-      show({ kind: "finding", what: "Turning on Parallax Connect" });
-      const failed = await window.parallax.setConnect(true);
-      if (failed) return fail(failed);
-    }
-    show({ kind: "finding", what: "Asking Tailscale for your computers" });
-    const answer = await window.parallax.request(localId, "connect/devices", {});
-    if ("error" in answer) return fail(describeError(answer.error));
-    const { tailscale, self, devices } = answer.result;
-    if (tailscale !== "running")
-      return show({ kind: "noTailnet", installed: tailscale !== "missing" });
-    const os = tailscaleOs[origin.current?.platform ?? ""];
-    const matching = devices
-      .filter((d) => d.id !== self?.id && (os ? d.os === os : d.os in parallaxOs))
-      .sort((a, b) => Number(b.online) - Number(a.online));
-    if (!matching.length) return show({ kind: "noComputer", os: os ? osName(os) : "" });
-    show({ kind: "pick", os: os ? osName(os) : "", devices: matching });
+    show({ kind: "pick" });
+    void window.parallax.discoverAccount();
   };
 
-  /** Reads where the session runs, then looks for it on the connected computers, then the tailnet. */
+  /** Reads where the session runs, then looks for it on the connected computers, then the account's. */
   const find = async () => {
     show({ kind: "finding", what: "Reading the session on claude.ai" });
     const answer = await window.parallax.request(hostId, "thread/remoteControlOrigin", { runId });
@@ -200,66 +183,55 @@ export function MoveRemoteControl({
       const session = await sessionOn(host.id);
       if (session) return move(host.id, host.name, session);
     }
-    await lookOnTailnet();
+    if (now.current.profile === null) return show({ kind: "signIn" });
+    listComputers();
+  };
+
+  /** Signs in in the browser, then lists the account's computers, before the profile catches up. */
+  const signIn = async () => {
+    show({ kind: "finding", what: "Signing in to Parallax in your browser" });
+    const failed = await window.parallax.signIn(false);
+    if (failed) return show({ kind: "signIn", error: failed });
+    listComputers();
   };
 
   /** Waits for `device` to connect, then moves the session there if it has it. */
-  const reach = async (device: TailnetDevice, devices: TailnetDevice[], os: string) => {
+  const reach = async (device: DeviceHost) => {
     show({ kind: "connecting", device });
-    const id = `tailnet:${device.id}`;
-    await window.parallax.setDeviceEnabled(id, true);
+    await window.parallax.setDeviceEnabled(device.id, true);
     const until = Date.now() + CONNECT_WAIT_MS;
     while (live.current && Date.now() < until) {
-      const state = await window.parallax.connectionState(id).catch(() => undefined);
+      const state = await window.parallax.connectionState(device.id).catch(() => undefined);
       if (state?.status === "connected") {
-        const session = await sessionOn(id);
-        // Its name in Parallax, once it's listed, else its Tailscale host name.
-        const name = now.current.hosts.find((h) => h.id === id)?.name ?? device.hostName;
-        if (session) return move(id, name, session);
-        return show({ kind: "missing", device, os, devices });
+        const session = await sessionOn(device.id);
+        if (session) return move(device.id, device.name, session);
+        return show({ kind: "pick", missing: device.name });
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    fail(`${device.hostName} didn't connect within two minutes. Check that it's on and try again.`);
+    fail(`${device.name} didn't connect within two minutes. Check that it's on and try again.`);
   };
 
-  const picking = useRef<{ os: string; devices: TailnetDevice[] }>({ os: "", devices: [] });
-  const back = () => show({ kind: "pick", ...picking.current });
   const where = origin.current?.cwd?.split(/[\\/]/).filter(Boolean).pop();
+  const computer = computerOf[origin.current?.platform ?? ""];
   const heading: Record<Step["kind"], [string, string]> = {
     choose: ["Claude Remote Control thread", `${title} runs on another computer.`],
     finding: ["Finding its computer", "Where this session runs."],
+    signIn: [
+      "Sign in to reach its computer",
+      "Parallax Connect finds your computers through your Parallax account.",
+    ],
     pick: [
       "Which computer runs it?",
-      `claude.ai doesn't name it. Your ${step.kind === "pick" && step.os ? `${step.os} ` : ""}computers on Tailscale:`,
-    ],
-    confirm: [
-      step.kind === "confirm" ? `Set up ${step.device.hostName}` : "",
-      step.kind === "confirm" ? `${osName(step.device.os)} · ${step.device.ip}` : "",
-    ],
-    install: [
-      step.kind === "install" ? `Setting up ${step.device.hostName}` : "",
-      "Type its password in the terminal if it asks.",
+      `claude.ai doesn't name it${computer ? `, but it's ${computer}` : ""}. Your computers:`,
     ],
     connecting: [
-      step.kind === "connecting" ? `Connecting to ${step.device.hostName}` : "",
+      step.kind === "connecting" ? `Connecting to ${step.device.name}` : "",
       "Then Parallax looks for this session there.",
-    ],
-    missing: [
-      step.kind === "missing" ? `${step.device.hostName} doesn't have it` : "",
-      "Pick the computer that runs claude remote-control.",
     ],
     moving: [
       step.kind === "moving" ? `Moving to ${step.where}` : "",
       "It continues there as a Parallax thread.",
-    ],
-    noTailnet: [
-      "Tailscale isn't running here",
-      "Parallax Connect reaches your computers over Tailscale.",
-    ],
-    noComputer: [
-      "Its computer isn't on your tailnet",
-      `No ${step.kind === "noComputer" && step.os ? `${step.os} ` : ""}computer on Tailscale but this one.`,
     ],
     done: [step.kind === "done" ? `Moved to ${step.where}` : "", "It's a Parallax thread now."],
     failed: ["Couldn't move it", "Try again picks up where it stopped."],
@@ -278,11 +250,6 @@ export function MoveRemoteControl({
     >
       <div className="flex max-h-[90vh] flex-col">
         <header className="flex items-start gap-3 px-6 pt-5 pb-4">
-          {(step.kind === "confirm" || step.kind === "missing") && (
-            <IconButton label="Back" onClick={back}>
-              <ArrowLeft aria-hidden />
-            </IconButton>
-          )}
           <Mark step={step} />
           <div className="min-w-0 flex-1">
             <h2 id={titleId} className="truncate text-heading font-semibold tracking-tight">
@@ -307,8 +274,8 @@ export function MoveRemoteControl({
                 [<SquareTerminal key="t" aria-hidden />, "Its terminal, files, and Git are here"],
               ]}
             >
-              Parallax sets up its computer over Tailscale, then continues the session there as a
-              normal thread, in the same folder.
+              Parallax finds its computer on your Parallax account, then continues the session there
+              as a normal thread, in the same folder.
             </Choice>
             <Choice
               icon={<Cloud aria-hidden />}
@@ -336,172 +303,85 @@ export function MoveRemoteControl({
             {step.kind === "finding"
               ? step.what
               : step.kind === "connecting"
-                ? `Waiting for ${step.device.hostName} to answer`
+                ? `Waiting for ${step.device.name} to answer`
                 : "Importing the session and archiving this thread"}
           </Working>
         )}
 
-        {(step.kind === "pick" || step.kind === "missing") && (
+        {step.kind === "signIn" && (
           <>
-            {step.kind === "missing" && (
-              <p className="mx-6 mb-3 flex items-start gap-2 text-body text-muted-foreground [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0">
+            {step.error && (
+              <p
+                role="alert"
+                className="mx-6 mb-5 flex items-start gap-2 rounded-xl border border-border bg-surface px-4 py-3 text-body [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0"
+              >
                 <CircleX aria-hidden className="text-danger" />
-                Claude Code on {step.device.hostName} has no transcript of this session.
+                {step.error}
               </p>
             )}
-            <ul
-              aria-label="Your computers"
-              className="mx-6 mb-5 min-h-0 overflow-y-auto rounded-xl border border-border bg-surface p-1"
-            >
-              {step.devices.map((device) => (
-                <DeviceRow
-                  key={device.id}
-                  device={device}
-                  onPick={() => {
-                    picking.current = { os: step.os, devices: step.devices };
-                    if (device.parallax) void reach(device, step.devices, step.os);
-                    else show({ kind: "confirm", device });
-                  }}
-                />
-              ))}
-            </ul>
-          </>
-        )}
-
-        {step.kind === "confirm" && (
-          <form
-            className="contents"
-            onSubmit={(e) => {
-              e.preventDefault();
-              show({
-                kind: "install",
-                device: step.device,
-                ...(user.trim() && { user: user.trim() }),
-                run: 0,
-              });
-            }}
-          >
-            <div className="flex flex-col gap-3 px-6 pb-5">
-              <ul className="rounded-xl border border-border bg-surface">
-                <Plan icon={<KeyRound aria-hidden />} title="Signs in over SSH">
-                  To {step.device.ip}. If it asks for a password, type it in the terminal. It goes
-                  only to {step.device.hostName}.
-                </Plan>
-                <Plan icon={<Download aria-hidden />} title="Installs Parallax">
-                  {step.device.os === "linux" ? "plxd" : "The app and plxd"}, then turns on Parallax
-                  Connect there.
-                </Plan>
-                <Plan icon={<ArrowRight aria-hidden />} title="Moves this thread">
-                  It continues there{where ? ` in ${where}` : ""}, and this one is archived.
-                </Plan>
-              </ul>
-              <label className="flex items-center justify-between gap-4 text-body">
-                <span>
-                  <span className="block font-medium">SSH user</span>
-                  <span className="block text-body text-muted-foreground">
-                    Empty uses your ssh config's, or your name here.
-                  </span>
-                </span>
-                <input
-                  name="user"
-                  value={user}
-                  onChange={(e) => setUser(e.target.value)}
-                  placeholder="Optional"
-                  spellCheck={false}
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  className={rowField}
-                />
-              </label>
-            </div>
             <Footer>
-              <button type="button" className={quietButton} onClick={back}>
-                Back
-              </button>
-              <button type="submit" className={primaryButton}>
-                Set up and move
-              </button>
-            </Footer>
-          </form>
-        )}
-
-        {step.kind === "install" && (
-          <>
-            <div className="px-6 pb-5">
-              {/* The fit addon sizes the terminal to the inner box, so the padding goes outside it. */}
-              <div className="h-72 rounded-xl border border-border bg-surface p-2">
-                <Suspense>
-                  <TerminalView
-                    key={`${step.device.id}-${step.run}`}
-                    id="connect-add"
-                    target={{
-                      hostId: localId,
-                      connect: {
-                        device: step.device.ip,
-                        ...(step.user && { user: step.user }),
-                        ...(step.device.os === "linux" && { headless: true }),
-                      },
-                    }}
-                    label={`Setting up ${step.device.hostName}`}
-                    onEnd={(why, exitCode) => {
-                      if (!why && exitCode === 0)
-                        return void reach(step.device, picking.current.devices, picking.current.os);
-                      fail(why ?? `${step.device.hostName} wasn't set up. The terminal said why.`);
-                    }}
-                  />
-                </Suspense>
-              </div>
-            </div>
-          </>
-        )}
-
-        {(step.kind === "noTailnet" || step.kind === "noComputer") && (
-          <>
-            <div className="flex flex-col gap-2 px-6 pb-5">
-              <ul className="rounded-xl border border-border bg-surface">
-                <Plan icon={<Network aria-hidden />} title="Add it to your tailnet">
-                  {step.kind === "noComputer"
-                    ? "Install Tailscale on that computer and sign in with the same account"
-                    : step.installed
-                      ? "Open Tailscale here and sign in"
-                      : "Install Tailscale here and on that computer, and sign in to both"}
-                  , then try again.
-                </Plan>
-                <Plan icon={<KeyRound aria-hidden />} title="Or add it with SSH">
-                  Add that computer as an SSH host in Settings, then move the thread from Thread
-                  details.
-                </Plan>
-              </ul>
-            </div>
-            <Footer
-              start={
-                <a
-                  href="https://tailscale.com/download"
-                  target="_blank"
-                  rel="noreferrer"
-                  className={`${quietButton} -ml-2.5`}
-                >
-                  Get Tailscale
-                </a>
-              }
-            >
-              <button
-                type="button"
-                className={quietButton}
-                onClick={() => {
-                  close();
-                  onAddWithSsh();
-                }}
-              >
-                Add with SSH
+              <button type="button" className={quietButton} onClick={close}>
+                Close
               </button>
               <button
                 type="button"
                 className={`${primaryButton} flex items-center gap-1.5 [&_svg]:size-3.5`}
-                onClick={() => void lookOnTailnet()}
+                onClick={() => void signIn()}
               >
-                <RefreshCw aria-hidden />
-                Try again
+                <KeyRound aria-hidden />
+                Sign in
+              </button>
+            </Footer>
+          </>
+        )}
+
+        {step.kind === "pick" && (
+          <>
+            {step.missing && (
+              <p className="mx-6 mb-3 flex items-start gap-2 text-body text-muted-foreground [&_svg]:mt-0.5 [&_svg]:size-4 [&_svg]:shrink-0">
+                <CircleX aria-hidden className="text-danger" />
+                Claude Code on {step.missing} has no transcript of this session.
+              </p>
+            )}
+            {computers.length ? (
+              <ul
+                aria-label="Your computers"
+                className="mx-6 mb-5 min-h-0 overflow-y-auto rounded-xl border border-border bg-surface p-1"
+              >
+                {computers.map((device) => (
+                  <ComputerRow
+                    key={device.id}
+                    device={device}
+                    onMove={() => void reach(device)}
+                    onEnterCode={() => setEntering(device)}
+                  />
+                ))}
+              </ul>
+            ) : (
+              <p className="mx-6 mb-5 rounded-xl border border-border bg-surface px-4 py-3 text-body text-muted-foreground">
+                No other computers on your Parallax account yet. Add the one that runs this session.
+              </p>
+            )}
+            <Footer
+              start={
+                <button
+                  type="button"
+                  onClick={() => void window.parallax.discoverAccount()}
+                  className={`${quietButton} -ml-2.5 flex items-center gap-1 [&_svg]:size-3.5`}
+                >
+                  <RefreshCw aria-hidden />
+                  Refresh
+                </button>
+              }
+            >
+              <button
+                type="button"
+                disabled={!connect}
+                className={`${primaryButton} flex items-center gap-1.5 [&_svg]:size-3.5`}
+                onClick={() => setAdding(true)}
+              >
+                <Plus aria-hidden />
+                Add a computer
               </button>
             </Footer>
           </>
@@ -551,12 +431,24 @@ export function MoveRemoteControl({
           </>
         )}
       </div>
+      {adding && connect && (
+        <ConnectWizard
+          channel={connect.channel}
+          devices={devices}
+          onClose={() => setAdding(false)}
+          onEnterCode={setEntering}
+        />
+      )}
+      {entering && (
+        <NewComputerDialog
+          key={entering.id}
+          computer={entering}
+          onClose={() => setEntering(undefined)}
+        />
+      )}
     </dialog>
   );
 }
-
-/** Tailscale's OS names Parallax runs on. */
-const parallaxOs = { macOS: 1, windows: 1, linux: 1 };
 
 /** The dialog's mark: Claude with a cloud while it's a Remote Control thread, then a check. */
 function Mark({ step }: { step: Step }) {
@@ -568,10 +460,10 @@ function Mark({ step }: { step: Step }) {
         <CircleCheck aria-hidden />
       </span>
     );
-  if (step.kind === "confirm" || step.kind === "install" || step.kind === "connecting")
+  if (step.kind === "connecting")
     return (
       <span className={`${box} text-muted-foreground`}>
-        <DeviceIcon icon={iconFor(step.device.hostName)} />
+        <DeviceIcon icon={step.device.icon} />
       </span>
     );
   return (
@@ -639,28 +531,42 @@ function Choice({
   );
 }
 
-/** A tailnet computer to move to: Set up, or Move when it already runs Parallax Connect. */
-function DeviceRow({ device, onPick }: { device: TailnetDevice; onPick: () => void }) {
-  const tone = device.online ? "text-muted-foreground" : "text-faint-foreground";
+/**
+ * An account computer to move to: Move here, or Enter code while it's new here. While this device
+ * waits to be allowed, it says so instead.
+ */
+function ComputerRow({
+  device,
+  onMove,
+  onEnterCode,
+}: {
+  device: DeviceHost;
+  onMove: () => void;
+  onEnterCode: () => void;
+}) {
+  const state = useConnection(device.id);
+  const connected = state?.status === "connected";
+  const status = connected
+    ? "Connected"
+    : (accessLabel(device) ?? (state ? statusLabel(state) : "Connecting…"));
   return (
     <li className="flex items-center gap-3 rounded-lg px-2.5 py-2">
       <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-border bg-background">
-        <DeviceIcon icon={iconFor(device.hostName)} className={`size-4 ${tone}`} />
+        <DeviceIcon icon={device.icon} className="size-4 text-muted-foreground" />
       </span>
       <span className="min-w-0 flex-1">
-        <span
-          className={`block truncate text-body font-medium ${device.online ? "" : "text-muted-foreground"}`}
-        >
-          {device.hostName}
-        </span>
-        <span className="block truncate text-meta text-faint-foreground">
-          {osName(device.os)} · {device.ip}
-          {!device.online ? " · Offline" : device.parallax ? " · Runs Parallax" : ""}
-        </span>
+        <span className="block truncate text-body font-medium">{device.name}</span>
+        <span className="block truncate text-meta text-faint-foreground">{status}</span>
       </span>
-      <button type="button" disabled={!device.online} className={primaryButton} onClick={onPick}>
-        {device.parallax ? "Move here" : "Set up"}
-      </button>
+      {device.access?.step === "needsCode" ? (
+        <button type="button" className={primaryButton} onClick={onEnterCode}>
+          Enter code
+        </button>
+      ) : (
+        <button type="button" disabled={!!device.access} className={primaryButton} onClick={onMove}>
+          Move here
+        </button>
+      )}
     </li>
   );
 }

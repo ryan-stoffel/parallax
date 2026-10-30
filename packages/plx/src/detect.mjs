@@ -32,11 +32,20 @@ else
 fi
 `;
 
-/** Prints `key=value` lines for {@link parseDetails} on Windows. Run with PowerShell. */
-export const WINDOWS_DETAILS = `$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+/**
+ * Prints `key=value` lines for {@link parseDetails} on Windows. Run with PowerShell. The version
+ * comes from the registry, not CIM, which refuses a user who isn't an administrator over ssh
+ * (PLX-1178). Windows 11 still names itself Windows 10 there, so its build number decides.
+ */
+export const WINDOWS_DETAILS = `$ProgressPreference = 'SilentlyContinue'
+$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 "arch=$arch"
 "name=$env:COMPUTERNAME"
-"version=$((Get-CimInstance Win32_OperatingSystem).Caption)"
+$os = Get-ItemProperty -ErrorAction SilentlyContinue -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'
+if ($os) {
+  $product = if ([int]$os.CurrentBuild -ge 22000) { $os.ProductName -replace 'Windows 10', 'Windows 11' } else { $os.ProductName }
+  "version=Microsoft $product"
+}
 `;
 
 /**

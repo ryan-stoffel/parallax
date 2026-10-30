@@ -1303,7 +1303,6 @@ export function App() {
             setMoveDialog(undefined);
           }}
           onOpen={openHostThread}
-          onAddWithSsh={() => openSettings("connections")}
         />
       )}
       <Splash
