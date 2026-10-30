@@ -59,5 +59,12 @@
       "plxd.cpuS": 6.5,
       "latencyMs.p95": 50
     }
+  },
+  "relay": {
+    "about": "plxd through Parallax Relay under `wrangler dev` (daemon/tests/server/relay.rs, run by relay/scripts/e2e.mjs): the median of 7 dials over relay:<hostId>, each after the spare stream opened, from the dial's start to an open /ws (connectMs) and to the first events/event of a subscription opened over it (firstEventMs). Measured 12-26 ms and 14-28 ms on an M-series Mac, debug build; the caps leave about 4x for a CI runner (0091).",
+    "max": {
+      "connectMs.p50": 100,
+      "firstEventMs.p50": 125
+    }
   }
 }

@@ -80,7 +80,7 @@ pub(crate) async fn open(
     data_dir: &Path,
 ) -> Result<App, remote::Error> {
     Ok(App::bridged(
-        remote::dial(routes, fingerprint, data_dir).await?,
+        remote::dial(routes, fingerprint, data_dir).await?.socket,
     ))
 }
 
@@ -91,12 +91,14 @@ pub(crate) async fn open_account(
     data_dir: &Path,
 ) -> Result<App, remote::Error> {
     Ok(App::bridged(
-        remote::dial_account(routes, host_id, data_dir).await?,
+        remote::dial_account(routes, host_id, data_dir)
+            .await?
+            .socket,
     ))
 }
 
 impl App {
-    fn bridged(
+    pub(crate) fn bridged(
         socket: tokio_tungstenite::WebSocketStream<
             tokio_rustls::client::TlsStream<plxd::relay::Stream>,
         >,
@@ -122,6 +124,20 @@ impl App {
             .unwrap()
             .unwrap();
         serde_json::from_str(&line.expect("an answer")).unwrap()
+    }
+
+    /// Sends one JSON-RPC message.
+    pub(crate) async fn send(&mut self, message: &str) {
+        self.writer
+            .write_all(format!("{message}\n").as_bytes())
+            .await
+            .unwrap();
+    }
+
+    /// The next message, within `PATIENCE`.
+    pub(crate) async fn next(&mut self) -> String {
+        let line = timeout(PATIENCE, self.lines.next_line()).await.unwrap();
+        line.unwrap().expect("a message")
     }
 
     /// Whether the host closed the connection within `PATIENCE`.
@@ -612,5 +628,85 @@ async fn the_web_client_is_served_only_when_on_and_pairs_a_browser_with_the_code
     web_socket(port, ticket["ticket"].as_str().unwrap(), &base)
         .await
         .unwrap();
+    server.stop().await;
+}
+
+/// A WebSocket to `/ws` opened with `token` and the `DPoP` proof `dpop` on the upgrade (0091).
+async fn proved_socket(
+    port: u16,
+    token: &str,
+    dpop: &str,
+) -> Result<WebSocket, tokio_tungstenite::tungstenite::Error> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let (tls, _) = remote::open(&format!("127.0.0.1:{port}"), None)
+        .await
+        .unwrap();
+    let mut request = format!("wss://127.0.0.1:{port}/ws")
+        .into_client_request()
+        .unwrap();
+    let headers = request.headers_mut();
+    let authorization = format!("DPoP {token}");
+    headers.insert("authorization", authorization.parse().unwrap());
+    headers.insert("dpop", dpop.parse().unwrap());
+    let (socket, _) = tokio_tungstenite::client_async(request, tls).await?;
+    Ok(socket)
+}
+
+#[tokio::test]
+async fn the_ws_upgrade_takes_a_sessions_proof_once_from_its_own_key() {
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    set_web(&mut client, true).await;
+    let key = remote::DpopKey::generate();
+    let base = format!("https://127.0.0.1:{port}");
+    let code = new_code(&mut client).await;
+    let dpop = key.proof("POST", &format!("{base}/api/pair/browser"), None);
+    let body = serde_json::json!({ "code": code, "clientLabel": "Phone" }).to_string();
+    let (status, _, answer) =
+        https(port, "POST", "/api/pair/browser", &[("DPoP", &dpop)], &body).await;
+    assert_eq!(status, 200);
+    let answer: Value = serde_json::from_slice(&answer).unwrap();
+    let token = answer["accessToken"].as_str().unwrap();
+    let refused = |result: Result<WebSocket, tokio_tungstenite::tungstenite::Error>| matches!(result, Err(tokio_tungstenite::tungstenite::Error::Http(r)) if r.status() == 401);
+
+    // One round trip: the proof on the upgrade opens the socket, with no ticket first.
+    let proof = key.proof("GET", &format!("{base}/ws"), Some(token));
+    let mut socket = proved_socket(port, token, &proof).await.unwrap();
+    let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"t","version":"0"},"capabilities":{}}}"#;
+    socket.send(Message::text(initialize)).await.unwrap();
+    let answer = timeout(PATIENCE, socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(answer.to_text().unwrap().contains("logId"), "{answer:?}");
+
+    // The same proof again, one from another key, one for another method, or an unknown token.
+    assert!(
+        refused(proved_socket(port, token, &proof).await),
+        "a replay"
+    );
+    let other = remote::DpopKey::generate().proof("GET", &format!("{base}/ws"), Some(token));
+    assert!(
+        refused(proved_socket(port, token, &other).await),
+        "another key"
+    );
+    let posted = key.proof("POST", &format!("{base}/ws"), Some(token));
+    assert!(
+        refused(proved_socket(port, token, &posted).await),
+        "another method"
+    );
+    let fresh = key.proof("GET", &format!("{base}/ws"), Some("guess"));
+    assert!(
+        refused(proved_socket(port, "guess", &fresh).await),
+        "an unknown token"
+    );
     server.stop().await;
 }

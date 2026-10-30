@@ -8,8 +8,8 @@
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    HostSettingsGet, HostSettingsSet, RelayHosts, RelayRegister, RelayRemove, RelaySign,
-    RemoteSessions, ScheduleList, ScheduleSave,
+    HostSettingsGet, HostSettingsSet, ProjectCreate, RelayHosts, RelayRegister, RelayRemove,
+    RelaySign, RemoteSessions, ScheduleList, ScheduleSave,
 };
 use parallax_protocol::{
     AccountChoice, HostSettingsGetParams, HostSettingsSetParams, RelayHostsParams,
@@ -23,7 +23,7 @@ use tokio::time::{Instant, sleep};
 
 use crate::agents::fake;
 use crate::connect::free_port;
-use crate::remote::{LOOPBACK, new_code, open, set_remote, wait_listening};
+use crate::remote::{App, LOOPBACK, new_code, open, set_remote, wait_listening};
 use crate::support::{Client, InProcess, PATIENCE, temp_dir};
 use crate::thread_tools::Keys;
 
@@ -353,4 +353,98 @@ async fn another_computer_registers_with_its_signature_alone() {
         host_id: signed.host_id,
     });
     removed.await.unwrap();
+}
+
+/// How many connections the relay benchmark times.
+const BENCH_RUNS: usize = 7;
+
+/// The median of `values`, in milliseconds.
+fn median(mut values: Vec<f64>) -> f64 {
+    values.sort_by(f64::total_cmp);
+    values[values.len() / 2]
+}
+
+/// Connect time and time to the first streamed event through the relay (0091, PLX-1167): from the
+/// start of a dial over `relay:<hostId>` to an open `/ws`, and to the first `events/event` of a
+/// subscription opened over it. Fails past the `relay` set in scripts/bench/budgets.json, by the
+/// median of [`BENCH_RUNS`] connections, each after the spare stream had time to open.
+#[tokio::test]
+async fn connecting_through_the_relay_stays_within_its_budget() {
+    let (Ok(url), Ok(token)) = (
+        std::env::var("PLXD_TEST_RELAY_URL"),
+        std::env::var("PLXD_TEST_RELAY_TOKEN"),
+    ) else {
+        return;
+    };
+    let port = free_port();
+    let dir = temp_dir();
+    let mut config = InProcess::config(dir.path());
+    config.remote_address = Some(LOOPBACK);
+    config.remote_port = port;
+    config.relay_url.clone_from(&url);
+    let server = InProcess::start(config);
+    let mut client = Client::ready(&server.socket).await;
+    set_remote(&mut client, true).await;
+    wait_listening(port, true).await;
+    let registered = client.call::<RelayRegister>(RelayRegisterParams {
+        token: token.clone(),
+        signed: None,
+    });
+    registered.await.unwrap();
+    let status = relay_status(&mut client, |s| s.connected).await;
+    let route = format!(
+        "relay:{}",
+        status.hook_url.unwrap().rsplit('/').next().unwrap()
+    );
+    relay::sign_in(url.clone(), token.clone());
+    let code = new_code(&mut client).await;
+    let phone = temp_dir();
+    let routes = std::slice::from_ref(&route);
+    let paired = remote::pair(routes, &code, "phone", phone.path())
+        .await
+        .unwrap();
+    // A host-level event for the subscription to replay.
+    let project = crate::agents::project_params(dir.path());
+    client.call::<ProjectCreate>(project).await.unwrap();
+
+    let subscribe = r#"{"jsonrpc":"2.0","id":2,"method":"events/subscribe","params":{"after":0}}"#;
+    let (mut connect, mut first_event) = (Vec::new(), Vec::new());
+    for _ in 0..BENCH_RUNS {
+        // The app connects long after plxd opened its spare stream.
+        sleep(Duration::from_millis(500)).await;
+        let started = Instant::now();
+        let dialed = remote::dial(routes, &paired.fingerprint, phone.path())
+            .await
+            .unwrap();
+        assert_eq!(dialed.route, route);
+        connect.push(started.elapsed().as_secs_f64() * 1000.0);
+        let mut app = App::bridged(dialed.socket);
+        assert!(app.initialize().await["result"].is_object());
+        app.send(subscribe).await;
+        while !app.next().await.contains(r#""method":"events/event""#) {}
+        first_event.push(started.elapsed().as_secs_f64() * 1000.0);
+    }
+    let measured = serde_json::json!({
+        "connectMs": { "p50": median(connect.clone()), "all": connect },
+        "firstEventMs": { "p50": median(first_event.clone()), "all": first_event },
+    });
+    eprintln!("relay benchmark: {measured}");
+    let budgets =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/bench/budgets.json");
+    let budgets: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(budgets).unwrap()).unwrap();
+    let max = budgets["relay"]["max"]
+        .as_object()
+        .expect("a relay budget set");
+    for (path, budget) in max {
+        let (metric, stat) = path.split_once('.').unwrap();
+        let value = measured[metric][stat]
+            .as_f64()
+            .unwrap_or_else(|| panic!("no {path}"));
+        assert!(
+            value <= budget.as_f64().unwrap(),
+            "{path} is {value:.1}, over its {budget}"
+        );
+    }
+    server.stop().await;
 }

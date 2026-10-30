@@ -4,8 +4,10 @@
 //! opened with the time signed by its host key. Then:
 //!
 //! - While `remote` is on too, for each client the relay announces, plxd opens a WebSocket for
-//!   that client's stream and joins it to a loopback connection to its own remote listener. The client's TLS ends in plxd,
-//!   at the certificate it pinned while pairing (0065), so the relay carries only ciphertext.
+//!   that client's stream and joins it to a loopback connection to its own remote listener. The
+//!   client's TLS ends in plxd, at the certificate it pinned (0065, 0091), so the relay carries
+//!   only ciphertext. plxd also keeps one spare stream open (0091): the relay joins the next client
+//!   to it without asking plxd first, and plxd asks for another once it's taken.
 //! - It answers the webhooks the relay forwards, held ones included, with the same check as
 //!   `/api/hooks` ([`crate::schedules::hook`]), keyed by the relay's delivery id so a redelivery
 //!   fires once.
@@ -16,7 +18,7 @@
 //! the socket.
 //!
 //! A client reaches a host over a `relay:<hostId>` route: [`open_stream`] is the byte stream its
-//! TLS runs over, signed in with the Clerk session [`sign_in`] keeps.
+//! TLS runs over, opened with the Clerk session [`sign_in`] keeps in its `Authorization` header.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -310,12 +312,12 @@ fn dechunk(mut rest: &[u8]) -> Vec<u8> {
     body
 }
 
-/// A WebSocket to the relay's `path`, with `proof` in [`PROOF_HEADER`] when given. A 404 is
-/// [`Error::Refused`]: no such host, or stream.
+/// A WebSocket to the relay's `path`, with `headers`. A 404 is [`Error::Refused`]: no such host,
+/// or stream.
 async fn websocket(
     url: &str,
     path: &str,
-    proof: Option<&str>,
+    headers: &[(&'static str, &str)],
 ) -> Result<WebSocketStream<Stream>, Error> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
     let base = Base::parse(url)?;
@@ -325,11 +327,11 @@ async fn websocket(
     let mut request = address
         .into_client_request()
         .map_err(|e| Error::Protocol(e.to_string()))?;
-    if let Some(proof) = proof {
-        let value = proof
+    for (name, value) in headers {
+        let value = value
             .parse()
-            .map_err(|_| Error::Protocol("a bad proof".to_owned()))?;
-        request.headers_mut().insert(PROOF_HEADER, value);
+            .map_err(|_| Error::Protocol(format!("a bad {name} header")))?;
+        request.headers_mut().insert(*name, value);
     }
     let config = Some(remote::websocket_config());
     let (socket, _) = tokio_tungstenite::client_async_with_config(request, stream, config)
@@ -388,8 +390,9 @@ fn pipe(socket: WebSocketStream<Stream>) -> DuplexStream {
     ours
 }
 
-/// A byte stream to the host with relay id `host_id`, through the relay [`sign_in`] named. The
-/// relay can't read it: the caller runs TLS to the host's pinned certificate over it.
+/// A byte stream to the host with relay id `host_id`, through the relay [`sign_in`] named, opened
+/// with the Clerk token in the `Authorization` header and no ticket first (0091). The relay can't
+/// read it: the caller runs TLS to the host's pinned certificate over it.
 ///
 /// # Errors
 ///
@@ -401,18 +404,13 @@ pub async fn open_stream(host_id: &str) -> Result<DuplexStream, Error> {
             "the relay route needs a sign-in (PLXD_RELAY_TOKEN)".to_owned(),
         ));
     };
-    let path = format!("/v1/hosts/{host_id}/tickets");
-    let (status, body) = http(url, "POST", &path, Some(token), None).await?;
-    let Some(ticket) = body["ticket"].as_str().filter(|_| status == 200) else {
-        return Err(Error::Protocol(format!(
-            "the relay answered {status}: {}",
-            body["error"].as_str().unwrap_or("no ticket")
-        )));
-    };
-    let path = format!("/v1/hosts/{host_id}/connect?ticket={ticket}");
-    let mut socket = match websocket(url, &path, None).await {
+    let path = format!("/v1/hosts/{host_id}/connect");
+    let authorization = format!("Bearer {token}");
+    let mut socket = match websocket(url, &path, &[("authorization", &authorization)]).await {
         Err(Error::Refused) => {
-            return Err(Error::Protocol("the relay refused the ticket".to_owned()));
+            return Err(Error::Protocol(
+                "the relay doesn't know that host".to_owned(),
+            ));
         }
         other => other?,
     };
@@ -757,7 +755,7 @@ async fn connected(daemon: &Arc<Daemon>, stop: &CancellationToken) -> Result<End
         let proof = format!("{at}.{}", remote::base64url(&signature));
         let path = format!("/v1/hosts/{host_id}/host");
         async move {
-            let mut socket = websocket(url, &path, Some(&proof)).await?;
+            let mut socket = websocket(url, &path, &[(PROOF_HEADER, &proof)]).await?;
             if next_json(&mut socket).await?["t"] != "ready" {
                 return Err(Error::Protocol(
                     "the relay didn't accept the host key".to_owned(),
@@ -843,6 +841,10 @@ async fn next_json(socket: &mut WebSocketStream<Stream>) -> Result<Value, Error>
 }
 
 /// Serves an accepted connection until it ends.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one select over the relay's messages, plxd's events, and the spare stream"
+)]
 async fn serve(
     daemon: &Arc<Daemon>,
     socket: WebSocketStream<Stream>,
@@ -862,6 +864,9 @@ async fn serve(
     let mut events = daemon.log.watch();
     let mut after = daemon.log.head();
     let mut waiting = Waiting::default();
+    // The spare stream (0091): asked for while `remote` is on, and again once it's taken or ends.
+    let (spare_done, mut spare_ended) = mpsc::channel::<()>(4);
+    let mut spare: Option<CancellationToken> = None;
     let mut ping = time::interval_at(Instant::now() + PING, PING);
     let mut heard = true;
     let failed = |error: tungstenite::Error| Error::Protocol(error.to_string());
@@ -872,6 +877,20 @@ async fn serve(
     };
     sink.send(hooks().await).await.map_err(failed)?;
     loop {
+        // `remote` on with no spare asks for one; `remote` off closes it.
+        match (serving(daemon).await, &spare) {
+            (true, None) => {
+                spare = Some(streams.child_token());
+                sink.send(Message::text(r#"{"t":"spare"}"#))
+                    .await
+                    .map_err(failed)?;
+            }
+            (false, Some(open)) => {
+                open.cancel();
+                spare = None;
+            }
+            _ => {}
+        }
         tokio::select! {
             () = stop.cancelled() => {
                 let _ = sink.close().await;
@@ -883,6 +902,7 @@ async fn serve(
                     return Ok(Ended::Off);
                 }
             }
+            Some(()) = spare_ended.recv() => spare = None,
             _ = ping.tick() => {
                 if !heard {
                     return Err(Error::Protocol("the relay stopped answering".to_owned()));
@@ -907,7 +927,13 @@ async fn serve(
                         if message["t"] == "open" && serving(daemon).await {
                             let url = daemon.relay.url.clone();
                             let host_id = host_id.to_owned();
-                            tokio::spawn(stream(url, host_id, message, local, streams.clone()));
+                            let joined = match (&spare, message["spare"] == true) {
+                                (Some(open), true) => Some((open.clone(), spare_done.clone())),
+                                _ => None,
+                            };
+                            let stop = joined.as_ref().map_or_else(|| streams.clone(), |(open, _)| open.clone());
+                            let done = joined.map(|(_, done)| done);
+                            tokio::spawn(stream(url, host_id, message, local, stop, done));
                         }
                     }
                     Some(Ok(Message::Binary(frame))) => {
@@ -931,13 +957,15 @@ async fn serve(
 }
 
 /// Joins a client's stream, which the relay announced with `message`, to the remote listener at
-/// `local`, until either ends or `stop`.
+/// `local`, until either ends or `stop`. The spare stream, with `spare` to say when it's taken or
+/// ended, waits for the relay's `ready`, sent when a client joins it, before it dials `local`.
 async fn stream(
     url: String,
     host_id: String,
     message: Value,
     local: SocketAddr,
     stop: CancellationToken,
+    spare: Option<mpsc::Sender<()>>,
 ) {
     let id = message["stream"].as_str().unwrap_or_default();
     let token = message["token"].as_str().unwrap_or_default();
@@ -952,9 +980,24 @@ async fn stream(
         return warn!("the relay announced a stream with a bad id or token");
     }
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
+    let mut unused = spare.clone();
     let joined = async {
-        let socket = websocket(&url, &path, None).await?;
+        let mut socket = websocket(&url, &path, &[]).await?;
+        if spare.is_some() {
+            loop {
+                match socket.next().await {
+                    Some(Ok(Message::Text(text))) if text.as_str() == "ready" => break,
+                    Some(Ok(_)) => {}
+                    _ => return Err(Error::Protocol("the spare stream closed".to_owned())),
+                }
+            }
+            // Taken: the next client gets a new spare.
+            if let Some(done) = unused.take() {
+                let _ = done.send(()).await;
+            }
+        }
         let mut tcp = TcpStream::connect(local).await?;
+        let _ = tcp.set_nodelay(true);
         let mut piped = pipe(socket);
         tokio::io::copy_bidirectional(&mut piped, &mut tcp).await?;
         Ok::<_, Error>(())
@@ -964,6 +1007,14 @@ async fn stream(
         joined = joined => if let Err(error) = joined {
             debug!(%error, "a relay stream ended");
         }
+    }
+    // A spare that ended before a client took it is asked for again, after a pause so a relay
+    // that keeps refusing it isn't asked in a loop.
+    if let Some(done) = unused {
+        if !stop.is_cancelled() {
+            time::sleep(FIRST_BACKOFF).await;
+        }
+        let _ = done.send(()).await;
     }
 }
 

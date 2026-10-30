@@ -121,6 +121,10 @@ struct TuiArgs {
 }
 
 #[derive(Debug, Args)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "dial's mode flags, as clap reads them"
+)]
 struct DialArgs {
     /// The device's Tailscale IP, with port 7340 unless one is given, such as `100.87.92.42` or
     /// `[fd7a:115c:a1e0::1]:7340`. With `--remote`, the paired computer's routes, tried in order,
@@ -152,6 +156,12 @@ struct DialArgs {
     /// List the computers on this network waiting for a pairing, by name, as JSON, and exit
     #[arg(long, conflicts_with = "addresses")]
     discover: bool,
+
+    /// With `--remote` or `--account`, send no credential: print the first ADDR that presents
+    /// the pinned certificate, raced as a dial races them, as JSON `{"route": ...}`, and exit, 4
+    /// when none did. For the app's re-checks of direct routes while it's on the relay (0091)
+    #[arg(long, conflicts_with_all = ["pair", "sign_in", "discover"])]
+    probe: bool,
 
     /// This computer's name, sent with `--pair`
     #[arg(long, value_name = "NAME")]
@@ -595,24 +605,51 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             }
         };
     }
+    if args.probe {
+        return dial_probe(args, report).await;
+    }
     let dialed = if let Some(host_id) = &args.account {
         remote::dial_account(&args.addresses, host_id, data_dir.root()).await
     } else {
         let fingerprint = args.remote.as_deref().unwrap_or_default();
         remote::dial(&args.addresses, fingerprint, data_dir.root()).await
     };
-    let socket = match dialed {
-        Ok(socket) => socket,
+    let dialed = match dialed {
+        Ok(dialed) => dialed,
         Err(error) => {
             report(&format!("could not reach the paired computer: {error}"));
             return exit(&error);
         }
     };
-    match remote::bridge(socket, tokio::io::stdin(), tokio::io::stdout()).await {
+    // The app reads this line to know when it's on the relay, and so re-checks direct routes.
+    report(&format!("connected over {}", dialed.route));
+    match remote::bridge(dialed.socket, tokio::io::stdin(), tokio::io::stdout()).await {
         Ok(()) => 0,
         Err(error) => {
             report(&format!("the connection failed: {error}"));
             1
+        }
+    }
+}
+
+/// `dial --probe` (0091): the first route that presents the pinned certificate, with nothing sent.
+async fn dial_probe(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
+    let pin = match (&args.account, &args.remote) {
+        (Some(host_id), _) => remote::Pin::HostId(host_id.clone()),
+        (None, Some(fingerprint)) => remote::Pin::Fingerprint(fingerprint.clone()),
+        (None, None) => {
+            report(&"--probe needs --remote or --account");
+            return 2;
+        }
+    };
+    match remote::probe(&args.addresses, &pin).await {
+        Ok(route) => {
+            print_json(&serde_json::json!({ "route": route }));
+            0
+        }
+        Err(error) => {
+            report(&format!("no route answered: {error}"));
+            EXIT_UNAVAILABLE.into()
         }
     }
 }

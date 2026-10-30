@@ -19,7 +19,9 @@
 //! - `POST /api/auth/account` and `POST /api/auth/approval`: account sign-in (0091), in
 //!   [`access`].
 //! - `POST /api/auth/websocket-ticket`: a ticket valid once for 30 s, for a `DPoP`-bound token.
-//! - `GET /ws?wsTicket=…`: a WebSocket carrying 0007's JSON-RPC, one message per frame.
+//! - `GET /ws`: a WebSocket carrying 0007's JSON-RPC, one message per frame, opened with the
+//!   session's token and a `DPoP` proof for the upgrade itself (0091), or with `?wsTicket=…`, for
+//!   a browser, which can't set the upgrade's headers.
 //! - `/api/hooks/<id>/<token>`, by any method: a scheduled task's webhook ([`crate::schedules`]),
 //!   with a body of up to [`MAX_HOOK_BYTES`].
 //!
@@ -638,9 +640,18 @@ impl Request {
 
     /// Checks this `POST`'s `DPoP` proof, bound to `access_token` when it has one.
     fn proof(&self, access_token: Option<&str>) -> Result<remote::Proven, &'static str> {
+        self.proof_for("POST", access_token)
+    }
+
+    /// Checks this request's `DPoP` proof for `method`, bound to `access_token` when it has one.
+    fn proof_for(
+        &self,
+        method: &str,
+        access_token: Option<&str>,
+    ) -> Result<remote::Proven, &'static str> {
         let proof = self.header("dpop").unwrap_or_default();
         let now = remote::now_seconds();
-        remote::verify_proof(proof, "POST", &self.url(), now, access_token)
+        remote::verify_proof(proof, method, &self.url(), now, access_token)
     }
 }
 
@@ -1222,40 +1233,57 @@ async fn serve_file(
 /// off: only `invalid_token` means pairing again. A browser's session while `remoteWeb` is off is
 /// `access_denied`, and works again once it's on.
 async fn ticket(daemon: &Daemon, request: &Request) -> (u16, serde_json::Value) {
+    let session = match authorize(daemon, request, "POST").await {
+        Ok(session) => session,
+        Err(refusal) => return refusal,
+    };
+    let ticket = daemon.remote.new_ticket(session);
+    let seconds = TICKET_LIFETIME.as_secs();
+    (200, json!({ "ticket": ticket, "expiresIn": seconds }))
+}
+
+/// The session a `method` request's `Authorization: DPoP` token and `DPoP` proof stand for, or why
+/// not.
+async fn authorize(
+    daemon: &Daemon,
+    request: &Request,
+    method: &str,
+) -> Result<String, (u16, serde_json::Value)> {
     let refused =
         |error: &str, why: &str| (401, json!({ "error": error, "error_description": why }));
     let Some(token) = request
         .header("authorization")
         .and_then(|value| value.strip_prefix("DPoP "))
     else {
-        return refused("invalid_token", "no DPoP access token");
+        return Err(refused("invalid_token", "no DPoP access token"));
     };
     let Some(session) = session_for(daemon, token).await else {
-        return refused("invalid_token", "an unknown or revoked session");
+        return Err(refused("invalid_token", "an unknown or revoked session"));
     };
-    let proven = match request.proof(Some(token)) {
-        Ok(proven) => proven,
-        Err(why) => return refused("invalid_dpop_proof", why),
-    };
+    let proven = request
+        .proof_for(method, Some(token))
+        .map_err(|why| refused("invalid_dpop_proof", why))?;
     if proven.thumbprint != session.thumbprint {
-        return refused("invalid_dpop_proof", "a DPoP proof from another key");
+        return Err(refused(
+            "invalid_dpop_proof",
+            "a DPoP proof from another key",
+        ));
     }
     if !daemon.remote.first_use(&proven) {
-        return refused("invalid_dpop_proof", "a replayed DPoP proof");
+        return Err(refused("invalid_dpop_proof", "a replayed DPoP proof"));
     }
     if session.browser && !web_on(daemon).await {
         let why = "Open in a browser is off on this computer";
-        return (
+        return Err((
             403,
             json!({ "error": "access_denied", "error_description": why }),
-        );
+        ));
     }
-    let ticket = daemon.remote.new_ticket(session.id);
-    let seconds = TICKET_LIFETIME.as_secs();
-    (200, json!({ "ticket": ticket, "expiresIn": seconds }))
+    Ok(session.id)
 }
 
-/// `GET /ws`: opens the WebSocket a ticket allows, and serves it as a socket connection.
+/// `GET /ws`: opens the WebSocket a session's token and proof, or a ticket, allows, and serves it
+/// as a socket connection.
 async fn serve_socket(
     mut stream: tokio_rustls::server::TlsStream<TcpStream>,
     request: &Request,
@@ -1264,19 +1292,27 @@ async fn serve_socket(
     closing: &CancellationToken,
     peer: SocketAddr,
 ) {
-    let session = request
-        .query("wsTicket")
-        .and_then(|t| daemon.remote.take_ticket(t));
+    let session = match request.query("wsTicket") {
+        Some(ticket) => daemon
+            .remote
+            .take_ticket(ticket)
+            .ok_or_else(|| refused("a wrong, used, or expired ticket")),
+        // The proof opens the channel itself, a round trip shorter (0091).
+        None => authorize(&daemon, request, "GET").await,
+    };
     let key = request.header("sec-websocket-key");
     let upgrade = request
         .header("upgrade")
         .is_some_and(|u| u.eq_ignore_ascii_case("websocket"));
-    let (Some(session), Some(key), true) = (session, key, upgrade) else {
-        warn!(%peer, "refused a WebSocket without a valid ticket");
-        let refusal = refused("a wrong, used, or expired ticket");
+    let (Ok(session), Some(key), true) = (session.as_ref(), key, upgrade) else {
+        warn!(%peer, "refused a WebSocket without a valid ticket or proof");
+        let refusal = session
+            .err()
+            .unwrap_or_else(|| (400, json!({ "error": "invalid_request" })));
         let _ = respond(&mut stream, refusal.0, &refusal.1).await;
         return;
     };
+    let session = session.clone();
     // Watched before the session is checked, so a revoke that lands in between still closes it.
     let closing = daemon.remote.watch(&session, closing);
     // A session revoked after its ticket was made, or a browser's after `remoteWeb` went off.
@@ -1506,8 +1542,10 @@ fn clean_name(name: &str) -> String {
 }
 
 /// Where a client can reach this host, best first: its LAN address, the one its default route
-/// leaves from, then its Tailscale address, each an IP, with the port when it isn't
-/// [`remote::PORT`], then `relay:<hostId>` while plxd is connected to the relay (PLX-652).
+/// leaves from, then its Tailscale address, found with `tailscale status` whether or not Connect
+/// is on (0091), each an IP, with the port when it isn't [`remote::PORT`], then `relay:<hostId>`
+/// while plxd is connected to the relay (PLX-652). Clients try the LAN and Tailscale routes
+/// together and the relay last ([`remote::race`]).
 pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
     let remote = &daemon.remote;
     let route = |ip: IpAddr| {
@@ -1521,7 +1559,6 @@ pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
     if let Some(ip) = remote.address {
         return std::iter::once(route(ip)).chain(relay).collect();
     }
-    let mut routes = Vec::new();
     // Connecting a UDP socket sends nothing; it only picks the address a packet would leave from.
     let primary = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
         .and_then(|socket| {
@@ -1529,23 +1566,30 @@ pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
             socket.local_addr()
         })
         .map(|address| address.ip());
-    if let Some(ip) = primary
+    let lan = primary
         .ok()
         .filter(|ip| remote::is_local_network(*ip) && !ip.is_loopback())
-    {
-        routes.push(route(ip));
-    }
-    if let Some(ip) = daemon
+        .map(route);
+    let tailnet = daemon
         .connect
         .tailnet
         .status()
         .await
         .ok()
         .and_then(|s| s.this.ipv4())
-    {
-        routes.push(route(ip));
+        .map(route);
+    ordered(lan, tailnet, relay)
+}
+
+/// The routes in the order clients try them: the LAN address, the Tailscale address, then the
+/// relay, each once. The default route may leave from the Tailscale address itself.
+fn ordered(lan: Option<String>, tailnet: Option<String>, relay: Option<String>) -> Vec<String> {
+    let mut routes: Vec<String> = Vec::new();
+    for route in [lan, tailnet, relay].into_iter().flatten() {
+        if !routes.contains(&route) {
+            routes.push(route);
+        }
     }
-    routes.extend(relay);
     routes
 }
 
@@ -1593,6 +1637,26 @@ mod tests {
     use tokio::io::AsyncWriteExt as _;
 
     use super::{MAX_HOOK_BYTES, read_request};
+
+    #[test]
+    fn routes_go_lan_then_tailscale_then_the_relay_each_once() {
+        let some = |route: &str| Some(route.to_owned());
+        let relay = format!("relay:{}", "h".repeat(43));
+        assert_eq!(
+            super::ordered(some("192.168.1.5"), some("100.64.0.7"), Some(relay.clone())),
+            ["192.168.1.5", "100.64.0.7", relay.as_str()]
+        );
+        assert_eq!(
+            super::ordered(None, some("100.64.0.7:7400"), Some(relay.clone())),
+            ["100.64.0.7:7400", relay.as_str()],
+            "Tailscale alone, with Connect off or no LAN"
+        );
+        assert_eq!(
+            super::ordered(some("100.64.0.7"), some("100.64.0.7"), None),
+            ["100.64.0.7"],
+            "a default route through the tailnet"
+        );
+    }
 
     async fn read(raw: Vec<u8>) -> Option<super::Request> {
         let (mut client, mut server) = tokio::io::duplex(64 * 1024);
