@@ -53,10 +53,13 @@ export const ago = (time: string) => (age(time) === "now" ? "just now" : `${age(
 
 /** A pull request's state as a chip: its icon and Open, Draft, Merged, or Closed, in its color. */
 export function StateBadge({ pr }: { pr: PullRequest }) {
-  const { Icon, color, tint, label } = lookOf(pr);
-  // Badge has no violet tone, so a merged one's tint and color win over neutral's.
+  const { Icon, label } = lookOf(pr);
+  const merged = pr.state === "merged";
+  const tone =
+    pr.state === "closed" ? "danger" : pr.state === "open" && !pr.draft ? "success" : "neutral";
   return (
-    <Badge className={`${tint}! ${color}!`}>
+    // Badge has no violet tone, so a merged one's tint and color win over neutral's.
+    <Badge tone={tone} className={merged ? "bg-project-violet/12! text-project-violet!" : ""}>
       <Icon aria-hidden />
       {label ?? pr.state}
     </Badge>

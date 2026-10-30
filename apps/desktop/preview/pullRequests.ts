@@ -152,7 +152,13 @@ function view(url: string): PullRequest {
         committedAt: at(60 * 3),
       },
     ],
-    reviews: [{ author: "claude-reviewer", state: "changesRequested", submittedAt: at(19) }],
+    reviews: [
+      {
+        author: "claude-reviewer",
+        state: number === 588 ? "changesRequested" : "approved",
+        submittedAt: at(19),
+      },
+    ],
     mergeState: merged
       ? undefined
       : number === 588
@@ -208,7 +214,7 @@ function status(url: string): PrStatusResult {
     behindBy: pr.mergeState === "behind" ? 3 : 0,
     mergeable: "MERGEABLE",
     mergeState: (pr.mergeState ?? "unknown").toUpperCase(),
-    reviewDecision: "CHANGES_REQUESTED",
+    reviewDecision: pr.number === 588 ? "CHANGES_REQUESTED" : "APPROVED",
     failing,
     pending: checks.filter((c) => c.how === "pending").map((c) => c.name),
     passed: checks.filter((c) => c.how === "passed").map((c) => c.name),

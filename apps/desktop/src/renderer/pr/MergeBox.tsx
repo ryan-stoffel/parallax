@@ -159,7 +159,7 @@ export function MergeBox({
                   aria-label="Merge method"
                   aria-haspopup="menu"
                   popoverTarget={`${id}-method`}
-                  disabled={methods.length < 2}
+                  disabled={busy || !gate.canMerge || methods.length < 2}
                   className="rounded-l-none border-l border-black/15 px-1.5"
                 >
                   <icons.expand aria-hidden />
