@@ -209,10 +209,14 @@ export function NewThreadPicker({
         </div>
         <div className="max-h-[50vh] overflow-y-auto px-2 pb-2">
           <div id={listId} role="listbox" aria-label="Where it starts">
-            {shownRepos.length > 0 && <Heading>Repositories</Heading>}
-            {shownRepos.map((row) => option(row))}
-            {shownOrchestrators.length > 0 && <Heading>Orchestrator threads</Heading>}
-            {shownOrchestrators.map((row) => option(row))}
+            {shownRepos.length > 0 && (
+              <Section label="Repositories">{shownRepos.map((row) => option(row))}</Section>
+            )}
+            {shownOrchestrators.length > 0 && (
+              <Section label="Orchestrator threads">
+                {shownOrchestrators.map((row) => option(row))}
+              </Section>
+            )}
           </div>
           {shown.length === 0 && (
             <p className="px-2.5 py-2 text-body text-faint-foreground">Nothing matches</p>
@@ -229,14 +233,15 @@ function submitterFor(form: HTMLFormElement, id: string): HTMLButtonElement | un
   return form.querySelector<HTMLButtonElement>(`button[name="group"][value="${id}"]`) ?? undefined;
 }
 
-/** A section's label in the picker's list. */
-function Heading({ children }: { children: ReactNode }) {
+/** A section of the picker's list, under its label, which screen readers name it by. */
+function Section({ label, children }: { label: string; children: ReactNode }) {
+  const id = useId();
   return (
-    <p
-      role="presentation"
-      className="px-2.5 pt-2 pb-1.5 text-meta font-medium text-faint-foreground first:pt-1"
-    >
+    <div role="group" aria-labelledby={id} className="first:[&>p]:pt-1">
+      <p id={id} className="px-2.5 pt-2 pb-1.5 text-meta font-medium text-faint-foreground">
+        {label}
+      </p>
       {children}
-    </p>
+    </div>
   );
 }

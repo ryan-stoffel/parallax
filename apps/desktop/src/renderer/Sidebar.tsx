@@ -1549,6 +1549,7 @@ export function ThreadList({
             draft={d.draft}
             repo={d.repo}
             compact={compact}
+            dense={folders}
             onOpen={() =>
               onSelect(d.draft.hostId, {
                 kind: "new",
@@ -2994,6 +2995,7 @@ function DraftRow({
   draft,
   repo,
   compact,
+  dense = false,
   onOpen,
   onDiscard,
   onKeys,
@@ -3003,6 +3005,8 @@ function DraftRow({
   repo?: Repo;
   /** Today's one-line look (pins.ts). */
   compact: boolean;
+  /** The denser card, as every row in the Traditional sidebar is. */
+  dense?: boolean;
   onOpen: () => void;
   onDiscard: () => void;
   /** Keyboard moves on the focused row. */
@@ -3017,6 +3021,7 @@ function DraftRow({
       rowKey={rowKey}
       kind="draft"
       compact={compact}
+      dense={dense}
       place={compact ? <RepoIcon repo={repo} /> : <RowPlace repo={repo} />}
       status={<DraftStatus />}
       title={title}

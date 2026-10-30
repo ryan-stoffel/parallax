@@ -418,20 +418,16 @@ function SidebarSettings() {
           onChange={(next) => sidebarMode.set(next)}
         />
       </Row>
-      {mode === "traditional" &&
-        navChoices.map(({ id, label }) => (
-          <Row
-            key={id}
-            title={label}
-            description="In the sidebar's head. Off, it waits under More."
-          >
-            <Switch
-              label={`Show ${label} in the sidebar`}
-              checked={nav[id]}
-              onChange={(show) => sidebarNav.set({ ...nav, [id]: show })}
-            />
-          </Row>
-        ))}
+      {/* Traditional's head rows. They show in Inbox too, so search finds them, and apply on switching. */}
+      {navChoices.map(({ id, label }) => (
+        <Row key={id} title={label} description="In Traditional's head. Off, it waits under More.">
+          <Switch
+            label={`Show ${label} in the sidebar`}
+            checked={nav[id]}
+            onChange={(show) => sidebarNav.set({ ...nav, [id]: show })}
+          />
+        </Row>
+      ))}
       <Row
         title="Working section"
         description="While a thread is working, list it under Working, above Archived. Off keeps it in the list."

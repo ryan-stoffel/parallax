@@ -1749,7 +1749,7 @@ export function App() {
                                 (r) => r.space && r.name === spaceRepo.name,
                               );
                               if (id !== host.id && there)
-                                openOnHost(id, { kind: "new", groupId: there.id });
+                                openOnHost(id, { kind: "new", groupId: there.id, draft });
                             }}
                           />
                         )

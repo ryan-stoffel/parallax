@@ -66,8 +66,8 @@ export function readMode(raw: unknown): SidebarMode | undefined {
   return undefined;
 }
 
-// Before 0091 the new sidebar was Settings › Beta's switch: on reads as Traditional.
-function legacyMode(): SidebarMode {
+/** The mode before 0091, when the new sidebar was Settings › Beta's switch: on reads as Traditional. */
+export function legacyMode(): SidebarMode {
   try {
     return localStorage.getItem("parallax.beta.newSidebar") === "true" ? "traditional" : "inbox";
   } catch {
