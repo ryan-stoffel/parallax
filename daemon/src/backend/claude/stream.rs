@@ -154,13 +154,13 @@ const MIN_SPEED_MS: u64 = 250;
 pub(super) struct Translator {
     policy: ToolPolicy,
     expected_key_source: &'static str,
-    /// plxd's MCP tools were attached, so a no-write run is a coordinator: full Claude Code in
+    /// plxd's MCP tools were attached, so a no-write run is an orchestrator: full Claude Code in
     /// its permission mode (0027), whose `system/init` may list any tool.
-    coordinator_tools: bool,
+    orchestrator_tools: bool,
     /// A normal thread's run: full Claude Code in every mode (0034), whose `system/init` may list
     /// any tool, as a bypass worker's may.
     thread: bool,
-    /// The permission mode a worker or a coordinator asked for, which its `system/init` must
+    /// The permission mode a worker or an orchestrator asked for, which its `system/init` must
     /// report. A thread's follows the mode its CLI reports switching to ([`Translator::system`]).
     permission_mode: &'static str,
     /// The CLI asks plxd before a tool call that would prompt (PLX-222), so its control
@@ -274,7 +274,7 @@ impl Translator {
         Self {
             policy,
             expected_key_source,
-            coordinator_tools: false,
+            orchestrator_tools: false,
             thread: false,
             permission_mode: DEFAULT_PERMISSION_MODE,
             prompts: false,
@@ -316,9 +316,10 @@ impl Translator {
         translator
     }
 
-    /// Checks `system/init` as a coordinator's when plxd's MCP tools were `attached` (0019, 0027).
-    pub fn with_coordinator_tools(mut self, attached: bool) -> Self {
-        self.coordinator_tools = attached;
+    /// Checks `system/init` as an orchestrator's when plxd's MCP tools were `attached` (0019,
+    /// 0027).
+    pub fn with_orchestrator_tools(mut self, attached: bool) -> Self {
+        self.orchestrator_tools = attached;
         self
     }
 
@@ -328,7 +329,7 @@ impl Translator {
         self
     }
 
-    /// Expects a worker's or a coordinator's `system/init` to report `mode` instead of
+    /// Expects a worker's or an orchestrator's `system/init` to report `mode` instead of
     /// [`DEFAULT_PERMISSION_MODE`], for a run that asked for another permission (PLX-97, 0027).
     /// [`BYPASS_PERMISSION_MODE`] also lifts a worker's tool check: it runs as full Claude Code.
     pub fn with_permission_mode(mut self, mode: &'static str) -> Self {
@@ -600,11 +601,11 @@ impl Translator {
             steps.push(violation(FailureKind::UnexpectedApiKey, message));
             return steps;
         }
-        let coordinator = self.policy == ToolPolicy::NoWrite && self.coordinator_tools;
+        let orchestrator = self.policy == ToolPolicy::NoWrite && self.orchestrator_tools;
         let unsandboxed = self.policy == ToolPolicy::WorkspaceWrite
             && (self.thread || self.permission_mode == BYPASS_PERMISSION_MODE);
         let (allowed, run) = match self.policy {
-            ToolPolicy::NoWrite if coordinator => (&[][..], "a coordinator run"),
+            ToolPolicy::NoWrite if orchestrator => (&[][..], "an orchestrator run"),
             ToolPolicy::NoWrite => (NO_WRITE_TOOLS, "a no-write run"),
             ToolPolicy::WorkspaceWrite => (WORKER_TOOLS, "a worker run"),
         };
@@ -614,14 +615,14 @@ impl Translator {
             steps.push(violation(FailureKind::PolicyViolation, message));
             return steps;
         };
-        // A coordinator, a thread, and a bypass worker are full Claude Code, whose tools are
+        // An orchestrator, a thread, and a bypass worker are full Claude Code, whose tools are
         // whatever its configuration loads (0027, 0034).
         let offered: Vec<&str> = tools
             .iter()
             .map(|tool| tool.as_str().unwrap_or("<not a string>"))
             .filter(|tool| !allowed.contains(tool) && !self.also_allowed(tool))
             .collect();
-        if !coordinator && !unsandboxed && !offered.is_empty() {
+        if !orchestrator && !unsandboxed && !offered.is_empty() {
             let message = format!(
                 "Claude Code offered tools beyond {} in {run}: {}",
                 allowed.join(", "),
@@ -643,9 +644,9 @@ impl Translator {
         }
         // Claude Code writes init before its first request, so this stops the run before any
         // tool runs.
-        if (self.policy == ToolPolicy::WorkspaceWrite || coordinator)
+        if (self.policy == ToolPolicy::WorkspaceWrite || orchestrator)
             && let Some(step) =
-                self.mode_violation(text(message, "permissionMode"), coordinator, run)
+                self.mode_violation(text(message, "permissionMode"), orchestrator, run)
         {
             steps.push(step);
             return steps;
@@ -654,9 +655,9 @@ impl Translator {
         steps
     }
 
-    /// The violation of a worker's or a coordinator's `system/init` that reports `mode` instead
+    /// The violation of a worker's or an orchestrator's `system/init` that reports `mode` instead
     /// of the one it asked for, or one of [`LEFT_PLAN_MODES`] once it left plan mode.
-    fn mode_violation(&self, mode: Option<&str>, coordinator: bool, run: &str) -> Option<Step> {
+    fn mode_violation(&self, mode: Option<&str>, orchestrator: bool, run: &str) -> Option<Step> {
         let left_plan = self.left_plan && mode.is_some_and(|mode| LEFT_PLAN_MODES.contains(&mode));
         if mode == Some(self.permission_mode) || left_plan {
             return None;
@@ -665,7 +666,7 @@ impl Translator {
             Some(mode) => format!("permission mode {mode:?}"),
             None => "no permission mode".to_owned(),
         };
-        let danger = if coordinator {
+        let danger = if orchestrator {
             ""
         } else {
             ", which on Linux lets a worker's commands write all of /home, /tmp, /var, /opt, /run, \

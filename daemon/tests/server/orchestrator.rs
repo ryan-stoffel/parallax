@@ -1,6 +1,6 @@
-//! A project's coordinator chat end to end (PLX-41, decision 0024): `project/start` against an
-//! in-process plxd whose backend is the fake CLI, in a real git repository. The coordinator runs
-//! in a detached worktree at the integration branch's tip, in the project's permission mode
+//! An orchestrator chat end to end (PLX-41, decision 0024): `orchestrator/start` against an
+//! in-process plxd whose backend is the fake CLI, in a real git repository. The orchestrator runs
+//! in a detached worktree at the integration branch's tip, in the orchestrator's permission mode
 //! (0042).
 
 use std::path::PathBuf;
@@ -9,25 +9,26 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::methods::{
-    AgentEvents, AgentList, AgentSend, AgentStart, EventsSubscribe, HostHealth, ProjectDelete,
-    ProjectList, ProjectStart, ProjectUpdate,
+    AgentEvents, AgentList, AgentSend, AgentStart, EventsSubscribe, HostHealth, OrchestratorDelete,
+    OrchestratorList, OrchestratorStart, OrchestratorUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AgentDelivery, AgentEventsParams, AgentListParams, AgentOutputItem,
     AgentPermission, AgentRun, AgentSendParams, AgentStartParams, AgentStatus, ErrorKind,
-    EventsEventParams, EventsSubscribeParams, HostHealthParams, ParallaxEvent, ProjectCreateParams,
-    ProjectDeleteParams, ProjectDeleteResult, ProjectId, ProjectListParams, ProjectPermission,
-    ProjectStartParams, ProjectUpdateParams, Provider, RunId, TurnId,
+    EventsEventParams, EventsSubscribeParams, HostHealthParams, OrchestratorCreateParams,
+    OrchestratorDeleteParams, OrchestratorDeleteResult, OrchestratorListParams,
+    OrchestratorPermission, OrchestratorStartParams, OrchestratorUpdateParams, ParallaxEvent,
+    Provider, RunId, ScopeId, TurnId,
 };
 use plxd::backend::fake::{FakeBackend, Step};
 use plxd::backend::{Backend, Capabilities, RunRequest, StartError, Started, ToolPolicy};
 use plxd::routing::BackendRegistry;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, project_params,
+    Conn, Host, create, end_turn, fake, fake_backend, git, init, items, orchestrator_params,
     send_params, subscribe, text, until, updated_to,
 };
-use crate::support::{PATIENCE, eventually, kind, project_update, temp_dir};
+use crate::support::{PATIENCE, eventually, kind, orchestrator_update, temp_dir};
 
 /// The fake backend, keeping every request it is asked to start.
 struct Recording {
@@ -66,9 +67,9 @@ fn recording(steps: Vec<Step>, seen: &Arc<Mutex<Vec<RunRequest>>>) -> BackendReg
     backends
 }
 
-pub(crate) fn start_params(project: ProjectId, prompt: &str) -> ProjectStartParams {
-    ProjectStartParams {
-        project,
+pub(crate) fn start_params(orchestrator: ScopeId, prompt: &str) -> OrchestratorStartParams {
+    OrchestratorStartParams {
+        orchestrator,
         run_id: RunId::generate(),
         prompt: prompt.to_owned(),
         account: Some(AccountChoice::Subscription {
@@ -82,54 +83,54 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> ProjectStartPara
     }
 }
 
-/// Where `host` keeps the coordinator's worktree for `project` (0042).
-fn coordinator_worktree(host: &Host, project: ProjectId) -> PathBuf {
+/// Where `host` keeps the orchestrator's worktree for `orchestrator` (0042).
+fn orchestrator_worktree(host: &Host, orchestrator: ScopeId) -> PathBuf {
     host.dir
         .path()
-        .join("coordinators")
-        .join(project.to_string())
+        .join("orchestrators")
+        .join(orchestrator.to_string())
 }
 
-/// PLX-397: what a coordinator writes stays in its own worktree. Neither the user's checkout nor
+/// PLX-397: what an orchestrator writes stays in its own worktree. Neither the user's checkout nor
 /// the integration branch sees it, and its next CLI process starts from a clean copy of the tip.
 #[tokio::test]
-async fn a_coordinators_edit_never_reaches_the_checkout_or_the_integration_branch() {
+async fn an_orchestrators_edit_never_reaches_the_checkout_or_the_integration_branch() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let write = |path: &str| Step::WriteFile {
         path: path.to_owned(),
-        content: "the coordinator's\n".to_owned(),
+        content: "the orchestrator's\n".to_owned(),
     };
     let script = vec![
-        init("coordinator-1"),
+        init("orchestrator-1"),
         write("README.md"),
         write("stray.txt"),
         end_turn("Edited."),
     ];
     let host = Host::start(temp_dir(), recording(script, &seen));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    let repo = PathBuf::from(&project.repo_path);
+    let orchestrator = create(&mut client, orchestrator_params(host.dir.path())).await;
+    let repo = PathBuf::from(&orchestrator.repo_path);
     let integration = host
         .dir
         .path()
         .join("integration")
-        .join(project.id.to_string());
+        .join(orchestrator.id.to_string());
     let tip = git(&repo, &["rev-parse", "parallax/app"]);
-    subscribe(&mut client, project.id, 0).await;
+    subscribe(&mut client, orchestrator.id, 0).await;
 
     let run = client
-        .call::<ProjectStart>(start_params(project.id, "Fix the README yourself."))
+        .call::<OrchestratorStart>(start_params(orchestrator.id, "Fix the README yourself."))
         .await
         .unwrap()
         .run;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
-    let worktree = coordinator_worktree(&host, project.id);
+    let worktree = orchestrator_worktree(&host, orchestrator.id);
     assert_eq!(seen.lock().unwrap()[0].cwd, worktree);
     assert_eq!(git(&worktree, &["rev-parse", "HEAD"]), tip, "at the tip");
     assert_eq!(git(&worktree, &["branch", "--show-current"]), "");
     assert_eq!(
         std::fs::read_to_string(worktree.join("README.md")).unwrap(),
-        "the coordinator's\n",
+        "the orchestrator's\n",
         "the edit is in its worktree"
     );
     for checkout in [&repo, &integration] {
@@ -146,12 +147,12 @@ async fn a_coordinators_edit_never_reaches_the_checkout_or_the_integration_branc
     // The next process, one that writes nothing, starts from a clean copy of the tip.
     let host = host
         .restart(recording(
-            vec![init("coordinator-1"), end_turn("Read.")],
+            vec![init("orchestrator-1"), end_turn("Read.")],
             &seen,
         ))
         .await;
     let mut client = host.client().await;
-    subscribe(&mut client, project.id, 0).await;
+    subscribe(&mut client, orchestrator.id, 0).await;
     client
         .call::<AgentSend>(send_params(run.id, TurnId::generate(), "Go on."))
         .await
@@ -167,22 +168,22 @@ async fn a_coordinators_edit_never_reaches_the_checkout_or_the_integration_branc
     host.server.stop().await;
 }
 
-/// 0060: a coordinator replaced while its session is idle has that session ended, so two
-/// coordinator CLIs never share the Project's worktree.
+/// 0060: an orchestrator replaced while its session is idle has that session ended, so two
+/// orchestrator CLIs never share the orchestrator's worktree.
 #[cfg(unix)]
 #[tokio::test]
-async fn a_replaced_coordinators_idle_session_ends() {
+async fn a_replaced_orchestrators_idle_session_ends() {
     let script = vec![
-        init("coordinator-1"),
+        init("orchestrator-1"),
         Step::EchoPid,
         Step::EndTurn { result: None },
         Step::AwaitFollowUp,
         end_turn("Done."),
     ];
     let host = Host::start(temp_dir(), fake(script));
-    let (mut client, project) = host.project_client().await;
+    let (mut client, orchestrator) = host.orchestrator_client().await;
     client
-        .call::<ProjectStart>(start_params(project.id, "Plan."))
+        .call::<OrchestratorStart>(start_params(orchestrator.id, "Plan."))
         .await
         .unwrap();
     let events = until(&mut client, updated_to(AgentStatus::Completed)).await;
@@ -200,34 +201,34 @@ async fn a_replaced_coordinators_idle_session_ends() {
     );
 
     client
-        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .call::<OrchestratorStart>(start_params(orchestrator.id, "Start over."))
         .await
         .unwrap();
     let deadline = std::time::Instant::now() + PATIENCE;
     while rustix::process::test_kill_process(pid).is_ok() {
         assert!(
             std::time::Instant::now() < deadline,
-            "the old coordinator still runs"
+            "the old orchestrator still runs"
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     host.server.stop().await;
 }
 
-/// Starts `project`'s coordinator on "Plan.".
-pub(crate) async fn plan(client: &mut Conn, project: ProjectId) -> AgentRun {
+/// Starts `orchestrator`'s orchestrator on "Plan.".
+pub(crate) async fn plan(client: &mut Conn, orchestrator: ScopeId) -> AgentRun {
     client
-        .call::<ProjectStart>(start_params(project, "Plan."))
+        .call::<OrchestratorStart>(start_params(orchestrator, "Plan."))
         .await
         .unwrap()
         .run
 }
 
-/// Workers on one script, and each coordinator launch on the next of its own, keeping every
+/// Workers on one script, and each orchestrator launch on the next of its own, keeping every
 /// request.
 struct Roles {
     worker: FakeBackend,
-    coordinator: Mutex<Vec<FakeBackend>>,
+    orchestrator_run: Mutex<Vec<FakeBackend>>,
     seen: Arc<Mutex<Vec<RunRequest>>>,
     permissions: &'static [AgentPermission],
 }
@@ -248,23 +249,27 @@ impl Backend for Roles {
     fn start(&self, request: RunRequest) -> Result<Started, StartError> {
         self.seen.lock().unwrap().push(request.clone());
         if request.policy == ToolPolicy::NoWrite {
-            self.coordinator.lock().unwrap().remove(0).start(request)
+            self.orchestrator_run
+                .lock()
+                .unwrap()
+                .remove(0)
+                .start(request)
         } else {
             self.worker.start(request)
         }
     }
 }
 
-/// Workers on `worker`, and each coordinator launch on the next of `coordinator`, in Auto or
+/// Workers on `worker`, and each orchestrator launch on the next of `orchestrator`, in Auto or
 /// Bypass.
 pub(crate) fn roles(
     worker: Vec<Step>,
-    coordinator: Vec<Vec<Step>>,
+    orchestrator_run: Vec<Vec<Step>>,
     seen: &Arc<Mutex<Vec<RunRequest>>>,
 ) -> BackendRegistry {
     roles_mapping(
         worker,
-        coordinator,
+        orchestrator_run,
         seen,
         &[AgentPermission::Auto, AgentPermission::Bypass],
     )
@@ -273,7 +278,7 @@ pub(crate) fn roles(
 /// [`roles`], mapping only `permissions`.
 pub(crate) fn roles_mapping(
     worker: Vec<Step>,
-    coordinator: Vec<Vec<Step>>,
+    orchestrator_run: Vec<Vec<Step>>,
     seen: &Arc<Mutex<Vec<RunRequest>>>,
     permissions: &'static [AgentPermission],
 ) -> BackendRegistry {
@@ -282,7 +287,7 @@ pub(crate) fn roles_mapping(
         Provider::Anthropic,
         Arc::new(Roles {
             worker: fake_backend(worker),
-            coordinator: Mutex::new(coordinator.into_iter().map(fake_backend).collect()),
+            orchestrator_run: Mutex::new(orchestrator_run.into_iter().map(fake_backend).collect()),
             seen: Arc::clone(seen),
             permissions,
         }),
@@ -290,8 +295,8 @@ pub(crate) fn roles_mapping(
     backends
 }
 
-/// Every coordinator launch `seen` so far.
-pub(crate) fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
+/// Every orchestrator launch `seen` so far.
+pub(crate) fn orchestrator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequest> {
     seen.lock()
         .unwrap()
         .iter()
@@ -300,62 +305,68 @@ pub(crate) fn coordinator_launches(seen: &Mutex<Vec<RunRequest>>) -> Vec<RunRequ
         .collect()
 }
 
-/// The `n`th coordinator launch, once it happens.
+/// The `n`th orchestrator launch, once it happens.
 pub(crate) async fn nth_launch(seen: &Mutex<Vec<RunRequest>>, n: usize) -> RunRequest {
     let deadline = Instant::now() + PATIENCE;
     loop {
-        if let Some(launch) = coordinator_launches(seen).get(n) {
+        if let Some(launch) = orchestrator_launches(seen).get(n) {
             return launch.clone();
         }
-        assert!(Instant::now() < deadline, "the coordinator was never woken");
+        assert!(
+            Instant::now() < deadline,
+            "the orchestrator was never woken"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
-/// A worker `project`'s coordinator starts through its tools, as `spawn_agent` would.
-pub(crate) async fn spawn(client: &mut Conn, coordinator: &AgentRun, task: &str) -> RunId {
+/// A worker `orchestrator`'s orchestrator starts through its tools, as `spawn_agent` would.
+pub(crate) async fn spawn(client: &mut Conn, orchestrator_run: &AgentRun, task: &str) -> RunId {
     let params = AgentStartParams {
-        coordinator_thread: coordinator.coordinator_thread,
-        ..crate::agents::start_params(coordinator.project, task)
+        orchestrator_thread: orchestrator_run.orchestrator_thread,
+        ..crate::agents::start_params(orchestrator_run.project, task)
     };
     client.call::<AgentStart>(params).await.unwrap().run.id
 }
 
-/// PLX-394 (0042): the coordinator and the runs it spawns run in the Project's mode, whatever
-/// they ask for, and a mode `project/update` changes applies from each run's next CLI process.
+/// PLX-394 (0042): the orchestrator and the runs it spawns run in the orchestrator's mode, whatever
+/// they ask for, and a mode `orchestrator/update` changes applies from each run's next CLI process.
 #[tokio::test]
-async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_process() {
+async fn an_orchestrators_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_process() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    // Workers never finish, so no wake-up takes a coordinator script.
+    // Workers never finish, so no wake-up takes an orchestrator script.
     let backends = roles(
         vec![init("worker-1"), Step::AwaitFollowUp],
         vec![
-            vec![init("coordinator-1"), end_turn("Planned.")],
-            vec![init("coordinator-1"), end_turn("Planned again.")],
+            vec![init("orchestrator-1"), end_turn("Planned.")],
+            vec![init("orchestrator-1"), end_turn("Planned again.")],
         ],
         &seen,
     );
     let host = Host::start(temp_dir(), backends);
     let mut client = host.client().await;
-    let project = create(
+    let orchestrator = create(
         &mut client,
-        ProjectCreateParams {
-            permission: Some(ProjectPermission::Bypass),
-            ..project_params(host.dir.path())
+        OrchestratorCreateParams {
+            permission: Some(OrchestratorPermission::Bypass),
+            ..orchestrator_params(host.dir.path())
         },
     )
     .await;
-    assert_eq!(project.permission, Some(ProjectPermission::Bypass));
-    subscribe(&mut client, project.id, 0).await;
-    let coordinator = client
-        .call::<ProjectStart>(ProjectStartParams {
+    assert_eq!(
+        orchestrator.permission,
+        Some(OrchestratorPermission::Bypass)
+    );
+    subscribe(&mut client, orchestrator.id, 0).await;
+    let orchestrator_run = client
+        .call::<OrchestratorStart>(OrchestratorStartParams {
             permission: Some(AgentPermission::Plan),
-            ..start_params(project.id, "Plan.")
+            ..start_params(orchestrator.id, "Plan.")
         })
         .await
         .unwrap()
         .run;
-    assert_eq!(coordinator.permission, Some(AgentPermission::Bypass));
+    assert_eq!(orchestrator_run.permission, Some(AgentPermission::Bypass));
     until(&mut client, updated_to(AgentStatus::Completed)).await;
     assert_eq!(
         nth_launch(&seen, 0).await.permission,
@@ -363,9 +374,9 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
     );
     let asked = client
         .call::<AgentStart>(AgentStartParams {
-            coordinator_thread: coordinator.coordinator_thread,
+            orchestrator_thread: orchestrator_run.orchestrator_thread,
             permission: Some(AgentPermission::Edit),
-            ..crate::agents::start_params(project.id, "Fix a typo.")
+            ..crate::agents::start_params(orchestrator.id, "Fix a typo.")
         })
         .await
         .unwrap()
@@ -373,18 +384,18 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
         .id;
 
     let updated = client
-        .call::<ProjectUpdate>(ProjectUpdateParams {
-            permission: Some(ProjectPermission::Auto),
-            ..project_update(project.id)
+        .call::<OrchestratorUpdate>(OrchestratorUpdateParams {
+            permission: Some(OrchestratorPermission::Auto),
+            ..orchestrator_update(orchestrator.id)
         })
         .await
         .unwrap()
-        .project;
-    assert_eq!(updated.permission, Some(ProjectPermission::Auto));
+        .orchestrator;
+    assert_eq!(updated.permission, Some(OrchestratorPermission::Auto));
     client
         .call::<AgentSend>(AgentSendParams {
             permission: Some(AgentPermission::Plan),
-            ..send_params(coordinator.id, TurnId::generate(), "Plan more.")
+            ..send_params(orchestrator_run.id, TurnId::generate(), "Plan more.")
         })
         .await
         .unwrap();
@@ -392,7 +403,7 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
         nth_launch(&seen, 1).await.permission,
         Some(AgentPermission::Auto)
     );
-    let after = spawn(&mut client, &coordinator, "Add a license.").await;
+    let after = spawn(&mut client, &orchestrator_run, "Add a license.").await;
 
     let launched = |run: RunId| {
         seen.lock()
@@ -406,27 +417,27 @@ async fn a_projects_runs_run_in_its_mode_and_a_new_mode_applies_from_their_next_
     host.server.stop().await;
 }
 
-/// PLX-222 (0031): a coordinator keeps `approvals` when it resumes. One started without them, as
+/// PLX-222 (0031): an orchestrator keeps `approvals` when it resumes. One started without them, as
 /// an older app starts it, asks too (PLX-473), as every child does, since the inbox answers (0042).
 #[tokio::test]
 async fn approvals_last_through_a_resume_and_every_child_has_them() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    // Workers never finish, so no wake-up takes a coordinator script.
+    // Workers never finish, so no wake-up takes an orchestrator script.
     let backends = roles(
         vec![init("worker-1"), Step::AwaitFollowUp],
         vec![
-            vec![init("coordinator-1"), end_turn("Planned.")],
-            vec![init("coordinator-1"), end_turn("Planned again.")],
-            vec![init("coordinator-2"), end_turn("Planned anew.")],
+            vec![init("orchestrator-1"), end_turn("Planned.")],
+            vec![init("orchestrator-1"), end_turn("Planned again.")],
+            vec![init("orchestrator-2"), end_turn("Planned anew.")],
         ],
         &seen,
     );
     let host = Host::start(temp_dir(), backends);
-    let (mut client, project) = host.project_client().await;
+    let (mut client, orchestrator) = host.orchestrator_client().await;
     let answering = client
-        .call::<ProjectStart>(ProjectStartParams {
+        .call::<OrchestratorStart>(OrchestratorStartParams {
             approvals: true,
-            ..start_params(project.id, "Plan.")
+            ..start_params(orchestrator.id, "Plan.")
         })
         .await
         .unwrap()
@@ -443,7 +454,7 @@ async fn approvals_last_through_a_resume_and_every_child_has_them() {
 
     // Starting over, from a client that doesn't answer.
     let quiet = client
-        .call::<ProjectStart>(start_params(project.id, "Start over."))
+        .call::<OrchestratorStart>(start_params(orchestrator.id, "Start over."))
         .await
         .unwrap()
         .run;
@@ -463,30 +474,30 @@ async fn approvals_last_through_a_resume_and_every_child_has_them() {
     host.server.stop().await;
 }
 
-/// PLX-42: two runs the coordinator started finish during its turn; once that turn ends, and with
+/// PLX-42: two runs the orchestrator started finish during its turn; once that turn ends, and with
 /// no client connected, plxd wakes it with one turn that names both.
 #[tokio::test]
-async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_connected() {
+async fn runs_finishing_during_a_orchestrator_turn_wake_it_once_with_no_client_connected() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let backends = roles(
         vec![init("worker-1"), end_turn("Added it.")],
         vec![
             vec![
-                init("coordinator-1"),
+                init("orchestrator-1"),
                 Step::AwaitFollowUp,
                 end_turn("Planned."),
             ],
-            vec![init("coordinator-1"), end_turn("Reviewed.")],
+            vec![init("orchestrator-1"), end_turn("Reviewed.")],
         ],
         &seen,
     );
     let host = Host::start(temp_dir(), backends);
-    let (mut client, project) = host.project_client().await;
-    let coordinator = plan(&mut client, project.id).await;
+    let (mut client, orchestrator) = host.orchestrator_client().await;
+    let orchestrator_run = plan(&mut client, orchestrator.id).await;
 
     let mut workers = Vec::new();
     for task in ["Add a README.", "Add a license."] {
-        workers.push(spawn(&mut client, &coordinator, task).await);
+        workers.push(spawn(&mut client, &orchestrator_run, task).await);
     }
     let mut left = workers.len();
     until(&mut client, |event| {
@@ -501,16 +512,16 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
     // Past wake-ups' 2 s batch: a turn in progress still holds them.
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(
-        coordinator_launches(&seen).len(),
+        orchestrator_launches(&seen).len(),
         1,
         "no wake-up during a turn"
     );
 
-    // The user's message, steered into the coordinator's turn, ends it; then nobody is watching.
+    // The user's message, steered into the orchestrator's turn, ends it; then nobody is watching.
     client
         .call::<AgentSend>(AgentSendParams {
             delivery: Some(AgentDelivery::Steer),
-            ..send_params(coordinator.id, TurnId::generate(), "Go on.")
+            ..send_params(orchestrator_run.id, TurnId::generate(), "Go on.")
         })
         .await
         .unwrap();
@@ -527,7 +538,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
     );
 
     let mut client = host.client().await;
-    subscribe(&mut client, project.id, 0).await;
+    subscribe(&mut client, orchestrator.id, 0).await;
     let events = until(&mut client, |event| {
         matches!(&event.event, ParallaxEvent::AgentOutput { items, .. } if items.iter().any(|item|
             matches!(item, AgentOutputItem::TurnStarted { wake: true, .. })))
@@ -537,7 +548,7 @@ async fn runs_finishing_during_a_coordinator_turn_wake_it_once_with_no_client_co
     else {
         unreachable!();
     };
-    assert_eq!(*run_id, coordinator.id);
+    assert_eq!(*run_id, orchestrator_run.id);
     assert!(items.contains(&AgentOutputItem::TurnStarted {
         turn_id: wake.turn_id,
         text: Some(wake.prompt.clone()),
@@ -558,48 +569,55 @@ fn subscribe_host(after: u64) -> EventsSubscribeParams {
     }
 }
 
-async fn delete(client: &mut Conn, project: ProjectId) -> Result<ProjectDeleteResult, ErrorObject> {
+async fn delete(
+    client: &mut Conn,
+    orchestrator: ScopeId,
+) -> Result<OrchestratorDeleteResult, ErrorObject> {
     client
-        .call::<ProjectDelete>(ProjectDeleteParams { project })
+        .call::<OrchestratorDelete>(OrchestratorDeleteParams { orchestrator })
         .await
 }
 
-async fn runs_of(client: &mut Conn, project: ProjectId) -> Vec<AgentRun> {
+async fn runs_of(client: &mut Conn, orchestrator: ScopeId) -> Vec<AgentRun> {
     let params = AgentListParams {
-        project: Some(project),
+        project: Some(orchestrator),
     };
     client.call::<AgentList>(params).await.unwrap().runs
 }
 
-fn deleted(project: ProjectId) -> impl FnMut(&EventsEventParams) -> bool {
-    move |event| matches!(&event.event, ParallaxEvent::ProjectDeleted { project: id } if *id == project)
+fn deleted(orchestrator: ScopeId) -> impl FnMut(&EventsEventParams) -> bool {
+    move |event| matches!(&event.event, ParallaxEvent::OrchestratorDeleted { orchestrator: id } if *id == orchestrator)
 }
 
-/// PLX-338: deleting a project stops its coordinator and the subagent it started, and removes
-/// their runs, events, worktree, and branch, its context folder, and the project itself, which
-/// `project.deleted` tells every client, then and on replay.
+/// PLX-338: deleting an orchestrator stops its orchestrator and the subagent it started, and
+/// removes their runs, events, worktree, and branch, its context folder, and the orchestrator
+/// itself, which `orchestrator.deleted` tells every client, then and on replay.
 #[tokio::test]
-async fn deleting_a_project_stops_its_agents_and_removes_everything() {
+async fn deleting_a_orchestrator_stops_its_agents_and_removes_everything() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let backends = roles(
         vec![init("worker-1"), text("Working"), Step::Hang],
-        vec![vec![init("coordinator-1"), Step::Hang]],
+        vec![vec![init("orchestrator-1"), Step::Hang]],
         &seen,
     );
     let host = Host::start(temp_dir(), backends);
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    let repo = PathBuf::from(&project.repo_path);
-    let context = host.dir.path().join("context").join(project.id.to_string());
+    let orchestrator = create(&mut client, orchestrator_params(host.dir.path())).await;
+    let repo = PathBuf::from(&orchestrator.repo_path);
+    let context = host
+        .dir
+        .path()
+        .join("context")
+        .join(orchestrator.id.to_string());
     assert!(context.is_dir());
     client
         .call::<EventsSubscribe>(subscribe_host(0))
         .await
         .unwrap();
-    subscribe(&mut client, project.id, 0).await;
-    let coordinator = plan(&mut client, project.id).await;
-    let worker = spawn(&mut client, &coordinator, "Build it.").await;
-    let mut running = vec![coordinator.id, worker];
+    subscribe(&mut client, orchestrator.id, 0).await;
+    let orchestrator_run = plan(&mut client, orchestrator.id).await;
+    let worker = spawn(&mut client, &orchestrator_run, "Build it.").await;
+    let mut running = vec![orchestrator_run.id, worker];
     until(&mut client, |event| {
         if let ParallaxEvent::AgentUpdated { run_id, state } = &event.event
             && state.status == AgentStatus::Running
@@ -609,7 +627,7 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
         running.is_empty()
     })
     .await;
-    let run = runs_of(&mut client, project.id)
+    let run = runs_of(&mut client, orchestrator.id)
         .await
         .into_iter()
         .find(|run| run.id == worker)
@@ -618,21 +636,21 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
     let branch = run.branch.unwrap();
     assert!(worktree.is_dir());
 
-    delete(&mut client, project.id).await.unwrap();
-    until(&mut client, deleted(project.id)).await;
+    delete(&mut client, orchestrator.id).await.unwrap();
+    until(&mut client, deleted(orchestrator.id)).await;
     let health = client
         .call::<HostHealth>(HostHealthParams {})
         .await
         .unwrap();
     assert_eq!(health.running_agents, 0, "both agents were stopped");
-    let projects = client
-        .call::<ProjectList>(ProjectListParams {})
+    let orchestrators = client
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap()
-        .projects;
-    assert!(projects.is_empty());
-    assert!(runs_of(&mut client, project.id).await.is_empty());
-    for run_id in [coordinator.id, worker] {
+        .orchestrators;
+    assert!(orchestrators.is_empty());
+    assert!(runs_of(&mut client, orchestrator.id).await.is_empty());
+    for run_id in [orchestrator_run.id, worker] {
         let events = client
             .call::<AgentEvents>(AgentEventsParams {
                 before: None,
@@ -646,12 +664,12 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
     }
     // The cleanup effects run once the deletes commit (0059).
     eventually(
-        "the worktrees, the branch, and the project's notes are removed",
+        "the worktrees, the branch, and the orchestrator's notes are removed",
         || {
             !worktree.exists()
                 && git(&repo, &["branch", "--list", &branch]).is_empty()
                 && !context.exists()
-                && !coordinator_worktree(&host, project.id).exists()
+                && !orchestrator_worktree(&host, orchestrator.id).exists()
         },
     )
     .await;
@@ -662,9 +680,9 @@ async fn deleting_a_project_stops_its_agents_and_removes_everything() {
         .call::<EventsSubscribe>(subscribe_host(0))
         .await
         .unwrap();
-    until(&mut replay, deleted(project.id)).await;
+    until(&mut replay, deleted(orchestrator.id)).await;
 
-    let again = delete(&mut client, project.id).await.unwrap_err();
-    assert_eq!(kind(&again), ErrorKind::ProjectNotFound);
+    let again = delete(&mut client, orchestrator.id).await.unwrap_err();
+    assert_eq!(kind(&again), ErrorKind::OrchestratorNotFound);
     host.server.stop().await;
 }

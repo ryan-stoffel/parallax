@@ -1,5 +1,5 @@
 //! Memory end to end (PLX-405, decision 0044): the app's `memory/*` methods, which write as the
-//! user, and the memory tools of `plxd mcp --thread`, by the caller's role: only a coordinator
+//! user, and the memory tools of `plxd mcp --thread`, by the caller's role: only an orchestrator
 //! writes, and a child's presented files never follow a symlink.
 
 use std::sync::{Arc, Mutex};
@@ -14,18 +14,18 @@ use parallax_protocol::{
     AgentListParams, AgentRun, AgentStatus, ContextListParams, ContextSaveArtifactParams,
     ContextWriteId, ContextWriteParams, ErrorKind, InboxKind, InboxListParams, MemoryDeleteParams,
     MemoryFile, MemoryKind, MemoryListParams, MemoryProposeParams, MemoryReadParams,
-    MemoryReadResult, MemoryScope, MemoryWriteParams, Project, ProjectId, Repo, RepoAddParams,
-    RepoId, RunId,
+    MemoryReadResult, MemoryScope, MemoryWriteParams, Orchestrator, Repo, RepoAddParams, RepoId,
+    RunId, ScopeId,
 };
 use plxd::backend::RunRequest;
 use plxd::backend::fake::Step;
 use serde_json::json;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, init, project_params, real_repo, until, updated_to,
+    Conn, Host, create, end_turn, fake, init, orchestrator_params, real_repo, until, updated_to,
 };
-use crate::coordinator::{plan, roles, spawn};
 use crate::mcp::{Mcp, mcp_command};
+use crate::orchestrator::{plan, roles, spawn};
 use crate::support::{kind, temp_dir};
 
 fn write(scope: MemoryScope, path: &str, content: &str, title: Option<&str>) -> MemoryWriteParams {
@@ -126,21 +126,21 @@ async fn names(mcp: &mut Mcp) -> Vec<String> {
     names
 }
 
-/// A Project whose coordinator has finished its first turn, and whose children hang.
-async fn project_with_coordinator(
+/// An orchestrator whose orchestrator has finished its first turn, and whose children hang.
+async fn orchestrator_with_orchestrator(
     seen: &Arc<Mutex<Vec<RunRequest>>>,
-) -> (Host, Conn, Project, AgentRun) {
-    let turn = |result: &str| vec![init("coordinator-1"), end_turn(result)];
+) -> (Host, Conn, Orchestrator, AgentRun) {
+    let turn = |result: &str| vec![init("orchestrator-1"), end_turn(result)];
     let backends = roles(
         vec![init("worker-1"), Step::Hang],
         vec![turn("Planned."), turn("Noted.")],
         seen,
     );
     let host = Host::start(temp_dir(), backends);
-    let (mut client, project) = host.project_client().await;
-    let coordinator = plan(&mut client, project.id).await;
+    let (mut client, project) = host.orchestrator_client().await;
+    let orchestrator = plan(&mut client, project.id).await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
-    (host, client, project, coordinator)
+    (host, client, project, orchestrator)
 }
 
 /// The app writes an entry as the user, with plxd's header, and lists, reads, and deletes it. The
@@ -149,8 +149,8 @@ async fn project_with_coordinator(
 async fn the_app_writes_reads_lists_and_deletes_an_entry_as_the_user() {
     let host = Host::start(temp_dir(), fake(vec![init("s-1"), end_turn("Done.")]));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
-    let scope = MemoryScope::Project { id: project.id };
+    let project = create(&mut client, orchestrator_params(host.dir.path())).await;
+    let scope = MemoryScope::Orchestrator { id: project.id };
     let path = "memory/decision/vitest.md";
 
     let refused = client
@@ -235,13 +235,13 @@ async fn the_you_and_repo_scopes_take_memory_and_bad_paths_are_refused() {
             .unwrap_err();
         assert_eq!(refused.code, INVALID_PARAMS, "{bad}");
     }
-    let id = ProjectId::generate();
-    let scope = MemoryScope::Project { id };
+    let id = ScopeId::generate();
+    let scope = MemoryScope::Orchestrator { id };
     let missing = client
         .call::<MemoryList>(MemoryListParams { scope })
         .await
         .unwrap_err();
-    assert_eq!(kind(&missing), ErrorKind::ProjectNotFound);
+    assert_eq!(kind(&missing), ErrorKind::OrchestratorNotFound);
     let id = RepoId::generate();
     let scope = MemoryScope::Repo { id };
     let missing = client
@@ -252,15 +252,15 @@ async fn the_you_and_repo_scopes_take_memory_and_bad_paths_are_refused() {
     host.server.stop().await;
 }
 
-/// Only the coordinator writes, and its write adds a `learned` inbox item. Its child has no
+/// Only the orchestrator writes, and its write adds a `learned` inbox item. Its child has no
 /// `memory_write`, and plxd refuses one in its name. Only the user writes the brief.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn only_the_coordinator_writes_and_its_write_adds_a_learned_item() {
+async fn only_the_orchestrator_writes_and_its_write_adds_a_learned_item() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let (host, mut client, project, coordinator) = project_with_coordinator(&seen).await;
-    let scope = MemoryScope::Project { id: project.id };
+    let (host, mut client, project, orchestrator) = orchestrator_with_orchestrator(&seen).await;
+    let scope = MemoryScope::Orchestrator { id: project.id };
 
-    let mut curator = tools(&host, coordinator.id).await;
+    let mut curator = tools(&host, orchestrator.id).await;
     let offered = names(&mut curator).await;
     assert_eq!(
         offered[offered.len() - 3..],
@@ -272,17 +272,20 @@ async fn only_the_coordinator_writes_and_its_write_adds_a_learned_item() {
             json!({"path": "memory/gotcha/flaky.md", "title": "CI is flaky", "content": "Retry."}),
         )
         .await;
-    assert_eq!(written["writer"], format!("coordinator {}", coordinator.id));
+    assert_eq!(
+        written["writer"],
+        format!("orchestrator {}", orchestrator.id)
+    );
     let params = InboxListParams {
-        project: project.id,
+        orchestrator: project.id,
     };
     let inbox = client.call::<InboxList>(params).await.unwrap().items;
     let learned = inbox.iter().find(|item| item.kind == InboxKind::Learned);
     let learned = learned.expect("a learned item");
-    assert_eq!(learned.run, coordinator.id);
+    assert_eq!(learned.run, orchestrator.id);
     assert!(learned.text.contains("CI is flaky"), "{}", learned.text);
 
-    let child = spawn(&mut client, &coordinator, "Fix the build.").await;
+    let child = spawn(&mut client, &orchestrator, "Fix the build.").await;
     let mut of_child = tools(&host, child).await;
     let offered = names(&mut of_child).await;
     assert_eq!(
@@ -299,22 +302,22 @@ async fn only_the_coordinator_writes_and_its_write_adds_a_learned_item() {
     };
     let refused = client.call::<MemoryWrite>(as_child).await.unwrap_err();
     assert_eq!(refused.code, INVALID_PARAMS);
-    assert!(refused.message.contains("only a Project's coordinator"));
+    assert!(refused.message.contains("only an orchestrator"));
     let listed = of_child.ok("memory_read", json!({})).await;
     assert_eq!(listed["files"][0]["path"], "memory/gotcha/flaky.md");
 
-    // 0044: the user writes or approves the brief, so the coordinator proposes it.
+    // 0044: the user writes or approves the brief, so the orchestrator proposes it.
     let brief = json!({"path": "brief.md", "content": "Mine."});
     let refused = curator.refused("memory_write", brief).await;
     assert!(
         refused.contains("only the user writes the brief"),
         "{refused}"
     );
-    let as_coordinator = MemoryWriteParams {
-        from: Some(coordinator.id),
+    let as_orchestrator = MemoryWriteParams {
+        from: Some(orchestrator.id),
         ..write(scope, "brief.md", "Mine.", None)
     };
-    let refused = client.call::<MemoryWrite>(as_coordinator).await;
+    let refused = client.call::<MemoryWrite>(as_orchestrator).await;
     assert_eq!(refused.unwrap_err().code, INVALID_PARAMS);
     let childs_brief = MemoryProposeParams {
         kind: None,
@@ -324,7 +327,7 @@ async fn only_the_coordinator_writes_and_its_write_adds_a_learned_item() {
     assert_eq!(
         refused.unwrap_err().code,
         INVALID_PARAMS,
-        "a coordinator's alone"
+        "an orchestrator's alone"
     );
     host.server.stop().await;
 }
@@ -346,12 +349,12 @@ async fn child_folder(client: &mut Conn, run: RunId) -> std::path::PathBuf {
 }
 
 /// PLX-941: a symlink in the child's folder is never followed, so it can't copy a file from
-/// outside into the Project.
+/// outside into the orchestrator.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_symlinked_source_is_never_saved_as_an_artifact() {
     let seen = Arc::new(Mutex::new(Vec::new()));
-    let (host, mut client, project, coordinator) = project_with_coordinator(&seen).await;
-    let child = spawn(&mut client, &coordinator, "Take a screenshot.").await;
+    let (host, mut client, project, orchestrator) = orchestrator_with_orchestrator(&seen).await;
+    let child = spawn(&mut client, &orchestrator, "Take a screenshot.").await;
     let folder = child_folder(&mut client, child).await;
     let outside = temp_dir();
     std::fs::write(outside.path().join("secret.png"), b"secret").unwrap();

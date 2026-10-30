@@ -145,7 +145,7 @@ impl Backend for CursorSdkBackend {
             "cwd": request.cwd,
             "model": request.model,
             // ponytail: Cursor's `systemPrompt` replaces its whole harness prompt, so a
-            // coordinator's instructions lead each process's first message instead, and a
+            // orchestrator's instructions lead each process's first message instead, and a
             // compaction inside one process can still drop them (0078).
             "prompt": request.first_prompt(),
             "agentId": request.resume.as_ref().map(|resume| &resume.session_id),
@@ -851,7 +851,7 @@ fn permission_name(permission: Option<AgentPermission>) -> Result<&'static str, 
 fn mcp_servers(request: &RunRequest) -> Result<Option<Value>, StartError> {
     let config = if let Some(tools) = &request.thread_tools {
         Some(tools.mcp_config()?)
-    } else if let Some(tools) = &request.coordinator_tools {
+    } else if let Some(tools) = &request.orchestrator_tools {
         Some(tools.mcp_config()?)
     } else {
         None
@@ -1045,7 +1045,7 @@ esac
             permission: None,
             context_window: None,
             fast: None,
-            coordinator_tools: None,
+            orchestrator_tools: None,
             thread_tools: None,
             approvals: false,
             thread: true,

@@ -12,7 +12,7 @@
       "subscription": "01a0f100-0000-7000-8000-000000000001",
       "snapshot": {
         "seq": 210,
-        "projects": [],
+        "orchestrators": [],
         "repos": [
           {
             "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
@@ -114,7 +114,10 @@
             "event": {
               "kind": "agent.output",
               "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
-              "items": [{ "kind": "turnStarted" }, { "kind": "text", "text": "Looking at the theme code." }]
+              "items": [
+                { "kind": "turnStarted" },
+                { "kind": "text", "text": "Looking at the theme code." }
+              ]
             }
           }
         ],
@@ -138,10 +141,7 @@
           "seq": 200,
           "time": "2026-10-03T12:00:00Z",
           "project": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
-          "event": {
-            "kind": "agent.started",
-            "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b"
-          }
+          "event": { "kind": "agent.started", "runId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b" }
         }
       ],
       "more": false
@@ -156,7 +156,10 @@
       "threadId": "01a0d390-2c3d-7e4f-9a0b-1c2d3e4f5a6b",
       "messageId": "01a0e010-0000-7000-8000-000000000002",
       "text": "Use the system setting by default.",
-      "dispatchMode": { "type": "steer_active", "targetRunId": "01a0f100-0000-7000-8000-000000000003" }
+      "dispatchMode": {
+        "type": "steer_active",
+        "targetRunId": "01a0f100-0000-7000-8000-000000000003"
+      }
     }
   },
   {

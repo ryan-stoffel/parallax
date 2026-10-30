@@ -1,7 +1,7 @@
 //! Memory (decision 0044, PLX-405), behind the `memory` capability: the brief, entries, and
 //! knowledge in a scope's context folder. `memory/list`, `memory/read`, `memory/write`, and
 //! `memory/delete` are the app's, which writes as the user. A thread's Parallax tools also use
-//! `memory/write` with `from`, which only a Project's coordinator may, and `memory/propose`.
+//! `memory/write` with `from`, which only an orchestrator may, and `memory/propose`.
 //!
 //! A path is relative to the scope's folder: `brief.md`, `memory/<kind>/<slug>.md`,
 //! `knowledge/<slug>.md`, or a plain thread's proposal, `proposals/<slug>.md`. An entry's file
@@ -17,9 +17,9 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{ProjectId, RepoId, RunId};
+use crate::{RepoId, RunId, ScopeId};
 
-/// Whose memory: the user's own, a repository's, or a Project's (0044).
+/// Whose memory: the user's own, a repository's, or an orchestrator's (0044).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(
     tag = "kind",
@@ -27,19 +27,20 @@ use crate::{ProjectId, RepoId, RunId};
     rename_all_fields = "camelCase"
 )]
 pub enum MemoryScope {
-    /// Preferences across every Project and thread, in `context/you`.
+    /// Preferences across every orchestrator and thread, in `context/you`.
     You,
-    /// Facts about one codebase, shared by its Projects and threads. Fails with `repoNotFound`
+    /// Facts about one codebase, shared by its orchestrators and threads. Fails with `repoNotFound`
     /// unless `id` is a repo entry with a repository.
     Repo {
         /// The repo entry.
         id: RepoId,
     },
-    /// A Project's brief, decisions, and knowledge. Fails with `projectNotFound` for an unknown
-    /// Project.
-    Project {
-        /// The Project.
-        id: ProjectId,
+    /// An orchestrator's brief, decisions, and knowledge. Fails with `orchestratorNotFound` for an
+    /// unknown orchestrator.
+    #[serde(alias = "project")]
+    Orchestrator {
+        /// The Orchestrator.
+        id: ScopeId,
     },
 }
 
@@ -51,10 +52,11 @@ pub enum MemoryScope {
 pub enum MemoryScopeKind {
     /// The user's own.
     You,
-    /// The repository's of the folder's Project, or the folder's own repository.
+    /// The repository's of the folder's Orchestrator, or the folder's own repository.
     Repo,
-    /// The Project's.
-    Project,
+    /// The orchestrator's.
+    #[serde(alias = "project")]
+    Orchestrator,
     /// A value this version does not know yet.
     #[serde(other)]
     #[ts(skip)]
@@ -108,23 +110,23 @@ pub struct MemoryFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub date: Option<String>,
-    /// Who wrote it: `user`, or `coordinator <run id>`, or for a proposal `thread <run id>` or
-    /// `coordinator <run id>`.
+    /// Who wrote it: `user`, or `orchestrator <run id>`, or for a proposal `thread <run id>` or
+    /// `orchestrator <run id>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub writer: Option<String>,
-    /// For a proposal in a Project's folder, the scope it is for: a child's, which its
-    /// coordinator curates, or a coordinator's, which the user saves there.
+    /// For a proposal in an orchestrator's folder, the scope it is for: a child's, which its
+    /// orchestrator curates, or an orchestrator's, which the user saves there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub for_scope: Option<MemoryScopeKind>,
-    /// For a coordinator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
+    /// For an orchestrator's proposal, the entry it rewrites, `memory/<kind>/<name>.md` at
     /// `for_scope`, which saving it replaces.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub replaces: Option<String>,
     /// An entry plxd marked for review because a path it names in backticks is missing from its
-    /// branch: the integration branch for a Project entry, the base branch for a repo entry
+    /// branch: the integration branch for an orchestrator entry, the base branch for a repo entry
     /// (0044, PLX-407). Rewriting the entry clears it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
@@ -200,7 +202,7 @@ pub struct MemoryReadResult {
 /// Params of `memory/write`: replaces `brief.md`, `knowledge/<slug>.md`, or an entry,
 /// `memory/<kind>/<slug>.md`, in full. For an entry, plxd writes the header from `title`, which it
 /// then needs, `source`, today's UTC date, and the writer. Fails with `contextTooLarge` over the
-/// shared context caps. Only the user writes the brief: a coordinator proposes it.
+/// shared context caps. Only the user writes the brief: an orchestrator proposes it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryWriteParams {
@@ -218,9 +220,9 @@ pub struct MemoryWriteParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub source: Option<String>,
-    /// The run writing, for a thread's Parallax tools. It must be its Project's current
-    /// coordinator, or the write fails with `invalidParams`, and the write adds a `learned` item to
-    /// that Project's inbox. Absent: the user writes.
+    /// The run writing, for a thread's Parallax tools. It must be its orchestrator's current
+    /// orchestrator, or the write fails with `invalidParams`, and the write adds a `learned` item
+    /// to that orchestrator's inbox. Absent: the user writes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub from: Option<RunId>,
@@ -251,11 +253,11 @@ pub struct MemoryDeleteParams {
 pub struct MemoryDeleteResult {}
 
 /// Params of `memory/propose`, for a thread's Parallax tools: run `from` proposes an entry, saved
-/// as `proposals/<slug>.md`. A Project's child's is saved in the Project's folder, with a `Scope:`
-/// line naming `scope`, and its coordinator's next wake-up carries it, then removes it; it
-/// doesn't wake the coordinator. A coordinator's is saved the same way, for the user, and no
-/// wake-up carries it. A plain thread's, only at its own repository's scope, is saved there for
-/// the user. Any other run's fails with `invalidParams`.
+/// as `proposals/<slug>.md`. An orchestrator's child's is saved in the orchestrator's folder, with
+/// a `Scope:` line naming `scope`, and its orchestrator's next wake-up carries it, then removes it;
+/// it doesn't wake the orchestrator. An orchestrator's is saved the same way, for the user, and no
+/// wake-up carries it. A plain thread's, only at its own repository's scope, is saved there for the
+/// user. Any other run's fails with `invalidParams`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MemoryProposeParams {
@@ -263,8 +265,8 @@ pub struct MemoryProposeParams {
     pub from: RunId,
     /// The scope the entry belongs in.
     pub scope: MemoryScope,
-    /// Its kind. Absent: a rewrite of the Project's brief, which only its coordinator proposes,
-    /// at the Project's scope. Its proposal has no kind.
+    /// Its kind. Absent: a rewrite of the orchestrator's brief, which only its orchestrator
+    /// proposes, at the orchestrator's scope. Its proposal has no kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub kind: Option<MemoryKind>,
@@ -273,7 +275,7 @@ pub struct MemoryProposeParams {
     /// Its body.
     pub content: String,
     /// The entry it rewrites, `memory/<kind>/<name>.md` of the same kind at `scope`, which must
-    /// exist. Only a coordinator names one; its proposal records it as `replaces`.
+    /// exist. Only an orchestrator names one; its proposal records it as `replaces`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub replaces: Option<String>,
@@ -285,8 +287,9 @@ pub struct MemoryProposeParams {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum MemoryProposalTo {
-    /// The Project's coordinator, at its next wake-up.
-    Coordinator,
+    /// The orchestrator, at its next wake-up.
+    #[serde(alias = "coordinator")]
+    Orchestrator,
     /// The user, in the Memory tab.
     User,
     /// A value this version does not know yet.

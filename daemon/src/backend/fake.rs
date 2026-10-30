@@ -289,7 +289,7 @@ impl Backend for FakeBackend {
         Box::pin(std::future::ready(Ok(rewind.session_id)))
     }
 
-    /// A Project's two modes (0042), so the app's end-to-end tests can run one. The fake CLI
+    /// An orchestrator's two modes (0042), so the app's end-to-end tests can run one. The fake CLI
     /// ignores them.
     fn permissions(&self) -> &[AgentPermission] {
         &[AgentPermission::Auto, AgentPermission::Bypass]

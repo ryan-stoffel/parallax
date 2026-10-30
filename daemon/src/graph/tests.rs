@@ -3,7 +3,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use parallax_protocol::{
     AgentApprovalBy, AgentApprovalDecision, AgentOutputItem, AgentToolStatus, ApprovalId,
-    ParallaxEvent, ProjectId, RunId, ThreadRun, ThreadRunStatus, TurnId,
+    ParallaxEvent, RunId, ScopeId, ThreadRun, ThreadRunStatus, TurnId,
 };
 use parallax_store::{Store, StoredEvent};
 use tokio_util::sync::CancellationToken;
@@ -16,7 +16,7 @@ fn open(dir: &Path) -> StoreHandle {
 }
 
 /// Stages `events` for one thread in one job, as the actor stages a batch.
-async fn stage(store: &StoreHandle, project: ProjectId, events: Vec<ParallaxEvent>) {
+async fn stage(store: &StoreHandle, project: ScopeId, events: Vec<ParallaxEvent>) {
     store
         .run(&CancellationToken::new(), move |db| {
             for event in events {
@@ -145,7 +145,7 @@ fn pairs(nodes: &[(&str, &str)]) -> Vec<(String, String)> {
 async fn a_turn_becomes_a_run_with_its_tools_and_requests_as_nodes() {
     let dir = tempfile::tempdir().unwrap();
     let store = open(dir.path());
-    let (thread, project) = (RunId::generate(), ProjectId::generate());
+    let (thread, project) = (RunId::generate(), ScopeId::generate());
     let approval_id = ApprovalId::generate();
     stage(
         &store,
@@ -229,7 +229,7 @@ async fn a_turn_becomes_a_run_with_its_tools_and_requests_as_nodes() {
 async fn a_thread_from_before_the_graph_is_imported_on_its_next_event() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("plxd.sqlite3");
-    let (thread, project) = (RunId::generate(), ProjectId::generate());
+    let (thread, project) = (RunId::generate(), ScopeId::generate());
     let second = TurnId::generate();
     {
         let store = Store::open(&path).unwrap();

@@ -20,7 +20,7 @@ use crate::server::Daemon;
 use crate::store::store_error;
 
 /// Methods that claim a 0052 receipt when the request carries `commandId`, until each becomes an
-/// orchestrator command (0059).
+/// dispatcher command (0059).
 pub(crate) const RECEIPTED_METHODS: &[&str] = &[
     "agent/approve",
     "agent/commit",
@@ -35,13 +35,16 @@ pub(crate) const RECEIPTED_METHODS: &[&str] = &[
     "land/queue",
     "land/approve",
     "land/sendBack",
-    "project/start",
+    "orchestrator/start",
 ];
 
-/// Methods whose receipts the orchestrator keeps (0059). Like [`RECEIPTED_METHODS`], they run
+/// Methods whose receipts the dispatcher keeps (0059). Like [`RECEIPTED_METHODS`], they run
 /// to the end when their connection closes.
-const ORCHESTRATED_METHODS: &[&str] =
-    &["orchestration/dispatch", "project/delete", "thread/delete"];
+const ORCHESTRATED_METHODS: &[&str] = &[
+    "orchestration/dispatch",
+    "orchestrator/delete",
+    "thread/delete",
+];
 
 /// Detached command tasks and in-memory waiters for an in-flight claim.
 pub(crate) struct Commands {
@@ -133,7 +136,7 @@ impl Commands {
     }
 }
 
-/// Whether `method` keeps a receipt, 0052's or the orchestrator's.
+/// Whether `method` keeps a receipt, 0052's or the dispatcher's.
 #[must_use]
 pub(crate) fn keeps_receipt(method: &str) -> bool {
     RECEIPTED_METHODS.contains(&method) || ORCHESTRATED_METHODS.contains(&method)
@@ -244,8 +247,8 @@ fn is_mutating_write(method: &str) -> bool {
             | "thread/fork"
             | "thread/archive"
             | "thread/update"
-            | "project/create"
-            | "project/update"
+            | "orchestrator/create"
+            | "orchestrator/update"
             | "context/write"
             | "pr/link"
             | "pr/unlink"

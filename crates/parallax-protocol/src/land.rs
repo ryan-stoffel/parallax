@@ -1,15 +1,16 @@
-//! A Project's landing queue (PLX-410, decision 0045), behind the `landing` capability: the
-//! coordinator queues a finished child with its `land` tool (`land/queue`), the user approves it
+//! An orchestrator's landing queue (PLX-410, decision 0045), behind the `landing` capability: the
+//! orchestrator queues a finished child with its `land` tool (`land/queue`), the user approves it
 //! with `land/approve` or sends it back with `land/sendBack`, and plxd squash-merges children onto
-//! the Project's integration branch one at a time. What happens shows in the Project's inbox.
+//! the orchestrator's integration branch one at a time. What happens shows in the orchestrator's
+//! inbox.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{ProjectId, RunId};
+use crate::{RunId, ScopeId};
 
-/// Where a child is in its Project's landing queue.
+/// Where a child is in its orchestrator's landing queue.
 ///
 /// A newer plxd may send a status this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -18,7 +19,8 @@ pub enum LandingStatus {
     /// It waits for the user's `land/approve` or `land/sendBack`, and the inbox has a `needsYou`
     /// item for it.
     Waiting,
-    /// Approved, or the Project lands automatically: it lands when its turn in the queue comes.
+    /// Approved, or the orchestrator lands automatically: it lands when its turn in the queue
+    /// comes.
     Queued,
     /// Its branch conflicted with the integration branch, or the user sent it back: the child has
     /// a message saying what to do, and plxd queues it again when that turn ends.
@@ -34,26 +36,27 @@ pub enum LandingStatus {
     Unknown,
 }
 
-/// A child in its Project's landing queue.
+/// A child in its orchestrator's landing queue.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Landing {
     /// The child's run.
     pub run_id: RunId,
-    /// Its Project.
-    pub project: ProjectId,
+    /// Its Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
     /// Where it is.
     pub status: LandingStatus,
     /// When it was last queued, in RFC 3339 UTC. The queue lands the oldest first.
     pub queued_at: Timestamp,
 }
 
-/// Params of `land/queue`: queues a finished child of a Project to land on its integration
-/// branch, as the coordinator's `land` tool does. It waits for the user's approval unless the
-/// Project's `autoLand` is on. A child already waiting, queued, or sent back stays as it is.
+/// Params of `land/queue`: queues a finished child of an orchestrator to land on its integration
+/// branch, as the orchestrator's `land` tool does. It waits for the user's approval unless the
+/// orchestrator's `autoLand` is on. A child already waiting, queued, or sent back stays as it is.
 ///
-/// Fails with `runNotFound`, or `landRefused` for a run that isn't a Project's completed child
-/// with a branch, such as one started with `explore`.
+/// Fails with `runNotFound`, or `landRefused` for a run that isn't an orchestrator's completed
+/// child with a branch, such as one started with `explore`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LandQueueParams {

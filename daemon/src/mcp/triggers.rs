@@ -106,7 +106,7 @@ pub fn definitions() -> Vec<Value> {
     vec![
         tool(
             "schedule_task",
-            "Create work that runs on a schedule, even when no turn is active. Report the returned nextRunAt. A webhook run sees its request only through prompt placeholders: {{body.path}} (such as {{body.action}} or {{body.release.tag_name}}), {{headers.name}}, {{query.name}}, {{body}}, or {{request}} (method, headers with credentials redacted, and body). For a sender that signs requests, first call request_secret so the user enters the secret privately (never ask for it in chat or invent one), then set signature with the returned secretRef. Give the user the result's webhookUrl; when it is absent, remote access is off on this host, so tell the user to turn it on in Settings > Connections, or share webhookPath for a sender on this network. By default each run posts into this thread; use bindToCurrentThread=false only when the user wants a fresh thread per run. A fresh thread uses this thread's repository, model, effort, and access, and in a Project, each run goes to the Project's coordinator.",
+            "Create work that runs on a schedule, even when no turn is active. Report the returned nextRunAt. A webhook run sees its request only through prompt placeholders: {{body.path}} (such as {{body.action}} or {{body.release.tag_name}}), {{headers.name}}, {{query.name}}, {{body}}, or {{request}} (method, headers with credentials redacted, and body). For a sender that signs requests, first call request_secret so the user enters the secret privately (never ask for it in chat or invent one), then set signature with the returned secretRef. Give the user the result's webhookUrl; when it is absent, remote access is off on this host, so tell the user to turn it on in Settings > Connections, or share webhookPath for a sender on this network. By default each run posts into this thread; use bindToCurrentThread=false only when the user wants a fresh thread per run. A fresh thread uses this thread's repository, model, effort, and access, and in an orchestrator, each run goes to the orchestrator.",
             object(
                 json!({
                     "prompt": {"type": "string", "description": "What each run sends, at most 64 KiB."},
@@ -579,7 +579,7 @@ async fn schedule(binding: &Binding, args: ScheduleArgs) -> Result<String, Strin
         enabled: enabled.unwrap_or(true),
         schedule,
         thread: None,
-        project: None,
+        orchestrator: None,
         repo: None,
         account: None,
         model: None,
@@ -621,7 +621,7 @@ async fn update(binding: &Binding, args: UpdateArgs) -> Result<String, String> {
         enabled: enabled.unwrap_or(task.enabled),
         schedule: schedule.unwrap_or(task.schedule),
         thread: task.thread,
-        project: task.project,
+        orchestrator: task.orchestrator,
         repo: task.repo,
         account: task.account,
         model: task.model,
@@ -693,14 +693,14 @@ async fn pull_request(binding: &Binding, name: &str, target: TargetArgs) -> Resu
 }
 
 /// Points a task at the caller's thread, or with `bound` false, at a fresh thread like it: in its
-/// repository with its model, effort, and access, or in a Project, at the coordinator.
+/// repository with its model, effort, and access, or in an orchestrator, at the orchestrator.
 async fn bind(
     binding: &Binding,
     params: &mut ScheduleSaveParams,
     bound: bool,
 ) -> Result<(), String> {
     params.thread = None;
-    params.project = None;
+    params.orchestrator = None;
     params.repo = None;
     if bound {
         params.thread = Some(binding.run);
@@ -721,7 +721,7 @@ async fn bind(
                 .find(|repo| repo.id == thread.repo && !repo.scratch)
                 .map(|repo| repo.id);
         }
-        None => params.project = Some(caller.project),
+        None => params.orchestrator = Some(caller.project),
     }
     inherit(params, &caller);
     Ok(())

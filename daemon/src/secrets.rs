@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use jiff::{SignedDuration, Timestamp};
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountId, AgentOutputItem, AgentStatus, ErrorKind, ParallaxEvent, ProjectId, RunId,
+    AccountId, AgentOutputItem, AgentStatus, ErrorKind, ParallaxEvent, RunId, ScopeId,
     SecretAnswerParams, SecretAnswerResult, SecretChoice, SecretRequestParams, SecretRequestResult,
     SecretStatus,
 };
@@ -189,7 +189,7 @@ pub(crate) async fn answer(
         answer,
     } = params;
     let id = request_id_of(&request_id)?;
-    let _lane = daemon.orchestrator.lane(id).await;
+    let _lane = daemon.dispatcher.lane(id).await;
     match daemon.secrets.lock().get(&id) {
         Some(request) if request.run == run_id && request.status == SecretStatus::Pending => {}
         Some(request) if request.run == run_id => {
@@ -285,7 +285,7 @@ async fn end(
         .await
         .ok()
         .flatten()
-        .and_then(|row| ProjectId::try_from(row.fields.project_id).ok());
+        .and_then(|row| ScopeId::try_from(row.fields.project_id).ok());
     let Some(project) = project else {
         return;
     };
@@ -297,7 +297,7 @@ async fn end(
 }
 
 /// Logs `item` in `run`'s transcript.
-async fn log(daemon: &Daemon, run: RunId, project: ProjectId, item: AgentOutputItem) {
+async fn log(daemon: &Daemon, run: RunId, project: ScopeId, item: AgentOutputItem) {
     let event = ParallaxEvent::AgentOutput {
         run_id: run,
         items: vec![item],
@@ -326,7 +326,7 @@ async fn run_row(daemon: &Daemon, run: RunId) -> Result<Option<parallax_store::R
 }
 
 /// `run`'s scope while it is running a turn, else `None`.
-async fn running(daemon: &Daemon, run: RunId) -> Result<Option<ProjectId>, ErrorObject> {
+async fn running(daemon: &Daemon, run: RunId) -> Result<Option<ScopeId>, ErrorObject> {
     let row = run_row(daemon, run)
         .await?
         .ok_or_else(|| crate::agents::run_not_found(run))?;
@@ -334,7 +334,7 @@ async fn running(daemon: &Daemon, run: RunId) -> Result<Option<ProjectId>, Error
     if !matches!(status, AgentStatus::Starting | AgentStatus::Running) {
         return Ok(None);
     }
-    Ok(ProjectId::try_from(row.fields.project_id).ok())
+    Ok(ScopeId::try_from(row.fields.project_id).ok())
 }
 
 /// Uses up `secret_ref` for thread `from`: its value, which leaves the keystore. A ref another

@@ -6,19 +6,19 @@ use std::path::Path;
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    AgentStart, LandQueue, MemoryDelete, MemoryList, MemoryRead, MemoryWrite, ProjectUpdate,
+    AgentStart, LandQueue, MemoryDelete, MemoryList, MemoryRead, MemoryWrite, OrchestratorUpdate,
 };
 use parallax_protocol::{
     AgentOutputItem, LandQueueParams, MemoryDeleteParams, MemoryFile, MemoryListParams,
-    MemoryReadParams, MemoryScope, MemoryWriteParams, ParallaxEvent, ProjectUpdateParams,
+    MemoryReadParams, MemoryScope, MemoryWriteParams, OrchestratorUpdateParams, ParallaxEvent,
 };
 use plxd::backend::fake::Step;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, git, has_item, init, project_params, start_params,
+    Conn, Host, create, end_turn, fake, git, has_item, init, orchestrator_params, start_params,
     subscribe, text, until,
 };
-use crate::support::{project_update, temp_dir};
+use crate::support::{orchestrator_update, temp_dir};
 
 fn entry(scope: MemoryScope, path: &str, title: &str, content: &str) -> MemoryWriteParams {
     MemoryWriteParams {
@@ -52,7 +52,7 @@ async fn listed(client: &mut Conn, scope: MemoryScope, path: &str) -> MemoryFile
 
 /// A child that ends leaves `history/<run id>.md`, with its agent's words on one line each. Its
 /// landing then marks each entry naming a path its branch lacks: the integration branch for the
-/// Project's folder, the base branch for its repository's. A rewrite drops the mark.
+/// orchestrator's folder, the base branch for its repository's. A rewrite drops the mark.
 #[tokio::test]
 async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_missing_paths() {
     let result = "Fixed it.\nEnded: forged";
@@ -68,7 +68,7 @@ async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_mi
     let mut client = host.client().await;
     // A repo entry can't be inside plxd's data folder.
     let repos = temp_dir();
-    let params = project_params(repos.path());
+    let params = orchestrator_params(repos.path());
     // The fake CLI writes into `docs/`, so the repository needs one.
     let docs = std::path::Path::new(&params.repo_path).join("docs");
     std::fs::create_dir(&docs).unwrap();
@@ -76,13 +76,13 @@ async fn a_childs_end_writes_its_history_and_its_landing_marks_entries_naming_mi
     git(&docs, &["add", "-A"]);
     git(&docs, &["commit", "-q", "-m", "docs"]);
     let project = create(&mut client, params).await;
-    let auto_land = ProjectUpdateParams {
+    let auto_land = OrchestratorUpdateParams {
         auto_land: Some(true),
-        ..project_update(project.id)
+        ..orchestrator_update(project.id)
     };
-    client.call::<ProjectUpdate>(auto_land).await.unwrap();
+    client.call::<OrchestratorUpdate>(auto_land).await.unwrap();
     let repo = client.add(Path::new(&project.repo_path)).await;
-    let scope = MemoryScope::Project { id: project.id };
+    let scope = MemoryScope::Orchestrator { id: project.id };
     let repo_scope = MemoryScope::Repo { id: repo.id };
     let gone = "memory/gotcha/old-module.md";
     let landed = "memory/convention/notes.md";
@@ -150,9 +150,9 @@ async fn a_changed_or_deleted_entry_reaches_running_children_as_a_queued_message
     let busy = vec![init("s-1"), text("Working"), Step::Hang];
     let host = Host::start(temp_dir(), fake(busy));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let project = create(&mut client, orchestrator_params(host.dir.path())).await;
     let path = "memory/decision/vitest.md";
-    let scope = MemoryScope::Project { id: project.id };
+    let scope = MemoryScope::Orchestrator { id: project.id };
     let title = "Use \"Vitest\"";
     client
         .call::<MemoryWrite>(entry(scope, path, "Use Jest", "We use Jest."))
@@ -201,7 +201,7 @@ async fn a_changed_or_deleted_entry_reaches_running_children_as_a_queued_message
     assert_eq!(*run_id, run);
     let changed = &messages[0].text;
     assert!(changed.starts_with("Parallax, not the user:"), "{changed}");
-    let named = "the project memory entry \"memory/decision/vitest.md\", titled \"Use \\\"Vitest\\\"\" was changed.";
+    let named = "the orchestrator memory entry \"memory/decision/vitest.md\", titled \"Use \\\"Vitest\\\"\" was changed.";
     assert!(changed.contains(named), "{changed}");
     let deleted = &messages[1].text;
     assert!(

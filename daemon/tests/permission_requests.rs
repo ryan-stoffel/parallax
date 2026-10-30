@@ -109,10 +109,10 @@ fn claude_backend(
     ClaudeBackend::new(Launcher::new(DataDir::new(data).unwrap(), env)).with_program(wrapper())
 }
 
-/// A coordinator in Manual at `cwd`, which is full Claude Code (0027), on an API key, whose
+/// An orchestrator in Manual at `cwd`, which is full Claude Code (0027), on an API key, whose
 /// client answers permission requests. Its plxd tools' server can't reach a plxd, so it fails
 /// to start, which the run doesn't need.
-fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
+fn orchestrator(cwd: &Path, data: &Path) -> RunRequest {
     RunRequest {
         run_id: RunId::generate(),
         turn_id: None,
@@ -131,7 +131,7 @@ fn coordinator(cwd: &Path, data: &Path) -> RunRequest {
         permission: Some(AgentPermission::Manual),
         context_window: None,
         fast: None,
-        coordinator_tools: Some(ThreadTools {
+        orchestrator_tools: Some(ThreadTools {
             program: PathBuf::from(env!("CARGO_BIN_EXE_plxd")),
             data_dir: data.to_owned(),
             run: RunId::generate(),
@@ -239,10 +239,10 @@ fn done() -> Outcome {
     }
 }
 
-/// A coordinator's Bash asks first. plxd allows it for the rest of the session with the rule the
+/// An orchestrator's Bash asks first. plxd allows it for the rest of the session with the rule the
 /// CLI offered, so the probe runs, and the same call later runs without asking.
 #[tokio::test]
-async fn a_manual_coordinator_runs_bash_once_plxd_allows_it() {
+async fn a_manual_orchestrator_runs_bash_once_plxd_allows_it() {
     let Some(claude) = claude_under_test() else {
         return;
     };
@@ -250,7 +250,7 @@ async fn a_manual_coordinator_runs_bash_once_plxd_allows_it() {
     let probe = ToolCall::bash("sh probe.sh");
     let api = fake_api(vec![probe.clone(), probe]).await;
     let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
-    let request = coordinator(&folders.project, &folders.data);
+    let request = orchestrator(&folders.project, &folders.data);
 
     let events = drive(&backend, request, |_| Decision::Allow {
         input: None,
@@ -277,10 +277,10 @@ async fn a_manual_coordinator_runs_bash_once_plxd_allows_it() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A coordinator's Bash asks, plxd denies it with the user's words, and the CLI skips the call
+/// An orchestrator's Bash asks, plxd denies it with the user's words, and the CLI skips the call
 /// and tells the model why.
 #[tokio::test]
-async fn a_manual_coordinator_skips_bash_that_plxd_denies() {
+async fn a_manual_orchestrator_skips_bash_that_plxd_denies() {
     const DENIAL: &str = "Not now: Parallax's test denies this call.";
     let Some(claude) = claude_under_test() else {
         return;
@@ -288,7 +288,7 @@ async fn a_manual_coordinator_skips_bash_that_plxd_denies() {
     let folders = Folders::new();
     let api = fake_api(vec![ToolCall::bash("sh probe.sh")]).await;
     let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
-    let request = coordinator(&folders.project, &folders.data);
+    let request = orchestrator(&folders.project, &folders.data);
 
     let events = drive(&backend, request, |_| Decision::Deny {
         message: DENIAL.into(),
@@ -309,10 +309,10 @@ async fn a_manual_coordinator_skips_bash_that_plxd_denies() {
     assert_eq!(outcome(&events), &done(), "{events:#?}");
 }
 
-/// A coordinator whose client doesn't answer runs as before the prompt channel: Claude Code
+/// An orchestrator whose client doesn't answer runs as before the prompt channel: Claude Code
 /// denies its Bash without asking anyone, and the turn goes on.
 #[tokio::test]
-async fn a_manual_coordinator_without_approvals_is_denied_without_asking() {
+async fn a_manual_orchestrator_without_approvals_is_denied_without_asking() {
     let Some(claude) = claude_under_test() else {
         return;
     };
@@ -321,7 +321,7 @@ async fn a_manual_coordinator_without_approvals_is_denied_without_asking() {
     let backend = claude_backend(&claude, &api, &folders.root, &folders.home, &folders.data);
     let request = RunRequest {
         approvals: false,
-        ..coordinator(&folders.project, &folders.data)
+        ..orchestrator(&folders.project, &folders.data)
     };
 
     let events = drive(&backend, request, |asked| {
@@ -656,7 +656,7 @@ fn plain(folders: &Folders, resume: Option<Resume>) -> RunRequest {
         permission: None,
         context_window: None,
         fast: None,
-        coordinator_tools: None,
+        orchestrator_tools: None,
         thread_tools: None,
         approvals: false,
         thread: false,

@@ -1,12 +1,12 @@
 //! A thread's memory tools (0044, PLX-405), served next to [`super::thread`]'s.
 //!
-//! - A Project's coordinator gets `memory_read`, `memory_propose`, and `memory_write`, at the You,
-//!   Repo, and Project scopes. Its writes add a `learned` inbox item. It proposes for the user a
+//! - An orchestrator gets `memory_read`, `memory_propose`, and `memory_write`, at the You, Repo,
+//!   and Orchestrator scopes. Its writes add a `learned` inbox item. It proposes for the user a
 //!   rewrite the Memory tab asked for, and any change to the brief, which only the user writes.
-//! - A Project's child gets `memory_read` and `memory_propose` at the same scopes. A proposal
-//!   waits for the coordinator's next wake-up.
-//! - A thread outside a Project, in a repository, gets `memory_read` and `memory_propose` at its
-//!   repository's scope only. A proposal waits for the user in the Memory tab.
+//! - An orchestrator's child gets `memory_read` and `memory_propose` at the same scopes. A proposal
+//!   waits for the orchestrator's next wake-up.
+//! - A thread outside an orchestrator, in a repository, gets `memory_read` and `memory_propose` at
+//!   its repository's scope only. A proposal waits for the user in the Memory tab.
 //!
 //! A scope is named `you`, `repo`, or `project`. The server resolves it from its caller, so no
 //! tool takes an id, and plxd checks the caller's role again on `memory/write` and
@@ -17,18 +17,18 @@ use std::path::Path;
 use parallax_protocol::methods::{MemoryList, MemoryPropose, MemoryRead, MemoryWrite, ThreadList};
 use parallax_protocol::{
     AgentRun, MemoryListParams, MemoryProposalTo, MemoryProposeParams, MemoryReadParams,
-    MemoryScope, MemoryWriteParams, Project, ProjectId, RepoId, RunId, ThreadListParams,
+    MemoryScope, MemoryWriteParams, Orchestrator, RepoId, RunId, ScopeId, ThreadListParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{MAX_CONTEXT_BYTES, MAX_PATH_BYTES, Plxd, check_text, object, parse, pretty, tool};
 
-/// A Project's child's memory tools, and a plain thread's.
+/// An orchestrator's child's memory tools, and a plain thread's.
 pub const CHILD_TOOLS: &[&str] = &["memory_read", "memory_propose"];
 
-/// A coordinator's memory tools.
-pub const COORDINATOR_TOOLS: &[&str] = &["memory_read", "memory_propose", "memory_write"];
+/// An orchestrator's memory tools.
+pub const ORCHESTRATOR_TOOLS: &[&str] = &["memory_read", "memory_propose", "memory_write"];
 
 /// The longest title, in bytes, as plxd takes it.
 const MAX_TITLE_BYTES: usize = 256;
@@ -38,12 +38,12 @@ const MAX_PROPOSAL_BYTES: usize = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Role {
-    /// A thread outside a Project.
+    /// A thread outside an orchestrator.
     Thread,
-    /// A Project's run other than its coordinator.
+    /// An orchestrator's run other than its orchestrator.
     Child,
-    /// A Project's coordinator.
-    Coordinator,
+    /// An orchestrator.
+    Orchestrator,
 }
 
 /// The memory a caller reaches: its role, and the ids its scopes stand for.
@@ -52,21 +52,21 @@ pub(super) struct Memory {
     role: Role,
     /// Its repository's entry, if it has one.
     repo: Option<RepoId>,
-    /// Its Project.
-    project: Option<ProjectId>,
+    /// Its Orchestrator.
+    project: Option<ScopeId>,
 }
 
 impl Memory {
-    /// `caller`'s memory: in `project` if it is a Project's run, as its `coordinator` or a
+    /// `caller`'s memory: in `project` if it is an orchestrator's run, as its `orchestrator` or a
     /// child, or else in its own repository. `None` for a thread with no repository.
     pub(super) async fn of(
         plxd: &Plxd,
         caller: &AgentRun,
-        project: Option<&Project>,
-        coordinator: bool,
+        project: Option<&Orchestrator>,
+        orchestrator: bool,
     ) -> Result<Option<Self>, String> {
         let listed = plxd.call::<ThreadList>(ThreadListParams {}).await?;
-        // Repo entries keep canonical paths; a Project keeps the one it was created with.
+        // Repo entries keep canonical paths; an orchestrator keeps the one it was created with.
         let repo_at = |path: &str| {
             let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.into());
             listed
@@ -77,8 +77,8 @@ impl Memory {
         };
         if let Some(project) = project {
             return Ok(Some(Self {
-                role: if coordinator {
-                    Role::Coordinator
+                role: if orchestrator {
+                    Role::Orchestrator
                 } else {
                     Role::Child
                 },
@@ -97,7 +97,7 @@ impl Memory {
 
     pub(super) fn names(&self) -> &'static [&'static str] {
         match self.role {
-            Role::Coordinator => COORDINATOR_TOOLS,
+            Role::Orchestrator => ORCHESTRATOR_TOOLS,
             Role::Thread | Role::Child => CHILD_TOOLS,
         }
     }
@@ -106,7 +106,7 @@ impl Memory {
     fn scopes(&self) -> &'static [&'static str] {
         match self.role {
             Role::Thread => &["repo"],
-            Role::Child | Role::Coordinator => &["project", "repo", "you"],
+            Role::Child | Role::Orchestrator => &["orchestrator", "repo", "you"],
         }
     }
 
@@ -115,8 +115,9 @@ impl Memory {
             "type": "string",
             "enum": self.scopes(),
             "description": format!(
-                "Whose memory: project (your Project's), repo (your repository's, shared by its \
-                 Projects and threads), or you (the user's own, across everything). Default {}.",
+                "Whose memory: orchestrator (your orchestrator's), repo (your repository's, shared \
+                 by its orchestrators and threads), or you (the user's own, across everything). \
+                 Default {}.",
                 self.scopes()[0]
             ),
         });
@@ -134,7 +135,7 @@ impl Memory {
             true,
         );
         let kinds: &[&str] = match self.role {
-            Role::Coordinator => &["preference", "convention", "decision", "gotcha", "brief"],
+            Role::Orchestrator => &["preference", "convention", "decision", "gotcha", "brief"],
             Role::Thread | Role::Child => &["preference", "convention", "decision", "gotcha"],
         };
         let mut properties = json!({
@@ -143,17 +144,17 @@ impl Memory {
             "title": title,
             "content": {"type": "string", "description": "The entry, at most 4 KiB: the fact, and for a decision why. For a brief, the whole brief, at most 1 MiB."},
         });
-        if self.role == Role::Coordinator {
+        if self.role == Role::Orchestrator {
             properties["path"] = json!({"type": "string", "description": "The entry this rewrites, memory/<kind>/<name>.md at scope, as memory_read lists it. Saving the proposal replaces it. Omit it for a new entry or a brief."});
         }
         let propose = tool(
             "memory_propose",
             match self.role {
-                Role::Coordinator => {
+                Role::Orchestrator => {
                     "Propose a memory change for the user to save or discard: a rewrite the Memory tab asked for, or a new brief (kind brief, project scope; only the user writes the brief). To rewrite an existing entry, name it in path."
                 }
                 Role::Child => {
-                    "Propose a memory entry: a lasting fact a later thread should start with, not what you did today. Your coordinator reviews it at its next wake-up and saves it or drops it."
+                    "Propose a memory entry: a lasting fact a later thread should start with, not what you did today. Your orchestrator reviews it at its next wake-up and saves it or drops it."
                 }
                 Role::Thread => {
                     "Propose a memory entry for your repository: a lasting fact a later thread should start with, not what you did today. The user reviews it and saves it or drops it."
@@ -162,7 +163,7 @@ impl Memory {
             object(properties, &["kind", "title", "content"]),
             false,
         );
-        if self.role != Role::Coordinator {
+        if self.role != Role::Orchestrator {
             return vec![read, propose];
         }
         let write = tool(
@@ -197,8 +198,8 @@ impl Memory {
             }),
             _ => self
                 .project
-                .map(|id| MemoryScope::Project { id })
-                .ok_or_else(|| "you aren't in a Project".to_owned()),
+                .map(|id| MemoryScope::Orchestrator { id })
+                .ok_or_else(|| "you aren't in an orchestrator".to_owned()),
         }
     }
 
@@ -251,7 +252,7 @@ impl Memory {
                 if let Some(path) = &path {
                     check_text("path", path, MAX_PATH_BYTES)?;
                 }
-                // `brief` is the coordinator's rewrite of the brief, which has no kind. plxd
+                // `brief` is the orchestrator's rewrite of the brief, which has no kind. plxd
                 // refuses it from anyone else, and any kind it doesn't know.
                 let kind = match kind.as_str() {
                     "brief" => None,
@@ -271,7 +272,7 @@ impl Memory {
                     MemoryProposalTo::User => {
                         "Proposed. It waits for the user to save or drop it.".to_owned()
                     }
-                    _ => "Proposed. Your coordinator reviews it at its next wake-up.".to_owned(),
+                    _ => "Proposed. Your orchestrator reviews it at its next wake-up.".to_owned(),
                 })
             }
             "memory_write" => {

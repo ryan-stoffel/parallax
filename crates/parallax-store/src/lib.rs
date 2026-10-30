@@ -1,7 +1,7 @@
-//! SQLite-backed storage for Parallax projects, key accounts, agent runs and the images sent to them,
-//! normal threads and their repo entries, Projects' inboxes, landing queues, and their children's
-//! questions, plxd's event log, its orchestrator's receipts, effects, and thread graph (0059),
-//! and its scheduled tasks and pull request watches (0063).
+//! SQLite-backed storage for Parallax projects, key accounts, agent runs and the images sent to
+//! them, normal threads and their repo entries, orchestrators' inboxes, landing queues, and their
+//! children's questions, plxd's event log, its dispatcher's receipts, effects, and thread graph
+//! (0059), and its scheduled tasks and pull request watches (0063).
 //!
 //! [`Store`] owns one SQLite connection and applies its own versioned
 //! migrations on open. The caller chooses the database path; this crate
@@ -13,7 +13,6 @@
 mod accounts;
 mod attached;
 mod board;
-mod coordinator_sessions;
 mod defaults;
 mod error;
 mod events;
@@ -24,8 +23,9 @@ mod landings;
 mod lineage;
 mod migrations;
 mod orchestration;
+mod orchestrator;
+mod orchestrator_sessions;
 mod placements;
-mod project;
 mod questions;
 mod queue;
 mod receipts;
@@ -50,7 +50,6 @@ use uuid::Uuid;
 
 pub use accounts::{Account, AccountFields};
 pub use board::BoardItem;
-pub use coordinator_sessions::NOT_RESUMABLE;
 pub use defaults::RoleDefault;
 pub use error::StoreError;
 pub use events::{CompactableTurn, StoredEvent};
@@ -60,8 +59,9 @@ pub use inbox::InboxItem;
 pub use landings::Landing;
 pub use lineage::Lineage;
 pub use orchestration::{ClaimedEffect, EffectOutcome, NewEffect, OrchestrationReceipt};
+pub use orchestrator::{ChosenIcon, Orchestrator, OrchestratorEdit, OrchestratorFields};
+pub use orchestrator_sessions::NOT_RESUMABLE;
 pub use placements::Placement;
-pub use project::{Project, ProjectEdit, ProjectFields, ProjectIcon};
 pub use questions::Question;
 pub use queue::QueuedRow;
 pub use receipts::{CommandReceipt, RECEIPT_RETENTION_SECS};

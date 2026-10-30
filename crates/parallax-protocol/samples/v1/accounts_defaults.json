@@ -15,16 +15,14 @@
     "id": 31,
     "method": "accounts/defaults/set",
     "params": {
-      "role": "coordinator",
+      "role": "orchestrator",
       "account": { "kind": "subscription", "backend": "claude" }
     }
   },
   {
     "jsonrpc": "2.0",
     "id": 31,
-    "result": {
-      "coordinator": { "kind": "subscription", "backend": "claude" }
-    }
+    "result": { "orchestrator": { "kind": "subscription", "backend": "claude" } }
   },
   {
     "jsonrpc": "2.0",
@@ -32,21 +30,15 @@
     "method": "accounts/defaults/set",
     "params": {
       "role": "worker",
-      "account": {
-        "kind": "key",
-        "id": "01a0d34e-01e0-7dc0-b326-598cbff22aa1"
-      }
+      "account": { "kind": "key", "id": "01a0d34e-01e0-7dc0-b326-598cbff22aa1" }
     }
   },
   {
     "jsonrpc": "2.0",
     "id": 32,
     "result": {
-      "coordinator": { "kind": "subscription", "backend": "claude" },
-      "worker": {
-        "kind": "key",
-        "id": "01a0d34e-01e0-7dc0-b326-598cbff22aa1"
-      }
+      "orchestrator": { "kind": "subscription", "backend": "claude" },
+      "worker": { "kind": "key", "id": "01a0d34e-01e0-7dc0-b326-598cbff22aa1" }
     }
   },
   {
@@ -59,11 +51,8 @@
     "jsonrpc": "2.0",
     "id": 33,
     "result": {
-      "coordinator": { "kind": "subscription", "backend": "claude" },
-      "worker": {
-        "kind": "key",
-        "id": "01a0d34e-01e0-7dc0-b326-598cbff22aa1"
-      }
+      "orchestrator": { "kind": "subscription", "backend": "claude" },
+      "worker": { "kind": "key", "id": "01a0d34e-01e0-7dc0-b326-598cbff22aa1" }
     }
   },
   {
@@ -75,8 +64,6 @@
   {
     "jsonrpc": "2.0",
     "id": 34,
-    "result": {
-      "coordinator": { "kind": "subscription", "backend": "claude" }
-    }
+    "result": { "orchestrator": { "kind": "subscription", "backend": "claude" } }
   }
 ]

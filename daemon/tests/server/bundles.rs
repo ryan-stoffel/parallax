@@ -1,4 +1,4 @@
-//! `bundle/*` and `git/startMerge` (0057): a device plxd in-process with a Project child, a
+//! `bundle/*` and `git/startMerge` (0057): a device plxd in-process with an orchestrator child, a
 //! second repository cloned from it as the home plxd's, and the home side's helpers over a
 //! `peer::Plxd` on the device's socket.
 
@@ -19,8 +19,8 @@ use plxd::worktree::WorktreeManager;
 use tempfile::TempDir;
 
 use crate::agents::{
-    Conn, Host, create, end_turn, fake, git, init, project_params, start_params, subscribe, until,
-    updated_to,
+    Conn, Host, create, end_turn, fake, git, init, orchestrator_params, start_params, subscribe,
+    until, updated_to,
 };
 use crate::support::{InProcess, kind, temp_dir};
 
@@ -29,7 +29,7 @@ const MIB: u64 = 1024 * 1024;
 /// The cap plxd gives a bundle.
 const CAP: u64 = 64 * MIB;
 
-/// A device with a Project child that ran `steps`, and the child's run id, repository, and
+/// A device with an orchestrator child that ran `steps`, and the child's run id, repository, and
 /// worktree, once it is `status`.
 struct Device {
     host: Host,
@@ -41,7 +41,7 @@ struct Device {
 
 async fn device(host: Host, status: AgentStatus) -> Device {
     let mut client = host.client().await;
-    let params = project_params(host.dir.path());
+    let params = orchestrator_params(host.dir.path());
     let repo = PathBuf::from(&params.repo_path);
     let project = create(&mut client, params).await;
     subscribe(&mut client, project.id, 0).await;

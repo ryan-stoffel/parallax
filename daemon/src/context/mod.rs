@@ -1,11 +1,11 @@
 //! Shared context: a folder per scope, outside any git repository, that agents and the editor
 //! read and write (decision records 0005 and 0044, #155, PLX-405).
 //!
-//! Layout: [`crate::paths::DataDir::context_dir`] under the data folder for a Project or a repo
-//! entry, and [`you_dir`] for the user's own memory. A path is relative to that folder: one file
-//! name, or a file in one of 0044's [`FOLDERS`], `memory/<kind>/`, `knowledge/`, `history/`, and
-//! `proposals/` (a plain thread's memory proposals, waiting for the user), or a file of any type
-//! under `artifacts/<thread>/` (PLX-941), at its path in the child's folder, which plxd copies
+//! Layout: [`crate::paths::DataDir::context_dir`] under the data folder for an orchestrator or a
+//! repo entry, and [`you_dir`] for the user's own memory. A path is relative to that folder: one
+//! file name, or a file in one of 0044's [`FOLDERS`], `memory/<kind>/`, `knowledge/`, `history/`,
+//! and `proposals/` (a plain thread's memory proposals, waiting for the user), or a file of any
+//! type under `artifacts/<thread>/` (PLX-941), at its path in the child's folder, which plxd copies
 //! there from a child's `present_files`. Every component is a normal name with no `..`, `\`, `:`,
 //! or leading `/`, and none is hidden but an artifact's own folders, such as `.screenshots/`.
 //! Outside `artifacts/` the file ends in `.md`, `.markdown`, or `.txt`, and nothing else nests, so
@@ -49,7 +49,7 @@ use std::sync::{Mutex, PoisonError};
 
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{ContextFile, ContextWriteId, ErrorKind, ProjectId};
+use parallax_protocol::{ContextFile, ContextWriteId, ErrorKind, ScopeId};
 
 use crate::paths::DataDir;
 
@@ -83,14 +83,14 @@ pub(crate) const MAX_BULK_BYTES: u64 = 2048 * MAX_FILE_BYTES;
 const ALLOWED_EXTENSIONS: [&str; 3] = ["md", "markdown", "txt"];
 
 /// Creates a project's shared context folder if it does not exist yet, private like the data
-/// folder itself. Safe to call on every access: `project/create` calls it eagerly and best
+/// folder itself. Safe to call on every access: `orchestrator/create` calls it eagerly and best
 /// effort, and every `context/*` call calls it again lazily, so an existing project that predates
 /// this feature still gets one.
-pub(crate) fn ensure_dir(data_dir: &DataDir, project: ProjectId) -> io::Result<PathBuf> {
+pub(crate) fn ensure_dir(data_dir: &DataDir, project: ScopeId) -> io::Result<PathBuf> {
     ensure(data_dir.context_dir(project))
 }
 
-/// The user's own scope, You (0044): preferences across every Project and thread.
+/// The user's own scope, You (0044): preferences across every orchestrator and thread.
 pub(crate) fn you_dir(data_dir: &DataDir) -> PathBuf {
     data_dir.context_root().join("you")
 }
@@ -578,7 +578,7 @@ pub(crate) enum Existing {
 /// async method handlers alike, like [`crate::event_log::EventLog`].
 #[derive(Default)]
 pub(crate) struct ContextIndex {
-    records: Mutex<HashMap<(ProjectId, String), Record>>,
+    records: Mutex<HashMap<(ScopeId, String), Record>>,
 }
 
 impl ContextIndex {
@@ -586,7 +586,7 @@ impl ContextIndex {
     /// with different content or a different writer.
     pub fn check(
         &self,
-        project: ProjectId,
+        project: ScopeId,
         path: &str,
         write_id: ContextWriteId,
         content: &[u8],
@@ -618,7 +618,7 @@ impl ContextIndex {
     /// `write`'s, in which case nothing is recorded.
     pub fn write_protocol<T>(
         &self,
-        project: ProjectId,
+        project: ScopeId,
         path: &str,
         write_id: ContextWriteId,
         writer: Option<String>,
@@ -652,7 +652,7 @@ impl ContextIndex {
     /// get its content taken for an agent's.
     pub fn record_disk_write(
         &self,
-        project: ProjectId,
+        project: ScopeId,
         path: &str,
         read: impl FnOnce() -> Option<Vec<u8>>,
     ) -> bool {
@@ -677,13 +677,13 @@ impl ContextIndex {
     }
 
     /// Who last wrote `path` in `project`, if plxd has seen a write to it since it started.
-    pub fn writer_of(&self, project: ProjectId, path: &str) -> Option<String> {
+    pub fn writer_of(&self, project: ScopeId, path: &str) -> Option<String> {
         self.lock()
             .get(&(project, path.to_owned()))
             .and_then(|record| record.writer.clone())
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(ProjectId, String), Record>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(ScopeId, String), Record>> {
         self.records.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
@@ -796,7 +796,7 @@ mod tests {
     #[test]
     fn the_index_tells_new_writes_from_retries_and_conflicts() {
         let index = ContextIndex::default();
-        let project = parallax_protocol::ProjectId::generate();
+        let project = parallax_protocol::ScopeId::generate();
         let id = parallax_protocol::ContextWriteId::generate();
         assert_eq!(
             index.check(project, "notes.md", id, b"hello", None),

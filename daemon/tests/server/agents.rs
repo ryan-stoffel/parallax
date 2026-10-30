@@ -14,7 +14,7 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::methods::{
     AgentAccept, AgentCancel, AgentDiff, AgentEvents, AgentFile, AgentList, AgentRequestChanges,
-    AgentSend, AgentStart, EventsEvent, EventsSubscribe, NotificationMethod, ProjectCreate,
+    AgentSend, AgentStart, EventsEvent, EventsSubscribe, NotificationMethod, OrchestratorCreate,
     RepoAdd, RequestMethod,
 };
 use parallax_protocol::{
@@ -23,8 +23,8 @@ use parallax_protocol::{
     AgentFileResult, AgentFileSide, AgentFileStatus, AgentListParams, AgentMerge, AgentMergeKind,
     AgentOutcome, AgentOutputItem, AgentPolicy, AgentRequestChangesParams, AgentRun,
     AgentSendParams, AgentStartParams, AgentStatus, DiffSummary, ErrorKind, EventsEventParams,
-    EventsSubscribeParams, InitializeResult, ParallaxEvent, Project, ProjectCreateParams,
-    ProjectId, Provider, Repo, RepoAddParams, RepoId, RunId, TurnId,
+    EventsSubscribeParams, InitializeResult, Orchestrator, OrchestratorCreateParams, ParallaxEvent,
+    Provider, Repo, RepoAddParams, RepoId, RunId, ScopeId, TurnId,
 };
 use plxd::backend::Event;
 use plxd::backend::fake::{FakeBackend, Script, Step};
@@ -114,7 +114,7 @@ fn hang() -> Vec<Step> {
     vec![init("hang-1"), text("Working"), Step::Hang]
 }
 
-pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams {
+pub(crate) fn start_params(project: ScopeId, prompt: &str) -> AgentStartParams {
     AgentStartParams {
         run_id: RunId::generate(),
         project,
@@ -123,7 +123,7 @@ pub(crate) fn start_params(project: ProjectId, prompt: &str) -> AgentStartParams
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),
         }),
-        coordinator_thread: None,
+        orchestrator_thread: None,
         notify: None,
         model: None,
         effort: None,
@@ -192,25 +192,25 @@ impl Host {
         Conn::ready(&self.server.socket).await
     }
 
-    /// A client on a new Project in a new real repository, subscribed to its events from the
+    /// A client on a new orchestrator in a new real repository, subscribed to its events from the
     /// start.
-    pub(crate) async fn project_client(&self) -> (Conn, Project) {
+    pub(crate) async fn orchestrator_client(&self) -> (Conn, Orchestrator) {
         let mut client = self.client().await;
-        let project = create(&mut client, project_params(self.dir.path())).await;
+        let project = create(&mut client, orchestrator_params(self.dir.path())).await;
         subscribe(&mut client, project.id, 0).await;
         (client, project)
     }
 }
 
 /// The project id a repo entry's events carry: the entry's own id.
-pub(crate) fn scope(repo: RepoId) -> ProjectId {
-    ProjectId::try_from(uuid::Uuid::from(repo)).unwrap()
+pub(crate) fn scope(repo: RepoId) -> ScopeId {
+    ScopeId::try_from(uuid::Uuid::from(repo)).unwrap()
 }
 
 /// Params for a project on a new real repository under `dir`.
-pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
-    ProjectCreateParams {
-        id: ProjectId::generate(),
+pub(crate) fn orchestrator_params(dir: &Path) -> OrchestratorCreateParams {
+    OrchestratorCreateParams {
+        id: ScopeId::generate(),
         name: "app".to_owned(),
         repo_path: real_repo(dir).to_str().unwrap().to_owned(),
         icon: None,
@@ -220,11 +220,15 @@ pub(crate) fn project_params(dir: &Path) -> ProjectCreateParams {
     }
 }
 
-pub(crate) async fn create(client: &mut Conn, params: ProjectCreateParams) -> Project {
-    client.call::<ProjectCreate>(params).await.unwrap().project
+pub(crate) async fn create(client: &mut Conn, params: OrchestratorCreateParams) -> Orchestrator {
+    client
+        .call::<OrchestratorCreate>(params)
+        .await
+        .unwrap()
+        .orchestrator
 }
 
-pub(crate) async fn subscribe(client: &mut Conn, project: ProjectId, after: u64) {
+pub(crate) async fn subscribe(client: &mut Conn, project: ScopeId, after: u64) {
     client
         .call::<EventsSubscribe>(EventsSubscribeParams {
             after,
@@ -449,7 +453,7 @@ fn assert_committed(repo: &Path, branch: &str, worktree: &Path, diff: &DiffSumma
 /// run's own events.
 async fn assert_replays(
     host: &Host,
-    project: ProjectId,
+    project: ScopeId,
     run_id: RunId,
     events: &[EventsEventParams],
 ) {
@@ -492,7 +496,7 @@ async fn assert_replays(
         .chain(&rest.events)
         .map(|event| event.seq)
         .collect();
-    // The run's own events, which carry its id: not the Project's context or inbox events.
+    // The run's own events, which carry its id: not the orchestrator's context or inbox events.
     let run_events: Vec<u64> = events
         .iter()
         .filter(|event| serde_json::to_value(&event.event).unwrap()["runId"] == run_id.to_string())
@@ -508,15 +512,15 @@ async fn assert_replays(
 #[tokio::test]
 async fn a_worker_edits_its_worktree_writes_shared_context_commits_and_replays() {
     let dir = temp_dir();
-    let project_params = project_params(dir.path());
+    let orchestrator_params = orchestrator_params(dir.path());
     let note = dir
         .path()
         .join("context")
-        .join(project_params.id.to_string())
+        .join(orchestrator_params.id.to_string())
         .join("notes.md");
     let host = Host::start(dir, fake(editing_script(&note)));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params).await;
+    let project = create(&mut client, orchestrator_params).await;
     subscribe(&mut client, project.id, 0).await;
 
     let params = start_params(project.id, "Rewrite the README");
@@ -606,7 +610,7 @@ async fn a_run_interrupted_by_a_restart_or_a_crash_resumes_by_its_session() {
     let host = Host::start(dir, fake(hang()));
     let mut client = Conn::connect(&host.server.socket).await;
     let first_log = client.initialize().await.log_id;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let project = create(&mut client, orchestrator_params(host.dir.path())).await;
     subscribe(&mut client, project.id, 0).await;
     let params = start_params(project.id, "Work until plxd stops");
     let run_id = params.run_id;
@@ -771,16 +775,16 @@ async fn recorded(out: &Path, program: &str, file: &str, wanted: &str) -> String
     }
 }
 
-/// PLX-396 (0042): a Project's child starts on each built-in kind as a thread the user starts
+/// PLX-396 (0042): an orchestrator's child starts on each built-in kind as a thread the user starts
 /// would, through plxd's real backends: Claude Code as full Claude Code with plxd's thread tools,
-/// Codex on `codex app-server`, and Cursor on its SDK sidecar (0053), each in the Project's mode and
-/// asking through the inbox. Auto is where a worker would have kept the sandbox's flags. Each
-/// stand-in CLI records its arguments and what plxd writes it.
+/// Codex on `codex app-server`, and Cursor on its SDK sidecar (0053), each in the orchestrator's
+/// mode and asking through the inbox. Auto is where a worker would have kept the sandbox's flags.
+/// Each stand-in CLI records its arguments and what plxd writes it.
 #[cfg(target_os = "macos")]
 #[tokio::test]
 #[expect(clippy::too_many_lines, reason = "one case per built-in kind")]
-async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
-    use parallax_protocol::{AgentPermission, ProjectPermission};
+async fn an_orchestrators_child_starts_as_a_thread_on_each_built_in_kind() {
+    use parallax_protocol::{AgentPermission, OrchestratorPermission};
 
     let dir = temp_dir();
     let out = dir.path().join("out");
@@ -809,11 +813,11 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
     );
     let mut client = Conn::ready(&server.socket).await;
     let mut projects = Vec::new();
-    for permission in [ProjectPermission::Auto, ProjectPermission::Bypass] {
+    for permission in [OrchestratorPermission::Auto, OrchestratorPermission::Bypass] {
         let repo = temp_dir();
-        let params = ProjectCreateParams {
+        let params = OrchestratorCreateParams {
             permission: Some(permission),
-            ..project_params(repo.path())
+            ..orchestrator_params(repo.path())
         };
         projects.push((create(&mut client, params).await, repo));
     }
@@ -879,7 +883,7 @@ async fn a_projects_child_starts_as_a_thread_on_each_built_in_kind() {
                 let stdin = recorded(&out, program, "stdin", "Tidy the build").await;
                 assert!(
                     stdin.contains(
-                        "You are working on a task in the Parallax Project \\\"app\\\".\\n\
+                        "You are working on a task in the Parallax Orchestrator \\\"app\\\".\\n\
                          Your Parallax tools are on the plxd MCP server: thread_list,"
                     ),
                     "{stdin}"
@@ -1101,15 +1105,15 @@ async fn assert_closed_after_accept(
 #[tokio::test]
 async fn a_finished_run_is_reviewed_accepted_into_the_branch_and_then_closed() {
     let dir = temp_dir();
-    let project_params = project_params(dir.path());
+    let orchestrator_params = orchestrator_params(dir.path());
     let note = dir
         .path()
         .join("context")
-        .join(project_params.id.to_string())
+        .join(orchestrator_params.id.to_string())
         .join("notes.md");
     let host = Host::start(dir, fake(editing_script(&note)));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params).await;
+    let project = create(&mut client, orchestrator_params).await;
     let repo = PathBuf::from(&project.repo_path);
     subscribe(&mut client, project.id, 0).await;
     let params = start_params(project.id, "Rewrite the README");
@@ -1207,7 +1211,7 @@ async fn review_reads_commits_not_the_worktree_and_accept_waits_for_the_run_to_s
         ]),
     );
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let project = create(&mut client, orchestrator_params(host.dir.path())).await;
     let repo = PathBuf::from(&project.repo_path);
     subscribe(&mut client, project.id, 0).await;
     let params = start_params(project.id, "Link a secret");

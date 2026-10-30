@@ -1,15 +1,15 @@
-//! A Project's status board as items (PLX-940, decision 0081): `board/list`, `board/add`,
+//! An orchestrator's status board as items (PLX-940, decision 0081): `board/list`, `board/add`,
 //! `board/update`, and `board/remove`, behind the `board` capability.
 //!
-//! plxd stores the items and renders the Project's `notes.md` and `archived.md` from them
+//! plxd stores the items and renders the orchestrator's `notes.md` and `archived.md` from them
 //! ([`render`]) after every change, at start, and every [`RENDER_PERIOD`], so a done item moves to
 //! `archived.md` once it is [`ARCHIVE_AFTER`] old. `context/write` refuses both files. Each line
-//! ends with the item's id, which the coordinator's `board_update` and `board_remove` take.
+//! ends with the item's id, which the orchestrator's `board_update` and `board_remove` take.
 //!
-//! Migration 49 marks each Project the store had. At start, [`migrate`] parses each marked
-//! Project's hand-written board ([`parse`]) into items once, keeping the originals as
-//! [`LEGACY`]. plxd never renders a marked Project, so a migration that fails leaves its files as
-//! they were for the next start to try again.
+//! Migration 49 marks each orchestrator the store had. At start, [`migrate`] parses each marked
+//! orchestrator's hand-written board ([`parse`]) into items once, keeping the originals as
+//! [`LEGACY`]. plxd never renders a marked Orchestrator, so a migration that fails leaves its files
+//! as they were for the next start to try again.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +19,7 @@ use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     BoardAddParams, BoardItem, BoardItemResult, BoardLinks, BoardListParams, BoardListResult,
     BoardRemoveParams, BoardRemoveResult, BoardSection, BoardStatus, BoardUpdateParams,
-    ContextWriteId, ProjectId,
+    ContextWriteId, ScopeId,
 };
 use parallax_store::{Store, StoreError};
 use tokio::time::{self, MissedTickBehavior};
@@ -45,7 +45,7 @@ pub(crate) const LEGACY: [&str; 2] = ["notes.legacy.md", "archived.legacy.md"];
 /// How long a done item stays in `notes.md`.
 const ARCHIVE_AFTER: SignedDuration = SignedDuration::from_hours(7 * 24);
 
-/// How often every Project's board is rendered again, so done items age out.
+/// How often every orchestrator's board is rendered again, so done items age out.
 const RENDER_PERIOD: Duration = Duration::from_hours(1);
 
 /// The longest an item's text, a link, or a file path may be, in bytes.
@@ -62,7 +62,8 @@ const SECTIONS: [(BoardSection, &str); 3] = [
 ];
 
 /// Serializes renders, so one that read the items before another's change can't land last.
-// ponytail: one lock for every Project's render; per-Project locks if boards change often.
+// ponytail: one lock for every orchestrator's render; per-Orchestrator locks if boards change
+// often.
 static RENDER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn status(done: bool) -> BoardStatus {
@@ -108,11 +109,11 @@ fn entry(row: parallax_store::BoardItem) -> Result<BoardItem, ErrorObject> {
     })
 }
 
-/// The stored row for `item` in `project`.
-fn row(project: Uuid, item: &BoardItem) -> parallax_store::BoardItem {
+/// The stored row for `item` in `orchestrator`.
+fn row(orchestrator: Uuid, item: &BoardItem) -> parallax_store::BoardItem {
     parallax_store::BoardItem {
         id: i64::try_from(item.id).unwrap_or(i64::MAX),
-        project_id: project,
+        orchestrator_id: orchestrator,
         text: item.text.clone(),
         status: status_key(item.status).to_owned(),
         section: section_key(item.section).to_owned(),
@@ -173,21 +174,25 @@ fn check_status(status: BoardStatus) -> Result<BoardStatus, ErrorObject> {
     Ok(status)
 }
 
-fn ensure_project(db: &Store, project: ProjectId) -> Result<(), ErrorObject> {
-    let id: Uuid = project.into();
-    if db.get_project(id).map_err(|e| store_error(&e))?.is_none() {
+fn ensure_orchestrator(db: &Store, orchestrator: ScopeId) -> Result<(), ErrorObject> {
+    let id: Uuid = orchestrator.into();
+    if db
+        .get_orchestrator(id)
+        .map_err(|e| store_error(&e))?
+        .is_none()
+    {
         return Err(store_error(&StoreError::NotFound { id }));
     }
     Ok(())
 }
 
 fn not_found(id: u64) -> ErrorObject {
-    ErrorObject::invalid_params(format!("this Project's board has no item {id}"))
+    ErrorObject::invalid_params(format!("this orchestrator's board has no item {id}"))
 }
 
-/// `project`'s items, oldest first.
-pub(crate) fn items(db: &Store, project: ProjectId) -> Result<Vec<BoardItem>, ErrorObject> {
-    db.board_items(project.into())
+/// `orchestrator`'s items, oldest first.
+pub(crate) fn items(db: &Store, orchestrator: ScopeId) -> Result<Vec<BoardItem>, ErrorObject> {
+    db.board_items(orchestrator.into())
         .map_err(|e| store_error(&e))?
         .into_iter()
         .map(entry)
@@ -199,10 +204,10 @@ pub(crate) async fn list(
     daemon: &Arc<Daemon>,
     params: BoardListParams,
 ) -> Result<BoardListResult, ErrorObject> {
-    let project = params.project;
+    let orchestrator = params.orchestrator;
     let items = store(daemon, move |db| {
-        ensure_project(db, project)?;
-        items(db, project)
+        ensure_orchestrator(db, orchestrator)?;
+        items(db, orchestrator)
     })
     .await?;
     Ok(BoardListResult { items })
@@ -214,7 +219,7 @@ pub(crate) async fn add(
     params: BoardAddParams,
 ) -> Result<BoardItemResult, ErrorObject> {
     let BoardAddParams {
-        project,
+        orchestrator,
         text,
         section,
         status,
@@ -237,14 +242,14 @@ pub(crate) async fn add(
         done_at: (status == BoardStatus::Done).then_some(now),
     };
     let item = store(daemon, move |db| {
-        ensure_project(db, project)?;
+        ensure_orchestrator(db, orchestrator)?;
         let saved = db
-            .add_board_item(&row(project.into(), &item))
+            .add_board_item(&row(orchestrator.into(), &item))
             .map_err(|e| store_error(&e))?;
         entry(saved)
     })
     .await?;
-    publish(daemon, project).await;
+    publish(daemon, orchestrator).await;
     Ok(BoardItemResult { item })
 }
 
@@ -254,7 +259,7 @@ pub(crate) async fn update(
     params: BoardUpdateParams,
 ) -> Result<BoardItemResult, ErrorObject> {
     let BoardUpdateParams {
-        project,
+        orchestrator,
         id,
         text,
         section,
@@ -268,10 +273,10 @@ pub(crate) async fn update(
         check_links(links)?;
     }
     let item = store(daemon, move |db| {
-        ensure_project(db, project)?;
+        ensure_orchestrator(db, orchestrator)?;
         let key = i64::try_from(id).map_err(|_| not_found(id))?;
         let before = db
-            .board_item(project.into(), key)
+            .board_item(orchestrator.into(), key)
             .map_err(|e| store_error(&e))?
             .ok_or_else(|| not_found(id))?;
         let mut item = entry(before)?;
@@ -287,12 +292,12 @@ pub(crate) async fn update(
             (false, true) => Some(now),
             (true, true) => item.done_at,
         };
-        db.update_board_item(&row(project.into(), &item))
+        db.update_board_item(&row(orchestrator.into(), &item))
             .map_err(|e| store_error(&e))?;
         Ok(item)
     })
     .await?;
-    publish(daemon, project).await;
+    publish(daemon, orchestrator).await;
     Ok(BoardItemResult { item })
 }
 
@@ -301,18 +306,18 @@ pub(crate) async fn remove(
     daemon: &Arc<Daemon>,
     params: BoardRemoveParams,
 ) -> Result<BoardRemoveResult, ErrorObject> {
-    let BoardRemoveParams { project, id } = params;
+    let BoardRemoveParams { orchestrator, id } = params;
     let removed = store(daemon, move |db| {
-        ensure_project(db, project)?;
+        ensure_orchestrator(db, orchestrator)?;
         let Ok(key) = i64::try_from(id) else {
             return Ok(false);
         };
-        db.remove_board_item(project.into(), key)
+        db.remove_board_item(orchestrator.into(), key)
             .map_err(|e| store_error(&e))
     })
     .await?;
     if removed {
-        publish(daemon, project).await;
+        publish(daemon, orchestrator).await;
     }
     Ok(BoardRemoveResult { removed })
 }
@@ -380,7 +385,7 @@ pub(crate) struct Parsed {
     pub section: BoardSection,
 }
 
-/// The items in a board written in the format `coordinator.md` described before 0081: `- [ ]` and
+/// The items in a board written in the format `orchestrator.md` described before 0081: `- [ ]` and
 /// `- [x]` lines under `## Now`, `## Next`, and `## Risks`. A checkbox line under another heading
 /// or none goes to Risks, keeping its status. Any other line that isn't blank, a heading, or the
 /// `Older items:` link becomes an open Risks item as it is, so nothing is dropped.
@@ -431,54 +436,54 @@ fn checkbox(line: &str) -> Option<(bool, &str)> {
     (!text.is_empty()).then_some((done, text))
 }
 
-/// Renders `project`'s board to its context folder, writing each file only when it changed,
+/// Renders `orchestrator`'s board to its context folder, writing each file only when it changed,
 /// unless its board migration is still to do. A failure is logged: the items are saved, and the
 /// next render writes the files.
-pub(crate) async fn publish(daemon: &Arc<Daemon>, project: ProjectId) {
+pub(crate) async fn publish(daemon: &Arc<Daemon>, orchestrator: ScopeId) {
     let _render = RENDER.lock().await;
     let listed = store(daemon, move |db| {
         if db
-            .board_migration_pending(project.into())
+            .board_migration_pending(orchestrator.into())
             .map_err(|e| store_error(&e))?
         {
             return Ok(None);
         }
-        items(db, project).map(Some)
+        items(db, orchestrator).map(Some)
     })
     .await;
     let items = match listed {
         Ok(Some(items)) => items,
         Ok(None) => {
-            warn!(%project, "not rendering a board whose migration is still to do");
+            warn!(%orchestrator, "not rendering a board whose migration is still to do");
             return;
         }
         Err(error) => {
-            warn!(%project, error = error.message, "could not read the board to render it");
+            warn!(%orchestrator, error = error.message, "could not read the board to render it");
             return;
         }
     };
     let daemon = Arc::clone(daemon);
     let written = tokio::task::spawn_blocking(move || {
         let (notes, archived) = render(&items, Timestamp::now());
-        write_if_changed(&daemon, project, NOTES, &notes)?;
-        write_if_changed(&daemon, project, ARCHIVED, &archived)
+        write_if_changed(&daemon, orchestrator, NOTES, &notes)?;
+        write_if_changed(&daemon, orchestrator, ARCHIVED, &archived)
     })
     .await;
     match written {
         Ok(Ok(())) => {}
-        Ok(Err(error)) => warn!(%project, error = error.message, "could not render the board"),
-        Err(error) => warn!(%project, %error, "the board's render task failed"),
+        Ok(Err(error)) => warn!(%orchestrator, error = error.message, "could not render the board"),
+        Err(error) => warn!(%orchestrator, %error, "the board's render task failed"),
     }
 }
 
 /// Writes `content` to `name` unless it's already there. A missing file counts as empty.
 fn write_if_changed(
     daemon: &Daemon,
-    project: ProjectId,
+    orchestrator: ScopeId,
     name: &str,
     content: &str,
 ) -> Result<(), ErrorObject> {
-    let dir = crate::context::ensure_dir(&daemon.data_dir, project)
+    let dir = crate::context::ensure_dir(&daemon.data_dir, orchestrator)
         .map_err(|e| crate::context::io_error(name, &e))?;
     let current = crate::context::read_file(&dir, name).map(|(bytes, _)| bytes);
     let same = match &current {
@@ -488,19 +493,19 @@ fn write_if_changed(
     if same {
         return Ok(());
     }
-    write_as_plxd(daemon, project, name, content)
+    write_as_plxd(daemon, orchestrator, name, content)
 }
 
-/// Writes `content` to `name` in `project`'s context folder, as plxd.
+/// Writes `content` to `name` in `orchestrator`'s context folder, as plxd.
 fn write_as_plxd(
     daemon: &Daemon,
-    project: ProjectId,
+    orchestrator: ScopeId,
     name: &str,
     content: &str,
 ) -> Result<(), ErrorObject> {
     write_context_file(
         daemon,
-        project,
+        orchestrator,
         name,
         content,
         Some("plxd".to_owned()),
@@ -509,49 +514,53 @@ fn write_as_plxd(
     Ok(())
 }
 
-/// Parses each marked Project's hand-written board into items once, before plxd serves anything.
-/// A Project that fails stays marked, and the next start tries it again. See [`migrate_project`].
+/// Parses each marked orchestrator's hand-written board into items once, before plxd serves
+/// anything. An orchestrator that fails stays marked, and the next start tries it again. See
+/// [`migrate_orchestrator`].
 pub(crate) async fn migrate(daemon: &Arc<Daemon>) {
     let pending = store(daemon, |db| {
         db.board_migrations_pending().map_err(|e| store_error(&e))
     })
     .await;
-    let projects = match pending {
-        Ok(projects) => projects,
+    let orchestrators = match pending {
+        Ok(orchestrators) => orchestrators,
         Err(error) => {
             warn!(error = error.message, "could not start the board migration");
             return;
         }
     };
-    for project in projects {
-        let Ok(project) = ProjectId::try_from(project) else {
+    for orchestrator in orchestrators {
+        let Ok(orchestrator) = ScopeId::try_from(orchestrator) else {
             continue;
         };
-        if let Err(error) = migrate_project(daemon, project).await {
-            warn!(%project, error = error.message, "could not migrate a Project's board");
+        if let Err(error) = migrate_orchestrator(daemon, orchestrator).await {
+            warn!(%orchestrator, error = error.message, "could not migrate an orchestrator's board");
         }
     }
 }
 
-/// Keeps `project`'s `notes.md` and `archived.md` as [`LEGACY`], adds what [`parse`] finds in the
-/// copies as items and clears its mark in one transaction, then renders the board. Until that
-/// transaction the board isn't rendered, so a failure at any step leaves the originals for the
-/// next run. A Project deleted since it was marked just loses its mark, and one not marked is
-/// left alone.
-async fn migrate_project(daemon: &Arc<Daemon>, project: ProjectId) -> Result<(), ErrorObject> {
+/// Keeps `orchestrator`'s `notes.md` and `archived.md` as [`LEGACY`], adds what [`parse`] finds in
+/// the copies as items and clears its mark in one transaction, then renders the board. Until that
+/// transaction the board isn't rendered, so a failure at any step leaves the originals for the next
+/// run. An orchestrator deleted since it was marked just loses its mark, and one not marked is left
+/// alone.
+async fn migrate_orchestrator(
+    daemon: &Arc<Daemon>,
+    orchestrator: ScopeId,
+) -> Result<(), ErrorObject> {
     let due = store(daemon, move |db| {
         if !db
-            .board_migration_pending(project.into())
+            .board_migration_pending(orchestrator.into())
             .map_err(|e| store_error(&e))?
         {
             return Ok(false);
         }
         let exists = db
-            .get_project(project.into())
+            .get_orchestrator(orchestrator.into())
             .map_err(|e| store_error(&e))?
             .is_some();
         if !exists {
-            db.finish_board_migration(project.into())
+            db.finish_board_migration(orchestrator.into())
                 .map_err(|e| store_error(&e))?;
         }
         Ok(exists)
@@ -562,7 +571,7 @@ async fn migrate_project(daemon: &Arc<Daemon>, project: ProjectId) -> Result<(),
     }
     let copied = {
         let daemon = Arc::clone(daemon);
-        tokio::task::spawn_blocking(move || keep_originals(&daemon, project))
+        tokio::task::spawn_blocking(move || keep_originals(&daemon, orchestrator))
             .await
             .map_err(|e| {
                 ErrorObject::internal_error(format!("the board migration failed: {e}"))
@@ -584,30 +593,30 @@ async fn migrate_project(daemon: &Arc<Daemon>, project: ProjectId) -> Result<(),
                     updated_at: now,
                     done_at,
                 };
-                db.add_board_item(&row(project.into(), &item))
+                db.add_board_item(&row(orchestrator.into(), &item))
                     .map_err(|e| store_error(&e))?;
                 added += 1;
             }
         }
-        db.finish_board_migration(project.into())
+        db.finish_board_migration(orchestrator.into())
             .map_err(|e| store_error(&e))?;
         Ok(added)
     })
     .await?;
-    info!(%project, added, "moved a Project's board to items");
-    publish(daemon, project).await;
+    info!(%orchestrator, added, "moved an orchestrator's board to items");
+    publish(daemon, orchestrator).await;
     Ok(())
 }
 
-/// The hand-written `notes.md` and `archived.md` of `project` to parse, each with the time to
+/// The hand-written `notes.md` and `archived.md` of `orchestrator` to parse, each with the time to
 /// call its done items done: now for `notes.md`, and for `archived.md` at least
 /// [`ARCHIVE_AFTER`] ago, so they stay archived. Reads each from its [`LEGACY`] copy when there
 /// is one, and otherwise copies the original there first.
 fn keep_originals(
     daemon: &Daemon,
-    project: ProjectId,
+    orchestrator: ScopeId,
 ) -> Result<Vec<(String, Option<Timestamp>)>, ErrorObject> {
-    let dir = crate::context::ensure_dir(&daemon.data_dir, project)
+    let dir = crate::context::ensure_dir(&daemon.data_dir, orchestrator)
         .map_err(|e| crate::context::io_error("", &e))?;
     let read = |name: &str| match crate::context::read_file(&dir, name) {
         Ok(read) => Ok(Some(read)),
@@ -619,7 +628,12 @@ fn keep_originals(
         let (bytes, metadata) = if let Some(kept) = read(legacy)? {
             kept
         } else if let Some((bytes, metadata)) = read(name)? {
-            write_as_plxd(daemon, project, legacy, &String::from_utf8_lossy(&bytes))?;
+            write_as_plxd(
+                daemon,
+                orchestrator,
+                legacy,
+                &String::from_utf8_lossy(&bytes),
+            )?;
             (bytes, metadata)
         } else {
             continue;
@@ -631,7 +645,7 @@ fn keep_originals(
     Ok(originals)
 }
 
-/// Renders every Project's board every [`RENDER_PERIOD`] until `stop`, so done items move to
+/// Renders every orchestrator's board every [`RENDER_PERIOD`] until `stop`, so done items move to
 /// `archived.md` as they age.
 pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     let mut interval = time::interval(RENDER_PERIOD);
@@ -642,18 +656,18 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
             () = stop.cancelled() => break,
             _ = interval.tick() => {}
         }
-        let projects = store(&daemon, |db| {
+        let orchestrators = store(&daemon, |db| {
             Ok(db
-                .list_projects()
+                .list_orchestrators()
                 .map_err(|e| store_error(&e))?
                 .into_iter()
-                .filter_map(|project| ProjectId::try_from(project.id).ok())
+                .filter_map(|orchestrator| ScopeId::try_from(orchestrator.id).ok())
                 .collect::<Vec<_>>())
         })
         .await
         .unwrap_or_default();
-        for project in projects {
-            publish(&daemon, project).await;
+        for orchestrator in orchestrators {
+            publish(&daemon, orchestrator).await;
         }
     }
 }
@@ -661,7 +675,7 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
 #[cfg(test)]
 mod tests {
 
-    use parallax_protocol::{ProjectCreateParams, ProjectId};
+    use parallax_protocol::{OrchestratorCreateParams, ScopeId};
 
     use super::{migrate, publish};
     use crate::server::Daemon;
@@ -672,8 +686,8 @@ mod tests {
     async fn a_migration_that_fails_partway_leaves_the_board_for_the_next_start() {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10, std::time::Duration::from_secs(90));
-        let params = ProjectCreateParams {
-            id: ProjectId::generate(),
+        let params = OrchestratorCreateParams {
+            id: ScopeId::generate(),
             name: "n".to_owned(),
             repo_path: "/r".to_owned(),
             icon: None,
@@ -681,17 +695,17 @@ mod tests {
             autonomy: None,
             base_branch: None,
         };
-        let project = params.id;
+        let orchestrator = params.id;
         store(&daemon, move |db| {
             let (id, fields) = fields(params);
-            db.create_project(id, &fields)
+            db.create_orchestrator(id, &fields)
                 .map_err(|error| store_error(&error))?;
             db.mark_board_migration(id)
                 .map_err(|error| store_error(&error))
         })
         .await
         .unwrap();
-        let context = crate::context::ensure_dir(&daemon.data_dir, project).unwrap();
+        let context = crate::context::ensure_dir(&daemon.data_dir, orchestrator).unwrap();
         let notes = "## Now\n\n- [ ] **Search**: adds it\n- [x] Login\n\nStray line\n";
         let archived = "- [x] Shipped long ago\n";
         std::fs::write(context.join("notes.md"), notes).unwrap();
@@ -705,7 +719,7 @@ mod tests {
         migrate(&daemon).await;
         assert_eq!(read("notes.legacy.md"), notes);
         // The hourly render and a board change leave the unmigrated board alone.
-        publish(&daemon, project).await;
+        publish(&daemon, orchestrator).await;
         assert_eq!(read("notes.md"), notes);
         assert_eq!(read("archived.md"), archived);
         // Whatever happens to notes.md now, the next start parses the copy.

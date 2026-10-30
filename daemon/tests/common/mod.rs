@@ -32,7 +32,7 @@ pub struct Worktree {
     pub path: PathBuf,
     /// The repository's git folder, `root/repo/.git`.
     pub git_dir: PathBuf,
-    /// The Project's context, `data/context/p`.
+    /// The orchestrator's context, `data/context/p`.
     pub context: PathBuf,
 }
 
@@ -89,7 +89,7 @@ pub fn worker_request(
         permission: None,
         context_window: None,
         fast: None,
-        coordinator_tools: None,
+        orchestrator_tools: None,
         thread_tools: None,
         approvals: false,
         thread: false,

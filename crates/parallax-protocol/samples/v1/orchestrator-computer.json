@@ -1,0 +1,49 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "repo/match",
+    "params": { "origin": "git@github.com:ryan-stoffel/parallax.git" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "repo": {
+        "id": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e02",
+        "name": "parallax",
+        "path": "/Users/me/Developer/parallax",
+        "createdAt": "2026-10-21T19:30:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "repo/match",
+    "params": { "origin": "https://github.com/ryan-stoffel/photon" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "orchestrator/update",
+    "params": {
+      "orchestrator": "01a0d5c1-1a2b-7c3d-8e4f-5a6b7c8d9e03",
+      "computer": "nZi1Lj6Rrb11CNTRL"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32000,
+      "message": "computer needs the projectComputer capability, which this plxd doesn't have",
+      "data": { "kind": "unsupportedOption" }
+    }
+  }
+]

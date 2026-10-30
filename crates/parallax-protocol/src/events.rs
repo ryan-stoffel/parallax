@@ -5,8 +5,8 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::{
     AgentBackgroundTask, AgentFailureKind, AgentMerge, AgentOutcome, AgentOutputItem, AgentRun,
-    AgentRunState, ContextFile, InboxItem, Project, ProjectId, QueuedMessage, Repo, RepoId, RunId,
-    ScriptStatus, ScriptTrigger, Thread, TurnCheckpoint, TurnId,
+    AgentRunState, ContextFile, InboxItem, Orchestrator, QueuedMessage, Repo, RepoId, RunId,
+    ScopeId, ScriptStatus, ScriptTrigger, Thread, TurnCheckpoint, TurnId,
 };
 
 uuid_v7_id! {
@@ -34,13 +34,13 @@ uuid_v7_id! {
 #[serde(rename_all = "camelCase")]
 pub struct EventsSubscribeParams {
     /// Replay the events whose `seq` is greater than this: usually the `seq` of a snapshot, such
-    /// as `project/list`'s, or of the last event received. `seq` starts at 1.
+    /// as `orchestrator/list`'s, or of the last event received. `seq` starts at 1.
     pub after: u64,
     /// Subscribe to one project's events. Without it, the subscription gets host-level events,
-    /// such as `project.created`.
+    /// such as `orchestrator.created`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub project: Option<ProjectId>,
+    pub project: Option<ScopeId>,
     /// Only this run's events, for an open transcript.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -86,7 +86,7 @@ pub struct EventsEventParams {
     /// The project it belongs to. Absent for host-level events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub project: Option<ProjectId>,
+    pub project: Option<ScopeId>,
     /// What happened.
     pub event: ParallaxEvent,
 }
@@ -118,25 +118,28 @@ pub struct Compacted {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all_fields = "camelCase")]
 pub enum ParallaxEvent {
-    /// A project was created. Host-level.
-    #[serde(rename = "project.created")]
-    ProjectCreated {
-        /// The new project.
-        project: Project,
+    /// An orchestrator was created. Host-level. Was `orchestrator.created` (0093).
+    #[serde(rename = "orchestrator.created", alias = "orchestrator.created")]
+    OrchestratorCreated {
+        /// The new orchestrator.
+        #[serde(alias = "project")]
+        orchestrator: Orchestrator,
     },
-    /// `project/update` renamed a project or changed its icon (PLX-227). Host-level, like
-    /// `project.created`.
-    #[serde(rename = "project.updated")]
-    ProjectUpdated {
-        /// The project as it stands.
-        project: Project,
+    /// `orchestrator/update` renamed an orchestrator or changed its icon (PLX-227). Host-level,
+    /// like `orchestrator.created`. Was `orchestrator.updated` (0093).
+    #[serde(rename = "orchestrator.updated", alias = "orchestrator.updated")]
+    OrchestratorUpdated {
+        /// The orchestrator as it stands.
+        #[serde(alias = "project")]
+        orchestrator: Orchestrator,
     },
-    /// `project/delete` deleted a project with every run in it (PLX-338). Host-level, like
-    /// `project.created`.
-    #[serde(rename = "project.deleted")]
-    ProjectDeleted {
-        /// The deleted project's id.
-        project: ProjectId,
+    /// `orchestrator/delete` deleted an orchestrator with every run in it (PLX-338). Host-level,
+    /// like `orchestrator.created`. Was `orchestrator.deleted` (0093).
+    #[serde(rename = "orchestrator.deleted", alias = "orchestrator.deleted")]
+    OrchestratorDeleted {
+        /// The deleted orchestrator's id.
+        #[serde(alias = "project")]
+        orchestrator: ScopeId,
     },
     /// A shared context file was created or changed (0005, #155): from `context/write`, or from
     /// an agent's own write, detected on disk. Project-scoped.
@@ -209,16 +212,16 @@ pub enum ParallaxEvent {
         /// What happened to the project's repository.
         merge: AgentMerge,
     },
-    /// plxd stopped waking a project's coordinator on its own (PLX-42, decision 0025): it took
+    /// plxd stopped waking an orchestrator on its own (PLX-42, decision 0025): it took
     /// 10 wake-up turns in a row without a message from the user, the user stopped it with
     /// `agent/cancel`, or a wake-up couldn't start it. Runs that finish meanwhile are kept, and
-    /// the user's next `agent/send` to the coordinator lets them through.
+    /// the user's next `agent/send` to the orchestrator lets them through.
     #[serde(rename = "agent.wakeupsPaused")]
     AgentWakeupsPaused {
-        /// The coordinator's run id.
+        /// The orchestrator's run id.
         run_id: RunId,
     },
-    /// plxd added an item to a Project's inbox (PLX-401, decision 0043). Project-scoped, and
+    /// plxd added an item to an orchestrator's inbox (PLX-401, decision 0043). Project-scoped, and
     /// never in a run's `agent/events`.
     #[serde(rename = "inbox.added")]
     InboxAdded {

@@ -5,6 +5,9 @@ use parallax_store::{
 use rusqlite::Connection;
 use uuid::Uuid;
 
+mod common;
+use common::UNDO_56;
+
 fn open() -> (tempfile::TempDir, Store) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path().join("parallax.sqlite3")).unwrap();
@@ -27,7 +30,7 @@ fn run_fields(repo: Uuid) -> RunFields {
         requested_account: None,
         policy: "workspaceWrite".to_owned(),
         backend: "claude".to_owned(),
-        coordinator_thread: None,
+        orchestrator_thread: None,
         parent: None,
         notify_parent: false,
         model: None,
@@ -371,23 +374,23 @@ fn a_missing_migration_below_the_newest_still_applies() {
     assert_eq!(restored, 1);
 }
 
-/// Migration 23 (decision record 0041): a run a coordinator started gets the coordinator's thread
-/// as its parent, the coordinator itself (whose thread is its own id) and a client's run get none,
-/// and existing threads have no fork origin, no title, and aren't settled.
+/// Migration 23 (decision record 0041): a run an orchestrator started gets the orchestrator's
+/// thread as its parent, the orchestrator itself (whose thread is its own id) and a client's run
+/// get none, and existing threads have no fork origin, no title, and aren't settled.
 #[test]
-fn migration_23_makes_a_coordinators_runs_its_children() {
+fn migration_23_makes_an_orchestrators_runs_its_children() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("parallax.sqlite3");
     let mut store = Store::open(&path).unwrap();
     let project = Uuid::now_v7();
-    let [coordinator, subagent, own] = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
+    let [orchestrator, subagent, own] = [Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7()];
     for (id, thread) in [
-        (coordinator, Some(coordinator)),
-        (subagent, Some(coordinator)),
+        (orchestrator, Some(orchestrator)),
+        (subagent, Some(orchestrator)),
         (own, None),
     ] {
         let fields = RunFields {
-            coordinator_thread: thread,
+            orchestrator_thread: thread,
             ..run_fields(project)
         };
         store.create_run(id, &fields, &state()).unwrap();
@@ -408,21 +411,22 @@ fn migration_23_makes_a_coordinators_runs_its_children() {
         .unwrap();
     drop(store);
     let conn = Connection::open(&path).unwrap();
-    conn.execute_batch(
-        "ALTER TABLE runs DROP COLUMN parent;
+    conn.execute_batch(&format!(
+        "{UNDO_56}
+         ALTER TABLE runs DROP COLUMN parent;
          ALTER TABLE threads DROP COLUMN forked_from_run;
          ALTER TABLE threads DROP COLUMN forked_from_turn;
          ALTER TABLE threads DROP COLUMN title;
          ALTER TABLE threads DROP COLUMN settled;
-         DELETE FROM schema_version WHERE version = 23;",
-    )
+         DELETE FROM schema_version WHERE version = 23;"
+    ))
     .unwrap();
     drop(conn);
 
     let store = Store::open(&path).unwrap();
     let parent = |id| store.get_run(id).unwrap().unwrap().fields.parent;
-    assert_eq!(parent(subagent), Some(coordinator));
-    assert_eq!(parent(coordinator), None);
+    assert_eq!(parent(subagent), Some(orchestrator));
+    assert_eq!(parent(orchestrator), None);
     assert_eq!(parent(own), None);
     let thread = store.get_thread(thread).unwrap().unwrap();
     assert_eq!(thread.parent, None);

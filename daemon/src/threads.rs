@@ -1,4 +1,4 @@
-//! Normal threads (#110, decision 0017): agents with no coordinator, behind the `threads`
+//! Normal threads (#110, decision 0017): agents with no orchestrator, behind the `threads`
 //! capability.
 //!
 //! A thread is an agent run that belongs to a repo entry instead of a project: its run's
@@ -20,10 +20,11 @@
 //! transcript up to that turn, and its first message either forks the parent's vendor session
 //! (the actor's `fork_source`) or hands that transcript to a new session, as 0014's move does.
 //!
-//! `thread/start` with `project` starts a Project's child (0042) through the same
-//! [`agents::create`] as a Project's other runs, so it runs in the Project's mode with its header,
-//! cut from the integration branch, and wakes the coordinator. Its scope and thread row's repo are
-//! the Project, and its parent the Project's current coordinator, or none before it has one.
+//! `thread/start` with `project` starts an orchestrator's child (0042) through the same
+//! [`agents::create`] as an orchestrator's other runs, so it runs in the orchestrator's mode with
+//! its header, cut from the integration branch, and wakes the orchestrator. Its scope and thread
+//! row's repo are the orchestrator, and its parent the orchestrator's current orchestrator, or none
+//! before it has one.
 //!
 //! A thread started with `checkout` gets no worktree: it works in its repo entry's own checkout,
 //! on the branch the user has out or the one `checkoutRef` switches it to, and plxd leaves its
@@ -39,8 +40,8 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentOutputItem, AgentStatus, ErrorKind, ForkedFrom, MAX_THREAD_TITLE_BYTES, ParallaxEvent,
-    ProjectId, Repo, RepoAddParams, RepoAddResult, RepoId, RepoRefsParams, RepoRefsResult,
-    RepoUpdateParams, RepoUpdateResult, RunId, Thread, ThreadArchiveParams, ThreadArchiveResult,
+    Repo, RepoAddParams, RepoAddResult, RepoId, RepoRefsParams, RepoRefsResult, RepoUpdateParams,
+    RepoUpdateResult, RunId, ScopeId, Thread, ThreadArchiveParams, ThreadArchiveResult,
     ThreadDeleteResult, ThreadForkParams, ThreadListResult, ThreadSearchParams, ThreadSearchResult,
     ThreadStartParams, ThreadStartResult, ThreadUpdateParams, ThreadUpdateResult, TurnId,
 };
@@ -52,7 +53,7 @@ use uuid::Uuid;
 use crate::agents::convert::{agent_run, option_value};
 use crate::agents::{self, NewFork, NewRun, NewThread, RunOptions};
 use crate::backend::check_argument;
-use crate::orchestrator::{self, Action, Command, Lane};
+use crate::dispatcher::{self, Action, Command, Lane};
 use crate::repo;
 use crate::server::Daemon;
 use crate::worktree::valid_branch_slug;
@@ -166,25 +167,25 @@ fn repo_not_found(id: RepoId) -> ErrorObject {
 /// entry it is the folder that holds the scratch repositories.
 pub(crate) fn scope_path(
     db: &parallax_store::Store,
-    scope: ProjectId,
+    scope: ScopeId,
 ) -> Result<String, ErrorObject> {
-    if let Some(project) = db.get_project(scope.into()).map_err(|e| store_error(&e))? {
+    if let Some(project) = db
+        .get_orchestrator(scope.into())
+        .map_err(|e| store_error(&e))?
+    {
         return Ok(project.repo_path);
     }
     if let Some(repo) = db.get_repo(scope.into()).map_err(|e| store_error(&e))? {
         return Ok(repo.fields.path);
     }
     Err(ErrorObject::parallax(
-        ErrorKind::ProjectNotFound,
+        ErrorKind::OrchestratorNotFound,
         format!("no project has id {scope}"),
     ))
 }
 
 /// Whether `scope` is plxd's scratch entry, whose threads have no repository of the user's.
-pub(crate) fn is_scratch(
-    db: &parallax_store::Store,
-    scope: ProjectId,
-) -> Result<bool, ErrorObject> {
+pub(crate) fn is_scratch(db: &parallax_store::Store, scope: ScopeId) -> Result<bool, ErrorObject> {
     Ok(db
         .get_repo(scope.into())
         .map_err(|e| store_error(&e))?
@@ -195,11 +196,11 @@ pub(crate) fn is_scratch(
 /// thread with no repo, so one quick chat never reads another's notes, and `scope` otherwise.
 pub(crate) fn context_scope(
     db: &parallax_store::Store,
-    scope: ProjectId,
+    scope: ScopeId,
     run: RunId,
-) -> Result<ProjectId, ErrorObject> {
+) -> Result<ScopeId, ErrorObject> {
     if is_scratch(db, scope)? {
-        ProjectId::try_from(Uuid::from(run)).map_err(|_| corrupt("run", run.into()))
+        ScopeId::try_from(Uuid::from(run)).map_err(|_| corrupt("run", run.into()))
     } else {
         Ok(scope)
     }
@@ -447,7 +448,7 @@ pub(crate) async fn start(
     let ThreadStartParams {
         run_id,
         repo,
-        project,
+        orchestrator: project,
         parent,
         title,
         prompt,
@@ -479,11 +480,11 @@ pub(crate) async fn start(
     .await?;
     let taken = stored.is_some();
     let (scope, scratch) = workspace(&daemon, project, repo, checkout, run_id, taken).await?;
-    // A retry is answered from its run, whatever became of its parent since, and a Project's
-    // child keeps the coordinator it started under.
+    // A retry is answered from its run, whatever became of its parent since, and an orchestrator's
+    // child keeps the orchestrator it started under.
     let parent = match (project, stored) {
         (Some(_), Some(stored)) => stored.and_then(|id| RunId::try_from(id).ok()),
-        (Some(project), None) => coordinator(&daemon, project).await?,
+        (Some(project), None) => orchestrator(&daemon, project).await?,
         (None, Some(_)) => parent,
         (None, None) => {
             check_parent(&daemon, parent).await?;
@@ -497,7 +498,7 @@ pub(crate) async fn start(
         images,
         threads,
         account,
-        coordinator_thread: None,
+        orchestrator_thread: None,
         notify: notify.unwrap_or(true),
         options: RunOptions {
             model,
@@ -545,8 +546,8 @@ pub(crate) async fn start(
     })
 }
 
-/// Refuses an invalid `branchSlug`, and, with `project`, what the Project decides for its child
-/// (0042).
+/// Refuses an invalid `branchSlug`, and, with `project`, what the orchestrator decides for its
+/// child (0042).
 fn check_start(params: &ThreadStartParams) -> Result<(), ErrorObject> {
     if let Some(slug) = &params.branch_slug
         && !valid_branch_slug(slug)
@@ -556,7 +557,7 @@ fn check_start(params: &ThreadStartParams) -> Result<(), ErrorObject> {
              with no leading or trailing hyphen",
         ));
     }
-    if params.project.is_none() {
+    if params.orchestrator.is_none() {
         return Ok(());
     }
     let decided = [
@@ -568,8 +569,8 @@ fn check_start(params: &ThreadStartParams) -> Result<(), ErrorObject> {
     ];
     match decided.iter().find(|(_, given)| *given) {
         Some((name, _)) => Err(ErrorObject::invalid_params(format!(
-            "a Project's child runs in a new worktree of the Project's repository, with its \
-             coordinator as parent; leave out {name}"
+            "an orchestrator's child runs in a new worktree of the orchestrator's repository, with its \
+             orchestrator as parent; leave out {name}"
         ))),
         None => Ok(()),
     }
@@ -579,12 +580,12 @@ fn check_start(params: &ThreadStartParams) -> Result<(), ErrorObject> {
 /// repo entry `repo` names, the scratch entry when it names none.
 async fn workspace(
     daemon: &Arc<Daemon>,
-    project: Option<ProjectId>,
+    project: Option<ScopeId>,
     repo: Option<RepoId>,
     checkout: bool,
     run_id: RunId,
     taken: bool,
-) -> Result<(ProjectId, Option<PathBuf>), ErrorObject> {
+) -> Result<(ScopeId, Option<PathBuf>), ErrorObject> {
     if let Some(project) = project {
         return Ok((project, None));
     }
@@ -594,25 +595,25 @@ async fn workspace(
             "checkout needs a repo: a thread with no repo has no checkout to work in",
         ));
     }
-    let scope = ProjectId::try_from(entry.id).map_err(|_| corrupt("repo entry", entry.id))?;
+    let scope = ScopeId::try_from(entry.id).map_err(|_| corrupt("repo entry", entry.id))?;
     Ok((scope, scratch_dir(daemon, &entry, run_id, taken).await?))
 }
 
-/// A new child's parent (0042): `project`'s current coordinator, or `None` before it has one.
-/// Fails with `projectNotFound` unless `project` is a Project.
-async fn coordinator(daemon: &Daemon, project: ProjectId) -> Result<Option<RunId>, ErrorObject> {
+/// A new child's parent (0042): `project`'s current orchestrator, or `None` before it has one.
+/// Fails with `orchestratorNotFound` unless `project` is an orchestrator.
+async fn orchestrator(daemon: &Daemon, project: ScopeId) -> Result<Option<RunId>, ErrorObject> {
     store(daemon, move |db| {
         if db
-            .get_project(project.into())
+            .get_orchestrator(project.into())
             .map_err(|e| store_error(&e))?
             .is_none()
         {
             return Err(ErrorObject::parallax(
-                ErrorKind::ProjectNotFound,
+                ErrorKind::OrchestratorNotFound,
                 format!("no project has id {project}"),
             ));
         }
-        agents::coordinator::coordinator_of(db, project.into())
+        agents::orchestrator::orchestrator_of(db, project.into())
     })
     .await
 }
@@ -662,7 +663,7 @@ pub(crate) async fn fork(
     // Share creation's per-id guard so a retry checks its fork identity after any competing
     // creation finishes, and concurrent forks cannot prepare the same scratch repository.
     // Check retries before generic creation compares options, which another backend may filter.
-    let lane = daemon.orchestrator.lane(new_run_id).await;
+    let lane = daemon.dispatcher.lane(new_run_id).await;
     if let Some(done) = existing_fork(&daemon, new_run_id, run_id, turn_id, caller).await? {
         return Ok(done);
     }
@@ -679,7 +680,7 @@ pub(crate) async fn fork(
     let (checkout, git_ref, scratch) = fork_workspace(&daemon, &parent, run_id, new_run_id).await?;
     let fields = &parent.run.fields;
     let scope =
-        ProjectId::try_from(parent.entry.id).map_err(|_| corrupt("repo entry", parent.entry.id))?;
+        ScopeId::try_from(parent.entry.id).map_err(|_| corrupt("repo entry", parent.entry.id))?;
     let new = NewRun {
         run_id: new_run_id,
         scope,
@@ -689,7 +690,7 @@ pub(crate) async fn fork(
         account: Some(
             account.unwrap_or_else(|| agents::session_account(&parent.run.state.account_id)),
         ),
-        coordinator_thread: None,
+        orchestrator_thread: None,
         // A fork with a parent wakes it as a launched child does, once its CLIs end (0041).
         notify: caller.is_some(),
         options: RunOptions {
@@ -1116,7 +1117,7 @@ pub(crate) async fn search(
     Ok(ThreadSearchResult { threads, snippets })
 }
 
-/// `thread/archive`: the orchestrator's `thread.archive` or `thread.unarchive` (0059).
+/// `thread/archive`: the dispatcher's `thread.archive` or `thread.unarchive` (0059).
 pub(crate) async fn archive(
     daemon: &Arc<Daemon>,
     params: ThreadArchiveParams,
@@ -1132,8 +1133,8 @@ pub(crate) async fn archive(
 }
 
 /// `thread/update`: marks a thread seen or snoozes it (0033), sets its title or settled flag
-/// (0041), or pins it (PLX-789), through the orchestrator's `thread.metadata.update` (0059), which appends
-/// `thread.updated` when anything changed.
+/// (0041), or pins it (PLX-789), through the dispatcher's `thread.metadata.update` (0059), which
+/// appends `thread.updated` when anything changed.
 pub(crate) async fn update(
     daemon: &Arc<Daemon>,
     params: ThreadUpdateParams,
@@ -1166,17 +1167,13 @@ async fn metadata(
     action: Action,
 ) -> Result<Thread, ErrorObject> {
     let command = Command::new(command_id, run_id, action);
-    let rows = daemon
-        .orchestrator
-        .dispatch(daemon, command)
-        .await?
-        .rows()?;
+    let rows = daemon.dispatcher.dispatch(daemon, command).await?.rows()?;
     thread_entry(&rows.thread.ok_or_else(|| thread_not_found(run_id))?)
 }
 
 /// After run `run_id`'s thread row changed in this job, stages `thread.updated` if the run is a
 /// thread: a recorded message moved its `lastPromptAt`, for the sidebar's order (0033), or joining
-/// a Project gave it a parent (PLX-419).
+/// an orchestrator gave it a parent (PLX-419).
 pub(crate) fn prompted(db: &mut crate::store::Tx, run_id: Uuid) -> Result<(), ErrorObject> {
     let Some(row) = db.get_thread(run_id).map_err(|e| store_error(&e))? else {
         return Ok(());
@@ -1211,7 +1208,7 @@ pub(crate) async fn update_repo(
     }
     let stored = icon
         .map(|icon| {
-            crate::methods::project::check_icon(&icon)?;
+            crate::methods::orchestrator::check_icon(&icon)?;
             Ok::<_, ErrorObject>(crate::store::stored_icon(icon))
         })
         .transpose()?;
@@ -1277,8 +1274,7 @@ pub(crate) async fn delete(
     run_id: RunId,
     command_id: Option<Uuid>,
 ) -> Result<ThreadDeleteResult, ErrorObject> {
-    let replayed =
-        || orchestrator::replayed(daemon, command_id, run_id, orchestrator::THREAD_DELETE);
+    let replayed = || dispatcher::replayed(daemon, command_id, run_id, dispatcher::THREAD_DELETE);
     if replayed().await? {
         return Ok(ThreadDeleteResult {});
     }
@@ -1305,13 +1301,13 @@ pub(crate) async fn delete(
     }
 }
 
-/// Deletes run `run_id` once its CLI has exited, through the orchestrator's `thread.delete`
-/// (0059) in `lane`, which the actor holds: its rows and stored events, and for a thread its
-/// thread row and `thread.deleted`, in one transaction, then its terminals and its events in
-/// memory. A Project's run (`project/delete`, PLX-338) has no thread row and gets no event of its
+/// Deletes run `run_id` once its CLI has exited, through the dispatcher's `thread.delete` (0059) in
+/// `lane`, which the actor holds: its rows and stored events, and for a thread its thread row and
+/// `thread.deleted`, in one transaction, then its terminals and its events in memory. An
+/// orchestrator's run (`orchestrator/delete`, PLX-338) has no thread row and gets no event of its
 /// own. The store clears the run from its children's parent and its forks' origin, and each such
-/// thread gets `thread.updated` (0041). The `thread.cleanup` effect then removes `worktree` and
-/// its branch, and for a thread with no repo its scratch repository and its own context folder.
+/// thread gets `thread.updated` (0041). The `thread.cleanup` effect then removes `worktree` and its
+/// branch, and for a thread with no repo its scratch repository and its own context folder.
 pub(crate) async fn purge(
     daemon: &Arc<Daemon>,
     lane: &Lane<'_>,
@@ -1320,7 +1316,7 @@ pub(crate) async fn purge(
     command_id: Option<Uuid>,
 ) -> Result<(), ErrorObject> {
     let command = Command::new(command_id, run_id, Action::Delete { worktree });
-    daemon.orchestrator.commit(daemon, lane, command).await?;
+    daemon.dispatcher.commit(daemon, lane, command).await?;
     daemon.terminals.close_thread(&run_id.to_string());
     daemon.previews.close_thread(run_id).await;
     daemon.log.purge_run(run_id);
@@ -1333,14 +1329,14 @@ pub(crate) fn remove_scratch_and_context(daemon: &Daemon, run_id: RunId) {
     if let Ok(root) = scratch_root(daemon) {
         remove_scratch(daemon, run_id, &root.join(run_id.to_string()));
     }
-    if let Ok(scope) = ProjectId::try_from(Uuid::from(run_id)) {
+    if let Ok(scope) = ScopeId::try_from(Uuid::from(run_id)) {
         remove_context(daemon, scope);
     }
 }
 
 /// Removes `scope`'s shared context folder, `context/<scope>`: a deleted thread with no repo's
-/// own, or a deleted Project's (PLX-338).
-pub(crate) fn remove_context(daemon: &Daemon, scope: ProjectId) {
+/// own, or a deleted orchestrator's (PLX-338).
+pub(crate) fn remove_context(daemon: &Daemon, scope: ScopeId) {
     let dir = daemon.data_dir.context_dir(scope);
     if !std::fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
         return;

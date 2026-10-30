@@ -9,17 +9,17 @@ use std::time::{Duration, Instant};
 
 use parallax_protocol::methods::{
     AgentAccept, AgentCommit, AgentGitStatus, AgentOpenPr, AgentPush, AgentSend, AgentStart,
-    ProjectDelete, QueueList, QueueSteer, ThreadStart,
+    OrchestratorDelete, QueueList, QueueSteer, ThreadStart,
 };
 use parallax_protocol::{
     AcceptId, AgentAcceptParams, AgentCommitParams, AgentGitStatusParams, AgentOutputItem,
-    AgentPushParams, AgentStatus, ErrorKind, GitStatus, ParallaxEvent, ProjectDeleteParams,
+    AgentPushParams, AgentStatus, ErrorKind, GitStatus, OrchestratorDeleteParams, ParallaxEvent,
     QueueListParams, QueueSteerParams, RunId, ThreadStartParams, TurnId,
 };
 use tokio::task::JoinHandle;
 
 use crate::agents::{
-    Conn, Host, create, git, project_params, real_repo, scope, send_params, start_params,
+    Conn, Host, create, git, orchestrator_params, real_repo, scope, send_params, start_params,
     subscribe, until, updated_to,
 };
 use crate::open_pr::{Tools, add_origin, editing, open, start, thread};
@@ -43,7 +43,7 @@ fn commit(run_id: RunId, message: &str) -> AgentCommitParams {
 async fn a_worktree_run_commits_the_user_s_edits_and_pushes_its_branch() {
     let tools = Tools::new();
     let dir = temp_dir();
-    let params = project_params(dir.path());
+    let params = orchestrator_params(dir.path());
     let repo = PathBuf::from(&params.repo_path);
     let origin = add_origin(&repo, dir.path());
     let host = start(dir, editing(), &tools);
@@ -289,7 +289,7 @@ async fn refused_while_pushing(client: &mut Conn, run_id: RunId, queued: TurnId)
 async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
     let tools = Tools::new();
     let dir = temp_dir();
-    let params = project_params(dir.path());
+    let params = orchestrator_params(dir.path());
     let repo = PathBuf::from(&params.repo_path);
     let origin = add_origin(&repo, dir.path());
     let (started, gate) = hold_pushes(&origin);
@@ -340,7 +340,7 @@ async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
     .await;
     until(&mut client, updated_to(AgentStatus::Completed)).await;
 
-    // `project/delete` waits for a push rather than stopping with some of its runs deleted.
+    // `orchestrator/delete` waits for a push rather than stopping with some of its runs deleted.
     fs::remove_file(&started).unwrap();
     fs::remove_file(&gate).unwrap();
     git(&worktree, &["commit", "-q", "--allow-empty", "-m", "More"]);
@@ -348,8 +348,8 @@ async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
     let mut other = host.client().await;
     let delete = tokio::spawn(async move {
         other
-            .call::<ProjectDelete>(ProjectDeleteParams {
-                project: project.id,
+            .call::<OrchestratorDelete>(OrchestratorDeleteParams {
+                orchestrator: project.id,
             })
             .await
     });
@@ -367,7 +367,7 @@ async fn a_slow_push_runs_off_the_actor_and_a_follow_up_waits_for_it() {
 async fn a_message_makes_a_swept_worktree_again() {
     let tools = Tools::new();
     let dir = temp_dir();
-    let params = project_params(dir.path());
+    let params = orchestrator_params(dir.path());
     let repo = PathBuf::from(&params.repo_path);
     let origin = add_origin(&repo, dir.path());
     let main = git(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -428,7 +428,7 @@ async fn a_message_makes_a_swept_worktree_again() {
 async fn a_missing_worktree_refuses_git_without_touching_the_checkout() {
     let tools = Tools::new();
     let dir = temp_dir();
-    let params = project_params(dir.path());
+    let params = orchestrator_params(dir.path());
     let repo = PathBuf::from(&params.repo_path);
     let origin = add_origin(&repo, dir.path());
     let host = start(dir, editing(), &tools);

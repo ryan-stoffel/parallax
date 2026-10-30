@@ -1,10 +1,10 @@
 //! `plxd mcp --thread <runId>`: a thread's Parallax tools, as an MCP server on stdio (decisions
-//! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for a Project's threads,
+//! 0019 and 0041). The tools are [`thread`]'s, with [`question`]'s for an orchestrator's threads,
 //! [`memory`]'s by the caller's role (0044), [`device`]'s (PLX-640), `computer`'s on macOS
 //! (PLX-897), and [`triggers`]' schedule
 //! and pull request tools and [`delegation`]'s (0063); this module is the server they share.
 //!
-//! A Project's coordinator gets the same server as any thread (PLX-380): its 0019 tools, bound to
+//! An orchestrator gets the same server as any thread (PLX-380): its 0019 tools, bound to
 //! one project, are gone.
 //!
 //! MCP's stdio transport is JSON-RPC 2.0 as newline-delimited JSON, the same framing as plxd's

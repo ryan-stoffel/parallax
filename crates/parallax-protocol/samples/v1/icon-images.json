@@ -2,7 +2,7 @@
   {
     "jsonrpc": "2.0",
     "id": 1,
-    "method": "project/create",
+    "method": "orchestrator/create",
     "params": {
       "id": "01a0f755-f200-74dd-8cfc-06d0b225c5ea",
       "name": "app",
@@ -20,7 +20,7 @@
     "jsonrpc": "2.0",
     "id": 1,
     "result": {
-      "project": {
+      "orchestrator": {
         "id": "01a0f755-f200-74dd-8cfc-06d0b225c5ea",
         "name": "app",
         "icon": {
@@ -40,9 +40,9 @@
   {
     "jsonrpc": "2.0",
     "id": 2,
-    "method": "project/update",
+    "method": "orchestrator/update",
     "params": {
-      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5ea",
+      "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5ea",
       "icon": { "name": "rocket", "image": { "mediaType": "image/webp", "data": "AAAA" } }
     }
   },
@@ -57,9 +57,9 @@
   {
     "jsonrpc": "2.0",
     "id": 3,
-    "method": "project/update",
+    "method": "orchestrator/update",
     "params": {
-      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5ea",
+      "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5ea",
       "icon": { "name": "rocket", "color": "green" }
     }
   },
@@ -67,7 +67,7 @@
     "jsonrpc": "2.0",
     "id": 3,
     "result": {
-      "project": {
+      "orchestrator": {
         "id": "01a0f755-f200-74dd-8cfc-06d0b225c5ea",
         "name": "app",
         "icon": { "name": "rocket", "color": "green" },

@@ -166,14 +166,14 @@ fn signed(duration: Duration) -> SignedDuration {
     SignedDuration::try_from(duration).unwrap_or(SignedDuration::MAX)
 }
 
-/// Whether a run with `own` as its override waits and resumes after a usage limit: its override,
-/// or else for a run in a Project yes, since nobody may be watching it (0060), or else the host's
-/// setting, which is off unless set on.
-pub(super) async fn enabled(daemon: &Daemon, own: Option<bool>, in_project: bool) -> bool {
+/// Whether a run with `own` as its override waits and resumes after a usage limit: its override, or
+/// else for a run in an orchestrator yes, since nobody may be watching it (0060), or else the
+/// host's setting, which is off unless set on.
+pub(super) async fn enabled(daemon: &Daemon, own: Option<bool>, in_orchestrator: bool) -> bool {
     if let Some(own) = own {
         return own;
     }
-    if in_project {
+    if in_orchestrator {
         return true;
     }
     store(daemon, |db| db.auto_resume().map_err(|e| store_error(&e)))

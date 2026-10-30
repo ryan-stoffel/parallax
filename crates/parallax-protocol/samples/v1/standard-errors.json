@@ -2,10 +2,7 @@
   {
     "jsonrpc": "2.0",
     "id": null,
-    "error": {
-      "code": -32700,
-      "message": "Parse error: expected value at line 1 column 1"
-    }
+    "error": { "code": -32700, "message": "Parse error: expected value at line 1 column 1" }
   },
   {
     "jsonrpc": "2.0",
@@ -29,7 +26,7 @@
   {
     "jsonrpc": "2.0",
     "id": 14,
-    "method": "project/create",
+    "method": "orchestrator/create",
     "params": { "id": "not-a-uuid", "name": "parallax", "repoPath": "/Users/me/src/parallax" }
   },
   {
@@ -43,15 +40,12 @@
   {
     "jsonrpc": "2.0",
     "id": 15,
-    "method": "project/list",
+    "method": "orchestrator/list",
     "params": {}
   },
   {
     "jsonrpc": "2.0",
     "id": 15,
-    "error": {
-      "code": -32603,
-      "message": "Internal error: the project store is unavailable"
-    }
+    "error": { "code": -32603, "message": "Internal error: the project store is unavailable" }
   }
 ]

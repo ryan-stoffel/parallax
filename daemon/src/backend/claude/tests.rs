@@ -206,7 +206,7 @@ fn request(cwd: &Path) -> RunRequest {
         permission: None,
         context_window: None,
         fast: None,
-        coordinator_tools: None,
+        orchestrator_tools: None,
         thread_tools: None,
         approvals: false,
         thread: false,
@@ -1681,10 +1681,10 @@ fn a_failed_turn_names_its_kind() {
     }
 }
 
-/// A coordinator's request at `cwd`, whose plxd tools make it full Claude Code (0027).
-fn coordinator(cwd: &Path) -> RunRequest {
+/// An orchestrator's request at `cwd`, whose plxd tools make it full Claude Code (0027).
+fn orchestrator(cwd: &Path) -> RunRequest {
     RunRequest {
-        coordinator_tools: Some(ThreadTools {
+        orchestrator_tools: Some(ThreadTools {
             program: PathBuf::from("/Applications/Parallax.app/Contents/Resources/plxd"),
             data_dir: cwd.join("data"),
             run: RunId::generate(),
@@ -1694,7 +1694,7 @@ fn coordinator(cwd: &Path) -> RunRequest {
 }
 
 /// PLX-222: Manual, Auto, and Plan ask plxd over stdio, right after the mode, for a worker and a
-/// coordinator alike, when the client answers. Without `approvals`, every mode runs as before, as
+/// orchestrator alike, when the client answers. Without `approvals`, every mode runs as before, as
 /// do Accept Edits and Bypass Permissions, and a plain no-write run never asks.
 #[test]
 fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
@@ -1704,9 +1704,9 @@ fn only_the_modes_that_prompt_ask_plxd_over_stdio_and_only_with_approvals() {
     worker.sandbox = Some(worker_sandbox(cwd));
     for (base, approvals) in [
         (worker.clone(), true),
-        (coordinator(cwd), true),
+        (orchestrator(cwd), true),
         (worker, false),
-        (coordinator(cwd), false),
+        (orchestrator(cwd), false),
     ] {
         for (permission, prompting) in [
             (None, false),
@@ -1784,7 +1784,7 @@ async fn an_answer_reaches_the_cli_as_the_user_gave_it() {
         let request = RunRequest {
             permission: Some(AgentPermission::Manual),
             approvals: true,
-            ..coordinator(&fake.root())
+            ..orchestrator(&fake.root())
         };
         let Started { run, mut events } = launch(&fake.backend, request).await;
         let asked = until_asked(&mut events).await;
@@ -1883,7 +1883,7 @@ async fn an_answer_reaches_the_cli_as_the_user_gave_it() {
             let request = RunRequest {
                 permission: Some(AgentPermission::Manual),
                 approvals: true,
-                ..coordinator(&fake.root())
+                ..orchestrator(&fake.root())
             };
             let Started { run, mut events } = launch(&fake.backend, request).await;
             let asked = until_asked(&mut events).await;
@@ -1909,8 +1909,8 @@ async fn until_asked(events: &mut EventStream) -> ApprovalRequest {
     }
 }
 
-/// An init line of a coordinator in `mode`.
-fn coordinator_init(mode: &str) -> Vec<u8> {
+/// An init line of an orchestrator in `mode`.
+fn orchestrator_init(mode: &str) -> Vec<u8> {
     format!(
         r#"{{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","permissionMode":"{mode}","tools":["Read","Bash"]}}"#
     )
@@ -1935,14 +1935,14 @@ fn control_requests_are_answered_only_with_the_prompt_channel() {
     let request = br#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"}}}"#;
     let cancel = br#"{"type":"control_cancel_request","request_id":"r1"}"#;
     let mut without = Translator::new(ToolPolicy::NoWrite, "none")
-        .with_coordinator_tools(true)
+        .with_orchestrator_tools(true)
         .with_permission_mode("default");
-    without.line(&coordinator_init("default"));
+    without.line(&orchestrator_init("default"));
     assert_eq!(without.line(request), []);
     assert_eq!(without.line(cancel), []);
 
     let mut early = Translator::new(ToolPolicy::NoWrite, "none")
-        .with_coordinator_tools(true)
+        .with_orchestrator_tools(true)
         .with_permission_mode("default")
         .with_prompts(true);
     assert_eq!(
@@ -1951,11 +1951,11 @@ fn control_requests_are_answered_only_with_the_prompt_channel() {
     );
 
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none")
-        .with_coordinator_tools(true)
+        .with_orchestrator_tools(true)
         .with_permission_mode("default")
         .with_prompts(true);
     assert_eq!(
-        violation_kind(&translator.line(&coordinator_init("default"))),
+        violation_kind(&translator.line(&orchestrator_init("default"))),
         None
     );
     let steps = translator.line(request);
@@ -1993,27 +1993,27 @@ fn leaving_plan_mode_allows_only_modes_that_ask_as_much() {
         // report another mode than the one the run asked for; until then they may not.
         let plan = || {
             Translator::new(ToolPolicy::NoWrite, "none")
-                .with_coordinator_tools(true)
+                .with_orchestrator_tools(true)
                 .with_permission_mode("plan")
                 .with_prompts(true)
         };
         let mut translator = plan();
         assert_eq!(
-            violation_kind(&translator.line(&coordinator_init("plan"))),
+            violation_kind(&translator.line(&orchestrator_init("plan"))),
             None
         );
         assert_eq!(
-            violation_kind(&translator.line(&coordinator_init("default"))),
+            violation_kind(&translator.line(&orchestrator_init("default"))),
             Some(FailureKind::PolicyViolation)
         );
         let mut translator = plan();
         assert_eq!(
-            violation_kind(&translator.line(&coordinator_init("plan"))),
+            violation_kind(&translator.line(&orchestrator_init("plan"))),
             None
         );
         translator.left_plan_mode();
         assert_eq!(
-            violation_kind(&translator.line(&coordinator_init("default"))),
+            violation_kind(&translator.line(&orchestrator_init("default"))),
             None
         );
         // Only Claude Code's own modes after plan mode: never one that asks less, or none at all.
@@ -2024,16 +2024,16 @@ fn leaving_plan_mode_allows_only_modes_that_ask_as_much() {
             ("auto", Some(FailureKind::PolicyViolation)),
         ] {
             let mut translator = plan();
-            translator.line(&coordinator_init("plan"));
+            translator.line(&orchestrator_init("plan"));
             translator.left_plan_mode();
             assert_eq!(
-                violation_kind(&translator.line(&coordinator_init(mode))),
+                violation_kind(&translator.line(&orchestrator_init(mode))),
                 expected,
                 "{mode}"
             );
         }
         let mut translator = plan();
-        translator.line(&coordinator_init("plan"));
+        translator.line(&orchestrator_init("plan"));
         translator.left_plan_mode();
         let modeless = br#"{"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","tools":["Read","Bash"]}"#;
         assert_eq!(
@@ -2185,10 +2185,10 @@ fn always_allow_offers_only_the_rules_the_user_is_shown() {
         },
     });
     let mut translator = Translator::new(ToolPolicy::NoWrite, "none")
-        .with_coordinator_tools(true)
+        .with_orchestrator_tools(true)
         .with_permission_mode("default")
         .with_prompts(true);
-    translator.line(&coordinator_init("default"));
+    translator.line(&orchestrator_init("default"));
     let steps = translator.line(request.to_string().as_bytes());
     let [(asked, ask)] = asks(&steps)[..] else {
         panic!("{steps:?}")
@@ -2220,7 +2220,7 @@ async fn a_request_left_waiting_when_the_cli_exits_is_withdrawn_before_the_run_e
     let request = RunRequest {
         permission: Some(AgentPermission::Manual),
         approvals: true,
-        ..coordinator(&fake.root())
+        ..orchestrator(&fake.root())
     };
     let Started { mut events, .. } = launch(&fake.backend, request).await;
     let asked = until_asked(&mut events).await;

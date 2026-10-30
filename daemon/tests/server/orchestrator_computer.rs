@@ -1,16 +1,16 @@
-//! A Project's computer (0057): `project/update`'s `computer` behind `projectComputer`, checked
-//! with 0056's device filter on a fake tailnet.
+//! An orchestrator's computer (0057): `orchestrator/update`'s `computer` behind
+//! `orchestratorComputer`, checked with 0056's device filter on a fake tailnet.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::INVALID_PARAMS;
-use parallax_protocol::methods::{ProjectCreate, ProjectUpdate};
-use parallax_protocol::{ErrorKind, ProjectId, ProjectUpdateParams};
+use parallax_protocol::methods::{OrchestratorCreate, OrchestratorUpdate};
+use parallax_protocol::{ErrorKind, OrchestratorUpdateParams, ScopeId};
 
 use crate::agents::git;
 use crate::connect::FakeTailnet;
-use crate::support::{Client, InProcess, create_params, kind, project_update, temp_dir};
+use crate::support::{Client, InProcess, create_params, kind, orchestrator_update, temp_dir};
 
 /// A repository at `dir/<name>` with one commit, and `origin` set to `origin` when given.
 fn repo(dir: &Path, name: &str, origin: Option<&str>) -> PathBuf {
@@ -37,18 +37,18 @@ fn repo(dir: &Path, name: &str, origin: Option<&str>) -> PathBuf {
     repo
 }
 
-fn computer(project: ProjectId, computer: &str) -> ProjectUpdateParams {
-    ProjectUpdateParams {
+fn computer(orchestrator: ScopeId, computer: &str) -> OrchestratorUpdateParams {
+    OrchestratorUpdateParams {
         computer: Some(computer.to_owned()),
-        ..project_update(project)
+        ..orchestrator_update(orchestrator)
     }
 }
 
-/// A server with the fake tailnet, and `projectComputer` on or off.
+/// A server with the fake tailnet, and `orchestratorComputer` on or off.
 fn server(data: &Path, on: bool) -> InProcess {
     let mut config = InProcess::config(data);
     config.tailnet = Some(Arc::new(FakeTailnet::default()));
-    config.project_computer = on;
+    config.orchestrator_computer = on;
     InProcess::start(config)
 }
 
@@ -61,16 +61,20 @@ async fn computer_needs_an_admitted_device_and_an_origin() {
     let server = server(dir.path(), true);
     let mut client = Client::connect(&server.socket).await;
     let init = client.initialize().await.unwrap();
-    assert!(init.capabilities.0.contains_key("projectComputer"));
+    assert!(init.capabilities.0.contains_key("orchestratorComputer"));
     let path = repo(work.path(), "app", None);
     let mut params = create_params(work.path(), "app");
     params.repo_path = path.to_str().unwrap().to_owned();
-    let project = client.call::<ProjectCreate>(params).await.unwrap().project;
+    let orchestrator = client
+        .call::<OrchestratorCreate>(params)
+        .await
+        .unwrap()
+        .orchestrator;
 
     // Another user's node, a tagged one, and one the tailnet doesn't have.
     for refused in ["s", "t", "nowhere"] {
         let error = client
-            .call::<ProjectUpdate>(computer(project.id, refused))
+            .call::<OrchestratorUpdate>(computer(orchestrator.id, refused))
             .await
             .unwrap_err();
         assert_eq!(error.code, INVALID_PARAMS, "{refused}");
@@ -80,7 +84,7 @@ async fn computer_needs_an_admitted_device_and_an_origin() {
         );
     }
     let error = client
-        .call::<ProjectUpdate>(computer(project.id, "a"))
+        .call::<OrchestratorUpdate>(computer(orchestrator.id, "a"))
         .await
         .unwrap_err();
     assert_eq!(
@@ -88,10 +92,10 @@ async fn computer_needs_an_admitted_device_and_an_origin() {
         "Invalid params: This repository has no origin, so another computer can't find it."
     );
     let error = client
-        .call::<ProjectUpdate>(computer(ProjectId::generate(), "a"))
+        .call::<OrchestratorUpdate>(computer(ScopeId::generate(), "a"))
         .await
         .unwrap_err();
-    assert_eq!(kind(&error), ErrorKind::ProjectNotFound);
+    assert_eq!(kind(&error), ErrorKind::OrchestratorNotFound);
 
     git(
         &path,
@@ -99,16 +103,16 @@ async fn computer_needs_an_admitted_device_and_an_origin() {
     );
     // `b` is offline, which doesn't matter: the user can pick it ahead of time.
     let set = client
-        .call::<ProjectUpdate>(computer(project.id, "b"))
+        .call::<OrchestratorUpdate>(computer(orchestrator.id, "b"))
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     assert_eq!(set.computer.as_deref(), Some("b"));
     let cleared = client
-        .call::<ProjectUpdate>(computer(project.id, ""))
+        .call::<OrchestratorUpdate>(computer(orchestrator.id, ""))
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     assert_eq!(cleared.computer, None);
     server.stop().await;
 }

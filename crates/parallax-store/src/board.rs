@@ -6,16 +6,16 @@ use crate::Store;
 use crate::error::StoreError;
 use crate::timestamp;
 
-/// The `host_settings` key prefix, before a Project's id, that migration 49 sets for each Project
-/// the store had: plxd hasn't yet parsed its hand-written board into items (0081).
+/// The `host_settings` key prefix, before an orchestrator's id, that migration 49 sets for each
+/// orchestrator the store had: plxd hasn't yet parsed its hand-written board into items (0081).
 const BOARD_MIGRATION: &str = "board_migration:";
 
-/// One item on a Project's status board (0081, PLX-940). The daemon owns what `status`,
+/// One item on an orchestrator's status board (0081, PLX-940). The daemon owns what `status`,
 /// `section`, and `links` mean; this crate stores them as text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BoardItem {
     pub id: i64,
-    pub project_id: Uuid,
+    pub orchestrator_id: Uuid,
     pub text: String,
     pub status: String,
     pub section: String,
@@ -28,7 +28,7 @@ pub struct BoardItem {
 }
 
 const COLUMNS: &str =
-    "id, project_id, text, status, section, links, created_at, updated_at, done_at";
+    "id, orchestrator_id, text, status, section, links, created_at, updated_at, done_at";
 
 type Raw = (
     i64,
@@ -43,11 +43,11 @@ type Raw = (
 );
 
 fn into_item(
-    (id, project, text, status, section, links, created, updated, done): Raw,
+    (id, orchestrator, text, status, section, links, created, updated, done): Raw,
 ) -> Result<BoardItem, StoreError> {
     Ok(BoardItem {
         id,
-        project_id: Uuid::parse_str(&project)?,
+        orchestrator_id: Uuid::parse_str(&orchestrator)?,
         text,
         status,
         section,
@@ -59,18 +59,18 @@ fn into_item(
 }
 
 impl Store {
-    /// Adds `item` to its Project's board, ignoring its `id`, and returns it with the new id.
+    /// Adds `item` to its orchestrator's board, ignoring its `id`, and returns it with the new id.
     ///
     /// # Errors
     ///
-    /// A database error, including a constraint error if its Project doesn't exist.
+    /// A database error, including a constraint error if its orchestrator doesn't exist.
     pub fn add_board_item(&self, item: &BoardItem) -> Result<BoardItem, StoreError> {
         self.conn.execute(
-            "INSERT INTO board_items (project_id, text, status, section, links, created_at,
+            "INSERT INTO board_items (orchestrator_id, text, status, section, links, created_at,
                  updated_at, done_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
-                item.project_id.to_string(),
+                item.orchestrator_id.to_string(),
                 item.text,
                 item.status,
                 item.section,
@@ -86,16 +86,18 @@ impl Store {
         })
     }
 
-    /// `project`'s item `id`, if it has one.
+    /// `orchestrator`'s item `id`, if it has one.
     ///
     /// # Errors
     ///
     /// A database error, or an error if a stored id or time is corrupt.
-    pub fn board_item(&self, project: Uuid, id: i64) -> Result<Option<BoardItem>, StoreError> {
+    pub fn board_item(&self, orchestrator: Uuid, id: i64) -> Result<Option<BoardItem>, StoreError> {
         self.conn
             .query_row(
-                &format!("SELECT {COLUMNS} FROM board_items WHERE id = ?1 AND project_id = ?2"),
-                params![id, project.to_string()],
+                &format!(
+                    "SELECT {COLUMNS} FROM board_items WHERE id = ?1 AND orchestrator_id = ?2"
+                ),
+                params![id, orchestrator.to_string()],
                 |row| Raw::try_from(row),
             )
             .optional()?
@@ -103,23 +105,23 @@ impl Store {
             .transpose()
     }
 
-    /// `project`'s board items, oldest first.
+    /// `orchestrator`'s board items, oldest first.
     ///
     /// # Errors
     ///
     /// A database error, or an error if a stored id or time is corrupt.
-    pub fn board_items(&self, project: Uuid) -> Result<Vec<BoardItem>, StoreError> {
+    pub fn board_items(&self, orchestrator: Uuid) -> Result<Vec<BoardItem>, StoreError> {
         let mut statement = self.conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM board_items WHERE project_id = ?1 ORDER BY id"
+            "SELECT {COLUMNS} FROM board_items WHERE orchestrator_id = ?1 ORDER BY id"
         ))?;
         let rows = statement
-            .query_map(params![project.to_string()], |row| Raw::try_from(row))?
+            .query_map(params![orchestrator.to_string()], |row| Raw::try_from(row))?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter().map(into_item).collect()
     }
 
     /// Saves `item`'s text, status, section, links, and times over the stored row with its id
-    /// and Project. Whether it exists.
+    /// and Orchestrator. Whether it exists.
     ///
     /// # Errors
     ///
@@ -128,10 +130,10 @@ impl Store {
         let changed = self.conn.execute(
             "UPDATE board_items SET text = ?3, status = ?4, section = ?5, links = ?6,
                  updated_at = ?7, done_at = ?8
-             WHERE id = ?1 AND project_id = ?2",
+             WHERE id = ?1 AND orchestrator_id = ?2",
             params![
                 item.id,
-                item.project_id.to_string(),
+                item.orchestrator_id.to_string(),
                 item.text,
                 item.status,
                 item.section,
@@ -143,20 +145,21 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Removes `project`'s item `id`. Whether it existed.
+    /// Removes `orchestrator`'s item `id`. Whether it existed.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn remove_board_item(&self, project: Uuid, id: i64) -> Result<bool, StoreError> {
+    pub fn remove_board_item(&self, orchestrator: Uuid, id: i64) -> Result<bool, StoreError> {
         let changed = self.conn.execute(
-            "DELETE FROM board_items WHERE id = ?1 AND project_id = ?2",
-            params![id, project.to_string()],
+            "DELETE FROM board_items WHERE id = ?1 AND orchestrator_id = ?2",
+            params![id, orchestrator.to_string()],
         )?;
         Ok(changed > 0)
     }
 
-    /// The Projects whose hand-written boards plxd still has to parse into items (migration 49).
+    /// The Orchestrators whose hand-written boards plxd still has to parse into items (migration
+    /// 49).
     ///
     /// # Errors
     ///
@@ -169,31 +172,33 @@ impl Store {
         crate::ids(&mut statement, [])
     }
 
-    /// Whether `project`'s board migration is still to do.
+    /// Whether `orchestrator`'s board migration is still to do.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn board_migration_pending(&self, project: Uuid) -> Result<bool, StoreError> {
-        Ok(self.text(&format!("{BOARD_MIGRATION}{project}"))?.is_some())
+    pub fn board_migration_pending(&self, orchestrator: Uuid) -> Result<bool, StoreError> {
+        Ok(self
+            .text(&format!("{BOARD_MIGRATION}{orchestrator}"))?
+            .is_some())
     }
 
-    /// Marks `project`'s board for the migration, as migration 49 marks each Project the store
-    /// had.
+    /// Marks `orchestrator`'s board for the migration, as migration 49 marks each orchestrator the
+    /// store had.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn mark_board_migration(&self, project: Uuid) -> Result<(), StoreError> {
-        self.set_text(&format!("{BOARD_MIGRATION}{project}"), Some("pending"))
+    pub fn mark_board_migration(&self, orchestrator: Uuid) -> Result<(), StoreError> {
+        self.set_text(&format!("{BOARD_MIGRATION}{orchestrator}"), Some("pending"))
     }
 
-    /// Records that `project`'s board is now items.
+    /// Records that `orchestrator`'s board is now items.
     ///
     /// # Errors
     ///
     /// A database error.
-    pub fn finish_board_migration(&self, project: Uuid) -> Result<(), StoreError> {
-        self.set_text(&format!("{BOARD_MIGRATION}{project}"), None)
+    pub fn finish_board_migration(&self, orchestrator: Uuid) -> Result<(), StoreError> {
+        self.set_text(&format!("{BOARD_MIGRATION}{orchestrator}"), None)
     }
 }

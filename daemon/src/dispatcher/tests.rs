@@ -2,11 +2,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use parallax_protocol::{ProjectCreateParams, ProjectId};
+use parallax_protocol::{OrchestratorCreateParams, ScopeId};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
-use super::{Action, Command, Orchestrator, recover, work};
+use super::{Action, Command, Dispatcher, recover, work};
 use crate::server::Daemon;
 use crate::store::store_error;
 
@@ -14,10 +14,10 @@ fn daemon(dir: &Path) -> Arc<Daemon> {
     Daemon::for_tests(dir, 10, Duration::from_secs(90))
 }
 
-/// A Project with no runs, and a file in its context folder for `project.cleanup` to remove.
-async fn project(daemon: &Daemon) -> ProjectId {
-    let id = ProjectId::generate();
-    let (uuid, fields) = crate::store::fields(ProjectCreateParams {
+/// An orchestrator with no runs, and a file in its context folder for `project.cleanup` to remove.
+async fn project(daemon: &Daemon) -> ScopeId {
+    let id = ScopeId::generate();
+    let (uuid, fields) = crate::store::fields(OrchestratorCreateParams {
         id,
         name: "p".to_owned(),
         repo_path: "/nowhere".to_owned(),
@@ -29,7 +29,7 @@ async fn project(daemon: &Daemon) -> ProjectId {
     daemon
         .store
         .run(&CancellationToken::new(), move |db| {
-            db.create_project(uuid, &fields)
+            db.create_orchestrator(uuid, &fields)
                 .map_err(|e| store_error(&e))
                 .map(drop)
         })
@@ -41,8 +41,8 @@ async fn project(daemon: &Daemon) -> ProjectId {
     id
 }
 
-fn delete(command_id: Uuid, project: ProjectId) -> Command {
-    Command::new(Some(command_id), project, Action::DeleteProject)
+fn delete(command_id: Uuid, project: ScopeId) -> Command {
+    Command::new(Some(command_id), project, Action::DeleteOrchestrator)
 }
 
 /// A connection of its own to the database in `dir`.
@@ -65,7 +65,7 @@ async fn effects_replay_or_retire_after_a_crash() {
     let running_dir = crashed.data_dir.context_dir(running);
     let pending_dir = crashed.data_dir.context_dir(pending);
     crashed
-        .orchestrator
+        .dispatcher
         .dispatch(&crashed, delete(Uuid::now_v7(), running))
         .await
         .unwrap();
@@ -79,7 +79,7 @@ async fn effects_replay_or_retire_after_a_crash() {
         .await
         .unwrap();
     crashed
-        .orchestrator
+        .dispatcher
         .dispatch(&crashed, delete(Uuid::now_v7(), pending))
         .await
         .unwrap();
@@ -131,7 +131,7 @@ async fn effects_replay_or_retire_after_a_crash() {
 /// call unconditionally.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_released_lock_is_not_reused_while_a_queued_retry_still_holds_it() {
-    let locks = Arc::new(Orchestrator::default());
+    let locks = Arc::new(Dispatcher::default());
     let id = Uuid::now_v7();
 
     // The first attempt takes the lock, then fails and drops its own guard.

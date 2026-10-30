@@ -33,13 +33,14 @@ use std::time::{Duration, Instant};
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AccountChoice, AccountId, ErrorKind, ImageMediaType, KeyAccount, ParallaxEvent, Project,
-    ProjectAutonomy, ProjectCreateParams, ProjectIcon, ProjectId, ProjectPermission,
-    ProjectUpdateParams, PromptImage, Provider, QueueStats, Role, RunId, StoreState,
+    AccountChoice, AccountId, ChosenIcon, ErrorKind, ImageMediaType, KeyAccount, Orchestrator,
+    OrchestratorAutonomy, OrchestratorCreateParams, OrchestratorPermission,
+    OrchestratorUpdateParams, ParallaxEvent, PromptImage, Provider, QueueStats, Role, RunId,
+    ScopeId, StoreState,
 };
 use parallax_store::{
-    AccountFields, ProjectEdit, ProjectFields, RoleDefault, Store, StoreError, StoredEvent,
-    StoredImage,
+    AccountFields, OrchestratorEdit, OrchestratorFields, RoleDefault, Store, StoreError,
+    StoredEvent, StoredImage,
 };
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -139,7 +140,7 @@ pub(crate) struct Tx {
     staged: Vec<Entry>,
     /// Whether staging failed, which rolls the job back however it ends.
     failed: bool,
-    /// The orchestrator command this job commits, which tags the events it stages (0059).
+    /// The dispatcher command this job commits, which tags the events it stages (0059).
     pub command_id: Option<String>,
     /// The threads whose stored events are in the graph ([`crate::graph::import`]), so a
     /// staged event's fold checks memory rather than the table.
@@ -200,7 +201,7 @@ impl Tx {
     pub fn stage(
         &mut self,
         time: Timestamp,
-        project: Option<ProjectId>,
+        project: Option<ScopeId>,
         event: ParallaxEvent,
     ) -> u64 {
         let Some(host_retention) = self.log.as_ref().map(|log| log.host_retention()) else {
@@ -268,7 +269,7 @@ impl Tx {
         thread: Uuid,
         seq: u64,
         time: Timestamp,
-        project: Option<ProjectId>,
+        project: Option<ScopeId>,
         event: &ParallaxEvent,
     ) -> Result<Option<Uuid>, StoreError> {
         self.import_thread_rows(thread)?;
@@ -276,7 +277,7 @@ impl Tx {
         if !self.copying {
             for run in &folded.ended {
                 if let Some(ordinal) = run.ordinal {
-                    let effect = crate::orchestrator::capture_effect(thread, run.id, ordinal);
+                    let effect = crate::dispatcher::capture_effect(thread, run.id, ordinal);
                     self.store.enqueue_effect(&effect)?;
                     self.effects = true;
                 }
@@ -597,7 +598,7 @@ impl StoreHandle {
     pub async fn append(
         &self,
         time: Timestamp,
-        project: Option<ProjectId>,
+        project: Option<ScopeId>,
         event: ParallaxEvent,
     ) -> u64 {
         if matches!(self.state, State::Unavailable) {
@@ -622,7 +623,7 @@ impl StoreHandle {
     pub fn append_blocking(
         &self,
         time: Timestamp,
-        project: Option<ProjectId>,
+        project: Option<ScopeId>,
         event: ParallaxEvent,
     ) -> u64 {
         if matches!(self.state, State::Unavailable) {
@@ -746,37 +747,39 @@ pub(crate) fn store_error(error: &StoreError) -> ErrorObject {
     match error {
         StoreError::IdConflict { id } => ErrorObject::parallax(
             ErrorKind::IdConflict,
-            format!("project {id} exists with a different name, repository, or icon"),
+            format!("orchestrator {id} exists with a different name, repository, or icon"),
         ),
         StoreError::NotFound { id } => ErrorObject::parallax(
-            ErrorKind::ProjectNotFound,
-            format!("no project has id {id}"),
+            ErrorKind::OrchestratorNotFound,
+            format!("no orchestrator has id {id}"),
         ),
         other => failed(other),
     }
 }
 
-/// The store's id and fields for a `project/create`.
-pub(crate) fn fields(params: ProjectCreateParams) -> (Uuid, ProjectFields) {
+/// The store's id and fields for a `orchestrator/create`.
+pub(crate) fn fields(params: OrchestratorCreateParams) -> (Uuid, OrchestratorFields) {
     (
         params.id.into(),
-        ProjectFields {
+        OrchestratorFields {
             name: params.name,
             repo_path: params.repo_path,
             icon: params.icon.map(stored_icon),
-            permission: stored_permission(params.permission.unwrap_or(ProjectPermission::Auto)),
-            autonomy: option_name(params.autonomy.unwrap_or(ProjectAutonomy::Routine))
+            permission: stored_permission(
+                params.permission.unwrap_or(OrchestratorPermission::Auto),
+            ),
+            autonomy: option_name(params.autonomy.unwrap_or(OrchestratorAutonomy::Routine))
                 .unwrap_or_default(),
             base_branch: params.base_branch,
         },
     )
 }
 
-/// The store's id and edit for a `project/update` (PLX-227).
-pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
+/// The store's id and edit for a `orchestrator/update` (PLX-227).
+pub(crate) fn edit(params: OrchestratorUpdateParams) -> (Uuid, OrchestratorEdit) {
     (
-        params.project.into(),
-        ProjectEdit {
+        params.orchestrator.into(),
+        OrchestratorEdit {
             name: params.name,
             icon: params.icon.map(stored_icon),
             permission: params.permission.map(stored_permission),
@@ -793,25 +796,25 @@ pub(crate) fn edit(params: ProjectUpdateParams) -> (Uuid, ProjectEdit) {
 }
 
 /// A project's permission mode as the `projects.permission` column keeps it (0042).
-fn stored_permission(permission: ProjectPermission) -> String {
+fn stored_permission(permission: OrchestratorPermission) -> String {
     option_name(permission).unwrap_or_default()
 }
 
-/// A stored permission mode as the protocol's, [`ProjectPermission::Unknown`] for one this build
-/// doesn't know.
-pub(crate) fn project_permission(stored: &str) -> ProjectPermission {
-    option_value(stored).unwrap_or(ProjectPermission::Unknown)
+/// A stored permission mode as the protocol's, [`OrchestratorPermission::Unknown`] for one this
+/// build doesn't know.
+pub(crate) fn orchestrator_permission(stored: &str) -> OrchestratorPermission {
+    option_value(stored).unwrap_or(OrchestratorPermission::Unknown)
 }
 
-/// A stored autonomy level as the protocol's, [`ProjectAutonomy::Unknown`] for one this build
+/// A stored autonomy level as the protocol's, [`OrchestratorAutonomy::Unknown`] for one this build
 /// doesn't know (0043).
-pub(crate) fn project_autonomy(stored: &str) -> ProjectAutonomy {
-    option_value(stored).unwrap_or(ProjectAutonomy::Unknown)
+pub(crate) fn orchestrator_autonomy(stored: &str) -> OrchestratorAutonomy {
+    option_value(stored).unwrap_or(OrchestratorAutonomy::Unknown)
 }
 
 /// A protocol icon as the store keeps it, a project's or a repo entry's alike.
-pub(crate) fn stored_icon(icon: ProjectIcon) -> parallax_store::ProjectIcon {
-    parallax_store::ProjectIcon {
+pub(crate) fn stored_icon(icon: ChosenIcon) -> parallax_store::ChosenIcon {
+    parallax_store::ChosenIcon {
         name: icon.name,
         color: icon.color,
         image: icon.image.map(|image| StoredImage {
@@ -822,8 +825,8 @@ pub(crate) fn stored_icon(icon: ProjectIcon) -> parallax_store::ProjectIcon {
 }
 
 /// A stored icon as the protocol's, a project's or a repo entry's alike.
-pub(crate) fn protocol_icon(icon: parallax_store::ProjectIcon) -> ProjectIcon {
-    ProjectIcon {
+pub(crate) fn protocol_icon(icon: parallax_store::ChosenIcon) -> ChosenIcon {
+    ChosenIcon {
         name: icon.name,
         color: icon.color,
         image: icon.image.map(|image| PromptImage {
@@ -834,27 +837,30 @@ pub(crate) fn protocol_icon(icon: parallax_store::ProjectIcon) -> ProjectIcon {
 }
 
 /// A store row as the protocol's project, with the branch its repository has checked out now and
-/// its coordinator run, if it has one (0024).
+/// its orchestrator run, if it has one (0024).
 ///
 /// plxd writes only version 7 ids, so a row with another kind of id was written by something
 /// else, and the request fails rather than hide the row.
-pub(crate) fn project(
-    row: parallax_store::Project,
-    coordinator: Option<RunId>,
-) -> Result<Project, ErrorObject> {
-    let id = ProjectId::try_from(row.id).map_err(|_| {
-        error!(id = %row.id, "a stored project's id is not a UUIDv7");
-        ErrorObject::internal_error(format!("the stored project {} has an invalid id", row.id))
+pub(crate) fn orchestrator(
+    row: parallax_store::Orchestrator,
+    orchestrator: Option<RunId>,
+) -> Result<Orchestrator, ErrorObject> {
+    let id = ScopeId::try_from(row.id).map_err(|_| {
+        error!(id = %row.id, "a stored orchestrator's id is not a UUIDv7");
+        ErrorObject::internal_error(format!(
+            "the stored orchestrator {} has an invalid id",
+            row.id
+        ))
     })?;
-    Ok(Project {
+    Ok(Orchestrator {
         id,
         name: row.name,
         icon: row.icon.map(protocol_icon),
-        permission: Some(project_permission(&row.permission)),
-        autonomy: Some(project_autonomy(&row.autonomy)),
+        permission: Some(orchestrator_permission(&row.permission)),
+        autonomy: Some(orchestrator_autonomy(&row.autonomy)),
         branch: repo::branch(Path::new(&row.repo_path)),
         repo_path: row.repo_path,
-        coordinator,
+        run: orchestrator,
         base_branch: row.base_branch,
         integration_branch: row.integration_branch,
         auto_land: row.auto_land,
@@ -870,7 +876,7 @@ pub(crate) fn project(
 
 /// The protocol error for an accounts-table store error.
 ///
-/// Unlike [`store_error`], a missing row is `accountNotFound`, not `projectNotFound`: the two
+/// Unlike [`store_error`], a missing row is `accountNotFound`, not `orchestratorNotFound`: the two
 /// tables share [`StoreError`], but not its meaning.
 pub(crate) fn account_store_error(error: &StoreError) -> ErrorObject {
     match error {
@@ -924,7 +930,7 @@ pub(crate) fn account_fields(
 /// `role`'s text for the `role_defaults.role` column.
 pub(crate) fn role_text(role: Role) -> &'static str {
     match role {
-        Role::Coordinator => "coordinator",
+        Role::Orchestrator => "orchestrator",
         Role::Worker => "worker",
     }
 }
@@ -1031,7 +1037,7 @@ mod tests {
 
     use jiff::Timestamp;
     use parallax_protocol::jsonrpc::INTERNAL_ERROR;
-    use parallax_protocol::{ParallaxEvent, ProjectCreateParams, ProjectId, StoreState};
+    use parallax_protocol::{OrchestratorCreateParams, ParallaxEvent, ScopeId, StoreState};
 
     use tokio_util::sync::CancellationToken;
 
@@ -1041,9 +1047,9 @@ mod tests {
         StoreHandle::open(path, 10, usize::MAX, usize::MAX)
     }
 
-    fn new_project() -> ProjectCreateParams {
-        ProjectCreateParams {
-            id: ProjectId::generate(),
+    fn new_orchestrator() -> OrchestratorCreateParams {
+        OrchestratorCreateParams {
+            id: ScopeId::generate(),
             name: "n".to_owned(),
             repo_path: "/r".to_owned(),
             icon: None,
@@ -1058,7 +1064,7 @@ mod tests {
     fn stored(path: &std::path::Path) -> (i64, Vec<i64>) {
         let raw = rusqlite::Connection::open(path).unwrap();
         let projects = raw
-            .query_row("SELECT COUNT(*) FROM projects", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM orchestrators", [], |row| row.get(0))
             .unwrap();
         let seqs = raw
             .prepare("SELECT seq FROM events ORDER BY seq")
@@ -1084,8 +1090,8 @@ mod tests {
 
         let failed = store
             .run(&cancel, |db| {
-                let (id, fields) = fields(new_project());
-                db.create_project(id, &fields)
+                let (id, fields) = fields(new_orchestrator());
+                db.create_orchestrator(id, &fields)
                     .map_err(|error| store_error(&error))?;
                 db.stage(Timestamp::now(), None, ParallaxEvent::Unknown);
                 Err::<(), _>(ErrorObject::internal_error("injected"))
@@ -1094,8 +1100,8 @@ mod tests {
         assert_eq!(failed.unwrap_err().message, "Internal error: injected");
         let panicked = store
             .run(&cancel, |db| {
-                let (id, fields) = fields(new_project());
-                db.create_project(id, &fields)
+                let (id, fields) = fields(new_orchestrator());
+                db.create_orchestrator(id, &fields)
                     .map_err(|error| store_error(&error))?;
                 assert!(id.is_nil(), "injected between the row and its event");
                 Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
@@ -1108,8 +1114,8 @@ mod tests {
 
         let seq = store
             .run(&cancel, |db| {
-                let (id, fields) = fields(new_project());
-                db.create_project(id, &fields)
+                let (id, fields) = fields(new_orchestrator());
+                db.create_orchestrator(id, &fields)
                     .map_err(|error| store_error(&error))?;
                 Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
             })
@@ -1137,7 +1143,7 @@ mod tests {
         let snapshot = reader.snapshot(&cancel, move |db| {
             started_tx.send(()).unwrap();
             release_rx.recv().unwrap();
-            db.list_projects().map_err(|error| store_error(&error))
+            db.list_orchestrators().map_err(|error| store_error(&error))
         });
         let write = async {
             tokio::task::spawn_blocking(move || started_rx.recv().unwrap())
@@ -1145,8 +1151,8 @@ mod tests {
                 .unwrap();
             let seq = store
                 .run(&cancel, move |db| {
-                    let (id, fields) = fields(new_project());
-                    db.create_project(id, &fields)
+                    let (id, fields) = fields(new_orchestrator());
+                    db.create_orchestrator(id, &fields)
                         .map_err(|error| store_error(&error))?;
                     Ok(db.stage(Timestamp::now(), None, ParallaxEvent::Unknown))
                 })
@@ -1188,7 +1194,7 @@ mod tests {
         assert_eq!(reader.state(), StoreState::Unavailable);
         let error = reader
             .run(&CancellationToken::new(), |db| {
-                db.list_projects().map_err(|error| store_error(&error))
+                db.list_orchestrators().map_err(|error| store_error(&error))
             })
             .await
             .unwrap_err();

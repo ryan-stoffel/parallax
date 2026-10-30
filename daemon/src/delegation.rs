@@ -6,9 +6,9 @@
 //! worktree for it. With a `completionWake` it is a task the owner delegated: its child, lineage
 //! `subagent`, whose end wakes the owner by [`wakes`]' rule. Without one it is a top-level thread
 //! beside it (`create_threads`). Its mode can't need less approval than the owner's, a no-write
-//! thread (a Project's coordinator) can't share its workspace, and the owner must be running a
-//! turn, as T3's must. Only threads in a repo entry share theirs: a Project's runs
-//! start children through their coordinator. At most [`MAX_SHARED_RUNNING`] such threads run at
+//! thread (an orchestrator) can't share its workspace, and the owner must be running a
+//! turn, as T3's must. Only threads in a repo entry share theirs: an orchestrator's runs
+//! start children through their orchestrator. At most [`MAX_SHARED_RUNNING`] such threads run at
 //! once on a host ([`Slots`]). A shared worktree is never removed while a thread works in it
 //! ([`busy_users`] for Accept, [`on_delete`] for Delete).
 //!
@@ -28,7 +28,7 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AccountChoice, AgentEffort, AgentPermission, AgentStatus, CompletionWake, DelegatedTask,
-    ErrorKind, ParallaxEvent, ProjectId, RunId, TaskDelegateParams, TaskDelivery, TaskStatusParams,
+    ErrorKind, ParallaxEvent, RunId, ScopeId, TaskDelegateParams, TaskDelivery, TaskStatusParams,
     ThreadMergeBackParams, ThreadMergeBackResult, ThreadStartResult,
 };
 use parallax_store::{Lineage, Store, ThreadFields};
@@ -239,7 +239,7 @@ pub(crate) async fn delegate(
             account: Some(
                 account.unwrap_or_else(|| agents::session_account(&row.state.account_id)),
             ),
-            coordinator_thread: None,
+            orchestrator_thread: None,
             notify: task.is_some(),
             options,
             // As a thread the user starts: it asks the app (0034).
@@ -321,7 +321,7 @@ fn claim(
     run_id: RunId,
     owner: RunId,
     task: Option<Task>,
-) -> Result<(parallax_store::Run, ProjectId, bool), ErrorObject> {
+) -> Result<(parallax_store::Run, ScopeId, bool), ErrorObject> {
     let error = |error| store_error(&error);
     let row = db
         .get_run(owner.into())
@@ -334,7 +334,7 @@ fn claim(
     };
     if !in_repo {
         return Err(ErrorObject::invalid_params(format!(
-            "thread {owner} is a Project's run: it starts children through its coordinator"
+            "thread {owner} is an orchestrator's run: it starts children through its orchestrator"
         )));
     }
     if row.fields.policy == agents::NO_WRITE {
@@ -386,7 +386,7 @@ fn claim(
             true
         }
     };
-    let scope = ProjectId::try_from(row.fields.project_id)
+    let scope = ScopeId::try_from(row.fields.project_id)
         .map_err(|_| ErrorObject::internal_error("a stored repo entry id is invalid"))?;
     Ok((row, scope, inserted))
 }
@@ -524,7 +524,7 @@ pub(crate) fn quiet(db: &Store, tasks: &[Uuid]) -> Result<Vec<Uuid>, ErrorObject
 
 /// The folder a checkout thread works in (0063): the worktree it shares, or else `scope`'s
 /// checkout.
-pub(crate) fn workdir(db: &Store, scope: ProjectId, run: Uuid) -> Result<String, ErrorObject> {
+pub(crate) fn workdir(db: &Store, scope: ScopeId, run: Uuid) -> Result<String, ErrorObject> {
     let lineage = db.lineage(run).map_err(|e| store_error(&e))?;
     match lineage
         .as_ref()

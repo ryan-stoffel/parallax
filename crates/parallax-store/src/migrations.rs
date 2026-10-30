@@ -554,7 +554,7 @@ const MIGRATIONS: &[Migration] = &[
         CREATE INDEX command_receipts_run ON command_receipts (run_id, created_at);
         CREATE INDEX command_receipts_age ON command_receipts (created_at);",
     },
-    // The orchestrator's core (0059, PLX-643). `events` names the thread it belongs to
+    // The dispatcher's core (0059, PLX-643). `events` names the thread it belongs to
     // `thread_id` (a run's row, until phase 2 splits threads from runs) and its kind `type`, and
     // gains the command that staged it and, for phase 2, the run (turn) and node. `events_run`
     // now indexes `(thread_id, seq)`. `orchestration_receipts` holds a command's outcome,
@@ -867,13 +867,36 @@ const MIGRATIONS: &[Migration] = &[
         version: 55,
         sql: "ALTER TABLE threads ADD COLUMN space_id TEXT;",
     },
+    // A Project and its coordinator are an orchestrator (0093, PLX-1174): their tables and
+    // columns take the new name, and so does the accounts default for one. `runs.project_id`
+    // stays, since it holds a repo entry's id too.
+    Migration {
+        version: 56,
+        sql: "ALTER TABLE projects RENAME TO orchestrators;
+        ALTER TABLE coordinator_sessions RENAME TO orchestrator_sessions;
+        ALTER TABLE runs RENAME COLUMN coordinator_thread TO orchestrator_thread;
+        ALTER TABLE inbox RENAME COLUMN project_id TO orchestrator_id;
+        ALTER TABLE questions RENAME COLUMN project_id TO orchestrator_id;
+        ALTER TABLE landings RENAME COLUMN project_id TO orchestrator_id;
+        ALTER TABLE placements RENAME COLUMN project_id TO orchestrator_id;
+        ALTER TABLE board_items RENAME COLUMN project_id TO orchestrator_id;
+        DROP INDEX inbox_project;
+        CREATE INDEX inbox_orchestrator ON inbox (orchestrator_id, created_at);
+        DROP INDEX questions_project;
+        CREATE INDEX questions_orchestrator ON questions (orchestrator_id, created_at);
+        DROP INDEX landings_project;
+        CREATE INDEX landings_orchestrator ON landings (orchestrator_id, status, queued_at);
+        DROP INDEX board_items_project;
+        CREATE INDEX board_items_orchestrator ON board_items (orchestrator_id);
+        UPDATE role_defaults SET role = 'orchestrator' WHERE role = 'coordinator';",
+    },
 ];
 
 /// Migrations that an existing store backs itself up before, with `VACUUM INTO`, which copies a
 /// WAL database consistently where a file copy could miss the WAL (0059). There is no downgrade,
 /// so the copy is the way back. It is `<database>.pre-<version>`, written once: before the
 /// oldest of these a store is missing, so one copy covers a jump over several.
-const BACKUP_BEFORE: &[i64] = &[39, 41];
+const BACKUP_BEFORE: &[i64] = &[39, 41, 56];
 
 /// Bootstraps the `schema_version` table and applies every migration whose
 /// version isn't recorded, in order. A missing version below the newest
@@ -1087,6 +1110,34 @@ mod tests {
         };
         assert!(pending(false).is_empty());
         assert_eq!(pending(true), [project]);
+    }
+
+    /// Migration 56 (0093) keeps a Project as an orchestrator, its inbox under the new column,
+    /// and the coordinator's accounts default as the orchestrator's.
+    #[test]
+    fn a_version_55_database_keeps_its_projects_as_orchestrators() {
+        let id = uuid::Uuid::parse_str("01a0f8a0-0000-7000-8000-000000000056").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plxd.sqlite3");
+        let conn = migrated_through(&path, 55);
+        let at = "2026-10-30T12:00:00Z";
+        conn.execute_batch(&format!(
+            "INSERT INTO projects (id, name, repo_path, created_at, updated_at)
+             VALUES ('{id}', 'formula fly', '/r', '{at}', '{at}');
+             INSERT INTO inbox (id, project_id, run_id, kind, text, created_at)
+             VALUES ('{id}', '{id}', '{id}', 'k', 't', '{at}');
+             INSERT INTO role_defaults (role, account_kind, backend, updated_at)
+             VALUES ('coordinator', 'subscription', 'claude', '{at}');"
+        ))
+        .unwrap();
+        drop(conn);
+        let store = crate::Store::open(&path).unwrap();
+        let orchestrator = store.get_orchestrator(id).unwrap().unwrap();
+        assert_eq!(orchestrator.name, "formula fly");
+        assert_eq!(store.inbox(id).unwrap().len(), 1);
+        assert!(store.get_role_default("orchestrator").unwrap().is_some());
+        assert!(store.get_role_default("coordinator").unwrap().is_none());
+        assert!(dir.path().join("plxd.sqlite3.pre-56").exists());
     }
 
     /// A backup that fails partway, here on a corrupt page, leaves no partial copy or journal

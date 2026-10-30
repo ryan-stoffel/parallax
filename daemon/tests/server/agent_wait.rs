@@ -19,7 +19,7 @@ async fn hanging_runs(count: usize) -> (Host, Conn, Vec<RunId>) {
         temp_dir(),
         fake(vec![init("wait-1"), text("Working"), Step::Hang]),
     );
-    let (mut client, project) = host.project_client().await;
+    let (mut client, project) = host.orchestrator_client().await;
     let mut runs = Vec::new();
     for _ in 0..count {
         let params = start_params(project.id, "Work until cancelled");

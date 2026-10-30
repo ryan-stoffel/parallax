@@ -426,7 +426,7 @@ mod tests {
 
     use parallax_protocol::framing::MAX_FRAME_BYTES;
     use parallax_protocol::jsonrpc::Response;
-    use parallax_protocol::{AgentEventsParams, AgentOutputItem, ParallaxEvent, ProjectId, RunId};
+    use parallax_protocol::{AgentEventsParams, AgentOutputItem, ParallaxEvent, RunId, ScopeId};
     use parallax_store::{RunFields, RunState};
     use tokio_util::sync::CancellationToken;
 
@@ -434,7 +434,7 @@ mod tests {
     use crate::server::Daemon;
 
     /// A daemon with one run, `running`, and a context to call methods with.
-    async fn daemon_with_run() -> (tempfile::TempDir, Arc<Daemon>, Context, RunId, ProjectId) {
+    async fn daemon_with_run() -> (tempfile::TempDir, Arc<Daemon>, Context, RunId, ScopeId) {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 10_000, Duration::from_secs(90));
         let context = Context {
@@ -445,7 +445,7 @@ mod tests {
             replies: tokio::sync::mpsc::channel(1).0,
             over_connect: false,
         };
-        let (run_id, project) = (RunId::generate(), ProjectId::generate());
+        let (run_id, project) = (RunId::generate(), ScopeId::generate());
         daemon
             .store
             .run(&CancellationToken::new(), move |db| {
@@ -455,7 +455,7 @@ mod tests {
                     requested_account: None,
                     policy: "workspaceWrite".to_owned(),
                     backend: "fake".to_owned(),
-                    coordinator_thread: None,
+                    orchestrator_thread: None,
                     parent: None,
                     notify_parent: false,
                     model: None,

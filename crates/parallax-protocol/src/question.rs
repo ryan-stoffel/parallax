@@ -1,15 +1,15 @@
-//! A Project's children's questions (PLX-402, decision 0043), behind the `questions` capability.
-//! A child asks with `question/ask` and goes on with its assumption at once. The question wakes
-//! the Project's coordinator, which answers it with `question/answer` or passes it to the user
-//! with `question/escalate`. The user answers any question, or changes a decided one, with
-//! `question/answer` and no `from`. `question/list` lists a Project's questions.
+//! An orchestrator's children's questions (PLX-402, decision 0043), behind the `questions`
+//! capability. A child asks with `question/ask` and goes on with its assumption at once. The
+//! question wakes the orchestrator, which answers it with `question/answer` or passes it to the
+//! user with `question/escalate`. The user answers any question, or changes a decided one, with
+//! `question/answer` and no `from`. `question/list` lists an orchestrator's questions.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{ProjectId, RunId};
+use crate::{RunId, ScopeId};
 
 uuid_v7_id! {
     /// Identifies one question. plxd generates it.
@@ -22,11 +22,11 @@ uuid_v7_id! {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub enum QuestionStatus {
-    /// Waiting for the coordinator. The child went on with its assumption.
+    /// Waiting for the orchestrator. The child went on with its assumption.
     Open,
-    /// The coordinator passed it to the user, in Needs you.
+    /// The orchestrator passed it to the user, in Needs you.
     Escalated,
-    /// The coordinator answered it for the user, who may change the answer.
+    /// The orchestrator answered it for the user, who may change the answer.
     Decided,
     /// The user answered it.
     Answered,
@@ -50,7 +50,7 @@ pub struct Question {
     pub assumption: String,
     /// Where it stands.
     pub status: QuestionStatus,
-    /// The coordinator's or the user's answer. Absent while `open` or `escalated`.
+    /// The orchestrator's or the user's answer. Absent while `open` or `escalated`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub answer: Option<String>,
@@ -58,8 +58,8 @@ pub struct Question {
     pub created_at: Timestamp,
 }
 
-/// Params of `question/ask`. Fails with `invalidParams` unless `run` is in a Project and isn't
-/// its coordinator, and with `runNotFound` for an unknown run.
+/// Params of `question/ask`. Fails with `invalidParams` unless `run` is in an orchestrator and
+/// isn't its orchestrator, and with `runNotFound` for an unknown run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionAskParams {
@@ -71,12 +71,12 @@ pub struct QuestionAskParams {
     pub assumption: String,
 }
 
-/// Params of `question/answer`. With `from`, the Project's current coordinator answers an `open`
-/// question, which becomes `decided`; otherwise it fails with `invalidParams`. Without `from`,
-/// the user answers any question, which becomes `answered`. The child gets the answer as a
-/// queued message when it differs from what it was last told: its assumption, or the decided
-/// answer the user changes. Fails with `invalidParams` for an unknown question, or one whose
-/// child is gone.
+/// Params of `question/answer`. With `from`, the orchestrator's current orchestrator answers an
+/// `open` question, which becomes `decided`; otherwise it fails with `invalidParams`. Without
+/// `from`, the user answers any question, which becomes `answered`. The child gets the answer as a
+/// queued message when it differs from what it was last told: its assumption, or the decided answer
+/// the user changes. Fails with `invalidParams` for an unknown question, or one whose child is
+/// gone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionAnswerParams {
@@ -84,21 +84,21 @@ pub struct QuestionAnswerParams {
     pub question: QuestionId,
     /// The answer, at most 4 KiB.
     pub text: String,
-    /// The coordinator's run, when it answers. Absent for the user.
+    /// The orchestrator's run, when it answers. Absent for the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub from: Option<RunId>,
 }
 
-/// Params of `question/escalate`: the Project's current coordinator passes an `open` question to
-/// the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or for
-/// a question that isn't open or is unknown.
+/// Params of `question/escalate`: the orchestrator's current orchestrator passes an `open` question
+/// to the user, adding a `needsYou` inbox item. Fails with `invalidParams` from any other run or
+/// for a question that isn't open or is unknown.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionEscalateParams {
     /// The question.
     pub question: QuestionId,
-    /// The coordinator's run.
+    /// The orchestrator's run.
     pub from: RunId,
 }
 
@@ -110,12 +110,13 @@ pub struct QuestionResult {
     pub question: Question,
 }
 
-/// Params of `question/list`. Fails with `projectNotFound` for an unknown project.
+/// Params of `question/list`. Fails with `orchestratorNotFound` for an unknown orchestrator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct QuestionListParams {
-    /// The Project.
-    pub project: ProjectId,
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
 }
 
 /// Result of `question/list`.

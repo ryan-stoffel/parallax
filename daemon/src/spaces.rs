@@ -14,7 +14,7 @@ use std::sync::Arc;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     ErrorKind, MAX_SPACE_FILES, MAX_SPACE_INSTRUCTIONS_BYTES, MAX_SPACE_NAME_BYTES, ParallaxEvent,
-    ProjectId, RepoId, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
+    RepoId, ScopeId, SpaceCreateParams, SpaceCreateResult, SpaceDeleteParams, SpaceDeleteResult,
     ThreadSetSpaceParams, ThreadSetSpaceResult,
 };
 use parallax_store::RepoFields;
@@ -142,7 +142,7 @@ pub(crate) async fn create(
     let name = check_name(&name)?;
     let icon = icon
         .map(|icon| {
-            crate::methods::project::check_icon(&icon)?;
+            crate::methods::orchestrator::check_icon(&icon)?;
             Ok::<_, ErrorObject>(crate::store::stored_icon(icon))
         })
         .transpose()?;
@@ -200,7 +200,7 @@ pub(crate) async fn create(
 
 /// `thread/setSpace`: adds each thread to the Space, or takes it out of its Space, appending
 /// `thread.updated` for each that changed. A thread started in a Space lives in its repository, and
-/// a Project's thread in its Project, so neither moves.
+/// an orchestrator's thread in its orchestrator, so neither moves.
 pub(crate) async fn set_space(
     daemon: &Arc<Daemon>,
     params: ThreadSetSpaceParams,
@@ -234,7 +234,7 @@ pub(crate) async fn set_space(
                 }
                 None => {
                     return Err(ErrorObject::invalid_params(format!(
-                        "thread {run} is a Project's, so it can't join a Space"
+                        "thread {run} is an orchestrator's, so it can't join a Space"
                     )));
                 }
                 Some(_) => {}
@@ -320,7 +320,7 @@ pub(crate) async fn delete(
     {
         warn!(space = %id, %error, "could not remove a deleted Space's repository");
     }
-    if let Ok(scope) = ProjectId::try_from(Uuid::from(id)) {
+    if let Ok(scope) = ScopeId::try_from(Uuid::from(id)) {
         threads::remove_context(daemon, scope);
     }
     info!(space = %id, "deleted a Space");

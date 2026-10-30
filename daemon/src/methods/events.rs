@@ -6,7 +6,7 @@ use std::sync::Arc;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, EventsSubscribeParams, ParallaxEvent, ProjectId, RunId, SubscriptionId,
+    ErrorKind, EventsSubscribeParams, ParallaxEvent, RunId, ScopeId, SubscriptionId,
 };
 use serde::Serialize;
 use serde_json::value::RawValue;
@@ -20,7 +20,7 @@ use crate::store::store_error;
 pub(crate) struct Cursor {
     pub subscription: SubscriptionId,
     /// The project whose events it gets, or `None` for host-level events.
-    pub project: Option<ProjectId>,
+    pub project: Option<ScopeId>,
     /// Every project's events and the host's, whatever `project` says: a shell subscription's
     /// (0059's `orchestration/subscribeShell`).
     pub all: bool,
@@ -30,6 +30,9 @@ pub(crate) struct Cursor {
     pub run: Option<RunId>,
     /// `agent.output` cut down to its approval items, and left out when it has none (PLX-453).
     pub shell: bool,
+    /// Its client is from before 0093, so events take the old names
+    /// ([`parallax_protocol::legacy`]). The connection sets it.
+    pub legacy: bool,
 }
 
 impl Cursor {
@@ -43,8 +46,14 @@ impl Cursor {
     }
 
     /// `entry`'s event as this subscription delivers it, when that differs from its JSON: a
-    /// `shell` subscription's `agent.output` cut down to its approval items.
+    /// `shell` subscription's `agent.output` cut down to its approval items, or for a client from
+    /// before 0093, an event 0093 renamed something in, in the old names.
     fn view(&self, entry: &Entry) -> Option<Box<RawValue>> {
+        if self.legacy && LEGACY_KINDS.contains(&entry.kind()) {
+            let mut event: serde_json::Value = serde_json::from_str(entry.json.get()).ok()?;
+            parallax_protocol::legacy::to_legacy("events/event", &mut event);
+            return serde_json::value::to_raw_value(&event).ok();
+        }
         if !self.shell || entry.kind() != AGENT_OUTPUT {
             return None;
         }
@@ -66,6 +75,15 @@ impl Cursor {
 
 const AGENT_OUTPUT: &str = "agent.output";
 
+/// The event kinds that carry a name 0093 renamed: the orchestrator's own, and a new run's
+/// `orchestratorThread`.
+const LEGACY_KINDS: &[&str] = &[
+    "orchestrator.created",
+    "orchestrator.updated",
+    "orchestrator.deleted",
+    "agent.started",
+];
+
 /// One event for one subscription.
 #[derive(Debug)]
 pub(crate) struct Delivery {
@@ -83,7 +101,7 @@ pub(crate) struct DeliveryParams<'a> {
     seq: u64,
     time: Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
-    project: Option<ProjectId>,
+    project: Option<ScopeId>,
     event: &'a RawValue,
 }
 
@@ -115,11 +133,11 @@ pub(crate) async fn subscribe(
             .reader
             .run(&context.cancel, move |store| {
                 // A normal thread's events go to its repo entry's id (#110).
-                let is_project = store
-                    .get_project(project.into())
+                let is_orchestrator = store
+                    .get_orchestrator(project.into())
                     .map_err(|error| store_error(&error))?
                     .is_some();
-                Ok(is_project
+                Ok(is_orchestrator
                     || store
                         .get_repo(project.into())
                         .map_err(|error| store_error(&error))?
@@ -128,7 +146,7 @@ pub(crate) async fn subscribe(
             .await?;
         if !exists {
             return Err(ErrorObject::parallax(
-                ErrorKind::ProjectNotFound,
+                ErrorKind::OrchestratorNotFound,
                 format!("no project has id {project}"),
             ));
         }
@@ -145,6 +163,7 @@ pub(crate) async fn subscribe(
         after: params.after,
         run: params.run,
         shell: params.shell,
+        legacy: false,
     })
 }
 
@@ -208,14 +227,14 @@ impl Cursors {
 mod tests {
     use jiff::Timestamp;
     use parallax_protocol::{
-        AgentApprovalBy, AgentApprovalDecision, AgentOutputItem, ApprovalId, ParallaxEvent,
-        ProjectId, RunId, SubscriptionId,
+        AgentApprovalBy, AgentApprovalDecision, AgentOutputItem, ApprovalId, ParallaxEvent, RunId,
+        ScopeId, SubscriptionId,
     };
 
     use super::{Cursor, Cursors};
     use crate::event_log::EventLog;
 
-    fn cursor(project: Option<ProjectId>, after: u64) -> Cursor {
+    fn cursor(project: Option<ScopeId>, after: u64) -> Cursor {
         Cursor {
             subscription: SubscriptionId::generate(),
             project,
@@ -223,13 +242,14 @@ mod tests {
             after,
             run: None,
             shell: false,
+            legacy: false,
         }
     }
 
     #[test]
     fn run_and_shell_cursors_skip_what_they_filter_out_and_keep_the_order() {
         let log = EventLog::new(20);
-        let project = ProjectId::generate();
+        let project = ScopeId::generate();
         let (open, sibling) = (RunId::generate(), RunId::generate());
         let text = AgentOutputItem::Text {
             message_id: None,
@@ -272,6 +292,7 @@ mod tests {
         };
         let shell = Cursor {
             shell: true,
+            legacy: false,
             ..cursor(Some(project), 0)
         };
         let (run_id, shell_id) = (run.subscription, shell.subscription);

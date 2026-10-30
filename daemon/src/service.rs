@@ -33,7 +33,7 @@ use parallax_protocol::jsonrpc::{Message, Request};
 #[cfg(unix)]
 use parallax_protocol::methods::Initialize;
 #[cfg(unix)]
-use parallax_protocol::{Capabilities, ClientInfo, InitializeParams, ProtocolRange};
+use parallax_protocol::{ClientInfo, InitializeParams, ProtocolRange};
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process};
 
@@ -376,7 +376,7 @@ fn probe_initialize(data_dir: &DataDir) -> bool {
                 version: crate::version().to_owned(),
                 machine_id: None,
             },
-            capabilities: Capabilities::default(),
+            capabilities: parallax_protocol::legacy::client_capabilities(),
         },
     );
     let Ok(mut line) = serde_json::to_string(&request) else {

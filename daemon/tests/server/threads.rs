@@ -15,7 +15,7 @@ use parallax_protocol::methods::{
 use parallax_protocol::{
     AccountChoice, AgentEffort, AgentEventsParams, AgentListParams, AgentPermission,
     AgentSendParams, AgentStatus, ErrorKind, EventsEventParams, EventsSubscribeParams,
-    HostHealthParams, ParallaxEvent, ProjectId, Provider, RepoAddParams, RepoId, RunId,
+    HostHealthParams, ParallaxEvent, Provider, RepoAddParams, RepoId, RunId, ScopeId,
     ThreadArchiveParams, ThreadDeleteParams, ThreadListParams, ThreadListResult, ThreadStartParams,
     ThreadUpdateParams, TurnId,
 };
@@ -36,7 +36,7 @@ mod context;
 mod files;
 mod fork;
 mod from_threads;
-mod project;
+mod orchestrator;
 mod schedules;
 mod scripts;
 #[cfg(unix)]
@@ -149,7 +149,7 @@ pub(crate) fn start_params(repo: Option<RepoId>, prompt: &str) -> ThreadStartPar
     ThreadStartParams {
         run_id: RunId::generate(),
         repo,
-        project: None,
+        orchestrator: None,
         parent: None,
         notify: None,
         title: None,
@@ -221,7 +221,7 @@ fn serve(dir: &TempDir, backends: BackendRegistry) -> InProcess {
 
 /// Thread-scoped calls on [`Conn`].
 impl Conn {
-    async fn subscribe(&mut self, after: u64, project: Option<ProjectId>) {
+    async fn subscribe(&mut self, after: u64, project: Option<ScopeId>) {
         self.call::<EventsSubscribe>(EventsSubscribeParams {
             after,
             project,

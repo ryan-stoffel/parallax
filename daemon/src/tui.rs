@@ -1,7 +1,7 @@
 //! `plxd tui`: Parallax in a terminal (PLX-740), laid out like Claude Code and Codex: one column
 //! with the transcript under a header, the prompt between two rules, and a status line. It is
-//! another client of the plxd the app attaches to, so its threads, Spaces, Projects, and messages
-//! are the app's, live, both ways.
+//! another client of the plxd the app attaches to, so its threads, Spaces, Orchestrators, and
+//! messages are the app's, live, both ways.
 //!
 //! - Threads come from `orchestration/subscribeShell`; ← on an empty prompt or `/threads` opens
 //!   them in a sidebar, by repo and Space, as the app lists them.
@@ -37,9 +37,9 @@ use parallax_protocol::{
     AccountChoice, AccountsDefaultsGetParams, AgentApprovalAnswer, AgentApproveParams, AgentEffort,
     AgentPermission, AgentRun, AgentStatus, ApprovalId, DispatchMode, EventsEventParams,
     EventsUnsubscribeParams, GithubStatus, HostHealthParams, HostSettings, KeyAccount, LoggedEvent,
-    OrchestrationCommand, ParallaxEvent, Project, ProviderInfo, ProviderKind, ProvidersListParams,
-    Repo, RepoAddParams, RepoId, RunId, SubscribeShellParams, SubscribeThreadParams,
-    SubscriptionId, Thread, ThreadStartParams, ThreadUpdateParams, TurnId,
+    OrchestrationCommand, Orchestrator, ParallaxEvent, ProviderInfo, ProviderKind,
+    ProvidersListParams, Repo, RepoAddParams, RepoId, RunId, SubscribeShellParams,
+    SubscribeThreadParams, SubscriptionId, Thread, ThreadStartParams, ThreadUpdateParams, TurnId,
 };
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::cursor::Show;
@@ -316,7 +316,7 @@ enum Draft {
 /// What picking a row of a list does.
 #[derive(Clone)]
 enum Pick {
-    /// Opens a thread, or a Project's coordinator.
+    /// Opens a thread, or an orchestrator.
     Run(RunId),
     /// Starts a thread in this repo or Space, or with `None`, in none.
     Group(Option<RepoId>),
@@ -429,7 +429,7 @@ struct App {
     /// The host's providers and their models.
     providers: Vec<ProviderInfo>,
     shell: Option<SubscriptionId>,
-    projects: Vec<Project>,
+    projects: Vec<Orchestrator>,
     repos: Vec<Repo>,
     threads: Vec<Thread>,
     runs: HashMap<RunId, AgentRun>,
@@ -704,7 +704,7 @@ impl App {
             .await?;
         self.shell = Some(subscribed.subscription);
         if let Some(shell) = subscribed.snapshot {
-            self.projects = shell.projects;
+            self.projects = shell.orchestrators;
             self.repos = shell.repos;
             self.threads = shell.threads;
             self.runs = shell.runs.into_iter().map(|run| (run.id, run)).collect();
@@ -821,7 +821,7 @@ impl App {
             transcript,
         });
         self.not_here = None;
-        // As the app does on opening a thread. A coordinator isn't a thread, and fails.
+        // As the app does on opening a thread. An orchestrator isn't a thread, and fails.
         let _ = self
             .call::<ThreadUpdate>(ThreadUpdateParams {
                 run_id: run,
@@ -875,11 +875,17 @@ impl App {
             return;
         }
         match params.event {
-            ParallaxEvent::ProjectCreated { project }
-            | ParallaxEvent::ProjectUpdated { project } => {
+            ParallaxEvent::OrchestratorCreated {
+                orchestrator: project,
+            }
+            | ParallaxEvent::OrchestratorUpdated {
+                orchestrator: project,
+            } => {
                 upsert(&mut self.projects, project, |held, new| held.id == new.id);
             }
-            ParallaxEvent::ProjectDeleted { project } => {
+            ParallaxEvent::OrchestratorDeleted {
+                orchestrator: project,
+            } => {
                 self.projects.retain(|held| held.id != project);
             }
             ParallaxEvent::RepoAdded { repo } | ParallaxEvent::RepoUpdated { repo } => {
@@ -1552,7 +1558,7 @@ impl App {
     }
 
     /// The sidebar, as the app lists threads: each repo and Space with its threads, newest
-    /// first, each with its age. Projects' coordinators aren't threads, and stay out.
+    /// first, each with its age. Orchestrators aren't threads, and stay out.
     fn threads_menu(&self) -> Menu {
         let open = self.open.as_ref().map(|open| open.run);
         let now = jiff::Timestamp::now();
@@ -1716,7 +1722,7 @@ impl App {
             .call::<ThreadStart>(ThreadStartParams {
                 run_id: RunId::generate(),
                 repo,
-                project: None,
+                orchestrator: None,
                 parent: None,
                 notify: None,
                 title: None,
@@ -1872,13 +1878,13 @@ impl App {
             .to_owned()
     }
 
-    /// Where the open thread, or the next one, works: its repo or Space, or its Project.
+    /// Where the open thread, or the next one, works: its repo or Space, or its orchestrator.
     fn place(&self) -> String {
         if let Some(open) = &self.open {
             if let Some(project) = self
                 .projects
                 .iter()
-                .find(|project| project.coordinator == Some(open.run))
+                .find(|project| project.run == Some(open.run))
             {
                 return project.name.clone();
             }

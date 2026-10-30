@@ -23,7 +23,7 @@ use ts_rs::TS;
 
 use crate::{
     AccountChoice, AgentBackgroundTask, AgentEffort, AgentPermission, AgentRun, LoggedEvent,
-    Project, PromptImage, Repo, RunId, SubscriptionId, Thread, TurnId,
+    Orchestrator, PromptImage, Repo, RunId, SubscriptionId, Thread, TurnId,
 };
 
 /// The most events a resume replays before it sends a snapshot instead.
@@ -309,7 +309,7 @@ pub enum OrchestrationCommand {
         thread_id: RunId,
     },
     /// Stops the thread's turn under way (Stop). With `holdQueue`, its queued runs wait for
-    /// `queue.resume`, and the threads it started stop too. A Project's coordinator stops only
+    /// `queue.resume`, and the threads it started stop too. An orchestrator stops only
     /// its own turn, with its queue going on, so its children keep working.
     #[serde(rename = "run.interrupt")]
     RunInterrupt {
@@ -379,12 +379,13 @@ pub struct ShellSnapshot {
     /// The event log's `seq` it stands at. Events after it follow.
     pub seq: u64,
     /// Every project.
-    pub projects: Vec<Project>,
+    #[serde(alias = "projects")]
+    pub orchestrators: Vec<Orchestrator>,
     /// Every repo entry.
     pub repos: Vec<Repo>,
     /// Every normal thread.
     pub threads: Vec<Thread>,
-    /// Every agent run: each thread's, and each Project's coordinators' and children's.
+    /// Every agent run: each thread's, and each orchestrators' and children's.
     pub runs: Vec<AgentRun>,
     /// The permission requests runs wait on, oldest first, each as an `agent.output` with its one
     /// `approvalRequested` item, at the `seq` it was logged at.

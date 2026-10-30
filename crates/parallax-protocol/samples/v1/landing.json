@@ -11,7 +11,7 @@
     "result": {
       "landing": {
         "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
-        "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
         "status": "waiting",
         "queuedAt": "2026-10-04T12:00:00Z"
       }
@@ -29,7 +29,7 @@
     "result": {
       "landing": {
         "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e1",
-        "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
         "status": "queued",
         "queuedAt": "2026-10-04T12:01:00Z"
       }
@@ -50,7 +50,7 @@
     "result": {
       "landing": {
         "runId": "01a0f755-f200-74dd-8cfc-06d0b225c5e2",
-        "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+        "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
         "status": "sentBack",
         "queuedAt": "2026-10-04T12:00:30Z"
       }
@@ -74,14 +74,14 @@
   {
     "jsonrpc": "2.0",
     "id": 5,
-    "method": "project/update",
-    "params": { "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0", "autoLand": true }
+    "method": "orchestrator/update",
+    "params": { "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5e0", "autoLand": true }
   },
   {
     "jsonrpc": "2.0",
     "id": 5,
     "result": {
-      "project": {
+      "orchestrator": {
         "id": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
         "name": "app",
         "repoPath": "/Users/me/src/app",

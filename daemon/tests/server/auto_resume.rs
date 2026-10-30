@@ -45,7 +45,7 @@ impl Backend for Sequence {
         self.scripts.lock().unwrap()[0].capabilities()
     }
 
-    // The fake's (0042), so its runs start in a Project's mode.
+    // The fake's (0042), so its runs start in an orchestrator's mode.
     fn permissions(&self) -> &[AgentPermission] {
         &[AgentPermission::Auto, AgentPermission::Bypass]
     }
@@ -130,8 +130,8 @@ async fn status(client: &mut Conn, run: RunId) -> AgentStatus {
     runs.into_iter().find(|r| r.id == run).unwrap().status
 }
 
-/// A reset `seconds` from now. Tests use at least 3: creating a Project and starting its run cut
-/// worktrees (PLX-409), which can take over a second on a busy runner.
+/// A reset `seconds` from now. Tests use at least 3: creating an orchestrator and starting its run
+/// cut worktrees (PLX-409), which can take over a second on a busy runner.
 fn in_seconds(seconds: i64) -> Timestamp {
     Timestamp::now() + SignedDuration::from_secs(seconds)
 }
@@ -159,7 +159,7 @@ async fn a_limited_run_resumes_at_its_reset_after_a_restart() {
     let reset = in_seconds(3);
     let backends = sequence(vec![limited("s-1", Some(reset)), resumed()], &seen);
     let host = host(temp_dir(), backends, Duration::from_secs(600));
-    let (mut client, project) = host.project_client().await;
+    let (mut client, project) = host.orchestrator_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await
@@ -234,7 +234,7 @@ async fn started(
         sequence(scripts, seen),
         Duration::from_secs(600),
     );
-    let (mut client, project) = host.project_client().await;
+    let (mut client, project) = host.orchestrator_client().await;
     let run = client
         .call::<AgentStart>(start_params(project.id, "Build it."))
         .await

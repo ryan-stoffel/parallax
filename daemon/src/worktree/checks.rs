@@ -1,4 +1,4 @@
-//! Running a Project's checks command (PLX-411, decision 0045), which the landing queue
+//! Running an orchestrator's checks command (PLX-411, decision 0045), which the landing queue
 //! ([`crate::methods::land`]) does in the integration worktree after each merge.
 //!
 //! The command runs through `sh -c` (`cmd /C` on Windows) from the manager's launcher, so it gets
@@ -15,13 +15,13 @@ use tokio::time::timeout;
 use super::{WorktreeError, WorktreeManager};
 use crate::backend::process::{Output, ProcessSpec};
 
-/// How long a Project's checks may run (0045).
+/// How long an orchestrator's checks may run (0045).
 pub const CHECKS_TIMEOUT: Duration = Duration::from_mins(30);
 
 /// How much of the end of the checks' output is kept: what a child gets back (0045).
 pub const CHECKS_OUTPUT_BYTES: usize = 64 * 1024;
 
-/// How a Project's checks ended.
+/// How an orchestrator's checks ended.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Checked {
     /// They exited 0.

@@ -1,22 +1,23 @@
-//! A Project's integration branch and its worktree (PLX-409, decision 0045).
+//! An orchestrator's integration branch and its worktree (PLX-409, decision 0045).
 //!
-//! Each Project has one integration branch, `parallax/<project slug>`, cut from its base branch.
-//! plxd keeps it checked out in a worktree of its own, `<data dir>/integration/<project id>`.
-//! Only the landing queue (PLX-410) writes there. A child's worktree is cut from the branch's tip.
+//! Each Orchestrator has one integration branch, `parallax/<orchestrator slug>`, cut from its base
+//! branch. plxd keeps it checked out in a worktree of its own, `<data
+//! dir>/integration/<orchestrator id>`. Only the landing queue (PLX-410) writes there. A child's
+//! worktree is cut from the branch's tip.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
-use parallax_protocol::ProjectId;
+use parallax_protocol::ScopeId;
 use tracing::warn;
 
 use super::{WorktreeError, WorktreeManager, create_parent, short_hash, valid_branch_slug};
 
 impl WorktreeManager {
-    /// The folder of `project`'s integration worktree.
+    /// The folder of `orchestrator`'s integration worktree.
     #[must_use]
-    pub fn integration_path(&self, project: ProjectId) -> PathBuf {
-        self.integration_root.join(project.to_string())
+    pub fn integration_path(&self, orchestrator: ScopeId) -> PathBuf {
+        self.integration_root.join(orchestrator.to_string())
     }
 
     /// The repository's default branch: the one `origin/HEAD` names, or with no `origin/HEAD`,
@@ -38,11 +39,12 @@ impl WorktreeManager {
             })
     }
 
-    /// Makes sure `project`'s integration worktree exists on its branch, and returns the branch.
+    /// Makes sure `orchestrator`'s integration worktree exists on its branch, and returns the
+    /// branch.
     ///
     /// A worktree already in place keeps the branch it has out, or `branch` while the landing
     /// queue has it detached for the checks (PLX-411). Otherwise the branch is `branch`
-    /// when plxd recorded one, or a new `parallax/<slug of name>`, with the project id's short
+    /// when plxd recorded one, or a new `parallax/<slug of name>`, with the orchestrator id's short
     /// hash after it when another branch has that name. A branch that exists is checked out as it
     /// is, and a missing one is cut from `base`, which must be a local or remote-tracking branch.
     /// A checkout that fails removes the worktree again and keeps the branch.
@@ -54,13 +56,13 @@ impl WorktreeManager {
     pub async fn ensure_integration(
         &self,
         repo_path: &Path,
-        project: ProjectId,
+        orchestrator: ScopeId,
         branch: Option<&str>,
         name: &str,
         base: &str,
     ) -> Result<String, WorktreeError> {
         let repo_root = self.repo_root(repo_path).await?;
-        let path = self.integration_path(project);
+        let path = self.integration_path(orchestrator);
         let guard = self.lock_repo(&repo_root).await;
         if path.join(".git").is_file() {
             let head = self
@@ -91,7 +93,7 @@ impl WorktreeManager {
                 .has_ref(&repo_root, &format!("refs/heads/{named}"))
                 .await?
             {
-                format!("{named}-{}", short_hash(&project.to_string()))
+                format!("{named}-{}", short_hash(&orchestrator.to_string()))
             } else {
                 named
             }
@@ -142,7 +144,7 @@ impl WorktreeManager {
             .run_git_ok(&path, &["reset", "--hard", "--quiet"])
             .await
         {
-            if let Err(cleanup) = self.remove_integration(&repo_root, project).await {
+            if let Err(cleanup) = self.remove_integration(&repo_root, orchestrator).await {
                 warn!(path = %path.display(), %cleanup, "could not remove an integration worktree whose checkout failed");
             }
             return Err(error);
@@ -150,7 +152,7 @@ impl WorktreeManager {
         Ok(branch)
     }
 
-    /// Removes `project`'s integration worktree, keeping its branch. A repository that is gone
+    /// Removes `orchestrator`'s integration worktree, keeping its branch. A repository that is gone
     /// leaves only the folder to remove.
     ///
     /// # Errors
@@ -159,13 +161,13 @@ impl WorktreeManager {
     pub async fn remove_integration(
         &self,
         repo_path: &Path,
-        project: ProjectId,
+        orchestrator: ScopeId,
     ) -> Result<(), WorktreeError> {
-        self.remove_linked(repo_path, &self.integration_path(project))
+        self.remove_linked(repo_path, &self.integration_path(orchestrator))
             .await
     }
 
-    /// Removes the worktree of `repo_path` at `path`, an integration or a coordinator worktree,
+    /// Removes the worktree of `repo_path` at `path`, an integration or an orchestrator worktree,
     /// keeping any branch. A repository that is gone leaves only the folder to remove.
     pub(super) async fn remove_linked(
         &self,
@@ -202,8 +204,9 @@ async fn remove_folder(path: &Path) -> Result<(), WorktreeError> {
     }
 }
 
-/// A project name as a branch slug ([`valid_branch_slug`]): lowercase letters and digits, with
-/// one hyphen for each run of anything else, cut to 40 characters. `project` when nothing is left.
+/// An orchestrator name as a branch slug ([`valid_branch_slug`]): lowercase letters and digits,
+/// with one hyphen for each run of anything else, cut to 40 characters. `orchestrator` when nothing
+/// is left.
 pub(super) fn slug(name: &str) -> String {
     let mut slug = String::new();
     for c in name.chars() {
@@ -218,6 +221,6 @@ pub(super) fn slug(name: &str) -> String {
     if valid_branch_slug(slug) {
         slug.to_owned()
     } else {
-        "project".to_owned()
+        "orchestrator".to_owned()
     }
 }

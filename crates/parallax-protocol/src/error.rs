@@ -20,15 +20,16 @@ pub enum ErrorKind {
     /// The events after the requested `seq` are gone or too many to replay. Reload the snapshots
     /// and subscribe again.
     ResyncRequired,
-    /// No project has the given id.
-    ProjectNotFound,
+    /// No orchestrator has the given id.
+    #[serde(alias = "projectNotFound")]
+    OrchestratorNotFound,
     /// No key account has the given id.
     AccountNotFound,
     /// The Keychain is locked, or access to an item was denied. Distinct from a bare internal
     /// error so the client can tell "locked" from "broken" (#117).
     KeychainUnavailable,
-    /// A create reused an existing id with different params, `project/start` named a new run
-    /// while the project's coordinator is starting or running, or a `commandId` was reused with a
+    /// A create reused an existing id with different params, `orchestrator/start` named a new run
+    /// while the orchestrator is starting or running, or a `commandId` was reused with a
     /// different method or params (0052).
     IdConflict,
     /// No shared context file has the given path (#155).
@@ -44,10 +45,10 @@ pub enum ErrorKind {
     /// still starting. `agent/resumeNow` and `queue/steer` fail with it while the run's push or
     /// Open PR runs (PLX-458).
     RunNotResumable,
-    /// plxd won't start a worker as asked: its backend doesn't implement the worker sandbox
-    /// (0013), the CLI is missing or older than the version the sandbox needs, or a path it would
-    /// sandbox holds `*`, `?`, `[`, or `]`. The message says which, and for an old CLI names both
-    /// versions. `project/start` fails with it too when the account's backend can't coordinate.
+    /// plxd won't start a worker as asked: its backend doesn't implement the worker sandbox (0013),
+    /// the CLI is missing or older than the version the sandbox needs, or a path it would sandbox
+    /// holds `*`, `?`, `[`, or `]`. The message says which, and for an old CLI names both versions.
+    /// `orchestrator/start` fails with it too when the account's backend can't coordinate.
     WorkerUnavailable,
     /// plxd could not create the run's worktree, for example because the project's repository
     /// has uncommitted changes, or read the git state of the run's folder (PLX-298). The message
@@ -96,8 +97,9 @@ pub enum ErrorKind {
     PrFailed,
     /// An image in `images` is over the per-image cap, or a message's images are over the
     /// per-message cap or count, which `promptImages`' options give (PLX-191). The message says
-    /// which. Nothing was sent. `project/create`, `project/update`, and `repo/update` also return
-    /// it when `icon.image` is over `iconImages`' `maxBytes` (PLX-339, 0038); nothing changed.
+    /// which. Nothing was sent. `orchestrator/create`, `orchestrator/update`, and `repo/update`
+    /// also return it when `icon.image` is over `iconImages`' `maxBytes` (PLX-339, 0038); nothing
+    /// changed.
     ImageTooLarge,
     /// No image of the run has the given id (PLX-191).
     ImageNotFound,
@@ -106,8 +108,9 @@ pub enum ErrorKind {
     ApprovalNotFound,
     /// `agent/commit` or `agent/push` refused with nothing changed (PLX-298): the run is still
     /// running, its push or Open PR is (PLX-458), there is nothing to commit, or its folder has a
-    /// detached HEAD, with no branch to push. The message says which. `thread/delete` fails with
-    /// it too while the thread's push or Open PR runs; `project/delete` waits for its runs' instead.
+    /// detached HEAD, with no branch to push. The message says which. `thread/delete` fails with it
+    /// too while the thread's push or Open PR runs; `orchestrator/delete` waits for its runs'
+    /// instead.
     GitRefused,
     /// `agent/commit`'s git failed, such as for a missing `user.name`. The message carries git's
     /// stderr.
@@ -118,9 +121,9 @@ pub enum ErrorKind {
     /// The run's queue has no waiting message with the given id: it was sent, cancelled, or never
     /// queued (PLX-370).
     QueuedMessageNotFound,
-    /// `land/queue` refused a run that isn't a Project's completed child with a branch, such as a
-    /// coordinator or a run started with `explore`, or `land/approve` or `land/sendBack` one that
-    /// isn't waiting for approval (PLX-410). The message says which. Nothing changed.
+    /// `land/queue` refused a run that isn't an orchestrator's completed child with a branch, such
+    /// as a orchestrator or a run started with `explore`, or `land/approve` or `land/sendBack` one
+    /// that isn't waiting for approval (PLX-410). The message says which. Nothing changed.
     LandRefused,
     /// `host/update` couldn't install or won't install the release (PLX-700): the download or
     /// its checksum failed, the version is older than plxd's, plxd runs from a development build,

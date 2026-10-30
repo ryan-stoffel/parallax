@@ -22,14 +22,14 @@ pub struct RunFields {
     pub requested_account: Option<String>,
     pub policy: String,
     pub backend: String,
-    /// The coordinator thread that started the run (#195), or `None` for a client's own run.
-    pub coordinator_thread: Option<Uuid>,
-    /// The run that launched this one (PLX-369, decision 0041): a coordinator's thread for its
+    /// The orchestrator thread that started the run (#195), or `None` for a client's own run.
+    pub orchestrator_thread: Option<Uuid>,
+    /// The run that launched this one (PLX-369, decision 0041): an orchestrator's thread for its
     /// subagents, or the parent a client named for a thread. `None` for a top-level run, and once
     /// the parent is deleted.
     pub parent: Option<Uuid>,
     /// Whether the run wakes its `parent` when a CLI process of its ends (PLX-380, decision
-    /// 0025). Fixed when the run is created, except that [`Store::join_project`] sets it.
+    /// 0025). Fixed when the run is created, except that [`Store::join_orchestrator`] sets it.
     pub notify_parent: bool,
     /// The model, effort, and permission the run asked for (PLX-97), each `None` for the CLI's
     /// default. Effort and permission are their protocol names, such as `high` and `plan`.
@@ -41,14 +41,14 @@ pub struct RunFields {
     pub context_window: Option<u32>,
     pub fast: Option<bool>,
     /// Whether the run forwards its CLI's permission requests to the client (PLX-222, decision
-    /// 0031). Fixed when the run is created, except that [`Store::join_project`] sets it.
+    /// 0031). Fixed when the run is created, except that [`Store::join_orchestrator`] sets it.
     pub approvals: bool,
     /// Whether the run works in its repository's own checkout, on the branch the user has out,
     /// rather than in a worktree of its own. Such a run has no worktree row. Fixed when the run is
     /// created.
     pub checkout: bool,
-    /// Whether a Project's child explores, such as a spike, and never lands (PLX-409, decision
-    /// 0045). Fixed when the run is created.
+    /// Whether an orchestrator's child explores, such as a spike, and never lands (PLX-409,
+    /// decision 0045). Fixed when the run is created.
     pub explore: bool,
 }
 
@@ -106,7 +106,7 @@ pub struct Run {
 const COLUMNS: &str = "id, project_id, prompt, requested_account, policy, backend, account_id, \
                        status, session_id, error, commit_sha, files_changed, insertions, \
                        deletions, created_at, updated_at, accept_id, merge_commit, \
-                       merge_into, merge_how, coordinator_thread, model, effort, permission, \
+                       merge_into, merge_how, orchestrator_thread, model, effort, permission, \
                        approvals, checkout, context_window, fast, pull_requests, parent, \
                        auto_resume, resume_at, resume_tries, notify_parent, explore";
 
@@ -135,7 +135,7 @@ struct RawRun {
     merge_commit: Option<String>,
     merge_into: Option<String>,
     merge_how: Option<String>,
-    coordinator_thread: Option<String>,
+    orchestrator_thread: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     permission: Option<String>,
@@ -175,7 +175,7 @@ impl RawRun {
             merge_commit: row.get(17)?,
             merge_into: row.get(18)?,
             merge_how: row.get(19)?,
-            coordinator_thread: row.get(20)?,
+            orchestrator_thread: row.get(20)?,
             model: row.get(21)?,
             effort: row.get(22)?,
             permission: row.get(23)?,
@@ -216,8 +216,8 @@ impl RawRun {
                 requested_account: self.requested_account,
                 policy: self.policy,
                 backend: self.backend,
-                coordinator_thread: self
-                    .coordinator_thread
+                orchestrator_thread: self
+                    .orchestrator_thread
                     .as_deref()
                     .map(Uuid::parse_str)
                     .transpose()?,
@@ -308,8 +308,8 @@ impl Store {
     }
 
     /// Deletes run `id` with its worktree row, stored events, sent turns, images, wake-up state,
-    /// queued messages, and questions, in one transaction: how `project/delete` (PLX-338) removes
-    /// a Project's run. Returns whether the run existed.
+    /// queued messages, and questions, in one transaction: how `orchestrator/delete` (PLX-338)
+    /// removes an orchestrator's run. Returns whether the run existed.
     ///
     /// # Errors
     ///
@@ -477,15 +477,20 @@ impl Store {
         Ok(run)
     }
 
-    /// Moves run `id` into Project `project` as the child of its coordinator `parent` (decision
-    /// 0042): a thread made into a Project's child. Like a child the Project starts, it wakes
-    /// `parent` when a CLI process of its ends and asks through the inbox, so `notify_parent` and
-    /// `approvals` are set. Returns the updated row.
+    /// Moves run `id` into Orchestrator `project` as the child of its orchestrator `parent`
+    /// (decision 0042): a thread made into an orchestrator's child. Like a child the orchestrator
+    /// starts, it wakes `parent` when a CLI process of its ends and asks through the inbox, so
+    /// `notify_parent` and `approvals` are set. Returns the updated row.
     ///
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no run has `id`, or a database error.
-    pub fn join_project(&self, id: Uuid, project: Uuid, parent: Uuid) -> Result<Run, StoreError> {
+    pub fn join_orchestrator(
+        &self,
+        id: Uuid,
+        project: Uuid,
+        parent: Uuid,
+    ) -> Result<Run, StoreError> {
         let changed = self.conn.execute(
             "UPDATE runs SET project_id = ?2, parent = ?3, notify_parent = 1, approvals = 1,
                              updated_at = ?4
@@ -555,7 +560,7 @@ pub(crate) fn insert_run(
         "INSERT INTO runs (id, project_id, prompt, requested_account, policy, backend,
                            account_id, status, session_id, error, commit_sha,
                            files_changed, insertions, deletions, created_at, updated_at,
-                           coordinator_thread, model, effort, permission, approvals, checkout,
+                           orchestrator_thread, model, effort, permission, approvals, checkout,
                            context_window, fast, parent, notify_parent, explore)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16,
                  ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)
@@ -576,7 +581,7 @@ pub(crate) fn insert_run(
             state.insertions,
             state.deletions,
             now,
-            fields.coordinator_thread.map(|id| id.to_string()),
+            fields.orchestrator_thread.map(|id| id.to_string()),
             fields.model,
             fields.effort,
             fields.permission,

@@ -5,7 +5,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use parallax_protocol::{ProjectId, RunId};
+use parallax_protocol::{RunId, ScopeId};
 
 use super::{WorktreeManager, short_hash};
 use crate::backend::process::{Environment, Launcher};
@@ -162,9 +162,9 @@ async fn a_branch_is_renamed_until_it_has_an_upstream() {
     );
 }
 
-/// A symlink where the coordinator's worktree goes is refused, and its target left alone.
+/// A symlink where the orchestrator's worktree goes is refused, and its target left alone.
 #[tokio::test]
-async fn a_coordinators_worktree_refuses_a_symlink() {
+async fn an_orchestrators_worktree_refuses_a_symlink() {
     let repo_dir = tempfile::tempdir().unwrap();
     let repo = init_repo(repo_dir.path()).canonicalize().unwrap();
     let data_dir = tempfile::tempdir().unwrap();
@@ -182,12 +182,12 @@ async fn a_coordinators_worktree_refuses_a_symlink() {
         ],
     );
     std::fs::write(theirs.join("draft.txt"), "unsaved\n").unwrap();
-    let project = ProjectId::generate();
-    let path = mgr.coordinator_path(project);
+    let project = ScopeId::generate();
+    let path = mgr.orchestrator_path(project);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     symlink(&theirs, &path).unwrap();
 
-    mgr.refresh_coordinator(&repo, project, "HEAD")
+    mgr.refresh_orchestrator(&repo, project, "HEAD")
         .await
         .unwrap_err();
     assert_eq!(git_output(&theirs, &["branch", "--show-current"]), "mine");

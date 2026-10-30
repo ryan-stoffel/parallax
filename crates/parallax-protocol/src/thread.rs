@@ -1,6 +1,6 @@
 //! Normal threads, behind the `threads` capability (0011, #110, decision 0017).
 //!
-//! A normal thread is one agent with no coordinator: an agent run (0014) that belongs to a repo
+//! A normal thread is one agent with no orchestrator: an agent run (0014) that belongs to a repo
 //! entry instead of a project. A repo entry is a lightweight record of a repository on the host,
 //! registered by path with `repo/add`. A thread with no repo, a quick chat, runs in a scratch
 //! repository plxd makes for it, and belongs to plxd's scratch entry.
@@ -13,11 +13,11 @@
 //! Since 0041, behind `threadLineage`, a thread also has a parent (the run that launched it), a
 //! fork origin, a title, and a settled flag.
 //!
-//! Since 0042, behind `projectTasks`, `thread/start` with `project` starts a Project's child: a
-//! thread whose run, and `repo`, is the Project's id, whose parent is its coordinator. Behind
-//! `projectFromThreads`, `project/fromThreads` makes existing threads a new Project's children:
-//! their runs move to the Project, so their later `agent.*` events take its id, while `repo`
-//! keeps their repo entry.
+//! Since 0042, behind `orchestratorTasks`, `thread/start` with `project` starts an orchestrator's
+//! child: a thread whose run, and `repo`, is the orchestrator's id, whose parent is its
+//! orchestrator. Behind `orchestratorFromThreads`, `orchestrator/fromThreads` makes existing
+//! threads a new orchestrator's children: their runs move to the orchestrator, so their later
+//! `agent.*` events take its id, while `repo` keeps their repo entry.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -25,8 +25,8 @@ use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
 use crate::{
-    AccountChoice, AgentEffort, AgentPermission, AgentRun, ProjectIcon, ProjectId, PromptImage,
-    RunId, TurnId,
+    AccountChoice, AgentEffort, AgentPermission, AgentRun, ChosenIcon, PromptImage, RunId, ScopeId,
+    TurnId,
 };
 
 /// The longest title `thread/start` and `thread/update` take, in bytes once trimmed (0041).
@@ -60,7 +60,7 @@ pub struct Repo {
     /// capability (0033). Absent means the app's default: the name's initials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub icon: Option<ProjectIcon>,
+    pub icon: Option<ChosenIcon>,
     /// When the entry was created, in RFC 3339 UTC.
     pub created_at: Timestamp,
     /// A Space's instructions, which plxd pins to the system prompt of every thread in it (0090),
@@ -81,9 +81,9 @@ pub struct Repo {
 pub struct Thread {
     /// The thread's run id.
     pub id: RunId,
-    /// Its repo entry: the scratch entry for a thread with no repo. A Project's child started with
-    /// `thread/start`'s `project` has the Project's id here instead (0042), while a thread
-    /// `project/fromThreads` made a Project's child keeps its repo entry.
+    /// Its repo entry: the scratch entry for a thread with no repo. An orchestrator's child started
+    /// with `thread/start`'s `project` has the orchestrator's id here instead (0042), while a
+    /// thread `orchestrator/fromThreads` made an orchestrator's child keeps its repo entry.
     pub repo: RepoId,
     /// Whether the user archived it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -199,10 +199,10 @@ pub struct ThreadUpdateResult {
 pub struct RepoUpdateParams {
     /// The entry's id.
     pub repo: RepoId,
-    /// Its new icon, checked as `project/update` checks a project's.
+    /// Its new icon, checked as `orchestrator/update` checks a project's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub icon: Option<ProjectIcon>,
+    pub icon: Option<ChosenIcon>,
     /// A Space's new name, trimmed, 1 to 128 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -239,10 +239,10 @@ pub struct SpaceCreateParams {
     pub id: RepoId,
     /// Its name, trimmed, 1 to [`MAX_SPACE_NAME_BYTES`] bytes.
     pub name: String,
-    /// Its icon, checked as `project/create` checks a project's.
+    /// Its icon, checked as `orchestrator/create` checks a project's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub icon: Option<ProjectIcon>,
+    pub icon: Option<ChosenIcon>,
 }
 
 /// Result of `space/create`.
@@ -267,7 +267,8 @@ pub struct SpaceDeleteParams {
 /// Space, or takes them out of the one they were added to. A thread keeps its repo entry, worktree,
 /// and transcript, and its next CLI process gets the Space's instructions and files. Appends
 /// `thread.updated` for each thread that changed. Fails with `invalidParams` for no threads, or a
-/// thread started in a Space or a Project, and with `repoNotFound` for a `space` that isn't one.
+/// thread started in a Space or an orchestrator, and with `repoNotFound` for a `space` that isn't
+/// one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSetSpaceParams {
@@ -403,9 +404,9 @@ pub struct RepoRemoteResult {
 }
 
 /// Params of `repo/match` (0057): which repo entry on this plxd is a copy of the repository at
-/// `origin`, for a Project on another plxd whose children run here. Each entry's `origin` and this
-/// one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing slash,
-/// and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
+/// `origin`, for an orchestrator on another plxd whose children run here. Each entry's `origin` and
+/// this one are compared as `host/path`, without scheme, user info, port, `.git`, or a trailing
+/// slash, and ignoring case, so `git@github.com:o/r.git` matches `https://github.com/o/r`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoMatchParams {
@@ -440,22 +441,22 @@ pub struct ThreadStartParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub repo: Option<RepoId>,
-    /// Starts a child of this Project instead (0042), behind `projectTasks`: it runs in the
-    /// Project's mode with `approvals`, in a new worktree cut from the Project's integration branch,
-    /// and its first message is the child's header, then `prompt`. Its parent is the Project's
-    /// current coordinator, which a batched wake-up tells of the start; with no coordinator yet it
-    /// has none. Not with `repo`, `parent`, `checkout`, `base`, or `checkoutRef`, which the Project
-    /// decides.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Starts a child of this orchestrator instead (0042), behind `orchestratorTasks`: it runs in
+    /// the orchestrator's mode with `approvals`, in a new worktree cut from the orchestrator's
+    /// integration branch, and its first message is the child's header, then `prompt`. Its parent
+    /// is the orchestrator's current orchestrator, which a batched wake-up tells of the start; with
+    /// no orchestrator yet it has none. Not with `repo`, `parent`, `checkout`, `base`, or
+    /// `checkoutRef`, which the orchestrator decides.
+    #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub project: Option<ProjectId>,
+    pub orchestrator: Option<ScopeId>,
     /// The run that launches it, recorded as its parent (0041). It must exist, or the start fails
     /// with `runNotFound`. Behind `threadLineage`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub parent: Option<RunId>,
-    /// Whether the thread wakes its `parent` when a CLI process of its ends, as a Project's
-    /// coordinator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
+    /// Whether the thread wakes its `parent` when a CLI process of its ends, as an orchestrator's
+    /// orchestrator wakes for its subagents (PLX-380, 0025). Absent means true. A retry must repeat
     /// it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

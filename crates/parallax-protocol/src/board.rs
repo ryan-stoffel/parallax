@@ -1,14 +1,14 @@
-//! A Project's status board as items (PLX-940, decision 0081), behind the `board` capability.
+//! An orchestrator's status board as items (PLX-940, decision 0081), behind the `board` capability.
 //!
-//! plxd stores each item and renders the Project's `notes.md` and `archived.md` from them after
-//! every change, so a change appends `context.changed` for the files it rewrote. Done items older
-//! than seven days go to `archived.md`. `context/write` refuses both files.
+//! plxd stores each item and renders the orchestrator's `notes.md` and `archived.md` from them
+//! after every change, so a change appends `context.changed` for the files it rewrote. Done items
+//! older than seven days go to `archived.md`. `context/write` refuses both files.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{ProjectId, RunId};
+use crate::{RunId, ScopeId};
 
 /// Whether a board item is still to do.
 ///
@@ -60,7 +60,7 @@ pub struct BoardLinks {
     pub files: Vec<String>,
 }
 
-/// One item on a Project's status board.
+/// One item on an orchestrator's status board.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardItem {
@@ -84,12 +84,13 @@ pub struct BoardItem {
     pub done_at: Option<Timestamp>,
 }
 
-/// Params of `board/list`. Fails with `projectNotFound` for an unknown Project.
+/// Params of `board/list`. Fails with `orchestratorNotFound` for an unknown Orchestrator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardListParams {
-    /// The Project.
-    pub project: ProjectId,
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
 }
 
 /// Result of `board/list`.
@@ -101,13 +102,14 @@ pub struct BoardListResult {
 }
 
 /// Params of `board/add`: adds an item. Not idempotent: a retry adds a second item. Fails with
-/// `projectNotFound` for an unknown Project, and `invalidParams` for empty or multi-line text
-/// over 2 KiB, or links that aren't valid.
+/// `orchestratorNotFound` for an unknown Orchestrator, and `invalidParams` for empty or multi-line
+/// text over 2 KiB, or links that aren't valid.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardAddParams {
-    /// The Project.
-    pub project: ProjectId,
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
     /// One line of Markdown.
     pub text: String,
     /// Its section.
@@ -123,12 +125,13 @@ pub struct BoardAddParams {
 }
 
 /// Params of `board/update`: changes what it names of one item, replacing `links` whole. Fails
-/// with `invalidParams` for an item the Project doesn't have, or a value `board/add` refuses.
+/// with `invalidParams` for an item the orchestrator doesn't have, or a value `board/add` refuses.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardUpdateParams {
-    /// The Project.
-    pub project: ProjectId,
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
     /// The item.
     pub id: u64,
     /// Its new text.
@@ -157,13 +160,14 @@ pub struct BoardItemResult {
     pub item: BoardItem,
 }
 
-/// Params of `board/remove`: removes one item. Removing one the Project doesn't have succeeds
+/// Params of `board/remove`: removes one item. Removing one the orchestrator doesn't have succeeds
 /// with `removed` false.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BoardRemoveParams {
-    /// The Project.
-    pub project: ProjectId,
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
     /// The item.
     pub id: u64,
 }

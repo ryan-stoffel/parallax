@@ -108,7 +108,7 @@ pub(crate) use uuid_v7_id;
 #[cfg(test)]
 mod tests {
     use super::{InvalidId, parse_v7};
-    use crate::ProjectId;
+    use crate::ScopeId;
 
     #[test]
     fn other_spellings_and_versions_are_rejected() {
@@ -125,8 +125,8 @@ mod tests {
         ] {
             assert_eq!(parse_v7(bad), Err(InvalidId), "{bad}");
             let json = serde_json::to_string(bad).unwrap();
-            assert!(serde_json::from_str::<ProjectId>(&json).is_err(), "{bad}");
+            assert!(serde_json::from_str::<ScopeId>(&json).is_err(), "{bad}");
         }
-        assert!(serde_json::from_str::<ProjectId>("7").is_err());
+        assert!(serde_json::from_str::<ScopeId>("7").is_err());
     }
 }

@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use parallax_protocol::methods::{
-    HostSettingsGet, HostSettingsSet, ProjectCreate, RelayHosts, RelayRegister, RelayRemove,
+    HostSettingsGet, HostSettingsSet, OrchestratorCreate, RelayHosts, RelayRegister, RelayRemove,
     RelaySign, RemoteSessions, ScheduleList, ScheduleSave,
 };
 use parallax_protocol::{
@@ -241,7 +241,7 @@ async fn a_client_reaches_its_host_and_webhooks_arrive_through_the_relay() {
                 }),
             },
             thread: None,
-            project: None,
+            orchestrator: None,
             repo: None,
             account: Some(AccountChoice::Subscription {
                 backend: "fake".to_owned(),
@@ -404,8 +404,11 @@ async fn connecting_through_the_relay_stays_within_its_budget() {
         .await
         .unwrap();
     // A host-level event for the subscription to replay.
-    let project = crate::agents::project_params(dir.path());
-    client.call::<ProjectCreate>(project).await.unwrap();
+    let orchestrator = crate::agents::orchestrator_params(dir.path());
+    client
+        .call::<OrchestratorCreate>(orchestrator)
+        .await
+        .unwrap();
 
     let subscribe = r#"{"jsonrpc":"2.0","id":2,"method":"events/subscribe","params":{"after":0}}"#;
     let (mut connect, mut first_event) = (Vec::new(), Vec::new());

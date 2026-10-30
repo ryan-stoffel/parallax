@@ -1,13 +1,14 @@
-//! A project's coordinator chat (PLX-41, decision 0024): a no-write run whose coordinator thread is
+//! An orchestrator chat (PLX-41, decision 0024): a no-write run whose orchestrator thread is
 //! its own id, with a thread's Parallax tools bound to that run (0041, PLX-380). Any backend whose
-//! kind has the project's permission mode runs it, as its full CLI in that mode (0042).
+//! kind has the orchestrator's permission mode runs it, as its full CLI in that mode (0042).
 //!
-//! `project/start` records it like any run, without a worktree row, and hands it to the same
+//! `orchestrator/start` records it like any run, without a worktree row, and hands it to the same
 //! actor as a worker's, so `agent/send`, `agent/cancel`, `agent/events`, the `agent.*` events, and
 //! resuming after a restart work unchanged. The actor runs it in a detached worktree at the
 //! integration branch's tip, refreshed before each CLI process, so its edits reach neither the
-//! user's checkout nor the branch (0042). A project has one live coordinator: a new run replaces
-//! the last one unless that one is still starting or running, and takes over the same worktree.
+//! user's checkout nor the branch (0042). An orchestrator has one live orchestrator: a new run
+//! replaces the last one unless that one is still starting or running, and takes over the same
+//! worktree.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -15,8 +16,8 @@ use std::sync::Arc;
 
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    AgentRun, ErrorKind, ProjectAutonomy, ProjectId, ProjectPermission, ProjectStartParams, Role,
-    RunId,
+    AgentRun, ErrorKind, OrchestratorAutonomy, OrchestratorPermission, OrchestratorStartParams,
+    Role, RunId, ScopeId,
 };
 use parallax_store::{RunFields, RunState};
 use tracing::info;
@@ -28,45 +29,45 @@ use super::{RunOptions, existing, prepare, requested_account, stage_started, sto
 use crate::methods::question::level;
 use crate::server::Daemon;
 
-/// The coordinator's instructions, pinned to its system prompt ([`instructions`]).
-const INSTRUCTIONS: &str = include_str!("coordinator.md");
+/// The orchestrator's instructions, pinned to its system prompt ([`instructions`]).
+const INSTRUCTIONS: &str = include_str!("orchestrator.md");
 
-/// `project/start`: see the module documentation. Idempotent on the run id, and refused while the
-/// project's coordinator is starting or running.
+/// `orchestrator/start`: see the module documentation. Idempotent on the run id, and refused while
+/// the orchestrator is starting or running.
 pub(crate) async fn start(
     daemon: Arc<Daemon>,
-    params: ProjectStartParams,
+    params: OrchestratorStartParams,
 ) -> Result<AgentRun, ErrorObject> {
-    let ProjectStartParams {
-        project,
+    let OrchestratorStartParams {
+        orchestrator,
         run_id,
         prompt,
         account,
         model,
         effort,
-        // It runs in the project's mode instead (0042).
+        // It runs in the orchestrator's mode instead (0042).
         permission: _,
         images,
-        // It asks through the inbox, as every Project child does (0042), and so gets plxd's tools
-        // on Codex and ACP, which attach them only with `approvals`.
+        // It asks through the inbox, as every orchestrator child does (0042), and so gets plxd's
+        // tools on Codex and ACP, which attach them only with `approvals`.
         approvals: _,
     } = params;
-    let _lane = daemon.orchestrator.lane(run_id).await;
-    // An unknown project has no mode, and fails below with `projectNotFound`.
-    let mode = super::project_mode(&daemon, project).await?;
+    let _lane = daemon.dispatcher.lane(run_id).await;
+    // An unknown orchestrator has no mode, and fails below with `orchestratorNotFound`.
+    let mode = super::orchestrator_mode(&daemon, orchestrator).await?;
     let options = RunOptions {
         model,
         effort,
-        permission: mode.and_then(ProjectPermission::agent),
+        permission: mode.and_then(OrchestratorPermission::agent),
         ..RunOptions::default()
     };
     let mut fields = RunFields {
-        project_id: project.into(),
+        project_id: orchestrator.into(),
         prompt: prompt.clone(),
         requested_account: requested_account(account.as_ref()),
         policy: NO_WRITE.to_owned(),
         backend: String::new(),
-        coordinator_thread: Some(Uuid::from(run_id)),
+        orchestrator_thread: Some(Uuid::from(run_id)),
         // Its own thread, never its own parent (0041).
         parent: None,
         notify_parent: false,
@@ -82,8 +83,15 @@ pub(crate) async fn start(
     if let Some(run) = existing(&daemon, run_id, &fields).await? {
         return Ok(run);
     }
-    let (prepared, _) =
-        prepare(&daemon, project, run_id, account, Role::Coordinator, false).await?;
+    let (prepared, _) = prepare(
+        &daemon,
+        orchestrator,
+        run_id,
+        account,
+        Role::Orchestrator,
+        false,
+    )
+    .await?;
     if let Some(mode) = mode {
         super::in_mode(prepared.resolved.backend(), mode)?;
     }
@@ -94,17 +102,17 @@ pub(crate) async fn start(
         account_id: prepared.resolved.account_id(),
         ..RunState::default()
     };
-    // One store job, so two starts with different run ids can't both find no live coordinator.
+    // One store job, so two starts with different run ids can't both find no live orchestrator.
     let (row, replaced, handed) = store(&daemon, move |db| {
-        require_project(db, project)?;
-        let current = newest(db, project.into())?;
+        require_orchestrator(db, orchestrator)?;
+        let current = newest(db, orchestrator.into())?;
         if let Some(current) = &current
             && (current.state.status == STARTING || current.state.status == RUNNING)
         {
             return Err(ErrorObject::parallax(
                 ErrorKind::IdConflict,
                 format!(
-                    "project {project}'s coordinator, run {}, is running; message it with \
+                    "orchestrator {orchestrator}'s run {} is running; message it with \
                      agent/send, or stop it before starting over",
                     current.id
                 ),
@@ -116,16 +124,16 @@ pub(crate) async fn start(
         stage_started(db, &row, None)?;
         // In the job that makes the row, so no child's end is both handed over and sent to it
         // (PLX-936).
-        let handed = super::wake::handed(db, project.into(), row.id);
+        let handed = super::wake::handed(db, orchestrator.into(), row.id);
         Ok((row, current.map(|current| current.id), handed))
     })
     .await?;
-    // The coordinator it replaces may have an idle session in the same worktree: it ends, so two
-    // coordinator CLIs never share it (0060).
+    // The orchestrator it replaces may have an idle session in the same worktree: it ends, so two
+    // orchestrator CLIs never share it (0060).
     if let Some(old) = replaced.and_then(|id| RunId::try_from(id).ok()) {
         super::detach(&daemon, old).await;
     }
-    info!(run = %run_id, project = %project, backend = %row.fields.backend, "created a project's coordinator");
+    info!(run = %run_id, orchestrator = %orchestrator, backend = %row.fields.backend, "created an orchestrator");
 
     let mut actor = Actor::new(Arc::clone(&daemon), row, None, HashMap::new());
     actor
@@ -138,48 +146,51 @@ pub(crate) async fn start(
     run
 }
 
-/// `coordinator/fresh`: ends `project`'s coordinator's session, so its next message starts its
-/// next epoch from the packet (PLX-937, decision 0079).
+/// `orchestrator/fresh`: ends `orchestrator`'s orchestrator's session, so its next message starts
+/// its next epoch from the packet (PLX-937, decision 0079).
 pub(crate) async fn fresh(
     daemon: &Arc<Daemon>,
-    project: ProjectId,
+    orchestrator: ScopeId,
 ) -> Result<AgentRun, ErrorObject> {
     let current = store(daemon, move |db| {
-        require_project(db, project)?;
-        coordinator_of(db, project.into())
+        require_orchestrator(db, orchestrator)?;
+        orchestrator_of(db, orchestrator.into())
     })
     .await?;
     let Some(run) = current else {
         return Err(ErrorObject::parallax(
             ErrorKind::RunNotFound,
-            format!("project {project} has no coordinator"),
+            format!("orchestrator {orchestrator} has no run"),
         ));
     };
     super::ask(daemon, run, |reply| super::actor::Command::Fresh { reply }).await
 }
 
-/// Fails with `projectNotFound` unless `project` is a Project in the store.
-fn require_project(db: &parallax_store::Store, project: ProjectId) -> Result<(), ErrorObject> {
+/// Fails with `orchestratorNotFound` unless `orchestrator` is an orchestrator in the store.
+fn require_orchestrator(
+    db: &parallax_store::Store,
+    orchestrator: ScopeId,
+) -> Result<(), ErrorObject> {
     match db
-        .get_project(project.into())
+        .get_orchestrator(orchestrator.into())
         .map_err(|e| store_error(&e))?
     {
         Some(_) => Ok(()),
         None => Err(ErrorObject::parallax(
-            ErrorKind::ProjectNotFound,
-            format!("no project has id {project}"),
+            ErrorKind::OrchestratorNotFound,
+            format!("no orchestrator has id {orchestrator}"),
         )),
     }
 }
 
-/// `project`'s coordinator: its newest no-write run. `project/start` with a new run id replaces it
-/// unless it is starting or running, so one whose session can't be resumed never locks the
-/// project.
-pub(crate) fn coordinator_of(
+/// `orchestrator`'s orchestrator: its newest no-write run. `orchestrator/start` with a new run id
+/// replaces it unless it is starting or running, so one whose session can't be resumed never locks
+/// the orchestrator.
+pub(crate) fn orchestrator_of(
     db: &parallax_store::Store,
-    project: Uuid,
+    orchestrator: Uuid,
 ) -> Result<Option<RunId>, ErrorObject> {
-    newest(db, project)?
+    newest(db, orchestrator)?
         .map(|run| {
             RunId::try_from(run.id).map_err(|_| {
                 ErrorObject::internal_error(format!("the stored run {} has an invalid id", run.id))
@@ -188,40 +199,43 @@ pub(crate) fn coordinator_of(
         .transpose()
 }
 
-/// `project`'s newest no-write run.
-// ponytail: scans the project's runs; a coordinator column on projects if that gets slow.
+/// `orchestrator`'s newest no-write run.
+// ponytail: scans the orchestrator's runs; an orchestrator column on orchestrators if that gets
+// slow.
 fn newest(
     db: &parallax_store::Store,
-    project: Uuid,
+    orchestrator: Uuid,
 ) -> Result<Option<parallax_store::Run>, ErrorObject> {
-    let runs = db.list_runs(Some(project)).map_err(|e| store_error(&e))?;
+    let runs = db
+        .list_runs(Some(orchestrator))
+        .map_err(|e| store_error(&e))?;
     Ok(runs
         .into_iter()
         .rev()
         .find(|run| run.fields.policy == NO_WRITE))
 }
 
-/// The user's first message to the coordinator of a Project made from `threads`
-/// (`project/fromThreads`, 0042): read them and propose a brief for the user to save.
+/// The user's first message to an orchestrator made from `threads`
+/// (`orchestrator/fromThreads`, 0042): read them and propose a brief for the user to save.
 pub(crate) fn from_threads_prompt(threads: &[RunId]) -> String {
     let mut list = String::new();
     for id in threads {
         let _ = writeln!(list, "- {id}");
     }
     format!(
-        "I made this Project from these threads, which are now your children:\n{list}\nRead each \
-         with thread_read. Then draft the Project's brief: its goal, scope, and constraints, in a \
+        "I made this orchestrator from these threads, which are now your children:\n{list}\nRead each \
+         with thread_read. Then draft the orchestrator's brief: its goal, scope, and constraints, in a \
          few lines, from what the threads were doing. Propose it with memory_propose (kind brief, \
-         project scope) for me to save or discard, and start no new work until I save it."
+         orchestrator scope) for me to save or discard, and start no new work until I save it."
     )
 }
 
-/// The coordinator's instructions, where it is, and the Project's autonomy level (0043), which
-/// every CLI process of its run gets in its system prompt, so compaction never drops them and a
-/// new level applies from the next process (0078).
-pub(super) fn instructions(repo: &str, autonomy: ProjectAutonomy) -> String {
+/// The orchestrator's instructions, where it is, and the orchestrator's autonomy level (0043),
+/// which every CLI process of its run gets in its system prompt, so compaction never drops them and
+/// a new level applies from the next process (0078).
+pub(super) fn instructions(repo: &str, autonomy: OrchestratorAutonomy) -> String {
     format!(
-        "{INSTRUCTIONS}\nThe project's repository is {repo}, the user's own checkout: leave it \
+        "{INSTRUCTIONS}\nThe orchestrator's repository is {repo}, the user's own checkout: leave it \
          alone. Read the code in your working directory instead, a copy of the integration \
          branch's latest commit that Parallax resets each time it starts you, so it doesn't have \
          the user's uncommitted changes, and nothing written there is kept.\n\n{} Each question \

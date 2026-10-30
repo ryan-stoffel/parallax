@@ -1,18 +1,18 @@
-//! A Project's landing queue (PLX-410, decision 0045): `land/queue`, `land/approve`, and
+//! An orchestrator's landing queue (PLX-410, decision 0045): `land/queue`, `land/approve`, and
 //! `land/sendBack`, behind the `landing` capability, and the queue that lands its children on the
 //! integration branch one at a time.
 //!
 //! The store keeps each child's place in the queue ([`parallax_store::Landing`]), so a restart
-//! picks it up again ([`resume`]). A child waits for the user's approval unless the Project's
-//! `autoLand` is on. [`drive`] lands a Project's queued children oldest first, holding the
-//! Project's lock: it fetches the base branch, merges it alone when it moved, then squash-merges
-//! the child's branch as one commit (the git side is [`crate::worktree::Merged`]'s module). A
-//! conflict sends the child back with the merge started in its worktree, and its next CLI end
-//! queues it again ([`turn_ended`]). After each merge the Project's checks run (PLX-411), and red
-//! checks put the branch back: after the base merge the failure is the base's and goes to the
-//! user, and after the child's squash the child gets their output and is queued again the same
-//! way. A second conflict or red checks, or anything else that stops a landing, goes to the user
-//! as a `needsYou` inbox item.
+//! picks it up again ([`resume`]). A child waits for the user's approval unless the orchestrator's
+//! `autoLand` is on. [`drive`] lands an orchestrator's queued children oldest first, holding the
+//! orchestrator's lock: it fetches the base branch, merges it alone when it moved, then
+//! squash-merges the child's branch as one commit (the git side is [`crate::worktree::Merged`]'s
+//! module). A conflict sends the child back with the merge started in its worktree, and its next
+//! CLI end queues it again ([`turn_ended`]). After each merge the orchestrator's checks run
+//! (PLX-411), and red checks put the branch back: after the base merge the failure is the base's
+//! and goes to the user, and after the child's squash the child gets their output and is queued
+//! again the same way. A second conflict or red checks, or anything else that stops a landing, goes
+//! to the user as a `needsYou` inbox item.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -23,7 +23,7 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentPolicy, AgentStatus, ErrorKind, InboxKind, LandApproveParams, LandQueueParams, LandResult,
-    LandSendBackParams, Landing, LandingStatus, ProjectId, RunId, TurnId,
+    LandSendBackParams, Landing, LandingStatus, RunId, ScopeId, TurnId,
 };
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -51,19 +51,19 @@ const PATHS_SHOWN: usize = 20;
 /// kept, the last 64 KiB.
 const OUTPUT_SHOWN: usize = 2 * 1024;
 
-/// One lock per Project, held while its queue lands, so only one landing runs at a time.
-// ponytail: never pruned, one entry per Project that ever landed; drop it when a Project is
-// deleted if that ever matters.
-static PROJECT_LOCKS: LazyLock<Mutex<HashMap<ProjectId, Arc<tokio::sync::Mutex<()>>>>> =
+/// One lock per Orchestrator, held while its queue lands, so only one landing runs at a time.
+// ponytail: never pruned, one entry per Orchestrator that ever landed; drop it when an orchestrator
+// is deleted if that ever matters.
+static ORCHESTRATOR_LOCKS: LazyLock<Mutex<HashMap<ScopeId, Arc<tokio::sync::Mutex<()>>>>> =
     LazyLock::new(Mutex::default);
 
 fn refused(message: impl Into<String>) -> ErrorObject {
     ErrorObject::parallax(ErrorKind::LandRefused, message)
 }
 
-/// `land/queue`: queues a Project's completed child, refusing a coordinator, a run outside a
-/// Project, one with no branch, and an exploration (0045). A child already waiting, queued, or
-/// sent back stays as it is.
+/// `land/queue`: queues an orchestrator's completed child, refusing an orchestrator, a run outside
+/// a orchestrator, one with no branch, and an exploration (0045). A child already waiting, queued,
+/// or sent back stays as it is.
 pub(super) async fn queue(
     context: &Context,
     params: LandQueueParams,
@@ -111,7 +111,7 @@ pub(super) async fn queue(
     Ok(LandResult { landing })
 }
 
-/// `run`'s new place in its Project's queue, or why it can't land.
+/// `run`'s new place in its orchestrator's queue, or why it can't land.
 fn new_landing(
     store: &parallax_store::Store,
     run: &parallax_store::Run,
@@ -119,15 +119,15 @@ fn new_landing(
 ) -> Result<parallax_store::Landing, ErrorObject> {
     let worktree = store.get_worktree(run.id).map_err(|e| store_error(&e))?;
     let snapshot = agents::snapshot(run, worktree.as_ref())?;
-    let project = store
-        .get_project(run.fields.project_id)
+    let orchestrator = store
+        .get_orchestrator(run.fields.project_id)
         .map_err(|e| store_error(&e))?;
-    let Some(project) = project else {
-        return Err(refused(format!("run {run_id} isn't in a Project")));
+    let Some(orchestrator) = orchestrator else {
+        return Err(refused(format!("run {run_id} isn't in an orchestrator")));
     };
     if snapshot.policy == AgentPolicy::NoWrite {
         return Err(refused(format!(
-            "run {run_id} is the Project's coordinator, which never lands"
+            "run {run_id} is the orchestrator, which never lands"
         )));
     }
     if snapshot.explore {
@@ -147,8 +147,13 @@ fn new_landing(
     }
     Ok(parallax_store::Landing {
         run_id: run.id,
-        project_id: project.id,
-        status: if project.auto_land { QUEUED } else { WAITING }.to_owned(),
+        orchestrator_id: orchestrator.id,
+        status: if orchestrator.auto_land {
+            QUEUED
+        } else {
+            WAITING
+        }
+        .to_owned(),
         conflicts: 0,
         failures: 0,
         queued_at: Timestamp::now(),
@@ -184,7 +189,7 @@ pub(super) async fn approve(
             )
         })
         .await?;
-    drive(&context.daemon, result.landing.project);
+    drive(&context.daemon, result.landing.orchestrator);
     Ok(result)
 }
 
@@ -244,10 +249,10 @@ pub(crate) fn turn_ended(daemon: &Arc<Daemon>, run_id: RunId) {
                 if row.status != SENT_BACK {
                     return Ok(None);
                 }
-                let project = store
-                    .get_project(row.project_id)
+                let orchestrator = store
+                    .get_orchestrator(row.orchestrator_id)
                     .map_err(|e| store_error(&e))?;
-                let Some(project) = project else {
+                let Some(orchestrator) = orchestrator else {
                     return Ok(None);
                 };
                 let run = store
@@ -255,7 +260,12 @@ pub(crate) fn turn_ended(daemon: &Arc<Daemon>, run_id: RunId) {
                     .map_err(|e| store_error(&e))?
                     .ok_or_else(|| agents::run_not_found(run_id))?;
                 let row = parallax_store::Landing {
-                    status: if project.auto_land { QUEUED } else { WAITING }.to_owned(),
+                    status: if orchestrator.auto_land {
+                        QUEUED
+                    } else {
+                        WAITING
+                    }
+                    .to_owned(),
                     queued_at: Timestamp::now(),
                     ..row
                 };
@@ -271,22 +281,24 @@ pub(crate) fn turn_ended(daemon: &Arc<Daemon>, run_id: RunId) {
     });
 }
 
-/// Picks up every Project's queue that a plxd before this one left with children to land.
+/// Picks up every orchestrator's queue that a plxd before this one left with children to land.
 /// Called once at startup.
 pub(crate) async fn resume(daemon: &Arc<Daemon>) {
-    let projects = daemon
+    let orchestrators = daemon
         .store
         .run(&CancellationToken::new(), |store| {
-            store.landing_projects(QUEUED).map_err(|e| store_error(&e))
+            store
+                .landing_orchestrators(QUEUED)
+                .map_err(|e| store_error(&e))
         })
         .await;
-    match projects {
-        Ok(projects) => {
-            for project in projects {
-                if let Ok(project) = ProjectId::try_from(project) {
-                    drive(daemon, project);
+    match orchestrators {
+        Ok(orchestrators) => {
+            for orchestrator in orchestrators {
+                if let Ok(orchestrator) = ScopeId::try_from(orchestrator) {
+                    drive(daemon, orchestrator);
                 } else {
-                    warn!(%project, "a landing's project id is not a UUIDv7");
+                    warn!(%orchestrator, "a landing's orchestrator id is not a UUIDv7");
                 }
             }
         }
@@ -297,12 +309,12 @@ pub(crate) async fn resume(daemon: &Arc<Daemon>) {
 /// A child just queued: it lands in its turn, or waits for the user, who gets a `needsYou` item.
 async fn queued(daemon: &Arc<Daemon>, landing: &Landing, task: &str, what: &str) {
     match landing.status {
-        LandingStatus::Queued => drive(daemon, landing.project),
+        LandingStatus::Queued => drive(daemon, landing.orchestrator),
         LandingStatus::Waiting => {
             let text = format!("{task}: {what}, waiting for your approval");
             super::inbox::add(
                 daemon,
-                landing.project,
+                landing.orchestrator,
                 landing.run_id,
                 InboxKind::NeedsYou,
                 text,
@@ -313,15 +325,15 @@ async fn queued(daemon: &Arc<Daemon>, landing: &Landing, task: &str, what: &str)
     }
 }
 
-/// Lands `project`'s queued children, oldest first, one at a time, in the background.
-fn drive(daemon: &Arc<Daemon>, project: ProjectId) {
+/// Lands `orchestrator`'s queued children, oldest first, one at a time, in the background.
+fn drive(daemon: &Arc<Daemon>, orchestrator: ScopeId) {
     let owned = Arc::clone(daemon);
     spawn(daemon, async move {
         let lock = Arc::clone(
-            PROJECT_LOCKS
+            ORCHESTRATOR_LOCKS
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
-                .entry(project)
+                .entry(orchestrator)
                 .or_default(),
         );
         let _held = lock.lock().await;
@@ -330,7 +342,7 @@ fn drive(daemon: &Arc<Daemon>, project: ProjectId) {
                 .store
                 .run(&CancellationToken::new(), move |store| {
                     store
-                        .first_landing(project.into(), QUEUED)
+                        .first_landing(orchestrator.into(), QUEUED)
                         .map_err(|e| store_error(&e))
                 })
                 .await?;
@@ -364,12 +376,12 @@ enum Attempt {
     Conflict { tip: String, paths: Vec<String> },
     /// The child resolved a conflict but left these markers, as `path:line`.
     Markers(Vec<String>),
-    /// The Project's checks failed with the child's branch landed, so it was taken off again.
+    /// The orchestrator's checks failed with the child's branch landed, so it was taken off again.
     Red(Red),
 }
 
 /// Checks that failed: the command, why, the end of its output, the integration tip the merge
-/// was built on, and whether the Project lands automatically.
+/// was built on, and whether the orchestrator lands automatically.
 struct Red {
     command: String,
     why: String,
@@ -378,10 +390,10 @@ struct Red {
     auto_land: bool,
 }
 
-/// Where a landing merges: a Project's integration branch, and the checks a merge has to pass
+/// Where a landing merges: an orchestrator's integration branch, and the checks a merge has to pass
 /// before the branch moves to it.
 struct Target<'a> {
-    project: ProjectId,
+    orchestrator: ScopeId,
     branch: &'a str,
     checks: Option<&'a str>,
     auto_land: bool,
@@ -400,23 +412,23 @@ struct Child {
 async fn land(daemon: &Arc<Daemon>, row: parallax_store::Landing) -> Result<(), ErrorObject> {
     let run_id = RunId::try_from(row.run_id)
         .map_err(|_| ErrorObject::internal_error("a landing's run id is not a UUIDv7"))?;
-    let project = ProjectId::try_from(row.project_id)
-        .map_err(|_| ErrorObject::internal_error("a landing's project id is not a UUIDv7"))?;
+    let orchestrator = ScopeId::try_from(row.orchestrator_id)
+        .map_err(|_| ErrorObject::internal_error("a landing's orchestrator id is not a UUIDv7"))?;
     let child = match child(daemon, run_id).await {
         Ok(child) => child,
         Err(error) => {
-            // Left queued, it would stop the Project's queue at every landing.
+            // Left queued, it would stop the orchestrator's queue at every landing.
             let stuck = parallax_store::Landing {
                 status: NEEDS_YOU.to_owned(),
                 ..row
             };
             put(daemon, stuck).await?;
             let text = format!("Could not land: {}", error.message);
-            super::inbox::add(daemon, project, run_id, InboxKind::NeedsYou, text).await;
+            super::inbox::add(daemon, orchestrator, run_id, InboxKind::NeedsYou, text).await;
             return Ok(());
         }
     };
-    let attempt = attempt(daemon, project, run_id, &child).await;
+    let attempt = attempt(daemon, orchestrator, run_id, &child).await;
     let mut failures = row.failures;
     let (status, conflicts, kind, text) = match attempt {
         Ok(Attempt::Landed(commit)) => {
@@ -426,7 +438,7 @@ async fn land(daemon: &Arc<Daemon>, row: parallax_store::Landing) -> Result<(), 
             );
             let text = format!("{}: landed on the integration branch, {how}", child.task);
             failures = 0;
-            crate::context::stale::check(daemon, project).await;
+            crate::context::stale::check(daemon, orchestrator).await;
             (LANDED, 0, InboxKind::Done, text)
         }
         Ok(Attempt::Markers(markers)) => {
@@ -490,7 +502,7 @@ async fn land(daemon: &Arc<Daemon>, row: parallax_store::Landing) -> Result<(), 
         },
     )
     .await?;
-    super::inbox::add(daemon, project, run_id, kind, text).await;
+    super::inbox::add(daemon, orchestrator, run_id, kind, text).await;
     Ok(())
 }
 
@@ -548,34 +560,34 @@ async fn child(daemon: &Arc<Daemon>, run_id: RunId) -> Result<Child, ErrorObject
         .await
 }
 
-/// Fetches the base branch and merges it alone when it moved, then squash-merges `child`'s
-/// branch, in `project`'s integration worktree, running the Project's checks after each merge. A
+/// Fetches the base branch and merges it alone when it moved, then squash-merges `child`'s branch,
+/// in `orchestrator`'s integration worktree, running the orchestrator's checks after each merge. A
 /// conflict with the base, or red checks after merging it, adds `needsYou` and the child still
-/// lands on the tip, since the failure isn't its own. A child that merged an
-/// integration tip to resolve a conflict is refused if its branch adds a conflict marker.
+/// lands on the tip, since the failure isn't its own. A child that merged an integration tip to
+/// resolve a conflict is refused if its branch adds a conflict marker.
 async fn attempt(
     daemon: &Arc<Daemon>,
-    project: ProjectId,
+    orchestrator: ScopeId,
     run_id: RunId,
     child: &Child,
 ) -> Result<Attempt, String> {
-    let row = agents::integration(daemon, project)
+    let row = agents::integration(daemon, orchestrator)
         .await
         .map_err(|error| error.message)?
-        .ok_or("its Project is gone")?;
+        .ok_or("its orchestrator is gone")?;
     let (Some(branch), Some(base)) = (row.integration_branch, row.base_branch) else {
-        return Err("its Project has no integration branch".to_owned());
+        return Err("its orchestrator has no integration branch".to_owned());
     };
     let worktrees = daemon.agents.worktrees();
     let failed = |error: crate::worktree::WorktreeError| error.to_string();
     let target = Target {
-        project,
+        orchestrator,
         branch: &branch,
         checks: row.checks.as_deref(),
         auto_land: row.auto_land,
     };
     let mut tip = worktrees
-        .integration_tip(project, &branch)
+        .integration_tip(orchestrator, &branch)
         .await
         .map_err(failed)?;
     let base_commit = worktrees
@@ -583,13 +595,13 @@ async fn attempt(
         .await
         .map_err(failed)?;
     if !worktrees
-        .integration_has(project, &tip, &base_commit)
+        .integration_has(orchestrator, &tip, &base_commit)
         .await
         .map_err(failed)?
     {
         let message = format!("Merge {base} into {branch}");
         match worktrees
-            .merge_into_integration(project, &tip, &base_commit, &message, false)
+            .merge_into_integration(orchestrator, &tip, &base_commit, &message, false)
             .await
             .map_err(failed)?
         {
@@ -602,7 +614,8 @@ async fn attempt(
                         red.why,
                         shown(&red.output)
                     );
-                    super::inbox::add(daemon, project, run_id, InboxKind::NeedsYou, text).await;
+                    super::inbox::add(daemon, orchestrator, run_id, InboxKind::NeedsYou, text)
+                        .await;
                 }
             },
             Merged::Unchanged => {}
@@ -611,12 +624,12 @@ async fn attempt(
                     "The base branch {base} conflicts with {branch} in {}: merge it by hand",
                     listed(&paths)
                 );
-                super::inbox::add(daemon, project, run_id, InboxKind::NeedsYou, text).await;
+                super::inbox::add(daemon, orchestrator, run_id, InboxKind::NeedsYou, text).await;
             }
         }
     }
     let markers = worktrees
-        .conflict_markers(project, &tip, &child.branch)
+        .conflict_markers(orchestrator, &tip, &child.branch)
         .await
         .map_err(failed)?;
     if !markers.is_empty() {
@@ -628,7 +641,7 @@ async fn attempt(
         child.branch
     );
     match worktrees
-        .merge_into_integration(project, &tip, &child.branch, &message, true)
+        .merge_into_integration(orchestrator, &tip, &child.branch, &message, true)
         .await
         .map_err(failed)?
     {
@@ -643,7 +656,7 @@ async fn attempt(
 
 /// Runs `target`'s checks on `commit`, just merged onto `tip` and checked out detached in the
 /// integration worktree (PLX-411, 0045). The branch moves to `commit` only when they pass, or
-/// when there are none, so a child or coordinator cut meanwhile, or a plxd that stops midway,
+/// when there are none, so a child or orchestrator cut meanwhile, or a plxd that stops midway,
 /// never sees an unchecked merge. Otherwise the worktree goes back to the branch. Only the exit
 /// status is logged: the output can hold anything the checks print.
 async fn checks(
@@ -652,19 +665,19 @@ async fn checks(
     tip: &str,
     commit: &str,
 ) -> Result<Option<Red>, String> {
-    let (project, branch) = (target.project, target.branch);
+    let (orchestrator, branch) = (target.orchestrator, target.branch);
     let worktrees = daemon.agents.worktrees();
     let result = match target.checks {
         None => Ok(None),
         Some(command) => {
-            let path = worktrees.integration_path(project);
+            let path = worktrees.integration_path(orchestrator);
             match worktrees.run_checks(&path, command, CHECKS_TIMEOUT).await {
                 Ok(Checked::Passed) => {
-                    info!(%project, "a Project's checks passed");
+                    info!(%orchestrator, "an orchestrator's checks passed");
                     Ok(None)
                 }
                 Ok(Checked::Failed { why, output }) => {
-                    info!(%project, why, "a Project's checks failed");
+                    info!(%orchestrator, why, "an orchestrator's checks failed");
                     Ok(Some(Red {
                         command: command.to_owned(),
                         why,
@@ -679,12 +692,12 @@ async fn checks(
     };
     if matches!(result, Ok(None)) {
         worktrees
-            .advance_integration(project, branch, tip, commit)
+            .advance_integration(orchestrator, branch, tip, commit)
             .await
             .map_err(|error| format!("plxd couldn't move {branch} to the merge: {error}"))?;
     } else {
         worktrees
-            .integration_tip(project, branch)
+            .integration_tip(orchestrator, branch)
             .await
             .map_err(|error| format!("plxd couldn't put back {branch}'s worktree: {error}"))?;
     }
@@ -707,7 +720,7 @@ fn red_message(red: &Red) -> String {
         "plxd queues it again for the user's approval"
     };
     format!(
-        "Parallax, not the user: the Project's checks failed on your branch squashed onto the \
+        "Parallax, not the user: the orchestrator's checks failed on your branch squashed onto the \
          integration branch's tip, {}, so your work didn't land. The checks, `{}`, {}. That \
          commit is in your repository, so you can read it with git, such as `git show {0}`, to \
          see what landed since you started. Fix your branch so they pass, keeping what your task \
@@ -763,7 +776,7 @@ async fn send_conflict(
         .await
         .map_err(|error| format!("plxd couldn't start the merge in its worktree: {error}"))?;
     let text = format!(
-        "Parallax, not the user: your branch conflicts with the Project's integration branch, \
+        "Parallax, not the user: your branch conflicts with the orchestrator's integration branch, \
          which other work landed on while you worked, in {}. plxd has started merging the \
          integration branch ({tip}) into your worktree: resolve the conflict markers in those \
          files, keeping what both sides meant, and make sure the result still works. Don't \
@@ -823,7 +836,7 @@ fn landing(row: &parallax_store::Landing) -> Result<Landing, ErrorObject> {
     let invalid = |_| ErrorObject::internal_error("a stored landing has an invalid id");
     Ok(Landing {
         run_id: RunId::try_from(row.run_id).map_err(invalid)?,
-        project: ProjectId::try_from(row.project_id).map_err(invalid)?,
+        orchestrator: ScopeId::try_from(row.orchestrator_id).map_err(invalid)?,
         status: serde_json::from_value(row.status.clone().into()).unwrap_or(LandingStatus::Unknown),
         queued_at: row.queued_at,
     })

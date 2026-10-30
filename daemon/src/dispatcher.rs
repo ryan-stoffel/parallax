@@ -1,8 +1,8 @@
-//! The orchestrator (0059, phase 1): thread metadata changes as commands, and their side effects
-//! as durable rows the effect worker runs.
+//! The dispatcher (0059's orchestrator, phase 1): thread metadata changes as commands, and their
+//! side effects as durable rows the effect worker runs.
 //!
 //! A [`Command`] has an id (the request's `commandId`, or a new one) and the thread whose lane it
-//! runs in. [`Orchestrator::dispatch`] takes that lane, so one thread's commands run one at a
+//! runs in. [`Dispatcher::dispatch`] takes that lane, so one thread's commands run one at a
 //! time while other threads' run alongside, and then runs one job on the store's writer: it looks
 //! up the command's receipt, reads the thread's rows, `decide`s with no I/O, applies the decision
 //! to the rows and stages its events tagged with the command, inserts the receipt, and enqueues
@@ -26,7 +26,7 @@ use std::time::Duration;
 
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{ErrorKind, ParallaxEvent, ProjectId, RepoId, RunId, TurnId};
+use parallax_protocol::{ErrorKind, ParallaxEvent, RepoId, RunId, ScopeId, TurnId};
 use parallax_store::{
     ClaimedEffect, EffectOutcome, NewEffect, OrchestrationReceipt, Run, RunFields, RunState,
     Thread, ThreadFields, ThreadUpdate, Worktree, WorktreeFields,
@@ -53,7 +53,7 @@ const BACKOFF: Duration = Duration::from_millis(100);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 const THREAD_CLEANUP: &str = "thread.cleanup";
-const PROJECT_CLEANUP: &str = "project.cleanup";
+const ORCHESTRATOR_CLEANUP: &str = "project.cleanup";
 const THREAD_WAKE: &str = "thread.wake";
 const DELEGATED_TASKS_STOP: &str = "delegated-tasks.stop";
 const SETTLE_SCRIPT: &str = "settle-script.run";
@@ -65,7 +65,7 @@ pub(crate) const CHECKPOINT_CAPTURE: &str = "checkpoint.capture";
 /// whose session a restart ended.
 const REPLAY_SAFE: &[&str] = &[
     THREAD_CLEANUP,
-    PROJECT_CLEANUP,
+    ORCHESTRATOR_CLEANUP,
     THREAD_WAKE,
     DELEGATED_TASKS_STOP,
     CHECKPOINT_CAPTURE,
@@ -73,7 +73,7 @@ const REPLAY_SAFE: &[&str] = &[
 
 /// The lanes, the effect worker's wake-up, and its word that an effect ended.
 #[derive(Default)]
-pub(crate) struct Orchestrator {
+pub(crate) struct Dispatcher {
     lanes: Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>,
     wake: Notify,
     finished: Notify,
@@ -82,23 +82,24 @@ pub(crate) struct Orchestrator {
 /// A held lane: no other command for its thread runs until it drops. Creating a run and
 /// spawning its actor hold it too, so one run never gets two worktrees or two actors (#190).
 pub(crate) struct Lane<'a> {
-    orchestrator: &'a Orchestrator,
+    dispatcher: &'a Dispatcher,
     id: Uuid,
     _lock: OwnedMutexGuard<()>,
 }
 
 impl Drop for Lane<'_> {
     fn drop(&mut self) {
-        self.orchestrator.release(self.id);
+        self.dispatcher.release(self.id);
     }
 }
 
-impl Orchestrator {
-    /// Waits for thread (or Project) `id`'s lane, waiting only on another holder of the same id.
+impl Dispatcher {
+    /// Waits for thread (or Orchestrator) `id`'s lane, waiting only on another holder of the same
+    /// id.
     pub(crate) async fn lane(&self, id: impl Into<Uuid>) -> Lane<'_> {
         let id = id.into();
         Lane {
-            orchestrator: self,
+            dispatcher: self,
             id,
             _lock: self.entry(id).lock_owned().await,
         }
@@ -172,7 +173,7 @@ impl Orchestrator {
 #[derive(Debug)]
 pub(crate) struct Command {
     pub id: String,
-    /// The thread, or for `project.delete` the Project, whose lane it runs in.
+    /// The thread, or for `project.delete` the orchestrator, whose lane it runs in.
     pub thread: Uuid,
     pub action: Action,
 }
@@ -204,7 +205,7 @@ pub(crate) enum Action {
     /// `thread.delete`, once its CLI has exited, with the worktree its actor had.
     Delete { worktree: Option<Worktree> },
     /// `project.delete`, once it has no runs.
-    DeleteProject,
+    DeleteOrchestrator,
 }
 
 impl Action {
@@ -215,7 +216,7 @@ impl Action {
             Self::Archive(false) => "thread.unarchive",
             Self::Update(_) => "thread.metadata.update",
             Self::Delete { .. } => "thread.delete",
-            Self::DeleteProject => "project.delete",
+            Self::DeleteOrchestrator => "project.delete",
         }
     }
 }
@@ -235,7 +236,7 @@ pub(crate) struct NewRows {
 pub(crate) enum Outcome {
     /// Applied now or before: its thread's rows after it.
     Done(Box<ThreadRows>),
-    /// `project.delete` found these runs still in the Project, and changed nothing.
+    /// `project.delete` found these runs still in the orchestrator, and changed nothing.
     Busy(Vec<Uuid>),
 }
 
@@ -261,7 +262,7 @@ pub(crate) struct ThreadRows {
 #[derive(Debug, Default)]
 struct Rows {
     thread: ThreadRows,
-    /// For `thread.create`: whether its scope, a Project or repo entry, exists.
+    /// For `thread.create`: whether its scope, an orchestrator or repo entry, exists.
     scope: bool,
     /// For `thread.delete`: whether the thread is in the scratch entry, and the threads whose
     /// parent or fork origin it is.
@@ -273,7 +274,7 @@ struct Rows {
     /// then stays, and the shared worktree it was the last to work in, which goes with it.
     shared: bool,
     left: Option<Removal>,
-    /// For `project.delete`: its repository, if it exists, and its runs, coordinators first.
+    /// For `project.delete`: its repository, if it exists, and its runs, orchestrators first.
     project: Option<String>,
     runs: Vec<Uuid>,
 }
@@ -290,7 +291,7 @@ enum Change {
         repo: Option<Uuid>,
         children: Vec<Uuid>,
     },
-    DeleteProject,
+    DeleteOrchestrator,
 }
 
 /// What a command does: its changes and the effects to run once they commit.
@@ -322,9 +323,9 @@ enum Effect {
         #[serde(default)]
         refs: Option<String>,
     },
-    /// A deleted Project's integration and coordinator worktrees and its context folder.
+    /// A deleted orchestrator's integration and orchestrator worktrees and its context folder.
     #[serde(rename = "project.cleanup")]
-    ProjectCleanup { repo_path: String },
+    OrchestratorCleanup { repo_path: String },
     /// A scheduled task's fire or a pull request watch's news, sent to a thread (0063).
     #[serde(rename = "thread.wake")]
     Wake(crate::schedules::Wake),
@@ -347,7 +348,7 @@ impl Effect {
     fn kind(&self) -> &'static str {
         match self {
             Self::ThreadCleanup { .. } => THREAD_CLEANUP,
-            Self::ProjectCleanup { .. } => PROJECT_CLEANUP,
+            Self::OrchestratorCleanup { .. } => ORCHESTRATOR_CLEANUP,
             Self::Wake(_) => THREAD_WAKE,
             Self::DelegatedTasksStop { .. } => DELEGATED_TASKS_STOP,
             Self::SettleScript => SETTLE_SCRIPT,
@@ -389,7 +390,7 @@ fn new_effect(
 }
 
 /// Enqueues `wake` as command `command_id`'s one effect, in `thread`'s lane and `db`'s
-/// transaction (0063). Call [`Orchestrator::notify`] once the job commits.
+/// transaction (0063). Call [`Dispatcher::notify`] once the job commits.
 pub(crate) fn enqueue_wake(
     db: &Tx,
     command_id: &str,
@@ -541,7 +542,7 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
         Action::Create(new) => {
             let scope = new.fields.project_id;
             rows.thread.run = db.get_run(thread).map_err(error)?;
-            rows.scope = db.get_project(scope).map_err(error)?.is_some()
+            rows.scope = db.get_orchestrator(scope).map_err(error)?.is_some()
                 || db.get_repo(scope).map_err(error)?.is_some();
         }
         Action::Archive(_) | Action::Update(_) => {
@@ -573,14 +574,14 @@ fn read(db: &Tx, thread: Uuid, action: &Action) -> Result<Rows, ErrorObject> {
                 .map(|row| row.id)
                 .collect();
         }
-        Action::DeleteProject => {
+        Action::DeleteOrchestrator => {
             rows.project = db
-                .get_project(thread)
+                .get_orchestrator(thread)
                 .map_err(error)?
                 .map(|project| project.repo_path);
             let mut runs = db.list_runs(Some(thread)).map_err(error)?;
-            // A coordinator's thread is its own run (0024): it goes first, so it starts no more.
-            runs.sort_by_key(|run| run.fields.coordinator_thread != Some(run.id));
+            // An orchestrator's thread is its own run (0024): it goes first, so it starts no more.
+            runs.sort_by_key(|run| run.fields.orchestrator_thread != Some(run.id));
             rows.runs = runs.into_iter().map(|run| run.id).collect();
         }
     }
@@ -611,7 +612,7 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
             if !rows.scope {
                 let scope = new.fields.project_id;
                 return Err(rejected(
-                    ErrorKind::ProjectNotFound,
+                    ErrorKind::OrchestratorNotFound,
                     format!("no project has id {scope}"),
                 ));
             }
@@ -660,10 +661,10 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
             }
             Ok(decide_delete(worktree, rows))
         }
-        Action::DeleteProject => {
+        Action::DeleteOrchestrator => {
             let Some(repo_path) = rows.project else {
                 return Err(rejected(
-                    ErrorKind::ProjectNotFound,
+                    ErrorKind::OrchestratorNotFound,
                     format!("no project has id {thread}"),
                 ));
             };
@@ -671,8 +672,8 @@ fn decide(thread: Uuid, action: Action, rows: Rows) -> Result<Decision, Refusal>
                 return Err(Refusal::Busy(rows.runs));
             }
             Ok(Decision {
-                changes: vec![Change::DeleteProject],
-                effects: vec![Effect::ProjectCleanup { repo_path }],
+                changes: vec![Change::DeleteOrchestrator],
+                effects: vec![Effect::OrchestratorCleanup { repo_path }],
             })
         }
     }
@@ -784,13 +785,15 @@ fn apply(db: &mut Tx, thread: Uuid, change: Change) -> Result<(), ErrorObject> {
                 }
             }
         }
-        Change::DeleteProject => {
-            db.delete_project(thread).map_err(error)?;
-            let project = ProjectId::try_from(thread).map_err(|_| corrupt(thread))?;
+        Change::DeleteOrchestrator => {
+            db.delete_orchestrator(thread).map_err(error)?;
+            let project = ScopeId::try_from(thread).map_err(|_| corrupt(thread))?;
             db.stage(
                 Timestamp::now(),
                 None,
-                ParallaxEvent::ProjectDeleted { project },
+                ParallaxEvent::OrchestratorDeleted {
+                    orchestrator: project,
+                },
             );
         }
     }
@@ -811,7 +814,7 @@ fn corrupt(id: Uuid) -> ErrorObject {
     ErrorObject::internal_error(format!("the stored id {id} is not a UUIDv7"))
 }
 
-/// A `thread/delete` or `project/delete` retry whose command committed already: `true` when it
+/// A `thread/delete` or `orchestrator/delete` retry whose command committed already: `true` when it
 /// was accepted, its stored error when rejected, and `idConflict` when the id was used for
 /// another thread or type. Read before the method asks an actor anything.
 pub(crate) async fn replayed(
@@ -842,8 +845,8 @@ pub(crate) async fn replayed(
 /// The receipt type of `thread/delete`'s command, for [`replayed`].
 pub(crate) const THREAD_DELETE: &str = "thread.delete";
 
-/// The receipt type of `project/delete`'s command, for [`replayed`].
-pub(crate) const PROJECT_DELETE: &str = "project.delete";
+/// The receipt type of `orchestrator/delete`'s command, for [`replayed`].
+pub(crate) const ORCHESTRATOR_DELETE: &str = "project.delete";
 
 /// Start-up recovery, before the worker starts: see the module documentation.
 pub(crate) async fn recover(daemon: &Daemon) -> Result<(), ErrorObject> {
@@ -891,7 +894,7 @@ pub(crate) async fn work(daemon: Arc<Daemon>, stop: CancellationToken) {
         }
         tokio::select! {
             () = stop.cancelled() => return,
-            () = daemon.orchestrator.wake.notified() => {}
+            () = daemon.dispatcher.wake.notified() => {}
             Some(_) = running.join_next(), if !running.is_empty() => {}
             () = tokio::time::sleep(wait.unwrap_or_default()), if wait.is_some() => {}
         }
@@ -921,7 +924,7 @@ async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
             }
         }
     };
-    let _lane = daemon.orchestrator.lane(claimed.thread_id).await;
+    let _lane = daemon.dispatcher.lane(claimed.thread_id).await;
     let id = claimed.id;
     let finished = store(&daemon, move |db| {
         db.finish_effect(&id, &outcome).map_err(|e| store_error(&e))
@@ -930,7 +933,7 @@ async fn run_one(daemon: Arc<Daemon>, claimed: ClaimedEffect) {
     if let Err(error) = finished {
         warn!(error = %error.message, "could not record how an effect ended");
     }
-    daemon.orchestrator.finished.notify_waiters();
+    daemon.dispatcher.finished.notify_waiters();
 }
 
 /// Does `effect`, effect `id`, for `thread`. An error says whether it is final; any other is
@@ -975,8 +978,8 @@ async fn perform(
             }
             Ok(())
         }
-        Effect::ProjectCleanup { repo_path } => {
-            let project = ProjectId::try_from(thread).map_err(|_| corrupt())?;
+        Effect::OrchestratorCleanup { repo_path } => {
+            let project = ScopeId::try_from(thread).map_err(|_| corrupt())?;
             let worktrees = daemon.agents.worktrees();
             worktrees
                 .remove_integration(Path::new(&repo_path), project)
@@ -988,11 +991,11 @@ async fn perform(
                     )
                 })?;
             worktrees
-                .remove_coordinator(Path::new(&repo_path), project)
+                .remove_orchestrator(Path::new(&repo_path), project)
                 .await
                 .map_err(|error| {
                     (
-                        format!("could not remove the coordinator's worktree: {error}"),
+                        format!("could not remove the orchestrator's worktree: {error}"),
                         false,
                     )
                 })?;
@@ -1033,7 +1036,7 @@ async fn perform(
                 })
                 .await
                 .map_err(|error| (error.message, false))?;
-                daemon.orchestrator.notify();
+                daemon.dispatcher.notify();
             }
             Ok(())
         }

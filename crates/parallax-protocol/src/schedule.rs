@@ -2,8 +2,8 @@
 //! capabilities.
 //!
 //! A scheduled task sends its prompt on a trigger: every interval, at a time of day, or on each
-//! request to its webhook. A task bound to a thread queues the prompt into it, one in a Project
-//! sends it to the Project's coordinator, and any other launches a new thread per fire.
+//! request to its webhook. A task bound to a thread queues the prompt into it, one in an
+//! orchestrator sends it to the orchestrator, and any other launches a new thread per fire.
 //! `schedule/save` creates or replaces one, `schedule/list` lists them, `schedule/run` fires one
 //! now, and `schedule/delete` removes one.
 //!
@@ -17,7 +17,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::{AccountChoice, AgentEffort, AgentPermission, ProjectId, RepoId, RunId};
+use crate::{AccountChoice, AgentEffort, AgentPermission, RepoId, RunId, ScopeId};
 
 /// What fires a scheduled task.
 ///
@@ -149,10 +149,10 @@ pub struct ScheduledTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub thread: Option<RunId>,
-    /// The Project whose coordinator each fire messages.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The Orchestrator whose orchestrator each fire messages.
+    #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub project: Option<ProjectId>,
+    pub orchestrator: Option<ScopeId>,
     /// Without `thread` or `project`: the repo entry each fire launches a thread in. Absent
     /// launches it with no repository.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -218,10 +218,10 @@ pub struct ScheduleSaveParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub thread: Option<RunId>,
-    /// The Project whose coordinator each fire messages.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The Orchestrator whose orchestrator each fire messages.
+    #[serde(default, alias = "project", skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub project: Option<ProjectId>,
+    pub orchestrator: Option<ScopeId>,
     /// The repo entry each fire launches a thread in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

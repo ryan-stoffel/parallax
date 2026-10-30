@@ -6,27 +6,27 @@ use crate::Store;
 use crate::error::StoreError;
 use crate::timestamp;
 
-/// A question a Project's child asked with `ask` (PLX-402, decision 0043). The daemon owns what
-/// `status` means; this crate stores it as text.
+/// A question an orchestrator's child asked with `ask` (PLX-402, decision 0043). The daemon owns
+/// what `status` means; this crate stores it as text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Question {
     pub id: Uuid,
-    pub project_id: Uuid,
+    pub orchestrator_id: Uuid,
     /// The child that asked.
     pub run_id: Uuid,
     pub question: String,
     /// What the child went on assuming.
     pub assumption: String,
     pub status: String,
-    /// The coordinator's or the user's answer, once there is one.
+    /// The orchestrator's or the user's answer, once there is one.
     pub answer: Option<String>,
     pub created_at: Timestamp,
-    /// The coordinator run whose wake-up turn carried the question to its CLI (PLX-469).
+    /// The orchestrator run whose wake-up turn carried the question to its CLI (PLX-469).
     pub delivered_to: Option<Uuid>,
 }
 
 const COLUMNS: &str =
-    "id, project_id, run_id, question, assumption, status, answer, created_at, delivered_to";
+    "id, orchestrator_id, run_id, question, assumption, status, answer, created_at, delivered_to";
 
 /// A row as SQLite stored it, before the fallible conversion to [`Question`].
 type Raw = (
@@ -42,11 +42,11 @@ type Raw = (
 );
 
 fn into_question(
-    (id, project, run, question, assumption, status, answer, created, delivered): Raw,
+    (id, orchestrator, run, question, assumption, status, answer, created, delivered): Raw,
 ) -> Result<Question, StoreError> {
     Ok(Question {
         id: Uuid::parse_str(&id)?,
-        project_id: Uuid::parse_str(&project)?,
+        orchestrator_id: Uuid::parse_str(&orchestrator)?,
         run_id: Uuid::parse_str(&run)?,
         question,
         assumption,
@@ -70,7 +70,7 @@ impl Store {
             ),
             params![
                 question.id.to_string(),
-                question.project_id.to_string(),
+                question.orchestrator_id.to_string(),
                 question.run_id.to_string(),
                 question.question,
                 question.assumption,
@@ -100,17 +100,17 @@ impl Store {
             .transpose()
     }
 
-    /// `project`'s questions, oldest first.
+    /// `orchestrator`'s questions, oldest first.
     ///
     /// # Errors
     ///
     /// A database error, or an error if a stored id or time is corrupt.
-    pub fn questions(&self, project: Uuid) -> Result<Vec<Question>, StoreError> {
+    pub fn questions(&self, orchestrator: Uuid) -> Result<Vec<Question>, StoreError> {
         let mut statement = self.conn.prepare(&format!(
-            "SELECT {COLUMNS} FROM questions WHERE project_id = ?1 ORDER BY created_at, id"
+            "SELECT {COLUMNS} FROM questions WHERE orchestrator_id = ?1 ORDER BY created_at, id"
         ))?;
         let rows = statement
-            .query_map(params![project.to_string()], |row| Raw::try_from(row))?
+            .query_map(params![orchestrator.to_string()], |row| Raw::try_from(row))?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter().map(into_question).collect()
     }
@@ -133,7 +133,7 @@ impl Store {
         Ok(changed > 0)
     }
 
-    /// Records that coordinator run `to`'s wake-up turn carried questions `ids` to its CLI
+    /// Records that orchestrator run `to`'s wake-up turn carried questions `ids` to its CLI
     /// (PLX-469).
     ///
     /// # Errors

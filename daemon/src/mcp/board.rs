@@ -1,12 +1,12 @@
-//! A Project's coordinator's board tools (PLX-940, decision 0081): `board_add`, `board_update`,
+//! An orchestrator's board tools (PLX-940, decision 0081): `board_add`, `board_update`,
 //! and `board_remove`, each one change to one item of the status board, through `board/*`.
 //! Parallax renders `notes.md` from the items, so these are the only way to change it. Only a
-//! coordinator gets them.
+//! orchestrator gets them.
 
 use parallax_protocol::methods::{BoardAdd, BoardList, BoardRemove, BoardUpdate};
 use parallax_protocol::{
     BoardAddParams, BoardLinks, BoardListParams, BoardRemoveParams, BoardSection, BoardStatus,
-    BoardUpdateParams, ProjectId, RunId,
+    BoardUpdateParams, RunId, ScopeId,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -14,19 +14,19 @@ use serde_json::{Value, json};
 use super::thread::Binding;
 use super::{object, parse, pretty, tool};
 
-/// The tools a coordinator gets from this module.
+/// The tools an orchestrator gets from this module.
 pub const TOOLS: &[&str] = &["board_add", "board_update", "board_remove"];
 
-/// [`TOOLS`] for a coordinator, and none for anyone else.
+/// [`TOOLS`] for an orchestrator, and none for anyone else.
 #[must_use]
-pub fn tools(coordinator: bool) -> &'static [&'static str] {
-    if coordinator { TOOLS } else { &[] }
+pub fn tools(orchestrator_run: bool) -> &'static [&'static str] {
+    if orchestrator_run { TOOLS } else { &[] }
 }
 
 /// The definitions of [`tools`], in its order.
 #[must_use]
-pub fn definitions(coordinator: bool) -> Vec<Value> {
-    if !coordinator {
+pub fn definitions(orchestrator_run: bool) -> Vec<Value> {
+    if !orchestrator_run {
         return Vec::new();
     }
     let id = json!({"type": "integer", "description": "The item's id, which ends its line in notes.md as `id N`."});
@@ -39,7 +39,7 @@ pub fn definitions(coordinator: bool) -> Vec<Value> {
     vec![
         tool(
             "board_add",
-            "Add an item to the Project's status board, which Parallax renders as notes.md. Returns the item with its id.",
+            "Add an item to the orchestrator's status board, which Parallax renders as notes.md. Returns the item with its id.",
             object(
                 json!({
                     "text": text,
@@ -117,14 +117,14 @@ impl ItemArgs {
     }
 }
 
-/// A board tool on `project`, the caller's Project when it is its coordinator.
+/// A board tool on `orchestrator`, the caller's Orchestrator when it is its orchestrator.
 pub(super) async fn call(
     binding: &Binding,
-    project: Option<ProjectId>,
+    orchestrator: Option<ScopeId>,
     name: &str,
     arguments: Value,
 ) -> Result<String, String> {
-    let project = project.ok_or("only a Project's coordinator edits its board")?;
+    let orchestrator = orchestrator.ok_or("only an orchestrator edits its board")?;
     let mut args: ItemArgs = parse(arguments)?;
     let plxd = &binding.plxd;
     match name {
@@ -134,7 +134,7 @@ pub(super) async fn call(
             let links = args.has_links().then(|| args.links(BoardLinks::default()));
             let item = plxd
                 .call::<BoardAdd>(BoardAddParams {
-                    project,
+                    orchestrator,
                     text,
                     section,
                     status: args.status,
@@ -148,7 +148,7 @@ pub(super) async fn call(
             let id = args.id.ok_or("id is required")?;
             let links = if args.has_links() {
                 let items = plxd
-                    .call::<BoardList>(BoardListParams { project })
+                    .call::<BoardList>(BoardListParams { orchestrator })
                     .await?
                     .items;
                 let item = items
@@ -161,7 +161,7 @@ pub(super) async fn call(
             };
             let item = plxd
                 .call::<BoardUpdate>(BoardUpdateParams {
-                    project,
+                    orchestrator,
                     id,
                     text: args.text,
                     section: args.section,
@@ -175,7 +175,7 @@ pub(super) async fn call(
         "board_remove" => {
             let id = args.id.ok_or("id is required")?;
             let removed = plxd
-                .call::<BoardRemove>(BoardRemoveParams { project, id })
+                .call::<BoardRemove>(BoardRemoveParams { orchestrator, id })
                 .await?
                 .removed;
             if removed {

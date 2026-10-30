@@ -1,5 +1,5 @@
-//! `plxd mcp --thread <runId>`: a thread's host-wide Parallax tools (0041, PLX-373), a Project's
-//! coordinator's included (PLX-380).
+//! `plxd mcp --thread <runId>`: a thread's host-wide Parallax tools (0041, PLX-373),
+//! orchestrators included (PLX-380).
 //!
 //! plxd writes `--thread` into the thread's `--mcp-config` ([`crate::backend::ThreadTools`]), so
 //! the server knows its caller and no tool takes the caller's id. The tools reach every thread on
@@ -9,13 +9,13 @@
 //! in the target's transcript (`agent/send`'s and `agent/cancel`'s `from`). Framing, connections, errors, and size caps are
 //! 0019's, from [`super`].
 //!
-//! A caller in a Project also gets [`CONTEXT_TOOLS`], the Project's shared context, and the
-//! question tools for its role ([`super::question`], PLX-402), and its coordinator gets
-//! [`super::land`]'s `land` (PLX-410). A Project's coordinator launches its children in its
-//! Project, through `agent/start` with itself as their coordinator thread, so they show in the
-//! Project's Agents panel, run as threads that ask through the inbox, in the Project's mode, and
-//! `thread_list` lists its Project's runs, each once. Every caller also gets [`super::device`]'s
-//! tools (PLX-640), [`super::triggers`]', and [`super::delegation`]'s (0063).
+//! A caller in an orchestrator also gets [`CONTEXT_TOOLS`], the orchestrator's shared context, and
+//! the question tools for its role ([`super::question`], PLX-402), and its orchestrator gets
+//! [`super::land`]'s `land` (PLX-410). An orchestrator launches its children in its orchestrator,
+//! through `agent/start` with itself as their orchestrator thread, so they show in the
+//! orchestrator's Agents panel, run as threads that ask through the inbox, in the orchestrator's
+//! mode, and `thread_list` lists its orchestrator's runs, each once. Every caller also gets
+//! [`super::device`]'s tools (PLX-640), [`super::triggers`]', and [`super::delegation`]'s (0063).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -23,16 +23,16 @@ use std::time::Duration;
 
 use parallax_protocol::methods::{
     AgentCancel, AgentEvents, AgentList, AgentSend, AgentStart, AgentWait, ContextList,
-    ContextRead, ContextWrite, PrLink, PrUnlink, ProjectList, RepoAdd, ThreadArchive, ThreadFork,
-    ThreadList, ThreadSearch, ThreadStart, ThreadUpdate,
+    ContextRead, ContextWrite, OrchestratorList, PrLink, PrUnlink, RepoAdd, ThreadArchive,
+    ThreadFork, ThreadList, ThreadSearch, ThreadStart, ThreadUpdate,
 };
 use parallax_protocol::{
     AccountChoice, AccountId, AgentCancelParams, AgentDelivery, AgentEffort, AgentEventsParams,
     AgentListParams, AgentOutcome, AgentOutputItem, AgentPermission, AgentPolicy, AgentRun,
     AgentSendParams, AgentStartParams, AgentStatus, AgentToolStatus, AgentWaitParams,
     AgentWaitUntil, ContextListParams, ContextReadParams, ContextWriteId, ContextWriteParams,
-    CoordinatorThreadId, ErrorKind, ParallaxEvent, PrViewParams, ProjectId, ProjectListParams,
-    Repo, RepoAddParams, RepoId, RunId, Thread, ThreadArchiveParams, ThreadForkParams,
+    ErrorKind, OrchestratorListParams, OrchestratorThreadId, ParallaxEvent, PrViewParams, Repo,
+    RepoAddParams, RepoId, RunId, ScopeId, Thread, ThreadArchiveParams, ThreadForkParams,
     ThreadListParams, ThreadListResult, ThreadSearchParams, ThreadStartParams, ThreadUpdateParams,
     TurnId,
 };
@@ -48,7 +48,7 @@ use super::{
 };
 use super::{board, device, land, question};
 
-/// Every tool the server offers a thread outside a Project.
+/// Every tool the server offers a thread outside an orchestrator.
 pub const TOOLS: &[&str] = &[
     "thread_list",
     "thread_read",
@@ -63,11 +63,11 @@ pub const TOOLS: &[&str] = &[
     "pr_unlink",
 ];
 
-/// The tools a caller in a Project also gets: its shared context (0019).
+/// The tools a caller in an orchestrator also gets: its shared context (0019).
 pub const CONTEXT_TOOLS: &[&str] = &["read_context", "write_context"];
 
-/// plxd's server as Claude Code names it in a thread's and a coordinator's `--allowedTools`, which
-/// allows every tool the server offers, so they run without asking in every permission mode.
+/// plxd's server as Claude Code names it in a thread's and an orchestrator's `--allowedTools`,
+/// which allows every tool the server offers, so they run without asking in every permission mode.
 /// Claude Code's todo tools follow it there. The server offers each caller only its own role's
 /// tools.
 pub const ALLOWED_TOOLS: &[&str] = &["mcp__plxd"];
@@ -116,10 +116,10 @@ pub struct Binding {
 /// A bound server: its [`Binding`], and what the caller's run is.
 struct Server {
     binding: Binding,
-    /// The caller's Project, when its run is in one rather than in a repo entry.
-    project: Option<ProjectId>,
-    /// The caller is its Project's coordinator (0024), whose children start in the Project.
-    coordinator: bool,
+    /// The caller's Orchestrator, when its run is in one rather than in a repo entry.
+    project: Option<ScopeId>,
+    /// The caller is its orchestrator (0024), whose children start in the orchestrator.
+    orchestrator: bool,
     /// The memory the caller reaches, if any (0044).
     memory: Option<super::memory::Memory>,
     /// The device tools, with the devices the caller has open (PLX-640).
@@ -144,17 +144,19 @@ pub async fn run(
 ) -> Result<(), String> {
     let plxd = &binding.plxd;
     let caller = find_run(plxd, binding.run).await?;
-    let projects = plxd.call::<ProjectList>(ProjectListParams {}).await?;
-    let in_project = projects
-        .projects
+    let orchestrators = plxd
+        .call::<OrchestratorList>(OrchestratorListParams {})
+        .await?;
+    let in_orchestrator = orchestrators
+        .orchestrators
         .iter()
         .find(|project| project.id == caller.project);
-    let coordinator = in_project.is_some() && caller.policy == AgentPolicy::NoWrite;
-    let memory = super::memory::Memory::of(plxd, &caller, in_project, coordinator).await?;
+    let orchestrator = in_orchestrator.is_some() && caller.policy == AgentPolicy::NoWrite;
+    let memory = super::memory::Memory::of(plxd, &caller, in_orchestrator, orchestrator).await?;
     let server = Server {
         binding: binding.clone(),
-        project: in_project.map(|project| project.id),
-        coordinator,
+        project: in_orchestrator.map(|project| project.id),
+        orchestrator,
         memory,
         devices: device::Devices::new(&binding.temp, binding.run),
         delegation: super::delegation::Delegation::default(),
@@ -165,9 +167,9 @@ pub async fn run(
 }
 
 impl Server {
-    /// The caller's Project, when the caller is its coordinator.
-    fn coordinated(&self) -> Option<ProjectId> {
-        self.project.filter(|_| self.coordinator)
+    /// The caller's Orchestrator, when the caller is its orchestrator.
+    fn coordinated(&self) -> Option<ScopeId> {
+        self.project.filter(|_| self.orchestrator)
     }
 }
 
@@ -177,9 +179,9 @@ impl Tools for Server {
             [
                 TOOLS,
                 CONTEXT_TOOLS,
-                question::tools(self.coordinator),
-                land::tools(self.coordinator),
-                board::tools(self.coordinator),
+                question::tools(self.orchestrator),
+                land::tools(self.orchestrator),
+                board::tools(self.orchestrator),
             ]
             .concat()
         } else {
@@ -207,9 +209,9 @@ impl Tools for Server {
         let mut tools = definitions(self.project.is_some());
         if let Some(list) = tools.as_array_mut() {
             if self.project.is_some() {
-                list.extend(question::definitions(self.coordinator));
-                list.extend(land::definitions(self.coordinator));
-                list.extend(board::definitions(self.coordinator));
+                list.extend(question::definitions(self.orchestrator));
+                list.extend(land::definitions(self.orchestrator));
+                list.extend(board::definitions(self.orchestrator));
             }
             if let Some(memory) = &self.memory {
                 list.extend(memory.definitions());
@@ -235,7 +237,7 @@ impl Tools for Server {
             return self.computer.call(&self.binding, name, arguments).await;
         }
         if super::files::TOOLS.contains(&name) {
-            let child = self.project.is_some() && !self.coordinator;
+            let child = self.project.is_some() && !self.orchestrator;
             return super::files::call(&self.binding, child, name, arguments).await;
         }
         if name.starts_with("html_") {
@@ -426,7 +428,7 @@ fn definitions(project: bool) -> Value {
         let context = [
             tool(
                 "read_context",
-                "Read your Project's shared context: one file's content by path, or the list of files without a path. It holds top-level files such as plan.md, memory/<preference|convention|decision|gotcha>/, knowledge/, proposals/, history/<thread>.md, and artifacts/<thread>/, the files children presented, which are listed but can't be read here.",
+                "Read your orchestrator's shared context: one file's content by path, or the list of files without a path. It holds top-level files such as plan.md, memory/<preference|convention|decision|gotcha>/, knowledge/, proposals/, history/<thread>.md, and artifacts/<thread>/, the files children presented, which are listed but can't be read here.",
                 object(
                     json!({
                         "path": {"type": "string", "description": "A path from the list, such as plan.md or knowledge/auth.md. Omit it to list the files."},
@@ -437,7 +439,7 @@ fn definitions(project: bool) -> Value {
             ),
             tool(
                 "write_context",
-                "Write a top-level file in your Project's shared context, such as plan.md, replacing it. Only .md, .markdown, and .txt names, and not brief.md. The folders are written another way: memory/, knowledge/, and proposals/ with the memory tools, and history/ and artifacts/ by Parallax.",
+                "Write a top-level file in your orchestrator's shared context, such as plan.md, replacing it. Only .md, .markdown, and .txt names, and not brief.md. The folders are written another way: memory/, knowledge/, and proposals/ with the memory tools, and history/ and artifacts/ by Parallax.",
                 object(
                     json!({
                         "path": {"type": "string", "description": "A file name such as plan.md."},
@@ -590,15 +592,15 @@ struct PrArgs {
     run_id: Option<RunId>,
 }
 
-/// `thread_list`: the host's threads, newest first, after the caller's Project's runs. A
-/// Project's runs are listed from `agent/list`, since only those `thread/start` made with
+/// `thread_list`: the host's threads, newest first, after the caller's orchestrator's runs. A
+/// orchestrator's runs are listed from `agent/list`, since only those `thread/start` made with
 /// `project` have thread rows (PLX-398). Those rows are left out of the host's threads, so no run
 /// is listed twice.
 async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     let caller = server.binding.run;
     let plxd = &server.binding.plxd;
     let mut listed = Vec::new();
-    let mut in_project = HashSet::new();
+    let mut in_orchestrator = HashSet::new();
     if let Some(project) = server.project {
         let runs = plxd
             .call::<AgentList>(AgentListParams {
@@ -606,7 +608,7 @@ async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
             })
             .await?
             .runs;
-        in_project.extend(runs.iter().map(|run| run.id));
+        in_orchestrator.extend(runs.iter().map(|run| run.id));
         listed.extend(
             runs.iter()
                 .rev()
@@ -617,7 +619,7 @@ async fn list(server: &Server, args: ListArgs) -> Result<String, String> {
     let mut threads = plxd.call::<ThreadList>(ThreadListParams {}).await?.threads;
     threads.reverse();
     threads.retain(|thread| {
-        (args.include_archived || !thread.archived) && !in_project.contains(&thread.id)
+        (args.include_archived || !thread.archived) && !in_orchestrator.contains(&thread.id)
     });
     listed.extend(described(plxd, &threads, caller).await?);
     Ok(pretty(&json!({"threads": listed})))
@@ -643,7 +645,7 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
             let threads = described(plxd, &found.threads, caller).await?;
             Ok(pretty(&json!({"threads": threads})))
         }
-        "thread_launch" if server.coordinator => launch_child(server, parse(arguments)?).await,
+        "thread_launch" if server.orchestrator => launch_child(server, parse(arguments)?).await,
         "thread_launch" => launch(binding, parse(arguments)?).await,
         "thread_fork" => fork(binding, parse(arguments)?).await,
         "thread_send" => send(binding, parse(arguments)?).await,
@@ -689,7 +691,7 @@ async fn call_tool(server: &Server, name: &str, arguments: Value) -> Result<Stri
         "read_context" | "write_context" => {
             let project = server
                 .project
-                .ok_or("your thread isn't in a Project, so it has no shared context")?;
+                .ok_or("your thread isn't in an orchestrator, so it has no shared context")?;
             context_tool(server, project, name, arguments).await
         }
         "ask" | "answer" | "escalate" => question::call(binding, name, arguments).await,
@@ -711,10 +713,10 @@ async fn memory_tool(server: &Server, name: &str, arguments: Value) -> Result<St
         .await
 }
 
-/// `read_context` and `write_context`, on the caller's Project's shared context.
+/// `read_context` and `write_context`, on the caller's orchestrator's shared context.
 async fn context_tool(
     server: &Server,
-    project: ProjectId,
+    project: ScopeId,
     name: &str,
     arguments: Value,
 ) -> Result<String, String> {
@@ -744,8 +746,8 @@ async fn context_tool(
     if content.len() > MAX_CONTEXT_BYTES {
         return Err(format!("content must be at most {MAX_CONTEXT_BYTES} bytes"));
     }
-    let writer = if server.coordinator {
-        "coordinator".to_owned()
+    let writer = if server.orchestrator {
+        "orchestrator".to_owned()
     } else {
         format!("thread {}", server.binding.run)
     };
@@ -886,8 +888,8 @@ fn describe(run: &AgentRun, thread: Option<&Thread>, repos: &[Repo], caller: Run
         value["settled"] = json!(thread.settled);
         value["archived"] = json!(thread.archived);
     } else if run.policy == AgentPolicy::WorkspaceWrite {
-        // A Project's run: its coordinator's thread is its parent's run id (0024).
-        value["parent"] = json!(run.coordinator_thread);
+        // An orchestrator's run: its orchestrator's thread is its parent's run id (0024).
+        value["parent"] = json!(run.orchestrator_thread);
     }
     value
 }
@@ -1070,7 +1072,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
             (Some(repo), matches!(workspace, Workspace::Checkout))
         }
     };
-    // The caller's mode, as a coordinator's subagents get its (0027), when the child runs on the
+    // The caller's mode, as an orchestrator's subagents get its (0027), when the child runs on the
     // same backend, which maps it.
     let same_backend = match &account {
         None => true,
@@ -1083,7 +1085,7 @@ async fn launch(binding: &Binding, args: LaunchArgs) -> Result<String, String> {
         .call::<ThreadStart>(ThreadStartParams {
             run_id: RunId::generate(),
             repo,
-            project: None,
+            orchestrator: None,
             parent: Some(binding.run),
             notify,
             title,
@@ -1208,10 +1210,10 @@ fn account_choice(
     }
 }
 
-/// `thread_launch` for a Project's coordinator: a child in its Project, through `agent/start` with
-/// the caller as its coordinator thread, so its parent is the caller (0041). It works in a new
-/// worktree of the Project's repository as a thread asking through the inbox, and plxd runs
-/// it in the Project's mode (0042), so the options that pick a workspace, a mode, or a title are
+/// `thread_launch` for an orchestrator: a child in its orchestrator, through `agent/start` with the
+/// caller as its orchestrator thread, so its parent is the caller (0041). It works in a new
+/// worktree of the orchestrator's repository as a thread asking through the inbox, and plxd runs it
+/// in the orchestrator's mode (0042), so the options that pick a workspace, a mode, or a title are
 /// refused.
 async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, String> {
     let LaunchArgs {
@@ -1239,16 +1241,18 @@ async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, Strin
     ];
     if let Some((name, _)) = fixed.iter().find(|(_, given)| *given) {
         return Err(format!(
-            "a Project's child runs in a new worktree of the Project's repository, in the \
-             Project's mode, with no title; leave out {name}"
+            "an orchestrator's child runs in a new worktree of the orchestrator's repository, in the \
+             orchestrator's mode, with no title; leave out {name}"
         ));
     }
     check_text("prompt", &prompt, MAX_TEXT_BYTES)?;
     let account = account_choice(backend, account)?;
     let caller = server.binding.run;
-    let project = server.project.ok_or("your thread isn't in a Project")?;
-    let thread = CoordinatorThreadId::try_from(Uuid::from(caller))
-        .map_err(|_| format!("run {caller} can't be a coordinator thread"))?;
+    let project = server
+        .project
+        .ok_or("your thread isn't in an orchestrator")?;
+    let thread = OrchestratorThreadId::try_from(Uuid::from(caller))
+        .map_err(|_| format!("run {caller} can't be an orchestrator thread"))?;
     let plxd = &server.binding.plxd;
     let run = plxd
         .call::<AgentStart>(AgentStartParams {
@@ -1257,16 +1261,16 @@ async fn launch_child(server: &Server, args: LaunchArgs) -> Result<String, Strin
             prompt,
             policy: AgentPolicy::WorkspaceWrite,
             account,
-            coordinator_thread: Some(thread),
+            orchestrator_thread: Some(thread),
             notify,
             model,
             effort,
             context_window: None,
             fast: None,
-            // The Project's mode, whatever is asked (0042).
+            // The orchestrator's mode, whatever is asked (0042).
             permission: None,
             images: Vec::new(),
-            // plxd turns them on for every run in a Project (0042).
+            // plxd turns them on for every run in an orchestrator (0042).
             approvals: false,
             threads,
             explore: false,
@@ -1411,11 +1415,11 @@ mod tests {
                 .collect();
             assert_eq!(listed, tools);
         }
-        for coordinator in [false, true] {
+        for orchestrator in [false, true] {
             let tools = [
-                question::definitions(coordinator),
-                land::definitions(coordinator),
-                board::definitions(coordinator),
+                question::definitions(orchestrator),
+                land::definitions(orchestrator),
+                board::definitions(orchestrator),
             ]
             .concat();
             let listed: Vec<&str> = tools
@@ -1425,9 +1429,9 @@ mod tests {
             assert_eq!(
                 listed,
                 [
-                    question::tools(coordinator),
-                    land::tools(coordinator),
-                    board::tools(coordinator)
+                    question::tools(orchestrator),
+                    land::tools(orchestrator),
+                    board::tools(orchestrator)
                 ]
                 .concat()
             );

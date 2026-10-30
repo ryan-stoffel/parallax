@@ -1,39 +1,40 @@
-//! `thread/start` with `project` (PLX-398, 0042): a Project's child, started by plxd under the
-//! Project's coordinator without waiting on it.
+//! `thread/start` with `orchestrator` (PLX-398, 0042): an orchestrator's child, started by plxd
+//! under the orchestrator without waiting on it.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use parallax_protocol::methods::{AgentCancel, AgentList, ProjectUpdate, ThreadStart};
+use parallax_protocol::methods::{AgentCancel, AgentList, OrchestratorUpdate, ThreadStart};
 use parallax_protocol::{
     AccountChoice, AccountId, AgentCancelParams, AgentListParams, AgentStatus, InboxKind,
-    ProjectId, ProjectUpdateParams, ThreadStartParams,
+    OrchestratorUpdateParams, ScopeId, ThreadStartParams,
 };
 use plxd::backend::fake::Step;
 use plxd::backend::{RunRequest, ToolPolicy};
 
-use crate::agents::{Host, create, fake, init, project_params, subscribe};
-use crate::coordinator::roles;
+use crate::agents::{Host, create, fake, init, orchestrator_params, subscribe};
 use crate::inbox::added;
-use crate::support::{PATIENCE, project_update, temp_dir};
+use crate::orchestrator::roles;
+use crate::support::{PATIENCE, orchestrator_update, temp_dir};
 
-fn task_params(project: ProjectId, task: &str) -> ThreadStartParams {
+fn task_params(orchestrator: ScopeId, task: &str) -> ThreadStartParams {
     ThreadStartParams {
-        project: Some(project),
+        orchestrator: Some(orchestrator),
         ..super::start_params(None, task)
     }
 }
 
-/// `project/update`'s params for `project` that change only `max_children` and `allow_api_keys`.
+/// `orchestrator/update`'s params for `orchestrator` that change only `max_children` and
+/// `allow_api_keys`.
 fn placement_update(
-    project: ProjectId,
+    orchestrator: ScopeId,
     max_children: Option<u32>,
     allow_api_keys: Option<bool>,
-) -> ProjectUpdateParams {
-    ProjectUpdateParams {
+) -> OrchestratorUpdateParams {
+    OrchestratorUpdateParams {
         max_children,
         allow_api_keys,
-        ..project_update(project)
+        ..orchestrator_update(orchestrator)
     }
 }
 
@@ -64,28 +65,28 @@ async fn tasks_over_max_children_wait_across_a_restart_and_start_as_slots_free()
     let hang = || vec![init("worker"), Step::Hang];
     let host = Host::start(temp_dir(), roles(hang(), Vec::new(), &seen));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let orchestrator = create(&mut client, orchestrator_params(host.dir.path())).await;
     client
-        .call::<ProjectUpdate>(placement_update(project.id, Some(1), None))
+        .call::<OrchestratorUpdate>(placement_update(orchestrator.id, Some(1), None))
         .await
         .unwrap();
-    subscribe(&mut client, project.id, 0).await;
+    subscribe(&mut client, orchestrator.id, 0).await;
 
     let mut runs = Vec::new();
     for task in ["Task A.", "Task B.", "Task C."] {
         let run = client
-            .call::<ThreadStart>(task_params(project.id, task))
+            .call::<ThreadStart>(task_params(orchestrator.id, task))
             .await
             .unwrap()
             .run;
         runs.push(run);
     }
-    let reason = "Waiting for a free slot: the Project runs at most 1 child at once";
+    let reason = "Waiting for a free slot: the orchestrator runs at most 1 child at once";
     for run in &runs[1..] {
         assert_eq!(run.status, AgentStatus::Waiting);
         assert_eq!(run.error.as_deref(), Some(reason));
     }
-    let item = added(&mut client, project.id).await;
+    let item = added(&mut client, orchestrator.id).await;
     assert_eq!((item.run, item.kind), (runs[1].id, InboxKind::Failed));
     assert_eq!(item.text, format!("Task B.: {reason}"));
     assert_eq!(worker_prompts(&seen, 1).await.len(), 1);
@@ -98,7 +99,7 @@ async fn tasks_over_max_children_wait_across_a_restart_and_start_as_slots_free()
     assert!(prompts[0].ends_with("Your task:\nTask B."), "{prompts:?}");
     let listed = client
         .call::<AgentList>(AgentListParams {
-            project: Some(project.id),
+            project: Some(orchestrator.id),
         })
         .await
         .unwrap()
@@ -119,17 +120,18 @@ async fn tasks_over_max_children_wait_across_a_restart_and_start_as_slots_free()
     host.server.stop().await;
 }
 
-/// PLX-413 (0046): a Project's child runs on an API key account only when the Project allows it.
+/// PLX-413 (0046): an orchestrator's child runs on an API key account only when the orchestrator
+/// allows it.
 #[tokio::test]
-async fn a_task_on_an_api_key_needs_the_project_to_allow_api_keys() {
+async fn a_task_on_an_api_key_needs_the_orchestrator_to_allow_api_keys() {
     let host = Host::start(temp_dir(), fake(vec![init("s"), Step::Hang]));
     let mut client = host.client().await;
-    let project = create(&mut client, project_params(host.dir.path())).await;
+    let orchestrator = create(&mut client, orchestrator_params(host.dir.path())).await;
     let on_key = || ThreadStartParams {
         account: Some(AccountChoice::Key {
             id: AccountId::generate(),
         }),
-        ..task_params(project.id, "Spend money.")
+        ..task_params(orchestrator.id, "Spend money.")
     };
     let refused = client.call::<ThreadStart>(on_key()).await.unwrap_err();
     assert!(
@@ -139,7 +141,7 @@ async fn a_task_on_an_api_key_needs_the_project_to_allow_api_keys() {
     );
 
     client
-        .call::<ProjectUpdate>(placement_update(project.id, None, Some(true)))
+        .call::<OrchestratorUpdate>(placement_update(orchestrator.id, None, Some(true)))
         .await
         .unwrap();
     let error = client.call::<ThreadStart>(on_key()).await.unwrap_err();

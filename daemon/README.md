@@ -19,7 +19,7 @@ The decisions behind it:
 | `plxd serve` | Serves the protocol on this user's Unix socket, or named pipe on Windows, until SIGTERM or SIGINT (Ctrl-C or Ctrl-Break on Windows) |
 | `plxd attach` | Connects stdin and stdout to that socket or pipe, and starts plxd first if nothing is listening |
 | `plxd dial <ADDR>` | Connects stdin and stdout to another device's plxd over Tailscale: `ADDR` is its Tailscale IP, with port 7340 unless one is given |
-| `plxd tui` | Parallax in this terminal, laid out like Claude Code: the same threads, Spaces, and Projects as the app, live. Starts plxd first if nothing is listening. `/help` lists its commands and keys. Linked or copied as `parallax`, plxd runs this when given no subcommand |
+| `plxd tui` | Parallax in this terminal, laid out like Claude Code: the same threads, Spaces, and Orchestrators as the app, live. Starts plxd first if nothing is listening. `/help` lists its commands and keys. Linked or copied as `parallax`, plxd runs this when given no subcommand |
 | `plxd connect on`, `off` | Turns Parallax Connect on or off in the data folder's settings. A running `serve` follows within 10 seconds |
 | `plxd service install`, `uninstall`, `status` | macOS and Linux: manage the service that keeps `serve` running, a LaunchAgent (#61) or a systemd user unit (PLX-18) |
 

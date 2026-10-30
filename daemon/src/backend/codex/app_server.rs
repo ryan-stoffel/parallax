@@ -11,7 +11,7 @@
 //! `model_context_window`, the thread's `plxd mcp --thread` server as dotted `mcp_servers.plxd.*`
 //! overrides that join the user's servers, its tools approved without asking (0041), fast mode as
 //! the `priority` service tier, the mode's approval policy and sandbox ([`mode`]), and a
-//! coordinator's instructions as `developerInstructions` (0078). The prompt
+//! orchestrator's instructions as `developerInstructions` (0078). The prompt
 //! is the first `turn/start`, as written, with its images as `localImage` files ([`write_images`])
 //! and the effort. If `thread/resume` fails, the thread sends `thread/start` once instead, with
 //! [`Resume::fallback`](super::super::Resume::fallback) as the prompt (T3 Code, PLX-728). A turn

@@ -1245,7 +1245,7 @@ mod tests {
             "installed": true,
             "permissions": [],
             "efforts": true,
-            "coordinator": false,
+            "orchestrator": false,
         });
         for (key, value) in extra.as_object().unwrap() {
             info[key] = value.clone();

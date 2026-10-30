@@ -1,13 +1,14 @@
-//! A Project's inbox (PLX-401, decision 0043), behind the `inbox` capability: what its children
-//! did while the user was away, built from the events plxd handles. `inbox/list` lists it,
-//! `inbox/seen` marks items read, and each new item appends `inbox.added` to the Project's events.
+//! An orchestrator's inbox (PLX-401, decision 0043), behind the `inbox` capability: what its
+//! children did while the user was away, built from the events plxd handles. `inbox/list` lists it,
+//! `inbox/seen` marks items read, and each new item appends `inbox.added` to the orchestrator's
+//! events.
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::id::uuid_v7_id;
-use crate::{ProjectId, RunId};
+use crate::{RunId, ScopeId};
 
 uuid_v7_id! {
     /// Identifies one inbox item. plxd generates it.
@@ -27,9 +28,9 @@ pub enum InboxKind {
     Done,
     /// A child failed.
     Failed,
-    /// The coordinator answered a question for the user.
+    /// The orchestrator answered a question for the user.
     Decided,
-    /// The Project's memory changed.
+    /// The orchestrator's memory changed.
     Learned,
     /// A kind this version does not know yet.
     #[serde(other)]
@@ -37,7 +38,7 @@ pub enum InboxKind {
     Unknown,
 }
 
-/// One item of a Project's inbox.
+/// One item of an orchestrator's inbox.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InboxItem {
@@ -45,7 +46,7 @@ pub struct InboxItem {
     pub id: InboxItemId,
     /// What it says.
     pub kind: InboxKind,
-    /// The run it is about: a child, or the coordinator when its wake-ups paused.
+    /// The run it is about: a child, or the orchestrator when its wake-ups paused.
     pub run: RunId,
     /// One line for people, such as the child's task and its diff stats.
     pub text: String,
@@ -57,12 +58,13 @@ pub struct InboxItem {
     pub seen_at: Option<Timestamp>,
 }
 
-/// Params of `inbox/list`. Fails with `projectNotFound` for an unknown project.
+/// Params of `inbox/list`. Fails with `orchestratorNotFound` for an unknown orchestrator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InboxListParams {
-    /// The Project.
-    pub project: ProjectId,
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
 }
 
 /// Result of `inbox/list`.
@@ -71,20 +73,21 @@ pub struct InboxListParams {
 pub struct InboxListResult {
     /// Every item, oldest first.
     pub items: Vec<InboxItem>,
-    /// The event log's `seq` from before the list was read. Subscribe to the Project's events
+    /// The event log's `seq` from before the list was read. Subscribe to the orchestrator's events
     /// with `after` set to it for the items added since. The list may already reflect some events
     /// after it, and replaying them is harmless.
     pub seq: u64,
 }
 
 /// Params of `inbox/seen`: marks items seen at plxd's clock now. An item already seen keeps its
-/// first `seenAt`, and ids not in the Project's inbox are skipped. Fails with `projectNotFound`
-/// for an unknown project.
+/// first `seenAt`, and ids not in the orchestrator's inbox are skipped. Fails with
+/// `orchestratorNotFound` for an unknown orchestrator.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InboxSeenParams {
-    /// The Project.
-    pub project: ProjectId,
+    /// The Orchestrator.
+    #[serde(alias = "project")]
+    pub orchestrator: ScopeId,
     /// The items to mark.
     pub items: Vec<InboxItemId>,
 }

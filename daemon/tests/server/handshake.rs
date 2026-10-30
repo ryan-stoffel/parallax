@@ -3,10 +3,11 @@
 use std::collections::BTreeMap;
 
 use parallax_protocol::framing::MAX_FRAME_BYTES;
-use parallax_protocol::methods::{HostHealth, HostUpdate, HostVersion, ProjectList};
+use parallax_protocol::methods::{HostHealth, HostUpdate, HostVersion, OrchestratorList};
 use parallax_protocol::{
     Capabilities, ErrorKind, HostHealthParams, HostUpdateParams, HostUpdateRestart,
-    HostVersionParams, IncompatibleProtocolDetail, ProjectListParams, ProtocolRange, StoreState,
+    HostVersionParams, IncompatibleProtocolDetail, OrchestratorListParams, ProtocolRange,
+    StoreState,
 };
 use serde_json::json;
 
@@ -51,8 +52,8 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("composerMenus".to_owned(), serde_json::Map::new()),
             ("connect".to_owned(), serde_json::Map::new()),
             ("contextAndFast".to_owned(), serde_json::Map::new()),
-            ("coordinator".to_owned(), serde_json::Map::new()),
-            ("coordinatorEpochs".to_owned(), serde_json::Map::new()),
+            ("orchestrator".to_owned(), serde_json::Map::new()),
+            ("orchestratorEpochs".to_owned(), serde_json::Map::new()),
             ("delegation".to_owned(), serde_json::Map::new()),
             ("devices".to_owned(), serde_json::Map::new()),
             ("eventFilters".to_owned(), serde_json::Map::new()),
@@ -89,6 +90,17 @@ async fn the_handshake_agrees_on_a_version_and_reports_the_host() {
             ("orchestration".to_owned(), serde_json::Map::new()),
             ("peerGit".to_owned(), serde_json::Map::new()),
             ("pins".to_owned(), serde_json::Map::new()),
+            ("orchestratorArtifacts".to_owned(), serde_json::Map::new()),
+            ("orchestratorAutonomy".to_owned(), serde_json::Map::new()),
+            ("orchestratorDelete".to_owned(), serde_json::Map::new()),
+            ("orchestratorEdit".to_owned(), serde_json::Map::new()),
+            ("orchestratorFromThreads".to_owned(), serde_json::Map::new()),
+            ("orchestratorPermission".to_owned(), serde_json::Map::new()),
+            ("orchestratorPlacement".to_owned(), serde_json::Map::new()),
+            ("orchestratorTasks".to_owned(), serde_json::Map::new()),
+            // 0093's old name, for one release.
+            ("coordinator".to_owned(), serde_json::Map::new()),
+            ("coordinatorEpochs".to_owned(), serde_json::Map::new()),
             ("projectArtifacts".to_owned(), serde_json::Map::new()),
             ("projectAutonomy".to_owned(), serde_json::Map::new()),
             ("projectDelete".to_owned(), serde_json::Map::new()),
@@ -237,7 +249,7 @@ async fn a_version_mismatch_gets_incompatible_protocol_and_the_connection_stays_
     );
 
     let still_uninitialized = client
-        .call::<ProjectList>(ProjectListParams {})
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap_err();
     assert_eq!(kind(&still_uninitialized), ErrorKind::NotInitialized);

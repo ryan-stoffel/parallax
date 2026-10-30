@@ -11,8 +11,8 @@
 //! - `plxd.sqlite3`: the project store and the event log, with SQLite's `-wal` and `-shm` files
 //!   next to it.
 //! - `worktrees/`: agent runs' git worktrees (#154), and `context/`: shared context (#155).
-//! - `integration/` and `coordinators/`: each Project's integration worktree (0045) and its
-//!   coordinator's detached worktree (0042).
+//! - `integration/` and `orchestrators/`: each orchestrator's integration worktree (0045) and its
+//!   orchestrator's detached worktree (0042).
 //! - `tmp/`: files plxd writes for a run and deletes when it ends, such as a Claude worker's
 //!   `CLAUDE_ENV_FILE` (PLX-126) and a Codex thread's prompt images (PLX-191). See
 //!   [`DataDir::temp_dir`].
@@ -37,7 +37,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use parallax_protocol::ProjectId;
+use parallax_protocol::ScopeId;
 
 /// The environment variable that sets the data folder when `--data-dir` is not given.
 pub const DATA_DIR_ENV: &str = "PLXD_DATA_DIR";
@@ -241,7 +241,7 @@ impl DataDir {
     /// One project's shared context folder: `context/<project-id>/` in the data folder. The
     /// runner (#156) makes it writable for the project's workers.
     #[must_use]
-    pub fn context_dir(&self, project: ProjectId) -> PathBuf {
+    pub fn context_dir(&self, project: ScopeId) -> PathBuf {
         self.context_root().join(project.to_string())
     }
 

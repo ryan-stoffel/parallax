@@ -33,7 +33,7 @@ fn params(schedule: Schedule) -> ScheduleSaveParams {
         enabled: true,
         schedule,
         thread: None,
-        project: None,
+        orchestrator: None,
         repo: None,
         account: None,
         model: None,

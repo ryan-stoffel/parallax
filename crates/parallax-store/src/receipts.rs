@@ -181,10 +181,10 @@ mod tests {
     fn incomplete_claims_are_deleted_and_finished_ones_stay() {
         let (_dir, store) = open();
         store
-            .claim_command("open", "project/delete", "h1", None)
+            .claim_command("open", "orchestrator/delete", "h1", None)
             .unwrap();
         store
-            .claim_command("done", "project/delete", "h2", None)
+            .claim_command("done", "orchestrator/delete", "h2", None)
             .unwrap();
         store.fill_command_receipt("done", "{}").unwrap();
         store
@@ -214,12 +214,12 @@ mod tests {
             .execute(
                 "INSERT INTO command_receipts
                     (command_id, method, params_hash, result, created_at, finished_at)
-                 VALUES ('old', 'project/delete', 'h', '{}', ?1, ?1)",
+                 VALUES ('old', 'orchestrator/delete', 'h', '{}', ?1, ?1)",
                 rusqlite::params![old],
             )
             .unwrap();
         store
-            .claim_command("new", "project/delete", "h", None)
+            .claim_command("new", "orchestrator/delete", "h", None)
             .unwrap();
         assert!(store.command_receipt("old").unwrap().is_none());
         assert!(store.command_receipt("new").unwrap().is_some());

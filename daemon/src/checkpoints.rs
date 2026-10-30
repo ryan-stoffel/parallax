@@ -6,7 +6,7 @@
 //! run's turn left it; ordinal 0 is the thread's start. `Tx::stage`'s graph fold enqueues the
 //! `checkpoint.capture` effect in the transaction that ends a run `completed`, `interrupted`, or
 //! `cancelled`, and [`capture`] runs it and stores the outcome as a `thread.checkpoint` event,
-//! which the fold writes onto the run. A coordinator writes nothing (0024) and gets none.
+//! which the fold writes onto the run. An orchestrator writes nothing (0024) and gets none.
 //!
 //! Before the actor hands a thread's CLI a new turn, [`before_turn`] waits for the thread's
 //! captures and captures the previous ordinal if it has no ref: the thread's start, or the first
@@ -29,8 +29,8 @@ use std::time::Duration;
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    CheckpointFile, CheckpointStatus, ErrorKind, FullThreadDiffParams, ParallaxEvent, ProjectId,
-    RunId, ThreadRun, ThreadRunStatus, ThreadRunsParams, ThreadRunsResult, TurnCheckpoint,
+    CheckpointFile, CheckpointStatus, ErrorKind, FullThreadDiffParams, ParallaxEvent, RunId,
+    ScopeId, ThreadRun, ThreadRunStatus, ThreadRunsParams, ThreadRunsResult, TurnCheckpoint,
     TurnDiffParams, TurnDiffResult, TurnId,
 };
 use parallax_store::Store;
@@ -70,7 +70,7 @@ pub(crate) struct Folder {
     path: PathBuf,
     git_dir: Option<PathBuf>,
     base: Option<String>,
-    project: ProjectId,
+    project: ScopeId,
 }
 
 impl Folder {
@@ -85,14 +85,14 @@ impl Folder {
     }
 }
 
-/// Thread `thread`'s folder, or `None` for one with no checkpoints: a coordinator, an accepted
+/// Thread `thread`'s folder, or `None` for one with no checkpoints: an orchestrator, an accepted
 /// thread, whose worktree is gone, or no thread at all.
 fn folder(db: &Store, thread: Uuid) -> Result<Option<Folder>, ErrorObject> {
     let error = |error| store_error(&error);
     let Some(run) = db.get_run(thread).map_err(error)? else {
         return Ok(None);
     };
-    let Ok(project) = ProjectId::try_from(run.fields.project_id) else {
+    let Ok(project) = ScopeId::try_from(run.fields.project_id) else {
         return Ok(None);
     };
     if run.fields.policy == crate::agents::NO_WRITE {
@@ -214,7 +214,7 @@ async fn files(
 async fn stage(
     daemon: &Daemon,
     thread: Uuid,
-    project: ProjectId,
+    project: ScopeId,
     event: ParallaxEvent,
 ) -> Result<(), ErrorObject> {
     daemon
@@ -291,13 +291,13 @@ pub(crate) async fn before_turn(daemon: &Daemon, thread: RunId) {
 async fn wait_captures(daemon: &Daemon, thread: Uuid) {
     let deadline = tokio::time::Instant::now() + CAPTURE_WAIT;
     loop {
-        let finished = daemon.orchestrator.effect_finished();
+        let finished = daemon.dispatcher.effect_finished();
         tokio::pin!(finished);
         finished.as_mut().enable();
         let open = daemon
             .reader
             .run(&CancellationToken::new(), move |db| {
-                db.has_open_effect(thread, crate::orchestrator::CHECKPOINT_CAPTURE)
+                db.has_open_effect(thread, crate::dispatcher::CHECKPOINT_CAPTURE)
                     .map_err(|error| store_error(&error))
             })
             .await;
@@ -664,7 +664,7 @@ pub(crate) async fn restore_revert(daemon: &Daemon, revert: &Revert) -> Result<(
 pub(crate) async fn finish_revert(
     daemon: &Arc<Daemon>,
     revert: Revert,
-) -> Result<(ProjectId, ParallaxEvent), ErrorObject> {
+) -> Result<(ScopeId, ParallaxEvent), ErrorObject> {
     let Revert {
         thread: run_id,
         ordinal,

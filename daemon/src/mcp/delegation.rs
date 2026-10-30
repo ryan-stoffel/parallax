@@ -1,9 +1,9 @@
 //! A thread's delegation tools (0063, PLX-648), with T3 Code's names and inputs:
-//! `orchestrator_capabilities`, `delegate_task`, `task_status`, `task_cancel`, and
-//! `create_threads` through `task/delegate`, `task/status`, and `orchestration/dispatch`, and
-//! `thread_merge_back` through `thread/mergeBack`, and `request_secret` through `secret/request`.
-//! Every caller gets them; plxd refuses to delegate from a Project's runs, which start children
-//! through their coordinator.
+//! `orchestrator_capabilities`, `delegate_task`, `task_status`, `task_cancel`, and `create_threads`
+//! through `task/delegate`, `task/status`, and `orchestration/dispatch`, and `thread_merge_back`
+//! through `thread/mergeBack`, and `request_secret` through `secret/request`. Every caller gets
+//! them; plxd refuses to delegate from an orchestrator's runs, which start children through their
+//! orchestrator.
 //!
 //! A task is a child thread in the caller's worktree. Its id is its thread's run id. An async
 //! task wakes the caller when it ends (`completionWake: always`); `wait` blocks for its result

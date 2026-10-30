@@ -8,7 +8,7 @@
 //!   Async by default, the agent starts alongside it. With `async: false`, [`worktree_created`]
 //!   returns what the first turn waits for, and an error exit fails the run.
 //! - Settling a thread runs the settle script in its worktree, in `settle-<id>-<8 hex>`, through
-//!   the orchestrator's `settle-script.run` effect. A thread with no worktree of its own skips it.
+//!   the dispatcher's `settle-script.run` effect. A thread with no worktree of its own skips it.
 //!
 //! A script runs in the user's shell ([`crate::terminals::Terminals::run_script`]). A clean exit
 //! closes its terminal unless something it started still runs there; any other leaves the shell
@@ -29,8 +29,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
-    ErrorKind, ParallaxEvent, ProjectId, RepoId, RepoSaveScriptsParams, RepoScript,
-    RepoScriptsParams, RepoScriptsResult, RunId, ScriptStatus, ScriptTrigger,
+    ErrorKind, ParallaxEvent, RepoId, RepoSaveScriptsParams, RepoScript, RepoScriptsParams,
+    RepoScriptsResult, RunId, ScopeId, ScriptStatus, ScriptTrigger,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -113,7 +113,7 @@ pub(crate) type Held = Result<(), Option<String>>;
 pub(crate) async fn worktree_created(
     daemon: &Arc<Daemon>,
     run_id: RunId,
-    scope: ProjectId,
+    scope: ScopeId,
     repo_path: &str,
     worktree: &Path,
 ) -> Option<impl Future<Output = Held> + Send + 'static> {
@@ -210,7 +210,7 @@ pub(crate) async fn settled(daemon: &Arc<Daemon>, thread: Uuid) {
     }
     let (Ok(run_id), Ok(scope)) = (
         RunId::try_from(thread),
-        ProjectId::try_from(run.fields.project_id),
+        ScopeId::try_from(run.fields.project_id),
     ) else {
         return;
     };
@@ -245,7 +245,7 @@ pub(crate) async fn settled(daemon: &Arc<Daemon>, thread: Uuid) {
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 struct Started {
     run_id: RunId,
-    scope: ProjectId,
+    scope: ScopeId,
     trigger: ScriptTrigger,
     name: String,
     terminal_id: String,

@@ -15,8 +15,8 @@ use parallax_protocol::jsonrpc::{
 };
 use parallax_protocol::methods::{Initialize, NotificationMethod, RequestMethod};
 use parallax_protocol::{
-    Capabilities, ClientInfo, ErrorKind, InitializeParams, InitializeResult, ProjectCreateParams,
-    ProjectId, ProjectUpdateParams, ProtocolRange,
+    ClientInfo, ErrorKind, InitializeParams, InitializeResult, OrchestratorCreateParams,
+    OrchestratorUpdateParams, ProtocolRange, ScopeId,
 };
 use plxd::paths::DataDir;
 use plxd::server::{Config, Server, Shutdown};
@@ -148,7 +148,7 @@ pub fn initialize_params(protocol: ProtocolRange) -> InitializeParams {
             version: "0.0.0".to_owned(),
             machine_id: None,
         },
-        capabilities: Capabilities::default(),
+        capabilities: parallax_protocol::legacy::client_capabilities(),
     }
 }
 
@@ -345,9 +345,9 @@ pub fn kind(error: &ErrorObject) -> ErrorKind {
 }
 
 /// Params for a new project named `name`, on a repository made for it under `dir`.
-pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
-    ProjectCreateParams {
-        id: ProjectId::generate(),
+pub fn create_params(dir: &Path, name: &str) -> OrchestratorCreateParams {
+    OrchestratorCreateParams {
+        id: ScopeId::generate(),
         name: name.to_owned(),
         repo_path: repo(dir, name),
         icon: None,
@@ -357,10 +357,11 @@ pub fn create_params(dir: &Path, name: &str) -> ProjectCreateParams {
     }
 }
 
-/// `project/update` params for `project` that change nothing, for a test to set what it changes.
-pub fn project_update(project: ProjectId) -> ProjectUpdateParams {
-    ProjectUpdateParams {
-        project,
+/// `orchestrator/update` params for `project` that change nothing, for a test to set what it
+/// changes.
+pub fn orchestrator_update(project: ScopeId) -> OrchestratorUpdateParams {
+    OrchestratorUpdateParams {
+        orchestrator: project,
         name: None,
         icon: None,
         permission: None,

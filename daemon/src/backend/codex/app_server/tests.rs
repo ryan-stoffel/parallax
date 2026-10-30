@@ -69,7 +69,7 @@ fn request(permission: AgentPermission) -> RunRequest {
         permission: Some(permission),
         context_window: None,
         fast: None,
-        coordinator_tools: None,
+        orchestrator_tools: None,
         thread_tools: None,
         approvals: true,
         thread: true,

@@ -3,10 +3,10 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use uuid::Uuid;
 
 use crate::error::StoreError;
-use crate::project::{icon_columns, icon_from_row};
+use crate::orchestrator::{icon_columns, icon_from_row};
 use crate::runs::{delete_run_rows, insert_run};
 use crate::worktree::insert_worktree;
-use crate::{ProjectIcon, Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
+use crate::{ChosenIcon, Run, RunFields, RunState, Store, Worktree, WorktreeFields, timestamp};
 
 /// What registering a repo entry takes (#110).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub struct Repo {
     pub id: Uuid,
     pub fields: RepoFields,
     /// Its icon, in a project's shape (decision record 0033), stored as the client sent it.
-    pub icon: Option<ProjectIcon>,
+    pub icon: Option<ChosenIcon>,
     pub created_at: Timestamp,
     /// A Space's instructions for every thread in it (decision record 0090).
     pub instructions: Option<String>,
@@ -111,7 +111,7 @@ type RawRepo = (
     String,
     bool,
     String,
-    Option<ProjectIcon>,
+    Option<ChosenIcon>,
     bool,
     Option<String>,
     Option<String>,
@@ -657,7 +657,7 @@ impl Store {
     /// # Errors
     ///
     /// [`StoreError::NotFound`] if no entry has `id`, or a database error.
-    pub fn set_repo_icon(&self, id: Uuid, icon: &ProjectIcon) -> Result<(Repo, bool), StoreError> {
+    pub fn set_repo_icon(&self, id: Uuid, icon: &ChosenIcon) -> Result<(Repo, bool), StoreError> {
         let before = existing_repo(&self.conn, id)?;
         if before.icon.as_ref() == Some(icon) {
             return Ok((before, false));

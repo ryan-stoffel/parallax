@@ -26,7 +26,7 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentApprovalDecision, AgentOutcome, AgentOutputItem, AgentSubagentStatus, AgentToolStatus,
-    ApprovalId, CheckpointStatus, LoggedEvent, ParallaxEvent, ProjectId, QueuedMessage, RunId,
+    ApprovalId, CheckpointStatus, LoggedEvent, ParallaxEvent, QueuedMessage, RunId, ScopeId,
     ThreadRun, ThreadRunStatus, TurnId,
 };
 use parallax_store::{GraphNode, GraphRun, RuntimeRequest, Store, StoreError};
@@ -52,7 +52,7 @@ pub(crate) fn apply(
     thread: Uuid,
     seq: u64,
     time: Timestamp,
-    project: Option<ProjectId>,
+    project: Option<ScopeId>,
     event: &ParallaxEvent,
 ) -> Result<Folded, StoreError> {
     let mut ended = Vec::new();
@@ -72,7 +72,7 @@ fn fold(
     thread: Uuid,
     seq: u64,
     time: Timestamp,
-    project: Option<ProjectId>,
+    project: Option<ScopeId>,
     event: &ParallaxEvent,
     ended: &mut Vec<ThreadRun>,
 ) -> Result<Option<Uuid>, StoreError> {
@@ -168,7 +168,7 @@ struct Fold<'a> {
     thread: Uuid,
     seq: u64,
     time: Timestamp,
-    project: Option<ProjectId>,
+    project: Option<ScopeId>,
     open: Vec<ThreadRun>,
     /// The runs it ended.
     ended: Vec<ThreadRun>,
@@ -180,7 +180,7 @@ impl<'a> Fold<'a> {
         thread: Uuid,
         seq: u64,
         time: Timestamp,
-        project: Option<ProjectId>,
+        project: Option<ScopeId>,
     ) -> Result<Self, StoreError> {
         let open = db
             .open_graph_runs(thread)?
@@ -660,9 +660,7 @@ pub(crate) fn import(db: &Store, thread: Uuid) -> Result<(), StoreError> {
         let Ok(event) = serde_json::from_str::<ParallaxEvent>(&stored.payload) else {
             continue;
         };
-        let project = stored
-            .project_id
-            .and_then(|id| ProjectId::try_from(id).ok());
+        let project = stored.project_id.and_then(|id| ScopeId::try_from(id).ok());
         if let Some(run) = apply(db, thread, stored.seq, stored.time, project, &event)?.run {
             db.set_event_run(stored.seq, run)?;
         }

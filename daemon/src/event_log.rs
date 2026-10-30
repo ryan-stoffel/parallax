@@ -14,8 +14,8 @@
 //! the log runs in memory only, starting over with a new `logId` on every start, as it did in M1.
 //!
 //! The table is compacted on a retention policy (#187, decision 0016): an agent run's events stay
-//! as long as its run row does, now one row per finished turn (0052), while host and project
-//! events with no `thread_id` — `project.created`, `context.changed` — are pruned to the newest
+//! as long as its run row does, now one row per finished turn (0052), while host and project events
+//! with no `thread_id` — `orchestrator.created`, `context.changed` — are pruned to the newest
 //! `host_retention` whenever one is staged. `host_retention` is always at least `retention`
 //! (`EventLog::with` enforces it): a restart only ever reloads the newest `retention` events, and
 //! by pigeonhole every host or project event in that reload is among the newest `retention` host
@@ -39,7 +39,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::Timestamp;
-use parallax_protocol::{AgentOutputItem, LogId, ParallaxEvent, ProjectId, RunId};
+use parallax_protocol::{AgentOutputItem, LogId, ParallaxEvent, RunId, ScopeId};
 use parallax_store::{Store, StoreError, StoredEvent};
 use serde_json::value::RawValue;
 use tokio::sync::watch;
@@ -52,7 +52,7 @@ use tracing::{info, warn};
 pub(crate) struct Entry {
     pub seq: u64,
     pub time: Timestamp,
-    pub project: Option<ProjectId>,
+    pub project: Option<ScopeId>,
     /// The run it belongs to: [`run_of`] its event.
     pub run: Option<RunId>,
     /// Whether it is an `agent.output` with approval items, which a `shell` subscription keeps.
@@ -67,14 +67,14 @@ pub(crate) struct Entry {
 
 impl Entry {
     /// An entry for `event`, serialized now.
-    fn new(seq: u64, time: Timestamp, project: Option<ProjectId>, event: &ParallaxEvent) -> Self {
+    fn new(seq: u64, time: Timestamp, project: Option<ScopeId>, event: &ParallaxEvent) -> Self {
         Self::with_json(seq, time, project, event, raw(event))
     }
 
     pub(crate) fn with_json(
         seq: u64,
         time: Timestamp,
-        project: Option<ProjectId>,
+        project: Option<ScopeId>,
         event: &ParallaxEvent,
         json: Box<RawValue>,
     ) -> Self {
@@ -171,9 +171,9 @@ pub(crate) fn run_of(event: &ParallaxEvent) -> Option<RunId> {
         | ParallaxEvent::ThreadScript { run_id, .. }
         | ParallaxEvent::ThreadCheckpoint { run_id, .. }
         | ParallaxEvent::ThreadReverted { run_id, .. } => Some(*run_id),
-        ParallaxEvent::ProjectCreated { .. }
-        | ParallaxEvent::ProjectUpdated { .. }
-        | ParallaxEvent::ProjectDeleted { .. }
+        ParallaxEvent::OrchestratorCreated { .. }
+        | ParallaxEvent::OrchestratorUpdated { .. }
+        | ParallaxEvent::OrchestratorDeleted { .. }
         | ParallaxEvent::ContextChanged { .. }
         | ParallaxEvent::InboxAdded { .. }
         | ParallaxEvent::RepoAdded { .. }
@@ -453,7 +453,7 @@ impl EventLog {
     pub fn append_in_memory(
         &self,
         time: Timestamp,
-        project: Option<ProjectId>,
+        project: Option<ScopeId>,
         event: ParallaxEvent,
     ) -> u64 {
         // One lock for reading `head` and publishing, so two callers can't take the same `seq`.
@@ -555,7 +555,7 @@ impl EventLog {
     pub fn next(
         &self,
         after: u64,
-        project: Option<ProjectId>,
+        project: Option<ScopeId>,
         keep: impl Fn(&Entry) -> bool,
     ) -> Result<(Option<Arc<Entry>>, u64), Gone> {
         self.next_matching(after, |entry| entry.project == project && keep(entry))
@@ -621,9 +621,7 @@ impl EventLog {
 pub(crate) fn entry(stored: StoredEvent, keep: bool) -> Entry {
     let event = serde_json::from_str(&stored.payload).unwrap_or(ParallaxEvent::Unknown);
     let json = RawValue::from_string(stored.payload).unwrap_or_else(|_| raw(&event));
-    let project = stored
-        .project_id
-        .and_then(|id| ProjectId::try_from(id).ok());
+    let project = stored.project_id.and_then(|id| ScopeId::try_from(id).ok());
     let mut entry = Entry::with_json(stored.seq, stored.time, project, &event, json);
     entry.parsed = keep.then_some(event);
     entry
@@ -643,14 +641,14 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use parallax_protocol::{AgentOutcome, ParallaxEvent, ProjectId, RunId};
+    use parallax_protocol::{AgentOutcome, ParallaxEvent, RunId, ScopeId};
     use tokio_util::sync::CancellationToken;
 
     use super::{EventLog, Gone};
     use crate::store::StoreHandle;
 
     /// Stores `event` through `store`'s thread, as plxd does.
-    fn put(store: &StoreHandle, project: Option<ProjectId>, event: ParallaxEvent) -> u64 {
+    fn put(store: &StoreHandle, project: Option<ScopeId>, event: ParallaxEvent) -> u64 {
         store.append_blocking(jiff::Timestamp::now(), project, event)
     }
 
@@ -670,7 +668,7 @@ mod tests {
     #[test]
     fn purging_a_run_removes_only_its_events_and_drops_nothing_else() {
         let log = EventLog::new(10);
-        let project = ProjectId::generate();
+        let project = ScopeId::generate();
         let (gone, kept) = (RunId::generate(), RunId::generate());
         log.append_in_memory(jiff::Timestamp::now(), Some(project), finished(gone));
         log.append_in_memory(jiff::Timestamp::now(), Some(project), finished(kept));
@@ -690,7 +688,7 @@ mod tests {
     fn a_stored_log_keeps_its_id_seq_and_events_across_a_reopen() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("plxd.sqlite3");
-        let project = ProjectId::generate();
+        let project = ScopeId::generate();
         let run = RunId::generate();
         let first = open(&path, 2);
         put(&first, None, ParallaxEvent::Unknown);

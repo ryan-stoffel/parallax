@@ -3,9 +3,7 @@
     "jsonrpc": "2.0",
     "id": 1,
     "method": "providers/list",
-    "params": {
-      "refresh": true
-    }
+    "params": { "refresh": true }
   },
   {
     "jsonrpc": "2.0",
@@ -31,7 +29,7 @@
           "models": [],
           "permissions": ["auto", "manual", "edit", "bypass"],
           "efforts": true,
-          "coordinator": false,
+          "orchestrator": false,
           "login": ["codex", "login"]
         },
         {
@@ -42,35 +40,18 @@
             "enabled": true,
             "args": [],
             "env": [
-              {
-                "name": "ANTHROPIC_BASE_URL",
-                "value": "https://ollama.com",
-                "secret": false
-              },
-              {
-                "name": "ANTHROPIC_AUTH_TOKEN",
-                "secret": true
-              }
+              { "name": "ANTHROPIC_BASE_URL", "value": "https://ollama.com", "secret": false },
+              { "name": "ANTHROPIC_AUTH_TOKEN", "secret": true }
             ],
-            "models": [
-              {
-                "id": "qwen3-coder:480b",
-                "name": "Qwen3 Coder 480B"
-              }
-            ]
+            "models": [{ "id": "qwen3-coder:480b", "name": "Qwen3 Coder 480B" }]
           },
           "installed": true,
           "path": "/opt/homebrew/bin/claude",
           "signedIn": true,
-          "models": [
-            {
-              "id": "gpt-oss:120b",
-              "name": "gpt-oss:120b"
-            }
-          ],
+          "models": [{ "id": "gpt-oss:120b", "name": "gpt-oss:120b" }],
           "permissions": ["auto", "manual", "edit", "plan", "bypass"],
           "efforts": true,
-          "coordinator": false
+          "orchestrator": false
         },
         {
           "instance": {
@@ -90,7 +71,7 @@
           "models": [],
           "permissions": ["edit"],
           "efforts": false,
-          "coordinator": false
+          "orchestrator": false
         }
       ],
       "checkedAt": "2026-10-03T12:00:00Z"
@@ -108,16 +89,8 @@
         "enabled": true,
         "args": [],
         "env": [
-          {
-            "name": "ANTHROPIC_BASE_URL",
-            "value": "https://ollama.com",
-            "secret": false
-          },
-          {
-            "name": "ANTHROPIC_AUTH_TOKEN",
-            "value": "an-ollama-api-key",
-            "secret": true
-          }
+          { "name": "ANTHROPIC_BASE_URL", "value": "https://ollama.com", "secret": false },
+          { "name": "ANTHROPIC_AUTH_TOKEN", "value": "an-ollama-api-key", "secret": true }
         ],
         "models": []
       }
@@ -126,25 +99,17 @@
   {
     "jsonrpc": "2.0",
     "id": 2,
-    "result": {
-      "providers": [],
-      "checkedAt": "2026-10-03T12:00:01Z"
-    }
+    "result": { "providers": [], "checkedAt": "2026-10-03T12:00:01Z" }
   },
   {
     "jsonrpc": "2.0",
     "id": 3,
     "method": "providers/remove",
-    "params": {
-      "id": "amp"
-    }
+    "params": { "id": "amp" }
   },
   {
     "jsonrpc": "2.0",
     "id": 3,
-    "result": {
-      "providers": [],
-      "checkedAt": "2026-10-03T12:00:02Z"
-    }
+    "result": { "providers": [], "checkedAt": "2026-10-03T12:00:02Z" }
   }
 ]

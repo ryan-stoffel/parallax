@@ -1,7 +1,7 @@
 //! Agent backends: one interface over the vendor CLIs that run agents (0004).
 //!
 //! A [`Backend`] starts a [`Run`] from a [`RunRequest`]. The run's CLI output arrives on an
-//! [`EventStream`] as normalized [`Event`]s, so M3's runner and M4's coordinator never see vendor
+//! [`EventStream`] as normalized [`Event`]s, so M3's runner and M4's orchestrator never see vendor
 //! differences. The adapters for Claude Code (#116), Codex (#122), and Cursor (#123) implement
 //! these traits on top of [`process`], and [`fake`] implements them for tests.
 //!
@@ -99,8 +99,9 @@ pub trait Backend: Send + Sync {
         &[]
     }
 
-    /// The [`Backend::permissions`] a run in a Project may take (0042). All of them by default.
-    fn project_permissions(&self) -> &[AgentPermission] {
+    /// The [`Backend::permissions`] a run in an orchestrator may take (0042). All of them by
+    /// default.
+    fn orchestrator_permissions(&self) -> &[AgentPermission] {
         self.permissions()
     }
 
@@ -332,10 +333,10 @@ pub struct RunRequest {
     pub context_window: Option<u32>,
     /// Fast mode on or off, or the CLI's default. Only for a backend with [`Backend::fast_mode`].
     pub fast: Option<bool>,
-    /// plxd's host-wide thread tools bound to a coordinator's own run, for its
+    /// plxd's host-wide thread tools bound to an orchestrator's own run, for its
     /// [`ToolPolicy::NoWrite`] run only (0041, PLX-380). Routing drops them for every other role,
     /// and a backend refuses them on a worker.
-    pub coordinator_tools: Option<ThreadTools>,
+    pub orchestrator_tools: Option<ThreadTools>,
     /// plxd's host-wide thread tools, for a normal thread's run only (0041). Routing drops them
     /// for every other run, and Claude Code attaches them only to a thread that runs as full
     /// Claude Code ([`claude::unsandboxed`]), since the server runs outside any sandbox.
@@ -344,12 +345,12 @@ pub struct RunRequest {
     /// call asks through [`Event::ApprovalRequested`] and [`Run::answer`]. Without it, the CLI
     /// runs as it did before, denying what would prompt.
     pub approvals: bool,
-    /// A thread's run (0017): a normal thread or a Project's child (0042), but not a coordinator.
-    /// With [`Self::approvals`], Claude Code runs it as full Claude Code in every mode, with no
-    /// worker sandbox (0034); without, it keeps the sandbox.
+    /// A thread's run (0017): a normal thread or an orchestrator's child (0042), but not an
+    /// orchestrator. With [`Self::approvals`], Claude Code runs it as full Claude Code in every
+    /// mode, with no worker sandbox (0034); without, it keeps the sandbox.
     pub thread: bool,
     /// Text added to the agent's system prompt on this CLI process, resumes included, so
-    /// compaction never drops it: a coordinator's instructions (0078). Claude Code takes it as
+    /// compaction never drops it: an orchestrator's instructions (0078). Claude Code takes it as
     /// `--append-system-prompt-file`, Codex as developer instructions, and `OpenCode` as each
     /// message's `system`. ACP agents and Cursor have no channel that adds to their own prompt,
     /// so they get it ahead of the process's first message ([`Self::first_prompt`]).
@@ -368,22 +369,22 @@ impl RunRequest {
     }
 
     /// Whether a backend that runs only full agents, Codex and ACP agents, takes it: a thread, or
-    /// a coordinator, which runs there as a thread does (0042).
+    /// an orchestrator, which runs there as a thread does (0042).
     #[must_use]
     pub fn full_agent(&self) -> bool {
-        self.thread || self.coordinator_tools.is_some()
+        self.thread || self.orchestrator_tools.is_some()
     }
 
-    /// Its Parallax tools on such a backend: a thread's, or a coordinator's (0041).
+    /// Its Parallax tools on such a backend: a thread's, or an orchestrator's (0041).
     #[must_use]
     pub fn full_agent_tools(&self) -> Option<&ThreadTools> {
         self.thread_tools
             .as_ref()
-            .or(self.coordinator_tools.as_ref())
+            .or(self.orchestrator_tools.as_ref())
     }
 }
 
-/// How a thread's CLI, or a coordinator's, launches `plxd mcp --thread` (0041): the server is
+/// How a thread's CLI, or an orchestrator's, launches `plxd mcp --thread` (0041): the server is
 /// bound to the run's own id, which plxd sets and the model never sees or chooses, so a thread it
 /// launches records it as the parent.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -668,7 +669,7 @@ pub enum AnswerError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToolPolicy {
-    /// Read-only tools, no hooks, no project settings: the coordinator's policy.
+    /// Read-only tools, no hooks, no project settings: the orchestrator's policy.
     NoWrite,
     /// Edits inside the working directory, and commands in the vendor's OS sandbox: a worker's
     /// policy, bounded by the run's [`WorkerSandbox`] (0013).

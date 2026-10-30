@@ -73,7 +73,7 @@ impl Actor {
         if !resume::enabled(
             &self.daemon,
             self.row.state.auto_resume,
-            self.in_project().await,
+            self.in_orchestrator().await,
         )
         .await
         {
@@ -94,7 +94,7 @@ impl Actor {
         if !resume::enabled(
             &self.daemon,
             self.row.state.auto_resume,
-            self.in_project().await,
+            self.in_orchestrator().await,
         )
         .await
         {
@@ -106,8 +106,8 @@ impl Actor {
         self.resume_waiting(turn).await;
     }
 
-    /// `agent/resumeNow`: resumes a waiting run now, as the user's own turn. A Project's child
-    /// waiting to be placed starts now on the account it was started on (0046).
+    /// `agent/resumeNow`: resumes a waiting run now, as the user's own turn. An orchestrator's
+    /// child waiting to be placed starts now on the account it was started on (0046).
     pub(super) async fn resume_now(&mut self) -> Result<AgentRun, ErrorObject> {
         if self.row.state.status != WAITING {
             return Err(ErrorObject::parallax(
@@ -133,7 +133,7 @@ impl Actor {
         if self.row.state.auto_resume != auto_resume {
             self.row.state.auto_resume = auto_resume;
             if self.row.state.status == WAITING
-                && !resume::enabled(&self.daemon, auto_resume, self.in_project().await).await
+                && !resume::enabled(&self.daemon, auto_resume, self.in_orchestrator().await).await
             {
                 self.stop_waiting(convert::FAILED).await;
             } else {

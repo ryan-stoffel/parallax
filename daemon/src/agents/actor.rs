@@ -20,7 +20,7 @@
 //! up. The session is released [`SESSION_IDLE`] after that, later while its tool calls,
 //! background commands, or subagents are still open, up to [`SESSION_MAX_PIN`], or sooner once
 //! more than the host's [`super::MAX_IDLE_SESSIONS`] with none open are idle and it is the least
-//! recently used, or at once on archive, settle, Accept, a Project join, its coordinator's
+//! recently used, or at once on archive, settle, Accept, an orchestrator join, its orchestrator's
 //! replacement, or a failed turn, which ends its process so its `Finished` says why.
 //!
 //! A message sent while its CLI works on a turn waits in the run's queue (PLX-370, decision
@@ -33,7 +33,7 @@
 //! waits, and a steer goes into the running turn instead, through the backend, or by cancelling
 //! the CLI and resuming it with the message where the backend takes no messages while it runs.
 //!
-//! A project's coordinator (0024) differs in three places: it starts in a detached worktree at the
+//! An orchestrator (0024) differs in three places: it starts in a detached worktree at the
 //! integration branch's tip, refreshed before each CLI process (0042), with a thread's Parallax
 //! tools and no sandbox (PLX-380), it is never committed, and only the project's current one
 //! wakes. Any run wakes when children it launched finish (PLX-42, PLX-380, [`super::wake`]).
@@ -42,7 +42,7 @@
 //! starts in the checkout, and it is never committed either.
 //!
 //! A run a usage limit stopped waits for the limit to reset and resumes itself (PLX-371,
-//! [`waiting`]). A Project's child that waits to be placed starts with its first message once
+//! [`waiting`]). An orchestrator's child that waits to be placed starts with its first message once
 //! [`super::placement`] finds it an account ([`placed`]).
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -56,9 +56,9 @@ use parallax_protocol::{AcceptId, AgentMerge, CliKind};
 use parallax_protocol::{
     AccountChoice, AccountId, AgentApprovalAnswer, AgentApprovalBy, AgentApprovalDecision,
     AgentApproveParams, AgentApproveResult, AgentBackgroundTask, AgentFailureKind, AgentOutcome,
-    AgentOutputItem, AgentPermission, AgentRun, ApprovalId, CoordinatorSessionEnd, DiffSummary,
-    ErrorKind, GitStatus, ImageId, InboxKind, ParallaxEvent, ProjectId, PromptImage, QueueResult,
-    QueuedMessage, Role, RunId, TurnId,
+    AgentOutputItem, AgentPermission, AgentRun, ApprovalId, DiffSummary, ErrorKind, GitStatus,
+    ImageId, InboxKind, OrchestratorSessionEnd, ParallaxEvent, PromptImage, QueueResult,
+    QueuedMessage, Role, RunId, ScopeId, TurnId,
 };
 use parallax_store::{
     QueuedRow, Run as RunRow, RunAccept, SessionModelUsage, StoredImage, Worktree,
@@ -116,9 +116,9 @@ const SESSION_MAX_PIN: Duration = Duration::from_hours(4);
 /// An `agent.output` is sent early once its items reach about this many bytes.
 const MAX_BATCH_BYTES: usize = 256 * 1024;
 
-/// The inbox item a coordinator adds when its wake-ups pause (PLX-401, 0043).
+/// The inbox item an orchestrator adds when its wake-ups pause (PLX-401, 0043).
 const WAKEUPS_PAUSED: &str =
-    "Wake-ups paused. Your next message to the coordinator lets them through.";
+    "Wake-ups paused. Your next message to the orchestrator lets them through.";
 
 /// The inbox item for a child's CLI ending (PLX-401, 0043): `done` with its diff stats, or
 /// `failed`. A cancelled or interrupted child adds none, since the user or plxd stopped it.
@@ -229,14 +229,14 @@ pub(super) enum Command {
         action: GitAction,
         reply: oneshot::Sender<Result<GitStatus, ErrorObject>>,
     },
-    /// `thread/delete` (#110) and `project/delete` (PLX-338): stops the run's CLI, waits for it to
-    /// exit, and deletes the run. A push or Open PR in flight refuses it, unless `wait`.
+    /// `thread/delete` (#110) and `orchestrator/delete` (PLX-338): stops the run's CLI, waits for
+    /// it to exit, and deletes the run. A push or Open PR in flight refuses it, unless `wait`.
     Delete {
         wait: bool,
         command_id: Option<Uuid>,
         reply: oneshot::Sender<Result<(), ErrorObject>>,
     },
-    /// A child of this run finished, or a run started in this coordinator's Project, as
+    /// A child of this run finished, or a run started in this orchestrator, as
     /// [`wake::summary`] and [`wake::started`] tell it (PLX-42, PLX-380), with the ids of the
     /// questions it names (PLX-469), the task it delegated that ended, if any (0063), and the
     /// newest stored end of a child it names (PLX-936).
@@ -257,15 +257,15 @@ pub(super) enum Command {
         auto_resume: Option<bool>,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
-    /// Starts a Project's child that waited to be placed on `account` (PLX-413, 0046).
+    /// Starts an orchestrator's child that waited to be placed on `account` (PLX-413, 0046).
     Place {
         account: AccountChoice,
         pending: super::placement::Pending,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
-    /// `project/fromThreads` (0042): the run joins Project `project` as `parent`'s child.
+    /// `orchestrator/fromThreads` (0042): the run joins Orchestrator `project` as `parent`'s child.
     Join {
-        project: ProjectId,
+        project: ScopeId,
         parent: RunId,
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
     },
@@ -276,7 +276,7 @@ pub(super) enum Command {
     },
     /// `provider-session.detach` (0060): releases the run's session, after its turn if one runs.
     Detach,
-    /// `coordinator/fresh` (PLX-937): ends a coordinator's session, so its next message starts
+    /// `orchestrator/fresh` (PLX-937): ends an orchestrator's session, so its next message starts
     /// the next epoch.
     Fresh {
         reply: oneshot::Sender<Result<AgentRun, ErrorObject>>,
@@ -372,7 +372,7 @@ pub(super) struct Queued {
     /// The thread that sent it through its Parallax tools (0041).
     pub from: Option<RunId>,
     /// plxd's own message, not the user's, such as a scheduled task's or a pull request watch's,
-    /// which a coordinator's packet leaves out of the user's messages (PLX-937).
+    /// which an orchestrator's packet leaves out of the user's messages (PLX-937).
     pub parallax: bool,
 }
 
@@ -538,7 +538,7 @@ struct Batch {
 pub(super) struct Actor {
     daemon: Arc<Daemon>,
     id: RunId,
-    project: ProjectId,
+    project: ScopeId,
     row: RunRow,
     /// The run's worktree, until `agent/accept` removes it.
     worktree: Option<Worktree>,
@@ -579,7 +579,7 @@ pub(super) struct Actor {
     /// that exits first does, waits again for the next CLI.
     handed: Vec<Queued>,
     stopping: bool,
-    /// Set once `thread/delete` or `project/delete` removed the run: the actor stops, refusing
+    /// Set once `thread/delete` or `orchestrator/delete` removed the run: the actor stops, refusing
     /// what is still queued.
     deleted: bool,
     /// The run's wake-ups, as a parent (PLX-42, PLX-380).
@@ -608,8 +608,8 @@ pub(super) struct Actor {
     /// The messages plxd sent as its own ([`Queued::parallax`]), by turn id, until they're
     /// recorded as sent.
     parallax_turns: HashSet<TurnId>,
-    /// Whether a coordinator's provider compacted its session since its last turn began, so the
-    /// next one carries the Project's state again (PLX-937). Lost on a restart.
+    /// Whether an orchestrator's provider compacted its session since its last turn began, so the
+    /// next one carries the orchestrator's state again (PLX-937). Lost on a restart.
     compacted: bool,
 }
 
@@ -624,9 +624,9 @@ impl Actor {
         turns: HashMap<TurnId, String>,
     ) -> Self {
         let id = RunId::try_from(row.id).unwrap_or_else(|_| RunId::generate());
-        let project = ProjectId::try_from(row.fields.project_id).unwrap_or_else(|_| {
+        let project = ScopeId::try_from(row.fields.project_id).unwrap_or_else(|_| {
             warn!(run = %row.id, "a stored run's project id is not a UUIDv7");
-            ProjectId::generate()
+            ScopeId::generate()
         });
         let last_message = row.fields.prompt.clone();
         Self {
@@ -748,8 +748,8 @@ impl Actor {
         self.row.state.status == convert::ACCEPTED
     }
 
-    /// Whether this is a project's coordinator (0024) rather than a worker or a thread.
-    fn is_coordinator(&self) -> bool {
+    /// Whether this is an orchestrator (0024) rather than a worker or a thread.
+    fn is_orchestrator(&self) -> bool {
         self.row.fields.policy == convert::NO_WRITE
     }
 
@@ -873,18 +873,18 @@ impl Actor {
         self.save().await;
     }
 
-    /// Whether this is a Project's coordinator or one of its children.
-    async fn in_project(&self) -> bool {
-        self.is_coordinator() || self.is_child().await
+    /// Whether this is an orchestrator or one of its children.
+    async fn in_orchestrator(&self) -> bool {
+        self.is_orchestrator() || self.is_child().await
     }
 
-    /// Whether this is one of a Project's children (0042): any run in a Project but its
-    /// coordinator, whether the coordinator launched it or the user started it with
+    /// Whether this is one of an orchestrator's children (0042): any run in an orchestrator but its
+    /// orchestrator, whether the orchestrator launched it or the user started it with
     /// `thread/start`'s `project` or `agent/start`. A store error counts as not a child.
     async fn is_child(&self) -> bool {
-        !self.is_coordinator()
+        !self.is_orchestrator()
             && matches!(
-                super::project_mode(&self.daemon, self.project).await,
+                super::orchestrator_mode(&self.daemon, self.project).await,
                 Ok(Some(_))
             )
     }
@@ -1148,7 +1148,7 @@ impl Actor {
         ended: Option<jiff::Timestamp>,
     ) {
         // ponytail: a late end's mark moves back in a store job of its own, after the end was
-        // stored and routed here, so a crash or a `project/start` between them can miss it
+        // stored and routed here, so a crash or a `orchestrator/start` between them can miss it
         // (PLX-936); fold the mark into the job that routes the end if that matters.
         if self
             .wakes
@@ -1160,8 +1160,8 @@ impl Actor {
 
     /// `agent/setPermission`: moves the live CLI to `permission` now, mid-turn included, then
     /// stores it as the run's, so its next message and next process run in it too. A run in a
-    /// Project runs in the Project's mode (0042), and a run whose backend can't switch live
-    /// takes the mode with its next message instead.
+    /// orchestrator runs in the orchestrator's mode (0042), and a run whose backend can't switch
+    /// live takes the mode with its next message instead.
     async fn on_permission(&mut self, permission: AgentPermission, reply: Reply<AgentRun>) {
         let _ = reply.send(self.set_permission(permission).await);
     }
@@ -1171,12 +1171,12 @@ impl Actor {
         &mut self,
         permission: AgentPermission,
     ) -> Result<AgentRun, ErrorObject> {
-        if super::project_mode(&self.daemon, self.project)
+        if super::orchestrator_mode(&self.daemon, self.project)
             .await?
             .is_some()
         {
             return Err(ErrorObject::invalid_params(
-                "a run in a Project runs in the Project's mode",
+                "a run in an orchestrator runs in the orchestrator's mode",
             ));
         }
         let changes = self.changes(RunOptions {
@@ -1282,17 +1282,18 @@ impl Actor {
         Ok(())
     }
 
-    /// Moves the run into Project `project` as `parent`'s child (0042). Its mode, inbox, wake-ups,
-    /// and Project tools all follow its scope, so it runs as a child from its next CLI process,
-    /// and a live CLI keeps what it started with. Joining the Project it is in changes nothing.
-    async fn join(&mut self, project: ProjectId, parent: RunId) -> Result<AgentRun, ErrorObject> {
+    /// Moves the run into Orchestrator `project` as `parent`'s child (0042). Its mode, inbox,
+    /// wake-ups, and Orchestrator tools all follow its scope, so it runs as a child from its next
+    /// CLI process, and a live CLI keeps what it started with. Joining the orchestrator it is in
+    /// changes nothing.
+    async fn join(&mut self, project: ScopeId, parent: RunId) -> Result<AgentRun, ErrorObject> {
         if self.project != project {
             let id = self.row.id;
             // Only its fields: its state may be newer here than in the store.
             // Its new parent is reported as `thread.updated` in the same job.
             self.row.fields = store(&self.daemon, move |db| {
                 let row = db
-                    .join_project(id, project.into(), parent.into())
+                    .join_orchestrator(id, project.into(), parent.into())
                     .map_err(|error| store_error(&error))?;
                 crate::threads::prompted(db, id)?;
                 Ok(row)
@@ -1300,9 +1301,9 @@ impl Actor {
             .await?
             .fields;
             self.project = project;
-            // Its next process runs as a child, with the Project's mode and tools.
+            // Its next process runs as a child, with the orchestrator's mode and tools.
             self.release();
-            info!(run = %self.id, %project, "a thread joined a Project");
+            info!(run = %self.id, %project, "a thread joined an orchestrator");
         }
         self.snapshot()
     }
@@ -1330,7 +1331,7 @@ impl Actor {
         }
         // Stop means stop: a child finishing a moment later doesn't start its parent again before
         // the user writes.
-        if self.is_coordinator() || self.has_children().await {
+        if self.is_orchestrator() || self.has_children().await {
             self.pause_wakes(false).await;
         }
     }
@@ -1359,7 +1360,7 @@ impl Actor {
         if busy && let Some(live) = &self.live {
             live.run.cancel();
         }
-        if self.is_coordinator() || self.has_children().await {
+        if self.is_orchestrator() || self.has_children().await {
             self.pause_wakes(false).await;
         }
     }
@@ -1379,18 +1380,18 @@ impl Actor {
 
     /// Sends what is waiting as the run's next turn, through the same resume as `agent/send`
     /// (PLX-42, PLX-380). Pauses wake-ups at the cap, or when this fails, keeping what is
-    /// waiting. Only a project's current coordinator wakes: a replaced one drops them, so a
-    /// project never has two live (0024). `project/start` caught the new one up on them, start
+    /// waiting. Only a project's current orchestrator wakes: a replaced one drops them, so a
+    /// project never has two live (0024). `orchestrator/start` caught the new one up on them, start
     /// lines aside, and `wake::send` sends later ones to it (PLX-936).
     async fn wake(&mut self) {
         // A shared thread's wake-up waits in line for a slot, and [`Self::slotted`] sends it.
         if !self.slot_ready().await {
             return;
         }
-        if self.is_coordinator() {
+        if self.is_orchestrator() {
             let project = self.project.into();
             let current = store(&self.daemon, move |db| {
-                super::coordinator::coordinator_of(db, project)
+                super::orchestrator::orchestrator_of(db, project)
             })
             .await;
             match current {
@@ -1400,21 +1401,21 @@ impl Actor {
                     return;
                 }
                 Err(error) => {
-                    warn!(run = %self.id, error = %error.message, "could not check a coordinator before waking it");
+                    warn!(run = %self.id, error = %error.message, "could not check an orchestrator before waking it");
                     self.pause_wakes(true).await;
                     return;
                 }
             }
         }
-        // A coordinator's wake-up carries its children's memory proposals (0044).
-        let proposals = if self.is_coordinator() {
+        // An orchestrator's wake-up carries its children's memory proposals (0044).
+        let proposals = if self.is_orchestrator() {
             super::wake::proposals(&self.daemon, self.project).await
         } else {
             Vec::new()
         };
         let (paths, mut lines): (Vec<String>, Vec<String>) = proposals.into_iter().unzip();
         // And, while its memory index is over the cap, a request to merge entries (0044).
-        if self.is_coordinator()
+        if self.is_orchestrator()
             && crate::context::memory::start(&self.daemon, self.project)
                 .await
                 .is_ok_and(|start| start.over)
@@ -1451,7 +1452,7 @@ impl Actor {
     }
 
     /// Stops waking the run until the user writes, and says so once (PLX-42). A pause plxd makes
-    /// on its own, `notify`, also adds a `needsYou` item to a coordinator's Project's inbox
+    /// on its own, `notify`, also adds a `needsYou` item to an orchestrator's inbox
     /// (PLX-401); the user's own Stop doesn't.
     async fn pause_wakes(&mut self, notify: bool) {
         if self.wakes.pause() {
@@ -1473,7 +1474,7 @@ impl Actor {
             if let Err(error) = saved {
                 warn!(run = %self.id, error = %error.message, "could not store a run's wake-ups");
             }
-            if notify && self.is_coordinator() {
+            if notify && self.is_orchestrator() {
                 self.inbox(InboxKind::NeedsYou, WAKEUPS_PAUSED.to_owned())
                     .await;
             }
@@ -1510,13 +1511,12 @@ impl Actor {
         }
     }
 
-    /// `thread/delete` and `project/delete`: cancels a running CLI and waits for it to exit and
-    /// its changes to be committed, then deletes the run's rows, events, worktree, and a thread's
-    /// scratch folders ([`crate::threads::purge`]), and drops this actor from the map, which then
-    /// stops. Running
-    /// here, between commands, it never races a resume or an accept. A push or Open PR, which
-    /// works in the run's folder, makes it wait for the effect to finish with `wait`, and
-    /// otherwise refuses it (`gitRefused`).
+    /// `thread/delete` and `orchestrator/delete`: cancels a running CLI and waits for it to exit
+    /// and its changes to be committed, then deletes the run's rows, events, worktree, and a
+    /// thread's scratch folders ([`crate::threads::purge`]), and drops this actor from the map,
+    /// which then stops. Running here, between commands, it never races a resume or an accept. A
+    /// push or Open PR, which works in the run's folder, makes it wait for the effect to finish
+    /// with `wait`, and otherwise refuses it (`gitRefused`).
     async fn delete(&mut self, wait: bool, command_id: Option<Uuid>) -> Result<(), ErrorObject> {
         if wait && let Some(effect) = &mut self.effect {
             let finished = effect.await;
@@ -1534,7 +1534,7 @@ impl Actor {
         self.flush().await;
         // The thread's lane (0059) holds off a concurrent create/actor_for retry for this run id
         // while its rows are deleted and this actor is dropped (#110).
-        let lane = self.daemon.orchestrator.lane(self.id).await;
+        let lane = self.daemon.dispatcher.lane(self.id).await;
         crate::threads::purge(
             &self.daemon,
             &lane,
@@ -2060,9 +2060,9 @@ impl Actor {
             return Err(ErrorObject::invalid_params("text must not be empty"));
         }
         self.check_compact(&queued)?;
-        // A run in a Project runs in its mode, so a message can't change it (0042).
+        // A run in an orchestrator runs in its mode, so a message can't change it (0042).
         if queued.options.permission.is_some()
-            && super::project_mode(&self.daemon, self.project)
+            && super::orchestrator_mode(&self.daemon, self.project)
                 .await?
                 .is_some()
         {
@@ -2246,7 +2246,7 @@ impl Actor {
         ))
     }
 
-    /// Hands `queued` to the live CLI as its next turn. An idle coordinator's worktree moves to
+    /// Hands `queued` to the live CLI as its next turn. An idle orchestrator's worktree moves to
     /// the integration branch's tip first, as a new process's does (0042).
     async fn hand_over(
         &mut self,
@@ -2255,10 +2255,10 @@ impl Actor {
         // A turn a shared thread can't start takes no checkpoint (0063).
         self.admit_shared().await?;
         self.checkpoint_before_turn().await;
-        if self.is_coordinator() && !self.busy() {
+        if self.is_orchestrator() && !self.busy() {
             let project = super::integration(&self.daemon, self.project).await?;
             if let Some(project) = project {
-                self.coordinator_setup(Path::new(&project.repo_path))
+                self.orchestrator_setup(Path::new(&project.repo_path))
                     .await
                     .map_err(|why| ErrorObject::parallax(ErrorKind::WorktreeFailed, why))?;
             }
@@ -2270,7 +2270,7 @@ impl Actor {
         // run keeps once the CLI has the message.
         let mut changes = self.changes(queued.options.clone());
         if changes != RunOptions::default() {
-            changes = self.in_project_mode(changes).await.unwrap_or_default();
+            changes = self.in_orchestrator_mode(changes).await.unwrap_or_default();
         }
         follow_up.model.clone_from(&changes.model);
         follow_up.permission = changes.permission;
@@ -2326,12 +2326,12 @@ impl Actor {
             || self.moves(queued.account.as_ref())
     }
 
-    /// Whether `queued` changes what the run's CLI runs with in a way only a new process takes,
-    /// so it waits for the CLI to exit. A backend with [`Capabilities::switch_in_session`] takes
-    /// a new model or mode on its next turn instead (PLX-727), but not on a `/compact`, which is
-    /// no turn of its own there, and not a new mode on a thread without approvals, whose
-    /// Parallax tools depend on the mode its CLI started in. In a Project, the new mode is the
-    /// Project's as it is now ([`Actor::in_project_mode`]).
+    /// Whether `queued` changes what the run's CLI runs with in a way only a new process takes, so
+    /// it waits for the CLI to exit. A backend with [`Capabilities::switch_in_session`] takes a new
+    /// model or mode on its next turn instead (PLX-727), but not on a `/compact`, which is no turn
+    /// of its own there, and not a new mode on a thread without approvals, whose Parallax tools
+    /// depend on the mode its CLI started in. In an orchestrator, the new mode is the
+    /// orchestrator's as it is now ([`Actor::in_orchestrator_mode`]).
     ///
     /// [`Capabilities::switch_in_session`]: crate::backend::Capabilities::switch_in_session
     async fn restarting(&self, queued: &Queued) -> bool {
@@ -2342,7 +2342,7 @@ impl Actor {
         if changes == RunOptions::default() {
             return false;
         }
-        let Some(changes) = self.in_project_mode(changes).await else {
+        let Some(changes) = self.in_orchestrator_mode(changes).await else {
             return true;
         };
         let others = RunOptions {
@@ -2361,11 +2361,15 @@ impl Actor {
                 .is_some_and(|(_, backend)| backend.capabilities().switch_in_session)
     }
 
-    /// `changes`, with a run in a Project taking the Project's mode as it is now, which
-    /// `project/update` may have changed since the run's CLI started, as [`Actor::store_options`]
-    /// stores it. `None` when that mode can't be read or mapped, so a new process reports why.
-    async fn in_project_mode(&self, mut changes: RunOptions) -> Option<RunOptions> {
-        if let Some(mode) = super::project_mode(&self.daemon, self.project).await.ok()? {
+    /// `changes`, with a run in an orchestrator taking the orchestrator's mode as it is now, which
+    /// `orchestrator/update` may have changed since the run's CLI started, as
+    /// [`Actor::store_options`] stores it. `None` when that mode can't be read or mapped, so a new
+    /// process reports why.
+    async fn in_orchestrator_mode(&self, mut changes: RunOptions) -> Option<RunOptions> {
+        if let Some(mode) = super::orchestrator_mode(&self.daemon, self.project)
+            .await
+            .ok()?
+        {
             let (_, backend) = self
                 .daemon
                 .agents
@@ -2822,28 +2826,28 @@ impl Actor {
 
     /// What [`Self::resume`]'s new CLI starts with on `account`, which `moving` moves the run to,
     /// and the repository path, with `permission` the one the message changes to. The third
-    /// value is why a coordinator's session ends here, so its next one starts from the packet
-    /// instead of failing (0079). A replaced coordinator stays stopped: a project has one live
-    /// coordinator (0024).
+    /// value is why an orchestrator's session ends here, so its next one starts from the packet
+    /// instead of failing (0079). A replaced orchestrator stays stopped: a project has one live
+    /// orchestrator (0024).
     async fn prepare_resume(
         &self,
         account: AccountChoice,
         moving: bool,
         permission: Option<AgentPermission>,
-    ) -> Result<(Prepared, String, Option<CoordinatorSessionEnd>), ErrorObject> {
-        let role = if self.is_coordinator() {
+    ) -> Result<(Prepared, String, Option<OrchestratorSessionEnd>), ErrorObject> {
+        let role = if self.is_orchestrator() {
             let project = self.project;
             let current = store(&self.daemon, move |db| {
-                super::coordinator::coordinator_of(db, project.into())
+                super::orchestrator::orchestrator_of(db, project.into())
             })
             .await?;
             if let Some(current) = current.filter(|current| *current != self.id) {
                 return Err(not_resumable(
                     self.id,
-                    &format!("project {project}'s coordinator is now run {current}"),
+                    &format!("orchestrator {project}'s run is now {current}"),
                 ));
             }
-            Role::Coordinator
+            Role::Orchestrator
         } else {
             Role::Worker
         };
@@ -2866,7 +2870,7 @@ impl Actor {
                         .parallax_data()
                         .is_some_and(|data| data.kind == ErrorKind::AccountNotFound) =>
             {
-                if role != Role::Coordinator {
+                if role != Role::Orchestrator {
                     return Err(not_resumable(
                         self.id,
                         &format!(
@@ -2876,15 +2880,15 @@ impl Actor {
                     ));
                 }
                 // Its session went with its account: the role's default takes over.
-                epoch_end = Some(CoordinatorSessionEnd::NotResumable);
+                epoch_end = Some(OrchestratorSessionEnd::NotResumable);
                 prepare(&self.daemon, self.project, self.id, None, role, full).await?
             }
             Err(error) => return Err(error),
         };
         let backend = prepared.resolved.backend().name();
         let from = &self.row.fields.backend;
-        if backend != from && role == Role::Coordinator {
-            epoch_end = Some(CoordinatorSessionEnd::BackendChange);
+        if backend != from && role == Role::Orchestrator {
+            epoch_end = Some(OrchestratorSessionEnd::BackendChange);
         } else if backend != from && !moving {
             return Err(not_resumable(
                 self.id,
@@ -2944,15 +2948,15 @@ impl Actor {
 
     /// Stores `changes` to the run's options, checked against `backend`. When `backend` isn't the
     /// run's, moves the run to it, where another vendor's model can't carry over but the other
-    /// options can if `backend` maps them, and returns the run's fields from before the move. A
-    /// run in a Project takes the Project's mode as it is now, which `project/update` may have
-    /// changed since the run's last process (0042).
+    /// options can if `backend` maps them, and returns the run's fields from before the move. A run
+    /// in an orchestrator takes the orchestrator's mode as it is now, which `orchestrator/update`
+    /// may have changed since the run's last process (0042).
     async fn store_options(
         &mut self,
         backend: &dyn Backend,
         mut changes: RunOptions,
     ) -> Result<Option<parallax_store::RunFields>, ErrorObject> {
-        if let Some(mode) = super::project_mode(&self.daemon, self.project).await? {
+        if let Some(mode) = super::orchestrator_mode(&self.daemon, self.project).await? {
             let permission = super::in_mode(backend, mode)?;
             changes.permission =
                 Some(permission).filter(|&p| option_name(p) != self.row.fields.permission);
@@ -3057,14 +3061,14 @@ impl Actor {
             let prompt = Self::first_message(&text, &prepared.place)?;
             return Ok((prompt, None, None));
         }
-        let coordinator = self.is_coordinator();
+        let orchestrator = self.is_orchestrator();
         if let Some(session_id) = session_id {
             info!(run = %self.id, "resuming an agent run's session");
             // ponytail: every Codex resume reads the run's whole log for a fallback it rarely
             // uses; build it only after `thread/resume` fails if long threads make this slow.
-            // The fallback never fails a resume that would succeed without it. A coordinator's
+            // The fallback never fails a resume that would succeed without it. An orchestrator's
             // is its packet, on every backend (0079).
-            let fallback = if coordinator {
+            let fallback = if orchestrator {
                 Some(self.packet(&text).await)
             } else if prepared.resolved.backend().resume_fallback() {
                 match self.handoff_prompt(&from, &text, &prepared.place).await {
@@ -3100,7 +3104,7 @@ impl Actor {
         }
         let to = prepared.resolved.backend().name();
         info!(run = %self.id, from, to, "starting a new session for an agent run");
-        if coordinator {
+        if orchestrator {
             return Ok((self.packet(&text).await, None, None));
         }
         let prompt = self.handoff_prompt(&from, &text, &prepared.place).await?;
@@ -3215,11 +3219,11 @@ impl Actor {
     }
 
     /// `message` as a new session's first message: after what a worker's first message says
-    /// about where it is and what it may do. A coordinator's instructions go in its system
+    /// about where it is and what it may do. An orchestrator's instructions go in its system
     /// prompt instead (0078).
     fn first_message(message: &str, place: &Place) -> Result<String, ErrorObject> {
         match place {
-            Place::Coordinator { .. } => Ok(message.to_owned()),
+            Place::Orchestrator { .. } => Ok(message.to_owned()),
             Place::Worker { .. } => super::first_prompt(message, place),
         }
     }
@@ -3401,7 +3405,7 @@ impl Actor {
                 context,
                 ..
             } => self.worker_setup(&home, &data_dir, &context, paths).await,
-            Place::Coordinator { repo } => self.coordinator_setup(&repo).await,
+            Place::Orchestrator { repo } => self.orchestrator_setup(&repo).await,
         };
         let Setup {
             cwd,
@@ -3437,7 +3441,7 @@ impl Actor {
             permission: self.row.fields.permission.as_deref().and_then(option_value),
             context_window: self.row.fields.context_window,
             fast: self.row.fields.fast,
-            coordinator_tools: tools,
+            orchestrator_tools: tools,
             thread_tools,
             approvals: self.row.fields.approvals,
             thread,
@@ -3483,9 +3487,9 @@ impl Actor {
         let (temp, temp_path) = self.run_temp().map_err(|error| error.message)?;
         let mut sandbox =
             WorkerSandbox::for_worktree(home, data_dir, &cwd, &git_common_dir, context, &temp_path);
-        // A thread, a Project's child or a plain one, reaches memory only through the tools, so
-        // the shared context folder isn't an allowed directory for it, and stays as unreadable as
-        // the rest of plxd's data folder in the sandbox (0044, PLX-468).
+        // A thread, an orchestrator's child or a plain one, reaches memory only through the tools,
+        // so the shared context folder isn't an allowed directory for it, and stays as unreadable
+        // as the rest of plxd's data folder in the sandbox (0044, PLX-468).
         sandbox.writable.clear();
         // A thread in a Space, started there or added to it, gets its instructions and files,
         // read as they are now (0090).
@@ -3511,11 +3515,11 @@ impl Actor {
         })
     }
 
-    /// A coordinator runs in its detached worktree, moved to the integration branch's tip first,
+    /// An orchestrator runs in its detached worktree, moved to the integration branch's tip first,
     /// and cut with the branch if either is missing (0042, 0045), with a thread's Parallax tools
-    /// bound to its own run (0041, PLX-380), and its instructions with the Project's autonomy as
-    /// it is now, pinned to this CLI's system prompt (0078).
-    async fn coordinator_setup(&mut self, repo: &Path) -> Result<Setup, String> {
+    /// bound to its own run (0041, PLX-380), and its instructions with the orchestrator's autonomy
+    /// as it is now, pinned to this CLI's system prompt (0078).
+    async fn orchestrator_setup(&mut self, repo: &Path) -> Result<Setup, String> {
         let project = self.project.into();
         let autonomy = store(&self.daemon, move |db| {
             crate::methods::question::autonomy_of(db, project)
@@ -3526,14 +3530,14 @@ impl Actor {
             .await
             .map_err(|error| error.message)?
             .and_then(|row| row.integration_branch)
-            .ok_or_else(|| "the coordinator's Project has no integration branch".to_owned())?;
+            .ok_or_else(|| "the orchestrator has no integration branch".to_owned())?;
         let cwd = self
             .daemon
             .agents
             .worktrees
-            .refresh_coordinator(repo, self.project, &branch)
+            .refresh_orchestrator(repo, self.project, &branch)
             .await
-            .map_err(|error| format!("could not prepare the coordinator's worktree: {error}"))?;
+            .map_err(|error| format!("could not prepare the orchestrator's worktree: {error}"))?;
         Ok(Setup {
             cwd,
             sandbox: None,
@@ -3541,7 +3545,7 @@ impl Actor {
             tools: Some(self.thread_tools()?),
             thread_tools: None,
             thread: false,
-            instructions: Some(super::coordinator::instructions(
+            instructions: Some(super::orchestrator::instructions(
                 &repo.to_string_lossy(),
                 autonomy,
             )),
@@ -3703,7 +3707,7 @@ impl Actor {
         *images = self.images.remove(turn_id).unwrap_or_default();
         *threads = self.attached.remove(turn_id).unwrap_or_default();
         if let Some(turn_id) = turn_id {
-            // A coordinator's wake-up or a usage limit's resume: plxd's own turn.
+            // An orchestrator's wake-up or a usage limit's resume: plxd's own turn.
             *wake = self.wakes.was_sent(*turn_id) || self.resumes.was_sent(*turn_id);
             *from = self.senders.remove(turn_id);
             *text = self
@@ -3791,7 +3795,7 @@ impl Actor {
                     self.wake_session().await;
                 }
                 if matches!(event, Event::ContextCompaction { done: true }) {
-                    self.compacted = self.is_coordinator();
+                    self.compacted = self.is_orchestrator();
                 }
                 self.track_work(&event);
                 if self.track_turns(&event).await {
@@ -4008,9 +4012,9 @@ impl Actor {
     }
 
     /// Records how a CLI process ended. Unless plxd stopped it, commits a worker's changes first,
-    /// through #166's hardened commit, and reports the commit. A Project's child then writes its
-    /// history (0044). Last it wakes the run's parent unless
-    /// it was launched with `notify: false` (PLX-380).
+    /// through #166's hardened commit, and reports the commit. An orchestrator's child then writes
+    /// its history (0044). Last it wakes the run's parent unless it was launched with `notify:
+    /// false` (PLX-380).
     async fn finish(&mut self, outcome: &Outcome) {
         self.shared_slot = None;
         self.flush().await;
@@ -4021,8 +4025,8 @@ impl Actor {
             return;
         }
         let (mut outcome, mut status, mut error) = convert::outcome(outcome);
-        // A coordinator's worktree and a thread's checkout are never committed.
-        let committed = if self.is_coordinator() || self.row.fields.checkout {
+        // An orchestrator's worktree and a thread's checkout are never committed.
+        let committed = if self.is_orchestrator() || self.row.fields.checkout {
             Ok(None)
         } else {
             self.commit(&commit_message(&self.last_message, self.id))
@@ -4069,8 +4073,8 @@ impl Actor {
         {
             wake::child_ended(&self.daemon, parent, &run, &outcome, self.row.updated_at);
         }
-        // A child sent back from landing goes back in its Project's queue once a turn completes
-        // (PLX-410).
+        // A child sent back from landing goes back in its orchestrator's queue once a turn
+        // completes (PLX-410).
         if self.worktree.is_some() && matches!(outcome, AgentOutcome::Completed { .. }) {
             crate::methods::land::turn_ended(&self.daemon, self.id);
         }
@@ -4079,9 +4083,9 @@ impl Actor {
     }
 
     /// Before a new turn: the checkpoint it starts from is captured, once the last turn's is
-    /// (0062). A coordinator has none.
+    /// (0062). An orchestrator has none.
     async fn checkpoint_before_turn(&mut self) {
-        if self.is_coordinator() {
+        if self.is_orchestrator() {
             return;
         }
         self.flush().await;
@@ -4528,7 +4532,7 @@ mod tests {
 
     use parallax_protocol::{
         AgentBackgroundKind, AgentBackgroundTask, AgentOutcome, AgentOutputItem, AgentPermission,
-        ParallaxEvent, ProjectId, RunId, TurnId,
+        ParallaxEvent, RunId, ScopeId, TurnId,
     };
     use parallax_store::{Run as RunRow, RunFields, RunState, Worktree};
     use tokio::sync::{mpsc, oneshot};
@@ -4536,7 +4540,7 @@ mod tests {
 
     use super::{Actor, Command, Live};
 
-    use crate::agents::tests::{project_fields, run_fields};
+    use crate::agents::tests::{orchestrator_fields, run_fields};
     use crate::backend::{AnswerError, Event, EventSink, FollowUp, Run, SendError};
     use crate::server::Daemon;
 
@@ -4563,7 +4567,7 @@ mod tests {
             id,
             fields: RunFields {
                 prompt: "flood".to_owned(),
-                ..run_fields(ProjectId::generate().into())
+                ..run_fields(ScopeId::generate().into())
             },
             state: RunState {
                 status: "running".to_owned(),
@@ -4705,7 +4709,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let daemon = Daemon::for_tests(dir.path(), 100, Duration::from_secs(90));
         let (row, worktree) = fake_row_and_worktree();
-        // A thread's: in no Project, so no Project's mode wins.
+        // A thread's: in no orchestrator, so no orchestrator's mode wins.
         let stored = row.clone();
         crate::agents::store(&daemon, move |db| {
             db.create_run(stored.id, &stored.fields, &stored.state)
@@ -4880,7 +4884,7 @@ mod tests {
         );
 
         crate::agents::store(&daemon, move |db| {
-            db.create_project(row.fields.project_id, &project_fields())
+            db.create_orchestrator(row.fields.project_id, &orchestrator_fields())
                 .unwrap();
             db.create_run(row.id, &row.fields, &row.state).unwrap();
             Ok(())

@@ -90,7 +90,7 @@ pub struct Config {
     /// after a restart reloads the table too.
     pub event_retention_bytes: usize,
     /// How many of the newest host and project events (not tied to a run, such as
-    /// `project.created` and `context.changed`) the stored event log keeps; older ones are
+    /// `orchestrator.created` and `context.changed`) the stored event log keeps; older ones are
     /// pruned (#187). An agent run's events are never pruned this way: they stay as long as the
     /// run's own row does, and nothing removes a run's row yet. 10,000 by default, the same
     /// figure as `event_retention`.
@@ -150,10 +150,10 @@ pub struct Config {
     /// The Clerk instance whose tokens account sign-in takes (0091). From `PLXD_CLERK_*` when set,
     /// else the desktop app's.
     pub clerk: crate::clerk::Config,
-    /// Whether `project/update` takes `computer` and plxd advertises `projectComputer` (0057).
-    /// Off until a Project's child can start, be followed, and land on another computer; tests
-    /// turn it on.
-    pub project_computer: bool,
+    /// Whether `orchestrator/update` takes `computer` and plxd advertises `orchestratorComputer`
+    /// (0057). Off until an orchestrator's child can start, be followed, and land on another
+    /// computer; tests turn it on.
+    pub orchestrator_computer: bool,
     /// The largest bundle `bundle/prepare` and `bundle/begin` take (0057). 64 MiB by default;
     /// tests shrink it.
     pub max_bundle_bytes: u64,
@@ -203,7 +203,7 @@ impl Config {
             keys: None,
             relay_url: crate::relay::url(),
             clerk: crate::clerk::Config::from_env(),
-            project_computer: false,
+            orchestrator_computer: false,
             max_bundle_bytes: crate::methods::bundle::MAX_BYTES,
             you_sync_interval: Duration::from_secs(60),
             you_sync_port: None,
@@ -318,7 +318,7 @@ pub(crate) struct Daemon {
     /// Detached listed-method tasks and in-memory command-id waiters (0052).
     pub commands: crate::commands::Commands,
     /// Thread lanes and the effect worker's wake-up (0059).
-    pub orchestrator: crate::orchestrator::Orchestrator,
+    pub dispatcher: crate::dispatcher::Dispatcher,
     /// Cursor account login through the SDK sidecar (0053).
     pub cursor: crate::backend::cursor_sdk::CursorAuth,
     /// Parallax Connect's tailnet and listener state (0056).
@@ -347,8 +347,8 @@ pub(crate) struct Daemon {
     pub self_update: crate::self_update::SelfUpdate,
     /// `request_secret`'s requests and its refs' expiry timer (0063).
     pub secrets: crate::secrets::Secrets,
-    /// [`Config::project_computer`].
-    pub project_computer: bool,
+    /// [`Config::orchestrator_computer`].
+    pub orchestrator_computer: bool,
     /// The bundle files `bundle/*` holds (0057).
     pub bundles: crate::methods::bundle::Bundles,
     /// Held while plxd records or applies You memory's versions (0082).
@@ -504,7 +504,7 @@ impl Server {
             devices: crate::devices::Devices::new(launcher.clone()),
             providers,
             commands: crate::commands::Commands::new(),
-            orchestrator: crate::orchestrator::Orchestrator::default(),
+            dispatcher: crate::dispatcher::Dispatcher::default(),
             connect: tailnet::Connect::new(tailnet, config.connect_port, config.connect_address),
             terminals: crate::terminals::Terminals::default(),
             setup_holds: crate::setup_scripts::Holds::default(),
@@ -521,7 +521,7 @@ impl Server {
             merged: tokio::sync::Notify::new(),
             self_update: crate::self_update::SelfUpdate::new(launcher.clone()),
             secrets: crate::secrets::Secrets::default(),
-            project_computer: config.project_computer,
+            orchestrator_computer: config.orchestrator_computer,
             bundles: crate::methods::bundle::Bundles::new(
                 data_dir.temp_dir().join("bundles"),
                 config.max_bundle_bytes,
@@ -608,7 +608,7 @@ impl Server {
         if daemon.store.state() != parallax_protocol::StoreState::Unavailable
             && let Err(error) = async {
                 crate::commands::purge_incomplete(&daemon).await?;
-                crate::orchestrator::recover(&daemon).await
+                crate::dispatcher::recover(&daemon).await
             }
             .await
         {
@@ -625,7 +625,7 @@ impl Server {
         remote::access::restore(&daemon).await;
         let stop = &shutdown.graceful;
         // Before what waits is sent: a turn waits for its thread's checkpoint captures (0062).
-        let mut background = vec![tokio::spawn(crate::orchestrator::work(
+        let mut background = vec![tokio::spawn(crate::dispatcher::work(
             Arc::clone(&daemon),
             stop.clone(),
         ))];
@@ -900,7 +900,7 @@ impl Daemon {
             agents: Agents::new(backends, worktrees),
             providers,
             commands: crate::commands::Commands::new(),
-            orchestrator: crate::orchestrator::Orchestrator::default(),
+            dispatcher: crate::dispatcher::Dispatcher::default(),
             previews: crate::preview::Previews::new(launcher.clone()),
             devices: crate::devices::Devices::new(launcher.clone()),
             cursor: crate::backend::cursor_sdk::CursorAuth::new(launcher.clone()),
@@ -919,7 +919,7 @@ impl Daemon {
             merged: tokio::sync::Notify::new(),
             self_update: crate::self_update::SelfUpdate::new(launcher),
             secrets: crate::secrets::Secrets::default(),
-            project_computer: false,
+            orchestrator_computer: false,
             bundles: crate::methods::bundle::Bundles::new(
                 DataDir::new(dir).unwrap().temp_dir().join("bundles"),
                 crate::methods::bundle::MAX_BYTES,

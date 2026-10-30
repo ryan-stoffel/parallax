@@ -11,6 +11,7 @@ use std::time::{Duration, SystemTime};
 
 use parallax_protocol::framing::MAX_FRAME_BYTES;
 use parallax_protocol::jsonrpc::{ErrorObject, Request};
+use parallax_protocol::legacy;
 use parallax_protocol::{
     Capabilities, ClientInfo, DEVICE_ICONS, HostFolder, HostFoldersParams, HostFoldersResult,
     HostHealthParams, HostHealthResult, HostQueues, HostReadUploadParams, HostReadUploadResult,
@@ -39,6 +40,9 @@ pub(crate) struct Session {
     /// The client declared `resyncNotice`: a subscription that falls behind ends with
     /// `events/resync` instead of closing the connection (PLX-455).
     pub resync_notice: bool,
+    /// The client didn't declare [`legacy::CLIENT_CAPABILITY`]: an app or phone from before 0093,
+    /// which gets the old names.
+    pub legacy: bool,
 }
 
 /// `initialize`: agrees on a protocol version, or fails with `incompatibleProtocol`.
@@ -76,13 +80,14 @@ pub(crate) fn initialize(
         protocol: version,
         plxd: crate::version().to_owned(),
         log_id: daemon.log.id(),
-        capabilities: capabilities_advertised(daemon.project_computer),
+        capabilities: capabilities_advertised(daemon.orchestrator_computer),
         max_frame_bytes: u64::try_from(MAX_FRAME_BYTES).unwrap_or(u64::MAX),
     };
     let session = Session {
         protocol: version,
         client,
         resync_notice: capabilities.0.contains_key("resyncNotice"),
+        legacy: !capabilities.0.contains_key(legacy::CLIENT_CAPABILITY),
     };
     Ok((session, result))
 }
@@ -92,76 +97,68 @@ pub(crate) fn initialize(
 /// independently; M3 adds `agents` (#156): the `agent/*` methods and `agent.*` events,
 /// `agentReview` (#157): `agent/diff`, `agent/file`, `agent/accept`, `agent/requestChanges`, and
 /// `agent.accepted`, so an editor can tell a host that reviews runs from one that only runs them,
-/// `threads` (#110): normal threads, with the `thread/*` and `repo/*` methods and the `repo.*`
-/// and `thread.*` events, `runOptions` (PLX-97): `agent/start` and `thread/start` take
-/// `model`, `effort`, and `permission`, which an older plxd would silently ignore (0007), and
-/// `sendOptions` (PLX-161): `agent/send` takes `effort` and `permission`, likewise, and its
-/// successor `sendModel` (PLX-163): `agent/send` also takes `model`, which a `sendOptions`-only
-/// plxd would silently ignore, and `sendAccount`: `agent/send` also takes `account`, which can move
-/// a run to another backend, a message changing the model, effort, permission, or account waits
-/// for a running CLI to exit instead of failing, and `agent.updated` reports the run's `backend`.
-/// M4 adds `coordinator` (PLX-41, 0024): `project/start` and
-/// `Project.coordinator`, and `openPr` (PLX-168): `agent/openPr`. `promptImages` (PLX-191, 0026):
-/// `agent/start`, `agent/send`, `thread/start`, and `project/start` take `images`, which an
-/// older plxd would silently drop, `turnStarted` lists them, and `agent/image` serves them. Its
-/// options are the caps: `maxImages`, and `maxImageBytes` and `maxTotalBytes` of base64 `data`.
-/// `approvals` (PLX-222, 0031): `agent/start`, `thread/start`, and `project/start` take
-/// `approvals`, which an older plxd would silently ignore. A run started with it, in Manual,
-/// Auto, or Plan, and a thread in Accept Edits too (0034), asks through `approvalRequested`
-/// items, which `agent/approve` answers, instead of denying what would prompt.
-/// `projectEdit` (PLX-227, 0032): `project/update`, `project.updated`, and `icon` on `Project`
-/// and `project/create`, which an older plxd would silently drop.
-/// `iconImages` (PLX-339, 0038): `image` on a project's or repo entry's `icon`, which an older
-/// plxd would silently drop. Its option `maxBytes` is the cap on the image's base64 `data`.
-/// `projectDelete` (PLX-338): `project/delete` and `project.deleted`.
-/// `projectPermission` (PLX-394, 0042): a project's `permission`, Auto or Bypass, on `Project`,
-/// `project/create`, and `project/update`, which an older plxd would silently drop. Every run in
-/// the project, its coordinator included, runs in it.
-/// `projectAutonomy` (PLX-403, 0043): a project's `autonomy`, Ask me, Routine, or Full, on
-/// `Project`, `project/create`, and `project/update`, which an older plxd would silently drop. In
-/// Ask me plxd refuses the coordinator's `answer` and sends every question to Needs you.
-/// `integrationBranch` (PLX-409, 0045): `baseBranch` and `integrationBranch` on `Project`,
-/// `baseBranch` on `project/create` and `project/update`, and `explore` on `agent/start` and
-/// `AgentRun`, which an older plxd would silently drop. A run in a Project is cut from its
-/// integration branch's tip.
-/// `projectPlacement` (PLX-413, 0046): `maxChildren` and `allowApiKeys` on `Project` and
-/// `project/update`, and `reserve` on a provider instance, which an older plxd would silently
-/// drop. A Project's child is placed on an instance with room, or waits as `waiting` until one
-/// frees up.
-/// `projectTasks` (PLX-398, 0042): `thread/start` takes `project`, to start a Project's child
-/// under its coordinator, which an older plxd would silently ignore, starting a scratch thread.
-/// `projectFromThreads` (PLX-419, 0042): `project/fromThreads`, which makes a Project from
-/// threads on one repo entry, each with its own worktree.
-/// `pins` (PLX-789): `pinned` on `Thread` and `thread/update`, and `snippets` on
-/// `thread/search`, which an older plxd would silently drop.
+/// `threads` (#110): normal threads, with the `thread/*` and `repo/*` methods and the `repo.*` and
+/// `thread.*` events, `runOptions` (PLX-97): `agent/start` and `thread/start` take `model`,
+/// `effort`, and `permission`, which an older plxd would silently ignore (0007), and `sendOptions`
+/// (PLX-161): `agent/send` takes `effort` and `permission`, likewise, and its successor `sendModel`
+/// (PLX-163): `agent/send` also takes `model`, which a `sendOptions`-only plxd would silently
+/// ignore, and `sendAccount`: `agent/send` also takes `account`, which can move a run to another
+/// backend, a message changing the model, effort, permission, or account waits for a running CLI to
+/// exit instead of failing, and `agent.updated` reports the run's `backend`. M4 adds `orchestrator`
+/// (PLX-41, 0024): `orchestrator/start` and `Orchestrator.orchestrator`, and `openPr` (PLX-168):
+/// `agent/openPr`. `promptImages` (PLX-191, 0026): `agent/start`, `agent/send`, `thread/start`, and
+/// `orchestrator/start` take `images`, which an older plxd would silently drop, `turnStarted` lists
+/// them, and `agent/image` serves them. Its options are the caps: `maxImages`, and `maxImageBytes`
+/// and `maxTotalBytes` of base64 `data`. `approvals` (PLX-222, 0031): `agent/start`,
+/// `thread/start`, and `orchestrator/start` take `approvals`, which an older plxd would silently
+/// ignore. A run started with it, in Manual, Auto, or Plan, and a thread in Accept Edits too
+/// (0034), asks through `approvalRequested` items, which `agent/approve` answers, instead of
+/// denying what would prompt. `orchestratorEdit` (PLX-227, 0032): `orchestrator/update`,
+/// `orchestrator.updated`, and `icon` on `Orchestrator` and `orchestrator/create`, which an older
+/// plxd would silently drop. `iconImages` (PLX-339, 0038): `image` on a project's or repo entry's
+/// `icon`, which an older plxd would silently drop. Its option `maxBytes` is the cap on the image's
+/// base64 `data`. `orchestratorDelete` (PLX-338): `orchestrator/delete` and `orchestrator.deleted`.
+/// `orchestratorPermission` (PLX-394, 0042): a project's `permission`, Auto or Bypass, on
+/// `Orchestrator`, `orchestrator/create`, and `orchestrator/update`, which an older plxd would
+/// silently drop. Every run in the project, its orchestrator included, runs in it.
+/// `orchestratorAutonomy` (PLX-403, 0043): a project's `autonomy`, Ask me, Routine, or Full, on
+/// `Orchestrator`, `orchestrator/create`, and `orchestrator/update`, which an older plxd would
+/// silently drop. In Ask me plxd refuses the orchestrator's `answer` and sends every question to
+/// Needs you. `integrationBranch` (PLX-409, 0045): `baseBranch` and `integrationBranch` on
+/// `Orchestrator`, `baseBranch` on `orchestrator/create` and `orchestrator/update`, and `explore`
+/// on `agent/start` and `AgentRun`, which an older plxd would silently drop. A run in an
+/// orchestrator is cut from its integration branch's tip. `orchestratorPlacement` (PLX-413, 0046):
+/// `maxChildren` and `allowApiKeys` on `Orchestrator` and `orchestrator/update`, and `reserve` on a
+/// provider instance, which an older plxd would silently drop. An orchestrator's child is placed on
+/// an instance with room, or waits as `waiting` until one frees up. `orchestratorTasks` (PLX-398,
+/// 0042): `thread/start` takes `project`, to start an orchestrator's child under its orchestrator,
+/// which an older plxd would silently ignore, starting a scratch thread. `orchestratorFromThreads`
+/// (PLX-419, 0042): `orchestrator/fromThreads`, which makes an orchestrator from threads on one
+/// repo entry, each with its own worktree. `pins` (PLX-789): `pinned` on `Thread` and
+/// `thread/update`, and `snippets` on `thread/search`, which an older plxd would silently drop.
 /// `board` (PLX-940, 0081): `board/list`, `board/add`, `board/update`, and `board/remove`, and
-/// `notes.md` and `archived.md` rendered from the items, which `context/write` refuses.
-/// `spaces` (PLX-732, 0069): `space/create`, `space/delete`, `repo.removed`, `name` on
-/// `repo/update`, and `space` on `Repo`.
-/// `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`, `repo.updated`, and
-/// `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on `Repo`.
-/// `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on `Thread`,
-/// `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`, which an
-/// older plxd would silently drop.
-/// `threadFork` (PLX-375, 0050): `thread/fork`.
+/// `notes.md` and `archived.md` rendered from the items, which `context/write` refuses. `spaces`
+/// (PLX-732, 0069): `space/create`, `space/delete`, `repo.removed`, `name` on `repo/update`, and
+/// `space` on `Repo`. `threadAttention` (PLX-270, 0033): `thread/update`, `repo/update`,
+/// `repo.updated`, and `seenAt`, `snoozedUntil`, and `lastPromptAt` on `Thread` and `icon` on
+/// `Repo`. `threadLineage` (PLX-369, 0041): `parent`, `forkedFrom`, `title`, and `settled` on
+/// `Thread`, `thread/start`'s `parent` and `title`, and `thread/update`'s `title` and `settled`,
+/// which an older plxd would silently drop. `threadFork` (PLX-375, 0050): `thread/fork`.
 /// `claudeRemoteControl` (PLX-1140): `thread/remoteControl`, and a Claude Remote Control thread's
 /// follow-ups go to its session on `claude.ai`, which an older plxd would run here instead.
 /// `claudeRemoteControlMove` (PLX-1143): `thread/remoteControlOrigin`, where a Claude Remote
-/// Control thread's session runs, to move it to that computer.
-/// `chatImport` (PLX-883): `thread/importChat` and `thread/importedChats`, chats from `ChatGPT` and
-/// `claude.ai` data exports.
-/// `threadImport` (PLX-881): `thread/importable` and `thread/import`, past sessions from the
-/// Claude, Codex, and Cursor desktop apps.
-/// `threadImportRemote` (PLX-1136): `thread/importable`'s and `thread/import`'s `remote`, the
-/// Claude Code sessions `claude.ai` keeps, which an older plxd would ignore and answer with the
-/// apps' sessions here.
-/// `threadNaming` (PLX-610, 0058): `thread/start` takes `naming`, which an older plxd would
-/// silently ignore, to name the thread and its branch with the user's own model, and
-/// `agent.updated` carries `branch` when plxd renamed it.
-/// `checkout`: `thread/start` takes `checkout`, to work in the repo's own checkout instead of a
-/// new worktree, and `AgentRun` reports it; an older plxd would silently make a worktree.
-/// `repoRefs`: `repo/refs`, and `thread/start` takes `base` and `checkoutRef`, which an older plxd
-/// would silently ignore, starting from `HEAD` or the branch the checkout has out.
+/// Control thread's session runs, to move it to that computer. `chatImport` (PLX-883):
+/// `thread/importChat` and `thread/importedChats`, chats from `ChatGPT` and `claude.ai` data
+/// exports. `threadImport` (PLX-881): `thread/importable` and `thread/import`, past sessions from
+/// the Claude, Codex, and Cursor desktop apps. `threadImportRemote` (PLX-1136):
+/// `thread/importable`'s and `thread/import`'s `remote`, the Claude Code sessions `claude.ai`
+/// keeps, which an older plxd would ignore and answer with the apps' sessions here. `threadNaming`
+/// (PLX-610, 0058): `thread/start` takes `naming`, which an older plxd would silently ignore, to
+/// name the thread and its branch with the user's own model, and `agent.updated` carries `branch`
+/// when plxd renamed it. `checkout`: `thread/start` takes `checkout`, to work in the repo's own
+/// checkout instead of a new worktree, and `AgentRun` reports it; an older plxd would silently make
+/// a worktree. `repoRefs`: `repo/refs`, and `thread/start` takes `base` and `checkoutRef`, which an
+/// older plxd would silently ignore, starting from `HEAD` or the branch the checkout has out.
 /// `repoClone` (PLX-905): `repo/clone`, `repo/cloneProgress`, and `repo/remote`, to clone a
 /// repository onto this host.
 /// `peerGit` (0057): `bundle/*` and `git/startMerge`, for another plxd to move a run's commits
@@ -199,79 +196,65 @@ pub(crate) fn initialize(
 /// plxd never fills.
 /// `threadTools` (PLX-373, 0041): `agent/send`'s and `agent/cancel`'s `from`, `turnStarted`'s
 /// `from` and the `interrupted` item, and `pr/link` and `pr/unlink`, which a thread's Parallax
-/// tools use.
-/// `inbox` (PLX-401, 0043): `inbox/list`, `inbox/seen`, and `inbox.added`.
-/// `landing` (PLX-410, 0045): `land/queue`, `land/approve`, `land/sendBack`, and `autoLand` on
-/// `Project` and `project/update`, which an older plxd would silently ignore.
-/// `checks` (PLX-411, 0045): `checks` and `proposedChecks` on `Project` and `project/update`,
-/// which an older plxd would silently ignore, and the checks running after each landing.
-/// `coordinatorEpochs` (PLX-937, 0079): `coordinator/fresh` and the `epoch` output item.
-/// `queue` (PLX-370, 0048): `queue/list`, `queue/edit`, `queue/reorder`, `queue/cancel`,
-/// `queue/steer`, and `queue.updated`, and `agent/send` takes `delivery`, which an older plxd
-/// would silently ignore, queueing a steer.
+/// tools use. `inbox` (PLX-401, 0043): `inbox/list`, `inbox/seen`, and `inbox.added`. `landing`
+/// (PLX-410, 0045): `land/queue`, `land/approve`, `land/sendBack`, and `autoLand` on `Orchestrator`
+/// and `orchestrator/update`, which an older plxd would silently ignore. `checks` (PLX-411, 0045):
+/// `checks` and `proposedChecks` on `Orchestrator` and `orchestrator/update`, which an older plxd
+/// would silently ignore, and the checks running after each landing. `orchestratorEpochs` (PLX-937,
+/// 0079): `orchestrator/fresh` and the `epoch` output item. `queue` (PLX-370, 0048): `queue/list`,
+/// `queue/edit`, `queue/reorder`, `queue/cancel`, `queue/steer`, and `queue.updated`, and
+/// `agent/send` takes `delivery`, which an older plxd would silently ignore, queueing a steer.
 /// `questions` (PLX-402, 0043): `question/ask`, `question/answer`, `question/escalate`, and
-/// `question/list`.
-/// `memory` (PLX-405, 0044): `memory/list`, `memory/read`, `memory/write`, `memory/delete`, and
-/// `memory/propose`, and shared context paths in 0044's folders.
-/// `agentWait` (PLX-451): `agent/wait`.
-/// `eventFilters` (PLX-453): `events/subscribe` takes `run` and `shell`, which an older plxd
-/// would silently ignore.
-/// `eventsBefore` (PLX-490): `agent/events` takes `before`, to page a run's events newest first,
-/// and answers it with the run and the log's `seq`; an older plxd would page from the start.
-/// `commandIds` (PLX-482, 0052): every request may carry `commandId` in its params. Listed
-/// methods keep a receipt so a retry returns the first result.
+/// `question/list`. `memory` (PLX-405, 0044): `memory/list`, `memory/read`, `memory/write`,
+/// `memory/delete`, and `memory/propose`, and shared context paths in 0044's folders. `agentWait`
+/// (PLX-451): `agent/wait`. `eventFilters` (PLX-453): `events/subscribe` takes `run` and `shell`,
+/// which an older plxd would silently ignore. `eventsBefore` (PLX-490): `agent/events` takes
+/// `before`, to page a run's events newest first, and answers it with the run and the log's `seq`;
+/// an older plxd would page from the start. `commandIds` (PLX-482, 0052): every request may carry
+/// `commandId` in its params. Listed methods keep a receipt so a retry returns the first result.
 /// `worktreeCleanup` (PLX-555): `cleanWorktrees` in `host/settings`, which an older plxd would
-/// silently ignore, and the sweep that removes a settled thread's merged worktree.
-/// `connect` (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which
-/// an older plxd would silently ignore, `connect/devices`, and the tailnet listener.
-/// `terminals` (PLX-637): `terminal/*`, the terminals plxd runs for its clients.
-/// `orchestration` (PLX-644, 0059): `orchestration/dispatch`, `orchestration/subscribeShell`,
-/// `orchestration/subscribeThread`, and `orchestration/threadHistory`, and `held` on
-/// `queue.updated` and `queue/*`'s results.
-/// `remote` (PLX-641, 0065): `remote` in `host/settings`, `remote/pair`, `remote/sessions`,
-/// `remote/revoke`, and the HTTPS listener.
-/// `remoteWeb` (PLX-651): `remoteWeb` in `host/settings`, and the web client and browser pairing
-/// the HTTPS listener serves while it's on.
-/// `relay` (PLX-652, 0068): `relay` in `host/settings`, `relay/register`, `relay/hosts`,
-/// `relay/remove`, and `relay` in `remote/sessions`. `relay/sign` (PLX-1146) came later, so an
-/// older plxd with `relay` answers it as an unknown method.
-/// `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener serves.
-/// `prWatch` (0063): `pr/watch`, `pr/unwatch`, `pr/watches`, `pr/status` (PLX-837),
+/// silently ignore, and the sweep that removes a settled thread's merged worktree. `connect`
+/// (PLX-574, 0056): `connect`, `deviceName`, and `deviceIcon` in `host/settings`, which an older
+/// plxd would silently ignore, `connect/devices`, and the tailnet listener. `terminals` (PLX-637):
+/// `terminal/*`, the terminals plxd runs for its clients. `orchestration` (PLX-644, 0059):
+/// `orchestration/dispatch`, `orchestration/subscribeShell`, `orchestration/subscribeThread`, and
+/// `orchestration/threadHistory`, and `held` on `queue.updated` and `queue/*`'s results. `remote`
+/// (PLX-641, 0065): `remote` in `host/settings`, `remote/pair`, `remote/sessions`, `remote/revoke`,
+/// and the HTTPS listener. `remoteWeb` (PLX-651): `remoteWeb` in `host/settings`, and the web
+/// client and browser pairing the HTTPS listener serves while it's on. `relay` (PLX-652, 0068):
+/// `relay` in `host/settings`, `relay/register`, `relay/hosts`, `relay/remove`, and `relay` in
+/// `remote/sessions`. `relay/sign` (PLX-1146) came later, so an older plxd with `relay` answers it
+/// as an unknown method. `schedules` (0063): `schedule/*`, and the webhooks the HTTPS listener
+/// serves. `prWatch` (0063): `pr/watch`, `pr/unwatch`, `pr/watches`, `pr/status` (PLX-837),
 /// `pr/failureLog` (PLX-1019), `pr/uploadMedia` (PLX-1020), `pr/sharedDiff` (PLX-1021), and
-/// `pr/write` and `pr/mergeWhenReady` (PLX-1022).
-/// `setupScripts` (PLX-650): `repo/scripts`, `repo/saveScripts`, and the `thread.script` event.
-/// `fileUploads` (PLX-779, 0071): `host/upload`, which saves a file attached to a message on the
-/// host for the agent to read, and `host/readUpload`, which reads it back for the transcript.
-/// Its option `maxBytes` is the cap on the file's base64 `data`.
-/// `fileChunks` (PLX-833, 0074): `host/upload` takes a file in pieces, with `uploadId`, `offset`,
-/// and `last`, and `host/readUpload` and `agent/file`'s `working` side read a slice, with `offset`
-/// and `length`, which an older plxd would ignore, sending the whole file or refusing it. Its
-/// options are `chunkBytes`, the most file bytes a piece or slice carries, and `maxBytes`, the
-/// largest file pieces make.
-/// `projectArtifacts` (PLX-941): `context/readBytes` and `context/saveArtifact`, and files of any
-/// type in a Project's `artifacts/<thread>/`, which `context/list` lists.
-/// `hostUpdate` (PLX-700, 0066): `host/update`, which installs a newer plxd and restarts into it.
-/// `hubs` (0089): `hubs/list`, `hubs/save`, and `hubs/remove`, the two provider instances each
-/// enabled hub adds, and `hub` on `ProviderInfo`, which an older plxd never fills.
-/// `hubAccounts` (PLX-1070): `hubs/accounts/*`, which signs a hub's accounts in through the
-/// browser and turns them on, off, or removes them.
-/// `providerUpdates` (PLX-746): `providers/updates` and `providers/upgrade`, and `host/update`'s
-/// `now`.
-/// `checkpoints` (0062): `orchestration/threadRuns`, `orchestration/getTurnDiff`,
+/// `pr/write` and `pr/mergeWhenReady` (PLX-1022). `setupScripts` (PLX-650): `repo/scripts`,
+/// `repo/saveScripts`, and the `thread.script` event. `fileUploads` (PLX-779, 0071): `host/upload`,
+/// which saves a file attached to a message on the host for the agent to read, and
+/// `host/readUpload`, which reads it back for the transcript. Its option `maxBytes` is the cap on
+/// the file's base64 `data`. `fileChunks` (PLX-833, 0074): `host/upload` takes a file in pieces,
+/// with `uploadId`, `offset`, and `last`, and `host/readUpload` and `agent/file`'s `working` side
+/// read a slice, with `offset` and `length`, which an older plxd would ignore, sending the whole
+/// file or refusing it. Its options are `chunkBytes`, the most file bytes a piece or slice carries,
+/// and `maxBytes`, the largest file pieces make. `orchestratorArtifacts` (PLX-941):
+/// `context/readBytes` and `context/saveArtifact`, and files of any type in an orchestrator's
+/// `artifacts/<thread>/`, which `context/list` lists. `hostUpdate` (PLX-700, 0066): `host/update`,
+/// which installs a newer plxd and restarts into it. `hubs` (0089): `hubs/list`, `hubs/save`, and
+/// `hubs/remove`, the two provider instances each enabled hub adds, and `hub` on `ProviderInfo`,
+/// which an older plxd never fills. `hubAccounts` (PLX-1070): `hubs/accounts/*`, which signs a
+/// hub's accounts in through the browser and turns them on, off, or removes them. `providerUpdates`
+/// (PLX-746): `providers/updates` and `providers/upgrade`, and `host/update`'s `now`. `checkpoints`
+/// (0062): `orchestration/threadRuns`, `orchestration/getTurnDiff`,
 /// `orchestration/getFullThreadDiff`, `checkpoint.rollback`, and the `thread.checkpoint` and
-/// `thread.reverted` events.
-/// `delegation` (PLX-648, 0063): `task/delegate`, `task/status`, and `thread/mergeBack`.
-/// `secrets` (PLX-648, 0063): `secret/request`, `secret/answer`, the `secretRequested` and
-/// `secretResolved` transcript items, and `secretRef` in `schedule/save`.
-/// `devices` (PLX-886): every `device/*` method and notification.
-/// `computerUse` (PLX-897, 0077), on macOS only: `computer/ask`, `computer/status`, and
-/// `computer/forget`.
-/// `youSync` (0082): `memory/syncList` and `memory/syncRead`, which another of the user's plxds
-/// pulls You memory with, and `machine` on a You `MemoryFile`.
-/// `projectComputer` (0057), only with [`Config::project_computer`](crate::server::Config): the
-/// `computer` a Project's children run on, on `Project` and `project/update`, which a plxd
-/// without it refuses.
-fn capabilities_advertised(project_computer: bool) -> Capabilities {
+/// `thread.reverted` events. `delegation` (PLX-648, 0063): `task/delegate`, `task/status`, and
+/// `thread/mergeBack`. `secrets` (PLX-648, 0063): `secret/request`, `secret/answer`, the
+/// `secretRequested` and `secretResolved` transcript items, and `secretRef` in `schedule/save`.
+/// `devices` (PLX-886): every `device/*` method and notification. `computerUse` (PLX-897, 0077), on
+/// macOS only: `computer/ask`, `computer/status`, and `computer/forget`. `youSync` (0082):
+/// `memory/syncList` and `memory/syncRead`, which another of the user's plxds pulls You memory
+/// with, and `machine` on a You `MemoryFile`. `orchestratorComputer` (0057), only with
+/// [`Config::orchestrator_computer`](crate::server::Config): the `computer` an orchestrator's
+/// children run on, on `Orchestrator` and `orchestrator/update`, which a plxd without it refuses.
+fn capabilities_advertised(orchestrator_computer: bool) -> Capabilities {
     fn options<const N: usize>(
         pairs: [(&str, serde_json::Value); N],
     ) -> serde_json::Map<String, serde_json::Value> {
@@ -320,8 +303,14 @@ fn capabilities_advertised(project_computer: bool) -> Capabilities {
     if cfg!(target_os = "macos") {
         capabilities.insert("computerUse".to_owned(), serde_json::Map::new());
     }
-    if project_computer {
-        capabilities.insert("projectComputer".to_owned(), serde_json::Map::new());
+    if orchestrator_computer {
+        capabilities.insert("orchestratorComputer".to_owned(), serde_json::Map::new());
+    }
+    // Each capability 0093 renamed, under its old name too, for an app from before it.
+    for (old, new) in legacy::CAPABILITIES {
+        if let Some(options) = capabilities.get(*new) {
+            capabilities.insert((*old).to_owned(), options.clone());
+        }
     }
     Capabilities(capabilities)
 }
@@ -342,17 +331,15 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "autoResume",
     "board",
     "chatImport",
+    "checkout",
     "checkpoints",
     "checks",
-    "checkout",
     "claudeRemoteControl",
     "claudeRemoteControlMove",
     "commandIds",
     "composerMenus",
     "connect",
     "contextAndFast",
-    "coordinator",
-    "coordinatorEpochs",
     "delegation",
     "devices",
     "eventFilters",
@@ -372,23 +359,25 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "memory",
     "openPr",
     "orchestration",
+    "orchestrator",
+    "orchestratorArtifacts",
+    "orchestratorAutonomy",
+    "orchestratorDelete",
+    "orchestratorEdit",
+    "orchestratorEpochs",
+    "orchestratorFromThreads",
+    "orchestratorPermission",
+    "orchestratorPlacement",
+    "orchestratorTasks",
     "peerGit",
     "pins",
     "prDiff",
     "prWatch",
-    "projectArtifacts",
-    "projectAutonomy",
-    "projectDelete",
-    "projectEdit",
-    "projectFromThreads",
-    "projectPermission",
-    "projectPlacement",
-    "projectTasks",
     "providerUpdates",
     "providers",
     "pullRequests",
-    "queue",
     "questions",
+    "queue",
     "relay",
     "remote",
     "remoteWeb",

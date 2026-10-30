@@ -19,7 +19,7 @@ fn hourly(title: &str, prompt: &str, thread: Option<RunId>) -> ScheduleSaveParam
             every_ms: 3_600_000,
         },
         thread,
-        project: None,
+        orchestrator: None,
         repo: None,
         account: Some(AccountChoice::Subscription {
             backend: "fake".to_owned(),

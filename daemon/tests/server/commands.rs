@@ -2,8 +2,12 @@
 //! cleanup.
 
 use parallax_protocol::jsonrpc::{ErrorObject, Request, RequestId};
-use parallax_protocol::methods::{ProjectCreate, ProjectDelete, ProjectList, RequestMethod};
-use parallax_protocol::{ErrorKind, ProjectDeleteParams, ProjectListParams, ProjectListResult};
+use parallax_protocol::methods::{
+    OrchestratorCreate, OrchestratorDelete, OrchestratorList, RequestMethod,
+};
+use parallax_protocol::{
+    ErrorKind, OrchestratorDeleteParams, OrchestratorListParams, OrchestratorListResult,
+};
 use rustix::process::Signal;
 use serde_json::json;
 use uuid::Uuid;
@@ -17,42 +21,44 @@ async fn a_listed_method_returns_the_first_result_and_does_not_apply_twice() {
     let mut client = Client::ready(&plxd.socket).await;
 
     let created = client
-        .call::<ProjectCreate>(create_params(dir.path(), "once"))
+        .call::<OrchestratorCreate>(create_params(dir.path(), "once"))
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     let command_id = Uuid::now_v7();
-    let params = ProjectDeleteParams {
-        project: created.id,
+    let params = OrchestratorDeleteParams {
+        orchestrator: created.id,
     };
-    let first = call_with_command::<ProjectDelete>(&mut client, params.clone(), command_id)
+    let first = call_with_command::<OrchestratorDelete>(&mut client, params.clone(), command_id)
         .await
         .unwrap();
-    let again = call_with_command::<ProjectDelete>(&mut client, params, command_id)
+    let again = call_with_command::<OrchestratorDelete>(&mut client, params, command_id)
         .await
         .unwrap();
     assert_eq!(again, first);
 
     let listed = client
-        .call::<ProjectList>(ProjectListParams {})
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap();
     assert!(
         listed
-            .projects
+            .orchestrators
             .iter()
             .all(|project| project.id != created.id),
         "the project was deleted once: {listed:?}"
     );
 
     let other = client
-        .call::<ProjectCreate>(create_params(dir.path(), "other"))
+        .call::<OrchestratorCreate>(create_params(dir.path(), "other"))
         .await
         .unwrap()
-        .project;
-    let conflict = call_with_command::<ProjectDelete>(
+        .orchestrator;
+    let conflict = call_with_command::<OrchestratorDelete>(
         &mut client,
-        ProjectDeleteParams { project: other.id },
+        OrchestratorDeleteParams {
+            orchestrator: other.id,
+        },
         command_id,
     )
     .await
@@ -67,23 +73,23 @@ async fn an_unfinished_claim_is_deleted_on_restart_and_a_retry_runs_again() {
     let plxd = Plxd::start(dir.path()).await;
     let mut client = Client::ready(&plxd.socket).await;
     let created = client
-        .call::<ProjectCreate>(create_params(dir.path(), "restart"))
+        .call::<OrchestratorCreate>(create_params(dir.path(), "restart"))
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     drop(client);
     plxd.signal(Signal::TERM);
     let _ = plxd.exit().await;
 
     let command_id = Uuid::now_v7();
-    let params = ProjectDeleteParams {
-        project: created.id,
+    let params = OrchestratorDeleteParams {
+        orchestrator: created.id,
     };
     let store = parallax_store::Store::open(dir.path().join("plxd.sqlite3")).unwrap();
     let (inserted, _) = store
         .claim_command(
             &command_id.hyphenated().to_string(),
-            ProjectDelete::NAME,
+            OrchestratorDelete::NAME,
             "unused-after-restart",
             None,
         )
@@ -103,7 +109,7 @@ async fn an_unfinished_claim_is_deleted_on_restart_and_a_retry_runs_again() {
     assert_eq!(left, 0, "the unfinished claim is gone after restart");
 
     let mut client = Client::ready(&plxd.socket).await;
-    call_with_command::<ProjectDelete>(&mut client, params, command_id)
+    call_with_command::<OrchestratorDelete>(&mut client, params, command_id)
         .await
         .unwrap();
     assert!(
@@ -112,18 +118,18 @@ async fn an_unfinished_claim_is_deleted_on_restart_and_a_retry_runs_again() {
     );
 }
 
-/// `project/delete`'s receipt is written in the transaction that deletes the project (0059): when
-/// it can't be stored, nothing is deleted, and a retry fails the same way instead of waiting.
+/// `orchestrator/delete`'s receipt is written in the transaction that deletes the project (0059):
+/// when it can't be stored, nothing is deleted, and a retry fails the same way instead of waiting.
 #[tokio::test]
 async fn a_receipt_that_cannot_be_stored_rolls_back_the_delete() {
     let dir = temp_dir();
     let plxd = Plxd::start(dir.path()).await;
     let mut client = Client::ready(&plxd.socket).await;
     let project = client
-        .call::<ProjectCreate>(create_params(dir.path(), "receipt-failure"))
+        .call::<OrchestratorCreate>(create_params(dir.path(), "receipt-failure"))
         .await
         .unwrap()
-        .project;
+        .orchestrator;
     let db = rusqlite::Connection::open(dir.path().join("plxd.sqlite3")).unwrap();
     db.execute_batch(
         "CREATE TRIGGER fail_receipt BEFORE INSERT ON orchestration_receipts
@@ -131,17 +137,17 @@ async fn a_receipt_that_cannot_be_stored_rolls_back_the_delete() {
     )
     .unwrap();
     let id = Uuid::now_v7();
-    let params = ProjectDeleteParams {
-        project: project.id,
+    let params = OrchestratorDeleteParams {
+        orchestrator: project.id,
     };
     assert!(
-        call_with_command::<ProjectDelete>(&mut client, params.clone(), id)
+        call_with_command::<OrchestratorDelete>(&mut client, params.clone(), id)
             .await
             .is_err()
     );
     let retry = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        call_with_command::<ProjectDelete>(&mut client, params, id),
+        call_with_command::<OrchestratorDelete>(&mut client, params, id),
     )
     .await
     .expect("a retry must not hang");
@@ -156,12 +162,12 @@ async fn a_receipt_that_cannot_be_stored_rolls_back_the_delete() {
 }
 
 async fn names(client: &mut Client) -> Vec<String> {
-    let listed: ProjectListResult = client
-        .call::<ProjectList>(ProjectListParams {})
+    let listed: OrchestratorListResult = client
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap();
     listed
-        .projects
+        .orchestrators
         .into_iter()
         .map(|project| project.name)
         .collect()

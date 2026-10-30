@@ -37,8 +37,8 @@ use parallax_protocol::methods::{
 };
 use parallax_protocol::{
     BundleApplyParams, BundleBeginParams, BundleDropParams, BundlePrepareParams, BundleReadParams,
-    BundleWriteParams, Capabilities, ClientInfo, EventsEventParams, HostHealthParams,
-    InitializeParams, InitializeResult, ProtocolRange, RunId,
+    BundleWriteParams, ClientInfo, EventsEventParams, HostHealthParams, InitializeParams,
+    InitializeResult, ProtocolRange, RunId,
 };
 use serde::Serialize;
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
@@ -450,7 +450,7 @@ impl Connection {
             InitializeParams {
                 protocol: ProtocolRange::SUPPORTED,
                 client,
-                capabilities: Capabilities::default(),
+                capabilities: parallax_protocol::legacy::client_capabilities(),
             },
         );
         let handshake = async {

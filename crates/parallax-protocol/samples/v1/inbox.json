@@ -3,7 +3,7 @@
     "jsonrpc": "2.0",
     "id": 1,
     "method": "inbox/list",
-    "params": { "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" }
+    "params": { "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5e0" }
   },
   {
     "jsonrpc": "2.0",
@@ -58,7 +58,7 @@
     "id": 3,
     "method": "inbox/seen",
     "params": {
-      "project": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
+      "orchestrator": "01a0f755-f200-74dd-8cfc-06d0b225c5e0",
       "items": ["01a0f755-f5e8-74c2-993d-c1660d1cd781"]
     }
   },

@@ -210,7 +210,7 @@ fn joined_len<'a>(parts: impl IntoIterator<Item = &'a str>) -> usize {
 mod tests {
     use parallax_protocol::{AgentOutputItem, AgentRun, ParallaxEvent, RunId, TurnId};
 
-    use parallax_protocol::{AgentPolicy, AgentStatus, ProjectId};
+    use parallax_protocol::{AgentPolicy, AgentStatus, ScopeId};
 
     use super::{Budget, HANDOFF_BYTES, HandoffEvent, LEFT_OUT, handoff};
     use crate::agents::attached::SUMMARY_BYTES;
@@ -242,7 +242,7 @@ mod tests {
                 run_id: RunId::generate(),
                 run: Some(AgentRun {
                     id: RunId::generate(),
-                    project: ProjectId::generate(),
+                    project: ScopeId::generate(),
                     prompt: prompt.to_owned(),
                     policy: AgentPolicy::WorkspaceWrite,
                     status: AgentStatus::Running,
@@ -254,7 +254,7 @@ mod tests {
                     session_id: None,
                     error: None,
                     diff: None,
-                    coordinator_thread: None,
+                    orchestrator_thread: None,
                     model: None,
                     effort: None,
                     context_window: None,

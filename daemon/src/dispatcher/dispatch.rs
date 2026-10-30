@@ -38,7 +38,7 @@ pub(crate) async fn dispatch(
 ) -> Result<DispatchResult, ErrorObject> {
     let (thread, kind) = describe(&command)?;
     let id = command_id.unwrap_or_else(Uuid::now_v7);
-    let _retries = daemon.orchestrator.lane(id).await;
+    let _retries = daemon.dispatcher.lane(id).await;
     let key = id.hyphenated().to_string();
     let lookup = key.clone();
     let receipt = daemon
@@ -96,7 +96,7 @@ pub(crate) async fn dispatch(
     })
     .await?;
     if woke {
-        daemon.orchestrator.notify();
+        daemon.dispatcher.notify();
     }
     acted.map(|_| DispatchResult { seq })
 }
@@ -300,14 +300,14 @@ async fn queue(
 
 /// Stops `thread`'s turn (0059's `run.interrupt`). With `hold_queue`, its queue waits for
 /// `queue.resume`, its tasks' ends wake it no more, and it answers with the children still
-/// running, for the cascade. A Project's
-/// coordinator stops only its own turn, and its queue goes on (Ryan, 0059).
+/// running, for the cascade. An orchestrator's
+/// orchestrator stops only its own turn, and its queue goes on (Ryan, 0059).
 pub(super) async fn stop(
     daemon: &Arc<Daemon>,
     thread: RunId,
     hold_queue: bool,
 ) -> Result<Option<Vec<RunId>>, ErrorObject> {
-    let (coordinator, children) = daemon
+    let (orchestrator, children) = daemon
         .reader
         .run(&CancellationToken::new(), move |db| {
             let error = |error| store_error(&error);
@@ -319,7 +319,7 @@ pub(super) async fn stop(
             Ok((row.fields.policy == agents::NO_WRITE, children))
         })
         .await?;
-    let hold = hold_queue && !coordinator;
+    let hold = hold_queue && !orchestrator;
     // A held Stop drops the wake-ups its stopped tasks would owe, as `task_cancel` does (0063).
     if hold {
         store(daemon, move |db| {

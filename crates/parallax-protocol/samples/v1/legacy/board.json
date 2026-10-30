@@ -1,0 +1,113 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "board/add",
+    "params": {
+      "project": "01a0f8a0-0000-7000-8000-000000000021",
+      "text": "**Search command**: one subagent adds it, with tests",
+      "section": "now",
+      "links": {
+        "threads": ["01a0f8a0-0000-7000-8000-000000000011"]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "item": {
+        "id": 7,
+        "text": "**Search command**: one subagent adds it, with tests",
+        "status": "open",
+        "section": "now",
+        "links": {
+          "threads": ["01a0f8a0-0000-7000-8000-000000000011"]
+        },
+        "createdAt": "2026-10-23T12:00:00Z",
+        "updatedAt": "2026-10-23T12:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "board/update",
+    "params": {
+      "project": "01a0f8a0-0000-7000-8000-000000000021",
+      "id": 7,
+      "status": "done",
+      "links": {
+        "threads": ["01a0f8a0-0000-7000-8000-000000000011"],
+        "pullRequest": "https://github.com/acme/app/pull/12",
+        "files": ["src/search.rs"]
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "item": {
+        "id": 7,
+        "text": "**Search command**: one subagent adds it, with tests",
+        "status": "done",
+        "section": "now",
+        "links": {
+          "threads": ["01a0f8a0-0000-7000-8000-000000000011"],
+          "pullRequest": "https://github.com/acme/app/pull/12",
+          "files": ["src/search.rs"]
+        },
+        "createdAt": "2026-10-23T12:00:00Z",
+        "updatedAt": "2026-10-23T13:00:00Z",
+        "doneAt": "2026-10-23T13:00:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "board/list",
+    "params": {
+      "project": "01a0f8a0-0000-7000-8000-000000000021"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": {
+      "items": [
+        {
+          "id": 7,
+          "text": "**Search command**: one subagent adds it, with tests",
+          "status": "done",
+          "section": "now",
+          "links": {
+            "threads": ["01a0f8a0-0000-7000-8000-000000000011"],
+            "pullRequest": "https://github.com/acme/app/pull/12",
+            "files": ["src/search.rs"]
+          },
+          "createdAt": "2026-10-23T12:00:00Z",
+          "updatedAt": "2026-10-23T13:00:00Z",
+          "doneAt": "2026-10-23T13:00:00Z"
+        }
+      ]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "board/remove",
+    "params": {
+      "project": "01a0f8a0-0000-7000-8000-000000000021",
+      "id": 7
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "removed": true
+    }
+  }
+]

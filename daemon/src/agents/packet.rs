@@ -1,11 +1,11 @@
-//! A coordinator's rehydration packet (PLX-937, decision 0079): the first message of each new
-//! session of its run, built from the Project's state as plxd keeps it, so a lost or fresh
-//! session costs nothing the Project needs. Also the short note the turn after a provider
+//! An orchestrator's rehydration packet (PLX-937, decision 0079): the first message of each new
+//! session of its run, built from the orchestrator's state as plxd keeps it, so a lost or fresh
+//! session costs nothing the orchestrator needs. Also the short note the turn after a provider
 //! compaction carries.
 
 use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
-use parallax_protocol::{ProjectId, QuestionId, RunId};
+use parallax_protocol::{QuestionId, RunId, ScopeId};
 use parallax_store::Store;
 
 use super::convert::{ACCEPTED, NO_WRITE};
@@ -27,7 +27,7 @@ const MESSAGES: usize = 10;
 /// How much of a thread's last result its line shows.
 const REPORT_BYTES: usize = 300;
 
-/// The Project's state for a packet or a note, one field per section.
+/// The orchestrator's state for a packet or a note, one field per section.
 #[derive(Debug, Default)]
 pub(super) struct State {
     pub brief: String,
@@ -37,13 +37,13 @@ pub(super) struct State {
     pub threads: String,
     pub questions: String,
     pub landing: String,
-    /// The user's last messages to the coordinator, oldest first.
+    /// The user's last messages to the orchestrator, oldest first.
     pub messages: Vec<String>,
 }
 
-/// The first message of coordinator `run`'s new session in `project`: the packet, then `text`,
+/// The first message of orchestrator `run`'s new session in `project`: the packet, then `text`,
 /// the message that starts it.
-pub(super) async fn packet(daemon: &Daemon, project: ProjectId, run: RunId, text: &str) -> String {
+pub(super) async fn packet(daemon: &Daemon, project: ScopeId, run: RunId, text: &str) -> String {
     let state = gather(daemon, project, run).await;
     format!(
         "{}\n\nThe message that starts this session:\n{text}",
@@ -53,21 +53,21 @@ pub(super) async fn packet(daemon: &Daemon, project: ProjectId, run: RunId, text
 
 /// The note ahead of the first turn after a provider compaction: the board, the open threads,
 /// and where the checkpoint is.
-pub(super) async fn after_compaction(daemon: &Daemon, project: ProjectId, run: RunId) -> String {
+pub(super) async fn after_compaction(daemon: &Daemon, project: ScopeId, run: RunId) -> String {
     let state = gather(daemon, project, run).await;
     let sections = [
         ("Board (notes.md)", state.board.as_str()),
         ("Open threads", state.threads.as_str()),
     ];
     let head = "Parallax, not the user: your conversation was just compacted, so here is the \
-                Project's state again.";
+                orchestrator's state again.";
     let tail = "Your progress note is checkpoint.md in your shared context: read it with \
                 read_context.";
     let room = NOTE_BYTES.saturating_sub(head.len() + tail.len() + 2);
     format!("{head}\n{}\n{tail}", fill(&sections, room))
 }
 
-/// `state` as a packet for coordinator `run`, at most [`PACKET_BYTES`], in the spec's order. The
+/// `state` as a packet for orchestrator `run`, at most [`PACKET_BYTES`], in the spec's order. The
 /// user's last messages take their room first, so the other sections never crowd them out.
 pub(super) fn render(state: &State, run: RunId) -> String {
     let sections = [
@@ -80,7 +80,7 @@ pub(super) fn render(state: &State, run: RunId) -> String {
         ("Landing queue", state.landing.as_str()),
     ];
     let head = "Parallax, not the user: this is a new session of this chat. Your earlier \
-                conversation isn't in it, so here is the Project's state as Parallax keeps it. \
+                conversation isn't in it, so here is the orchestrator's state as Parallax keeps it. \
                 Treat it as orientation, and read more with read_context, memory_read, and \
                 thread_list.";
     let tail = format!(
@@ -149,13 +149,13 @@ fn fill(sections: &[(&str, &str)], room: usize) -> String {
     out
 }
 
-/// Reads the Project's state for coordinator `run`. A part that can't be read is left empty.
-async fn gather(daemon: &Daemon, project: ProjectId, run: RunId) -> State {
+/// Reads the orchestrator's state for orchestrator `run`. A part that can't be read is left empty.
+async fn gather(daemon: &Daemon, project: ScopeId, run: RunId) -> State {
     let start = memory::start(daemon, project).await.unwrap_or_default();
     let dir = daemon.data_dir.context_dir(project);
     let stored = store(daemon, move |db| from_store(db, project, run)).await;
     let (mut state, threads) = stored.unwrap_or_else(|error| {
-        tracing::warn!(%run, error = %error.message, "could not read a Project's state for its coordinator");
+        tracing::warn!(%run, error = %error.message, "could not read an orchestrator's state for its orchestrator");
         (State::default(), Vec::new())
     });
     state.brief = start.brief.unwrap_or_default();
@@ -197,7 +197,7 @@ async fn gather(daemon: &Daemon, project: ProjectId, run: RunId) -> State {
 /// report to.
 fn from_store(
     db: &Store,
-    project: ProjectId,
+    project: ScopeId,
     run: RunId,
 ) -> Result<(State, Vec<(uuid::Uuid, String)>), ErrorObject> {
     let error = |e| store_error(&e);
@@ -267,7 +267,7 @@ fn from_store(
     Ok((state, threads))
 }
 
-/// The last [`MESSAGES`] of `sent`, the user's messages to a coordinator oldest first, that
+/// The last [`MESSAGES`] of `sent`, the user's messages to an orchestrator oldest first, that
 /// aren't blank.
 fn last_messages(sent: impl Iterator<Item = String>) -> Vec<String> {
     let mut messages: Vec<String> = sent.filter(|text| !text.trim().is_empty()).collect();

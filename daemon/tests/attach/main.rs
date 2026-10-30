@@ -15,8 +15,8 @@ use std::os::unix::fs::symlink;
 use std::path::Path;
 use std::time::Duration;
 
-use parallax_protocol::ProjectListParams;
-use parallax_protocol::methods::{ProjectCreate, ProjectList};
+use parallax_protocol::OrchestratorListParams;
+use parallax_protocol::methods::{OrchestratorCreate, OrchestratorList};
 use plxd::attach::{self, Options};
 use plxd::launch_agent::LaunchAgent;
 use plxd::paths::DataDir;
@@ -86,14 +86,17 @@ async fn two_attaches_at_once_start_and_share_one_plxd() {
     let (one, two) = tokio::join!(first.initialize(), second.initialize());
     assert_eq!(one.log_id, two.log_id, "both reach the same plxd");
     let params = create_params(dir.path(), "parallax");
-    first.call::<ProjectCreate>(params.clone()).await.unwrap();
+    first
+        .call::<OrchestratorCreate>(params.clone())
+        .await
+        .unwrap();
     let listed = second
-        .call::<ProjectList>(ProjectListParams {})
+        .call::<OrchestratorList>(OrchestratorListParams {})
         .await
         .unwrap();
     assert!(
         listed
-            .projects
+            .orchestrators
             .iter()
             .any(|project| project.id == params.id)
     );

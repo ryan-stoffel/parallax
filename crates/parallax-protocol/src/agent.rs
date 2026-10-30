@@ -14,7 +14,7 @@ use ts_rs::TS;
 use crate::id::uuid_v7_id;
 use crate::{
     AccountChoice, AgentApprovalBy, AgentApprovalDecision, AgentDelivery, ApprovalId,
-    ParallaxEvent, ProjectId,
+    ParallaxEvent, ScopeId,
 };
 
 uuid_v7_id! {
@@ -24,9 +24,9 @@ uuid_v7_id! {
 }
 
 uuid_v7_id! {
-    /// A project's coordinator thread (M4, #195, decision 0019). Runs the coordinator starts
+    /// An orchestrator thread (M4, #195, decision 0019). Runs the orchestrator starts
     /// through its Parallax tools carry it, so a client can tell them from runs it started itself.
-    CoordinatorThreadId
+    OrchestratorThreadId
 }
 
 uuid_v7_id! {
@@ -84,8 +84,8 @@ pub struct PromptImage {
     pub data: String,
 }
 
-/// What a run's tools may do. `agent/start` takes only `workspaceWrite`; a project's coordinator,
-/// which `project/start` starts, is `noWrite`.
+/// What a run's tools may do. `agent/start` takes only `workspaceWrite`; an orchestrator,
+/// which `orchestrator/start` starts, is `noWrite`.
 ///
 /// A newer plxd may send a policy this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -94,8 +94,8 @@ pub enum AgentPolicy {
     /// Edits in the run's worktree and the shared context folder, commands in the vendor's OS
     /// sandbox (0004, 0013).
     WorkspaceWrite,
-    /// A project's coordinator (0024): full Claude Code in its permission mode, in the project's
-    /// repository, plus plxd's coordinator tools (0019, 0027). Without those tools, read-only
+    /// An orchestrator (0024): full Claude Code in its permission mode, in the project's
+    /// repository, plus plxd's orchestrator tools (0019, 0027). Without those tools, read-only
     /// tools (0004).
     NoWrite,
     /// A policy this version does not know yet.
@@ -212,7 +212,7 @@ pub struct AgentRun {
     /// The run's id.
     pub id: RunId,
     /// Its project.
-    pub project: ProjectId,
+    pub project: ScopeId,
     /// The task it was started with.
     pub prompt: String,
     /// What its tools may do.
@@ -249,11 +249,15 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub diff: Option<DiffSummary>,
-    /// The coordinator thread that started it through its Parallax tools. Absent for a run a client
-    /// started itself.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The orchestrator thread that started it through its Parallax tools. Absent for a run a
+    /// client started itself.
+    #[serde(
+        default,
+        alias = "coordinatorThread",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
-    pub coordinator_thread: Option<CoordinatorThreadId>,
+    pub orchestrator_thread: Option<OrchestratorThreadId>,
     /// Its model: what it was started with, or what `agent/send` last changed it to. Absent
     /// means the CLI's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -275,10 +279,10 @@ pub struct AgentRun {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub permission: Option<AgentPermission>,
-    /// True when it forwards its permission requests to the client, as the start method that
-    /// made it asked with `approvals` (PLX-222, decision 0031). It changes only when
-    /// `project/fromThreads` makes the run a Project's child, which sets it. Absent means false:
-    /// its CLI denies what would prompt.
+    /// True when it forwards its permission requests to the client, as the start method that made
+    /// it asked with `approvals` (PLX-222, decision 0031). It changes only when
+    /// `orchestrator/fromThreads` makes the run an orchestrator's child, which sets it. Absent
+    /// means false: its CLI denies what would prompt.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
     /// True for a thread started with `checkout`: it works in its repository's own checkout, so it
@@ -286,7 +290,7 @@ pub struct AgentRun {
     /// Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub checkout: bool,
-    /// True for a Project's exploration child, started with `explore` (0045): it never lands.
+    /// True for an orchestrator's exploration child, started with `explore` (0045): it never lands.
     /// Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub explore: bool,
@@ -481,20 +485,20 @@ pub enum AgentTodoStatus {
     Unknown,
 }
 
-/// Why a Project's coordinator session ended (PLX-937, decision 0079).
+/// Why an orchestrator session ended (PLX-937, decision 0079).
 ///
 /// A newer plxd may send a reason this version does not know; treat it as unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub enum CoordinatorSessionEnd {
+pub enum OrchestratorSessionEnd {
     /// The provider compacted it out. plxd never ends one for compaction (decision 1 of the
-    /// Projects spec), so none ends this way yet.
+    /// orchestrators spec), so none ends this way yet.
     CompactedOut,
     /// It couldn't be resumed: the provider lost it, or its account is gone.
     NotResumable,
-    /// The user asked for a fresh session with `coordinator/fresh`.
+    /// The user asked for a fresh session with `orchestrator/fresh`.
     UserFresh,
-    /// The coordinator moved to another backend, which can't resume it.
+    /// The orchestrator moved to another backend, which can't resume it.
     BackendChange,
     /// A reason this version does not know yet.
     #[serde(other)]
@@ -543,7 +547,7 @@ pub enum AgentOutputItem {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[ts(optional)]
         text: Option<String>,
-        /// True for a wake-up (PLX-42, decision 0025): a turn plxd sent a project's coordinator
+        /// True for a wake-up (PLX-42, decision 0025): a turn plxd sent an orchestrator
         /// on its own, not the user, because runs it started finished. `text` lists them. Also
         /// true for the turn plxd sends a run once its usage limit resets (PLX-371, decision
         /// 0049).
@@ -633,13 +637,13 @@ pub enum AgentOutputItem {
         /// Whether it's finished.
         done: bool,
     },
-    /// A Project's coordinator session ended, and the next one, epoch `epoch`, starts from the
-    /// Project's state (PLX-937, decision 0079). Behind the `coordinatorEpochs` capability.
+    /// An orchestrator session ended, and the next one, epoch `epoch`, starts from the
+    /// orchestrator's state (PLX-937, decision 0079). Behind the `orchestratorEpochs` capability.
     Epoch {
-        /// The new session's number, from 1 for the coordinator's first.
+        /// The new session's number, from 1 for the orchestrator's first.
         epoch: u32,
         /// Why the last one ended.
-        reason: CoordinatorSessionEnd,
+        reason: OrchestratorSessionEnd,
     },
     /// A turn ended.
     TurnFinished {
@@ -929,23 +933,27 @@ pub struct AgentStartParams {
     /// The new run's id, a version 7 UUID generated by the client.
     pub run_id: RunId,
     /// The project whose repository the run works in.
-    pub project: ProjectId,
+    pub project: ScopeId,
     /// The task.
     pub prompt: String,
-    /// What the run's tools may do: only `workspaceWrite`. A project's coordinator, the one
-    /// `noWrite` run, is started with `project/start`.
+    /// What the run's tools may do: only `workspaceWrite`. An orchestrator, the one
+    /// `noWrite` run, is started with `orchestrator/start`.
     pub policy: AgentPolicy,
     /// The account to run on. Absent means the worker role's default (`accounts/defaults/*`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub account: Option<AccountChoice>,
-    /// The coordinator thread starting the run, which `plxd mcp` sets for runs the coordinator
+    /// The orchestrator thread starting the run, which `plxd mcp` sets for runs the orchestrator
     /// spawns (0019). The run keeps it, and a retry must repeat it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "coordinatorThread",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
-    pub coordinator_thread: Option<CoordinatorThreadId>,
-    /// Whether the run wakes its coordinator when a CLI process of its ends (PLX-380, 0025), for
-    /// a run with a `coordinatorThread`. Absent means true. A retry must repeat it.
+    pub orchestrator_thread: Option<OrchestratorThreadId>,
+    /// Whether the run wakes its orchestrator when a CLI process of its ends (PLX-380, 0025), for
+    /// a run with a `orchestratorThread`. Absent means true. A retry must repeat it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub notify: Option<bool>,
@@ -987,7 +995,7 @@ pub struct AgentStartParams {
     /// answers them, and only to a plxd that advertises `approvals`. A thread with it is full
     /// Claude Code and also asks in Accept Edits (0034). Absent, a run in Manual, Auto, or Plan
     /// denies what would prompt, and a thread keeps the worker sandbox, as before. A run with a
-    /// `coordinatorThread` also gets it when its coordinator has it. The run keeps it when it
+    /// `orchestratorThread` also gets it when its orchestrator has it. The run keeps it when it
     /// resumes, and a retry must repeat it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approvals: bool,
@@ -999,9 +1007,9 @@ pub struct AgentStartParams {
     /// them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<RunId>,
-    /// Start a Project's child as an exploration, such as a spike or a comparison, which never
-    /// lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must repeat
-    /// it.
+    /// Start an orchestrator's child as an exploration, such as a spike or a comparison, which
+    /// never lands (0045). Sent only to a plxd that advertises `integrationBranch`. A retry must
+    /// repeat it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub explore: bool,
 }
@@ -1134,7 +1142,7 @@ pub struct AgentListParams {
     /// Only this project's runs. Absent lists every run on the host.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub project: Option<ProjectId>,
+    pub project: Option<ScopeId>,
 }
 
 /// Result of `agent/list`.
@@ -1274,7 +1282,7 @@ pub struct LoggedEvent {
     /// Its project. Absent for host-level events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub project: Option<ProjectId>,
+    pub project: Option<ScopeId>,
     /// What happened.
     pub event: ParallaxEvent,
 }

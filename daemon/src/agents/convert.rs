@@ -5,8 +5,8 @@ use jiff::Timestamp;
 use parallax_protocol::jsonrpc::ErrorObject;
 use parallax_protocol::{
     AgentApproveResult, AgentFailureKind, AgentMerge, AgentMergeKind, AgentOutcome,
-    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, ApprovalId,
-    CoordinatorThreadId, DiffSummary, ProjectId, RunId,
+    AgentOutputItem, AgentPolicy, AgentRun, AgentRunState, AgentStatus, ApprovalId, DiffSummary,
+    OrchestratorThreadId, RunId, ScopeId,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -63,7 +63,7 @@ pub(super) const ACCEPTED: &str = "accepted";
 /// The store's text for the only policy `agent/start` takes.
 pub(super) const WORKSPACE_WRITE: &str = "workspaceWrite";
 
-/// The store's text for a project coordinator's policy (0024).
+/// The store's text for a project orchestrator's policy (0024).
 pub(crate) const NO_WRITE: &str = "noWrite";
 
 /// The protocol's status for a run row's stored `status`.
@@ -94,7 +94,7 @@ pub(crate) fn agent_run(
         ErrorObject::internal_error(format!("the stored run {} has an invalid {what}", row.id))
     };
     let id = RunId::try_from(row.id).map_err(|_| corrupt("id"))?;
-    let project = ProjectId::try_from(row.fields.project_id).map_err(|_| corrupt("project id"))?;
+    let project = ScopeId::try_from(row.fields.project_id).map_err(|_| corrupt("project id"))?;
     let state = &row.state;
     Ok(AgentRun {
         id,
@@ -114,12 +114,12 @@ pub(crate) fn agent_run(
         session_id: state.session_id.clone(),
         error: state.error.clone(),
         diff: diff(state),
-        coordinator_thread: row
+        orchestrator_thread: row
             .fields
-            .coordinator_thread
-            .map(CoordinatorThreadId::try_from)
+            .orchestrator_thread
+            .map(OrchestratorThreadId::try_from)
             .transpose()
-            .map_err(|_| corrupt("coordinator thread id"))?,
+            .map_err(|_| corrupt("orchestrator thread id"))?,
         model: row.fields.model.clone(),
         effort: row.fields.effort.as_deref().and_then(option_value),
         permission: row.fields.permission.as_deref().and_then(option_value),
@@ -326,7 +326,7 @@ pub(super) fn output_item(event: &Event) -> Option<AgentOutputItem> {
             model: model.as_deref().map(|model| truncate(model, MAX_ID_BYTES)),
         },
         // The backend knows only the id; the run's actor adds a follow-up's text (PLX-92), marks
-        // a coordinator's wake-up (PLX-42), and lists the message's images (PLX-191) and
+        // an orchestrator's wake-up (PLX-42), and lists the message's images (PLX-191) and
         // attached threads (PLX-372).
         Event::TurnStarted { turn_id } => AgentOutputItem::TurnStarted {
             turn_id: *turn_id,
