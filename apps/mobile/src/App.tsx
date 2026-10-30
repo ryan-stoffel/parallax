@@ -474,14 +474,14 @@ function Gate() {
     void loadSetup().then(async (loaded) => {
       if (!devComputer || loaded.machines.length) return setSetup(loaded);
       const machines = await probe(devComputer).catch(() => []);
-      const next = { machines, defaultId: machines[0]?.id };
+      const next = { machines, defaultId: machines[0]?.id, onboarded: true };
       saveSetup(next);
       setSetup(next);
     });
   }, []);
   if (user === undefined || !setup) return <Loading />;
   if (!user && !devComputer) return <SignIn />;
-  if (setup.machines.length === 0)
+  if (!setup.onboarded)
     return (
       <Onboarding
         onDone={(next) => {

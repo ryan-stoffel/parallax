@@ -3,7 +3,7 @@
 // icon and a greeting over the message box that starts it.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import * as Haptics from "expo-haptics";
-import { ChevronDown, ChevronLeft, Search, SquareDashed } from "lucide-react-native";
+import { ChevronDown, ChevronLeft, MonitorSmartphone, Plus, Search, SquareDashed } from "lucide-react-native";
 import { useLayoutEffect, useRef, useState } from "react";
 import {
   Animated,
@@ -30,7 +30,7 @@ import { getPrefs, setPrefs } from "./prefs";
 import { RepoIcon, useSharedIcons } from "./RepoIcon";
 import { homeless } from "./Sidebar";
 import { setStarted } from "./started";
-import { DeviceIcon, Icon, Section, T, useColors } from "./ui";
+import { Button, DeviceIcon, Icon, Section, T, useColors } from "./ui";
 
 /** The default computer first, then the rest by name. */
 const ordered = (computers: Computer[], defaultId?: string) =>
@@ -311,6 +311,24 @@ export function StartThreadScreen({ route, navigation }: NativeStackScreenProps<
     navigation.reset({ index: 0, routes: [{ name: "Thread", params: { hostId, runId, instant: true } }] });
     return undefined;
   }
+
+  // No computer yet, as after skipping Find computers: where to add one, and no message box.
+  if (computers.length === 0)
+    return (
+      <View style={[styles.middle, { paddingTop: headerHeight, backgroundColor: c.background }]}>
+        <Icon icon={MonitorSmartphone} size={48} color={c.faintForeground} />
+        <T style={styles.greeting}>{greeting(new Date().getHours(), user?.given_name)}</T>
+        <T muted style={{ fontSize: 15, lineHeight: 21, textAlign: "center", paddingHorizontal: 32 }}>
+          Add a computer that runs Parallax to start threads on it from here.
+        </T>
+        <Button
+          label="Add computer"
+          icon={Plus}
+          primary
+          onPress={() => navigation.navigate("Settings", { screen: "AddComputer", initial: false })}
+        />
+      </View>
+    );
 
   return (
     <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: c.background }}>
