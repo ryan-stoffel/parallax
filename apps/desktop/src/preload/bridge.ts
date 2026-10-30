@@ -449,6 +449,12 @@ export interface ParallaxBridge {
    * or an error for people.
    */
   revokeDevice(id: string): Promise<RemoteSessionsResult | string>;
+  /**
+   * Turns on Reach from anywhere on `tailnet:` device `hostId` the user kept on Tailscale only,
+   * registered under the signed-in account, so it's reached through the account before the
+   * Tailscale-only path goes (0091). Resolves to an error for people, or undefined.
+   */
+  turnOnReach(hostId: string): Promise<string | undefined>;
 
   /**
    * The agents in the ACP Registry, fetched once while the app runs. Resolves to an error for

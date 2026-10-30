@@ -2,6 +2,7 @@ import {
   Check,
   ChevronRight,
   Ellipsis,
+  Globe,
   KeyRound,
   Pencil,
   Plus,
@@ -174,6 +175,26 @@ function useHealth(hostId: string, connected: boolean): Health | undefined {
   return health;
 }
 
+/**
+ * Whether connected `tailnet:` device `hostId` was kept on Tailscale only, with `relay` or `remote`
+ * turned off there, so the account can't reach it once the Tailscale-only path goes (0091).
+ */
+function useTailnetOnly(hostId: string, connected: boolean) {
+  const [only, setOnly] = useState(false);
+  useEffect(() => {
+    if (!connected || !hostId.startsWith("tailnet:")) return setOnly(false);
+    let live = true;
+    void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
+      if (live && "result" in answer)
+        setOnly(answer.result.relay === false || answer.result.remote === false);
+    });
+    return () => {
+      live = false;
+    };
+  }, [hostId, connected]);
+  return [only, setOnly] as const;
+}
+
 /** 7260 → "2h 1m": how long plxd has run. */
 export function uptime(seconds: number): string {
   const days = Math.floor(seconds / 86_400);
@@ -208,6 +229,16 @@ function DeviceCard({
   const state = useConnection(device.id);
   const connected = enabled && state?.status === "connected";
   const health = useHealth(device.id, connected);
+  const [tailnetOnly, setTailnetOnly] = useTailnetOnly(device.id, connected);
+  const [reaching, setReaching] = useState(false);
+  const reach = async () => {
+    setReaching(true);
+    const failed = await window.parallax.turnOnReach(device.id);
+    setReaching(false);
+    if (failed)
+      notify({ tone: "error", title: `Couldn't turn on Reach from anywhere`, body: failed });
+    else setTailnetOnly(false);
+  };
   const [renaming, setRenaming] = useState(false);
   const menuId = useId();
   const iconsId = useId();
@@ -290,6 +321,11 @@ function DeviceCard({
             {health.store !== "ok" && ` · store ${health.store}`}
           </p>
         )}
+        {tailnetOnly && (
+          <p className="text-meta text-faint-foreground">
+            Only on Tailscale. Turn on Reach from anywhere to keep it in Parallax.
+          </p>
+        )}
         {access ? (
           <p className="text-meta text-faint-foreground">{accessLabel({ access })}</p>
         ) : (
@@ -307,6 +343,18 @@ function DeviceCard({
         >
           <KeyRound aria-hidden />
           Enter code
+        </button>
+      )}
+      {tailnetOnly && (
+        <button
+          type="button"
+          disabled={reaching}
+          title="Parallax Connect is moving off Tailscale-only connections. Reach from anywhere keeps this computer connected through your Parallax account."
+          onClick={() => void reach()}
+          className={`${primaryButton} flex items-center gap-1 [&_svg]:size-3.5`}
+        >
+          <Globe aria-hidden />
+          {reaching ? "Turning on…" : "Reach from anywhere"}
         </button>
       )}
       {access?.step === "ask" && (

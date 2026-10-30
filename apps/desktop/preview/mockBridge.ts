@@ -1535,6 +1535,8 @@ const tailnet: (TailnetDevice & {
   repos?: (here: Repo[]) => Repo[];
   off?: boolean;
   removed?: boolean;
+  /** Reach from anywhere turned on from Settings. */
+  reach?: boolean;
 })[] = [
   {
     id: "nMini7Q2kX",
@@ -1743,8 +1745,16 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
       }
       return { thread, run };
     }
+    // The Windows PC was kept on Tailscale only, so Settings offers Reach from anywhere (0091).
     case "host/settings/get":
-      return { autoResume: true, connect: true, deviceName: device.name, deviceIcon: device.icon };
+      return {
+        autoResume: true,
+        connect: true,
+        relay: device.os !== "windows" || !!device.reach,
+        remote: true,
+        deviceName: device.name,
+        deviceIcon: device.icon,
+      };
     case "host/version":
       return {
         plxd: "0.0.0-preview",
@@ -2240,6 +2250,11 @@ export const mockBridge: ParallaxBridge = {
     return undefined;
   },
   askAgain: () => delay(undefined),
+  turnOnReach: (hostId) => {
+    const device = deviceOf(hostId);
+    if (device) device.reach = true;
+    return delay(undefined, 400);
+  },
   revokeDevice: (id) => {
     lan.sessions = lan.sessions.filter((s) => s.id !== id);
     return delay({ sessions: lan.sessions, listening: lan.on, pairing: false });

@@ -760,3 +760,38 @@ test("a tailnet device matched to its account computer by relay/id is approved o
     rmSync(fake.userData, { recursive: true, force: true });
   }
 });
+
+test("Reach from anywhere on a tailnet device registers it under the account and turns on relay and remote there", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    const device = { id: "n1", hostName: "thinkpad", ip: "100.64.0.2", os: "linux" };
+    const local = await start({ devices: [device] }, signedIn().account);
+    fake.answers.set("host/settings/get", { result: { connect: true } });
+    fake.answers.set("connect/devices", { result: { devices: [] } });
+    local.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    const tailnet = fake.made.find((c) => c.options.device === "thinkpad")!;
+    tailnet.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+
+    const calls: [string, unknown, unknown][] = [];
+    for (const method of ["relay/sign", "relay/register", "host/settings/set"])
+      fake.answers.set(method, (params: unknown, c: unknown) => {
+        calls.push([method, c, params]);
+        return { result: method === "relay/sign" ? { signature: "s" } : {} };
+      });
+    const turn = (id: string) => fake.handlers.get("parallax:turnOnReach")!({}, id);
+    expect(await turn("local")).toMatch(/can't reach/);
+    expect(await turn(`tailnet:${device.id}`)).toBeUndefined();
+    expect(calls.map(([method, c]) => [method, c === tailnet ? "thinkpad" : "local"])).toEqual([
+      ["relay/sign", "thinkpad"],
+      ["relay/register", "local"],
+      ["host/settings/set", "thinkpad"],
+    ]);
+    expect(calls.at(-1)?.[2]).toEqual({ relay: true, remote: true });
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});

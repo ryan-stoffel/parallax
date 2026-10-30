@@ -647,6 +647,7 @@ export function webBridge(host: WebHost, name: string): ParallaxBridge {
     onAccessRequests: (listener) => (listener([]), () => {}),
     answerAccess: async () => NOT_HERE,
     revokeDevice: async () => NOT_HERE,
+    turnOnReach: async () => NOT_HERE,
 
     acpRegistry: async () => NOT_HERE,
 

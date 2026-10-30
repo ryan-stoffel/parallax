@@ -250,6 +250,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   });
   ipcMain.handle("parallax:accessRequests", () => accessRequests());
   ipcMain.handle("parallax:revokeDevice", (_event, id: unknown) => revokeDevice(id));
+  ipcMain.handle("parallax:turnOnReach", (_event, hostId: unknown) => turnOnReach(hostId));
   ipcMain.handle("parallax:answerAccess", (_event, id: unknown, allow: unknown) =>
     typeof id === "string" && typeof allow === "boolean"
       ? answerAccess(id, allow)
@@ -2044,6 +2045,27 @@ const syncAccess = coalesced(async () => {
       .map((each) => each.host.request("access/merge", union)),
   );
 });
+
+/**
+ * `window.parallax.turnOnReach`: for a `tailnet:` device the user kept on Tailscale only, registers
+ * it with the relay under the signed-in account (`joinRelay`), turns on its `relay` and `remote`,
+ * and asks the account for its computers, so it moves to an `account:` connection before the
+ * Tailscale-only path goes (0091). Resolves to an error for people.
+ */
+async function turnOnReach(hostId: unknown): Promise<string | undefined> {
+  const host =
+    typeof hostId === "string" && hostId.startsWith("tailnet:")
+      ? connections.get(hostId)
+      : undefined;
+  if (host?.state.status !== "connected") return "Parallax can't reach that computer right now.";
+  if (!(await account?.accessToken()))
+    return "Sign in to Parallax from Profile in the sidebar first.";
+  await joinRelay(hostId as string);
+  const answer = await host.request("host/settings/set", { relay: true, remote: true });
+  if ("error" in answer) return `Parallax couldn't turn it on there: ${answer.error.message}`;
+  void discoverAccounts();
+  return undefined;
+}
 
 /** The key thumbprints host `host` keeps as removed; none when it can't say. */
 async function removedKeys(host: Connection): Promise<Set<string>> {
