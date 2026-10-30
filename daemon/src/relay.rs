@@ -181,11 +181,11 @@ fn cant_reach(error: &Error) -> String {
     format!("Parallax couldn't reach the relay: {error}")
 }
 
-/// A JSON `GET` of `path` at `url`, with no credential, such as Clerk's JWKS (0091): its status and
-/// JSON body. HTTPS checked against the Mozilla roots, as the relay's own, or plain HTTP to this
-/// computer.
-pub(crate) async fn get(url: &str, path: &str) -> Result<(u16, Value), Error> {
-    http(url, "GET", path, None, None).await
+/// A JSON `GET` of `path` at `url`, with no credential, such as Clerk's JWKS (0091): its status,
+/// JSON body, and `Cache-Control` `max-age`. HTTPS checked against the Mozilla roots, as the
+/// relay's own, or plain HTTP to this computer.
+pub(crate) async fn get(url: &str, path: &str) -> Result<(u16, Value, Option<Duration>), Error> {
+    request(url, "GET", path, None, None).await
 }
 
 /// One JSON request to the relay, signed in with `token` when given: its status and JSON body.
@@ -196,6 +196,18 @@ async fn http(
     token: Option<&str>,
     body: Option<&Value>,
 ) -> Result<(u16, Value), Error> {
+    let (status, body, _) = request(url, method, path, token, body).await?;
+    Ok((status, body))
+}
+
+/// One JSON request: its status, JSON body, and `Cache-Control` `max-age`.
+async fn request(
+    url: &str,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&Value>,
+) -> Result<(u16, Value, Option<Duration>), Error> {
     let base = Base::parse(url)?;
     let mut stream = base.connect().await?;
     let body = body.map(ToString::to_string).unwrap_or_default();
@@ -232,8 +244,12 @@ async fn http(
     }
 }
 
-/// The status and JSON body of `answer`, once it's whole, or at the end of the connection.
-fn parse_response(answer: &[u8], ended: bool) -> Option<Result<(u16, Value), Error>> {
+/// The status, JSON body, and `Cache-Control` `max-age` of `answer`, once it's whole, or at the
+/// end of the connection.
+fn parse_response(
+    answer: &[u8],
+    ended: bool,
+) -> Option<Result<(u16, Value, Option<Duration>), Error>> {
     let mut headers = [httparse::EMPTY_HEADER; 32];
     let mut response = httparse::Response::new(&mut headers);
     let Ok(httparse::Status::Complete(length)) = response.parse(answer) else {
@@ -264,9 +280,15 @@ fn parse_response(answer: &[u8], ended: bool) -> Option<Result<(u16, Value), Err
         return None;
     };
     let status = response.code.unwrap_or(0);
+    let max_age = header("cache-control").and_then(|value| {
+        let (_, rest) = value.split_once("max-age=")?;
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok().map(Duration::from_secs)
+    });
     Some(Ok((
         status,
         serde_json::from_slice(&body).unwrap_or(Value::Null),
+        max_age,
     )))
 }
 
