@@ -4,6 +4,10 @@
 - Date: 2026-10-29
 - Issue: PLX-1148
 
+![Parallax Connect over Parallax Relay: computers A and B, the phone, the relay's Worker and Durable Objects, Clerk, the routes, the first connection, trust, migration, and what is removed](0091-connect-over-relay.svg)
+
+The diagram's source is [0091-connect-over-relay.excalidraw](0091-connect-over-relay.excalidraw). Open it at excalidraw.com to edit it, then export it as SVG over the file above.
+
 ## Context
 
 Parallax Connect (0056) works only when every computer is on one Tailscale tailnet. plxd listens on its Tailscale IPv4, port 7340, and admits a connection after `tailscale whois` names its own untagged user. The app finds computers with `connect/devices` (`tailscale status`), reaches them with `plxd dial <tailnet ip>`, and runs installs and CLI sign-ins on them over ssh to the Tailscale IP (`apps/desktop/src/main/hosts.ts`, `sshOf`). The phone reaches them the same way (PLX-983). plx-connect's `add` needs ssh and Tailscale on both ends. Tailscale is in about 50 files across plxd, the protocol, the store, the desktop app, the phone, and plx-connect. Ryan wants Connect to be Parallax's own tunnel, so Parallax controls every part of it, and as close to T3 Connect as possible.
