@@ -1674,7 +1674,14 @@ const discoverAccounts = coalesced(async () => {
         dropAccountConnection(accountId(old.hostId));
     keepAccounts(accounts);
   }
+  offlineAccounts.clear();
+  for (const each of answer.result.hosts)
+    if (!each.online) offlineAccounts.add(accountId(each.hostId));
   for (const each of accounts) addAccountConnection(each);
+  // A new computer that was offline may answer now.
+  for (const [id, access] of accountAccess)
+    if (access.step === "needsCode" && access.offline && !offlineAccounts.has(id))
+      void askForCode(id);
   broadcast("parallax:devices", deviceHosts());
 });
 
@@ -1713,7 +1720,8 @@ async function probeRoutes(relayId: string, routes: string[]): Promise<string | 
   const plxd = localPlxd();
   if (!plxd) return undefined;
   try {
-    const { stdout } = await dialPlxd(plxd, ["--probe", "--account", relayId, "--", ...routes]);
+    const args = ["--probe", "--account", relayId, "--", ...routes];
+    const { stdout } = await dialPlxd(plxd, args, await account?.accessToken());
     const { route } = JSON.parse(stdout) as { route?: unknown };
     return typeof route === "string" ? route : undefined;
   } catch {
@@ -1786,13 +1794,35 @@ async function beginAccess(id: string): Promise<void> {
   const relayId = relayIdOf(id);
   const vouched = await vouchedHosts();
   if (!relayId || !vouched || connections.get(id)?.state.status !== "failed") return;
-  if (!vouched.has(relayId)) {
-    if (step !== "needsCode") setAccess(id, { step: "needsCode" });
-    return;
-  }
+  if (!vouched.has(relayId)) return askForCode(id);
   if (signedIn.has(id))
     return setAccess(id, { step: "ask", why: "It hasn't let this computer in. Ask again." });
   await signIn(id);
+}
+
+/** Account computers the relay last listed as offline, by host id. */
+const offlineAccounts = new Set<string>();
+/** New account computers whose routes `askForCode` is probing, so one trigger probes once. */
+const probing = new Set<string>();
+
+/**
+ * Marks new account computer `id` as needing the code its `plx connect` shows. The dialog asks
+ * for it only once the computer answers: one the relay lists as offline, or none of whose routes
+ * presents its key, as an old install's leftover entry never does, stays `offline`, listed in
+ * Settings > Connections, where Enter code still asks (0091). Discovery checks again.
+ */
+async function askForCode(id: string): Promise<void> {
+  const relayId = relayIdOf(id);
+  const routes = accountRoutes.get(id);
+  if (!relayId || !routes || probing.has(id)) return;
+  probing.add(id);
+  const answers =
+    !offlineAccounts.has(id) && (await probeRoutes(relayId, routes.dial())) !== undefined;
+  probing.delete(id);
+  const now = accountAccess.get(id);
+  // Something moved on meanwhile, or nothing changed, which keeps a wrong code's error.
+  if ((now && now.step !== "needsCode") || (now && !now.offline === answers)) return;
+  setAccess(id, { step: "needsCode", ...(!answers && { offline: true as const }) });
 }
 
 /**

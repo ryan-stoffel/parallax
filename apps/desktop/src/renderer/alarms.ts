@@ -220,6 +220,9 @@ export function useConnectionAlarms(hosts: Host[]) {
           notify({ key, tone: "success", title: `Reconnected to ${name}` });
       } else if (state.status === "failed" && !state.retrying) {
         if (before?.status === "failed" && !before.retrying) return;
+        // An account computer with no session here signs in, or waits for its code, which
+        // Settings > Connections and its own prompts show, so it isn't an error (0091).
+        if (state.error.reason === "refused" && hostId.startsWith("account:")) return;
         troubled.add(hostId);
         notify({
           key,

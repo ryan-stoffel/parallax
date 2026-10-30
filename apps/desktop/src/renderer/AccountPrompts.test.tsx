@@ -74,6 +74,14 @@ test("a new computer's dialog takes its 6 digits once, clears a wrong code, and 
   expect(dialog()).toBeNull();
 });
 
+test("an offline new computer asks for nothing, and the dialog opens once it answers", async () => {
+  await render([{ ...buildBox, access: { step: "needsCode", offline: true } }], []);
+  expect(dialog()).toBeNull();
+  act(() => root?.unmount());
+  await render([buildBox], []);
+  expect(dialog()?.textContent).toContain("Connect build-box");
+});
+
 test("a device's request comes first, shows its code, and is allowed or denied", async () => {
   const parallax = await render([buildBox], [phone, { ...phone, id: "r2", name: "iPad" }]);
   expect(dialog()?.textContent).toContain("Allow Ryan's iPhone?");

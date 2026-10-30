@@ -273,11 +273,13 @@ function DeviceCard({
   const access = enabled && !connected ? device.access : undefined;
   const status = !enabled
     ? "Off"
-    : state
-      ? connected
-        ? "Connected"
-        : statusLabel(state)
-      : "Connecting…";
+    : access?.step === "needsCode" && access.offline
+      ? "Offline"
+      : state
+        ? connected
+          ? "Connected"
+          : statusLabel(state)
+        : "Connecting…";
   const details = [
     health?.os ?? device.os,
     health?.arch,

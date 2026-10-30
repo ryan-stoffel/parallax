@@ -481,8 +481,11 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
     );
     local.set(connected({ accountAccess: {} }));
     const box = accountConnection(buildBox)!;
+    // It answers with its key, so the dialog asks for its code.
+    fake.dialOutput = { lines: [`{"route":"relay:${buildBox}"}`], code: 0 };
     box.set(refused);
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.dials.map((d) => d.args[1])).toEqual(["--probe"]);
     expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
 
     const enter = (code: string) =>
@@ -490,7 +493,7 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
         string | undefined
       >;
     expect(await enter("12 34")).toBe("Enter the 6 digits it shows.");
-    expect(fake.dials).toHaveLength(0);
+    expect(fake.dials).toHaveLength(1);
 
     fake.dialOutput = { lines: [], code: 5 };
     const wrong = enter("482 913");
@@ -854,6 +857,52 @@ test("an account computer's routes are read again from relay/id once it connects
       await vi.advanceTimersByTimeAsync(0);
       expect(dialed()).toEqual(["10.0.0.12:7400", `relay:${studio}`]);
     }
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});
+
+test("a new account computer that's offline or doesn't answer waits in Settings, and is asked for its code once it answers", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    let online = false;
+    fake.answers.set("relay/hosts", () => ({
+      result: { hosts: [{ hostId: buildBox, name: "mac-mini", online, thisComputer: false }] },
+    }));
+    fake.answers.set("access/get", accessState([]));
+    const local = await start({}, signedIn().account);
+    local.set(connected({ accountAccess: {} }));
+    await vi.advanceTimersByTimeAsync(0);
+    const box = accountConnection(buildBox)!;
+    // An old install's leftover entry: the relay lists it offline, so nothing is dialed for it.
+    box.set(refused);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(listed(buildBox)?.access).toEqual({ step: "needsCode", offline: true });
+    expect(fake.dials).toHaveLength(0);
+
+    // Listed online, but none of its routes answers with its key: still offline.
+    online = true;
+    fake.dialOutput = { lines: [], code: 4 };
+    fake.appEvents.get("browser-window-focus")!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fake.dials.map((d) => d.args[1])).toEqual(["--probe"]);
+    expect(listed(buildBox)?.access).toEqual({ step: "needsCode", offline: true });
+
+    // Once it answers, the dialog may ask.
+    fake.dialOutput = { lines: [`{"route":"relay:${buildBox}"}`], code: 0 };
+    fake.appEvents.get("browser-window-focus")!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(listed(buildBox)?.access).toEqual({ step: "needsCode" });
+
+    // Remove takes it off this app's list, and the account listing it again doesn't add it back.
+    await fake.handlers.get("parallax:removeDevice")!({}, `account:${buildBox}`);
+    expect(box.disposed).toBe(true);
+    expect(listed(buildBox)).toBeUndefined();
+    fake.handlers.get("parallax:discoverAccount")!();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(listed(buildBox)).toBeUndefined();
   } finally {
     vi.useRealTimers();
     rmSync(fake.userData, { recursive: true, force: true });
