@@ -118,7 +118,6 @@ test("a new account computer takes its code in a dialog, then installs and signs
   const dialog = page.getByRole("dialog", { name: "Connect build-box" });
   await expect(dialog).toBeVisible();
   await dialog.getByRole("textbox", { name: "Code" }).fill(`${code.slice(0, 3)} ${code.slice(3)}`);
-  await page.screenshot({ path: test.info().outputPath("code-entry.png") });
   // A wrong code is refused, and cleared: each code is good for one try.
   await dialog.getByRole("textbox", { name: "Code" }).fill(code === "000000" ? "111111" : "000000");
   await dialog.getByRole("button", { name: "Connect" }).click();
@@ -145,5 +144,4 @@ test("a new account computer takes its code in a dialog, then installs and signs
   const card = page.locator(`li[data-device="${hostId}"]`);
   await expect(card).toContainText("build-box");
   await expect(card).toContainText("Connected");
-  await page.screenshot({ path: test.info().outputPath("settings-connections.png") });
 });
