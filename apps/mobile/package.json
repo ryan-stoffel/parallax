@@ -7,7 +7,8 @@
     "start": "expo start --dev-client",
     "ios": "expo run:ios",
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:native": "node modules/pinned-tls/test/relay.mjs"
   },
   "dependencies": {
     "@noble/curves": "^2.4.0",

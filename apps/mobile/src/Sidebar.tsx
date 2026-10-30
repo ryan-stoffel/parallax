@@ -63,7 +63,7 @@ import { ProviderLogo } from "./logos";
 import { ProjectGlyph, RepoIcon, useSharedIcons } from "./RepoIcon";
 import { ago, useNav, useShow } from "./nav";
 import { getPrefs } from "./prefs";
-import { AttentionBadge, DeviceIcon, Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
+import { AttentionBadge, Button, DeviceIcon, Icon, SkyBanner, T, useColors, Wordmark } from "./ui";
 
 /** How much of the screen's width the sidebar takes. */
 export const sidebarWidth = (screen: number) => Math.round(screen * 0.78);
@@ -689,7 +689,18 @@ export function Sidebar() {
           // Every thread in a drawer below leaves the list empty, but not the sidebar.
           shown.length ? null : (
             <View style={styles.empty}>
-              {loading || offline.length === computers.length ? (
+              {computers.length === 0 ? (
+                <>
+                  <T muted style={{ textAlign: "center" }}>
+                    No computers yet. Add one that runs Parallax to see its threads here.
+                  </T>
+                  <Button
+                    label="Add computer"
+                    icon={Lucide.Plus}
+                    onPress={() => nav.navigate("Settings", { screen: "AddComputer", initial: false })}
+                  />
+                </>
+              ) : loading || offline.length === computers.length ? (
                 <ActivityIndicator color={c.accent} />
               ) : (
                 <T muted style={{ textAlign: "center" }}>

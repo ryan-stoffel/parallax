@@ -1,60 +1,18 @@
 // HTTPS requests and a WebSocket to plxd's remote listener (0065), whose certificate is its own
-// self-signed one: trusted only when its SHA-256 matches the fingerprint pairing pinned. React
-// Native's fetch and WebSocket can't pin a certificate, so the app reaches plxd through this. It
-// also opens Parallax Connect's plain TCP connections over Tailscale (0056), finds hosts over
-// mDNS, signs in to the Parallax account as the desktop does (0067), keeps the app running briefly
-// in the background, shows a file in Quick Look, and supplies secure random bytes, a backup-free
-// file location, this phone's tailnet address, and the build's version.
+// self-signed one: trusted only when its SHA-256 matches the fingerprint pairing pinned, or, for an
+// account's host, when its key is the host id (0091, Pinning.swift). React Native's fetch and
+// WebSocket can't pin a certificate, so the app reaches plxd through this, directly or through a
+// Parallax Relay stream (RelayBridge.swift). It also opens Parallax Connect's plain TCP
+// connections over Tailscale (0056), finds hosts over mDNS, signs in to the Parallax account as
+// the desktop does (0067), reports network changes, keeps the app running briefly in the
+// background, shows a file in Quick Look, and supplies secure random bytes, a backup-free file
+// location, this phone's tailnet address, and the build's version.
 import AuthenticationServices
-import CryptoKit
 import ExpoModulesCore
 import Foundation
 import Network
 import QuickLook
 import UIKit
-
-/// Accepts the server's certificate only when its SHA-256 is `pin`. With no pin, as pairing's first
-/// request has, it accepts any and records the fingerprint, which SPAKE2 then vouches for.
-private final class Pinning: NSObject, URLSessionWebSocketDelegate {
-  let pin: String?
-  var seen = ""
-  var opened: (() -> Void)?
-  var closed: (() -> Void)?
-
-  init(pin: String?) { self.pin = pin }
-
-  func urlSession(
-    _ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
-    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-  ) {
-    guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-      let trust = challenge.protectionSpace.serverTrust,
-      let leaf = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first
-    else { return completionHandler(.cancelAuthenticationChallenge, nil) }
-    let der = SecCertificateCopyData(leaf) as Data
-    seen = SHA256.hash(data: der).map { String(format: "%02x", $0) }.joined()
-    if pin == nil || pin == seen {
-      completionHandler(.useCredential, URLCredential(trust: trust))
-    } else {
-      completionHandler(.cancelAuthenticationChallenge, nil)
-    }
-  }
-
-  /// plxd never redirects, and a redirect could carry the `DPoP` header elsewhere.
-  func urlSession(
-    _ session: URLSession, task: URLSessionTask,
-    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
-    completionHandler: @escaping (URLRequest?) -> Void
-  ) { completionHandler(nil) }
-
-  func urlSession(
-    _ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol: String?
-  ) { opened?() }
-
-  func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-    closed?()
-  }
-}
 
 /// A Bonjour service's IPv4 address and port, once resolved, loopback last as plxd's own discovery
 /// sorts them. Network's NWConnection would resolve it too, but only by connecting.
@@ -99,10 +57,13 @@ public class PinnedTlsModule: Module {
   private var background: UIBackgroundTaskIdentifier = .invalid
   /// The file Quick Look shows, kept while its preview is up.
   private let look = Look()
+  /// The relay bridges open, by the id the app gave each.
+  private var bridges: [String: RelayBridge] = [:]
+  private let paths = NWPathMonitor()
 
   public func definition() -> ModuleDefinition {
     Name("PinnedTls")
-    Events("onSocket")
+    Events("onSocket", "onNetwork")
 
     /// `count` bytes from the system's secure random generator, for `crypto.getRandomValues`.
     Function("randomBytes") { (count: Int) throws -> Data in
@@ -157,17 +118,19 @@ public class PinnedTlsModule: Module {
     }
 
     /// One request: its status, its body as text, and the fingerprint of the certificate reached.
+    /// It gives up after `timeout` seconds without a byte.
     AsyncFunction("request") {
       (
         url: String, method: String, headers: [String: String], body: String?, pin: String?,
-        promise: Promise
+        timeout: Double, promise: Promise
       ) in
       guard let target = URL(string: url) else {
         return promise.reject("ERR_URL", "not a URL: \(url)")
       }
       let pinning = Pinning(pin: pin)
-      let session = URLSession(configuration: .ephemeral, delegate: pinning, delegateQueue: nil)
-      var request = URLRequest(url: target, timeoutInterval: 10)
+      let session = URLSession(
+        configuration: Pinning.configuration(pin: pin), delegate: pinning, delegateQueue: nil)
+      var request = URLRequest(url: target, timeoutInterval: timeout)
       request.httpMethod = method
       for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
       if let body {
@@ -177,9 +140,8 @@ public class PinnedTlsModule: Module {
       session.dataTask(with: request) { data, response, error in
         session.finishTasksAndInvalidate()
         if let error {
-          let code = pinning.pin != nil && !pinning.seen.isEmpty && pinning.seen != pinning.pin
-            ? "ERR_WRONG_HOST" : "ERR_NETWORK"
-          return promise.reject(code, error.localizedDescription)
+          return promise.reject(
+            pinning.refused ? "ERR_WRONG_HOST" : "ERR_NETWORK", error.localizedDescription)
         }
         promise.resolve([
           "status": (response as? HTTPURLResponse)?.statusCode ?? 0,
@@ -189,19 +151,52 @@ public class PinnedTlsModule: Module {
       }.resume()
     }
 
-    /// Opens WebSocket `id`, which reports `open`, each `message`, and one `close` as `onSocket`.
-    Function("open") { (id: String, url: String, pin: String) in
+    /// Opens WebSocket `id` with `headers` on its upgrade, which reports `open`, each `message`,
+    /// and one `close` as `onSocket`, the close with the upgrade's HTTP status when it was refused.
+    Function("open") { (id: String, url: String, pin: String, headers: [String: String]) in
       guard let target = URL(string: url) else { return }
       let pinning = Pinning(pin: pin)
-      let session = URLSession(configuration: .ephemeral, delegate: pinning, delegateQueue: nil)
-      let task = session.webSocketTask(with: target)
+      let session = URLSession(
+        configuration: Pinning.configuration(pin: pin), delegate: pinning, delegateQueue: nil)
+      var request = URLRequest(url: target)
+      for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+      let task = session.webSocketTask(with: request)
       // plxd's frames carry whole snapshots, larger than URLSession's 1 MiB default.
       task.maximumMessageSize = 64 << 20
-      pinning.opened = { [weak self] in self?.sendEvent("onSocket", ["id": id, "type": "open"]) }
-      pinning.closed = { [weak self] in self?.closed(id) }
+      var open = false
+      pinning.opened = { [weak self] in
+        open = true
+        self?.sendEvent("onSocket", ["id": id, "type": "open"])
+      }
+      pinning.closed = { [weak self] status in self?.closed(id, status: open ? nil : status) }
       lock.withLock { sockets[id] = (task, session) }
       receive(id, task)
       task.resume()
+    }
+
+    /// Opens relay bridge `id` (RelayBridge.swift): a loopback port each of whose connections is a
+    /// stream to a host through the relay's `url` (`wss://…/v1/hosts/<id>/connect`), opened with
+    /// the Clerk `token`. Resolves to the port.
+    AsyncFunction("relayOpen") { (id: String, url: String, token: String, promise: Promise) in
+      guard let target = URL(string: url), let bridge = try? RelayBridge(url: target, token: token)
+      else { return promise.reject("ERR_NETWORK", "Couldn't open a relay stream.") }
+      self.lock.withLock { self.bridges[id] = bridge }
+      bridge.start { port in
+        if let port { promise.resolve(Int(port)) } else {
+          promise.reject("ERR_NETWORK", "Couldn't open a relay stream.")
+        }
+      }
+    }
+
+    /// The relay's HTTP status when it last refused one of bridge `id`'s streams, such as 503
+    /// while the host is offline, or nil.
+    Function("relayRefused") { (id: String) -> Int? in
+      lock.withLock { bridges[id] }?.refused
+    }
+
+    /// Closes relay bridge `id` and every stream through it.
+    Function("relayClose") { (id: String) in
+      lock.withLock { bridges.removeValue(forKey: id) }?.close()
     }
 
     /// Signs in as the desktop app does (0067): Clerk's authorize URL `url` opens in a sign-in
@@ -250,6 +245,18 @@ public class PinnedTlsModule: Module {
     /// Keeps the app running for the time iOS allows after it goes to the background, about 30
     /// seconds, so its connections can still hear a thread finish and notify.
     OnCreate {
+      // A network that comes back or changes, for the account's computers' discovery and route
+      // re-checks (0091).
+      var last: NWPath?
+      paths.pathUpdateHandler = { [weak self] path in
+        defer { last = path }
+        guard let last, path.status == .satisfied,
+          last.status != .satisfied || path.availableInterfaces.map(\.name)
+            != last.availableInterfaces.map(\.name)
+        else { return }
+        self?.sendEvent("onNetwork", [:])
+      }
+      paths.start(queue: queue)
       NotificationCenter.default.addObserver(
         forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
       ) { [weak self] _ in self?.holdInBackground() }
@@ -382,15 +389,18 @@ public class PinnedTlsModule: Module {
     }
   }
 
-  /// Reports socket `id` closed, once, and lets its session or connection go.
-  private func closed(_ id: String) {
+  /// Reports socket `id` closed, once, with the HTTP `status` that refused its upgrade if one
+  /// did, and lets its session or connection go.
+  private func closed(_ id: String, status: Int? = nil) {
     if let line = lock.withLock({ tcp.removeValue(forKey: id) }) {
       line.connection.cancel()
       return sendEvent("onSocket", ["id": id, "type": "close"])
     }
     guard let socket = lock.withLock({ sockets.removeValue(forKey: id) }) else { return }
     socket.session.invalidateAndCancel()
-    sendEvent("onSocket", ["id": id, "type": "close"])
+    var event: [String: Any] = ["id": id, "type": "close"]
+    if let status { event["status"] = status }
+    sendEvent("onSocket", event)
   }
 }
 

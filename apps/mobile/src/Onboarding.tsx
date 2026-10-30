@@ -4,7 +4,6 @@
 import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
   Linking,
   Pressable,
   ScrollView,
@@ -47,30 +46,44 @@ function Step({
 }) {
   const c = useColors();
   return (
-    <KeyboardAvoidingView behavior="padding" style={{ flex: 1, backgroundColor: c.background }}>
-      <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
-        <View style={styles.progress}>
-          {[0, 1, 2, 3].map((i) => (
-            <View
-              key={i}
-              style={[styles.bar, { backgroundColor: i <= index ? c.accent : c.selected }]}
-            />
-          ))}
-        </View>
-        <View style={{ gap: 8, marginBottom: 8 }}>
-          <T medium style={{ fontSize: 26, lineHeight: 34 }}>
-            {title}
-          </T>
-          <T muted>{subtitle}</T>
-        </View>
-        {children}
-      </ScrollView>
-    </KeyboardAvoidingView>
+    // The scroll view is the root, which a sheet (Settings › Add computer) needs to size it, and
+    // keeps clear of the keyboard itself.
+    <ScrollView
+      style={{ flex: 1, backgroundColor: c.background }}
+      contentContainerStyle={styles.page}
+      keyboardShouldPersistTaps="handled"
+      automaticallyAdjustKeyboardInsets
+    >
+      <View style={styles.progress}>
+        {[0, 1, 2, 3].map((i) => (
+          <View
+            key={i}
+            style={[styles.bar, { backgroundColor: i <= index ? c.accent : c.selected }]}
+          />
+        ))}
+      </View>
+      <View style={{ gap: 8, marginBottom: 8 }}>
+        <T medium style={{ fontSize: 26, lineHeight: 34 }}>
+          {title}
+        </T>
+        <T muted>{subtitle}</T>
+      </View>
+      {children}
+    </ScrollView>
   );
 }
 
-/** Finds the user's computers from any one of them. `onFound` gets every Parallax computer. */
-export function FindComputers({ onFound }: { onFound: (machines: Machine[]) => void }) {
+/**
+ * Finds the user's computers from any one of them. `onFound` gets every Parallax computer. With
+ * `onSkip`, it can be left with none, for one added later in Settings › Add computer.
+ */
+export function FindComputers({
+  onFound,
+  onSkip,
+}: {
+  onFound: (machines: Machine[]) => void;
+  onSkip?: () => void;
+}) {
   const c = useColors();
   const [address, setAddress] = useState("");
   const [busy, setBusy] = useState(false);
@@ -134,6 +147,9 @@ export function FindComputers({ onFound }: { onFound: (machines: Machine[]) => v
       >
         <T style={{ fontSize: 14, color: c.accent }}>No Tailscale? Pair on this Wi‑Fi instead</T>
       </Pressable>
+      {onSkip && (
+        <Button label="Skip for now" onPress={onSkip} />
+      )}
     </Step>
   );
 }
@@ -243,6 +259,11 @@ export function Onboarding({ onDone }: { onDone: (setup: Setup) => void }) {
           setChosen(found[0]?.id);
           setStep("default");
         }}
+        onSkip={() => {
+          setMachines([]);
+          setChosen(undefined);
+          setStep("notify");
+        }}
       />
     );
 
@@ -267,7 +288,7 @@ export function Onboarding({ onDone }: { onDone: (setup: Setup) => void }) {
       </Step>
     );
 
-  const finish = () => onDone({ machines, defaultId: chosen });
+  const finish = () => onDone({ machines, defaultId: chosen, onboarded: true });
   return (
     <Step
       index={3}
