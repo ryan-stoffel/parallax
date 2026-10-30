@@ -105,7 +105,10 @@ use crate::{
     BundlePrepareParams, BundlePrepareResult, BundleReadParams, BundleReadResult,
     BundleWriteParams, GitStartMergeParams,
 };
-use crate::{ThreadRemoteControlParams, ThreadRemoteControlResult};
+use crate::{
+    ThreadRemoteControlOriginParams, ThreadRemoteControlOriginResult, ThreadRemoteControlParams,
+    ThreadRemoteControlResult,
+};
 
 /// A method that is called with a request and answered with a response.
 pub trait RequestMethod {
@@ -448,6 +451,9 @@ method_table! {
         /// `thread/remoteControl`: a Claude Remote Control thread's session, where it works, and
         /// what it's doing (PLX-1140). Gated on the `claudeRemoteControl` capability.
         ThreadRemoteControl = "thread/remoteControl": ThreadRemoteControlParams => ThreadRemoteControlResult;
+        /// `thread/remoteControlOrigin`: where a Claude Remote Control thread's session runs, read
+        /// from `claude.ai`, to move it there (PLX-1143). Gated on `claudeRemoteControlMove`.
+        ThreadRemoteControlOrigin = "thread/remoteControlOrigin": ThreadRemoteControlOriginParams => ThreadRemoteControlOriginResult;
         /// `thread/archive`: archives a normal thread or brings it back.
         ThreadArchive = "thread/archive": ThreadArchiveParams => ThreadArchiveResult;
         /// `thread/update`: marks a normal thread seen or snoozes it (0033), gated on the

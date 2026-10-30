@@ -146,6 +146,8 @@ pub(crate) fn initialize(
 /// `threadFork` (PLX-375, 0050): `thread/fork`.
 /// `claudeRemoteControl` (PLX-1140): `thread/remoteControl`, and a Claude Remote Control thread's
 /// follow-ups go to its session on `claude.ai`, which an older plxd would run here instead.
+/// `claudeRemoteControlMove` (PLX-1143): `thread/remoteControlOrigin`, where a Claude Remote
+/// Control thread's session runs, to move it to that computer.
 /// `chatImport` (PLX-883): `thread/importChat` and `thread/importedChats`, chats from `ChatGPT` and
 /// `claude.ai` data exports.
 /// `threadImport` (PLX-881): `thread/importable` and `thread/import`, past sessions from the
@@ -341,6 +343,7 @@ const PLAIN_CAPABILITIES: &[&str] = &[
     "checks",
     "checkout",
     "claudeRemoteControl",
+    "claudeRemoteControlMove",
     "commandIds",
     "composerMenus",
     "connect",

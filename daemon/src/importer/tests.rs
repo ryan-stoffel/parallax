@@ -2,7 +2,9 @@ use parallax_protocol::ImportSource;
 
 use std::fs;
 
-use super::{Message, Session, claude_messages, claude_remote_session, clone_path, run_id};
+use super::{
+    Message, Session, claude_code_id, claude_messages, claude_remote_session, clone_path, run_id,
+};
 
 fn user(text: &str) -> Message {
     Message::User(text.to_owned())
@@ -148,4 +150,37 @@ fn a_remote_sessions_repository_is_cloned_where_it_was_or_under_home() {
     assert_eq!(at(Some("/srv/learn-rust")), "~/learn-rust");
     assert_eq!(at(None), "~/learn-rust");
     assert_eq!(at(Some("C:\\Users\\ryan\\D:\\learn-rust")), "~/learn-rust");
+}
+
+#[test]
+fn a_claude_session_listed_under_the_desktop_apps_id_names_claude_codes() {
+    let session = |id: &str, resume: Option<&str>, source| Session {
+        source,
+        id: id.to_owned(),
+        title: "hello".to_owned(),
+        cwd: None,
+        started: "2026-10-29T03:43:05Z".parse().unwrap(),
+        updated: "2026-10-29T03:43:05Z".parse().unwrap(),
+        resume: resume.map(str::to_owned),
+    };
+    assert_eq!(
+        claude_code_id(&session(
+            "local_desktop",
+            Some("5c5f05dc"),
+            ImportSource::Claude
+        )),
+        Some("5c5f05dc".to_owned())
+    );
+    assert_eq!(
+        claude_code_id(&session("5c5f05dc", Some("5c5f05dc"), ImportSource::Claude)),
+        None
+    );
+    assert_eq!(
+        claude_code_id(&session("5c5f05dc", None, ImportSource::Claude)),
+        None
+    );
+    assert_eq!(
+        claude_code_id(&session("c1", Some("thread"), ImportSource::Codex)),
+        None
+    );
 }

@@ -334,6 +334,7 @@ async fn route(context: &Context, request: &Request) -> Result<Value, ErrorObjec
         ThreadImportChat => |p| thread::import_chat(context, p),
         ThreadImportedChats => |p| crate::importer::imported_chats(daemon, p),
         ThreadRemoteControl => |p| crate::remote_control::session(daemon, p),
+        ThreadRemoteControlOrigin => |p| crate::remote_control::origin(daemon, p),
         ThreadArchive => |p| threads::archive(daemon, p, context.command_id),
         ThreadUpdate => |p| threads::update(daemon, p, context.command_id),
         ThreadDelete => |p| thread::delete(context, p),

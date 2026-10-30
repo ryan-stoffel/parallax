@@ -1,0 +1,34 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "thread/remoteControlOrigin",
+    "params": {
+      "runId": "01990b8a-7c00-7d3e-8f4a-5b6c7d8e9f01"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "origin": {
+        "sessionId": "5c5f05dc-0803-5867-9381-52e904679e32",
+        "cwd": "C:\\Users\\ryan\\projects\\learn-rust",
+        "platform": "win32"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "thread/remoteControlOrigin",
+    "params": {
+      "runId": "01989835-0e80-7d3e-8f4a-5b6c7d8e9f02"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {}
+  }
+]

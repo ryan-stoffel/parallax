@@ -113,6 +113,7 @@ import {
 import { cloneOnto, type CloneAsk } from "./clone";
 import { isRunning, kindOf } from "./transcript";
 import { isRemoteControl, useRemoteControl } from "./remoteControl";
+import { keptRemoteControl, MoveRemoteControl } from "./MoveRemoteControl";
 import { appShortcut, Breadcrumb, IconButton, TopBar, type Crumb } from "./ui";
 import { useUpdateAlarms } from "./Update";
 import { tileCommands } from "./keybindings";
@@ -483,6 +484,31 @@ export function App() {
     connected && "claudeRemoteControl" in connection.capabilities,
     threadRun?.status,
   );
+  // Its choice between keeping it and moving it to its computer (PLX-1143): asked on its first
+  // open, until kept, and from Thread details. Once open, the dialog stays until it's closed, as
+  // setting up a computer changes the hosts under it.
+  const canMove = remoteThread && connected && "claudeRemoteControlMove" in connection.capabilities;
+  const kept = keptRemoteControl.use();
+  const [moveDialog, setMoveDialog] = useState<{ hostId: string; runId: string; title: string }>();
+  const [moveDismissed, setMoveDismissed] = useState<ReadonlySet<string>>(new Set());
+  const moveKey = threadRun ? `${host.id}:${threadRun.id}` : "";
+  const askMove = () =>
+    threadRun &&
+    setMoveDialog({
+      hostId: host.id,
+      runId: threadRun.id,
+      title: threads.state.titles[threadRun.id] ?? titleOf(threadRun),
+    });
+  const firstOpen =
+    canMove &&
+    !threads.state.threads.find((t) => t.id === threadRun?.id)?.archived &&
+    !kept.includes(moveKey) &&
+    !moveDismissed.has(moveKey);
+  useEffect(() => {
+    if (firstOpen) askMove();
+    // Asked once per thread opened; askMove reads the rest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firstOpen, moveKey]);
   const prs = usePullRequests(
     host.id,
     threadRun?.id,
@@ -1207,7 +1233,14 @@ export function App() {
           : undefined
       }
       prs={selection.kind === "thread" ? { prs, onOpen: openPr } : undefined}
-      remoteControl={remoteThread ? { session: remoteSession } : undefined}
+      remoteControl={
+        remoteThread
+          ? {
+              session: remoteSession,
+              ...(canMove && { onMove: askMove }),
+            }
+          : undefined
+      }
       space={
         selection.kind === "thread" && openThread && !openThread.parent
           ? { thread: openThread, view: threads }
@@ -1256,6 +1289,21 @@ export function App() {
       ))}
       <Notifications />
       {onboarding && <Onboarding onStart={() => picker.current?.showModal()} />}
+      {moveDialog && (
+        <MoveRemoteControl
+          key={`${moveDialog.hostId}:${moveDialog.runId}`}
+          {...moveDialog}
+          onKeep={() =>
+            keptRemoteControl.set([...kept, `${moveDialog.hostId}:${moveDialog.runId}`])
+          }
+          onClose={() => {
+            setMoveDismissed((now) => new Set(now).add(`${moveDialog.hostId}:${moveDialog.runId}`));
+            setMoveDialog(undefined);
+          }}
+          onOpen={openHostThread}
+          onAddWithSsh={() => openSettings("connections")}
+        />
+      )}
       <Splash
         ready={
           onboarding ||

@@ -65,6 +65,12 @@ pub struct ImportableSession {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[ts(as = "Option<bool>", optional)]
     pub remote: bool,
+    /// For a Claude session, Claude Code's own id for it when that isn't `id`, as for one the
+    /// Claude desktop app records. Moving a Claude Remote Control thread finds its session by it
+    /// (PLX-1143).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub claude_session: Option<String>,
 }
 
 /// Params of `thread/importable`.

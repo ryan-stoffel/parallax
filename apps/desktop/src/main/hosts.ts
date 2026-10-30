@@ -127,7 +127,8 @@ const CLONE_TIMEOUT_MS = 60 * 60_000;
 /**
  * How long `thread/importable` may take: plxd reads each claude.ai Remote Control session through
  * Claude Code, for up to 2 minutes (PLX-1136). `thread/import` gets `repo/clone`'s, as importing
- * one clones its repository when it isn't here.
+ * one clones its repository when it isn't here. `thread/remoteControlOrigin` gets this one too, as
+ * it reads a session from claude.ai the same way (PLX-1143).
  */
 const IMPORTABLE_TIMEOUT_MS = 3 * 60_000;
 
@@ -269,7 +270,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
               ? PROBE_TIMEOUT_MS
               : method === "repo/clone" || method === "thread/import"
                 ? CLONE_TIMEOUT_MS
-                : method === "thread/importable"
+                : method === "thread/importable" || method === "thread/remoteControlOrigin"
                   ? IMPORTABLE_TIMEOUT_MS
                   : undefined;
       return host.request(method as RendererMethod, params as never, timeout);

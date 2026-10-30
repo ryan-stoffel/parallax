@@ -65,6 +65,7 @@ const capabilities: Capabilities = Object.fromEntries(
     "checks",
     "checkout",
     "claudeRemoteControl",
+    "claudeRemoteControlMove",
     "commandIds",
     "composerMenus",
     "computerUse",
@@ -912,6 +913,18 @@ const handlers: { [M in Method]?: Handler<M> } = {
   "thread/importable": (p) => ({ sessions: p.remote ? remoteImportable : importable }),
   // A Claude Remote Control thread's session, as plxd last listed it (PLX-1140).
   "thread/remoteControl": (p) => ({ session: db.remoteControl[p.runId] }),
+  // Where it runs (PLX-1143): Claude Code's own session on the Gaming PC, which that computer's
+  // plxd lists once it's set up.
+  "thread/remoteControlOrigin": (p) =>
+    db.remoteControl[p.runId]
+      ? {
+          origin: {
+            sessionId: `local-${p.runId}`,
+            cwd: "C:\\Users\\ryan\\Developer\\learn-rust",
+            platform: "win32",
+          },
+        }
+      : {},
   "thread/import": (p) => {
     const session = (p.remote ? remoteImportable : importable).find(
       (s) => s.source === p.source && s.id === p.id,
@@ -1671,6 +1684,39 @@ function deviceRequest(hostId: string, method: string, params: Record<string, un
       return { runs: db.runs.filter((r) => own(r.id)), seq };
     case "project/list":
       return { projects: [], seq };
+    // The Gaming PC runs the Remote Control threads' sessions (PLX-1143).
+    case "thread/importable":
+      return {
+        sessions:
+          device.os === "windows"
+            ? Object.keys(db.remoteControl).map((runId) => ({
+                source: "claude" as const,
+                id: `local-${runId}`,
+                title: db.threads.find((t) => t.id === runId)?.title ?? "A session",
+                cwd: "C:\\Users\\ryan\\Developer\\learn-rust",
+                updatedAt: now(),
+                ...(db.threads.some((t) => t.id === `moved-${runId}`) && {
+                  thread: `moved-${runId}`,
+                }),
+              }))
+            : [],
+      };
+    case "thread/import": {
+      // A copy of the Remote Control thread, now running Claude Code on the device.
+      const from = String(params["id"]).replace(/^local-/, "");
+      const id = `moved-${from}`;
+      const run: AgentRun = { ...runOf(from)!, id, sessionId: String(params["id"]) };
+      const thread: Thread = { ...db.threads.find((t) => t.id === from)!, id, archived: true };
+      if (!db.threads.some((t) => t.id === id)) {
+        deviceRuns.set(id, hostId);
+        logs.set(id, structuredClone(logs.get(from) ?? []));
+        db.runs.push(run);
+        db.threads.push(thread);
+        emit({ kind: "agent.started", runId: id, run });
+        emit({ kind: "thread.started", thread });
+      }
+      return { thread, run };
+    }
     case "host/settings/get":
       return { autoResume: true, connect: true, deviceName: device.name, deviceIcon: device.icon };
     case "host/version":
