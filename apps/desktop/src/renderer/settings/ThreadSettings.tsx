@@ -15,7 +15,6 @@ import { ModelMenu } from "../ModelMenu";
 import { models, plainName, useCatalog, type Provider } from "../models";
 import { newThreadPrefs, setNewThreadPrefs } from "../prefs";
 import { RunTargetMenu, workspaces } from "../RunTargetMenu";
-import { archivePageSize, sidebarPrefs, type SidebarPrefs } from "../sidebarPrefs";
 import { Picker } from "../ui";
 import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
 
@@ -23,42 +22,17 @@ import { HostPicker, PageTitle, Row, Section, Switch } from "./parts";
 const pickerBox = "rounded-lg border border-border bg-background";
 
 /**
- * Settings > Threads: what a new thread starts with, how the sidebar lists threads, whether a
- * host's threads resume after a usage limit or a restart, and importing past sessions (PLX-881)
- * and exported chats (PLX-883).
+ * Settings > Threads: what a new thread starts with, whether a host's threads resume after a
+ * usage limit or a restart, and importing past sessions (PLX-881) and exported chats (PLX-883).
+ * How the sidebar lists threads is Appearance's (0091).
  */
 export function ThreadSettings() {
-  const sidebar = sidebarPrefs.use();
-  const setSidebar = (patch: Partial<SidebarPrefs>) =>
-    sidebarPrefs.set({ ...sidebarPrefs.get(), ...patch });
   return (
     <>
       <PageTitle title="Threads">
-        What a new thread starts with, how the sidebar lists threads, and when they pick up again.
+        What a new thread starts with, and when threads pick up again.
       </PageTitle>
       <NewThreads />
-      <Section title="Sidebar">
-        <Row
-          title="Working section"
-          description="While a thread is working, list it under Working, above Archived. Off keeps it in Threads."
-        >
-          <Switch
-            label="Working section"
-            checked={sidebar.workingSection}
-            onChange={(workingSection) => setSidebar({ workingSection })}
-          />
-        </Row>
-        <Row
-          title="Archive pages"
-          description={`Show ${archivePageSize} archived threads at a time, with Show more for the rest. Off lists them all.`}
-        >
-          <Switch
-            label="Archive pages"
-            checked={sidebar.pageArchived}
-            onChange={(pageArchived) => setSidebar({ pageArchived })}
-          />
-        </Row>
-      </Section>
       <Resuming />
       <Section title="Import">
         <Row

@@ -4,8 +4,9 @@ import { merged, stored } from "./stored";
 export const archivePageSize = 25;
 
 /**
- * Sidebar behavior kept on this computer (0033). Both default to the sections: a Working drawer
- * while a thread runs, and archived threads a page at a time. Off is the earlier list.
+ * Sidebar behavior kept on this computer (0033), set in Settings › Appearance › Sidebar. Both
+ * default to the sections: a Working drawer while a thread runs, and archived threads a page at a
+ * time. Off is the earlier list.
  */
 export type SidebarPrefs = {
   /** While a top-level thread is working, list it and its children under Working. */
@@ -48,10 +49,28 @@ export function togglePinnedProject(key: string) {
 }
 
 /**
- * Whether the sidebar is the new one (0090): New thread, Search, and Projects as rows, Pinned
- * projects, and the Projects page. Off, the default, it's the classic sidebar. Settings › Beta
- * switches it.
+ * Which sidebar shows (0091). Classic, the default, is 0087's: the search box and filter in its
+ * head and the threads as one list. Beta is 0090's: New thread, Search, and Projects as rows, and
+ * Pinned projects. Folders has Beta's head and lists the threads in a folder per repo, as Codex
+ * does. Settings › Appearance › Sidebar switches it.
  */
-export const newSidebar = stored<boolean>("parallax.beta.newSidebar", false, (raw, fallback) =>
-  typeof raw === "boolean" ? raw : fallback,
+export type SidebarMode = "classic" | "beta" | "folders";
+
+const isMode = (raw: unknown): raw is SidebarMode =>
+  raw === "classic" || raw === "beta" || raw === "folders";
+
+// Before 0091 the new sidebar was Settings › Beta's switch: on reads as Beta.
+function legacyMode(): SidebarMode {
+  try {
+    return localStorage.getItem("parallax.beta.newSidebar") === "true" ? "beta" : "classic";
+  } catch {
+    return "classic";
+  }
+}
+
+/** The sidebar's mode, kept on this computer. */
+export const sidebarMode = stored<SidebarMode>(
+  "parallax.sidebarMode",
+  legacyMode(),
+  (raw, fallback) => (isMode(raw) ? raw : fallback),
 );

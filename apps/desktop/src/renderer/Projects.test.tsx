@@ -25,9 +25,9 @@ import { sectionsStore } from "./Sidebar";
 import { moreShown } from "./SidebarNav";
 import {
   navDefaults,
-  newSidebar,
   pinnedProjects,
   sidebarDefaults,
+  sidebarMode,
   sidebarNav,
   sidebarPrefs,
 } from "./sidebarPrefs";
@@ -104,8 +104,8 @@ beforeEach(() => {
   localStorage.clear();
   sidebarPrefs.set(sidebarDefaults);
   sidebarNav.set(navDefaults);
-  // These tests are the new sidebar's (0090); one below covers the classic one.
-  newSidebar.set(true);
+  // These tests are the Beta sidebar's (0090); one below covers Classic and Folders (0091).
+  sidebarMode.set("beta");
   pinnedProjects.set([]);
   moreShown.set(false);
   sectionsStore.set({});
@@ -1179,8 +1179,8 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
   expect(unpushed("NFA to DFA help")).toBeNull();
 });
 
-test("the classic sidebar keeps Projects in a drawer and Pull requests in the footer until Beta turns on the new one", async () => {
-  newSidebar.set(false);
+test("Classic keeps Projects in a drawer and Pull requests in the footer, Beta lists neither, and Folders lists each Project as a row in its folder", async () => {
+  sidebarMode.set("classic");
   sectionsStore.set({ all: { projects: true } });
   await renderApp();
   const sidebar = document.getElementById("sidebar")!;
@@ -1194,9 +1194,16 @@ test("the classic sidebar keeps Projects in a drawer and Pull requests in the fo
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
   expect(sidebarButton("Projects")).toBeUndefined();
 
-  await act(async () => newSidebar.set(true));
+  await act(async () => sidebarMode.set("beta"));
   expect(sidebar.querySelector('li[data-kind="project"]')).toBeNull();
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
+  expect(sidebarButton("Projects")).toBeDefined();
+
+  await act(async () => sidebarMode.set("folders"));
+  const list = sidebar.querySelector('ul[aria-label="Threads"]')!;
+  expect(
+    [...list.querySelectorAll('li[data-kind="project"] [data-title]')].map((t) => t.textContent),
+  ).toEqual(["photon", "ember"]);
   expect(sidebarButton("Projects")).toBeDefined();
 });
 

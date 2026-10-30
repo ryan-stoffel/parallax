@@ -40,6 +40,7 @@ import { NewThread } from "./NewThread";
 import { DevicePanel } from "./DevicePanel";
 import { DocumentView } from "./DocumentView";
 import type { DocRef } from "./documents";
+import { freshDraftId } from "./drafts";
 import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
 import { NewThreadPicker } from "./NewThreadPicker";
@@ -767,8 +768,9 @@ export function App() {
     setOpening({ hostId, projectId });
   };
 
-  // New Thread's draft, which picking where it runs keeps (PLX-788).
-  const draft = selection.kind === "new" ? selection.draft : undefined;
+  // New Thread's draft, which picking where it runs keeps (PLX-788). A fresh New thread gets its
+  // own, so opening another leaves this one as a draft (PLX-1150).
+  const draft = selection.kind === "new" ? (selection.draft ?? freshDraftId(selection)) : undefined;
   // Runs New Thread on another computer: opens that host, keeping the repository if it lists one
   // of the same name (each host's entries have their own ids). A host whose list is in but lacks
   // it adds the repository at the same path first, or `at`, where New Thread's clone dialog put
@@ -1677,7 +1679,7 @@ export function App() {
                     </div>
                   ) : selection.kind === "new" ? (
                     <NewThread
-                      // Opening a draft opens a new screen, which leaves the one open as a draft.
+                      // Each draft is its own screen, so opening another leaves this one as a draft.
                       key={draft}
                       draftId={draft}
                       hostId={host.id}

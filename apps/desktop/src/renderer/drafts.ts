@@ -2,6 +2,7 @@ import type { JSONContent } from "@tiptap/react";
 import { useSyncExternalStore } from "react";
 
 import type { PromptImage } from "../protocol/generated/protocol";
+import { uuidv7 } from "./uuidv7";
 
 /** What a composer holds: its Markdown, its editor document, and what's attached. */
 export interface ComposerContents {
@@ -54,6 +55,21 @@ export const drafts = {
     if (list.some((d) => d.id === id)) set(list.filter((d) => d.id !== id));
   },
 };
+
+// A fresh New thread's draft id, by the selection that opened it.
+const fresh = new WeakMap<object, string>();
+
+/**
+ * The draft id of a New thread opened by `selection` (PLX-1150): a new one for each selection
+ * that opens a fresh New thread, the same one for every render of it. App keeps it as the
+ * selection's `draft` through a change of repository or computer, and keys New Thread by it, so
+ * opening another New thread leaves this one as a draft.
+ */
+export function freshDraftId(selection: object): string {
+  let id = fresh.get(selection);
+  if (!id) fresh.set(selection, (id = uuidv7()));
+  return id;
+}
 
 /**
  * The unsent prompts of existing threads (PLX-887), by `hostId/runId`. A thread takes its own out

@@ -65,6 +65,9 @@ export const favoriteOrder = stored<string[]>("parallax:favoriteOrder", [], stri
 /** Today's groups folded shut, by group key (a repo's, or a day's). */
 export const todayFolded = stored<string[]>("parallax:todayFolded", [], strings);
 
+/** The Folders sidebar's folders folded shut, by folder key (`host/repo`, 0091). */
+export const folderFolded = stored<string[]>("parallax:folderFolded", [], strings);
+
 /** The favorites: pinned threads moved up into their squares, by key. */
 export const pinFavorites = stored<string[]>("parallax:pinFavorites", [], strings);
 

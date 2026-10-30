@@ -289,7 +289,7 @@ test("a finished thread opens on Loading…, not its prompt alone, while its tra
   expect(musing()).toBeUndefined();
 });
 
-test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens it (PLX-788)", async () => {
+test("leaving New Thread keeps its prompt as a draft atop the list, which reopens it (PLX-788)", async () => {
   capabilities = { threadContext: { maxThreads: 8 } };
   answers["thread/start"] = (p) => ({
     result: {
@@ -312,7 +312,7 @@ test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens
   await settle();
 
   const draft = () => document.querySelector<HTMLElement>('#sidebar li[data-kind="draft"] button');
-  const rows = document.querySelectorAll('#sidebar ul[aria-label="Threads"] > li');
+  const rows = document.querySelectorAll("#sidebar [data-row]");
   expect(rows[0]!.getAttribute("data-kind")).toBe("draft");
   expect(draft()!.textContent).toBe('parallaxDraft@"Fix the flaky test" Tidy the README');
 
@@ -332,6 +332,30 @@ test("leaving New Thread keeps its prompt as a draft atop Threads, which reopens
     }),
   ]);
   expect(draft()).toBeNull();
+});
+
+test("each New thread is its own draft, so several list at once, newest first, and X discards one with Undo (PLX-1150)", async () => {
+  await renderApp();
+  // The sidebar's mark opens a New thread at once.
+  const newThread = () => act(async () => button("Parallax")!.click());
+  const listed = () =>
+    [...document.querySelectorAll('#sidebar ul[aria-label="Drafts"] [data-title]')].map(
+      (t) => t.textContent,
+    );
+  act(() => void composer().editor!.commands.insertContent("First idea"));
+  await newThread();
+  await settle();
+  expect(composer().textContent).toBe("");
+  act(() => void composer().editor!.commands.insertContent("Second idea"));
+  await newThread();
+  await settle();
+  expect(listed()).toEqual(["Second idea", "First idea"]);
+
+  const first = document.querySelectorAll<HTMLElement>('#sidebar li[data-kind="draft"]')[1]!;
+  await act(async () => first.querySelector<HTMLElement>('[aria-label="Discard draft"]')!.click());
+  expect(listed()).toEqual(["Second idea"]);
+  await act(async () => button("Undo")!.click());
+  expect(listed()).toEqual(["First idea", "Second idea"]);
 });
 
 test("leaving a thread keeps its unsent prompt as a draft, which coming back restores (PLX-887)", async () => {

@@ -83,7 +83,8 @@ function Segmented<T extends string | number | boolean | null>({
 
 /**
  * The sidebar's View options, at the foot of the filter menu (PLX-1043): how today's threads
- * group, how tall their rows are, and when finished threads archive themselves.
+ * group (not in Folders, 0091), how tall their rows are, and when finished threads archive
+ * themselves.
  */
 export function ViewOptions({
   autoHours,
@@ -97,24 +98,28 @@ export function ViewOptions({
   onAutoHours: (hours: number | null) => void;
   compact: boolean;
   onCompact: (compact: boolean) => void;
-  /** How today's threads are grouped. */
-  group: TodayGroup;
+  /** How today's threads are grouped, or undefined in Folders, which groups them by repo. */
+  group?: TodayGroup;
   onGroup: (group: TodayGroup) => void;
 }) {
   return (
     <div role="group" aria-label="View" className="flex flex-col gap-2.5">
       <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2.5">
-        <span className="text-body text-muted-foreground">Group</span>
-        <Segmented
-          label="Group"
-          value={group}
-          options={[
-            ["none", "None"],
-            ["repo", "Repo"],
-            ["day", "Day"],
-          ]}
-          onChange={onGroup}
-        />
+        {group !== undefined && (
+          <>
+            <span className="text-body text-muted-foreground">Group</span>
+            <Segmented
+              label="Group"
+              value={group}
+              options={[
+                ["none", "None"],
+                ["repo", "Repo"],
+                ["day", "Day"],
+              ]}
+              onChange={onGroup}
+            />
+          </>
+        )}
         <span className="text-body text-muted-foreground">Rows</span>
         <Segmented
           label="Rows"

@@ -8,6 +8,15 @@ import {
 } from "../../preload/bridge";
 import { seesThrough, setAppearance, shownThemes, useAppearance } from "../appearance";
 import { ParallaxMark } from "../logos";
+import { navChoices } from "../SidebarNav";
+import {
+  archivePageSize,
+  navDefaults,
+  sidebarMode,
+  sidebarNav,
+  sidebarPrefs,
+  type SidebarMode,
+} from "../sidebarPrefs";
 import { IconButton, Picker, Segmented, menuItem, type PickerOption } from "../ui";
 import {
   fillIcons,
@@ -91,7 +100,7 @@ const materials: { value: WindowMaterial; name: string }[] = [
 
 /**
  * Settings > Appearance: the theme for each mode and the colors changed over it, the window's
- * background, text, and how the interface reads.
+ * background, text, how the interface reads, and the sidebar.
  */
 export function AppearanceSettings({
   theme,
@@ -377,6 +386,73 @@ export function AppearanceSettings({
           />
         </Row>
       </Section>
+
+      <SidebarSettings />
     </>
+  );
+}
+
+const modes: { value: SidebarMode; name: string }[] = [
+  { value: "classic", name: "Classic" },
+  { value: "beta", name: "Beta" },
+  { value: "folders", name: "Folders" },
+];
+
+/**
+ * Appearance's Sidebar (0091): which sidebar shows, where Beta's and Folders' pages show (0090), and
+ * the Working and Archived drawers' behavior.
+ */
+function SidebarSettings() {
+  const mode = sidebarMode.use();
+  const nav = { ...navDefaults, ...sidebarNav.use() };
+  const prefs = sidebarPrefs.use();
+  return (
+    <Section title="Sidebar">
+      <Row
+        title="Layout"
+        description="Classic lists your threads under Search. Beta adds New thread, Search, and Projects as rows. Folders groups threads by repo."
+      >
+        <Segmented
+          label="Sidebar layout"
+          options={modes}
+          value={mode}
+          onChange={(next) => sidebarMode.set(next)}
+        />
+      </Row>
+      {mode !== "classic" &&
+        navChoices.map(({ id, label }) => (
+          <Row
+            key={id}
+            title={label}
+            description="In the sidebar's head. Off, it waits under More."
+          >
+            <Switch
+              label={`Show ${label} in the sidebar`}
+              checked={nav[id]}
+              onChange={(show) => sidebarNav.set({ ...nav, [id]: show })}
+            />
+          </Row>
+        ))}
+      <Row
+        title="Working section"
+        description="While a thread is working, list it under Working, above Archived. Off keeps it in the list."
+      >
+        <Switch
+          label="Working section"
+          checked={prefs.workingSection}
+          onChange={(workingSection) => sidebarPrefs.set({ ...sidebarPrefs.get(), workingSection })}
+        />
+      </Row>
+      <Row
+        title="Archive pages"
+        description={`Show ${archivePageSize} archived threads at a time, with Show more for the rest. Off lists them all.`}
+      >
+        <Switch
+          label="Archive pages"
+          checked={prefs.pageArchived}
+          onChange={(pageArchived) => sidebarPrefs.set({ ...sidebarPrefs.get(), pageArchived })}
+        />
+      </Row>
+    </Section>
   );
 }
