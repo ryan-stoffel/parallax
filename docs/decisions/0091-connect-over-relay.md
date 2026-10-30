@@ -112,7 +112,7 @@ Each is one Linear issue. All seven land in one pull request, built in this orde
 3. Desktop: account discovery, `account:` connections, LAN and relay routes started 200 ms apart with re-checks, approving devices and computers, and the Add computer wizard.
 4. Desktop: installs and sign-ins on `account:` hosts through plxd terminals.
 5. Phone: TLS inside a relay stream in `apps/mobile/modules/pinned-tls`, which today does only pinned HTTPS and WebSockets over URLSession and raw TCP over the tailnet. 0068 lists this as the phone's prerequisite for the relay. Then account routes in place of `tailnet:` connections, and approving devices.
-6. Tailscale as a route: plxd reports its Tailscale address, and the desktop and the phone try it after the LAN and before the relay. Deleting the Tailscale-only path waits one release for migration, as its own issue then.
+6. Tailscale as a route: plxd reports its Tailscale address, and the desktop and the phone try it with the LAN, before the relay. Deleting the Tailscale-only path waits one release for migration, as its own issue then.
 7. Speed, after 1: `/v1/hosts/<hostId>/connect` with a Clerk token in a header, the spare stream, a Durable Object per stream, and the proof on the `/ws` upgrade. Connect time and time to the first streamed event over the relay go into `scripts/bench/budgets.json`, and the issue records one comparison with T3 Connect from the same network.
 
 ## Alternatives
