@@ -1,6 +1,6 @@
 # 0091: Parallax Connect runs over Parallax Relay and account sign-in, without Tailscale
 
-- Status: proposed, waiting on Ryan's three calls below; once accepted it replaces [0056](0056-parallax-connect.md)'s transport, discovery, and plx-connect sections, amends [0068](0068-relay.md)'s identity section and [0065](0065-remote-reach.md)'s mobile amendment (PLX-983), and keeps [0072](0072-connect-stays-up.md)
+- Status: proposed, waiting on Ryan's four calls below; once accepted it replaces [0056](0056-parallax-connect.md)'s transport, discovery, and plx-connect sections, amends [0068](0068-relay.md)'s identity section and [0065](0065-remote-reach.md)'s mobile amendment (PLX-983), and keeps [0072](0072-connect-stays-up.md)
 - Date: 2026-10-29
 - Issue: PLX-1148
 
@@ -34,13 +34,15 @@ These change the result and wait on Ryan. The rest of this record assumes the re
 1. **Trust.** Recommended: account sign-in alone admits a client, as in T3 (below, "Access"). The other choice keeps 0068's promise that the relay can't forge a stream, at the cost of a one-time pairing code per client and host, with the account used only to list computers.
 2. **Tailscale.** Recommended: remove it from Connect entirely, after one release of migration. The other choice keeps a computer's Tailscale address as an extra direct route.
 3. **Delivery.** Recommended: this record first, then one issue and one PR per part (below, "Work").
+4. **The npm name.** Recommended: publish the CLI as `plx`, so setup is `npx plx connect` (below, "Setup"). `plx` on npm is held by another user's placeholder (0.0.1, "Coming soon", last changed 2022-06-24), so Ryan asks its owner for it, then npm support under its package name dispute policy. The fallback is `plx-cli` with a `plx` command (`npx plx-cli connect`), which is free today.
 
-### Setup: `plx-connect`, like `t3 connect`
+### Setup: `plx connect`, like `t3 connect`
 
-- `plx-connect` with no arguments, run on the computer to add (`npx plx-connect`, or the copy the app ships, 0072): signs in, installs plxd in `~/.parallax-plxd` with its login service (0072), registers the host with the relay, and turns on `relay` and `remote`. It then waits until the relay reports the host connected, and prints its name.
+- The npm package `plx-connect` becomes `plx`, a CLI with subcommands, and `connect` is one of them, as `connect` is in T3's `t3`. The app ships it as it ships plx-connect today (0072). The old name publishes one last version that prints the new command.
+- `plx connect`, run on the computer to add (`npx plx connect`, or the copy the app ships): signs in, installs plxd in `~/.parallax-plxd` with its login service (0072), registers the host with the relay, and turns on `relay` and `remote`. It then waits until the relay reports the host connected, and prints its name.
 - Sign-in is the desktop app's Clerk OAuth application with PKCE and a loopback redirect when the computer can open a browser, started on a hosted page as T3 does. Otherwise, and with `--device-code`, it uses Clerk's OAuth device authorization grant: the CLI prints a link and a short code, the user approves on any device, and the CLI polls Clerk. The grant must be on for that OAuth application.
 - The token is used once. plxd registers with it (`relay/register`) and records the token's Clerk user as the host's account (below). After that plxd proves itself to the relay with its key on every connection (0068), so nothing keeps the token. Unlike T3, there is no stored sign-in to log out of.
-- `plx-connect unlink` turns `relay` off and keeps the registration, so webhook URLs and the host id don't change. plxd admits account sign-ins (below) only while `relay` is on, so unlink stops new ones. Sessions already issued stay until revoked in Settings, and `remote` stays on for clients that paired on the LAN. With `relay` off the host also sends no phone notifications and gets no webhooks: the relay holds them for up to 24 hours (0068), then drops them. `plx-connect remove` signs in again, since nothing kept the token, and deregisters the host (`DELETE /v1/hosts/<id>`). `plx-connect status` prints the account, host id, relay state, and routes. `plx-connect add <ssh destination>` stays as a shortcut that runs the same setup over ssh, with the device code shown here. It is the only path that uses ssh, and only once.
+- `plx connect unlink` turns `relay` off and keeps the registration, so webhook URLs and the host id don't change. plxd admits account sign-ins (below) only while `relay` is on, so unlink stops new ones. Sessions already issued stay until revoked in Settings, and `remote` stays on for clients that paired on the LAN. With `relay` off the host also sends no phone notifications and gets no webhooks: the relay holds them for up to 24 hours (0068), then drops them. `plx connect remove` signs in again, since nothing kept the token, and deregisters the host (`DELETE /v1/hosts/<id>`). `plx connect status` prints the account, host id, relay state, and routes. `plx connect add <ssh destination>` stays as a shortcut that runs the same setup over ssh, with the device code shown here. It is the only path that uses ssh, and only once.
 - Adding a computer from the desktop app's Add computer wizard shows the command to run there, and its device-code approval, rather than asking for an ssh destination.
 
 ### Discovery: the account lists the computers
@@ -72,7 +74,7 @@ These change the result and wait on Ryan. The rest of this record assumes the re
 ### Removing Tailscale
 
 - First release: for a host whose `connect` is on, plxd turns on `relay` and `remote` unless the user chose either one before, as 0068's "one turned off stays off" and `on_unless_chosen` already do, and the signed-in app registers it as PLX-1146 does. Turning on `remote` opens port 7341, which admits only private, link-local, loopback, and CGNAT addresses (0065) and only paired or signed-in clients. A host the user kept off stays on its `tailnet:` connection, and Settings asks to turn on Reach from anywhere for it before Tailscale goes. The app adds `account:` connections beside `tailnet:` ones and drops a `tailnet:` connection once the same host answers as `account:`. They match by the JWK thumbprint of the certificate key each connection reached, since the descriptor's `hostId` is the certificate's SHA-256 fingerprint, not the relay id.
-- The release after both the desktop and the phone reach account hosts (Work 3 and 5): plxd's port 7340 listener, the `connect` setting, `connect/devices`, `plxd dial`'s tailnet addresses, `plxd connect on|off`, `daemon/src/tailnet.rs` and `server/tailnet.rs`, plx-connect's `tailscale.mjs`, and the phone's tailnet route go. The phone uses the same account routes as the desktop.
+- The release after both the desktop and the phone reach account hosts (Work 3 and 5): plxd's port 7340 listener, the `connect` setting, `connect/devices`, `plxd dial`'s tailnet addresses, `plxd connect on|off`, `daemon/src/tailnet.rs` and `server/tailnet.rs`, the old plx-connect's `tailscale.mjs`, and the phone's tailnet route go. The phone uses the same account routes as the desktop.
 
 ### Limits
 
@@ -83,7 +85,7 @@ These change the result and wait on Ryan. The rest of this record assumes the re
 Each is one issue and one PR, in this order once Ryan accepts:
 
 1. plxd: account id at registration, `/api/auth/account` with Clerk verification, and host-id pinning in `plxd dial`.
-2. plx-connect: sign-in with PKCE and device code, `unlink`, `remove`, `status`, and `add` over ssh.
+2. `plx connect`: rename `packages/plx-connect` to `packages/plx`, then sign-in with PKCE and device code, `unlink`, `remove`, `status`, and `add` over ssh.
 3. Desktop: account discovery, `account:` connections, LAN-then-relay routes with re-checks, and the Add computer wizard.
 4. Desktop: installs and sign-ins on `account:` hosts through plxd terminals.
 5. Phone: TLS inside a relay stream in `apps/mobile/modules/pinned-tls`, which today does only pinned HTTPS and WebSockets over URLSession and raw TCP over the tailnet. 0068 lists this as the phone's prerequisite for the relay. Then account routes in place of the tailnet.
