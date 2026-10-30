@@ -37,6 +37,7 @@ import { Alert, AppState, Linking, Pressable, ScrollView, StyleSheet, View } fro
 
 import { appVersion, tailnetAddress } from "../modules/pinned-tls";
 import { Avatar, nameOf, useAccount } from "./Account";
+import { formatCode } from "./accountPrompts";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { useNav, type PhonePage, type SettingsScreens } from "./nav";
 import { FindComputers } from "./Onboarding";
@@ -51,14 +52,23 @@ import { DeviceIcon, Dot, GitHubLogo, Icon, Mark, Row, T, useColors } from "./ui
 const REPO = "https://github.com/ryan-stoffel/parallax";
 
 function status(m: Computer): string {
+  if (m.gate?.kind === "setup") return "New computer · Tap to set up";
+  if (m.gate?.kind === "waiting") return `Waiting for approval · ${formatCode(m.gate.code)}`;
+  if (m.gate?.kind === "refused") return sentence(m.gate.message);
   if (m.state.status === "connected") return `Connected · Parallax ${m.state.plxd}`;
   if (m.state.status === "failed") return m.state.error.message;
   return "Connecting…";
 }
 
+/** plxd's reason, such as "this device was removed", as a sentence. */
+const sentence = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}${/[.!?]$/.test(text) ? "" : "."}`;
+
+/** An account computer's routes, best first, as 0091 tries them. */
+const routesOf = (m: Computer) => [...(m.machine.account?.routes.filter((r) => !r.startsWith("relay:")) ?? []), "Parallax Relay"].join(" · ");
+
 function StatusDot({ m }: { m: Computer }) {
   const c = useColors();
-  return <Dot color={m.connected ? c.added : m.state.status === "connecting" ? c.warning : c.faintForeground} />;
+  return <Dot color={m.connected ? c.added : m.state.status === "connecting" && !m.gate ? c.warning : c.faintForeground} />;
 }
 
 /** "Parallax (Nightly) 1.2.3 (45)": this build's name and version. */
@@ -290,13 +300,18 @@ export function NewThreadsSection() {
   );
 }
 
-/** Connections' settings of this phone's own: its computers, each with its page, Add computer, and Tailscale. */
+/**
+ * Connections' settings of this phone's own: its computers, each with its page or, for a new
+ * account computer, its setup, the account's computers removed from this phone, Add computer,
+ * and Tailscale. Opening it lists the account's computers again.
+ */
 export function PhoneConnections() {
   const c = useColors();
   const nav = useNav();
-  const { computers, defaultId } = useFleet();
+  const { computers, defaultId, discover, removed, restore, setUp } = useFleet();
   const [address, setAddress] = useState(() => tailnetAddress());
   useEffect(() => {
+    discover();
     const sub = AppState.addEventListener("change", (s) => s === "active" && setAddress(tailnetAddress()));
     return () => sub.remove();
   }, []);
@@ -304,7 +319,7 @@ export function PhoneConnections() {
     <>
       <Section
         title="Computers"
-        footer="New threads start on the default computer. Your other computers with Parallax Connect on join on their own."
+        footer="New threads start on the default computer. The computers you set up with plx connect join on their own."
       >
         {computers.map((m) => (
           <Row
@@ -313,7 +328,7 @@ export function PhoneConnections() {
             title={m.machine.name}
             detail={status(m)}
             chevron
-            onPress={() => nav.navigate("Computer", { id: m.machine.id })}
+            onPress={() => (m.gate ? setUp(m.machine.id) : nav.navigate("Computer", { id: m.machine.id }))}
             right={
               <View style={styles.line}>
                 {m.machine.id === defaultId && <Pill label="Default" color={c.accent} />}
@@ -322,12 +337,25 @@ export function PhoneConnections() {
             }
           />
         ))}
+        {removed.map((l) => (
+          <Row
+            key={l.hostId}
+            leading={<DeviceIcon name={l.name} size={18} color={c.faintForeground} />}
+            title={l.name}
+            detail="Removed from this phone · Tap to add"
+            onPress={() => restore(l.hostId)}
+          />
+        ))}
         <Row icon={Plus} iconColor={c.accent} title="Add computer" last onPress={() => nav.navigate("AddComputer")} />
       </Section>
       <Section title="This phone">
         <Row
           title="Tailscale"
-          detail={address ? `This phone is ${address} on your tailnet.` : "Open Tailscale to reach your computers."}
+          detail={
+            address
+              ? `This phone is ${address} on your tailnet.`
+              : "Optional: a direct route to your computers away from home."
+          }
           last
           onPress={address ? undefined : () => void Linking.openURL("tailscale://").catch(() => {})}
           right={
@@ -417,7 +445,11 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
         {m.state.status === "connected" && <Row title="Parallax" detail={m.state.plxd} />}
         {m.state.status === "failed" && <Row title="Last error" detail={m.state.error.message} />}
         <Row title="System" detail={m.machine.os || "Unknown"} />
-        <Row title={m.machine.paired ? "Paired on this Wi‑Fi" : "Tailscale address"} detail={m.machine.address} last />
+        {m.machine.account ? (
+          <Row title="Routes" detail={routesOf(m)} last />
+        ) : (
+          <Row title={m.machine.paired ? "Paired on this Wi‑Fi" : "Tailscale address"} detail={m.machine.address} last />
+        )}
       </Section>
       {m.connected && (
         <Section title="Settings" footer={`Saved on ${m.machine.name}, for every device that reaches it.`}>

@@ -13,6 +13,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -98,8 +99,11 @@ interface AccountValue {
   user: User | null | undefined;
   signIn: (create: boolean) => Promise<string | undefined>;
   signOut: () => Promise<void>;
-  /** A current access token, for Parallax Relay, or undefined signed out. */
-  accessToken: () => Promise<string | undefined>;
+  /**
+   * A current access token, for Parallax Relay, or undefined signed out. With `fresh`, a new one
+   * from Clerk, as an account's computer takes only a token issued in the last minute (0091).
+   */
+  accessToken: (fresh?: boolean) => Promise<string | undefined>;
 }
 
 const AccountContext = createContext<AccountValue | null>(null);
@@ -107,9 +111,17 @@ export const useAccount = () => useContext(AccountContext)!;
 
 export function AccountProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>();
-  const [access, setAccess] = useState<{ token: string; expiresAt: number }>();
+  // The latest session and token, for refreshes from callbacks that outlive a render, and the
+  // refresh under way: one at a time, so a rotated refresh token is never used twice.
+  const latest = useRef<{ session?: Session | null; access?: { token: string; expiresAt: number } }>({});
+  const refreshing = useRef<Promise<unknown>>(Promise.resolve());
+  latest.current.session = session;
+  const setAccess = (access: { token: string; expiresAt: number } | undefined) => {
+    latest.current.access = access;
+  };
 
   const save = async (next: Session | null) => {
+    latest.current.session = next;
     setSession(next);
     if (next) await SecureStore.setItemAsync(KEY, JSON.stringify(next), keychain);
     else await SecureStore.deleteItemAsync(KEY, keychain);
@@ -184,23 +196,30 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         }).catch(() => undefined);
     },
 
-    async accessToken() {
-      if (access && access.expiresAt - 60_000 > Date.now()) return access.token;
-      if (!session) return undefined;
-      try {
-        const fresh = await token({ grant_type: "refresh_token", refresh_token: session.refreshToken });
-        setAccess(fresh.access);
-        // Each refresh also refreshes the profile, so a sign-in from before the picture gets it.
-        const user = await userinfo(fresh.access.token).catch(() => session.user);
-        await save({ user, refreshToken: fresh.refreshToken ?? session.refreshToken });
-        return fresh.access.token;
-      } catch (e) {
-        // Revoked, such as by signing out everywhere: signed out here too.
-        if (e instanceof ClerkError && e.revoked) await save(null);
-        return undefined;
-      }
+    accessToken(fresh = false) {
+      const next = refreshing.current.then(() => refresh(fresh));
+      refreshing.current = next.catch(() => undefined);
+      return next;
     },
   };
+
+  async function refresh(fresh: boolean): Promise<string | undefined> {
+    const { access, session } = latest.current;
+    if (!fresh && access && access.expiresAt - 60_000 > Date.now()) return access.token;
+    if (!session) return undefined;
+    try {
+      const answer = await token({ grant_type: "refresh_token", refresh_token: session.refreshToken });
+      setAccess(answer.access);
+      // Each refresh also refreshes the profile, so a sign-in from before the picture gets it.
+      const user = await userinfo(answer.access.token).catch(() => session.user);
+      await save({ user, refreshToken: answer.refreshToken ?? session.refreshToken });
+      return answer.access.token;
+    } catch (e) {
+      // Revoked, such as by signing out everywhere: signed out here too.
+      if (e instanceof ClerkError && e.revoked) await save(null);
+      return undefined;
+    }
+  }
   return <AccountContext value={value}>{children}</AccountContext>;
 }
 

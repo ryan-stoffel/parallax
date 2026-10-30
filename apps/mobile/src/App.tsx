@@ -26,6 +26,7 @@ import Animated, { interpolate, useAnimatedStyle } from "react-native-reanimated
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { AccountProvider, SignIn, useAccount } from "./Account";
+import { AccountHosts } from "./accountHosts";
 import { AccountScreen } from "./AccountScreen";
 import { useFleet, FleetProvider } from "./fleet";
 import { GlassButton, SidebarIcon } from "./Glass";
@@ -382,7 +383,8 @@ function PullRequestsSheet() {
   );
 }
 
-function Main({ setup }: { setup: Setup }) {
+function Main({ setup, accounts }: { setup: Setup; accounts?: AccountHosts }) {
+  const { accessToken } = useAccount();
   const scheme = useColorScheme();
   const c = scheme === "dark" ? dark : light;
   const base = scheme === "dark" ? DarkTheme : DefaultTheme;
@@ -405,7 +407,7 @@ function Main({ setup }: { setup: Setup }) {
     },
   };
   return (
-    <FleetProvider setup={setup}>
+    <FleetProvider setup={setup} accounts={accounts} token={accessToken}>
       <NavigationContainer ref={nav} theme={theme} linking={linking}>
         <Alerts />
         <LightboxHost />
@@ -467,9 +469,20 @@ function Main({ setup }: { setup: Setup }) {
  */
 const devComputer = __DEV__ ? process.env.EXPO_PUBLIC_DEV_COMPUTER : undefined;
 
+/** What this phone calls itself to the computers it signs in to. */
+const DEVICE_NAME = "iPhone";
+
 function Gate() {
-  const { user } = useAccount();
+  const { user, accessToken } = useAccount();
   const [setup, setSetup] = useState<Setup>();
+  // The account's computers' sessions and approvals, read once signed in.
+  const [accounts, setAccounts] = useState<AccountHosts | null>();
+  const signedIn = user === undefined ? undefined : !!user;
+  useEffect(() => {
+    if (signedIn === undefined) return;
+    if (!signedIn) return setAccounts(null);
+    void AccountHosts.load(accessToken, DEVICE_NAME).then(setAccounts, () => setAccounts(null));
+  }, [signedIn]);
   useEffect(() => {
     void loadSetup().then(async (loaded) => {
       if (!devComputer || loaded.machines.length) return setSetup(loaded);
@@ -479,7 +492,7 @@ function Gate() {
       setSetup(next);
     });
   }, []);
-  if (user === undefined || !setup) return <Loading />;
+  if (user === undefined || !setup || (user && accounts === undefined)) return <Loading />;
   if (!user && !devComputer) return <SignIn />;
   if (!setup.onboarded)
     return (
@@ -490,7 +503,7 @@ function Gate() {
         }}
       />
     );
-  return <Main setup={setup} />;
+  return <Main setup={setup} accounts={accounts ?? undefined} />;
 }
 
 export default function App() {

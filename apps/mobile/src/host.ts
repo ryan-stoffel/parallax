@@ -1,6 +1,7 @@
-// A computer paired on the LAN (0065), for one without Parallax Connect: pairing with its code,
-// its credential in the Keychain, and the pinned socket to its plxd's remote listener, which
-// machines.ts connects a WebHost over.
+// A computer paired on the LAN (0065), for one without Parallax Connect: pairing with its code
+// (`spakePair`, which a new account computer's setup code runs too, 0091), its credential in the
+// Keychain, and the pinned socket to its plxd's remote listener, which machines.ts connects a
+// WebHost over.
 
 import * as SecureStore from "expo-secure-store";
 
@@ -15,8 +16,8 @@ import {
   spake,
   thumbprint,
 } from "./pairing";
+import { withPort } from "./routes";
 
-const PORT = 7341;
 const KEY = "host";
 
 /** A paired computer: its name, certificate fingerprint, where it listens, and the session. */
@@ -41,17 +42,49 @@ export async function loadSaved(): Promise<Saved | null> {
 /** Forgets the paired computer. */
 export const forget = () => SecureStore.deleteItemAsync(KEY, keychain);
 
-/** `route` with plxd's port when it has none: `10.0.0.2` is `10.0.0.2:7341`. */
-const withPort = (route: string) => (route.includes(":") ? route : `${route}:${PORT}`);
 const url = (route: string, path: string) => `https://${withPort(route)}${path}`;
 
-/** A POST to `path`, pinned to `pin`: its JSON answer, or a pairing error for people. */
-async function post(route: string, pin: string, path: string, body: object, headers = {}) {
-  const answer = await request(url(route, path), "POST", headers, body, pin);
+/** A POST to `target`, pinned to `pin`: its JSON answer, or a pairing error for people. */
+async function post(target: string, pin: string, body: object, headers = {}) {
+  const answer = await request(target, "POST", headers, body, pin);
   if (answer.status === 401)
     throw new Error("That code is wrong, used, or expired. Show a new one.");
+  if (answer.status === 429) throw new Error("That computer's code was tried too often. Try again later.");
   if (answer.status !== 200) throw new Error(`Parallax couldn't pair (${answer.status}).`);
   return JSON.parse(answer.body) as Record<string, unknown>;
+}
+
+/**
+ * Runs SPAKE2 with `code` against the host whose certificate has fingerprint `fp`, reached at
+ * `at(path)` and pinned to `pin`, and binds the session to DPoP key `secret`. Resolves to the
+ * host's answer, with its session, only if the host confirms it knows the code too.
+ */
+export async function spakePair(
+  at: (path: string) => string,
+  pin: string,
+  fp: string,
+  code: string,
+  secret: Uint8Array,
+  label: string,
+): Promise<Record<string, unknown>> {
+  const exchange = spake(code, fp);
+  const started = await post(at("/api/pair/start"), pin, { pake: base64url(exchange.message) });
+  const shared = exchange.finish(fromBase64url(String(started["pake"])));
+  const tp = thumbprint(secret);
+  const finished = await post(
+    at("/api/pair/finish"),
+    pin,
+    {
+      pairing: started["pairing"],
+      confirm: base64url(confirmation(shared, "client", fp, tp)),
+      clientLabel: label,
+    },
+    { DPoP: proof(secret, "POST", at("/api/pair/finish")) },
+  );
+  // Only a host that knows the code can vouch for the certificate this phone saw.
+  if (!same(confirmation(shared, "host", fp, tp), fromBase64url(String(finished["confirm"]))))
+    throw new Error("Another computer answered at that address. Pairing stopped.");
+  return finished;
 }
 
 /**
@@ -74,25 +107,8 @@ export async function pair(route: string, code: string, label: string): Promise<
     );
   });
   const fp = seen.fingerprint;
-  const exchange = spake(code, fp);
-  const started = await post(route, fp, "/api/pair/start", { pake: base64url(exchange.message) });
-  const shared = exchange.finish(fromBase64url(String(started["pake"])));
   const secret = newDpopSecret();
-  const tp = thumbprint(secret);
-  const finished = await post(
-    route,
-    fp,
-    "/api/pair/finish",
-    {
-      pairing: started["pairing"],
-      confirm: base64url(confirmation(shared, "client", fp, tp)),
-      clientLabel: label,
-    },
-    { DPoP: proof(secret, "POST", url(route, "/api/pair/finish")) },
-  );
-  // Only a host that knows the code can vouch for the certificate this phone saw.
-  if (!same(confirmation(shared, "host", fp, tp), fromBase64url(String(finished["confirm"]))))
-    throw new Error("Another computer answered at that address. Pairing stopped.");
+  const finished = await spakePair((path) => url(route, path), fp, fp, code, secret, label);
   const reported = (finished["routes"] as string[] | undefined) ?? [];
   const saved: Saved = {
     name: String(finished["name"] ?? route),
