@@ -5,7 +5,9 @@
 //
 // State: `relay` and `remote` (settings), `registered`, `connects` (false keeps the relay
 // unreachable), `pending` (a new device's request), `pairAfterCodes` (the setup code count after
-// which a device pairs), and `expiresInMs` (each setup code's life).
+// which a device pairs), `pairInMs` (how long after that code it pairs), `expiresInMs` (each
+// setup code's life), and `idleMs` (when set, it exits after that long without a request, as plxd
+// closes a silent connection).
 
 import { appendFileSync } from "node:fs";
 
@@ -18,7 +20,10 @@ const state = {
   /** @type {object | undefined} */
   pending: undefined,
   pairAfterCodes: 1,
+  pairInMs: 30,
   expiresInMs: 600_000,
+  /** @type {number | undefined} */
+  idleMs: undefined,
   ...JSON.parse(process.env["FAKE_PLXD"] ?? "{}"),
 };
 let version = 1;
@@ -46,6 +51,7 @@ const access = () => ({
 /** @type {Record<string, (params: any) => unknown>} */
 const methods = {
   initialize: () => ({ plxd: "0.0.0-test", protocol: 1 }),
+  "host/health": () => ({ uptimeSecs: 1 }),
   "relay/register": ({ token }) => {
     if (token !== "good-token") throw new Error("The relay refused the sign-in. Sign in again.");
     state.registered = true;
@@ -86,7 +92,7 @@ const methods = {
       setTimeout(() => {
         setupApproved = "MacBook Air";
         changed();
-      }, 30);
+      }, state.pairInMs);
     return { code: `48291${codes}`, expiresAt: new Date(Date.now() + state.expiresInMs).toISOString() };
   },
   "access/get": ({ after }) => {
@@ -105,9 +111,18 @@ const methods = {
   },
 };
 
+/** @type {NodeJS.Timeout | undefined} */
+let idle;
+const quiet = () => {
+  clearTimeout(idle);
+  if (state.idleMs !== undefined) idle = setTimeout(() => process.exit(0), state.idleMs);
+};
+quiet();
+
 let buffered = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => {
+  quiet();
   const lines = (buffered + chunk).split("\n");
   buffered = lines.pop() ?? "";
   for (const line of lines) {
