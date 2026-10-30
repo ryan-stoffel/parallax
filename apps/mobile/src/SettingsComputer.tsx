@@ -1010,7 +1010,20 @@ export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenP
   const m = useComputer(id);
   useEffect(() => navigation.setOptions({ title: pages[page] }), [page]);
   const Body = bodies[page];
-  if (!m) return null;
+  // No computer yet: the phone's own settings on this page, and the way to add one.
+  if (!m)
+    return (
+      <Page>
+        {page === "threads" && <NewThreadsSection />}
+        {page === "connections" ? (
+          <PhoneConnections />
+        ) : (
+          <Section footer="These settings belong to a computer. Add one to change them here.">
+            <Row icon={Plus} title="Add computer" last onPress={() => navigation.navigate("AddComputer")} />
+          </Section>
+        )}
+      </Page>
+    );
   return (
     <Page>
       {page === "threads" && <NewThreadsSection />}
