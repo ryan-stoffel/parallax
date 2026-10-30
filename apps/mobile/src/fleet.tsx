@@ -193,7 +193,9 @@ export function FleetProvider({
             );
             return JSON.stringify(machines) === JSON.stringify(s.machines) ? s : { ...s, machines };
           }),
-        gated: gate,
+        // A computer still waiting on another device keeps showing its code.
+        gated: (id, next) =>
+          setGates((g) => (next.kind === "setup" && g[id]?.kind === "waiting" ? g : { ...g, [id]: next })),
       },
     );
     fleetRef.current = made;

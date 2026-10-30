@@ -17,6 +17,7 @@ import {
   GitBranch,
   HardDrive,
   Info,
+  KeyRound,
   MessageSquare,
   Monitor,
   Moon,
@@ -52,7 +53,7 @@ import { DeviceIcon, Dot, GitHubLogo, Icon, Mark, Row, T, useColors } from "./ui
 const REPO = "https://github.com/ryan-stoffel/parallax";
 
 function status(m: Computer): string {
-  if (m.gate?.kind === "setup") return "New computer · Tap to set up";
+  if (m.gate?.kind === "setup") return "New computer · Needs setup";
   if (m.gate?.kind === "waiting") return `Waiting for approval · ${formatCode(m.gate.code)}`;
   if (m.gate?.kind === "refused") return sentence(m.gate.message);
   if (m.state.status === "connected") return `Connected · Parallax ${m.state.plxd}`;
@@ -301,14 +302,14 @@ export function NewThreadsSection() {
 }
 
 /**
- * Connections' settings of this phone's own: its computers, each with its page or, for a new
- * account computer, its setup, the account's computers removed from this phone, Add computer,
- * and Tailscale. Opening it lists the account's computers again.
+ * Connections' settings of this phone's own: its computers, each with its page, the account's
+ * computers removed from this phone, Add computer, and Tailscale. Opening it lists the account's
+ * computers again.
  */
 export function PhoneConnections() {
   const c = useColors();
   const nav = useNav();
-  const { computers, defaultId, discover, removed, restore, setUp } = useFleet();
+  const { computers, defaultId, discover, removed, restore } = useFleet();
   const [address, setAddress] = useState(() => tailnetAddress());
   useEffect(() => {
     discover();
@@ -328,7 +329,7 @@ export function PhoneConnections() {
             title={m.machine.name}
             detail={status(m)}
             chevron
-            onPress={() => (m.gate ? setUp(m.machine.id) : nav.navigate("Computer", { id: m.machine.id }))}
+            onPress={() => nav.navigate("Computer", { id: m.machine.id })}
             right={
               <View style={styles.line}>
                 {m.machine.id === defaultId && <Pill label="Default" color={c.accent} />}
@@ -417,11 +418,14 @@ const pageIcons: Partial<Record<SettingsPage, LucideIcon>> = {
   storage: HardDrive,
 };
 
-/** One computer: its status, version, address, its settings pages, and Make default, Reconnect, and Remove. */
+/**
+ * One computer: its status, Set up for a new account computer, version, address or routes, its
+ * settings pages, and Make default, Reconnect, and Remove.
+ */
 export function ComputerScreen({ route, navigation }: NativeStackScreenProps<SettingsScreens, "Computer">) {
   const c = useColors();
   const m = useComputer(route.params.id);
-  const { defaultId, setDefault, remove } = useFleet();
+  const { defaultId, setDefault, remove, setUp } = useFleet();
   useEffect(() => navigation.setOptions({ title: m?.machine.name ?? "Computer" }), [m?.machine.name]);
   if (!m) return null;
   const isDefault = m.machine.id === defaultId;
@@ -437,10 +441,15 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
         <T style={{ fontSize: 20, fontWeight: "600" }}>{m.machine.name}</T>
         <View style={styles.line}>
           <StatusDot m={m} />
-          <T muted>{m.connected ? "Connected" : m.state.status === "connecting" ? "Connecting…" : "Not reachable"}</T>
+          <T muted>{m.connected ? "Connected" : m.gate ? status(m) : m.state.status === "connecting" ? "Connecting…" : "Not reachable"}</T>
           {isDefault && <Pill label="Default" color={c.accent} />}
         </View>
       </View>
+      {m.gate && (
+        <Section footer="Type the code plx connect shows on it, or approve this phone from a device that already uses it.">
+          <Row icon={KeyRound} iconColor={c.accent} title={m.gate.kind === "refused" ? "Try again" : "Set up"} last onPress={() => setUp(m.machine.id)} />
+        </Section>
+      )}
       <Section>
         {m.state.status === "connected" && <Row title="Parallax" detail={m.state.plxd} />}
         {m.state.status === "failed" && <Row title="Last error" detail={m.state.error.message} />}
