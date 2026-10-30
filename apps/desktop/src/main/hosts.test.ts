@@ -795,3 +795,38 @@ test("Reach from anywhere on a tailnet device registers it under the account and
     rmSync(fake.userData, { recursive: true, force: true });
   }
 });
+
+test("an account computer's routes are read again from relay/id once it connects and on a network change", async () => {
+  vi.useFakeTimers();
+  fake.answers.clear();
+  try {
+    await start({ accounts: [{ hostId: studio, name: "studio", routes: ["192.168.1.20:7341"] }] });
+    const connection = accountConnection(studio)!;
+    let reported: { hostId: string; routes?: string[] } = {
+      hostId: studio,
+      routes: ["10.0.0.9", "100.70.1.2", `relay:${studio}`],
+    };
+    fake.answers.set("relay/id", () => ({ result: reported }));
+    const dialed = () => connection.options.command()?.slice(5);
+
+    connection.set(connected());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dialed()).toEqual(["10.0.0.9", "100.70.1.2", `relay:${studio}`]);
+
+    reported = { hostId: studio, routes: ["10.0.0.12:7400", `relay:${studio}`] };
+    fake.handlers.get("parallax:network")!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(dialed()).toEqual(["10.0.0.12:7400", `relay:${studio}`]);
+
+    // An older plxd reports no routes, and another key's answer is never taken: both keep them.
+    for (const answer of [{ hostId: studio }, { hostId: buildBox, routes: ["10.9.9.9"] }]) {
+      reported = answer;
+      fake.handlers.get("parallax:network")!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dialed()).toEqual(["10.0.0.12:7400", `relay:${studio}`]);
+    }
+  } finally {
+    vi.useRealTimers();
+    rmSync(fake.userData, { recursive: true, force: true });
+  }
+});

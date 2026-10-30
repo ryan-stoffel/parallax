@@ -238,7 +238,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   // Settings > Connections and Add computer ask for the account's computers when they open, and
   // the window's focus and the network do too, with no timer (0091).
   ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
-  ipcMain.on("parallax:network", () => lookAgain());
+  ipcMain.on("parallax:network", () => void networkChanged());
   app.on("browser-window-focus", () => lookAgain());
   ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
     enterSetupCode(hostId, code),
@@ -1679,6 +1679,30 @@ function lookAgain(): void {
   for (const routes of accountRoutes.values()) void routes.recheck();
 }
 
+/** A network change: as `lookAgain`, with each account computer's routes read again first. */
+async function networkChanged(): Promise<void> {
+  void discoverAccounts();
+  await Promise.all([...accountRoutes.keys()].map(readRoutes));
+  for (const routes of accountRoutes.values()) void routes.recheck();
+}
+
+/**
+ * Reads connected account computer `id`'s routes from its plxd (`relay/id`), and keeps its direct
+ * ones in place of those saved, LAN then Tailscale. The dial adds the relay itself. An older plxd
+ * reports none, so what the sign-in or pairing learned stays.
+ */
+async function readRoutes(id: string): Promise<void> {
+  const relayId = relayIdOf(id);
+  const host = connections.get(id);
+  if (!relayId || host?.state.status !== "connected") return;
+  const answer = await host.request("relay/id", {});
+  if ("error" in answer || answer.result.hostId !== relayId || !answer.result.routes) return;
+  const routes = directRoutes(answer.result.routes);
+  const saved = savedAccounts().find((a) => a.hostId === relayId);
+  if (saved && saved.routes.join("\n") !== routes.join("\n"))
+    updateAccount(relayId, (each) => ({ ...each, routes }));
+}
+
 /** The first of `routes` to present account computer `relayId`'s key, sent nothing (0091). */
 async function probeRoutes(relayId: string, routes: string[]): Promise<string | undefined> {
   const plxd = localPlxd();
@@ -1703,6 +1727,7 @@ function followAccess(hostId: string, state: ConnectionState): void {
     signedIn.delete(hostId);
     setAccess(hostId, undefined);
     finishMigration(relayId);
+    void readRoutes(hostId);
   }
   if (hostId === "local") {
     void discoverAccounts();
