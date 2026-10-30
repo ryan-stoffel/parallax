@@ -18,7 +18,7 @@ import { Alert, AppState } from "react-native";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
-import type { AccessState } from "../../desktop/src/protocol/generated/protocol";
+import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, merged, type Lists } from "./access";
 import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
@@ -53,6 +53,11 @@ interface FleetValue {
   restore: (hostId: string) => void;
   /** Sets up a gated account computer: its code, or an approval from another device. */
   setUp: (id: string) => void;
+  /**
+   * Revokes session `session` on computer `id`. A device signed in with the account also loses its
+   * key there, which `share` then copies to every computer this phone uses (0091).
+   */
+  revoke: (id: string, session: string) => Promise<RemoteSessionsResult | { error: string }>;
   /** Unsent text, by thread. */
   drafts: Map<string, string>;
 }
@@ -377,6 +382,13 @@ export function FleetProvider({
         return { ...s, hidden, machines, defaultId: defaultOf(machines, s.defaultId) };
       }),
     setUp,
+    async revoke(id, session) {
+      const answer = await fleet.hosts.get(id)?.request("remote/revoke", { id: session });
+      if (!answer) return { error: "That computer isn't connected." };
+      if ("error" in answer) return { error: answer.error.message };
+      void share();
+      return answer.result as RemoteSessionsResult;
+    },
     drafts,
   };
 

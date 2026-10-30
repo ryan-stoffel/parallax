@@ -37,7 +37,7 @@ import {
 import { isRepository } from "../../desktop/src/renderer/threads";
 import { uuidv7 } from "../../desktop/src/renderer/uuidv7";
 import { Choices } from "./Choices";
-import { useComputer, type Computer } from "./fleet";
+import { useComputer, useFleet, type Computer } from "./fleet";
 import { ago, type SettingsScreens } from "./nav";
 import { NewThreadsSection, PhoneConnections } from "./Settings";
 import { choiceKey, pages, type SettingsPage } from "./settingsLogic";
@@ -783,6 +783,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
   const id = m.machine.id;
   const { settings, error, set } = useHostSettings(m);
   const [status, setStatus] = useState<RemoteSessionsResult>();
+  const { revoke: revokeSession } = useFleet();
   const [code, setCode] = useState<RemotePairResult & { before: number }>();
   const [picking, setPicking] = useState(false);
   const connect = can(m, "connect");
@@ -830,9 +831,9 @@ function ConnectionsPage({ m }: { m: Computer }) {
   };
   const revoke = (s: { id: string; name: string }) =>
     confirm(`Revoke ${s.name || "Unnamed computer"}?`, "It can't reach this computer until it pairs again.", "Revoke", async () => {
-      const answer = await window.parallax.request(id, "remote/revoke", { id: s.id });
+      const answer = await revokeSession(id, s.id);
       if ("error" in answer) fail("Couldn't revoke the computer", answer.error);
-      else setStatus(answer.result);
+      else setStatus(answer);
     });
 
   if (!connect && !remote)
