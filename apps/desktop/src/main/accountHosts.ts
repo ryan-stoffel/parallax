@@ -35,7 +35,6 @@ export const relayIdOf = (id: string): string | undefined =>
 export const isRelayId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value);
 
-/** Routes worth keeping from a host's answer: direct ones `plxd dial` takes, in its order. */
 /**
  * A Clerk token's user id, its JWT's `sub`, read without checking the signature: main got the
  * token from Clerk itself, and only passes the id to a plxd it trusts (`relay/sign`). Undefined
@@ -52,6 +51,7 @@ export function tokenSubject(token: string): string | undefined {
   }
 }
 
+/** Routes worth keeping from a host's answer: direct ones `plxd dial` takes, in its order. */
 export const directRoutes = (routes: unknown): string[] =>
   Array.isArray(routes)
     ? [...new Set(routes.filter((r): r is string => isRoute(r) && !r.startsWith("relay:")))]
