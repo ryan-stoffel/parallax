@@ -15,8 +15,12 @@ final class RelayBridge {
   private let session = URLSession(configuration: .ephemeral)
   private var pipes: [Pipe] = []
   private var started = false
+  private let lock = NSLock()
+  private var refusal: Int?
+
   /// The relay's HTTP status when it last refused a stream, such as 503 while the host is offline.
-  private(set) var refused: Int?
+  /// Set before the refused connection closes, so the request that fails can read it.
+  var refused: Int? { lock.withLock { refusal } }
 
   init(url: URL, token: String) throws {
     let parameters = NWParameters.tcp
@@ -69,7 +73,8 @@ final class RelayBridge {
     socket.resume()
     socket.receive { [weak self] result in
       if case .success(.string(let text)) = result, text == "ready" { return pipe.run() }
-      self?.queue.async { self?.refused = (socket.response as? HTTPURLResponse)?.statusCode }
+      let status = (socket.response as? HTTPURLResponse)?.statusCode
+      self?.lock.withLock { self?.refusal = status }
       pipe.end()
     }
   }

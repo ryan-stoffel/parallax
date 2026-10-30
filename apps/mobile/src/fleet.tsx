@@ -222,9 +222,7 @@ export function FleetProvider({
     setListed(found);
     update((s) => {
       const machines = withListed(s.machines, found, s.hidden);
-      return machines.length === s.machines.length && machines.every((m, i) => m === s.machines[i])
-        ? s
-        : { ...s, machines };
+      return machines === s.machines ? s : { ...s, machines, defaultId: defaultOf(machines, s.defaultId) };
     });
   }
 
@@ -306,12 +304,28 @@ export function FleetProvider({
     });
     if ("error" in approved) return;
     await accounts.trust([hostId]);
-    tailnetOf.set(accountId(hostId), id);
-    const m = latest.current.machines.find((x) => x.id === accountId(hostId));
-    if (m && !fleet.hosts.has(m.id)) {
+    const replacement = accountId(hostId);
+    tailnetOf.set(replacement, id);
+    const m = latest.current.machines.find((x) => x.id === replacement);
+    if (!m) return;
+    if (fleet.hosts.get(replacement)?.state.status === "connected") return retire(replacement);
+    if (!fleet.hosts.has(m.id)) {
       gate(m.id, undefined);
       fleet.add(m);
     }
+  }
+
+  /** Drops the `tailnet:` computer that account computer `id`, now connected, replaces. */
+  function retire(id: string) {
+    const old = tailnetOf.get(id);
+    if (!old) return;
+    tailnetOf.delete(id);
+    fleet.remove(old);
+    update((s) => ({
+      ...s,
+      machines: s.machines.filter((m) => m.id !== old),
+      defaultId: s.defaultId === old ? id : s.defaultId,
+    }));
   }
 
   useEffect(() => {
@@ -321,16 +335,7 @@ export function FleetProvider({
       void outboxes.get(id)?.drain();
       if (id.startsWith("account:")) {
         gate(id, undefined);
-        const old = tailnetOf.get(id);
-        if (old) {
-          tailnetOf.delete(id);
-          fleet.remove(old);
-          update((s) => ({
-            ...s,
-            machines: s.machines.filter((m) => m.id !== old),
-            defaultId: s.defaultId === old ? id : s.defaultId,
-          }));
-        }
+        retire(id);
       } else if (!id.startsWith("paired-") && "accountAccess" in state.capabilities) void migrate(id);
       if ("accountAccess" in state.capabilities) {
         watchAccess(id);

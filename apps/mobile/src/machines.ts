@@ -49,20 +49,21 @@ export interface Setup {
 export const accountId = (hostId: string) => `account:${hostId}`;
 
 /**
- * `known` with the account's computers the relay `listed`: new ones added, unless removed from
- * this phone, and names kept current. One the relay no longer lists stays, as an offline one does.
+ * `known` with the account's computers the relay `listed` that it lacks, unless removed from this
+ * phone. A known one keeps the name it reports itself, and one the relay no longer lists stays,
+ * as an offline one does.
  */
 export function withListed(known: Machine[], listed: Listed[], hidden: string[] = []): Machine[] {
-  const next = known.map((m) => {
-    const now = m.account && listed.find((l) => l.hostId === m.account!.hostId);
-    return now && now.name && now.name !== m.name ? { ...m, name: now.name } : m;
-  });
-  for (const l of listed) {
-    const id = accountId(l.hostId);
-    if (hidden.includes(id) || next.some((m) => m.id === id)) continue;
-    next.push({ id, name: l.name || "Computer", os: "", address: "", account: { hostId: l.hostId, routes: [] } });
-  }
-  return next;
+  const added = listed
+    .filter((l) => !hidden.includes(accountId(l.hostId)) && !known.some((m) => m.id === accountId(l.hostId)))
+    .map((l) => ({
+      id: accountId(l.hostId),
+      name: l.name || "Computer",
+      os: "",
+      address: "",
+      account: { hostId: l.hostId, routes: [] },
+    }));
+  return added.length ? [...known, ...added] : known;
 }
 
 const setupFile = new File(privateFile("machines.json"));

@@ -66,7 +66,6 @@ old.close()
 // A token the relay refuses: no stream, and the bridge says why.
 let (refused, refusedPort) = bridge(connect, token: "not-a-token")
 let unauthorized = get(refusedPort, pin: "key:\(hostId)")
-Thread.sleep(forTimeInterval: 0.2)
 check(
   "the relay's refusal is reported", unauthorized.status == nil && refused.refused == 401,
   "\(String(describing: refused.refused))")
