@@ -153,7 +153,7 @@ function Alerts() {
       if (t.archived) continue;
       const key = `${m.machine.id}:${t.id}`;
       const asks = state.approvals[t.id]?.items.filter((i) => i.kind === "approval" && !i.resolved).length ?? 0;
-      const now = phaseOf(state.runs[t.id], asks);
+      const now = phaseOf(state.runs[t.id], asks, t.id in state.waiting);
       const alert = alertFor(phases.current.get(key), now);
       phases.current.set(key, now);
       if (alert && getPrefs().notify[alert]) notify(alert, m.machine.id, t.id, state.titles[t.id] ?? "A thread", m.machine.name);

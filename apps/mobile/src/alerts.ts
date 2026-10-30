@@ -6,10 +6,14 @@ import { isRunning } from "../../desktop/src/renderer/transcript";
 /** Where a run is, as far as notifying goes. */
 export type Phase = "needsYou" | "working" | "done" | "failed" | "idle";
 
-export function phaseOf(run: AgentRun | undefined, asks: number): Phase {
+/**
+ * `waiting`: the run's agent still waits on background work or a watched pull request (PLX-777),
+ * so a turn that ended isn't done yet: the agent wakes for it and carries on.
+ */
+export function phaseOf(run: AgentRun | undefined, asks: number, waiting = false): Phase {
   if (asks > 0) return "needsYou";
   if (!run) return "idle";
-  if (isRunning(run.status)) return "working";
+  if (isRunning(run.status) || (run.status === "completed" && waiting)) return "working";
   if (run.status === "completed") return "done";
   return run.status === "failed" ? "failed" : "idle";
 }
