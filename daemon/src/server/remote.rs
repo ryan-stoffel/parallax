@@ -14,8 +14,14 @@
 //!   up the code and answers with a session bound to the proof's key, the host's own
 //!   confirmation, its name, and its routes. A wrong one counts against the code, which locks
 //!   after [`remote::MAX_WRONG_CODES`]. The session's token is stored hashed.
+//!   A new computer's setup code (0091) runs the same exchange, and also approves the client's
+//!   key for account sign-in. Its runs are capped at [`MAX_SETUP_RUNS`] an hour.
+//! - `POST /api/auth/account` and `POST /api/auth/approval`: account sign-in (0091), in
+//!   [`access`].
 //! - `POST /api/auth/websocket-ticket`: a ticket valid once for 30 s, for a `DPoP`-bound token.
-//! - `GET /ws?wsTicket=…`: a WebSocket carrying 0007's JSON-RPC, one message per frame.
+//! - `GET /ws`: a WebSocket carrying 0007's JSON-RPC, one message per frame, opened with the
+//!   session's token and a `DPoP` proof for the upgrade itself (0091), or with `?wsTicket=…`, for
+//!   a browser, which can't set the upgrade's headers.
 //! - `/api/hooks/<id>/<token>`, by any method: a scheduled task's webhook ([`crate::schedules`]),
 //!   with a body of up to [`MAX_HOOK_BYTES`].
 //!
@@ -38,6 +44,8 @@
 //! While a code waits, plxd advertises itself over mDNS as `_parallax._tcp`, by name, with no
 //! secret. Turning `remote` off ends the pairing and closes every connection the listener
 //! accepted, and `remote/revoke` closes a session's own.
+
+pub(crate) mod access;
 
 use std::collections::HashMap;
 use std::io;
@@ -74,6 +82,15 @@ use crate::remote::{self, Descriptor, HostKey};
 
 /// How long a pairing code works, as 0065 has it.
 pub(crate) const CODE_LIFETIME: Duration = Duration::from_mins(5);
+
+/// How long a new computer's setup code works (0091).
+const SETUP_CODE_LIFETIME: Duration = Duration::from_mins(10);
+
+/// How many SPAKE2 runs setup codes allow an hour, together (0091). Each run is one guess.
+pub(crate) const MAX_SETUP_RUNS: usize = 5;
+
+/// The window [`MAX_SETUP_RUNS`] and new devices' requests are counted in.
+const HOUR: Duration = Duration::from_hours(1);
 
 /// How long a started SPAKE2 exchange waits for its finish.
 const PAKE_LIFETIME: Duration = Duration::from_secs(30);
@@ -149,6 +166,8 @@ pub(crate) struct Remote {
     proofs: Mutex<HashMap<String, Instant>>,
     /// Each session's connections close when its token is cancelled.
     sessions: Mutex<HashMap<String, CancellationToken>>,
+    /// Account sign-in's approvals (0091).
+    pub access: access::Access,
 }
 
 impl Remote {
@@ -171,13 +190,20 @@ impl Remote {
             tickets: Mutex::default(),
             proofs: Mutex::default(),
             sessions: Mutex::default(),
+            access: access::Access::default(),
         }
     }
 
     /// Starts a pairing with a new code, which replaces any earlier one, and advertises this host
-    /// as `name` over mDNS until it ends. Answers with the code and when it stops working.
-    pub(crate) fn new_pairing(&self, name: &str) -> (String, jiff::Timestamp) {
-        let code = remote::new_code();
+    /// as `name` over mDNS until it ends. A `setup` code is a new computer's (0091): 6 digits, for
+    /// 10 minutes, and a client that pairs with it is approved for account sign-in. Answers with
+    /// the code and when it stops working.
+    pub(crate) fn new_pairing(&self, name: &str, setup: bool) -> (String, jiff::Timestamp) {
+        let (code, lifetime) = if setup {
+            (remote::new_setup_code(), SETUP_CODE_LIFETIME)
+        } else {
+            (remote::new_code(), self.code_lifetime)
+        };
         // A test's listener on loopback has nothing to advertise.
         let advert = self
             .address
@@ -186,7 +212,8 @@ impl Remote {
             .flatten();
         let pairing = Pairing {
             code: code.clone(),
-            expires: Instant::now() + self.code_lifetime,
+            setup,
+            expires: Instant::now() + lifetime,
             wrong: 0,
             pending: HashMap::new(),
             advert,
@@ -197,7 +224,7 @@ impl Remote {
         // The listener's loop waits for the new expiry.
         self.changed.notify_one();
         let expires = jiff::Timestamp::now()
-            + jiff::SignedDuration::try_from(self.code_lifetime).expect("a short lifetime");
+            + jiff::SignedDuration::try_from(lifetime).expect("a short lifetime");
         (code, expires)
     }
 
@@ -242,6 +269,9 @@ impl Remote {
         };
         let (answer, key) = remote::pake_host(&waiting.code, fingerprint, client)
             .map_err(|_| "a bad SPAKE2 message")?;
+        if waiting.setup && !self.access.setup_run() {
+            return Err("too many tries with setup codes this hour");
+        }
         waiting.pending.retain(|_, (_, expires)| now < *expires);
         if waiting.pending.len() >= MAX_PENDING_PAKES {
             let oldest = waiting
@@ -261,14 +291,15 @@ impl Remote {
     }
 
     /// Checks the client's confirmation for exchange `id`: the shared key when it's right, which
-    /// uses up the code. A wrong one counts against the code, and the last allowed one locks it.
+    /// uses up the code, and whether it was a setup code. A wrong one counts against the code, and
+    /// the last allowed one locks it.
     fn finish_pake(
         &self,
         id: &str,
         fingerprint: &str,
         thumbprint: &str,
         mac: &[u8],
-    ) -> Result<Vec<u8>, &'static str> {
+    ) -> Result<(Vec<u8>, bool), &'static str> {
         let mut pairing = self.lock_pairing();
         let now = Instant::now();
         let Some(waiting) = pairing.as_mut().filter(|p| now < p.expires) else {
@@ -281,8 +312,10 @@ impl Remote {
             return Err("a pairing exchange that took too long");
         }
         if remote::confirms(&key, b"client", fingerprint, thumbprint, mac) {
-            pairing.take().expect("a pairing").end();
-            return Ok(key);
+            let used = pairing.take().expect("a pairing");
+            let setup = used.setup;
+            used.end();
+            return Ok((key, setup));
         }
         Err(wrong_code(&mut pairing))
     }
@@ -291,7 +324,9 @@ impl Remote {
     /// against the code as a wrong confirmation does, so guesses get the same 5 tries.
     fn use_code(&self, code: &str) -> Result<(), &'static str> {
         let mut pairing = self.lock_pairing();
-        let Some(waiting) = pairing.as_ref().filter(|p| Instant::now() < p.expires) else {
+        // A setup code is for SPAKE2 only, which approves the key that ran it.
+        let waiting = pairing.as_ref().filter(|p| !p.setup);
+        let Some(waiting) = waiting.filter(|p| Instant::now() < p.expires) else {
             return Err("no pairing code is waiting");
         };
         if waiting.code == code {
@@ -368,6 +403,8 @@ fn wrong_code(pairing: &mut Option<Pairing>) -> &'static str {
 /// A pairing code waiting to be used.
 struct Pairing {
     code: String,
+    /// A new computer's setup code (0091), not 0065's.
+    setup: bool,
     expires: Instant,
     /// How many wrong codes have been tried.
     wrong: u32,
@@ -603,9 +640,18 @@ impl Request {
 
     /// Checks this `POST`'s `DPoP` proof, bound to `access_token` when it has one.
     fn proof(&self, access_token: Option<&str>) -> Result<remote::Proven, &'static str> {
+        self.proof_for("POST", access_token)
+    }
+
+    /// Checks this request's `DPoP` proof for `method`, bound to `access_token` when it has one.
+    fn proof_for(
+        &self,
+        method: &str,
+        access_token: Option<&str>,
+    ) -> Result<remote::Proven, &'static str> {
         let proof = self.header("dpop").unwrap_or_default();
         let now = remote::now_seconds();
-        remote::verify_proof(proof, "POST", &self.url(), now, access_token)
+        remote::verify_proof(proof, method, &self.url(), now, access_token)
     }
 }
 
@@ -860,6 +906,8 @@ impl Serving {
                         pair_browser(&daemon, &request).await
                     }
                     ("POST", "/api/auth/websocket-ticket") => ticket(&daemon, &request).await,
+                    ("POST", "/api/auth/account") => access::sign_in(&daemon, &key, &request).await,
+                    ("POST", "/api/auth/approval") => access::approval(&daemon, &key, &request).await,
                     _ if request.too_large => (413, json!({ "error": "body_too_large" })),
                     (method, hook) if hook.starts_with("/api/hooks/") => {
                         let Request { path, headers, body, .. } = &request;
@@ -936,19 +984,27 @@ async fn finish_pairing(
         Err(why) => return refused(why),
     };
     let fp = &key.fingerprint;
-    let shared = match daemon
-        .remote
-        .finish_pake(&finish.pairing, fp, &proven.thumbprint, &mac)
-    {
-        Ok(shared) => shared,
-        Err(why) => return refused(why),
-    };
+    let (shared, setup) =
+        match daemon
+            .remote
+            .finish_pake(&finish.pairing, fp, &proven.thumbprint, &mac)
+        {
+            Ok(shared) => shared,
+            Err(why) => return refused(why),
+        };
     // Only a client that knew the code gets its proof remembered, so strangers can't grow the map.
     if !daemon.remote.first_use(&proven) {
         return refused("a replayed DPoP proof");
     }
-    let Some(token) = new_session(daemon, &proven, &finish.client_label, false).await else {
-        return (500, json!({ "error": "server_error" }));
+    // A setup code approves the key that typed it for account sign-in (0091).
+    if setup
+        && let Err(refusal) = access::approve_by_setup(daemon, &proven, &finish.client_label).await
+    {
+        return refusal;
+    }
+    let token = match new_session(daemon, &proven, &finish.client_label, false).await {
+        Ok(token) => token,
+        Err(refusal) => return refusal,
     };
     let confirm = remote::confirmation(&shared, b"host", fp, &proven.thumbprint);
     (
@@ -964,12 +1020,14 @@ async fn finish_pairing(
 }
 
 /// Keeps a new session bound to the key of `proven`, named `label`, and answers with its token.
+/// A key the account removed gets none: checked in the same write that keeps the session, so a
+/// removal can't land between the check and the session (0091).
 async fn new_session(
     daemon: &Daemon,
     proven: &remote::Proven,
     label: &str,
     browser: bool,
-) -> Option<String> {
+) -> Result<String, (u16, serde_json::Value)> {
     let token = remote::random_token(32);
     let session = StoredSession {
         id: uuid::Uuid::new_v4().to_string(),
@@ -983,17 +1041,29 @@ async fn new_session(
     let stored = daemon
         .store
         .run(&CancellationToken::new(), move |db| {
+            if access::read_lists(db)?
+                .removed_clients
+                .contains(&session.thumbprint)
+            {
+                return Ok(false);
+            }
             let mut sessions = read_sessions(db)?;
             sessions.push(session);
-            write_sessions(db, &sessions)
+            write_sessions(db, &sessions)?;
+            Ok(true)
         })
         .await;
-    if let Err(error) = stored {
-        warn!(error = %error.message, "could not keep a remote session");
-        return None;
+    match stored {
+        Ok(true) => {
+            info!(%name, "paired a remote client");
+            Ok(token)
+        }
+        Ok(false) => Err(access::removed("this device was removed")),
+        Err(error) => {
+            warn!(error = %error.message, "could not keep a remote session");
+            Err((500, json!({ "error": "server_error" })))
+        }
     }
-    info!(%name, "paired a remote client");
-    Some(token)
 }
 
 /// `POST /api/pair/browser` (PLX-651): the waiting code, typed into a browser, with a `DPoP`
@@ -1024,8 +1094,9 @@ async fn pair_browser(daemon: &Daemon, request: &Request) -> (u16, serde_json::V
     if let Err(why) = daemon.remote.use_code(&remote::normalize_code(&pair.code)) {
         return refused(why);
     }
-    let Some(token) = new_session(daemon, &proven, &pair.client_label, true).await else {
-        return (500, json!({ "error": "server_error" }));
+    let token = match new_session(daemon, &proven, &pair.client_label, true).await {
+        Ok(token) => token,
+        Err(refusal) => return refusal,
     };
     (
         200,
@@ -1162,40 +1233,57 @@ async fn serve_file(
 /// off: only `invalid_token` means pairing again. A browser's session while `remoteWeb` is off is
 /// `access_denied`, and works again once it's on.
 async fn ticket(daemon: &Daemon, request: &Request) -> (u16, serde_json::Value) {
+    let session = match authorize(daemon, request, "POST").await {
+        Ok(session) => session,
+        Err(refusal) => return refusal,
+    };
+    let ticket = daemon.remote.new_ticket(session);
+    let seconds = TICKET_LIFETIME.as_secs();
+    (200, json!({ "ticket": ticket, "expiresIn": seconds }))
+}
+
+/// The session a `method` request's `Authorization: DPoP` token and `DPoP` proof stand for, or why
+/// not.
+async fn authorize(
+    daemon: &Daemon,
+    request: &Request,
+    method: &str,
+) -> Result<String, (u16, serde_json::Value)> {
     let refused =
         |error: &str, why: &str| (401, json!({ "error": error, "error_description": why }));
     let Some(token) = request
         .header("authorization")
         .and_then(|value| value.strip_prefix("DPoP "))
     else {
-        return refused("invalid_token", "no DPoP access token");
+        return Err(refused("invalid_token", "no DPoP access token"));
     };
     let Some(session) = session_for(daemon, token).await else {
-        return refused("invalid_token", "an unknown or revoked session");
+        return Err(refused("invalid_token", "an unknown or revoked session"));
     };
-    let proven = match request.proof(Some(token)) {
-        Ok(proven) => proven,
-        Err(why) => return refused("invalid_dpop_proof", why),
-    };
+    let proven = request
+        .proof_for(method, Some(token))
+        .map_err(|why| refused("invalid_dpop_proof", why))?;
     if proven.thumbprint != session.thumbprint {
-        return refused("invalid_dpop_proof", "a DPoP proof from another key");
+        return Err(refused(
+            "invalid_dpop_proof",
+            "a DPoP proof from another key",
+        ));
     }
     if !daemon.remote.first_use(&proven) {
-        return refused("invalid_dpop_proof", "a replayed DPoP proof");
+        return Err(refused("invalid_dpop_proof", "a replayed DPoP proof"));
     }
     if session.browser && !web_on(daemon).await {
         let why = "Open in a browser is off on this computer";
-        return (
+        return Err((
             403,
             json!({ "error": "access_denied", "error_description": why }),
-        );
+        ));
     }
-    let ticket = daemon.remote.new_ticket(session.id);
-    let seconds = TICKET_LIFETIME.as_secs();
-    (200, json!({ "ticket": ticket, "expiresIn": seconds }))
+    Ok(session.id)
 }
 
-/// `GET /ws`: opens the WebSocket a ticket allows, and serves it as a socket connection.
+/// `GET /ws`: opens the WebSocket a session's token and proof, or a ticket, allows, and serves it
+/// as a socket connection.
 async fn serve_socket(
     mut stream: tokio_rustls::server::TlsStream<TcpStream>,
     request: &Request,
@@ -1204,19 +1292,27 @@ async fn serve_socket(
     closing: &CancellationToken,
     peer: SocketAddr,
 ) {
-    let session = request
-        .query("wsTicket")
-        .and_then(|t| daemon.remote.take_ticket(t));
+    let session = match request.query("wsTicket") {
+        Some(ticket) => daemon
+            .remote
+            .take_ticket(ticket)
+            .ok_or_else(|| refused("a wrong, used, or expired ticket")),
+        // The proof opens the channel itself, a round trip shorter (0091).
+        None => authorize(&daemon, request, "GET").await,
+    };
     let key = request.header("sec-websocket-key");
     let upgrade = request
         .header("upgrade")
         .is_some_and(|u| u.eq_ignore_ascii_case("websocket"));
-    let (Some(session), Some(key), true) = (session, key, upgrade) else {
-        warn!(%peer, "refused a WebSocket without a valid ticket");
-        let refusal = refused("a wrong, used, or expired ticket");
+    let (Ok(session), Some(key), true) = (session.as_ref(), key, upgrade) else {
+        warn!(%peer, "refused a WebSocket without a valid ticket or proof");
+        let refusal = session
+            .err()
+            .unwrap_or_else(|| (400, json!({ "error": "invalid_request" })));
         let _ = respond(&mut stream, refusal.0, &refusal.1).await;
         return;
     };
+    let session = session.clone();
     // Watched before the session is checked, so a revoke that lands in between still closes it.
     let closing = daemon.remote.watch(&session, closing);
     // A session revoked after its ticket was made, or a browser's after `remoteWeb` went off.
@@ -1381,24 +1477,36 @@ pub(crate) async fn sessions(
     Ok(listed(sessions))
 }
 
-/// Revokes the session `id` and closes its connections. Answers with the sessions left.
+/// Revokes the session `id` and closes its connections. Answers with the sessions left. A session
+/// whose key the account approved also removes that key (0091), so the device can't sign straight
+/// back in.
 pub(crate) async fn revoke(
     daemon: &Daemon,
     cancel: &CancellationToken,
     id: String,
 ) -> Result<Vec<RemoteSession>, ErrorObject> {
     let gone = id.clone();
-    let sessions = daemon
+    let (sessions, approved) = daemon
         .store
         .run(cancel, move |db| {
             let mut sessions = read_sessions(db)?;
+            let thumbprint = sessions
+                .iter()
+                .find(|s| s.id == gone)
+                .map(|s| s.thumbprint.clone());
             sessions.retain(|s| s.id != gone);
             write_sessions(db, &sessions)?;
-            Ok(sessions)
+            let lists = access::read_lists(db)?;
+            let approved = thumbprint.filter(|key| lists.approved_clients.contains(key));
+            Ok((sessions, approved))
         })
         .await?;
     daemon.remote.revoke(&id);
     info!(session = %id, "revoked a remote session");
+    if let Some(thumbprint) = approved {
+        access::remove(daemon, cancel, thumbprint).await?;
+        return self::sessions(daemon, cancel).await;
+    }
     Ok(listed(sessions))
 }
 
@@ -1411,7 +1519,20 @@ pub(crate) async fn new_pairing(daemon: &Daemon) -> Result<(String, jiff::Timest
         return Err(problem.unwrap_or_else(|| "Turn on pairing first.".to_owned()));
     }
     let name = host_name(daemon).await;
-    Ok(remote.new_pairing(&name))
+    Ok(remote.new_pairing(&name, false))
+}
+
+/// A new computer's setup code (0091), which replaces any pairing code waiting, for a signed-in
+/// client to type. Refused while the listener isn't bound.
+pub(crate) async fn new_setup_code(daemon: &Daemon) -> Result<(String, jiff::Timestamp), String> {
+    let remote = &daemon.remote;
+    if !remote.listening.load(Ordering::Relaxed) {
+        let problem = lock(&remote.problem).clone();
+        return Err(problem.unwrap_or_else(|| "Turn on Reach from anywhere first.".to_owned()));
+    }
+    let name = host_name(daemon).await;
+    remote.access.setup_started();
+    Ok(remote.new_pairing(&name, true))
 }
 
 /// A client's name as kept: no control characters, at most 64 characters.
@@ -1421,8 +1542,10 @@ fn clean_name(name: &str) -> String {
 }
 
 /// Where a client can reach this host, best first: its LAN address, the one its default route
-/// leaves from, then its Tailscale address, each an IP, with the port when it isn't
-/// [`remote::PORT`], then `relay:<hostId>` while plxd is connected to the relay (PLX-652).
+/// leaves from, then its Tailscale address, found with `tailscale status` whether or not Connect
+/// is on (0091), each an IP, with the port when it isn't [`remote::PORT`], then `relay:<hostId>`
+/// while plxd is connected to the relay (PLX-652). Clients try the LAN and Tailscale routes
+/// together and the relay last ([`remote::race`]).
 pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
     let remote = &daemon.remote;
     let route = |ip: IpAddr| {
@@ -1436,7 +1559,6 @@ pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
     if let Some(ip) = remote.address {
         return std::iter::once(route(ip)).chain(relay).collect();
     }
-    let mut routes = Vec::new();
     // Connecting a UDP socket sends nothing; it only picks the address a packet would leave from.
     let primary = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0))
         .and_then(|socket| {
@@ -1444,23 +1566,30 @@ pub(crate) async fn routes(daemon: &Daemon) -> Vec<String> {
             socket.local_addr()
         })
         .map(|address| address.ip());
-    if let Some(ip) = primary
+    let lan = primary
         .ok()
         .filter(|ip| remote::is_local_network(*ip) && !ip.is_loopback())
-    {
-        routes.push(route(ip));
-    }
-    if let Some(ip) = daemon
+        .map(route);
+    let tailnet = daemon
         .connect
         .tailnet
         .status()
         .await
         .ok()
         .and_then(|s| s.this.ipv4())
-    {
-        routes.push(route(ip));
+        .map(route);
+    ordered(lan, tailnet, relay)
+}
+
+/// The routes in the order clients try them: the LAN address, the Tailscale address, then the
+/// relay, each once. The default route may leave from the Tailscale address itself.
+fn ordered(lan: Option<String>, tailnet: Option<String>, relay: Option<String>) -> Vec<String> {
+    let mut routes: Vec<String> = Vec::new();
+    for route in [lan, tailnet, relay].into_iter().flatten() {
+        if !routes.contains(&route) {
+            routes.push(route);
+        }
     }
-    routes.extend(relay);
     routes
 }
 
@@ -1508,6 +1637,26 @@ mod tests {
     use tokio::io::AsyncWriteExt as _;
 
     use super::{MAX_HOOK_BYTES, read_request};
+
+    #[test]
+    fn routes_go_lan_then_tailscale_then_the_relay_each_once() {
+        let some = |route: &str| Some(route.to_owned());
+        let relay = format!("relay:{}", "h".repeat(43));
+        assert_eq!(
+            super::ordered(some("192.168.1.5"), some("100.64.0.7"), Some(relay.clone())),
+            ["192.168.1.5", "100.64.0.7", relay.as_str()]
+        );
+        assert_eq!(
+            super::ordered(None, some("100.64.0.7:7400"), Some(relay.clone())),
+            ["100.64.0.7:7400", relay.as_str()],
+            "Tailscale alone, with Connect off or no LAN"
+        );
+        assert_eq!(
+            super::ordered(some("100.64.0.7"), some("100.64.0.7"), None),
+            ["100.64.0.7"],
+            "a default route through the tailnet"
+        );
+    }
 
     async fn read(raw: Vec<u8>) -> Option<super::Request> {
         let (mut client, mut server) = tokio::io::duplex(64 * 1024);

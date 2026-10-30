@@ -63,6 +63,9 @@ spake2 = "0.4"
 # Parallax Relay (PLX-652): the relay's public certificate, checked against Mozilla's roots, the
 # same on every OS.
 webpki-roots = "1"
+# An `account:` host's certificate is pinned by its key's JWK thumbprint, its relay id (0091), read
+# with the same parse rustls checks the handshake with. rustls already builds it.
+webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["alloc"] }
 mdns-sd = { version = "0.21", default-features = false }
 # `plxd tui` (PLX-740), on crossterm, which it re-exports. `line_count` scrolls a wrapped
 # transcript to its end.

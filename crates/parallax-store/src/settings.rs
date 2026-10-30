@@ -38,6 +38,17 @@ const RELAY: &str = "relay";
 /// The `host_settings` key for the remote clients' sessions, as plxd's JSON (PLX-641).
 const REMOTE_SESSIONS: &str = "remote_sessions";
 
+/// The `host_settings` key for the Clerk user id this host registered with the relay under (0091).
+const RELAY_ACCOUNT: &str = "relay_account";
+
+/// The `host_settings` key for the account's approved and removed client keys and approved host
+/// ids, as plxd's JSON (0091).
+const ACCOUNT_ACCESS: &str = "account_access";
+
+/// The `host_settings` key for account sign-in's hourly counts and waiting request, as plxd's JSON
+/// (0091), so a restart resets neither.
+const ACCOUNT_LIMITS: &str = "account_limits";
+
 /// The `host_settings` key for the Claude Remote Control sessions plxd's sync already imported
 /// or found imported, as a JSON array of their ids (PLX-1140).
 const REMOTE_CONTROL_SYNCED: &str = "remote_control_synced";
@@ -285,6 +296,60 @@ impl Store {
     /// A database error.
     pub fn set_remote_sessions(&self, sessions: Option<&str>) -> Result<(), StoreError> {
         self.set_text(REMOTE_SESSIONS, sessions)
+    }
+
+    /// The Clerk user id this host registered with the relay under, if it has (0091).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn relay_account(&self) -> Result<Option<String>, StoreError> {
+        self.text(RELAY_ACCOUNT)
+    }
+
+    /// Records the Clerk user id this host registered under.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_relay_account(&self, user: &str) -> Result<(), StoreError> {
+        self.set_text(RELAY_ACCOUNT, Some(user))
+    }
+
+    /// Who may sign in with the account, as plxd's JSON, if anyone was approved or removed (0091).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn account_access(&self) -> Result<Option<String>, StoreError> {
+        self.text(ACCOUNT_ACCESS)
+    }
+
+    /// Stores who may sign in with the account.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_account_access(&self, access: &str) -> Result<(), StoreError> {
+        self.set_text(ACCOUNT_ACCESS, Some(access))
+    }
+
+    /// Account sign-in's hourly counts and waiting request, as plxd's JSON, if kept (0091).
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn account_limits(&self) -> Result<Option<String>, StoreError> {
+        self.text(ACCOUNT_LIMITS)
+    }
+
+    /// Stores account sign-in's hourly counts and waiting request.
+    ///
+    /// # Errors
+    ///
+    /// A database error.
+    pub fn set_account_limits(&self, limits: &str) -> Result<(), StoreError> {
+        self.set_text(ACCOUNT_LIMITS, Some(limits))
     }
 
     /// The Claude Remote Control sessions plxd's sync already took, as plxd's JSON, if any

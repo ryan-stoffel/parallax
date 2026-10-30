@@ -132,6 +132,11 @@ pub struct RelayRegisterParams {
 pub struct RelaySignParams {
     /// The token's SHA-256, in base64url without padding.
     pub token_hash: String,
+    /// The token's Clerk user id (`sub`), which this host records as its account (0091). Only a
+    /// trusted connection's caller sets it, never the relay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub user_id: Option<String>,
 }
 
 /// Result of `relay/sign`: what `relay/register`'s `signed` takes.
@@ -168,4 +173,129 @@ pub struct RemoteSession {
 pub struct RemoteRevokeParams {
     /// The session's id, from `remote/sessions`.
     pub id: String,
+}
+
+/// Params of `relay/id`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayIdParams {}
+
+/// Result of `relay/id` (0091): this host's relay id, the JWK thumbprint of its host key, which an
+/// `account:` connection pins, and its current routes, so a client can refresh them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayIdResult {
+    /// Its relay id.
+    pub host_id: String,
+    /// Where the host can be reached now, best first, as its `/.well-known/parallax` descriptor
+    /// lists them: its LAN address, its Tailscale address, then `relay:<hostId>` while plxd is
+    /// connected to the relay. Each address is an IP, with `:port` when plxd listens on another
+    /// port than 7341. An older plxd leaves it out.
+    #[serde(default)]
+    #[ts(as = "Option<Vec<String>>", optional)]
+    pub routes: Vec<String>,
+}
+
+/// Params of `access/get`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessGetParams {
+    /// A `version` the caller already has: the answer waits until the state changes from it, or
+    /// the connection closes. Absent answers at once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub after: Option<u64>,
+}
+
+/// Who may sign in to this host with its account (0091), and what waits for the user.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessState {
+    /// Changes whenever anything below does, for `access/get`'s `after`.
+    pub version: u64,
+    /// The Clerk user id this host registered with the relay under, if it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub account: Option<String>,
+    /// The `DPoP` key thumbprints of the approved clients.
+    pub approved_clients: Vec<String>,
+    /// The thumbprints of removed clients, which are never approved again.
+    pub removed_clients: Vec<String>,
+    /// The relay ids of the account's approved hosts.
+    pub approved_hosts: Vec<String>,
+    /// A new device's request, while it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub pending: Option<AccessRequest>,
+    /// The name of the device the latest `access/setupCode` code approved, once one has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub setup_approved: Option<String>,
+}
+
+/// A new device's request to sign in, which one of the user's approved devices approves once
+/// both show the same code.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessRequest {
+    /// Its id, which `access/approve` and `access/deny` take.
+    pub id: String,
+    /// The name the device gave.
+    pub name: String,
+    /// The device's `DPoP` key thumbprint.
+    pub thumbprint: String,
+    /// Its 6 digits, once the device sent its random value. Until then it can't be approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub code: Option<String>,
+    /// When it lapses, in RFC 3339.
+    pub expires_at: String,
+}
+
+/// Params of `access/merge`: lists another host keeps, merged into this one's. A removed key
+/// stays removed and leaves the approved list.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessMergeParams {
+    /// Approved client thumbprints.
+    #[serde(default)]
+    pub approved_clients: Vec<String>,
+    /// Removed client thumbprints.
+    #[serde(default)]
+    pub removed_clients: Vec<String>,
+    /// Approved host ids.
+    #[serde(default)]
+    pub approved_hosts: Vec<String>,
+}
+
+/// Params of `access/approve` and `access/deny`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessRequestParams {
+    /// The request's id.
+    pub request: String,
+}
+
+/// Params of `access/remove`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessRemoveParams {
+    /// The client's `DPoP` key thumbprint.
+    pub thumbprint: String,
+}
+
+/// Params of `access/setupCode`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessSetupCodeParams {}
+
+/// Result of `access/setupCode`: the code a new computer shows for a signed-in client to type
+/// (0091).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AccessSetupCodeResult {
+    /// 6 digits. A client that types it runs SPAKE2 pairing with it once.
+    pub code: String,
+    /// When it stops working, in RFC 3339.
+    pub expires_at: String,
 }

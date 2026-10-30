@@ -1,22 +1,28 @@
 import { app, ipcMain, powerMonitor, type WebContents } from "electron";
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { promisify } from "node:util";
 
 import {
   ErrorCodes,
   REQUEST_METHODS,
+  type AccessRequest,
   type CliKind,
   type DeviceStreamParams,
   type RelayHost,
+  type RemoteSessionsResult,
 } from "../protocol/generated/protocol";
 import {
   HOME_VARS,
   NPM_INSTALLS,
+  type AccessPrompt,
+  type AccountAccess,
+  type ConnectionState,
   type ConnectState,
   type DeviceHost,
   type DeviceIcon,
@@ -29,6 +35,20 @@ import {
   type SubscribeParams,
   type WatchParams,
 } from "../preload/bridge";
+import {
+  accountId,
+  coalesced,
+  countPairRun,
+  directRoutes,
+  lacks,
+  mergeListed,
+  parseSignIn,
+  relayIdOf,
+  Routes,
+  tokenSubject,
+  unionLists,
+  type SavedAccount,
+} from "./accountHosts";
 import {
   addCommand,
   deviceHostId,
@@ -156,18 +176,15 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   account?.onSignIn(() => {
     for (const [hostId, connection] of connections)
       if (connection.state.status === "connected") void joinRelay(hostId);
+    // The account's computers, which a sign-in to another account changes (0091).
+    void discoverAccounts();
   });
   targetVersion = target;
   hostUpdater = new HostUpdater({
     packaged: app.isPackaged && !process.env["PLXD_PATH"],
     version: app.getVersion(),
     channel: channel(),
-    kindOf: (hostId) =>
-      savedHost(hostId)
-        ? "ssh"
-        : isLanHost(hostId) || hostId.startsWith("tailnet:")
-          ? "remote"
-          : undefined,
+    kindOf: (hostId) => (savedHost(hostId) ? "ssh" : runsOnHost(hostId) ? "remote" : undefined),
     states: () => [...connections].map(([id, each]) => [id, each.state]),
     update: async (hostId, version, now) =>
       (await connections
@@ -205,6 +222,7 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
   }
   for (const host of settings.hosts) addSshConnection(host, host.plxdInstalled);
   for (const computer of settings.lan ?? []) addLanConnection(computer);
+  for (const each of savedAccounts()) addAccountConnection(each);
 
   ipcMain.handle("parallax:connect", () => connectState());
   ipcMain.handle("parallax:setConnect", (_event, on: unknown) =>
@@ -218,6 +236,27 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
     typeof enabled === "boolean" ? setDeviceEnabled(hostId, enabled) : undefined,
   );
   ipcMain.handle("parallax:removeDevice", (_event, hostId: unknown) => removeDevice(hostId));
+  // Settings > Connections and Add computer ask for the account's computers when they open, and
+  // the window's focus and the network do too, with no timer (0091).
+  ipcMain.handle("parallax:discoverAccount", () => discoverAccounts());
+  ipcMain.on("parallax:network", () => void networkChanged());
+  app.on("browser-window-focus", () => lookAgain());
+  ipcMain.handle("parallax:enterSetupCode", (_event, hostId: unknown, code: unknown) =>
+    enterSetupCode(hostId, code),
+  );
+  ipcMain.handle("parallax:askAgain", (_event, hostId: unknown) => {
+    const saved = accountOf(hostId);
+    if (saved && accountAccess.get(accountId(saved.hostId))?.step === "ask")
+      return signIn(accountId(saved.hostId));
+  });
+  ipcMain.handle("parallax:accessRequests", () => accessRequests());
+  ipcMain.handle("parallax:revokeDevice", (_event, id: unknown) => revokeDevice(id));
+  ipcMain.handle("parallax:turnOnReach", (_event, hostId: unknown) => turnOnReach(hostId));
+  ipcMain.handle("parallax:answerAccess", (_event, id: unknown, allow: unknown) =>
+    typeof id === "string" && typeof allow === "boolean"
+      ? answerAccess(id, allow)
+      : "invalid request",
+  );
 
   ipcMain.handle("parallax:hosts", () => listedHosts(settings));
   ipcMain.handle("parallax:sshSuggestions", () => sshSuggestions(homedir()));
@@ -403,11 +442,11 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
         command = await providerSignInCommand(hostId, provider);
       if (!command) return "invalid terminal";
       if (typeof command === "string") return command;
-      // It runs on this computer, over ssh for an SSH host or Connect device, or on a LAN
-      // computer's own plxd, under an id of its own, so an earlier one's last output and exit
-      // never reach it.
+      // It runs on this computer, over ssh for an SSH host, or on a LAN, account, or Connect
+      // computer's own plxd (0064, 0091), under an id of its own, so an earlier one's last output
+      // and exit never reach it.
       const { file: program, args, env = {} } = command;
-      const runner = isLanHost(hostId) ? connections.get(hostId) : connection("local");
+      const runner = runsOnHost(hostId) ? connections.get(hostId) : connection("local");
       if (!runner) return "That host isn't in Parallax anymore.";
       return openTerminal(event.sender, id, runner, {
         threadId: "",
@@ -426,9 +465,8 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
       !Object.hasOwn(NPM_INSTALLS, kind)
     )
       return "invalid install";
-    // runInstall runs here; a LAN computer's install opens in a terminal on its own plxd.
-    if (isLanHost(hostId))
-      return "On a computer paired on this network, agents install in a terminal.";
+    // runInstall runs here; another computer's install opens in a terminal on its own plxd.
+    if (runsOnHost(hostId)) return "On another computer, agents install in a terminal there.";
     return runInstall(await installOn(hostId, kind));
   });
   ipcMain.on("parallax:terminalInput", (event, id: unknown, data: unknown) => {
@@ -465,19 +503,13 @@ export function startHosts(signedIn: Account | undefined, target: () => string):
 }
 
 /**
- * How a host's command terminals reach it from this computer: an SSH host by its destination, a
- * Connect device (0056) by ssh to its Tailscale IP, as `plx-connect add` did. Undefined for
- * `local` and for a LAN computer, whose commands run on its own plxd (`isLanHost`), so neither
- * needs ssh, and a remote host's command never runs here.
+ * How a host's command terminals reach it from this computer: an SSH host by its destination.
+ * Undefined for `local`, and for a computer whose commands run on its own plxd (`runsOnHost`),
+ * so a remote host's command never runs here.
  */
 function sshOf(hostId: string): SshTarget | undefined {
-  const ssh = settings.ssh ?? "ssh";
   const saved = savedHost(hostId);
-  if (saved) return { destination: saved.destination, ssh };
-  if (!hostId.startsWith("tailnet:")) return undefined;
-  const device = savedDevices().find((d) => deviceHostId(d.id) === hostId);
-  // An unknown device has no address; a bare `-` never reaches ssh as one.
-  return { destination: device?.ip ?? "-", ssh };
+  return saved ? { destination: saved.destination, ssh: settings.ssh ?? "ssh" } : undefined;
 }
 
 /**
@@ -490,13 +522,13 @@ async function installOn(hostId: string, kind: string): Promise<Command | string
   if (!host) return "That host isn't in Parallax anymore.";
   const ssh = sshOf(hostId);
   // A remote host's OS decides its shell; this computer's is known.
-  const remote = ssh || isLanHost(hostId);
+  const remote = ssh || runsOnHost(hostId);
   const version = remote ? await host.request("host/version", {}) : undefined;
   if (version && "error" in version)
     return `Parallax couldn't ask the host which OS it runs: ${version.error.message}`;
   const os = version && "result" in version ? version.result.os : undefined;
-  // A LAN computer runs it on its own plxd, as if local there, with its own shell.
-  if (isLanHost(hostId)) return installCommand(kind, undefined, platformOf(os), {});
+  // Another computer runs it on its own plxd, as if local there, with its own shell.
+  if (runsOnHost(hostId)) return installCommand(kind, undefined, platformOf(os), {});
   return installCommand(kind, ssh, process.platform, process.env, os);
 }
 
@@ -514,7 +546,7 @@ async function signInCommand(hostId: string, cli: CliKind): Promise<Command | st
     return `Parallax couldn't ask the host where the CLI is: ${answer.error.message}`;
   const path = answer.result.clis.find((each) => each.cli === cli)?.path;
   if (!path) return "That CLI isn't installed on this host anymore.";
-  return loginCommand(cli, path, ssh, await lanPlatform(hostId));
+  return loginCommand(cli, path, ssh, await hostPlatform(hostId));
 }
 
 /**
@@ -541,7 +573,7 @@ async function providerSignInCommand(hostId: string, id: string): Promise<Comman
     ...(homeVar && home ? { [homeVar]: home } : {}),
   };
   const own = found.path && /[^/\\]+$/.exec(found.path)?.[0].replace(/\.\w+$/, "") === program;
-  const platform = await lanPlatform(hostId);
+  const platform = await hostPlatform(hostId);
   return loginCommand(kind, own ? found.path! : program, ssh, platform, args, env);
 }
 
@@ -826,7 +858,10 @@ async function replaceOtherServe(
 function addConnection(
   hostId: string,
   command: () => string[] | undefined,
-  options: Pick<ConnectionOptions, "destination" | "device" | "lan" | "env"> = {},
+  options: Pick<
+    ConnectionOptions,
+    "destination" | "device" | "lan" | "account" | "onRoute" | "env"
+  > = {},
 ) {
   const { destination } = options;
   connections.get(hostId)?.dispose();
@@ -851,13 +886,15 @@ function addConnection(
       }
       broadcast("parallax:state", hostId, state);
       hostUpdater?.onState(hostId, state);
+      followAccess(hostId, state);
       if (state.status !== "connected") return;
       void joinRelay(hostId);
       if (hostId === "local") {
         // A new local plxd, such as after `host/update` or a service uninstall, is checked again.
         if (serviceState === "done") serviceState = "check";
         void refreshConnect().then(keepServing);
-      } else if (hostId.startsWith("tailnet:")) void readLook(hostId);
+      } else if (hostId.startsWith("tailnet:") || hostId.startsWith("account:"))
+        void readLook(hostId);
     },
   });
   connections.set(hostId, created);
@@ -976,17 +1013,24 @@ const listedHosts = (from: Settings): SavedHost[] => [
   })),
 ];
 
-/** Whether `hostId` is a computer paired on the LAN, whose commands run on its own plxd. */
+/** Whether `hostId` is a computer paired on the LAN. */
 const isLanHost = (hostId: string) =>
   (settings.lan ?? []).some((c) => lanHostId(c.fingerprint) === hostId);
+
+/**
+ * Whether `hostId` is a computer whose commands, such as an agent's install or sign-in, run in
+ * its own plxd's terminals (0064): one paired on the LAN, on the account (0091), or on the tailnet.
+ */
+const runsOnHost = (hostId: string) =>
+  isLanHost(hostId) || hostId.startsWith("account:") || hostId.startsWith("tailnet:");
 
 /** A platform for plxd's `host/version` OS, such as `macOS 26.0`, `windows`, or `linux`. */
 const platformOf = (os?: string): NodeJS.Platform =>
   /^windows/i.test(os ?? "") ? "win32" : /^macos/i.test(os ?? "") ? "darwin" : "linux";
 
-/** A LAN computer's platform, for a command that runs there; this computer's otherwise. */
-async function lanPlatform(hostId: string): Promise<NodeJS.Platform> {
-  if (!isLanHost(hostId)) return process.platform;
+/** The platform of a computer a command runs on (`runsOnHost`); this computer's otherwise. */
+async function hostPlatform(hostId: string): Promise<NodeJS.Platform> {
+  if (!runsOnHost(hostId)) return process.platform;
   const answer = await connections.get(hostId)?.request("host/version", {});
   return platformOf(answer && "result" in answer ? answer.result.os : undefined);
 }
@@ -1056,8 +1100,9 @@ async function registerRelay(): Promise<string | undefined> {
  * Registers computer `hostId` with Parallax Relay under the signed-in account, so its threads
  * notify the phone with no switch to turn on (PLX-1146): this computer's plxd and each Parallax
  * Connect computer's. Another computer's plxd signs the registration over the token's hash and
- * this one's posts it, so the token never leaves this computer. Quiet when signed out, for any
- * other kind of host, and for a plxd too old to sign.
+ * this one's posts it, so the token never leaves this computer. With it goes the token's Clerk
+ * user id, which that plxd records as its account (0091): without one, it refuses every account
+ * sign-in. Quiet when signed out, for any other kind of host, and for a plxd too old to sign.
  */
 async function joinRelay(hostId: string): Promise<void> {
   if (hostId !== "local" && !hostId.startsWith("tailnet:")) return;
@@ -1069,7 +1114,10 @@ async function joinRelay(hostId: string): Promise<void> {
     return;
   }
   const tokenHash = createHash("sha256").update(token).digest("base64url");
-  const signed = await connections.get(hostId)?.request("relay/sign", { tokenHash });
+  const userId = tokenSubject(token);
+  const signed = await connections
+    .get(hostId)
+    ?.request("relay/sign", { tokenHash, ...(userId && { userId }) });
   if (signed && "result" in signed)
     await local.request("relay/register", { token, signed: signed.result });
 }
@@ -1161,18 +1209,18 @@ let connectOn: boolean | undefined;
 let localIcon: DeviceIcon | undefined;
 const DISCOVERY_MS = 15_000;
 
-/** plx-connect in this build: package-app's copy in the resources, or a dev build's repo's. */
+/** plx in this build: package-app's copy in the resources, or a dev build's repo's. */
 const connectProgram = (): ConnectProgram => ({
   platform: process.platform,
   env: process.env,
   execPath: process.execPath,
   script: app.isPackaged
-    ? path.join(process.resourcesPath, "plx-connect", "bin", "plx-connect.mjs")
-    : path.join(app.getAppPath(), "..", "..", "packages", "plx-connect", "bin", "plx-connect.mjs"),
+    ? path.join(process.resourcesPath, "plx", "bin", "plx.mjs")
+    : path.join(app.getAppPath(), "..", "..", "packages", "plx", "bin", "plx.mjs"),
 });
 
 /**
- * The channel `plx-connect add` installs: this app's own (0028). A development build follows
+ * The channel `plx add` installs: this app's own (0028). A development build follows
  * nightly, the channel with releases.
  */
 const channel = () => (isNightly(app.getVersion()) || !app.isPackaged ? "nightly" : "stable");
@@ -1187,22 +1235,40 @@ function connectState(): ConnectState {
 
 const savedDevices = () => settings.devices ?? [];
 
-/** The devices as the renderer lists them, by name, less removed ones. None while Connect is off. */
+/**
+ * The devices as the renderer lists them, by name, less removed ones: the account's computers
+ * (0091), then, while Connect is on, the tailnet's not yet reached through the account.
+ */
 function deviceHosts(): DeviceHost[] {
-  if (!connectOn) return [];
-  return savedDevices()
-    .filter((d) => !d.removed)
-    .map((d) => ({
-      id: deviceHostId(d.id),
-      name: d.name || d.hostName,
-      icon: d.icon ?? iconFor(d.hostName),
-      detected: iconFor(d.hostName),
-      hostName: d.hostName,
-      ip: d.ip,
-      os: d.os,
-      enabled: !d.off,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const accounts = savedAccounts()
+    .filter((a) => !a.removed)
+    .map((a): DeviceHost => {
+      const access = accountAccess.get(accountId(a.hostId));
+      return {
+        id: accountId(a.hostId),
+        name: a.name,
+        icon: a.icon ?? iconFor(a.name),
+        detected: iconFor(a.name),
+        hostName: a.name,
+        enabled: !a.off,
+        ...(access && { access }),
+      };
+    });
+  const tailnet = connectOn
+    ? savedDevices()
+        .filter((d) => !d.removed && !d.migrated)
+        .map((d) => ({
+          id: deviceHostId(d.id),
+          name: d.name || d.hostName,
+          icon: d.icon ?? iconFor(d.hostName),
+          detected: iconFor(d.hostName),
+          hostName: d.hostName,
+          ip: d.ip,
+          os: d.os,
+          enabled: !d.off,
+        }))
+    : [];
+  return [...accounts, ...tailnet].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** Keeps `devices`, in memory even when settings.json can't be written. */
@@ -1257,6 +1323,13 @@ let serviceRetryAt = 0;
 /** Runs the local plxd with `args`, for its `service` commands. */
 const runPlxd = (plxd: string, ...args: string[]) =>
   promisify(execFile)(plxd, args, { timeout: 60_000 });
+
+/** Runs `plxd dial` with `args`, and the relay's sign-in for a `relay:` route (PLX-652). */
+const dialPlxd = (plxd: string, args: string[], token?: string) =>
+  promisify(execFile)(plxd, ["dial", ...args], {
+    timeout: 60_000,
+    env: { ...process.env, ...(token && { PLXD_RELAY_TOKEN: token }) },
+  });
 
 /**
  * The packaged app's own plxd, which its copy comes from. Undefined in a dev build, under
@@ -1340,7 +1413,7 @@ async function keepServing(): Promise<void> {
  */
 function addDeviceConnection(device: SavedDevice): void {
   const id = deviceHostId(device.id);
-  if (device.off || device.removed) return;
+  if (device.off || device.removed || device.migrated) return;
   const existing = connections.get(id);
   if (existing) {
     if (existing.state.status === "failed" && !existing.state.retrying) existing.retry();
@@ -1375,9 +1448,19 @@ async function readLook(hostId: string, announce = true): Promise<void> {
   if (host?.state.status !== "connected") return;
   const answer = await host.request("host/settings/get", {});
   if ("error" in answer) return;
-  const old = deviceOf(hostId);
   const name = answer.result.deviceName || undefined;
   const icon = isDeviceIcon(answer.result.deviceIcon) ? answer.result.deviceIcon : undefined;
+  const relayId = relayIdOf(hostId);
+  if (relayId) {
+    // An account computer keeps the name it registered with until its plxd has one.
+    const saved = savedAccounts().find((a) => a.hostId === relayId);
+    if (!saved || ((!name || saved.name === name) && saved.icon === icon)) return;
+    const { icon: _icon, ...rest } = saved;
+    updateAccount(relayId, () => ({ ...rest, ...(name && { name }), ...(icon && { icon }) }));
+    if (announce) broadcast("parallax:devices", deviceHosts());
+    return;
+  }
+  const old = deviceOf(hostId);
   if (!old || (old.name === name && old.icon === icon)) return;
   const { name: _name, icon: _icon, ...rest } = old;
   const next = { ...rest, ...(name && { name }), ...(icon && { icon }) };
@@ -1405,7 +1488,10 @@ async function saveDevice(hostId: unknown, look: unknown): Promise<string | unde
   if (name !== undefined && typeof name !== "string") return "invalid device";
   if (icon !== undefined && !isDeviceIcon(icon)) return "invalid device";
   const host = connections.get(hostId);
-  if (!host || (hostId !== "local" && !hostId.startsWith("tailnet:")))
+  if (
+    !host ||
+    (hostId !== "local" && !hostId.startsWith("tailnet:") && !hostId.startsWith("account:"))
+  )
     return "That device isn't in Parallax anymore.";
   const answer = await host.request("host/settings/set", {
     ...(name !== undefined && { deviceName: name }),
@@ -1438,6 +1524,15 @@ const deviceOf = (hostId: unknown) =>
  * looks now, and `discover` adds it.
  */
 async function setDeviceEnabled(hostId: unknown, enabled: boolean): Promise<void> {
+  const saved = accountOf(hostId);
+  if (saved) {
+    const { off: _off, removed: _removed, ...rest } = saved;
+    const next = updateAccount(saved.hostId, () => (enabled ? rest : { ...rest, off: true }));
+    if (next && enabled) addAccountConnection(next);
+    else dropAccountConnection(accountId(saved.hostId));
+    broadcast("parallax:devices", deviceHosts());
+    return;
+  }
   const device = deviceOf(hostId);
   if (!device) {
     if (enabled && connectOn) await discover();
@@ -1453,12 +1548,616 @@ async function setDeviceEnabled(hostId: unknown, enabled: boolean): Promise<void
 
 /** `window.parallax.removeDevice`. The device stays saved as removed, so discovery skips it. */
 function removeDevice(hostId: unknown): void {
+  const saved = accountOf(hostId);
+  if (saved) {
+    const { off: _off, ...rest } = saved;
+    updateAccount(saved.hostId, () => ({ ...rest, removed: true }));
+    dropAccountConnection(accountId(saved.hostId));
+    broadcast("parallax:devices", deviceHosts());
+    return;
+  }
   const device = deviceOf(hostId);
   if (!device) return;
   const { off: _off, ...rest } = device;
   keepDevices(savedDevices().map((d) => (d === device ? { ...rest, removed: true as const } : d)));
   dropDeviceConnection(deviceHostId(device.id));
   broadcast("parallax:devices", deviceHosts());
+}
+
+// Parallax Connect over the relay (0091): while signed in, this app keeps a connection to every
+// other computer on the account, as host `account:<relay id>`, with `plxd dial --account`, which
+// pins the computer's key to its id over every route. One it has no session with signs in with a
+// fresh Clerk token, or, if none of the user's computers vouches for it yet, takes the code its
+// `plx connect` shows. The app also shows the user's other devices asking to sign in, and copies
+// who's approved between the computers it reaches.
+
+const savedAccounts = () => settings.accounts ?? [];
+
+/** A saved account computer by its host id in the app, `account:<relay id>`. */
+const accountOf = (hostId: unknown) =>
+  typeof hostId === "string"
+    ? savedAccounts().find((a) => accountId(a.hostId) === hostId)
+    : undefined;
+
+/** Keeps `accounts`, in memory even when settings.json can't be written. */
+function keepAccounts(accounts: SavedAccount[]): void {
+  if (saveSettings({ ...settings, accounts })) settings = { ...settings, accounts };
+}
+
+/** Replaces the saved account computer `relayId` with `change` of it, and answers the new one. */
+function updateAccount(
+  relayId: string,
+  change: (saved: SavedAccount) => SavedAccount,
+): SavedAccount | undefined {
+  const old = savedAccounts().find((a) => a.hostId === relayId);
+  if (!old) return undefined;
+  const next = change(old);
+  keepAccounts(savedAccounts().map((a) => (a === old ? next : a)));
+  return next;
+}
+
+/** Each account computer's routes (accountHosts.ts), by host id. */
+const accountRoutes = new Map<string, Routes>();
+/** Each account computer's sign-in, by host id, while it needs the user or runs. */
+const accountAccess = new Map<string, AccountAccess>();
+/** Account computers this app signed in to since they last answered, so a refusal asks once. */
+const signedIn = new Set<string>();
+/** The requests this app's own sign-ins are waiting on, which it never prompts itself about. */
+const ownRequests = new Set<string>();
+/** Each connected `tailnet:` device's relay id, from `relay/id`, which migration matches by. */
+const tailnetRelayIds = new Map<string, string>();
+
+function setAccess(id: string, access: AccountAccess | undefined): void {
+  if (access) accountAccess.set(id, access);
+  else if (!accountAccess.delete(id)) return;
+  broadcast("parallax:devices", deviceHosts());
+}
+
+/**
+ * An account computer's connection, unless it's off or removed. One that stopped retrying, such
+ * as one refused as `incompatibleProtocol` before its plxd was updated, tries again; one refused
+ * for want of a session picks up its sign-in.
+ */
+function addAccountConnection(saved: SavedAccount): void {
+  const id = accountId(saved.hostId);
+  if (saved.off || saved.removed) return;
+  const existing = connections.get(id);
+  if (existing) {
+    if (existing.state.status !== "failed" || existing.state.retrying) return;
+    if (existing.state.error.reason === "refused") void beginAccess(id);
+    else existing.retry();
+    return;
+  }
+  const routes = new Routes({
+    hostId: saved.hostId,
+    learned: () => accountOf(id)?.routes ?? [],
+    probe: (direct) => probeRoutes(saved.hostId, direct),
+    move: () => connections.get(id)?.reconnect(),
+  });
+  accountRoutes.set(id, routes);
+  addConnection(
+    id,
+    () => {
+      const plxd = localPlxd();
+      return plxd === undefined
+        ? undefined
+        : [plxd, "dial", "--account", saved.hostId, "--", ...routes.dial()];
+    },
+    { account: saved.name, env: relayEnv, onRoute: (route) => (routes.route = route) },
+  );
+}
+
+function dropAccountConnection(id: string): void {
+  connections.get(id)?.dispose();
+  connections.delete(id);
+  accountRoutes.get(id)?.dispose();
+  accountRoutes.delete(id);
+  signedIn.delete(id);
+  setAccess(id, undefined);
+}
+
+/**
+ * Asks the local plxd for the account's computers (`relay/hosts`), keeps them, and connects to
+ * each, reviving any that stopped. Runs on a sign-in, the network coming back or changing, focus,
+ * and Settings > Connections or Add computer opening, with no timer, as T3 Connect does.
+ */
+const discoverAccounts = coalesced(async () => {
+  const token = await account?.accessToken();
+  const local = connections.get("local");
+  if (!token || local?.state.status !== "connected") return;
+  const answer = await local.request("relay/hosts", { token });
+  if ("error" in answer) return;
+  const { accounts, changed } = mergeListed(savedAccounts(), answer.result.hosts);
+  if (changed) {
+    for (const old of savedAccounts())
+      if (!accounts.some((a) => a.hostId === old.hostId))
+        dropAccountConnection(accountId(old.hostId));
+    keepAccounts(accounts);
+  }
+  offlineAccounts.clear();
+  for (const each of answer.result.hosts)
+    if (!each.online) offlineAccounts.add(accountId(each.hostId));
+  for (const each of accounts) addAccountConnection(each);
+  // A new computer that was offline may answer now.
+  for (const [id, access] of accountAccess)
+    if (access.step === "needsCode" && access.offline && !offlineAccounts.has(id))
+      void askForCode(id);
+  broadcast("parallax:devices", deviceHosts());
+});
+
+/** Focus or a network change: the account's computers again, and each relay route's re-check. */
+function lookAgain(): void {
+  void discoverAccounts();
+  for (const routes of accountRoutes.values()) void routes.recheck();
+}
+
+/** A network change: as `lookAgain`, with each account computer's routes read again first. */
+async function networkChanged(): Promise<void> {
+  void discoverAccounts();
+  await Promise.all([...accountRoutes.keys()].map(readRoutes));
+  for (const routes of accountRoutes.values()) void routes.recheck();
+}
+
+/**
+ * Reads connected account computer `id`'s routes from its plxd (`relay/id`), and keeps its direct
+ * ones in place of those saved, LAN then Tailscale. The dial adds the relay itself. An older plxd
+ * reports none, so what the sign-in or pairing learned stays.
+ */
+async function readRoutes(id: string): Promise<void> {
+  const relayId = relayIdOf(id);
+  const host = connections.get(id);
+  if (!relayId || host?.state.status !== "connected") return;
+  const answer = await host.request("relay/id", {});
+  if ("error" in answer || answer.result.hostId !== relayId || !answer.result.routes) return;
+  const routes = directRoutes(answer.result.routes);
+  const saved = savedAccounts().find((a) => a.hostId === relayId);
+  if (saved && saved.routes.join("\n") !== routes.join("\n"))
+    updateAccount(relayId, (each) => ({ ...each, routes }));
+}
+
+/** The first of `routes` to present account computer `relayId`'s key, sent nothing (0091). */
+async function probeRoutes(relayId: string, routes: string[]): Promise<string | undefined> {
+  const plxd = localPlxd();
+  if (!plxd) return undefined;
+  try {
+    const args = ["--probe", "--account", relayId, "--", ...routes];
+    const { stdout } = await dialPlxd(plxd, args, await account?.accessToken());
+    const { route } = JSON.parse(stdout) as { route?: unknown };
+    return typeof route === "string" ? route : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** A connection's state, as account access follows it: sign-ins, prompts, and migration. */
+function followAccess(hostId: string, state: ConnectionState): void {
+  const relayId = relayIdOf(hostId);
+  if (relayId) accountRoutes.get(hostId)?.onStatus(state.status);
+  if (relayId && state.status === "failed" && state.error.reason === "refused")
+    void beginAccess(hostId);
+  if (state.status !== "connected") return;
+  if (relayId) {
+    signedIn.delete(hostId);
+    setAccess(hostId, undefined);
+    finishMigration(relayId);
+    void readRoutes(hostId);
+  }
+  if (hostId === "local") {
+    void discoverAccounts();
+    // Sign-ins that waited for the local plxd's lists.
+    for (const [id, each] of connections)
+      if (relayIdOf(id) && each.state.status === "failed" && each.state.error.reason === "refused")
+        void beginAccess(id);
+  }
+  if (hostId.startsWith("tailnet:")) void matchTailnet(hostId);
+  if (hostId === "local" || relayId || hostId.startsWith("tailnet:")) {
+    watchAccess(hostId);
+    void syncAccess();
+  }
+}
+
+/**
+ * The user's computers this app has a session with, connected, whose plxd keeps who may sign in
+ * (`accountAccess`): this computer, the account's, and the tailnet's.
+ */
+const accessHosts = () =>
+  [...connections].filter(
+    ([id, each]) =>
+      (id === "local" || relayIdOf(id) || id.startsWith("tailnet:")) &&
+      each.state.status === "connected" &&
+      each.state.capabilities["accountAccess"],
+  );
+
+/**
+ * The relay ids the user's computers vouch for (0091): each connected one's `approvedHosts`, and
+ * the `tailnet:` devices', which Tailscale vouches for. Undefined until the local plxd answers.
+ */
+async function vouchedHosts(): Promise<Set<string> | undefined> {
+  const asked = accessHosts();
+  if (!asked.some(([id]) => id === "local")) return undefined;
+  const answers = await Promise.all(asked.map(([, each]) => each.request("access/get", {})));
+  const vouched = new Set(tailnetRelayIds.values());
+  for (const answer of answers)
+    if ("result" in answer) for (const id of answer.result.approvedHosts) vouched.add(id);
+  return vouched;
+}
+
+/**
+ * What an account computer that refused this app for want of a session needs: a sign-in when the
+ * user's computers vouch for it, else the code its `plx connect` shows. One sign-in runs on its
+ * own after each time the computer answered; after that, a denied or lapsed request waits for
+ * the user to ask again, since a new request starts only when the user asks (0091).
+ */
+async function beginAccess(id: string): Promise<void> {
+  const step = accountAccess.get(id)?.step;
+  if (step === "signingIn" || step === "pairing" || step === "pending" || step === "ask") return;
+  const relayId = relayIdOf(id);
+  const vouched = await vouchedHosts();
+  if (!relayId || !vouched || connections.get(id)?.state.status !== "failed") return;
+  if (!vouched.has(relayId)) return askForCode(id);
+  if (signedIn.has(id))
+    return setAccess(id, { step: "ask", why: "It hasn't let this computer in. Ask again." });
+  await signIn(id);
+}
+
+/** Account computers the relay last listed as offline, by host id. */
+const offlineAccounts = new Set<string>();
+/** New account computers whose routes `askForCode` is probing, so one trigger probes once. */
+const probing = new Set<string>();
+
+/**
+ * Marks new account computer `id` as needing the code its `plx connect` shows. The dialog asks
+ * for it only once the computer answers: one the relay lists as offline, or none of whose routes
+ * presents its key, as an old install's leftover entry never does, stays `offline`, listed in
+ * Settings > Connections, where Enter code still asks (0091). Discovery checks again.
+ */
+async function askForCode(id: string): Promise<void> {
+  const relayId = relayIdOf(id);
+  const routes = accountRoutes.get(id);
+  if (!relayId || !routes || probing.has(id)) return;
+  probing.add(id);
+  const answers =
+    !offlineAccounts.has(id) && (await probeRoutes(relayId, routes.dial())) !== undefined;
+  probing.delete(id);
+  const now = accountAccess.get(id);
+  // Something moved on meanwhile, or nothing changed, which keeps a wrong code's error.
+  if ((now && now.step !== "needsCode") || (now && !now.offline === answers)) return;
+  setAccess(id, { step: "needsCode", ...(!answers && { offline: true as const }) });
+}
+
+/**
+ * Signs in to account computer `id` with a fresh Clerk token (0091) through `plxd dial --account
+ * --sign-in`, which saves the session it gets. While the computer waits for one of the user's
+ * devices to allow this one, its code shows here too; during migration, the `tailnet:` connection
+ * to the same computer allows it, so no code is asked for.
+ */
+async function signIn(id: string): Promise<void> {
+  const relayId = relayIdOf(id);
+  const routes = accountRoutes.get(id);
+  const plxd = localPlxd();
+  if (!relayId || !routes || !plxd) return;
+  signedIn.add(id);
+  setAccess(id, { step: "signingIn" });
+  const token = await account?.freshToken();
+  if (!token)
+    return setAccess(id, {
+      step: "ask",
+      why: "Sign in to Parallax from Profile in the sidebar first.",
+    });
+  const relayToken = await account?.accessToken();
+  const child = spawn(
+    plxd,
+    ["dial", "--account", relayId, "--sign-in", `--name=${localName()}`, "--", ...routes.dial()],
+    {
+      windowsHide: true,
+      env: { ...process.env, ...(relayToken && { PLXD_RELAY_TOKEN: relayToken }) },
+    },
+  );
+  child.stdin.on("error", () => {});
+  child.stdin.end(`${token}\n`);
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => (stderr = (stderr + String(chunk)).slice(-2000)));
+  let request: string | undefined;
+  createInterface({ input: child.stdout }).on("line", (line) => {
+    const answer = parseSignIn(line);
+    if (answer?.status === "pending") {
+      request = answer.request;
+      ownRequests.add(request);
+      setAccess(id, { step: "pending", code: answer.code });
+      void allowOverTailnet(relayId, answer.request);
+    } else if (answer) learn(relayId, answer.name, answer.routes);
+  });
+  const code = await new Promise<number | null>((resolve) => {
+    child.on("error", () => resolve(-1));
+    child.on("close", resolve);
+  });
+  if (request) ownRequests.delete(request);
+  if (code === 0) {
+    setAccess(id, undefined);
+    connections.get(id)?.retry();
+    return;
+  }
+  setAccess(id, {
+    step: "ask",
+    why:
+      code === 5
+        ? "It didn't let this computer in: the request was denied or lapsed."
+        : `Parallax couldn't sign in there: ${stderr.replace(/^plxd dial: /gm, "").trim() || "plxd failed"}`,
+  });
+}
+
+/** Keeps what account computer `relayId` said of itself while signing in or pairing. */
+function learn(relayId: string, name: string, routes: string[]): void {
+  updateAccount(relayId, (saved) => ({
+    ...saved,
+    ...(name && { name }),
+    ...(routes.length && { routes }),
+  }));
+}
+
+/**
+ * `window.parallax.enterSetupCode`: pairs with new account computer `hostId` with the 6-digit code
+ * its `plx connect` shows (0091), through `plxd dial --account --pair`. Each typed code gets one
+ * run, at most `MAX_PAIR_RUNS` an hour per computer, since a computer the relay made up sets no
+ * limit of its own. Then this app vouches for it to the user's other computers. Resolves to an
+ * error for people.
+ */
+async function enterSetupCode(hostId: unknown, code: unknown): Promise<string | undefined> {
+  const saved = accountOf(hostId);
+  if (!saved) return "That computer isn't on your account anymore.";
+  const id = accountId(saved.hostId);
+  const digits = typeof code === "string" ? code.replace(/\s/g, "") : "";
+  if (!/^\d{6}$/.test(digits)) return "Enter the 6 digits it shows.";
+  const plxd = localPlxd();
+  const routes = accountRoutes.get(id);
+  if (!plxd || !routes) return "plxd wasn't found. Set PLXD_PATH to the plxd binary.";
+  const runs = countPairRun(saved.pairRuns, Date.now());
+  const fail = (why: string) => (setAccess(id, { step: "needsCode", error: why }), why);
+  if (!runs) return fail("That's 5 tries with this computer this hour. Try again later.");
+  updateAccount(saved.hostId, (each) => ({ ...each, pairRuns: runs }));
+  setAccess(id, { step: "pairing" });
+  let stdout: string;
+  try {
+    const args = ["--account", saved.hostId, "--pair", `--name=${localName()}`, "--"];
+    const running = dialPlxd(plxd, [...args, ...routes.dial()], await account?.accessToken());
+    running.child.stdin?.end(`${digits}\n`);
+    ({ stdout } = await running);
+  } catch (error) {
+    const exit = (error as { code?: unknown }).code;
+    if (exit === 5)
+      return fail("That code is wrong, used, or expired. Check it, then type it again.");
+    if (exit === 4)
+      return fail("Couldn't reach it. Check that it's on and still showing its code.");
+    const why = (error as { stderr?: string }).stderr?.replace(/^plxd dial: /gm, "").trim();
+    return fail(`Parallax couldn't pair: ${why || "plxd failed"}`);
+  }
+  const paired = JSON.parse(stdout) as { name?: unknown; routes?: unknown };
+  learn(
+    saved.hostId,
+    typeof paired.name === "string" ? paired.name : "",
+    directRoutes(paired.routes),
+  );
+  // This computer vouches for it now, and `syncAccess` tells the rest once it connects.
+  await connections.get("local")?.request("access/merge", {
+    approvedClients: [],
+    removedClients: [],
+    approvedHosts: [saved.hostId],
+  });
+  setAccess(id, undefined);
+  connections.get(id)?.retry();
+  return undefined;
+}
+
+/** Reads a `tailnet:` device's relay id, which matches it to its account computer (0091). */
+async function matchTailnet(tailnetId: string): Promise<void> {
+  const answer = await connections.get(tailnetId)?.request("relay/id", {});
+  if (!answer || "error" in answer) return;
+  const relayId = answer.result.hostId;
+  tailnetRelayIds.set(tailnetId, relayId);
+  const id = accountId(relayId);
+  if (connections.get(id)?.state.status === "connected") return finishMigration(relayId);
+  // Tailscale vouches for it, so a computer that asked for its code signs in instead.
+  if (accountAccess.get(id)?.step === "needsCode") {
+    setAccess(id, undefined);
+    void beginAccess(id);
+  }
+}
+
+/** Allows this app's own request at account computer `relayId` over its `tailnet:` connection. */
+async function allowOverTailnet(relayId: string, request: string): Promise<void> {
+  for (const [tailnetId, matched] of tailnetRelayIds)
+    if (matched === relayId)
+      await connections.get(tailnetId)?.request("access/approve", { request });
+}
+
+/** Once account computer `relayId` answers, its `tailnet:` connection goes for good (0091). */
+function finishMigration(relayId: string): void {
+  const migrating = [...tailnetRelayIds].filter(([, matched]) => matched === relayId);
+  if (!migrating.length) return;
+  const ids = new Set(migrating.map(([tailnetId]) => tailnetId));
+  keepDevices(
+    savedDevices().map((d) => (ids.has(deviceHostId(d.id)) ? { ...d, migrated: relayId } : d)),
+  );
+  for (const tailnetId of ids) {
+    tailnetRelayIds.delete(tailnetId);
+    dropDeviceConnection(tailnetId);
+  }
+  broadcast("parallax:devices", deviceHosts());
+}
+
+/**
+ * New devices' requests waiting on the user's computers (0091), by request id, with the hosts
+ * showing each. One device asks one computer, but this app may reach it more than one way.
+ */
+const prompts = new Map<string, { prompt: AccessPrompt; hosts: Set<string> }>();
+/** The connection each host's waiting `access/get` runs on. */
+const watchedAccess = new Map<string, Connection>();
+/** How long one `access/get {after}` waits before it's asked again: plxd answers on a change. */
+const ACCESS_WAIT_MS = 60 * 60_000;
+
+const accessRequests = (): AccessPrompt[] => [...prompts.values()].map((p) => p.prompt);
+
+/**
+ * Keeps one `access/get {after}` waiting on connected host `hostId` (0091), which answers when
+ * who may sign in there changes, so a new device's request shows here at once.
+ */
+function watchAccess(hostId: string): void {
+  const host = connections.get(hostId);
+  if (
+    !host ||
+    host.state.status !== "connected" ||
+    !host.state.capabilities["accountAccess"] ||
+    watchedAccess.get(hostId) === host
+  )
+    return;
+  watchedAccess.set(hostId, host);
+  void (async () => {
+    let after: number | undefined;
+    while (connections.get(hostId) === host && host.state.status === "connected") {
+      const params = after === undefined ? {} : { after };
+      const answer = await host.request("access/get", params, ACCESS_WAIT_MS);
+      // Only a wait that ran out is asked again; anything else ends with the connection.
+      if ("error" in answer) {
+        if (/timed out/.test(answer.error.message)) continue;
+        break;
+      }
+      after = answer.result.version;
+      showRequest(hostId, answer.result.pending);
+    }
+    if (watchedAccess.get(hostId) === host) watchedAccess.delete(hostId);
+    showRequest(hostId, undefined);
+  })();
+}
+
+/** Host `hostId`'s waiting request, shown once it has its code, and no other of that host's. */
+function showRequest(hostId: string, pending: AccessRequest | undefined): void {
+  const before = JSON.stringify(accessRequests());
+  for (const [id, each] of prompts) {
+    if (id === pending?.id) continue;
+    each.hosts.delete(hostId);
+    if (!each.hosts.size) prompts.delete(id);
+  }
+  if (pending?.code && !ownRequests.has(pending.id)) {
+    const host =
+      hostId === "local"
+        ? localName()
+        : (accountOf(hostId)?.name ?? deviceOf(hostId)?.name ?? deviceOf(hostId)?.hostName ?? "");
+    const shown = prompts.get(pending.id) ?? {
+      prompt: { id: pending.id, name: pending.name, code: pending.code, host },
+      hosts: new Set<string>(),
+    };
+    shown.hosts.add(hostId);
+    prompts.set(pending.id, shown);
+  }
+  if (JSON.stringify(accessRequests()) !== before)
+    broadcast("parallax:accessRequests", accessRequests());
+}
+
+/**
+ * `window.parallax.answerAccess`: allows or denies a new device's request on a computer showing
+ * it. Allowing copies the device's key to the user's other computers. Resolves to an error for
+ * people.
+ */
+async function answerAccess(id: string, allow: boolean): Promise<string | undefined> {
+  const shown = prompts.get(id);
+  if (!shown) return "That request isn't waiting anymore.";
+  let why = "Parallax isn't connected to that computer.";
+  for (const hostId of shown.hosts) {
+    const method = allow ? "access/approve" : "access/deny";
+    const answer = await connections.get(hostId)?.request(method, { request: id });
+    if (!answer) continue;
+    if ("error" in answer) {
+      why = answer.error.message;
+      continue;
+    }
+    if (allow) void syncAccess();
+    return undefined;
+  }
+  return `Parallax couldn't ${allow ? "allow" : "deny"} it: ${why}`;
+}
+
+/**
+ * Copies who may sign in between the user's computers this app reaches (0091): every connected
+ * one's approved and removed keys and approved host ids, and their own relay ids, merged into
+ * each that lacks any. A computer that was offline catches up the next time it connects.
+ */
+const syncAccess = coalesced(async () => {
+  const read = await Promise.all(
+    accessHosts().map(async ([, host]) => {
+      const [state, own] = await Promise.all([
+        host.request("access/get", {}),
+        host.request("relay/id", {}),
+      ]);
+      return "result" in state && "result" in own
+        ? { host, state: state.result, relayId: own.result.hostId }
+        : undefined;
+    }),
+  );
+  const known = read.filter((each) => each !== undefined);
+  if (known.length < 2) return;
+  const union = unionLists(
+    known.map((each) => each.state),
+    known.map((each) => each.relayId),
+  );
+  await Promise.all(
+    known
+      .filter((each) => lacks(each.state, union))
+      .map((each) => each.host.request("access/merge", union)),
+  );
+});
+
+/**
+ * `window.parallax.turnOnReach`: for a `tailnet:` device the user kept on Tailscale only, registers
+ * it with the relay under the signed-in account (`joinRelay`), turns on its `relay` and `remote`,
+ * and asks the account for its computers, so it moves to an `account:` connection before the
+ * Tailscale-only path goes (0091). Resolves to an error for people.
+ */
+async function turnOnReach(hostId: unknown): Promise<string | undefined> {
+  const host =
+    typeof hostId === "string" && hostId.startsWith("tailnet:")
+      ? connections.get(hostId)
+      : undefined;
+  if (host?.state.status !== "connected") return "Parallax can't reach that computer right now.";
+  if (!(await account?.accessToken()))
+    return "Sign in to Parallax from Profile in the sidebar first.";
+  await joinRelay(hostId as string);
+  const answer = await host.request("host/settings/set", { relay: true, remote: true });
+  if ("error" in answer) return `Parallax couldn't turn it on there: ${answer.error.message}`;
+  void discoverAccounts();
+  return undefined;
+}
+
+/** The key thumbprints host `host` keeps as removed; none when it can't say. */
+async function removedKeys(host: Connection): Promise<Set<string>> {
+  if (host.state.status !== "connected" || !host.state.capabilities["accountAccess"])
+    return new Set();
+  const answer = await host.request("access/get", {});
+  return new Set("result" in answer ? answer.result.removedClients : []);
+}
+
+/**
+ * `window.parallax.revokeDevice`: ends a device's session on this computer (`remote/revoke`).
+ * A device signed in with the account then has its key removed here, which plxd does with the
+ * revoke, and on every other computer this app has a session with (`access/remove`), so it gets
+ * a session nowhere (0091). A computer offline now learns of it from `syncAccess` once it
+ * connects. Answers this computer's sessions, or why not, for people.
+ */
+async function revokeDevice(id: unknown): Promise<RemoteSessionsResult | string> {
+  if (typeof id !== "string") return "invalid session";
+  const local = connections.get("local");
+  if (local?.state.status !== "connected")
+    return "Parallax isn't connected to this computer's plxd.";
+  const before = await removedKeys(local);
+  const answer = await local.request("remote/revoke", { id });
+  if ("error" in answer) return answer.error.message;
+  const removed = [...(await removedKeys(local))].filter((key) => !before.has(key));
+  const others = accessHosts().filter(([hostId]) => hostId !== "local");
+  await Promise.all(
+    others.flatMap(([, host]) =>
+      removed.map((thumbprint) => host.request("access/remove", { thumbprint })),
+    ),
+  );
+  return answer.result;
 }
 
 function connection(hostId: unknown): Connection {

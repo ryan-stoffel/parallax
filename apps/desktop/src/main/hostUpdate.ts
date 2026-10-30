@@ -45,7 +45,7 @@ export type HostUpdaterDeps = {
   packaged: boolean;
   /** The app's version, which each host's plxd is updated to. */
   version: string;
-  /** The channel plx-connect installs from. */
+  /** The channel plx installs from. */
   channel: "stable" | "nightly";
   /** `ssh` for a saved SSH host, `remote` for a LAN computer or Connect device, else undefined. */
   kindOf: (hostId: string) => HostKind | undefined;
@@ -80,7 +80,7 @@ type Pending = {
 function unsupportedMessage(plxd: string, os: string | undefined, channel: string): string {
   const old = `plxd ${plxd} there is too old to update itself.`;
   if (/^(macos|windows)/i.test(os ?? "")) return `${old} Update Parallax on that computer.`;
-  return `${old} On that computer, run: npx plx-connect setup --channel ${channel}`;
+  return `${old} On that computer, run: npx plx-cli setup --channel ${channel}`;
 }
 
 export class HostUpdater {

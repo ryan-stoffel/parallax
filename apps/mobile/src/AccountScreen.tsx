@@ -230,7 +230,7 @@ export function AccountScreen() {
         />
       </Section>
 
-      <Section title="Parallax Connect" footer="Your other computers with Parallax Connect on join this phone on their own.">
+      <Section title="Parallax Connect" footer="The computers you add with plx connect join this phone on their own.">
         <Row
           title="Computers"
           detail={`${computers.length} on this phone`}

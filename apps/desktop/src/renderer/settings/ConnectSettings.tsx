@@ -1,4 +1,14 @@
-import { Check, ChevronRight, Ellipsis, Network, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  Ellipsis,
+  Globe,
+  KeyRound,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import {
@@ -7,38 +17,44 @@ import {
   type DeviceHost,
   type DeviceIcon as DeviceIconName,
 } from "../../preload/bridge";
+import { NewComputerDialog } from "../AccountPrompts";
 import { statusLabel, useConnection } from "../ConnectionStatus";
-import { ConnectWizard } from "../ConnectWizard";
+import { accessLabel, ConnectWizard } from "../ConnectWizard";
 import { DeviceIcon, deviceIconNames } from "../DeviceIcon";
 import { localId, useConnect, useHosts } from "../hosts";
 import { notify } from "../notifications";
+import { useProfile } from "../profile";
 import { menuItem, menuPanel } from "../ui";
 import { primaryButton, quietButton, RenameForm, Row, Section, Switch } from "./parts";
 
 /**
- * Settings > Connections' Parallax Connect section (0056): a switch turns Connect on, which opens
- * Add computer, which runs the plx-connect inside the app. While it's on, this computer and every
- * device found on the tailnet are listed as cards with their health. A device's switch says
+ * Settings > Connections' Parallax Connect section (0091): signed in, every other computer on the
+ * Parallax account is listed as a card with its health, beside this computer, and Add computer
+ * shows the command that adds one. Opening it asks the account for its computers. A switch still
+ * turns on the tailnet's devices (0056), until Tailscale is only a route. A device's switch says
  * whether this app uses it, and its menu changes its icon, renames it on the device's own plxd,
  * or removes it from this app's list.
  */
 export function ConnectSettings() {
   const connect = useConnect();
+  const profile = useProfile();
   const hosts = useHosts();
   const [devices, setDevices] = useState<DeviceHost[]>([]);
   const [adding, setAdding] = useState(false);
+  const [entering, setEntering] = useState<DeviceHost>();
   useEffect(() => window.parallax.onDevices(setDevices), []);
+  useEffect(() => void window.parallax.discoverAccount(), []);
   const local = hosts.find((h) => h.id === localId)!;
+  const listed = !!profile || !!connect?.on || devices.length > 0;
 
   const toggle = async (on: boolean) => {
     const failed = await window.parallax.setConnect(on);
     if (failed)
       notify({
         tone: "error",
-        title: `Couldn't turn Parallax Connect ${on ? "on" : "off"}`,
+        title: `Couldn't turn Tailscale ${on ? "on" : "off"}`,
         body: failed,
       });
-    else if (on) setAdding(true);
   };
 
   return (
@@ -46,11 +62,29 @@ export function ConnectSettings() {
       <Section title="Parallax Connect">
         <Row
           title="Connect your computers"
-          description="Set up your other computers over Tailscale, and see every computer's threads live from any of them."
+          description={
+            profile === null
+              ? "Sign in to Parallax from Profile in the sidebar, then add your other computers."
+              : "Every computer signed in to your Parallax account, over your network or Parallax Relay."
+          }
+        >
+          <button
+            type="button"
+            disabled={!profile}
+            onClick={() => setAdding(true)}
+            className={`${primaryButton} flex items-center gap-1 [&_svg]:size-3.5`}
+          >
+            <Plus aria-hidden />
+            Add computer
+          </button>
+        </Row>
+        <Row
+          title="Tailscale"
+          description="Also find the computers on your tailnet that run Parallax Connect."
         >
           {connect ? (
             <Switch
-              label="Parallax Connect"
+              label="Tailscale"
               checked={!!connect.on}
               disabled={connect.on === undefined}
               onChange={(on) => void toggle(on)}
@@ -60,19 +94,9 @@ export function ConnectSettings() {
           )}
         </Row>
       </Section>
-      {connect?.on && (
+      {listed && connect && (
         <section aria-label="Computers" className="mb-8">
-          <div className="mb-2 flex min-h-7 items-center justify-between gap-4">
-            <h2 className="text-reading font-semibold">Computers</h2>
-            <button
-              type="button"
-              onClick={() => setAdding(true)}
-              className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
-            >
-              <Plus aria-hidden />
-              Add computer
-            </button>
-          </div>
+          <h2 className="mb-2 flex min-h-7 items-center text-reading font-semibold">Computers</h2>
           <ul className="flex flex-col gap-2">
             <DeviceCard
               device={{ id: localId, name: local.name, icon: connect.icon }}
@@ -80,20 +104,19 @@ export function ConnectSettings() {
               local
             />
             {devices.map((d) => (
-              <DeviceCard key={d.id} device={d} detected={d.detected} enabled={d.enabled} />
+              <DeviceCard
+                key={d.id}
+                device={d}
+                detected={d.detected}
+                enabled={d.enabled}
+                onEnterCode={() => setEntering(d)}
+              />
             ))}
           </ul>
           {!devices.length && (
-            <div className="mt-2 flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-6 py-8 text-center">
-              <Network aria-hidden className="size-6 text-faint-foreground" />
-              <p className="text-body font-medium">No other computers yet</p>
-              <p className="max-w-sm text-body text-muted-foreground">
-                Add a computer on your tailnet. Parallax installs itself there over SSH.
-              </p>
-              <button type="button" className={primaryButton} onClick={() => setAdding(true)}>
-                Add computer
-              </button>
-            </div>
+            <p className="mt-2 text-body text-muted-foreground">
+              No other computers yet. Add one with Add computer.
+            </p>
           )}
         </section>
       )}
@@ -102,6 +125,14 @@ export function ConnectSettings() {
           channel={connect.channel}
           devices={devices}
           onClose={() => setAdding(false)}
+          onEnterCode={setEntering}
+        />
+      )}
+      {entering && (
+        <NewComputerDialog
+          key={entering.id}
+          computer={entering}
+          onClose={() => setEntering(undefined)}
         />
       )}
     </>
@@ -144,6 +175,26 @@ function useHealth(hostId: string, connected: boolean): Health | undefined {
   return health;
 }
 
+/**
+ * Whether connected `tailnet:` device `hostId` was kept on Tailscale only, with `relay` or `remote`
+ * turned off there, so the account can't reach it once the Tailscale-only path goes (0091).
+ */
+function useTailnetOnly(hostId: string, connected: boolean) {
+  const [only, setOnly] = useState(false);
+  useEffect(() => {
+    if (!connected || !hostId.startsWith("tailnet:")) return setOnly(false);
+    let live = true;
+    void window.parallax.request(hostId, "host/settings/get", {}).then((answer) => {
+      if (live && "result" in answer)
+        setOnly(answer.result.relay === false || answer.result.remote === false);
+    });
+    return () => {
+      live = false;
+    };
+  }, [hostId, connected]);
+  return [only, setOnly] as const;
+}
+
 /** 7260 → "2h 1m": how long plxd has run. */
 export function uptime(seconds: number): string {
   const days = Math.floor(seconds / 86_400);
@@ -156,6 +207,7 @@ export function uptime(seconds: number): string {
 
 /**
  * A Connect device's card, or this computer's with `local`: its icon, name, details, and health;
+ * an account computer's sign-in while it needs the user (0091), with Enter code or Ask again;
  * then, for a device, whether this app uses it; then its menu.
  */
 function DeviceCard({
@@ -163,16 +215,30 @@ function DeviceCard({
   detected,
   enabled = true,
   local,
+  onEnterCode,
 }: {
-  device: Pick<DeviceHost, "id" | "name" | "icon"> & Partial<Pick<DeviceHost, "ip" | "os">>;
+  device: Pick<DeviceHost, "id" | "name" | "icon"> &
+    Partial<Pick<DeviceHost, "ip" | "os" | "access">>;
   /** The icon its host name suggests, marked in the Icon menu. */
   detected: DeviceIconName;
   enabled?: boolean;
   local?: boolean;
+  /** Opens the code dialog, for a new account computer. */
+  onEnterCode?: () => void;
 }) {
   const state = useConnection(device.id);
   const connected = enabled && state?.status === "connected";
   const health = useHealth(device.id, connected);
+  const [tailnetOnly, setTailnetOnly] = useTailnetOnly(device.id, connected);
+  const [reaching, setReaching] = useState(false);
+  const reach = async () => {
+    setReaching(true);
+    const failed = await window.parallax.turnOnReach(device.id);
+    setReaching(false);
+    if (failed)
+      notify({ tone: "error", title: `Couldn't turn on Reach from anywhere`, body: failed });
+    else setTailnetOnly(false);
+  };
   const [renaming, setRenaming] = useState(false);
   const menuId = useId();
   const iconsId = useId();
@@ -204,13 +270,16 @@ function DeviceCard({
   const unreachable = enabled
     ? `Parallax can't reach ${device.name} right now.`
     : `Turn ${device.name} on to change it.`;
+  const access = enabled && !connected ? device.access : undefined;
   const status = !enabled
     ? "Off"
-    : state
-      ? connected
-        ? "Connected"
-        : statusLabel(state)
-      : "Connecting…";
+    : access?.step === "needsCode" && access.offline
+      ? "Offline"
+      : state
+        ? connected
+          ? "Connected"
+          : statusLabel(state)
+        : "Connecting…";
   const details = [
     health?.os ?? device.os,
     health?.arch,
@@ -254,10 +323,52 @@ function DeviceCard({
             {health.store !== "ok" && ` · store ${health.store}`}
           </p>
         )}
-        {enabled && state?.status === "failed" && (
-          <p className="text-meta text-faint-foreground">{state.error.message}</p>
+        {tailnetOnly && (
+          <p className="text-meta text-faint-foreground">
+            Only on Tailscale. Turn on Reach from anywhere to keep it in Parallax.
+          </p>
+        )}
+        {access ? (
+          <p className="text-meta text-faint-foreground">{accessLabel({ access })}</p>
+        ) : (
+          enabled &&
+          state?.status === "failed" && (
+            <p className="text-meta text-faint-foreground">{state.error.message}</p>
+          )
         )}
       </div>
+      {access?.step === "needsCode" && (
+        <button
+          type="button"
+          onClick={onEnterCode}
+          className={`${primaryButton} flex items-center gap-1 [&_svg]:size-3.5`}
+        >
+          <KeyRound aria-hidden />
+          Enter code
+        </button>
+      )}
+      {tailnetOnly && (
+        <button
+          type="button"
+          disabled={reaching}
+          title="Parallax Connect is moving off Tailscale-only connections. Reach from anywhere keeps this computer connected through your Parallax account."
+          onClick={() => void reach()}
+          className={`${primaryButton} flex items-center gap-1 [&_svg]:size-3.5`}
+        >
+          <Globe aria-hidden />
+          {reaching ? "Turning on…" : "Reach from anywhere"}
+        </button>
+      )}
+      {access?.step === "ask" && (
+        <button
+          type="button"
+          onClick={() => void window.parallax.askAgain(device.id)}
+          className={`${quietButton} flex items-center gap-1 [&_svg]:size-3.5`}
+        >
+          <RefreshCw aria-hidden />
+          Ask again
+        </button>
+      )}
       {!local && (
         <Switch
           label={`Use ${device.name} in Parallax`}

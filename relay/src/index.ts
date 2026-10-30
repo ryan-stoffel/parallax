@@ -5,10 +5,12 @@
  * - plxd registers its host key under a Clerk user (`POST /v1/hosts`), then keeps one WebSocket
  *   open to the host's Durable Object (`/v1/hosts/<id>/host`), opened with the time signed by
  *   that key.
- * - A client signed in as the same user gets a ticket (`POST /v1/hosts/<id>/tickets`) and opens
- *   `/v1/hosts/<id>/connect` with it. plxd opens a matching `/v1/hosts/<id>/streams/<stream>`,
- *   and the relay passes binary frames between the two. The client runs TLS to plxd's pinned
- *   certificate inside them (0065), so the relay carries only ciphertext.
+ * - A client signed in as the same user opens `/v1/hosts/<id>/connect` with its Clerk token in the
+ *   `Authorization` header (0091). plxd joins it at `/v1/hosts/<id>/streams/<stream>`, or already
+ *   waits there on its spare stream, and the stream's own Durable Object ([`StreamRelay`]) passes
+ *   binary frames between the two. The client runs TLS to plxd's pinned certificate inside them
+ *   (0065), so the relay carries only ciphertext. Clients from before 0091 get a ticket first
+ *   (`POST /v1/hosts/<id>/tickets`) and open `/connect?ticket=<ticket>`.
  * - `/v1/hooks/<id>/<hookId>/<token>` goes to plxd over its WebSocket, or is held while it's away.
  * - A user removes a host of theirs with `DELETE /v1/hosts/<id>`, which frees its slot.
  * - Mobile devices register for push at `/v1/devices`.
@@ -16,14 +18,17 @@
  * Every route but the WebSockets plxd opens and the webhooks needs a Clerk session token.
  */
 import { verifySession } from "./clerk";
+import { connectCode } from "./connect-code";
 import { sha256 } from "./crypto";
 import { forwarded, HOOK_METHODS, type HookReply, HostRelay, readCapped } from "./host";
+import { StreamRelay } from "./stream";
 import { UserAccount } from "./user";
 
-export { HostRelay, UserAccount };
+export { HostRelay, StreamRelay, UserAccount };
 
 export interface Env {
   HOSTS: DurableObjectNamespace<HostRelay>;
+  STREAMS: DurableObjectNamespace<StreamRelay>;
   USERS: DurableObjectNamespace<UserAccount>;
   /** Anonymous requests (webhooks and the WebSockets that prove themselves) per address and
    *  host, before they reach a host's object. */
@@ -71,10 +76,42 @@ export function json(status: number, body: unknown, headers?: Record<string, str
   return Response.json(body, { status, headers });
 }
 
+/**
+ * A WebSocket to host `hostId`: plxd's control socket goes to the host's object; a client's
+ * stream, once the host's object admits it, and plxd's side of a stream, to that stream's object.
+ * A client's Clerk token is read only from the `Authorization` header, never the URL.
+ */
+async function relayed(env: Env, request: Request, hostId: string, action: string, stream: string) {
+  const host = env.HOSTS.get(env.HOSTS.idFromName(hostId));
+  if (action === "host") return host.fetch(request);
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
+    return json(426, { error: "upgrade_required" });
+  const streamOf = (id: string) => env.STREAMS.get(env.STREAMS.idFromName(`${hostId}/${id}`));
+  if (action === "streams") {
+    const token = new URL(request.url).searchParams.get("token") ?? "";
+    if (!/^[0-9a-f-]{36}$/.test(stream)) return json(404, { error: "not_found" });
+    const url = `https://stream/host?token=${encodeURIComponent(token)}`;
+    return streamOf(stream).fetch(url, { headers: { upgrade: "websocket" } });
+  }
+  const ticket = new URL(request.url).searchParams.get("ticket");
+  let opened: Awaited<ReturnType<HostRelay["open"]>>;
+  if (ticket !== null) {
+    opened = await host.redeem(ticket);
+  } else {
+    const token = request.headers.get("authorization")?.match(/^Bearer (\S+)$/)?.[1];
+    const user = token ? await verifySession(env, token) : null;
+    if (!user) return json(401, { error: "unauthorized" });
+    opened = await host.open(user);
+  }
+  if ("error" in opened) return json(opened.status, { error: opened.error });
+  return streamOf(opened.stream).fetch("https://stream/client", { headers: { upgrade: "websocket" } });
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const parts = new URL(request.url).pathname.split("/").slice(1);
     const [version, kind, id = "", action] = parts;
+    if (parts.length === 2 && version === "connect" && kind === "code") return connectCode(request);
     if (version !== "v1") return json(404, { error: "not_found" });
     const host = (hostId: string) => env.HOSTS.get(env.HOSTS.idFromName(hostId));
 
@@ -85,7 +122,7 @@ export default {
       const address = network(request.headers.get("cf-connecting-ip") ?? "");
       if (!(await env.ANON.limit({ key: `${address}:${id}` })).success)
         return json(429, { error: "rate_limited" }, { "retry-after": "60" });
-      if (kind !== "hooks") return host(id).fetch(request);
+      if (kind !== "hooks") return relayed(env, request, id, action!, parts[4] ?? "");
       // A webhook's body is read here, after the host's object admits it, and never streamed
       // to the object, which can't answer before reading a stream without breaking.
       if (!HOOK_METHODS.has(request.method))

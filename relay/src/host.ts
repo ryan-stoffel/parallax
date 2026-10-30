@@ -5,7 +5,6 @@ import {
   isHostJwk,
   Limiter,
   randomToken,
-  same,
   sha256,
   thumbprint,
   verifyEs256,
@@ -16,14 +15,9 @@ import type { Notification } from "./push";
 /** The user a host is registered to, and its key. */
 type Owner = { user: string; hostId: string; jwk: HostJwk; name: string };
 
-/** What each WebSocket is, kept with it across hibernation. */
-type Attachment =
-  /** plxd's control socket, opened with a signed proof. */
-  | { role: "host" }
-  /** A client's stream, waiting for plxd's side until `ready`. */
-  | { role: "client"; stream: string; tokenHash: string; ready: boolean }
-  /** plxd's side of a client's stream. */
-  | { role: "stream"; stream: string };
+/** The streams open to this host, by id, each its own [`StreamRelay`]. `spare` marks the one
+ *  plxd keeps waiting for the next client (0091). */
+type Streams = Record<string, { spare?: true }>;
 
 /** Why the relay refused a request, with its HTTP status. */
 type Refusal = { status: number; error: string };
@@ -35,15 +29,10 @@ export type HookReply = { status: number; body: unknown };
 const TICKET_LIFETIME = 30_000;
 /** How long the relay waits for plxd to answer a webhook. */
 const HOOK_TIMEOUT = 10_000;
-/** How many clients' streams a host may have open at once. */
-const MAX_STREAMS = 16;
+/** How many clients' streams a host may have open at once, its spare included. */
+export const MAX_STREAMS = 16;
 /** How many bytes a host's streams may carry in a UTC day, both ways together. */
 export const MAX_DAILY_BYTES = 2 * 1024 ** 3;
-/** Each frame counts as at least this many bytes, since Cloudflare bills by message, not byte:
- *  a day's budget is at most 131,072 frames. */
-export const MIN_FRAME_BYTES = 16 * 1024;
-/** How often a host's byte count is saved, so a hibernated object loses at most this much. */
-const SAVE_BYTES_EVERY = 8 * 1_048_576;
 /** How many webhook URLs plxd may list. */
 const MAX_HOOK_URLS = 1_000;
 /** How long the relay waits for a webhook's body. */
@@ -63,11 +52,14 @@ const MAX_RETRY = 10 * 60_000;
 const MIN_ALARM = 1_000;
 
 /** Per-host limits, each per minute. `hostConnect` counts only connections with a valid proof;
- *  the Worker limits anonymous attempts per address. */
+ *  the Worker limits anonymous attempts per address. `opens` counts clients' streams, each opened
+ *  with a Clerk token or with a ticket, which counts when it's issued. `spares` counts the spare
+ *  streams plxd asks for. */
 export const LIMITS = {
   register: 10,
   hostConnect: 12,
-  tickets: 30,
+  opens: 30,
+  spares: 30,
   hooks: 600,
   hookUrl: 60,
   pushes: 60,
@@ -123,9 +115,10 @@ export const registerMessage = (hostId: string, tokenHash: string) =>
   `parallax-relay-register\n${hostId}\n${tokenHash}`;
 
 /**
- * One host on the relay, named by its id: who it's registered to, plxd's live socket, its
- * clients' streams, and the webhooks held while it's away. Its WebSockets hibernate, so an idle
- * host costs nothing.
+ * One host on the relay, named by its id: who it's registered to, plxd's live socket, which of
+ * its clients' streams are open, its traffic, and the webhooks held while it's away. Each stream's
+ * bytes cross its own [`StreamRelay`], which reports them here (0091). Its WebSockets hibernate,
+ * so an idle host costs nothing.
  */
 export class HostRelay extends DurableObject<Env> {
   private limits = new Limiter();
@@ -134,8 +127,8 @@ export class HostRelay extends DurableObject<Env> {
   /** Webhooks sent to plxd, waiting for its answer, by delivery id. */
   private waiting = new Map<string, (reply: HookReply) => void>();
   private delivering = false;
-  /** Today's bytes through this host's streams, and how many of them are saved. */
-  private traffic?: { day: string; bytes: number; saved: number };
+  /** Today's bytes through this host's streams, as saved. */
+  private traffic?: { day: string; bytes: number };
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -155,26 +148,53 @@ export class HostRelay extends DurableObject<Env> {
   }
 
   /**
-   * Adds `bytes` to today's traffic and answers whether the host is still within
-   * [`MAX_DAILY_BYTES`]. Saved every [`SAVE_BYTES_EVERY`] and when a stream closes.
+   * Adds `bytes` to today's traffic, saved at once, and answers whether the host is still within
+   * [`MAX_DAILY_BYTES`]. Streams report every [`REPORT_BYTES`] and when they close, so this saves
+   * no more often than 0068's host object did.
    */
   private async count(bytes: number): Promise<boolean> {
     const day = new Date().toISOString().slice(0, 10);
     if (this.traffic?.day !== day) {
       const saved = await this.ctx.storage.get<{ day: string; bytes: number }>("traffic");
-      const today = saved?.day === day ? saved.bytes : 0;
-      this.traffic = { day, bytes: today, saved: today };
+      this.traffic = { day, bytes: saved?.day === day ? saved.bytes : 0 };
     }
-    this.traffic.bytes += bytes;
-    if (this.traffic.bytes - this.traffic.saved >= SAVE_BYTES_EVERY) await this.saveTraffic();
+    if (bytes > 0) {
+      this.traffic.bytes += bytes;
+      await this.ctx.storage.put("traffic", this.traffic);
+    }
     return this.traffic.bytes <= MAX_DAILY_BYTES;
   }
 
-  private async saveTraffic() {
-    if (!this.traffic || this.traffic.bytes === this.traffic.saved) return;
-    const { day, bytes } = this.traffic;
-    this.traffic.saved = bytes;
-    await this.ctx.storage.put("traffic", { day, bytes });
+  private async streams() {
+    return (await this.ctx.storage.get<Streams>("streams")) ?? {};
+  }
+
+  private streamOf(hostId: string, stream: string) {
+    return this.env.STREAMS.get(this.env.STREAMS.idFromName(`${hostId}/${stream}`));
+  }
+
+  /**
+   * A new stream for plxd to join, armed with the hash of the one-time token plxd is sent with
+   * it, and counted as open. A spare waits for the next client.
+   */
+  private async newStream(hostId: string, spare: boolean) {
+    const stream = crypto.randomUUID();
+    const token = randomToken();
+    await this.streamOf(hostId, stream).arm({ hostId, stream, tokenHash: await sha256(token) });
+    const streams = await this.streams();
+    streams[stream] = spare ? { spare: true } : {};
+    await this.ctx.storage.put<Streams>("streams", streams);
+    this.host()?.send(JSON.stringify({ t: "open", stream, token, ...(spare ? { spare } : {}) }));
+    return stream;
+  }
+
+  /** Closes every open stream's object and forgets them. */
+  private async closeStreams(hostId: string, code: number, reason: string) {
+    const streams = await this.streams();
+    await this.ctx.storage.delete("streams");
+    await Promise.all(
+      Object.keys(streams).map((id) => this.streamOf(hostId, id).close(code, reason).catch(() => {})),
+    );
   }
 
   private owner() {
@@ -209,6 +229,7 @@ export class HostRelay extends DurableObject<Env> {
     const before = await this.owner();
     if (before && before.user !== user) {
       for (const ws of this.ctx.getWebSockets()) ws.close(4409, "moved to another user");
+      await this.closeStreams(hostId, 4409, "moved to another user");
       this.tickets.clear();
       // The host no longer counts against its old user's slots.
       await this.env.USERS.get(this.env.USERS.idFromName(before.user)).release(hostId);
@@ -227,6 +248,7 @@ export class HostRelay extends DurableObject<Env> {
     const owner = await this.owner();
     if (owner?.user !== user) return false;
     for (const ws of this.ctx.getWebSockets()) ws.close(4410, "removed");
+    await this.closeStreams(owner.hostId, 4410, "removed");
     this.tickets.clear();
     this.traffic = undefined;
     await this.ctx.storage.deleteAlarm();
@@ -241,15 +263,30 @@ export class HostRelay extends DurableObject<Env> {
     return { hostId: owner.hostId, name: owner.name, online: !!this.host() };
   }
 
-  /** A ticket for one stream to this host, for its own user only. */
-  async ticket(user: string): Promise<Refusal | { ticket: string }> {
+  /** Whether `user` may open a stream to this host now, which counts against `LIMITS.opens`. */
+  private async admit(user: string): Promise<Refusal | null> {
     const owner = await this.owner();
     // Another user's host looks the same as no host.
     if (owner?.user !== user) return { status: 404, error: "not_found" };
-    if (!this.limits.allow("tickets", LIMITS.tickets))
-      return { status: 429, error: "rate_limited" };
+    if (!this.limits.allow("opens", LIMITS.opens)) return { status: 429, error: "rate_limited" };
     if (!this.host()) return { status: 503, error: "host_offline" };
     if (!(await this.count(0))) return { status: 429, error: "daily_limit" };
+    return null;
+  }
+
+  /**
+   * A stream for a client of `user`, signed in with a Clerk token the Worker checked (0091): the
+   * spare plxd keeps when there is one, so plxd isn't asked first, else a new one plxd is asked to
+   * join. The Worker then brings the client's WebSocket to the stream's object.
+   */
+  async open(user: string): Promise<Refusal | { stream: string }> {
+    return (await this.admit(user)) ?? this.take();
+  }
+
+  /** A ticket for one stream to this host, for its own user only. Clients from before 0091. */
+  async ticket(user: string): Promise<Refusal | { ticket: string }> {
+    const refused = await this.admit(user);
+    if (refused) return refused;
     const now = Date.now();
     for (const [key, ticket] of this.tickets) if (ticket.expires < now) this.tickets.delete(key);
     const ticket = randomToken();
@@ -257,16 +294,55 @@ export class HostRelay extends DurableObject<Env> {
     return { ticket };
   }
 
+  /** The stream a ticket opens, once: as [`open`] answers, counted when the ticket was issued. */
+  async redeem(ticket: string): Promise<Refusal | { stream: string }> {
+    const found = this.tickets.get(ticket);
+    this.tickets.delete(ticket);
+    const owner = await this.owner();
+    if (!found || found.expires < Date.now() || found.user !== owner?.user)
+      return { status: 401, error: "unauthorized" };
+    if (!this.host()) return { status: 503, error: "host_offline" };
+    return this.take();
+  }
+
+  /** The spare stream, else a new one within [`MAX_STREAMS`]. */
+  private async take(): Promise<Refusal | { stream: string }> {
+    const owner = (await this.owner())!;
+    const streams = await this.streams();
+    const spare = Object.keys(streams).find((id) => streams[id]?.spare);
+    if (spare) {
+      streams[spare] = {};
+      await this.ctx.storage.put<Streams>("streams", streams);
+      return { stream: spare };
+    }
+    if (Object.keys(streams).length >= MAX_STREAMS)
+      return { status: 429, error: "too_many_streams" };
+    return { stream: await this.newStream(owner.hostId, false) };
+  }
+
+  /**
+   * A stream's report of the bytes it carried since its last, and whether it closed, which frees
+   * its place. Answers whether the host's day has room. When it doesn't, every stream closes.
+   */
+  async report(stream: string, bytes: number, closed: boolean): Promise<boolean> {
+    if (closed) {
+      const streams = await this.streams();
+      if (stream in streams) {
+        delete streams[stream];
+        await this.ctx.storage.put<Streams>("streams", streams);
+      }
+    }
+    if (await this.count(bytes)) return true;
+    const owner = await this.owner();
+    if (owner) await this.closeStreams(owner.hostId, 4429, "daily limit");
+    return false;
+  }
+
+  /** plxd's control socket. Clients' streams go to their own objects, through the Worker. */
   async fetch(request: Request): Promise<Response> {
-    const url = new URL(request.url);
-    const parts = url.pathname.split("/").slice(1);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
       return json(426, { error: "upgrade_required" });
-    if (parts[3] === "host") return this.hostSocket(request.headers.get(PROOF_HEADER) ?? "");
-    if (parts[3] === "connect") return this.clientSocket(url.searchParams.get("ticket") ?? "");
-    if (parts[3] === "streams" && parts[4])
-      return this.streamSocket(parts[4], url.searchParams.get("token") ?? "");
-    return json(404, { error: "not_found" });
+    return this.hostSocket(request.headers.get(PROOF_HEADER) ?? "");
   }
 
   /**
@@ -297,79 +373,22 @@ export class HostRelay extends DurableObject<Env> {
       return json(429, { error: "rate_limited" }, { "retry-after": "60" });
     await this.ctx.storage.put("lastProof", time);
     for (const other of this.ctx.getWebSockets("host")) other.close(4409, "replaced");
+    // plxd's streams end with its control connection, so a new one starts with none open, even
+    // when the old ones' close never arrived, as after a deploy.
+    await this.closeStreams(owner.hostId, 1000, "the host reconnected");
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server!, ["host"]);
-    server!.serializeAttachment({ role: "host" } satisfies Attachment);
     server!.send(JSON.stringify({ t: "ready" }));
     this.ctx.waitUntil(this.deliverHeld());
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  /** A client's stream, opened with a ticket. plxd is asked to open its side. */
-  private async clientSocket(ticket: string) {
-    const found = this.tickets.get(ticket);
-    this.tickets.delete(ticket);
-    const owner = await this.owner();
-    if (!found || found.expires < Date.now() || found.user !== owner?.user)
-      return json(401, { error: "unauthorized" });
-    const host = this.host();
-    if (!host) return json(503, { error: "host_offline" });
-    if (this.ctx.getWebSockets("client").length >= MAX_STREAMS)
-      return json(429, { error: "too_many_streams" });
-    const stream = crypto.randomUUID();
-    const token = randomToken();
-    const [client, server] = Object.values(new WebSocketPair());
-    this.ctx.acceptWebSocket(server!, ["client", `c:${stream}`]);
-    server!.serializeAttachment({
-      role: "client",
-      stream,
-      tokenHash: await sha256(token),
-      ready: false,
-    } satisfies Attachment);
-    host.send(JSON.stringify({ t: "open", stream, token }));
-    return new Response(null, { status: 101, webSocket: client });
+  async webSocketMessage(_: WebSocket, message: string | ArrayBuffer) {
+    return this.fromHost(message);
   }
 
-  /** plxd's side of a client's stream, with the one-time token the relay sent it. */
-  private async streamSocket(stream: string, token: string) {
-    const client = this.ctx.getWebSockets(`c:${stream}`)[0];
-    const waiting = client?.deserializeAttachment() as (Attachment & { role: "client" }) | undefined;
-    if (!client || !waiting || waiting.ready || !same(await sha256(token), waiting.tokenHash))
-      return json(404, { error: "not_found" });
-    const [ours, server] = Object.values(new WebSocketPair());
-    this.ctx.acceptWebSocket(server!, ["stream", `h:${stream}`]);
-    server!.serializeAttachment({ role: "stream", stream } satisfies Attachment);
-    client.serializeAttachment({ ...waiting, ready: true } satisfies Attachment);
-    client.send("ready");
-    return new Response(null, { status: 101, webSocket: ours });
-  }
-
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    const attachment = ws.deserializeAttachment() as Attachment;
-    switch (attachment.role) {
-      case "host":
-        return this.fromHost(message);
-      case "client": {
-        // Only TLS records, and only once plxd's side is there.
-        if (!attachment.ready || typeof message === "string") return ws.close(4400, "bad frame");
-        return this.pass(ws, `h:${attachment.stream}`, message);
-      }
-      case "stream": {
-        if (typeof message === "string") return ws.close(4400, "bad frame");
-        return this.pass(ws, `c:${attachment.stream}`, message);
-      }
-    }
-  }
-
-  /** Passes a stream's frame to its other side, within the host's daily bytes. */
-  private async pass(from: WebSocket, to: string, message: ArrayBuffer) {
-    const peer = this.ctx.getWebSockets(to)[0];
-    if (await this.count(Math.max(message.byteLength, MIN_FRAME_BYTES))) return peer?.send(message);
-    from.close(4429, "daily limit");
-    peer?.close(4429, "daily limit");
-  }
-
-  /** A message from plxd's control socket: a webhook's answer, or a push. */
+  /** A message from plxd's control socket: a webhook's answer, its webhook URLs, a push, or a
+   *  request for a spare stream. */
   private async fromHost(message: string | ArrayBuffer) {
     const parsed = typeof message === "string" ? parse(message) : undefined;
     if (parsed?.t === "hook" && typeof parsed.id === "string") {
@@ -394,6 +413,14 @@ export class HostRelay extends DurableObject<Env> {
       if (!valid || !owner || !this.limits.allow("pushes", LIMITS.pushes)) return;
       const account = this.env.USERS.get(this.env.USERS.idFromName(owner.user));
       await account.push(owner.hostId, run, state as Notification["state"]);
+    } else if (parsed?.t === "spare") {
+      // plxd asks once its spare was taken or ended, so any spare still listed is gone.
+      const owner = await this.owner();
+      if (!owner || !this.limits.allow("spares", LIMITS.spares)) return;
+      const streams = await this.streams();
+      for (const id of Object.keys(streams)) if (streams[id]?.spare) delete streams[id];
+      await this.ctx.storage.put<Streams>("streams", streams);
+      if (Object.keys(streams).length < MAX_STREAMS) await this.newStream(owner.hostId, true);
     }
   }
 
@@ -404,13 +431,6 @@ export class HostRelay extends DurableObject<Env> {
     } catch {
       // Already closed.
     }
-    const attachment = ws.deserializeAttachment() as Attachment | null;
-    if (attachment?.role === "client") {
-      await this.saveTraffic();
-      this.ctx.getWebSockets(`h:${attachment.stream}`)[0]?.close(1000, "closed");
-    }
-    if (attachment?.role === "stream")
-      this.ctx.getWebSockets(`c:${attachment.stream}`)[0]?.close(1000, "closed");
   }
 
   async webSocketError(ws: WebSocket) {

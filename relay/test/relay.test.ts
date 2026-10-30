@@ -1,4 +1,4 @@
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
 import { sha256 } from "../src/crypto";
@@ -8,9 +8,10 @@ import {
   LIMITS,
   MAX_DAILY_BYTES,
   MAX_HOOK_BYTES,
-  MIN_FRAME_BYTES,
+  MAX_STREAMS,
 } from "../src/host";
 import { type Env, network } from "../src/index";
+import { MIN_FRAME_BYTES, REPORT_BYTES, StreamRelay } from "../src/stream";
 import { sendApns } from "../src/push";
 import { MAX_HOSTS, UserAccount, USER_LIMITS } from "../src/user";
 import {
@@ -39,18 +40,42 @@ async function online(user = `user_${crypto.randomUUID()}`) {
   return { host, token, control };
 }
 
-/** A client's stream to `host`, joined by plxd's side. */
-async function stream(host: Host, token: string, control: Awaited<ReturnType<typeof online>>["control"]) {
+type Open = { t: string; stream: string; token: string; spare?: boolean };
+
+/** A client's stream to `host`, opened with a ticket as clients before 0091 do, not yet joined. */
+async function stream(host: Host, token: string, control: Socket) {
   const ticket = await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token });
   expect(ticket.status).toBe(200);
   const { ticket: value } = (await ticket.json()) as { ticket: string };
   const client = opened(await socket(`/v1/hosts/${host.id}/connect?ticket=${value}`));
-  const open = JSON.parse((await control.next()) as string) as { t: string; stream: string; token: string };
+  const open = JSON.parse((await control.next()) as string) as Open;
   expect(open.t).toBe("open");
   return { client, open, ticket: value };
 }
 
+/** A client's stream opened with its Clerk token in the header (0091): the socket or refusal. */
+function connect(host: Host, token: string) {
+  return socket(`/v1/hosts/${host.id}/connect`, { authorization: `Bearer ${token}` });
+}
+
+/** plxd's side of the stream `open` announced. */
+function join(host: Host, open: Open) {
+  return socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`);
+}
+
+/** The streams `host`'s object counts as open. */
+function openStreams(host: Host) {
+  return runInDurableObject(hosts.get(hosts.idFromName(host.id)), async (_: HostRelay, state) =>
+    (await state.storage.get<Record<string, { spare?: true }>>("streams")) ?? {},
+  );
+}
+
+function streamObject(host: Host, stream: string) {
+  return streams.get(streams.idFromName(`${host.id}/${stream}`));
+}
+
 const hosts = testEnv.HOSTS;
+const streams = testEnv.STREAMS;
 const users = testEnv.USERS;
 
 describe("sign-in", () => {
@@ -176,10 +201,11 @@ describe("streams", () => {
     const { client, open } = await stream(host, token, control);
     const wrong = await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=nope`);
     expect(wrong instanceof Response && wrong.status).toBe(404);
-    const side = opened(await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`));
+    const side = opened(await join(host, open));
     expect(await client.next()).toBe("ready");
+    expect(await side.next()).toBe("ready");
     // A second join with the same token is refused: the stream already has its side.
-    const again = await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`);
+    const again = await join(host, open);
     expect(again instanceof Response && again.status).toBe(404);
 
     const record = new Uint8Array([0x16, 0x03, 0x01, 0, 4, 1, 2, 3, 4]);
@@ -188,16 +214,89 @@ describe("streams", () => {
     side.ws.send(record.slice().reverse());
     expect(new Uint8Array((await client.next()) as ArrayBuffer)).toEqual(record.slice().reverse());
 
-    // The relay keeps nothing of a stream: only the host's registration is stored.
+    // The relay keeps nothing of a stream's bytes: the host's object only counts it as open.
     const stub = hosts.get(hosts.idFromName(host.id));
     const stored = await runInDurableObject(stub, async (_: HostRelay, state) => ({
       keys: [...(await state.storage.list()).keys()],
       held: state.storage.sql.exec("SELECT count(*) AS n FROM held").one().n,
     }));
-    expect(stored).toEqual({ keys: ["lastProof", "owner"], held: 0 });
+    expect(stored).toEqual({ keys: ["lastProof", "owner", "streams"], held: 0 });
+    expect(Object.keys(await openStreams(host))).toEqual([open.stream]);
 
     client.ws.close(1000);
     expect(await side.closed).toBe(1000);
+    // The stream's object reports its close, which frees its place, and keeps nothing.
+    await expect.poll(() => openStreams(host)).toEqual({});
+    const left = await runInDurableObject(streamObject(host, open.stream), async (_: StreamRelay, state) =>
+      (await state.storage.list()).size,
+    );
+    expect(left).toBe(0);
+  });
+
+  it("opens with the Clerk token in the Authorization header, never the URL", async () => {
+    const { host, token, control } = await online();
+    for (const query of [`token=${token}`, `access_token=${token}`, `ticket=`]) {
+      const inUrl = await socket(`/v1/hosts/${host.id}/connect?${query}`);
+      expect(inUrl instanceof Response && inUrl.status).toBe(401);
+    }
+    const forged = await connect(host, `${token}x`);
+    expect(forged instanceof Response && forged.status).toBe(401);
+    const intruder = await connect(host, await session("user_intruder"));
+    expect(intruder instanceof Response && intruder.status).toBe(404);
+
+    const client = opened(await connect(host, token));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    expect(open).toMatchObject({ t: "open" });
+    expect(open.spare).toBeUndefined();
+    const side = opened(await join(host, open));
+    expect(await client.next()).toBe("ready");
+    expect(await side.next()).toBe("ready");
+    client.ws.send(new Uint8Array([1, 2, 3]));
+    expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it("joins a client to plxd's spare stream without asking plxd first", async () => {
+    const { host, token, control } = await online();
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const spare = JSON.parse((await control.next()) as string) as Open;
+    expect(spare).toMatchObject({ t: "open", spare: true });
+    const side = opened(await join(host, spare));
+    expect(await openStreams(host)).toEqual({ [spare.stream]: { spare: true } });
+
+    const client = opened(await connect(host, token));
+    // Joined at once: both ends hear it, and plxd was sent nothing new.
+    expect(await client.next()).toBe("ready");
+    expect(await side.next()).toBe("ready");
+    expect(await openStreams(host)).toEqual({ [spare.stream]: {} });
+    side.ws.send(new Uint8Array([9]));
+    expect(new Uint8Array((await client.next()) as ArrayBuffer)).toEqual(new Uint8Array([9]));
+
+    // plxd asks for the next spare, which replaces none and counts as open.
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    const next = JSON.parse((await control.next()) as string) as Open;
+    expect(next.spare).toBe(true);
+    expect(Object.keys(await openStreams(host)).sort()).toEqual([spare.stream, next.stream].sort());
+  });
+
+  it("closes a stream plxd never joins, which frees its place", async () => {
+    const { host, token, control } = await online();
+    const client = opened(await connect(host, token));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    expect(await runDurableObjectAlarm(streamObject(host, open.stream))).toBe(true);
+    expect(await client.closed).toBe(4408);
+    await expect.poll(() => openStreams(host)).toEqual({});
+  });
+
+  it("forgets the streams of plxd's last control connection when it reconnects", async () => {
+    const { host, token, control } = await online();
+    const client = opened(await connect(host, token));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    opened(await join(host, open));
+    await client.next();
+    const { control: again } = await connectHost(host);
+    await again.next();
+    expect(await client.closed).toBe(1000);
+    expect(await openStreams(host)).toEqual({});
   });
 });
 
@@ -359,17 +458,21 @@ describe("held webhook retries", () => {
 });
 
 describe("rate limits", () => {
-  it("limit each hook URL, a host's tickets, and a user's signed-in requests", async () => {
+  it("limit each hook URL, a host's stream opens, and a user's signed-in requests", async () => {
     const { host } = await away();
     for (let i = 0; i < LIMITS.hookUrl; i++) {
       expect((await call(`/v1/hooks/${host.id}/hook1/token`, { method: "POST" })).status).toBe(202);
     }
     expect((await call(`/v1/hooks/${host.id}/hook1/token`, { method: "POST" })).status).toBe(429);
 
+    // A ticket and an open with a token count alike: 30 a host a minute.
     const ticketed = await online();
-    for (let i = 0; i < LIMITS.tickets; i++) {
+    for (let i = 0; i < LIMITS.opens - 1; i++) {
       expect((await call(`/v1/hosts/${ticketed.host.id}/tickets`, { method: "POST", token: ticketed.token })).status).toBe(200);
     }
+    opened(await connect(ticketed.host, ticketed.token));
+    const over = await connect(ticketed.host, ticketed.token);
+    expect(over instanceof Response && over.status).toBe(429);
     expect((await call(`/v1/hosts/${ticketed.host.id}/tickets`, { method: "POST", token: ticketed.token })).status).toBe(429);
 
     const token = await session("user_busy");
@@ -431,25 +534,73 @@ describe("cost ceilings", () => {
     expect(listed.hosts).toHaveLength(MAX_HOSTS);
   });
 
-  it("count each stream frame as at least 16 KiB, and close a host's streams and tickets past its daily bytes", async () => {
+  it("cap a host's open streams at 16, its spare included", async () => {
     const { host, token, control } = await online();
-    const { client, open } = await stream(host, token, control);
-    const side = opened(await socket(`/v1/hosts/${host.id}/streams/${open.stream}?token=${open.token}`));
-    await client.next();
-    const stub = hosts.get(hosts.idFromName(host.id));
-    await runInDurableObject(stub, (relay: HostRelay) => {
-      const day = new Date().toISOString().slice(0, 10);
-      const bytes = MAX_DAILY_BYTES - 2 * MIN_FRAME_BYTES;
-      (relay as unknown as { traffic: object }).traffic = { day, bytes, saved: bytes };
-    });
+    control.ws.send(JSON.stringify({ t: "spare" }));
+    await control.next();
+    for (let i = 1; i < MAX_STREAMS; i++) opened(await connect(host, token));
+    // The 16th took the spare; the 17th finds none and no room.
+    opened(await connect(host, token));
+    const over = await connect(host, token);
+    expect(over instanceof Response && over.status).toBe(429);
+    expect(Object.keys(await openStreams(host))).toHaveLength(MAX_STREAMS);
+  });
+
+  it("count each stream frame as at least 16 KiB, reported every 8 MiB, and close every stream past a host's daily bytes", async () => {
+    const { host, token, control } = await online();
+    const ends = [];
     for (let i = 0; i < 2; i++) {
-      client.ws.send(new Uint8Array([i]));
-      expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(new Uint8Array([i]));
+      const client = opened(await connect(host, token));
+      const open = JSON.parse((await control.next()) as string) as Open;
+      const side = opened(await join(host, open));
+      await client.next();
+      await side.next();
+      ends.push({ client, side, open });
     }
-    client.ws.send(new Uint8Array([2]));
-    expect(await client.closed).toBe(4429);
-    expect(await side.closed).toBe(4429);
+    const [first, second] = ends as [(typeof ends)[0], (typeof ends)[0]];
+    await runInDurableObject(hosts.get(hosts.idFromName(host.id)), async (relay: HostRelay, state) => {
+      const day = new Date().toISOString().slice(0, 10);
+      await state.storage.put("traffic", { day, bytes: MAX_DAILY_BYTES - REPORT_BYTES + 1 });
+      (relay as unknown as { traffic?: object }).traffic = undefined;
+    });
+    // Two frames short of a report: each one-byte frame counts as 16 KiB.
+    await runInDurableObject(streamObject(host, first.open.stream), (relay: StreamRelay) => {
+      (relay as unknown as { unreported: number }).unreported = REPORT_BYTES - 2 * MIN_FRAME_BYTES;
+    });
+    first.client.ws.send(new Uint8Array([0]));
+    expect(new Uint8Array((await first.side.next()) as ArrayBuffer)).toEqual(new Uint8Array([0]));
+    // This one reports 8 MiB, which spends the day, so both streams close.
+    first.client.ws.send(new Uint8Array([1]));
+    expect(await first.client.closed).toBe(4429);
+    expect(await second.client.closed).toBe(4429);
+    expect(await second.side.closed).toBe(4429);
+    const refused = await connect(host, token);
+    expect(refused instanceof Response && refused.status).toBe(429);
     expect((await call(`/v1/hosts/${host.id}/tickets`, { method: "POST", token })).status).toBe(429);
+  });
+
+  it("keep a stream's unreported count across hibernation", async () => {
+    const { host, token, control } = await online();
+    const client = opened(await connect(host, token));
+    const open = JSON.parse((await control.next()) as string) as Open;
+    const side = opened(await join(host, open));
+    await client.next();
+    await side.next();
+    const send = async (byte: number) => {
+      client.ws.send(new Uint8Array([byte]));
+      expect(new Uint8Array((await side.next()) as ArrayBuffer)).toEqual(new Uint8Array([byte]));
+    };
+    for (let i = 0; i < 3; i++) await send(i);
+    // Its in-memory state goes; the WebSockets hibernate, open.
+    await evictDurableObject(streamObject(host, open.stream));
+    await send(3);
+    client.ws.close(1000);
+    await side.closed;
+    const traffic = () =>
+      runInDurableObject(hosts.get(hosts.idFromName(host.id)), async (_: HostRelay, state) =>
+        (await state.storage.get<{ bytes: number }>("traffic"))?.bytes,
+      );
+    await expect.poll(traffic).toBe(4 * MIN_FRAME_BYTES);
   });
 
   it("key anonymous limits by IPv4 address or IPv6 /64", () => {

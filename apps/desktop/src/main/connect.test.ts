@@ -32,29 +32,28 @@ test("found devices update known ones and add new ones that answer", () => {
   expect(mergeFound(devices, [])).toEqual({ devices, changed: false });
 });
 
-test("plx-connect add runs the app's own copy with its Electron as Node, with checked arguments", () => {
+test("plx add runs the app's own copy with its Electron as Node, with checked arguments", () => {
   const mac = {
     platform: "darwin" as const,
     env: { SHELL: "/bin/zsh" },
     execPath: "/Applications/Parallax (Nightly).app/Contents/MacOS/Parallax (Nightly)",
-    script:
-      "/Applications/Parallax (Nightly).app/Contents/Resources/plx-connect/bin/plx-connect.mjs",
+    script: "/Applications/Parallax (Nightly).app/Contents/Resources/plx/bin/plx.mjs",
   };
   expect(addCommand("100.74.190.83", "ryan", "nightly", false, mac)).toEqual({
     file: "/bin/zsh",
     args: [
       "-lc",
-      "ELECTRON_RUN_AS_NODE=1 exec '/Applications/Parallax (Nightly).app/Contents/MacOS/Parallax (Nightly)' '/Applications/Parallax (Nightly).app/Contents/Resources/plx-connect/bin/plx-connect.mjs' add 100.74.190.83 --channel nightly --user ryan",
+      "ELECTRON_RUN_AS_NODE=1 exec '/Applications/Parallax (Nightly).app/Contents/MacOS/Parallax (Nightly)' '/Applications/Parallax (Nightly).app/Contents/Resources/plx/bin/plx.mjs' add 100.74.190.83 --channel nightly --user ryan",
     ],
   });
   const dev = {
     ...mac,
-    env: { PLX_CONNECT_PATH: "/x/y z/plx-connect.mjs" },
+    env: { PLX_CONNECT_PATH: "/x/y z/plx.mjs" },
     execPath: "/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
   };
   expect(addCommand("mac-mini", undefined, "stable", true, dev).args).toEqual([
     "-lc",
-    "ELECTRON_RUN_AS_NODE=1 exec /repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron '/x/y z/plx-connect.mjs' add mac-mini --channel stable --headless",
+    "ELECTRON_RUN_AS_NODE=1 exec /repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron '/x/y z/plx.mjs' add mac-mini --channel stable --headless",
   ]);
   // A profile folder may hold `$`, a backtick, or `'`: literals keep them as they are.
   const windows = {
@@ -62,7 +61,7 @@ test("plx-connect add runs the app's own copy with its Electron as Node, with ch
     env: {},
     execPath: "C:\\Users\\R$yan O'B`x\\AppData\\Local\\Programs\\parallax-desktop\\Parallax.exe",
     script:
-      "C:\\Users\\R$yan O'B`x\\AppData\\Local\\Programs\\parallax-desktop\\resources\\plx-connect\\bin\\plx-connect.mjs",
+      "C:\\Users\\R$yan O'B`x\\AppData\\Local\\Programs\\parallax-desktop\\resources\\plx\\bin\\plx.mjs",
   };
   expect(addCommand("100.1.2.3", undefined, "nightly", true, windows)).toEqual({
     file: "powershell.exe",
@@ -70,7 +69,7 @@ test("plx-connect add runs the app's own copy with its Electron as Node, with ch
       "-NoLogo",
       "-NoProfile",
       "-Command",
-      "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $env:ELECTRON_RUN_AS_NODE = '1'; & 'C:\\Users\\R$yan O''B`x\\AppData\\Local\\Programs\\parallax-desktop\\Parallax.exe' 'C:\\Users\\R$yan O''B`x\\AppData\\Local\\Programs\\parallax-desktop\\resources\\plx-connect\\bin\\plx-connect.mjs' add 100.1.2.3 --channel nightly --headless | Out-Host; exit $LASTEXITCODE",
+      "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $env:ELECTRON_RUN_AS_NODE = '1'; & 'C:\\Users\\R$yan O''B`x\\AppData\\Local\\Programs\\parallax-desktop\\Parallax.exe' 'C:\\Users\\R$yan O''B`x\\AppData\\Local\\Programs\\parallax-desktop\\resources\\plx\\bin\\plx.mjs' add 100.1.2.3 --channel nightly --headless | Out-Host; exit $LASTEXITCODE",
     ],
   });
   for (const bad of ["", "-oProxyCommand=x", "a b", "a;b", "$(x)"]) {

@@ -134,11 +134,12 @@ export function LanSettings() {
     setCode({ ...answer.result, before: sessions.length });
     void readSessions();
   };
+  // A device signed in with the account loses its key on every computer this app reaches (0091).
   const revoke = async (id: string) => {
     retry();
-    const answer = await window.parallax.request(localId, "remote/revoke", { id });
-    if ("error" in answer) return failed("Couldn't revoke the computer", answer.error.message);
-    setStatus(answer.result);
+    const answer = await window.parallax.revokeDevice(id);
+    if (typeof answer === "string") return failed("Couldn't revoke the computer", answer);
+    setStatus(answer);
   };
 
   return (

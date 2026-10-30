@@ -75,10 +75,10 @@ mkdir -p target/package-resources
 cp "$plxd" "target/package-resources/plxd$exe"
 printf '%s\n' "$version" > target/package-resources/plxd.version
 
-# plx-connect (0056), which Add computer runs with the app's own Electron as Node, so this computer
+# plx (0091), which Add computer runs with the app's own Electron as Node, so this computer
 # needs no Node or npm. It imports only Node's own modules, so its package is all it needs.
-mkdir -p target/package-resources/plx-connect
-cp -R packages/plx-connect/bin packages/plx-connect/src packages/plx-connect/package.json target/package-resources/plx-connect/
+mkdir -p target/package-resources/plx
+cp -R packages/plx/bin packages/plx/src packages/plx/package.json target/package-resources/plx/
 
 cd apps/desktop
 node --version
@@ -87,7 +87,7 @@ pnpm install --frozen-lockfile
 pnpm build
 pnpm exec electron-builder --publish never "$builder_arch" -c.extraMetadata.version="$version" "$@"
 
-# plxd on its own, which the app installs on an SSH host (PLX-642) and plx-connect --headless
+# plxd on its own, which the app installs on an SSH host (PLX-642) and plx
 # installs, and its SHA256, which those installs check, beside the installer so publish-build
 # attaches both. Not SHA256SUMS, which waits for every build. On macOS, the signed copy from inside
 # the app. Copied after electron-builder ran, so its update metadata names only the installer.

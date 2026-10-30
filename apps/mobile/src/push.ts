@@ -6,7 +6,8 @@
 // the run's id. Tapping either opens the thread.
 import * as Notifications from "expo-notifications";
 
-const RELAY = "https://relay.parallax.codes";
+/** Parallax Relay (0068). */
+export const RELAY_URL = "https://relay.parallax.codes";
 
 /** The thread on screen, whose own notifications don't show while it's open. */
 let viewing: string | undefined;
@@ -75,7 +76,7 @@ export async function registerWithRelay(
   // The account's OAuth access token, which the relay takes from the desktop app's client too.
   const session = await token();
   if (!session) return "Sign in to get notifications while Parallax is closed.";
-  const answer = await fetch(`${RELAY}/v1/devices`, {
+  const answer = await fetch(`${RELAY_URL}/v1/devices`, {
     method: "POST",
     headers: { Authorization: `Bearer ${session}`, "Content-Type": "application/json" },
     body: JSON.stringify({ token: String(device.data) }),

@@ -71,7 +71,7 @@ updates:
   - package-ecosystem: npm
     directories:
       - /packages/clerk-verify
-      - /packages/plx-connect
+      - /packages/plx
       - /sidecar/claude
       - /sidecar/cursor
       - /sidecar/device-hub

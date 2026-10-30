@@ -4,8 +4,10 @@
 //! opened with the time signed by its host key. Then:
 //!
 //! - While `remote` is on too, for each client the relay announces, plxd opens a WebSocket for
-//!   that client's stream and joins it to a loopback connection to its own remote listener. The client's TLS ends in plxd,
-//!   at the certificate it pinned while pairing (0065), so the relay carries only ciphertext.
+//!   that client's stream and joins it to a loopback connection to its own remote listener. The
+//!   client's TLS ends in plxd, at the certificate it pinned (0065, 0091), so the relay carries
+//!   only ciphertext. plxd also keeps one spare stream open (0091): the relay joins the next client
+//!   to it without asking plxd first, and plxd asks for another once it's taken.
 //! - It answers the webhooks the relay forwards, held ones included, with the same check as
 //!   `/api/hooks` ([`crate::schedules::hook`]), keyed by the relay's delivery id so a redelivery
 //!   fires once.
@@ -16,7 +18,7 @@
 //! the socket.
 //!
 //! A client reaches a host over a `relay:<hostId>` route: [`open_stream`] is the byte stream its
-//! TLS runs over, signed in with the Clerk session [`sign_in`] keeps.
+//! TLS runs over, opened with the Clerk session [`sign_in`] keeps in its `Authorization` header.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -181,19 +183,44 @@ fn cant_reach(error: &Error) -> String {
     format!("Parallax couldn't reach the relay: {error}")
 }
 
-/// One JSON request to the relay, signed in with `token`: its status and JSON body.
+/// A JSON `GET` of `path` at `url`, with no credential, such as Clerk's JWKS (0091): its status,
+/// JSON body, and `Cache-Control` `max-age`. HTTPS checked against the Mozilla roots, as the
+/// relay's own, or plain HTTP to this computer.
+pub(crate) async fn get(url: &str, path: &str) -> Result<Answer, Error> {
+    request(url, "GET", path, None, None).await
+}
+
+/// An HTTP answer: its status, JSON body, and `Cache-Control` `max-age`.
+pub(crate) type Answer = (u16, Value, Option<Duration>);
+
+/// One JSON request to the relay, signed in with `token` when given: its status and JSON body.
 async fn http(
     url: &str,
     method: &str,
     path: &str,
-    token: &str,
+    token: Option<&str>,
     body: Option<&Value>,
 ) -> Result<(u16, Value), Error> {
+    let (status, body, _) = request(url, method, path, token, body).await?;
+    Ok((status, body))
+}
+
+/// One JSON request: its status, JSON body, and `Cache-Control` `max-age`.
+async fn request(
+    url: &str,
+    method: &str,
+    path: &str,
+    token: Option<&str>,
+    body: Option<&Value>,
+) -> Result<Answer, Error> {
     let base = Base::parse(url)?;
     let mut stream = base.connect().await?;
     let body = body.map(ToString::to_string).unwrap_or_default();
+    let authorization = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {token}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: {}\r\n{authorization}\
          Connection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         base.authority(),
         body.len()
@@ -222,8 +249,9 @@ async fn http(
     }
 }
 
-/// The status and JSON body of `answer`, once it's whole, or at the end of the connection.
-fn parse_response(answer: &[u8], ended: bool) -> Option<Result<(u16, Value), Error>> {
+/// The status, JSON body, and `Cache-Control` `max-age` of `answer`, once it's whole, or at the
+/// end of the connection.
+fn parse_response(answer: &[u8], ended: bool) -> Option<Result<Answer, Error>> {
     let mut headers = [httparse::EMPTY_HEADER; 32];
     let mut response = httparse::Response::new(&mut headers);
     let Ok(httparse::Status::Complete(length)) = response.parse(answer) else {
@@ -254,9 +282,15 @@ fn parse_response(answer: &[u8], ended: bool) -> Option<Result<(u16, Value), Err
         return None;
     };
     let status = response.code.unwrap_or(0);
+    let max_age = header("cache-control").and_then(|value| {
+        let (_, rest) = value.split_once("max-age=")?;
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok().map(Duration::from_secs)
+    });
     Some(Ok((
         status,
         serde_json::from_slice(&body).unwrap_or(Value::Null),
+        max_age,
     )))
 }
 
@@ -278,39 +312,56 @@ fn dechunk(mut rest: &[u8]) -> Vec<u8> {
     body
 }
 
-/// A WebSocket to the relay's `path`, with `proof` in [`PROOF_HEADER`] when given. A 404 is
-/// [`Error::Refused`]: no such host, or stream.
+/// A WebSocket to the relay's `path`, with `headers`. A 404 is [`Error::Refused`]: no such host,
+/// or stream.
 async fn websocket(
     url: &str,
     path: &str,
-    proof: Option<&str>,
+    headers: &[(&'static str, &str)],
 ) -> Result<WebSocketStream<Stream>, Error> {
+    upgrade(url, path, headers)
+        .await
+        .map_err(|(_, error)| error)
+}
+
+/// [`websocket`], with the HTTP status the relay refused the upgrade with, if it answered one.
+async fn upgrade(
+    url: &str,
+    path: &str,
+    headers: &[(&'static str, &str)],
+) -> Result<WebSocketStream<Stream>, (Option<u16>, Error)> {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-    let base = Base::parse(url)?;
-    let stream = base.connect().await?;
+    let base = Base::parse(url).map_err(|e| (None, e.into()))?;
+    let stream = base.connect().await.map_err(|e| (None, e.into()))?;
     let scheme = if base.tls { "wss" } else { "ws" };
     let address = format!("{scheme}://{}{path}", base.authority());
     let mut request = address
         .into_client_request()
-        .map_err(|e| Error::Protocol(e.to_string()))?;
-    if let Some(proof) = proof {
-        let value = proof
+        .map_err(|e| (None, Error::Protocol(e.to_string())))?;
+    for (name, value) in headers {
+        let value = value
             .parse()
-            .map_err(|_| Error::Protocol("a bad proof".to_owned()))?;
-        request.headers_mut().insert(PROOF_HEADER, value);
+            .map_err(|_| (None, Error::Protocol(format!("a bad {name} header"))))?;
+        request.headers_mut().insert(*name, value);
     }
     let config = Some(remote::websocket_config());
     let (socket, _) = tokio_tungstenite::client_async_with_config(request, stream, config)
         .await
-        .map_err(|error| match error {
-            tungstenite::Error::Http(response) if response.status() == 404 => Error::Refused,
-            tungstenite::Error::Http(response) if response.status() == 401 => {
-                match relay_clock(&response) {
+        .map_err(|error| {
+            let tungstenite::Error::Http(response) = error else {
+                let error = Error::Protocol(format!("the relay's WebSocket failed: {error}"));
+                return (None, error);
+            };
+            let status = response.status().as_u16();
+            let error = match status {
+                404 => Error::Refused,
+                401 => match relay_clock(&response) {
                     Some(relay_ms) => Error::Clock(relay_ms),
                     None => Error::Protocol("the relay refused this host's proof".to_owned()),
-                }
-            }
-            other => Error::Protocol(format!("the relay's WebSocket failed: {other}")),
+                },
+                _ => Error::Protocol(format!("the relay's WebSocket failed: HTTP {status}")),
+            };
+            (Some(status), error)
         })?;
     Ok(socket)
 }
@@ -356,8 +407,9 @@ fn pipe(socket: WebSocketStream<Stream>) -> DuplexStream {
     ours
 }
 
-/// A byte stream to the host with relay id `host_id`, through the relay [`sign_in`] named. The
-/// relay can't read it: the caller runs TLS to the host's pinned certificate over it.
+/// A byte stream to the host with relay id `host_id`, through the relay [`sign_in`] named, opened
+/// with the Clerk token in the `Authorization` header and no ticket first (0091). The relay can't
+/// read it: the caller runs TLS to the host's pinned certificate over it.
 ///
 /// # Errors
 ///
@@ -369,20 +421,20 @@ pub async fn open_stream(host_id: &str) -> Result<DuplexStream, Error> {
             "the relay route needs a sign-in (PLXD_RELAY_TOKEN)".to_owned(),
         ));
     };
-    let path = format!("/v1/hosts/{host_id}/tickets");
-    let (status, body) = http(url, "POST", &path, token, None).await?;
-    let Some(ticket) = body["ticket"].as_str().filter(|_| status == 200) else {
-        return Err(Error::Protocol(format!(
-            "the relay answered {status}: {}",
-            body["error"].as_str().unwrap_or("no ticket")
-        )));
-    };
-    let path = format!("/v1/hosts/{host_id}/connect?ticket={ticket}");
-    let mut socket = match websocket(url, &path, None).await {
-        Err(Error::Refused) => {
-            return Err(Error::Protocol("the relay refused the ticket".to_owned()));
-        }
-        other => other?,
+    stream_at(url, token, host_id).await
+}
+
+/// [`open_stream`] through the relay at `url`, signed in with `token`. A relay from before 0091
+/// refuses the header with 401, 404, or 426 before any stream opens. Then this asks it for a
+/// ticket and opens `/connect?ticket=`, as such a relay expects. Once a stream opened, nothing is
+/// tried again.
+async fn stream_at(url: &str, token: &str, host_id: &str) -> Result<DuplexStream, Error> {
+    let path = format!("/v1/hosts/{host_id}/connect");
+    let authorization = format!("Bearer {token}");
+    let mut socket = match upgrade(url, &path, &[("authorization", &authorization)]).await {
+        Ok(socket) => socket,
+        Err((Some(401 | 404 | 426), _)) => ticketed(url, token, host_id).await?,
+        Err((_, error)) => return Err(error),
     };
     // The relay says so once the host joined the stream.
     match socket.next().await {
@@ -390,6 +442,23 @@ pub async fn open_stream(host_id: &str) -> Result<DuplexStream, Error> {
         _ => Err(Error::Protocol(
             "the host didn't join the relay's stream".to_owned(),
         )),
+    }
+}
+
+/// A WebSocket to `host_id` opened with a ticket, as a relay from before 0091 expects.
+async fn ticketed(url: &str, token: &str, host_id: &str) -> Result<WebSocketStream<Stream>, Error> {
+    let path = format!("/v1/hosts/{host_id}/tickets");
+    let (status, body) = http(url, "POST", &path, Some(token), None).await?;
+    let Some(ticket) = body["ticket"].as_str().filter(|_| status == 200) else {
+        return Err(Error::Protocol(format!(
+            "the relay answered {status}: {}",
+            body["error"].as_str().unwrap_or("no ticket")
+        )));
+    };
+    let path = format!("/v1/hosts/{host_id}/connect?ticket={ticket}");
+    match websocket(url, &path, &[]).await {
+        Err(Error::Refused) => Err(Error::Protocol("the relay refused the ticket".to_owned())),
+        other => other,
     }
 }
 
@@ -455,6 +524,12 @@ impl Relay {
         let id = self.get().connected?;
         Some(format!("{}{id}", remote::RELAY_ROUTE))
     }
+
+    /// How far the relay's clock is ahead of this computer's, in milliseconds, as last measured.
+    /// Zero until the relay refused a proof for its time.
+    pub(crate) fn clock_offset_ms(&self) -> i64 {
+        self.clock_offset.load(Ordering::Relaxed)
+    }
 }
 
 /// Whether plxd should be connected: `relay` on. Pushes and webhooks need nothing else
@@ -498,12 +573,20 @@ async fn on_unless_chosen(daemon: &Daemon) {
 
 /// `relay/sign`: this host's registration with the relay, signed with its key over `token_hash`,
 /// the SHA-256 of a Clerk session token that stays on another computer, which posts it with
-/// [`register`] (PLX-1146). Turns `relay` on unless its user chose.
-pub(crate) async fn sign(daemon: &Daemon, token_hash: &str) -> Result<RelaySignResult, String> {
+/// [`register`] (PLX-1146). Records `user`, the token's Clerk user that the caller names, as this
+/// host's account (0091). Turns `relay` on unless its user chose.
+pub(crate) async fn sign(
+    daemon: &Daemon,
+    token_hash: &str,
+    user: Option<&str>,
+) -> Result<RelaySignResult, String> {
     let key = signer(daemon).await.map_err(|e| e.to_string())?;
     let host_id = key.thumbprint();
     let (x, y) = key.coordinates();
     let signature = key.sign(register_message(&host_id, token_hash).as_bytes());
+    if let Some(user) = user {
+        crate::server::remote::access::record_account(daemon, user).await?;
+    }
     on_unless_chosen(daemon).await;
     Ok(RelaySignResult {
         host_id,
@@ -523,7 +606,9 @@ async fn signer(daemon: &Daemon) -> Result<DpopKey, Error> {
 
 /// `relay/register`: registers a host's key with the relay under the user of the Clerk session
 /// `token`: `signed`, another computer's from its `relay/sign`, else this host's, signed now. This
-/// host's turns `relay` on unless its user chose, and reconnects. Answers why it couldn't.
+/// host's records the token's user as its account (0091), from the token the caller handed it,
+/// never from the relay, turns `relay` on unless its user chose, and reconnects. Answers why it
+/// couldn't.
 pub(crate) async fn register(
     daemon: &Daemon,
     token: &str,
@@ -536,6 +621,7 @@ pub(crate) async fn register(
             sign(
                 daemon,
                 &remote::base64url(&remote::sha256(token.as_bytes())),
+                None,
             )
             .await?
         }
@@ -554,11 +640,14 @@ pub(crate) async fn register(
         "signature": signature,
     });
     let relay = &daemon.relay;
-    let answered = http(&relay.url, "POST", "/v1/hosts", token, Some(&body)).await;
+    let answered = http(&relay.url, "POST", "/v1/hosts", Some(token), Some(&body)).await;
     match answered {
         Ok((200, _)) => {
             info!(%host_id, own, "registered with the relay");
             if own {
+                if let Some(user) = crate::clerk::subject(token) {
+                    crate::server::remote::access::record_account(daemon, &user).await?;
+                }
                 relay.changed.notify_one();
             }
             Ok(())
@@ -576,7 +665,7 @@ pub(crate) async fn register(
 /// marked. Answers why not, for people.
 pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<Vec<RelayHost>, String> {
     let own = signer(daemon).await.ok().map(|key| key.thumbprint());
-    let answered = http(&daemon.relay.url, "GET", "/v1/hosts", token, None).await;
+    let answered = http(&daemon.relay.url, "GET", "/v1/hosts", Some(token), None).await;
     let body = match answered {
         Ok((200, body)) => body,
         Ok((401, _)) => return Err(SIGN_IN_REFUSED.to_owned()),
@@ -609,7 +698,7 @@ pub(crate) async fn remove(daemon: &Daemon, token: &str, host_id: &str) -> Resul
         return Err("That isn't a host on the relay.".to_owned());
     }
     let path = format!("/v1/hosts/{host_id}");
-    match http(&daemon.relay.url, "DELETE", &path, token, None).await {
+    match http(&daemon.relay.url, "DELETE", &path, Some(token), None).await {
         Ok((200 | 404, _)) => {
             info!(%host_id, "removed a host from the relay");
             Ok(())
@@ -635,6 +724,8 @@ pub(crate) async fn run(daemon: Arc<Daemon>, stop: CancellationToken) {
     loop {
         if !wanted(&daemon).await {
             relay.set(Status::default());
+            // Unlinked: a new device's request waiting for approval goes too (0091).
+            daemon.remote.access.clear();
             tokio::select! {
                 () = stop.cancelled() => return,
                 () = relay.changed.notified() => continue,
@@ -703,7 +794,7 @@ async fn connected(daemon: &Arc<Daemon>, stop: &CancellationToken) -> Result<End
         let proof = format!("{at}.{}", remote::base64url(&signature));
         let path = format!("/v1/hosts/{host_id}/host");
         async move {
-            let mut socket = websocket(url, &path, Some(&proof)).await?;
+            let mut socket = websocket(url, &path, &[(PROOF_HEADER, &proof)]).await?;
             if next_json(&mut socket).await?["t"] != "ready" {
                 return Err(Error::Protocol(
                     "the relay didn't accept the host key".to_owned(),
@@ -789,6 +880,10 @@ async fn next_json(socket: &mut WebSocketStream<Stream>) -> Result<Value, Error>
 }
 
 /// Serves an accepted connection until it ends.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one select over the relay's messages, plxd's events, and the spare stream"
+)]
 async fn serve(
     daemon: &Arc<Daemon>,
     socket: WebSocketStream<Stream>,
@@ -808,6 +903,9 @@ async fn serve(
     let mut events = daemon.log.watch();
     let mut after = daemon.log.head();
     let mut waiting = Waiting::default();
+    // The spare stream (0091): asked for while `remote` is on, and again once it's taken or ends.
+    let (spare_done, mut spare_ended) = mpsc::channel::<()>(4);
+    let mut spare: Option<CancellationToken> = None;
     let mut ping = time::interval_at(Instant::now() + PING, PING);
     let mut heard = true;
     let failed = |error: tungstenite::Error| Error::Protocol(error.to_string());
@@ -818,6 +916,20 @@ async fn serve(
     };
     sink.send(hooks().await).await.map_err(failed)?;
     loop {
+        // `remote` on with no spare asks for one; `remote` off closes it.
+        match (serving(daemon).await, &spare) {
+            (true, None) => {
+                spare = Some(streams.child_token());
+                sink.send(Message::text(r#"{"t":"spare"}"#))
+                    .await
+                    .map_err(failed)?;
+            }
+            (false, Some(open)) => {
+                open.cancel();
+                spare = None;
+            }
+            _ => {}
+        }
         tokio::select! {
             () = stop.cancelled() => {
                 let _ = sink.close().await;
@@ -829,6 +941,7 @@ async fn serve(
                     return Ok(Ended::Off);
                 }
             }
+            Some(()) = spare_ended.recv() => spare = None,
             _ = ping.tick() => {
                 if !heard {
                     return Err(Error::Protocol("the relay stopped answering".to_owned()));
@@ -853,7 +966,13 @@ async fn serve(
                         if message["t"] == "open" && serving(daemon).await {
                             let url = daemon.relay.url.clone();
                             let host_id = host_id.to_owned();
-                            tokio::spawn(stream(url, host_id, message, local, streams.clone()));
+                            let joined = match (&spare, message["spare"] == true) {
+                                (Some(open), true) => Some((open.clone(), spare_done.clone())),
+                                _ => None,
+                            };
+                            let stop = joined.as_ref().map_or_else(|| streams.clone(), |(open, _)| open.clone());
+                            let done = joined.map(|(_, done)| done);
+                            tokio::spawn(stream(url, host_id, message, local, stop, done));
                         }
                     }
                     Some(Ok(Message::Binary(frame))) => {
@@ -877,13 +996,15 @@ async fn serve(
 }
 
 /// Joins a client's stream, which the relay announced with `message`, to the remote listener at
-/// `local`, until either ends or `stop`.
+/// `local`, until either ends or `stop`. The spare stream, with `spare` to say when it's taken or
+/// ended, waits for the relay's `ready`, sent when a client joins it, before it dials `local`.
 async fn stream(
     url: String,
     host_id: String,
     message: Value,
     local: SocketAddr,
     stop: CancellationToken,
+    spare: Option<mpsc::Sender<()>>,
 ) {
     let id = message["stream"].as_str().unwrap_or_default();
     let token = message["token"].as_str().unwrap_or_default();
@@ -898,9 +1019,24 @@ async fn stream(
         return warn!("the relay announced a stream with a bad id or token");
     }
     let path = format!("/v1/hosts/{host_id}/streams/{id}?token={token}");
+    let mut unused = spare.clone();
     let joined = async {
-        let socket = websocket(&url, &path, None).await?;
+        let mut socket = websocket(&url, &path, &[]).await?;
+        if spare.is_some() {
+            loop {
+                match socket.next().await {
+                    Some(Ok(Message::Text(text))) if text.as_str() == "ready" => break,
+                    Some(Ok(_)) => {}
+                    _ => return Err(Error::Protocol("the spare stream closed".to_owned())),
+                }
+            }
+            // Taken: the next client gets a new spare.
+            if let Some(done) = unused.take() {
+                let _ = done.send(()).await;
+            }
+        }
         let mut tcp = TcpStream::connect(local).await?;
+        let _ = tcp.set_nodelay(true);
         let mut piped = pipe(socket);
         tokio::io::copy_bidirectional(&mut piped, &mut tcp).await?;
         Ok::<_, Error>(())
@@ -910,6 +1046,14 @@ async fn stream(
         joined = joined => if let Err(error) = joined {
             debug!(%error, "a relay stream ended");
         }
+    }
+    // A spare that ended before a client took it is asked for again, after a pause so a relay
+    // that keeps refusing it isn't asked in a loop.
+    if let Some(done) = unused {
+        if !stop.is_cancelled() {
+            time::sleep(FIRST_BACKOFF).await;
+        }
+        let _ = done.send(()).await;
     }
 }
 
@@ -1081,6 +1225,85 @@ mod tests {
             },
         };
         assert_eq!(state(failed), Some(json!("failed")));
+    }
+
+    /// A relay from before 0091, on loopback: `/connect` without a ticket is 401, `POST
+    /// /tickets` with the token answers `t1`, and `/connect?ticket=t1` says `ready` and echoes.
+    /// Each request's first line goes to `seen`. Like a real server, it reads a request whole
+    /// before answering and closes only after the client does: closing with unread bytes resets
+    /// the connection, and on Windows the client then loses the answer.
+    async fn ticket_only_relay(seen: Arc<Mutex<Vec<String>>>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                tokio::spawn(answer_like_a_ticket_relay(tcp, Arc::clone(&seen)));
+            }
+        });
+        url
+    }
+
+    /// One request to [`ticket_only_relay`]. The client's requests here have no body.
+    async fn answer_like_a_ticket_relay(mut tcp: TcpStream, seen: Arc<Mutex<Vec<String>>>) {
+        // Peeked, not read, so a WebSocket handshake can still read it.
+        let mut buffer = vec![0; 8192];
+        let head = loop {
+            let peeked = tcp.peek(&mut buffer).await.unwrap();
+            let text = String::from_utf8_lossy(&buffer[..peeked]);
+            if let Some(end) = text.find("\r\n\r\n") {
+                break text[..end + 4].to_owned();
+            }
+            assert!(peeked > 0, "the client closed mid-request");
+            time::sleep(Duration::from_millis(1)).await;
+        };
+        let line = head.lines().next().unwrap_or_default().to_owned();
+        seen.lock().unwrap().push(line.clone());
+        if line.starts_with("GET /v1/hosts/h/connect?ticket=t1 ") {
+            let mut socket = tokio_tungstenite::accept_async(tcp).await.unwrap();
+            socket.send(Message::text("ready")).await.unwrap();
+            while let Some(Ok(frame)) = socket.next().await {
+                if frame.is_binary() {
+                    socket.send(frame).await.unwrap();
+                }
+            }
+            return;
+        }
+        tcp.read_exact(&mut vec![0; head.len()]).await.unwrap();
+        let (status, body) = if !line.starts_with("POST /v1/hosts/h/tickets ") {
+            ("401 Unauthorized", "")
+        } else if head.contains("Authorization: Bearer tok\r\n") {
+            ("200 OK", r#"{"ticket":"t1"}"#)
+        } else {
+            ("401 Unauthorized", r#"{"error":"unauthorized"}"#)
+        };
+        let answer = format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        tcp.write_all(answer.as_bytes()).await.unwrap();
+        let _ = tcp.shutdown().await;
+        // Until the client closes its side.
+        let _ = tcp.read_to_end(&mut Vec::new()).await;
+    }
+
+    #[tokio::test]
+    async fn a_relay_that_only_knows_tickets_gets_one_after_refusing_the_header() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let url = ticket_only_relay(Arc::clone(&seen)).await;
+        let mut stream = stream_at(&url, "tok", "h").await.unwrap();
+        stream.write_all(b"ping").await.unwrap();
+        let mut echoed = [0; 4];
+        stream.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"ping");
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                "GET /v1/hosts/h/connect HTTP/1.1",
+                "POST /v1/hosts/h/tickets HTTP/1.1",
+                "GET /v1/hosts/h/connect?ticket=t1 HTTP/1.1",
+            ]
+        );
     }
 
     #[test]

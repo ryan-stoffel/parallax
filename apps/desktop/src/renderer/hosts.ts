@@ -26,8 +26,8 @@ export function useConnect(): ConnectState | undefined {
 
 /**
  * Every host, kept current: this computer first, named as Settings > Connections names it, then
- * the saved SSH hosts, oldest first, then the LAN computers, then the Connect devices turned on
- * here, by name.
+ * the saved SSH hosts, oldest first, then the LAN computers, then the account computers and
+ * Connect devices turned on here, by name.
  */
 export function useHosts(): Host[] {
   const [saved, setSaved] = useState<SavedHost[]>([]);
@@ -54,8 +54,11 @@ export function useHosts(): Host[] {
     () => [
       { id: localId, name: localName, ...(icon && { icon }) },
       ...saved,
-      // A device turned off in Settings has no connection here, so it's left out.
-      ...devices.filter((d) => d.enabled).map(({ id, name, icon }) => ({ id, name, icon })),
+      // A device turned off in Settings has no connection here, so it's left out, as is a new
+      // account computer until its code is typed (0091).
+      ...devices
+        .filter((d) => d.enabled && d.access?.step !== "needsCode")
+        .map(({ id, name, icon }) => ({ id, name, icon })),
     ],
     [saved, devices, localName, icon],
   );

@@ -1,5 +1,10 @@
 // What every screen reads: each computer's connection, threads, and outbox, and the setup they
 // came from. Each computer's threads come from the desktop's `useThreads`, one per computer.
+//
+// With the account signed in it also finds the account's computers on Parallax Relay (0091),
+// when it starts, the app comes to the front, the network changes, and Settings opens, with no
+// timer. It sets them up or asks to use them, asks the user to allow other devices that ask, and
+// copies who's approved between the computers this phone uses.
 import { File } from "expo-file-system";
 import {
   createContext,
@@ -13,9 +18,13 @@ import { Alert, AppState } from "react-native";
 
 import type { ConnectionState } from "../../desktop/src/preload/bridge";
 import { idleThreads, useThreads, type ThreadsView } from "../../desktop/src/renderer/threads";
-import { privateFile } from "../modules/pinned-tls";
+import type { AccessState, RemoteSessionsResult } from "../../desktop/src/protocol/generated/protocol";
+import { onNetwork, privateFile } from "../modules/pinned-tls";
+import { lacks, merged, type Lists } from "./access";
+import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
+import { confirmDevice, setUpComputer } from "./accountPrompts";
 import { forget } from "./host";
-import { computers, Fleet, merge, saveSetup, type Machine, type Setup } from "./machines";
+import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
 
 /** One computer as the screens see it. */
@@ -25,15 +34,30 @@ export interface Computer {
   connected: boolean;
   view: ThreadsView;
   outbox: Outbox;
+  /** Why an account's computer isn't connecting, until it's set up or approved. */
+  gate?: Gate;
 }
 
 interface FleetValue {
   computers: Computer[];
   defaultId?: string;
   setDefault: (id: string) => void;
-  /** Adds computers found with `probe`, or a LAN-paired one. */
-  add: (found: Machine[]) => void;
+  /** Adds a computer paired on the LAN. */
+  add: (paired: Machine) => void;
   remove: (id: string) => void;
+  /** Lists the account's computers again. */
+  discover: () => void;
+  /** The account's computers removed from this phone, to add back. */
+  removed: Listed[];
+  /** Adds back an account's computer removed from this phone. */
+  restore: (hostId: string) => void;
+  /** Sets up a gated account computer: its code, or an approval from another device. */
+  setUp: (id: string) => void;
+  /**
+   * Revokes session `session` on computer `id`. A device signed in with the account also loses its
+   * key there, which `share` then copies to every computer this phone uses (0091).
+   */
+  revoke: (id: string, session: string) => Promise<RemoteSessionsResult | { error: string }>;
   /** Unsent text, by thread. */
   drafts: Map<string, string>;
 }
@@ -114,26 +138,60 @@ function Threads({
   return null;
 }
 
+
 export function FleetProvider({
   setup: initial,
+  accounts,
+  token,
   children,
 }: {
   setup: Setup;
+  /** The account's computers, while signed in. */
+  accounts?: AccountHosts;
+  /** The account's current access token. */
+  token: () => Promise<string | undefined>;
   children: ReactNode;
 }) {
   const [setup, setSetup] = useState(initial);
   const [states, setStates] = useState<Record<string, ConnectionState>>({});
   const [views, setViews] = useState<Record<string, ThreadsView>>({});
+  const [gates, setGates] = useState<Record<string, Gate | undefined>>({});
+  const [listed, setListed] = useState<Listed[]>([]);
   const [drafts] = useState(() => new Map<string, string>());
+  /** Requests already shown, so each asks once. */
+  const [asked] = useState(() => new Set<string>());
   const fleetRef = useRef<Fleet>(null);
+  const latest = useRef(setup);
+  latest.current = setup;
+  const gate = (id: string, next: Gate | undefined) =>
+    setGates((g) => (JSON.stringify(g[id]) === JSON.stringify(next) ? g : { ...g, [id]: next }));
   const [fleet] = useState(() => {
-    const made = new Fleet(async (m) => {
-      // A LAN-paired computer revoked this phone: its connection ends, so pairing again
-      // connects afresh under the same id.
-      await forget();
-      fleetRef.current?.remove(m.id);
-      update((s) => ({ ...s, machines: s.machines.filter((x) => x.id !== m.id) }));
-    }, initial.machines);
+    const made = new Fleet(
+      async (m) => {
+        // An account's computer that needs setting up, or refused this phone: its connection
+        // ends, and connects again once it's set up.
+        if (m.account) return fleetRef.current?.remove(m.id);
+        // A LAN-paired computer revoked this phone: its connection ends, so pairing again
+        // connects afresh under the same id.
+        await forget();
+        fleetRef.current?.remove(m.id);
+        update((s) => ({ ...s, machines: s.machines.filter((x) => x.id !== m.id) }));
+      },
+      initial.machines,
+      accounts && {
+        hosts: accounts,
+        learned: (id, routes, name) =>
+          update((s) => {
+            const machines = s.machines.map((m) =>
+              m.id === id && m.account ? { ...m, name: name || m.name, account: { ...m.account, routes } } : m,
+            );
+            return JSON.stringify(machines) === JSON.stringify(s.machines) ? s : { ...s, machines };
+          }),
+        // A computer still waiting on another device keeps showing its code.
+        gated: (id, next) =>
+          setGates((g) => (next.kind === "setup" && g[id]?.kind === "waiting" ? g : { ...g, [id]: next })),
+      },
+    );
     fleetRef.current = made;
     return made;
   });
@@ -147,9 +205,81 @@ export function FleetProvider({
   function update(change: (s: Setup) => Setup) {
     setSetup((s) => {
       const next = change(s);
-      saveSetup(next);
+      if (next !== s) saveSetup(next);
       return next;
     });
+  }
+
+  /** Lists the account's computers on the relay, and adds new ones. */
+  async function discover() {
+    const bearer = accounts && (await token());
+    const found = bearer && (await listHosts(bearer));
+    if (!found) return;
+    setListed(found);
+    update((s) => {
+      const machines = withListed(s.machines, found, s.hidden);
+      return machines === s.machines ? s : { ...s, machines, defaultId: defaultOf(machines, s.defaultId) };
+    });
+  }
+
+  /**
+   * Copies who's approved between every connected computer that keeps it (0091), with the
+   * computers this phone uses approved too, and trusts the computers they list.
+   */
+  async function share() {
+    if (!accounts) return;
+    const keepers = [...fleet.hosts.entries()].filter(
+      ([, host]) => host.state.status === "connected" && "accountAccess" in host.state.capabilities,
+    );
+    const answers = await Promise.all(
+      keepers.map(async ([id, host]) => ({ id, answer: await host.request("access/get", {}) })),
+    );
+    const lists = answers.flatMap(({ id, answer }) =>
+      "error" in answer ? [] : [{ id, lists: answer.result as AccessState as Lists }],
+    );
+    if (!lists.length) return;
+    const union = merged(lists.map((l) => l.lists), accounts.sessions);
+    await accounts.trust(union.approvedHosts);
+    for (const { id, lists: theirs } of lists)
+      if (lacks(theirs, union)) void fleet.hosts.get(id)?.request("access/merge", union);
+    // A computer one of them lists connects now.
+    for (const m of latest.current.machines)
+      if (m.account && accounts.trusts(m.account.hostId) && !fleet.hosts.has(m.id)) {
+        gate(m.id, undefined);
+        fleet.add(m);
+      }
+  }
+
+  /**
+   * Keeps one `access/get` call open with computer `id` while it's connected, and asks the user
+   * to allow each new device that waits there, with its code.
+   */
+  function watchAccess(id: string) {
+    let version: number | undefined;
+    void (async () => {
+      for (;;) {
+        const host = fleet.hosts.get(id);
+        if (host?.state.status !== "connected") return;
+        const answer = await host.request("access/get", version === undefined ? {} : { after: version });
+        if ("error" in answer) {
+          // A wait past the request timeout comes back as one: wait again.
+          if (answer.error.code === -32800) continue;
+          return;
+        }
+        const state = answer.result as AccessState;
+        version = state.version;
+        const pending = state.pending;
+        if (!pending?.code || asked.has(pending.id)) continue;
+        asked.add(pending.id);
+        const decide = (method: "access/approve" | "access/deny") =>
+          void host.request(method, { request: pending.id }).then((done) => {
+            if ("error" in done) Alert.alert("Couldn't answer the request", done.error.message);
+            // Approved here, it's approved on every computer this phone uses.
+            else if (method === "access/approve") void share();
+          });
+        confirmDevice(pending.name, pending.code, () => decide("access/approve"), () => decide("access/deny"));
+      }
+    })();
   }
 
   useEffect(() => {
@@ -157,23 +287,25 @@ export function FleetProvider({
       setStates((s) => ({ ...s, [id]: state }));
       if (state.status !== "connected") return;
       void outboxes.get(id)?.drain();
-      // A connected computer lists the tailnet's others, so one added elsewhere shows up here.
-      if ("connect" in state.capabilities)
-        void window.parallax.request(id, "connect/devices", {}).then((answer) => {
-          if ("error" in answer) return;
-          const { devices, self } = answer.result;
-          const found = computers(self ? [self, ...devices] : devices);
-          update((s) => {
-            const machines = merge(s.machines, found);
-            return JSON.stringify(machines) === JSON.stringify(s.machines) ? s : { ...s, machines };
-          });
-        });
+      if (id.startsWith("account:")) gate(id, undefined);
+      if ("accountAccess" in state.capabilities) {
+        watchAccess(id);
+        void share();
+      }
     });
-    // A phone that slept may have lost its sockets: check them, or try again now.
-    const awake = AppState.addEventListener("change", (s) => s === "active" && fleet.wake());
+    // A phone that slept may have lost its sockets: check them, or try again now. Coming to the
+    // front, or a network that changed, also lists the account's computers again.
+    const again = () => {
+      fleet.wake();
+      void discover();
+    };
+    const awake = AppState.addEventListener("change", (s) => s === "active" && again());
+    const network = onNetwork(again);
+    void discover();
     return () => {
       listener();
       awake.remove();
+      network();
       // Signed out: this provider's connections end with it.
       fleet.close();
     };
@@ -196,17 +328,38 @@ export function FleetProvider({
       connected: state.status === "connected",
       view: views[machine.id] ?? idleThreads,
       outbox: outbox(machine.id),
+      gate: gates[machine.id],
     };
   });
+
+  /** Connects to account computer `m` afresh, as once it's set up or approved. */
+  const connect = (m: Machine) => {
+    gate(m.id, undefined);
+    fleet.remove(m.id);
+    fleet.add(m);
+  };
+
+  function setUp(id: string) {
+    const m = setup.machines.find((x) => x.id === id);
+    if (!accounts || !m?.account) return;
+    const { hostId, routes } = m.account;
+    // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
+    if (accounts.trusts(hostId)) return connect(m);
+    setUpComputer(accounts, { hostId, name: m.name, routes }, {
+      onWaiting: (code) => gate(id, { kind: "waiting", code }),
+      done: () => connect(m),
+      failed: () => gate(id, { kind: "setup" }),
+    });
+  }
 
   const value: FleetValue = {
     computers: list,
     defaultId: defaultOf(setup.machines, setup.defaultId),
     setDefault: (id) => update((s) => ({ ...s, defaultId: id })),
-    // A computer added with none set as the default becomes it.
-    add: (found) =>
+    // A computer added with none set as the default becomes it. Pairing again replaces it.
+    add: (paired) =>
       update((s) => {
-        const machines = merge(s.machines, found);
+        const machines = [...s.machines.filter((m) => m.id !== paired.id), paired];
         return { ...s, machines, defaultId: defaultOf(machines, s.defaultId) };
       }),
     remove: (id) => {
@@ -215,8 +368,26 @@ export function FleetProvider({
         ...s,
         machines: s.machines.filter((m) => m.id !== id),
         defaultId: s.defaultId === id ? undefined : s.defaultId,
+        // Discovery would bring an account's computer straight back.
+        hidden: id.startsWith("account:") ? [...(s.hidden ?? []), id] : s.hidden,
       }));
       if (setup.machines.find((m) => m.id === id)?.paired) void forget();
+    },
+    discover: () => void discover(),
+    removed: listed.filter((l) => setup.hidden?.includes(accountId(l.hostId))),
+    restore: (hostId) =>
+      update((s) => {
+        const hidden = (s.hidden ?? []).filter((id) => id !== accountId(hostId));
+        const machines = withListed(s.machines, listed, hidden);
+        return { ...s, hidden, machines, defaultId: defaultOf(machines, s.defaultId) };
+      }),
+    setUp,
+    async revoke(id, session) {
+      const answer = await fleet.hosts.get(id)?.request("remote/revoke", { id: session });
+      if (!answer) return { error: "That computer isn't connected." };
+      if ("error" in answer) return { error: answer.error.message };
+      void share();
+      return answer.result as RemoteSessionsResult;
     },
     drafts,
   };

@@ -147,6 +147,9 @@ pub struct Config {
     pub keys: Option<Arc<dyn KeyStore>>,
     /// Parallax Relay's URL (PLX-652). `PLXD_RELAY_URL` when set, else relay.parallax.codes.
     pub relay_url: String,
+    /// The Clerk instance whose tokens account sign-in takes (0091). From `PLXD_CLERK_*` when set,
+    /// else the desktop app's.
+    pub clerk: crate::clerk::Config,
     /// Whether `project/update` takes `computer` and plxd advertises `projectComputer` (0057).
     /// Off until a Project's child can start, be followed, and land on another computer; tests
     /// turn it on.
@@ -199,6 +202,7 @@ impl Config {
                 }),
             keys: None,
             relay_url: crate::relay::url(),
+            clerk: crate::clerk::Config::from_env(),
             project_computer: false,
             max_bundle_bytes: crate::methods::bundle::MAX_BYTES,
             you_sync_interval: Duration::from_secs(60),
@@ -327,6 +331,8 @@ pub(crate) struct Daemon {
     pub remote: remote::Remote,
     /// The connection to Parallax Relay (PLX-652).
     pub relay: crate::relay::Relay,
+    /// Checks the account tokens of clients that sign in (0091).
+    pub clerk: crate::clerk::Clerk,
     /// Agents' browser tabs (PLX-639).
     pub previews: crate::preview::Previews,
     /// The Device panel's simulators, emulators, and device hub (PLX-886).
@@ -509,6 +515,7 @@ impl Server {
                 config.remote_code_lifetime,
             ),
             relay: crate::relay::Relay::new(config.relay_url.clone()),
+            clerk: crate::clerk::Clerk::new(config.clerk.clone()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
             merged: tokio::sync::Notify::new(),
@@ -615,6 +622,7 @@ impl Server {
         }
         let cut = agents::recover(&daemon).await;
         crate::setup_scripts::recover(&daemon).await;
+        remote::access::restore(&daemon).await;
         let stop = &shutdown.graceful;
         // Before what waits is sent: a turn waits for its thread's checkpoint captures (0062).
         let mut background = vec![tokio::spawn(crate::orchestrator::work(
@@ -648,6 +656,7 @@ impl Server {
             tokio::spawn(crate::schedules::run(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(crate::pr_watch::run(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(crate::relay::run(Arc::clone(&daemon), stop.clone())),
+            tokio::spawn(remote::access::persist(Arc::clone(&daemon), stop.clone())),
             tokio::spawn(handover),
             tokio::spawn(crate::context::you_sync::run(
                 Arc::clone(&daemon),
@@ -904,6 +913,7 @@ impl Daemon {
             setup_holds: crate::setup_scripts::Holds::default(),
             remote: remote::Remote::new(crate::remote::PORT, None, None, remote::CODE_LIFETIME),
             relay: crate::relay::Relay::new(crate::relay::DEFAULT_URL.to_owned()),
+            clerk: crate::clerk::Clerk::new(crate::clerk::Config::from_env()),
             schedules: crate::schedules::Schedules::default(),
             pr_watches: crate::pr_watch::Watches::default(),
             merged: tokio::sync::Notify::new(),

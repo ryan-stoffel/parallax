@@ -19,6 +19,11 @@ class_name = "HostRelay"
 name = "USERS"
 class_name = "UserAccount"
 
+# One per client stream, so one stream's bytes don't queue behind another's (0091).
+[[durable_objects.bindings]]
+name = "STREAMS"
+class_name = "StreamRelay"
+
 # Anonymous requests per address and host, before they reach a host's object.
 [[ratelimits]]
 name = "ANON"
@@ -28,6 +33,10 @@ simple = { limit = 120, period = 60 }
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["HostRelay", "UserAccount"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["StreamRelay"]
 
 # Clerk's development instance (0067), for `wrangler dev`. Its issuer and JWKS are public.
 [env.dev]
@@ -47,6 +56,10 @@ class_name = "HostRelay"
 [[env.dev.durable_objects.bindings]]
 name = "USERS"
 class_name = "UserAccount"
+
+[[env.dev.durable_objects.bindings]]
+name = "STREAMS"
+class_name = "StreamRelay"
 
 [[env.dev.ratelimits]]
 name = "ANON"

@@ -1,0 +1,147 @@
+[
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "relay/sign",
+    "params": { "tokenHash": "u2GjF0z9bQ3oQk2l8n3c1X0hUo0T3n4N0Xyq0m5bJ0s", "userId": "user_2abc" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+      "x": "f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU",
+      "y": "x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0",
+      "name": "studio",
+      "signature": "<es256 signature>"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "relay/id",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 2,
+    "result": {
+      "hostId": "tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE",
+      "routes": ["192.168.1.5", "100.64.0.7", "relay:tX7O-_vCPIBZoydFYwEZwysPFXJgEwKcg_pLNX-XhFE"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "access/setupCode",
+    "params": {}
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "result": { "code": "482915", "expiresAt": "2026-10-30T16:10:00Z" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "access/get",
+    "params": { "after": 3 }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 4,
+    "result": {
+      "version": 4,
+      "account": "user_2abc",
+      "approvedClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"],
+      "removedClients": [],
+      "approvedHosts": [],
+      "setupApproved": "MacBook Air"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "access/merge",
+    "params": {
+      "approvedClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"],
+      "removedClients": [],
+      "approvedHosts": ["kZ3Ua8Qe0pX5y6mN9bR2tLwVc4jH7sD1fG8oI3uE5nA"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 5,
+    "result": {
+      "version": 5,
+      "account": "user_2abc",
+      "approvedClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"],
+      "removedClients": [],
+      "approvedHosts": ["kZ3Ua8Qe0pX5y6mN9bR2tLwVc4jH7sD1fG8oI3uE5nA"],
+      "pending": {
+        "id": "5bD1qJ2nV8rT0wX3yZ6aCg",
+        "name": "iPhone",
+        "thumbprint": "Qm9vZ3JhcGhpY2FsbHktZXF1YWwtdGh1bWJwcmludA0",
+        "code": "071344",
+        "expiresAt": "2026-10-30T16:12:00Z"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "method": "access/approve",
+    "params": { "request": "5bD1qJ2nV8rT0wX3yZ6aCg" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 6,
+    "result": {
+      "version": 7,
+      "account": "user_2abc",
+      "approvedClients": [
+        "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
+        "Qm9vZ3JhcGhpY2FsbHktZXF1YWwtdGh1bWJwcmludA0"
+      ],
+      "removedClients": [],
+      "approvedHosts": ["kZ3Ua8Qe0pX5y6mN9bR2tLwVc4jH7sD1fG8oI3uE5nA"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "method": "access/deny",
+    "params": { "request": "8kP0sW4vB1nM7cX2zQ9eRt" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 7,
+    "result": {
+      "version": 9,
+      "account": "user_2abc",
+      "approvedClients": [
+        "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs",
+        "Qm9vZ3JhcGhpY2FsbHktZXF1YWwtdGh1bWJwcmludA0"
+      ],
+      "removedClients": [],
+      "approvedHosts": ["kZ3Ua8Qe0pX5y6mN9bR2tLwVc4jH7sD1fG8oI3uE5nA"]
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "method": "access/remove",
+    "params": { "thumbprint": "Qm9vZ3JhcGhpY2FsbHktZXF1YWwtdGh1bWJwcmludA0" }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 8,
+    "result": {
+      "version": 10,
+      "account": "user_2abc",
+      "approvedClients": ["NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs"],
+      "removedClients": ["Qm9vZ3JhcGhpY2FsbHktZXF1YWwtdGh1bWJwcmludA0"],
+      "approvedHosts": ["kZ3Ua8Qe0pX5y6mN9bR2tLwVc4jH7sD1fG8oI3uE5nA"]
+    }
+  }
+]

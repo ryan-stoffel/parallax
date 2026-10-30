@@ -837,7 +837,7 @@ function ConnectRows() {
   const connect = useConnect();
   const [devices, setDevices] = useState<DeviceHost[]>([]);
   useEffect(() => window.parallax.onDevices(setDevices), []);
-  if (!connect?.on)
+  if (!connect?.on && !devices.length)
     return (
       <p className="text-body text-muted-foreground">
         Parallax Connect is off. Turn it on in Settings › Connections to add your other computers.
@@ -858,8 +858,9 @@ function ConnectRows() {
               <DeviceIcon icon={d.icon} />
             </span>
             <RowText title={d.name}>
-              {d.hostName} · {osName(d.os)} · {d.ip}
-              {!d.enabled && " · Off here"}
+              {[d.hostName, d.os && osName(d.os), d.ip, !d.enabled && "Off here"]
+                .filter(Boolean)
+                .join(" · ")}
             </RowText>
           </div>
           <button

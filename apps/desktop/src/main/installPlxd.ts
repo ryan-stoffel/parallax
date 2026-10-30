@@ -12,7 +12,7 @@ const RELEASES = "https://github.com/ryan-stoffel/parallax/releases/download";
  * (packages/ssh/src/tunnel.ts): downloads with curl or wget over HTTPS only, checks the SHA256
  * against the release's `<asset>.sha256`, and proves it runs before replacing anything. Then the
  * old plxd stops, which ends its agents' runs: a host with plxd's login service (a Mac with
- * Connect on, a Linux host plx-connect set up) gets `service install --replace`, which points the
+ * Connect on, a Linux host plx set up) gets `service install --replace`, which points the
  * service at this plxd, the copy the app keeps there too (`refreshCopy`), and restarts it; any
  * other host's `plxd serve`, or one whose service can't be moved, gets SIGTERM, so the next attach
  * starts this one. Exits 3 with one line for people when it can't. `sh -s` reads it from ssh's

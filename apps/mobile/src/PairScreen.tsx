@@ -1,4 +1,4 @@
-// Pairing on the LAN (0065), for a computer without Tailscale: pick a computer showing a code on
+// Pairing on the LAN (0065), for a computer not on the account: pick a computer showing a code on
 // this network, or type its address, then the code from its Settings > Connections > Pair a device.
 import { useEffect, useState } from "react";
 import {
@@ -144,7 +144,7 @@ export function Pairing({
         </T>
       )}
       <Pressable accessibilityRole="button" onPress={onCancel} style={{ alignSelf: "center", padding: 10 }}>
-        <T style={{ fontSize: 14, color: c.accent }}>Use Tailscale instead</T>
+        <T style={{ fontSize: 14, color: c.accent }}>Cancel</T>
       </Pressable>
     </ScrollView>
   );

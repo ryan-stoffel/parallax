@@ -226,7 +226,9 @@ pub use queue::{
     QueueResult, QueueSteerParams, QueuedMessage,
 };
 pub use remote::{
-    RelayHost, RelayHostsParams, RelayHostsResult, RelayRegisterParams, RelayRemoveParams,
+    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequest, AccessRequestParams,
+    AccessSetupCodeParams, AccessSetupCodeResult, AccessState, RelayHost, RelayHostsParams,
+    RelayHostsResult, RelayIdParams, RelayIdResult, RelayRegisterParams, RelayRemoveParams,
     RelaySignParams, RelaySignResult, RelayStatus, RemotePairParams, RemotePairResult,
     RemoteRevokeParams, RemoteSession, RemoteSessionsParams, RemoteSessionsResult,
 };
