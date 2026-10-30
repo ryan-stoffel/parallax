@@ -15,6 +15,11 @@
 //! - A paired client gets a 30 s ticket at `/api/auth/websocket-ticket` with the token and a
 //!   `DPoP` proof, then opens `/ws` with it, which carries 0007's JSON-RPC, one message per frame.
 //!
+//! - An `account:` host (0091) is pinned by its relay id, the JWK thumbprint of its certificate's
+//!   key ([`Pin::HostId`]). This computer signs in to it with a Clerk token ([`sign_in`]) and one
+//!   [`device_key`] for every such host, which the host approves once ([`await_approval`]), or
+//!   pairs with its setup code ([`pair_account`]).
+//!
 //! [`dial`] tries a host's routes in order, as T3's connection driver does, and [`bridge`] joins
 //! the WebSocket to `plxd dial`'s stdio. Its credential stays in its data folder, readable only by
 //! this user.
@@ -98,6 +103,12 @@ pub fn base64url(bytes: &[u8]) -> String {
     BASE64URL_NOPAD.encode(bytes)
 }
 
+/// The bytes of base64url `text`, without padding, if it is that.
+#[must_use]
+pub fn base64url_decode(text: &str) -> Option<Vec<u8>> {
+    BASE64URL_NOPAD.decode(text.as_bytes()).ok()
+}
+
 /// `bytes` in lowercase hex.
 #[must_use]
 pub fn hex(bytes: &[u8]) -> String {
@@ -145,6 +156,100 @@ pub fn new_code() -> String {
         .iter()
         .map(|b| char::from(CODE_ALPHABET[usize::from(b % 32)]))
         .collect()
+}
+
+/// How many digits a new computer's setup code and a new device's approval code have (0091).
+pub const DIGITS: usize = 6;
+
+/// `DIGITS` decimal digits from the first 8 bytes of `bytes`. A u64 modulo a million is uniform
+/// to within one part in 10^13.
+fn digits(bytes: &[u8]) -> String {
+    let mut first = [0; 8];
+    first.copy_from_slice(&bytes[..8]);
+    format!("{:06}", u64::from_be_bytes(first) % 1_000_000)
+}
+
+/// A new computer's setup code (0091): [`DIGITS`] random digits, which a signed-in client types to
+/// run SPAKE2 pairing with it.
+///
+/// # Panics
+///
+/// If the OS has no random numbers.
+#[must_use]
+pub fn new_setup_code() -> String {
+    let mut bytes = [0_u8; 8];
+    getrandom::fill(&mut bytes).expect("the OS's random numbers");
+    digits(&bytes)
+}
+
+/// How many random bytes each side of a new device's request contributes to its code.
+pub const APPROVAL_VALUE_BYTES: usize = 32;
+
+/// A new device's request starts with the host committing to its random value: this hash of it,
+/// in base64url. The host reveals the value only after the client sent its own, so neither side
+/// picks its value after seeing the other's (0091).
+#[must_use]
+pub fn approval_commitment(host_value: &[u8]) -> String {
+    base64url(&sha256(
+        &[b"parallax-approval-commit\0".as_slice(), host_value].concat(),
+    ))
+}
+
+/// The 6 digits both ends of a new device's request show: a hash of both random values, the host's
+/// relay id, and the client's `DPoP` key thumbprint. The values have a fixed length, so the parts
+/// can't run into each other.
+#[must_use]
+pub fn approval_code(
+    host_value: &[u8],
+    client_value: &[u8],
+    host_id: &str,
+    thumbprint: &str,
+) -> String {
+    let hash = sha256(
+        &[
+            b"parallax-approval-code\0".as_slice(),
+            host_value,
+            client_value,
+            host_id.as_bytes(),
+            b"\0",
+            thumbprint.as_bytes(),
+        ]
+        .concat(),
+    );
+    digits(&hash)
+}
+
+/// Whether `text` looks like a host's relay id: a JWK thumbprint, 43 characters of base64url.
+#[must_use]
+pub fn is_host_id(text: &str) -> bool {
+    text.len() == 43
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// What a P-256 public key's DER `SubjectPublicKeyInfo` starts with, before its point's x and y.
+const P256_SPKI_PREFIX: &[u8] = &[
+    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
+    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04,
+];
+
+/// The JWK thumbprint of a certificate's P-256 key, which is a host's relay id (0068), or `None`
+/// for a certificate that isn't one or doesn't parse. The key comes from webpki's parse, the same
+/// one TLS checks the handshake's signature with, so it is the key the host proves it holds.
+#[must_use]
+pub fn key_id(certificate: &[u8]) -> Option<String> {
+    let der = CertificateDer::from(certificate);
+    let parsed = webpki::EndEntityCert::try_from(&der).ok()?;
+    let spki = parsed.subject_public_key_info();
+    let point = spki.as_ref().strip_prefix(P256_SPKI_PREFIX)?;
+    if point.len() != 64 {
+        return None;
+    }
+    Some(thumbprint(
+        &base64url(&point[..32]),
+        &base64url(&point[32..]),
+    ))
 }
 
 /// A code as typed, without spaces or dashes, in capitals: `7kq-4m2` is `7KQ4M2`.
@@ -316,6 +421,15 @@ impl HostKey {
         DpopKey::from_pkcs8(self.key.secret_pkcs8_der())
     }
 
+    /// This host's relay id: its key's JWK thumbprint, which an `account:` client pins (0091).
+    /// Empty if it isn't a P-256 key.
+    #[must_use]
+    pub fn host_id(&self) -> String {
+        self.signer()
+            .map(|key| key.thumbprint())
+            .unwrap_or_default()
+    }
+
     /// The TLS server's configuration: this certificate, TLS 1.3 (the only version built), no
     /// client certificates.
     ///
@@ -336,11 +450,33 @@ impl HostKey {
     }
 }
 
-/// Accepts only the certificate with one fingerprint, the one the client paired with. Without
-/// one, while pairing, it accepts any and keeps its fingerprint in `seen`, for SPAKE2 to vouch for.
+/// Which certificate a connection accepts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Pin {
+    /// Any, while pairing with a code, for SPAKE2 to vouch for.
+    Any,
+    /// Only the one with this SHA-256 fingerprint, which the client paired with (0065).
+    Fingerprint(String),
+    /// Only one whose key's JWK thumbprint is this relay id: an `account:` host (0091). The relay
+    /// can't present another key for an id, so it can't stand in for the host.
+    HostId(String),
+}
+
+impl Pin {
+    fn accepts(&self, certificate: &[u8], presented: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Fingerprint(pinned) => pinned == presented,
+            Self::HostId(id) => key_id(certificate).is_some_and(|key| key == *id),
+        }
+    }
+}
+
+/// Accepts only the certificate its [`Pin`] names, and keeps the fingerprint of the one presented
+/// in `seen`, for SPAKE2 to vouch for while pairing.
 #[derive(Debug)]
 struct Pinned {
-    fingerprint: Option<String>,
+    pin: Pin,
     seen: Arc<Mutex<Option<String>>>,
     algorithms: WebPkiSupportedAlgorithms,
 }
@@ -355,11 +491,7 @@ impl ServerCertVerifier for Pinned {
         _: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         let presented = fingerprint(end_entity);
-        if self
-            .fingerprint
-            .as_ref()
-            .is_some_and(|pinned| *pinned != presented)
-        {
+        if !self.pin.accepts(end_entity, &presented) {
             return Err(rustls::Error::InvalidCertificate(
                 CertificateError::UnknownIssuer,
             ));
@@ -698,9 +830,41 @@ struct Credential {
     key: String,
 }
 
-/// Where a client keeps its credential for the host with `fingerprint`.
+/// Where a client keeps its credential for the host with `fingerprint`, or with relay id
+/// `fingerprint` for an `account:` host.
 fn credential_path(data_dir: &Path, fingerprint: &str) -> PathBuf {
     data_dir.join("remote-hosts").join(fingerprint)
+}
+
+/// Saves `token` for the host `name`d so, with `key`, replacing any earlier credential.
+fn save_credential(data_dir: &Path, name: &str, token: &str, key: &DpopKey) -> Result<(), Error> {
+    let credential = Credential {
+        token: token.to_owned(),
+        key: base64url(&key.pkcs8),
+    };
+    let file = credential_path(data_dir, name);
+    let _ = fs::remove_file(&file);
+    create_once(&file, &serde_json::to_vec(&credential).expect("plain JSON"))?;
+    Ok(())
+}
+
+/// This computer's own `DPoP` key for `account:` hosts (0091), made the first time. One key for
+/// every host, since its thumbprint is what the user's hosts approve and copy between them.
+///
+/// # Errors
+///
+/// When the file can't be read or written, or is damaged.
+pub fn device_key(data_dir: &Path) -> io::Result<DpopKey> {
+    let path = data_dir.join("remote-device-key");
+    let pkcs8 = match fs::read(&path) {
+        Ok(pkcs8) => pkcs8,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            create_once(&path, &DpopKey::generate().pkcs8)?
+        }
+        Err(error) => return Err(error),
+    };
+    DpopKey::from_pkcs8(&pkcs8)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "the device key file is damaged"))
 }
 
 /// A TLS connection to `route` that presents the certificate with fingerprint `pin`, or any
@@ -709,18 +873,32 @@ fn credential_path(data_dir: &Path, fingerprint: &str) -> PathBuf {
 /// # Errors
 ///
 /// [`Error::WrongHost`] when the certificate isn't the pinned one, or the network's error.
-///
-/// # Panics
-///
-/// Never: `parallax` is a valid server name.
 pub async fn open(
     route: &str,
     pin: Option<&str>,
 ) -> Result<(TlsStream<crate::relay::Stream>, String), Error> {
+    let pin = pin.map_or(Pin::Any, |fp| Pin::Fingerprint(fp.to_owned()));
+    open_pinned(route, &pin).await
+}
+
+/// A TLS connection to `route` that presents the certificate `pin` accepts, and the fingerprint
+/// it presented.
+///
+/// # Errors
+///
+/// [`Error::WrongHost`] when `pin` refuses the certificate, or the network's error.
+///
+/// # Panics
+///
+/// Never: `parallax` is a valid server name.
+pub async fn open_pinned(
+    route: &str,
+    pin: &Pin,
+) -> Result<(TlsStream<crate::relay::Stream>, String), Error> {
     let provider = provider();
     let seen = Arc::new(Mutex::new(None));
     let verifier = Pinned {
-        fingerprint: pin.map(str::to_owned),
+        pin: pin.clone(),
         seen: Arc::clone(&seen),
         algorithms: provider.signature_verification_algorithms,
     };
@@ -763,13 +941,13 @@ pub async fn open(
 /// One HTTPS request to `route`, on a connection of its own: its status and body.
 async fn request(
     route: &str,
-    pin: Option<&str>,
+    pin: &Pin,
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
     body: Option<&serde_json::Value>,
 ) -> Result<(u16, Vec<u8>), Error> {
-    let (mut tls, _) = open(route, pin).await?;
+    let (mut tls, _) = open_pinned(route, pin).await?;
     let body = body.map(ToString::to_string).unwrap_or_default();
     let mut head = format!(
         "{method} {path} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Length: {}\r\n",
@@ -829,9 +1007,40 @@ pub async fn pair(
     name: &str,
     data_dir: &Path,
 ) -> Result<Paired, Error> {
+    pair_routes(routes, code, name, data_dir, None).await
+}
+
+/// Pairs with the `account:` host `host_id` with the setup code it shows (0091), as [`pair`] does,
+/// except that only a certificate with that key answers, the host approves this computer's
+/// [`device_key`], and the session is saved for [`dial_account`].
+///
+/// # Errors
+///
+/// As [`pair`]'s, and [`Error::WrongHost`] when another key answers.
+pub async fn pair_account(
+    routes: &[String],
+    host_id: &str,
+    code: &str,
+    name: &str,
+    data_dir: &Path,
+) -> Result<Paired, Error> {
+    if !is_host_id(host_id) {
+        return Err(Error::Protocol(format!("{host_id} isn't a relay id")));
+    }
+    pair_routes(routes, code, name, data_dir, Some(host_id)).await
+}
+
+async fn pair_routes(
+    routes: &[String],
+    code: &str,
+    name: &str,
+    data_dir: &Path,
+    host_id: Option<&str>,
+) -> Result<Paired, Error> {
     let mut last = Error::Protocol("no routes".to_owned());
     for route in routes {
-        let attempt = tokio::time::timeout(REQUEST_TIMEOUT, pair_at(route, code, name, data_dir));
+        let pairing = pair_at(route, code, name, data_dir, host_id);
+        let attempt = tokio::time::timeout(REQUEST_TIMEOUT, pairing);
         match attempt.await {
             Ok(Ok(mut paired)) => {
                 let mut all = vec![route.clone()];
@@ -875,7 +1084,8 @@ async fn pairing_step(
     headers: &[(&str, &str)],
     body: &serde_json::Value,
 ) -> Result<serde_json::Value, Error> {
-    let (status, answer) = request(route, Some(fp), "POST", path, headers, Some(body)).await?;
+    let pin = Pin::Fingerprint(fp.to_owned());
+    let (status, answer) = request(route, &pin, "POST", path, headers, Some(body)).await?;
     answered(path, status, &answer)
 }
 
@@ -888,9 +1098,17 @@ fn answered(path: &str, status: u16, body: &[u8]) -> Result<serde_json::Value, E
     }
 }
 
-async fn pair_at(route: &str, code: &str, name: &str, data_dir: &Path) -> Result<Paired, Error> {
-    // The first connection learns which certificate answers; the later ones must present it.
-    let (_, fp) = open(route, None).await?;
+async fn pair_at(
+    route: &str,
+    code: &str,
+    name: &str,
+    data_dir: &Path,
+    host_id: Option<&str>,
+) -> Result<Paired, Error> {
+    // The first connection learns which certificate answers, of those an `account:` host's id
+    // allows; the later ones must present it.
+    let pin = host_id.map_or(Pin::Any, |id| Pin::HostId(id.to_owned()));
+    let (_, fp) = open_pinned(route, &pin).await?;
     let (state, first) = pake_client(code, &fp);
     let start = json!({ "pake": base64url(&first) });
     let started = pairing_step(route, &fp, "/api/pair/start", &[], &start).await?;
@@ -898,7 +1116,11 @@ async fn pair_at(route: &str, code: &str, name: &str, data_dir: &Path) -> Result
         .finish(&field(&started, "pake")?)
         .map_err(|e| Error::Protocol(format!("a bad SPAKE2 answer: {e:?}")))?;
 
-    let key = DpopKey::generate();
+    // An `account:` host approves this computer's own key, which its other hosts then share.
+    let key = match host_id {
+        Some(_) => device_key(data_dir)?,
+        None => DpopKey::generate(),
+    };
     let thumbprint = key.thumbprint();
     let path = "/api/pair/finish";
     let proof = key.proof("POST", &url(route, path), None);
@@ -921,25 +1143,247 @@ async fn pair_at(route: &str, code: &str, name: &str, data_dir: &Path) -> Result
     let Some(token) = finished["accessToken"].as_str() else {
         return Err(Error::Protocol(format!("{path} answered without a token")));
     };
-    let credential = Credential {
-        token: token.to_owned(),
-        key: base64url(&key.pkcs8),
-    };
-    let file = credential_path(data_dir, &fp);
     // A new pairing replaces the old credential.
-    let _ = fs::remove_file(&file);
-    create_once(&file, &serde_json::to_vec(&credential).expect("plain JSON"))?;
-    let routes = finished["routes"]
+    save_credential(data_dir, host_id.unwrap_or(&fp), token, &key)?;
+    Ok(Paired {
+        fingerprint: fp,
+        name: finished["name"].as_str().unwrap_or_default().to_owned(),
+        routes: listed_routes(&finished),
+    })
+}
+
+/// The routes an answer lists.
+fn listed_routes(body: &serde_json::Value) -> Vec<String> {
+    body["routes"]
         .as_array()
         .into_iter()
         .flatten()
         .filter_map(|r| r.as_str().map(str::to_owned))
-        .collect();
-    Ok(Paired {
-        fingerprint: fp,
-        name: finished["name"].as_str().unwrap_or_default().to_owned(),
+        .collect()
+}
+
+/// Where an account sign-in stands (0091).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum SignIn {
+    /// This computer's key is approved and its session saved, so [`dial_account`] reaches the host.
+    Approved {
+        /// The host's name.
+        name: String,
+        /// Where the host can be reached, best first: the route that answered, then the rest.
+        routes: Vec<String>,
+    },
+    /// A request waits for one of the user's approved devices, which shows the same `code`.
+    Pending {
+        /// The request's id, for [`await_approval`].
+        request: String,
+        /// Its 6 digits.
+        code: String,
+    },
+}
+
+/// How long the host holds a call to `/api/auth/approval` with `wait` before it answers that the
+/// request still waits.
+pub const APPROVAL_WAIT: Duration = Duration::from_secs(25);
+
+/// How long a new device's request waits for approval before it lapses (0091).
+pub const REQUEST_LIFETIME: Duration = Duration::from_mins(10);
+
+/// The random value a client sent for a request, kept while the request can wait, so a reconnect
+/// sends the same one and a host that then answers with another commitment fails (0091).
+#[derive(Serialize, Deserialize)]
+struct Committed {
+    request: String,
+    commitment: String,
+    /// The value, in base64url.
+    value: String,
+    /// When the request lapses, in seconds since the epoch.
+    until: i64,
+}
+
+fn committed_path(data_dir: &Path, host_id: &str) -> PathBuf {
+    credential_path(data_dir, &format!("{host_id}.request"))
+}
+
+/// This client's value for `request` at `host_id`: the one it kept, unless that one is for an
+/// earlier request or lapsed, else a new one, kept now.
+fn client_value(
+    data_dir: &Path,
+    host_id: &str,
+    request: &str,
+    commitment: &str,
+) -> Result<Vec<u8>, Error> {
+    let path = committed_path(data_dir, host_id);
+    let kept = fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Committed>(&bytes).ok())
+        .filter(|kept| kept.request == request && kept.until > now_seconds());
+    if let Some(kept) = kept {
+        if kept.commitment != commitment {
+            return Err(Error::WrongHost);
+        }
+        return BASE64URL_NOPAD
+            .decode(kept.value.as_bytes())
+            .map_err(|_| Error::Protocol("the kept request is damaged".to_owned()));
+    }
+    let mut value = vec![0; APPROVAL_VALUE_BYTES];
+    getrandom::fill(&mut value).map_err(|e| Error::Protocol(e.to_string()))?;
+    let committed = Committed {
+        request: request.to_owned(),
+        commitment: commitment.to_owned(),
+        value: base64url(&value),
+        until: now_seconds() + i64::try_from(REQUEST_LIFETIME.as_secs()).unwrap_or(i64::MAX),
+    };
+    let _ = fs::remove_file(&path);
+    create_once(&path, &serde_json::to_vec(&committed).expect("plain JSON"))?;
+    Ok(value)
+}
+
+/// Signs in to the `account:` host `host_id` at the first of `routes` that answers, with a fresh
+/// Clerk `token` (0091), as `name`. An approved [`device_key`] gets a session, saved for
+/// [`dial_account`]. Any other starts a request, or finds the one waiting, and both ends then show
+/// its code. Answers with the route that answered.
+///
+/// # Errors
+///
+/// [`Error::Refused`] when the host refuses the token or this computer's key, or its request
+/// limit is reached, [`Error::WrongHost`] when another key answers or the host's value doesn't
+/// match its commitment, and the last route's error when none answered.
+pub async fn sign_in(
+    routes: &[String],
+    host_id: &str,
+    token: &str,
+    name: &str,
+    data_dir: &Path,
+) -> Result<(String, SignIn), Error> {
+    if !is_host_id(host_id) {
+        return Err(Error::Protocol(format!("{host_id} isn't a relay id")));
+    }
+    let key = device_key(data_dir)?;
+    let mut last = Error::Protocol("no routes".to_owned());
+    for route in routes {
+        let attempt = sign_in_at(route, host_id, token, name, data_dir, &key);
+        match tokio::time::timeout(REQUEST_TIMEOUT, attempt).await {
+            Ok(Ok(signed_in)) => return Ok((route.clone(), signed_in)),
+            Ok(Err(error @ (Error::Refused | Error::WrongHost))) => return Err(error),
+            Ok(Err(error)) => last = error,
+            Err(_) => last = timed_out(route),
+        }
+    }
+    Err(last)
+}
+
+async fn sign_in_at(
+    route: &str,
+    host_id: &str,
+    token: &str,
+    name: &str,
+    data_dir: &Path,
+    key: &DpopKey,
+) -> Result<SignIn, Error> {
+    let pin = Pin::HostId(host_id.to_owned());
+    let path = "/api/auth/account";
+    let proof = key.proof("POST", &url(route, path), Some(token));
+    let body = json!({ "token": token, "clientLabel": name });
+    let headers = [("DPoP", proof.as_str())];
+    let (status, answer) = request(route, &pin, "POST", path, &headers, Some(&body)).await?;
+    let answer: serde_json::Value = match status {
+        200 => return approved(route, host_id, key, data_dir, &json(&answer)?),
+        202 => json(&answer)?,
+        401 | 403 | 429 => return Err(Error::Refused),
+        _ => return Err(Error::Protocol(format!("{path} answered {status}"))),
+    };
+    let (Some(request_id), Some(commitment)) =
+        (answer["request"].as_str(), answer["commitment"].as_str())
+    else {
+        return Err(Error::Protocol(format!(
+            "{path} answered without a request"
+        )));
+    };
+    let value = client_value(data_dir, host_id, request_id, commitment)?;
+    let step = json!({ "request": request_id, "value": base64url(&value) });
+    let (status, answer) = approval_step(route, &pin, key, &step).await?;
+    if status == 200 {
+        return approved(route, host_id, key, data_dir, &answer);
+    }
+    // Only now does the host show its value, which must be the one it committed to.
+    let host_value = field(&answer, "value")?;
+    if approval_commitment(&host_value) != commitment {
+        return Err(Error::WrongHost);
+    }
+    Ok(SignIn::Pending {
+        request: request_id.to_owned(),
+        code: approval_code(&host_value, &value, host_id, &key.thumbprint()),
+    })
+}
+
+/// One call to `/api/auth/approval` with `body`: 200 with a session, or 202 while it waits.
+async fn approval_step(
+    route: &str,
+    pin: &Pin,
+    key: &DpopKey,
+    body: &serde_json::Value,
+) -> Result<(u16, serde_json::Value), Error> {
+    let path = "/api/auth/approval";
+    let proof = key.proof("POST", &url(route, path), None);
+    let headers = [("DPoP", proof.as_str())];
+    let (status, answer) = request(route, pin, "POST", path, &headers, Some(body)).await?;
+    match status {
+        200 | 202 => Ok((status, json(&answer)?)),
+        401 | 403 => Err(Error::Refused),
+        _ => Err(Error::Protocol(format!("{path} answered {status}"))),
+    }
+}
+
+/// Saves the session in a sign-in's answer and forgets the request's value.
+fn approved(
+    route: &str,
+    host_id: &str,
+    key: &DpopKey,
+    data_dir: &Path,
+    body: &serde_json::Value,
+) -> Result<SignIn, Error> {
+    let Some(token) = body["accessToken"].as_str() else {
+        return Err(Error::Protocol("a session without a token".to_owned()));
+    };
+    save_credential(data_dir, host_id, token, key)?;
+    let _ = fs::remove_file(committed_path(data_dir, host_id));
+    let mut routes = vec![route.to_owned()];
+    routes.extend(
+        listed_routes(body)
+            .into_iter()
+            .filter(|r| r != route && is_route(r)),
+    );
+    Ok(SignIn::Approved {
+        name: body["name"].as_str().unwrap_or_default().to_owned(),
         routes,
     })
+}
+
+/// Waits at `route` until one of the user's devices approves `request` at the `account:` host
+/// `host_id`, then saves the session, as [`sign_in`] does.
+///
+/// # Errors
+///
+/// [`Error::Refused`] when the request is denied or lapses, or the network's error.
+pub async fn await_approval(
+    route: &str,
+    host_id: &str,
+    request: &str,
+    data_dir: &Path,
+) -> Result<SignIn, Error> {
+    let key = device_key(data_dir)?;
+    let pin = Pin::HostId(host_id.to_owned());
+    let body = json!({ "request": request, "wait": true });
+    loop {
+        let step = approval_step(route, &pin, &key, &body);
+        let (status, answer) = tokio::time::timeout(APPROVAL_WAIT + REQUEST_TIMEOUT, step)
+            .await
+            .map_err(|_| timed_out(route))??;
+        if status == 200 {
+            return approved(route, host_id, &key, data_dir, &answer);
+        }
+    }
 }
 
 /// A host found over mDNS: its name and where it listens.
@@ -1011,7 +1455,36 @@ pub async fn dial(
     fingerprint: &str,
     data_dir: &Path,
 ) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
-    let credential: Credential = match fs::read(credential_path(data_dir, fingerprint)) {
+    let pin = Pin::Fingerprint(fingerprint.to_owned());
+    dial_pinned(routes, &pin, fingerprint, data_dir).await
+}
+
+/// Opens the `account:` host `host_id`'s `/ws` as [`dial`] does, accepting only a certificate
+/// whose key's JWK thumbprint is `host_id` (0091), with the session [`sign_in`] or
+/// [`pair_account`] saved.
+///
+/// # Errors
+///
+/// As [`dial`]'s.
+pub async fn dial_account(
+    routes: &[String],
+    host_id: &str,
+    data_dir: &Path,
+) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+    if !is_host_id(host_id) {
+        return Err(Error::Protocol(format!("{host_id} isn't a relay id")));
+    }
+    let pin = Pin::HostId(host_id.to_owned());
+    dial_pinned(routes, &pin, host_id, data_dir).await
+}
+
+async fn dial_pinned(
+    routes: &[String],
+    pin: &Pin,
+    saved_as: &str,
+    data_dir: &Path,
+) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
+    let credential: Credential = match fs::read(credential_path(data_dir, saved_as)) {
         Ok(bytes) => json(&bytes)?,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(Error::Refused),
         Err(error) => return Err(error.into()),
@@ -1023,7 +1496,7 @@ pub async fn dial(
         .ok_or_else(|| Error::Protocol("the saved DPoP key is damaged".to_owned()))?;
     let mut last = Error::Protocol("no routes".to_owned());
     for route in routes {
-        let attempt = dial_at(route, fingerprint, &credential.token, &key);
+        let attempt = dial_at(route, pin, &credential.token, &key);
         match tokio::time::timeout(REQUEST_TIMEOUT, attempt).await {
             Ok(Ok(socket)) => return Ok(socket),
             Ok(Err(Error::Refused)) => return Err(Error::Refused),
@@ -1036,7 +1509,7 @@ pub async fn dial(
 
 async fn dial_at(
     route: &str,
-    fingerprint: &str,
+    pin: &Pin,
     token: &str,
     key: &DpopKey,
 ) -> Result<WebSocketStream<TlsStream<crate::relay::Stream>>, Error> {
@@ -1047,12 +1520,12 @@ async fn dial_at(
         ("Authorization", authorization.as_str()),
         ("DPoP", proof.as_str()),
     ];
-    let (status, body) = request(route, Some(fingerprint), "POST", path, &headers, None).await?;
+    let (status, body) = request(route, pin, "POST", path, &headers, None).await?;
     let ticket = answered(path, status, &body)?;
     let Some(ticket) = ticket["ticket"].as_str() else {
         return Err(Error::Protocol(format!("{path} answered without a ticket")));
     };
-    let (tls, _) = open(route, Some(fingerprint)).await?;
+    let (tls, _) = open_pinned(route, pin).await?;
     let address = format!("wss://{}/ws?wsTicket={}", with_port(route), ticket);
     let (socket, _) =
         tokio_tungstenite::client_async_with_config(address, tls, Some(websocket_config()))

@@ -79,18 +79,38 @@ pub(crate) async fn open(
     fingerprint: &str,
     data_dir: &Path,
 ) -> Result<App, remote::Error> {
-    let socket = remote::dial(routes, fingerprint, data_dir).await?;
-    let (app, stdio) = duplex(64 * 1024);
-    let (input, output) = tokio::io::split(stdio);
-    tokio::spawn(remote::bridge(socket, input, output));
-    let (reader, writer) = tokio::io::split(app);
-    Ok(App {
-        lines: BufReader::new(reader).lines(),
-        writer,
-    })
+    Ok(App::bridged(
+        remote::dial(routes, fingerprint, data_dir).await?,
+    ))
+}
+
+/// An app's connection to the `account:` host `host_id` (0091).
+pub(crate) async fn open_account(
+    routes: &[String],
+    host_id: &str,
+    data_dir: &Path,
+) -> Result<App, remote::Error> {
+    Ok(App::bridged(
+        remote::dial_account(routes, host_id, data_dir).await?,
+    ))
 }
 
 impl App {
+    fn bridged(
+        socket: tokio_tungstenite::WebSocketStream<
+            tokio_rustls::client::TlsStream<plxd::relay::Stream>,
+        >,
+    ) -> Self {
+        let (app, stdio) = duplex(64 * 1024);
+        let (input, output) = tokio::io::split(stdio);
+        tokio::spawn(remote::bridge(socket, input, output));
+        let (reader, writer) = tokio::io::split(app);
+        App {
+            lines: BufReader::new(reader).lines(),
+            writer,
+        }
+    }
+
     pub(crate) async fn initialize(&mut self) -> Value {
         let request = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol":{"min":1,"max":1},"client":{"name":"test","version":"0"},"capabilities":{}}}"#;
         self.writer
@@ -105,7 +125,7 @@ impl App {
     }
 
     /// Whether the host closed the connection within `PATIENCE`.
-    async fn closes(&mut self) -> bool {
+    pub(crate) async fn closes(&mut self) -> bool {
         matches!(
             timeout(PATIENCE, self.lines.next_line()).await,
             Ok(Ok(None) | Err(_))

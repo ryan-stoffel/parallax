@@ -27,6 +27,10 @@ use ts_rs::TS;
 use crate::jsonrpc::CancelRequestParams;
 use crate::schedule::{PrFailureLogParams, PrFailureLogResult};
 use crate::{
+    AccessGetParams, AccessMergeParams, AccessRemoveParams, AccessRequestParams,
+    AccessSetupCodeParams, AccessSetupCodeResult, AccessState,
+};
+use crate::{
     AccountsDefaultsGetParams, AccountsDefaultsGetResult, AccountsDefaultsSetParams,
     AccountsKeysAddParams, AccountsKeysAddResult, AccountsKeysListParams, AccountsKeysListResult,
     AccountsKeysRemoveParams, AccountsKeysRemoveResult, AccountsListParams, AccountsListResult,
@@ -77,9 +81,9 @@ use crate::{
     QuestionAnswerParams, QuestionAskParams, QuestionEscalateParams, QuestionListParams,
     QuestionListResult, QuestionResult, QueueCancelParams, QueueEditParams, QueueListParams,
     QueueReorderParams, QueueResult, QueueSteerParams, RelayHostsParams, RelayHostsResult,
-    RelayRegisterParams, RelayRemoveParams, RelaySignParams, RelaySignResult, RemotePairParams,
-    RemotePairResult, RemoteRevokeParams, RemoteSessionsParams, RemoteSessionsResult,
-    RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
+    RelayIdParams, RelayIdResult, RelayRegisterParams, RelayRemoveParams, RelaySignParams,
+    RelaySignResult, RemotePairParams, RemotePairResult, RemoteRevokeParams, RemoteSessionsParams,
+    RemoteSessionsResult, RepoAddParams, RepoAddResult, RepoCloneParams, RepoCloneProgressParams,
     RepoCloneProgressResult, RepoFilesParams, RepoFilesResult, RepoGitStatusParams, RepoGrepParams,
     RepoGrepResult, RepoMatchParams, RepoMatchResult, RepoRefsParams, RepoRefsResult,
     RepoRemoteParams, RepoRemoteResult, RepoSaveScriptsParams, RepoScriptsParams,
@@ -572,6 +576,24 @@ method_table! {
         /// `relay/remove`: removes one of the user's hosts from the relay, freeing its place, and
         /// answers with the rest.
         RelayRemove = "relay/remove": RelayRemoveParams => RelayHostsResult;
+        /// `relay/id`: this host's relay id, so a client on another route, such as a `tailnet:`
+        /// connection, can match it to the account's host list (0091). Gated on the
+        /// `accountAccess` capability, like every `access/*` method.
+        RelayId = "relay/id": RelayIdParams => RelayIdResult;
+        /// `access/get`: who may sign in with this host's account, and a new device's request
+        /// while it waits (0091). With `after`, it answers once that changes.
+        AccessGet = "access/get": AccessGetParams => AccessState;
+        /// `access/merge`: merges another host's approved and removed lists into this one's.
+        AccessMerge = "access/merge": AccessMergeParams => AccessState;
+        /// `access/approve`: approves the waiting request's key, once it shows a code.
+        AccessApprove = "access/approve": AccessRequestParams => AccessState;
+        /// `access/deny`: drops the waiting request, so a new one can start.
+        AccessDeny = "access/deny": AccessRequestParams => AccessState;
+        /// `access/remove`: removes a client's key for good and ends its sessions.
+        AccessRemove = "access/remove": AccessRemoveParams => AccessState;
+        /// `access/setupCode`: a new code for a signed-in client to type, which replaces any
+        /// pairing code waiting.
+        AccessSetupCode = "access/setupCode": AccessSetupCodeParams => AccessSetupCodeResult;
         /// `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
         /// read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
         InboxList = "inbox/list": InboxListParams => InboxListResult;

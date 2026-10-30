@@ -46,7 +46,10 @@ async fn relay_on(client: &mut Client) -> bool {
 async fn sign(client: &mut Client, token: &str) -> parallax_protocol::RelaySignResult {
     let hash = remote::base64url(&remote::sha256(token.as_bytes()));
     client
-        .call::<RelaySign>(RelaySignParams { token_hash: hash })
+        .call::<RelaySign>(RelaySignParams {
+            token_hash: hash,
+            user_id: None,
+        })
         .await
         .unwrap()
 }

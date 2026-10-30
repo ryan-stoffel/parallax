@@ -1,6 +1,6 @@
 use std::io::{self, Write as _};
 use std::net::{IpAddr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -131,6 +131,17 @@ struct DialArgs {
     /// Reach a computer paired over HTTPS, whose certificate fingerprint this is (PLX-641)
     #[arg(long, value_name = "FINGERPRINT", conflicts_with_all = ["pair", "discover"])]
     remote: Option<String>,
+
+    /// Reach a computer of this account, whose relay id this is, over HTTPS to a certificate whose
+    /// key has that JWK thumbprint (0091). With `--pair`, the code read is its setup code
+    #[arg(long, value_name = "HOST_ID", conflicts_with_all = ["remote", "discover"])]
+    account: Option<String>,
+
+    /// With `--account`, sign in with the Clerk token on the first line of stdin, print where the
+    /// sign-in stands as JSON, and while a request waits for approval, print it once approved, and
+    /// exit
+    #[arg(long, requires = "account", conflicts_with = "pair")]
+    sign_in: bool,
 
     /// Pair with the computer at the first ADDR that answers, with the code it shows, read from
     /// the first line of stdin so no other user sees it; print its fingerprint, name, and routes
@@ -474,7 +485,7 @@ fn dial(args: &DialArgs) -> ! {
         report(&format!("could not start the runtime: {error}"));
         std::process::exit(1)
     });
-    if args.remote.is_some() || args.pair || args.discover {
+    if args.remote.is_some() || args.account.is_some() || args.pair || args.discover {
         std::process::exit(runtime.block_on(dial_remote(args, &report)));
     }
     let parsed = match args.addresses.as_slice() {
@@ -512,8 +523,8 @@ fn dial(args: &DialArgs) -> ! {
     std::process::exit(code)
 }
 
-/// `dial --discover`, `dial --pair`, and `dial --remote` (PLX-641). Exits 4 when no route answered, and
-/// [`remote::EXIT_REFUSED`] when the computer refused this one.
+/// `dial --discover`, `dial --pair`, and `dial --remote` (PLX-641), and `dial --account` (0091).
+/// Exits 4 when no route answered, and [`remote::EXIT_REFUSED`] when the computer refused this one.
 async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -> i32 {
     let data_dir = match DataDir::resolve(args.data_dir.as_deref()) {
         Ok(dir) => dir,
@@ -546,14 +557,34 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             }
         };
     }
+    let name = args.name.as_deref().unwrap_or_default();
+    if let (Some(host_id), true) = (&args.account, args.sign_in) {
+        return match dial_sign_in(&args.addresses, host_id, name, data_dir.root()).await {
+            Ok(()) => 0,
+            Err(Some(error)) => {
+                report(&format!("could not sign in: {error}"));
+                exit(&error)
+            }
+            Err(None) => {
+                report(&"--sign-in reads the token from stdin");
+                2
+            }
+        };
+    }
     if args.pair {
         let mut code = String::new();
         if io::stdin().read_line(&mut code).is_err() || code.trim().is_empty() {
             report(&"--pair reads the code from stdin");
             return 2;
         }
-        let name = args.name.as_deref().unwrap_or_default();
-        return match remote::pair(&args.addresses, code.trim(), name, data_dir.root()).await {
+        let paired = match &args.account {
+            Some(host_id) => {
+                remote::pair_account(&args.addresses, host_id, code.trim(), name, data_dir.root())
+                    .await
+            }
+            None => remote::pair(&args.addresses, code.trim(), name, data_dir.root()).await,
+        };
+        return match paired {
             Ok(paired) => {
                 print_json(&paired);
                 0
@@ -564,8 +595,13 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             }
         };
     }
-    let fingerprint = args.remote.as_deref().unwrap_or_default();
-    let socket = match remote::dial(&args.addresses, fingerprint, data_dir.root()).await {
+    let dialed = if let Some(host_id) = &args.account {
+        remote::dial_account(&args.addresses, host_id, data_dir.root()).await
+    } else {
+        let fingerprint = args.remote.as_deref().unwrap_or_default();
+        remote::dial(&args.addresses, fingerprint, data_dir.root()).await
+    };
+    let socket = match dialed {
         Ok(socket) => socket,
         Err(error) => {
             report(&format!("could not reach the paired computer: {error}"));
@@ -579,6 +615,28 @@ async fn dial_remote(args: &DialArgs, report: &dyn Fn(&dyn std::fmt::Display)) -
             1
         }
     }
+}
+
+/// `dial --account --sign-in` (0091): signs in to the `account:` host `host_id` with the Clerk token
+/// on stdin's first line and prints where it stands, then, while a request waits, waits for its
+/// approval and prints that. `Err(None)` when stdin has no token.
+async fn dial_sign_in(
+    routes: &[String],
+    host_id: &str,
+    name: &str,
+    data_dir: &Path,
+) -> Result<(), Option<remote::Error>> {
+    let mut token = String::new();
+    if io::stdin().read_line(&mut token).is_err() || token.trim().is_empty() {
+        return Err(None);
+    }
+    let (route, signed_in) = remote::sign_in(routes, host_id, token.trim(), name, data_dir).await?;
+    print_json(&signed_in);
+    if let remote::SignIn::Pending { request, .. } = &signed_in {
+        let approved = remote::await_approval(&route, host_id, request, data_dir).await?;
+        print_json(&approved);
+    }
+    Ok(())
 }
 
 /// Prints `value` as one line of JSON on stdout.

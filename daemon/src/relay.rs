@@ -181,19 +181,29 @@ fn cant_reach(error: &Error) -> String {
     format!("Parallax couldn't reach the relay: {error}")
 }
 
-/// One JSON request to the relay, signed in with `token`: its status and JSON body.
+/// A JSON `GET` of `path` at `url`, with no credential, such as Clerk's JWKS (0091): its status and
+/// JSON body. HTTPS checked against the Mozilla roots, as the relay's own, or plain HTTP to this
+/// computer.
+pub(crate) async fn get(url: &str, path: &str) -> Result<(u16, Value), Error> {
+    http(url, "GET", path, None, None).await
+}
+
+/// One JSON request to the relay, signed in with `token` when given: its status and JSON body.
 async fn http(
     url: &str,
     method: &str,
     path: &str,
-    token: &str,
+    token: Option<&str>,
     body: Option<&Value>,
 ) -> Result<(u16, Value), Error> {
     let base = Base::parse(url)?;
     let mut stream = base.connect().await?;
     let body = body.map(ToString::to_string).unwrap_or_default();
+    let authorization = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
     let head = format!(
-        "{method} {path} HTTP/1.1\r\nHost: {}\r\nAuthorization: Bearer {token}\r\n\
+        "{method} {path} HTTP/1.1\r\nHost: {}\r\n{authorization}\
          Connection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
         base.authority(),
         body.len()
@@ -370,7 +380,7 @@ pub async fn open_stream(host_id: &str) -> Result<DuplexStream, Error> {
         ));
     };
     let path = format!("/v1/hosts/{host_id}/tickets");
-    let (status, body) = http(url, "POST", &path, token, None).await?;
+    let (status, body) = http(url, "POST", &path, Some(token), None).await?;
     let Some(ticket) = body["ticket"].as_str().filter(|_| status == 200) else {
         return Err(Error::Protocol(format!(
             "the relay answered {status}: {}",
@@ -455,6 +465,12 @@ impl Relay {
         let id = self.get().connected?;
         Some(format!("{}{id}", remote::RELAY_ROUTE))
     }
+
+    /// How far the relay's clock is ahead of this computer's, in milliseconds, as last measured.
+    /// Zero until the relay refused a proof for its time.
+    pub(crate) fn clock_offset_ms(&self) -> i64 {
+        self.clock_offset.load(Ordering::Relaxed)
+    }
 }
 
 /// Whether plxd should be connected: `relay` on. Pushes and webhooks need nothing else
@@ -498,12 +514,20 @@ async fn on_unless_chosen(daemon: &Daemon) {
 
 /// `relay/sign`: this host's registration with the relay, signed with its key over `token_hash`,
 /// the SHA-256 of a Clerk session token that stays on another computer, which posts it with
-/// [`register`] (PLX-1146). Turns `relay` on unless its user chose.
-pub(crate) async fn sign(daemon: &Daemon, token_hash: &str) -> Result<RelaySignResult, String> {
+/// [`register`] (PLX-1146). Records `user`, the token's Clerk user that the caller names, as this
+/// host's account (0091). Turns `relay` on unless its user chose.
+pub(crate) async fn sign(
+    daemon: &Daemon,
+    token_hash: &str,
+    user: Option<&str>,
+) -> Result<RelaySignResult, String> {
     let key = signer(daemon).await.map_err(|e| e.to_string())?;
     let host_id = key.thumbprint();
     let (x, y) = key.coordinates();
     let signature = key.sign(register_message(&host_id, token_hash).as_bytes());
+    if let Some(user) = user {
+        crate::server::remote::access::record_account(daemon, user).await?;
+    }
     on_unless_chosen(daemon).await;
     Ok(RelaySignResult {
         host_id,
@@ -523,7 +547,9 @@ async fn signer(daemon: &Daemon) -> Result<DpopKey, Error> {
 
 /// `relay/register`: registers a host's key with the relay under the user of the Clerk session
 /// `token`: `signed`, another computer's from its `relay/sign`, else this host's, signed now. This
-/// host's turns `relay` on unless its user chose, and reconnects. Answers why it couldn't.
+/// host's records the token's user as its account (0091), from the token the caller handed it,
+/// never from the relay, turns `relay` on unless its user chose, and reconnects. Answers why it
+/// couldn't.
 pub(crate) async fn register(
     daemon: &Daemon,
     token: &str,
@@ -536,6 +562,7 @@ pub(crate) async fn register(
             sign(
                 daemon,
                 &remote::base64url(&remote::sha256(token.as_bytes())),
+                None,
             )
             .await?
         }
@@ -554,11 +581,14 @@ pub(crate) async fn register(
         "signature": signature,
     });
     let relay = &daemon.relay;
-    let answered = http(&relay.url, "POST", "/v1/hosts", token, Some(&body)).await;
+    let answered = http(&relay.url, "POST", "/v1/hosts", Some(token), Some(&body)).await;
     match answered {
         Ok((200, _)) => {
             info!(%host_id, own, "registered with the relay");
             if own {
+                if let Some(user) = crate::clerk::subject(token) {
+                    crate::server::remote::access::record_account(daemon, &user).await?;
+                }
                 relay.changed.notify_one();
             }
             Ok(())
@@ -576,7 +606,7 @@ pub(crate) async fn register(
 /// marked. Answers why not, for people.
 pub(crate) async fn hosts(daemon: &Daemon, token: &str) -> Result<Vec<RelayHost>, String> {
     let own = signer(daemon).await.ok().map(|key| key.thumbprint());
-    let answered = http(&daemon.relay.url, "GET", "/v1/hosts", token, None).await;
+    let answered = http(&daemon.relay.url, "GET", "/v1/hosts", Some(token), None).await;
     let body = match answered {
         Ok((200, body)) => body,
         Ok((401, _)) => return Err(SIGN_IN_REFUSED.to_owned()),
@@ -609,7 +639,7 @@ pub(crate) async fn remove(daemon: &Daemon, token: &str, host_id: &str) -> Resul
         return Err("That isn't a host on the relay.".to_owned());
     }
     let path = format!("/v1/hosts/{host_id}");
-    match http(&daemon.relay.url, "DELETE", &path, token, None).await {
+    match http(&daemon.relay.url, "DELETE", &path, Some(token), None).await {
         Ok((200 | 404, _)) => {
             info!(%host_id, "removed a host from the relay");
             Ok(())

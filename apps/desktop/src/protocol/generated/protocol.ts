@@ -669,6 +669,38 @@ export type ParallaxRequests = {
 	 */
 	"relay/remove": { params: RelayRemoveParams, result: RelayHostsResult },
 	/**
+	 * `relay/id`: this host's relay id, so a client on another route, such as a `tailnet:`
+	 * connection, can match it to the account's host list (0091). Gated on the
+	 * `accountAccess` capability, like every `access/*` method.
+	 */
+	"relay/id": { params: RelayIdParams, result: RelayIdResult },
+	/**
+	 * `access/get`: who may sign in with this host's account, and a new device's request
+	 * while it waits (0091). With `after`, it answers once that changes.
+	 */
+	"access/get": { params: AccessGetParams, result: AccessState },
+	/**
+	 * `access/merge`: merges another host's approved and removed lists into this one's.
+	 */
+	"access/merge": { params: AccessMergeParams, result: AccessState },
+	/**
+	 * `access/approve`: approves the waiting request's key, once it shows a code.
+	 */
+	"access/approve": { params: AccessRequestParams, result: AccessState },
+	/**
+	 * `access/deny`: drops the waiting request, so a new one can start.
+	 */
+	"access/deny": { params: AccessRequestParams, result: AccessState },
+	/**
+	 * `access/remove`: removes a client's key for good and ends its sessions.
+	 */
+	"access/remove": { params: AccessRemoveParams, result: AccessState },
+	/**
+	 * `access/setupCode`: a new code for a signed-in client to type, which replaces any
+	 * pairing code waiting.
+	 */
+	"access/setupCode": { params: AccessSetupCodeParams, result: AccessSetupCodeResult },
+	/**
 	 * `inbox/list`: a Project's inbox, oldest first, and the event log's `seq` from before the
 	 * read (PLX-401, 0043). Gated on the `inbox` capability, like `inbox/seen`.
 	 */
@@ -1149,6 +1181,13 @@ export const REQUEST_METHODS = [
 	"relay/sign",
 	"relay/hosts",
 	"relay/remove",
+	"relay/id",
+	"access/get",
+	"access/merge",
+	"access/approve",
+	"access/deny",
+	"access/remove",
+	"access/setupCode",
 	"inbox/list",
 	"inbox/seen",
 	"github/install",
@@ -8114,6 +8153,11 @@ export type RelaySignParams = {
 	 * The token's SHA-256, in base64url without padding.
 	 */
 	tokenHash: string,
+	/**
+	 * The token's Clerk user id (`sub`), which this host records as its account (0091). Only a
+	 * trusted connection's caller sets it, never the relay.
+	 */
+	userId?: string,
 };
 
 /**
@@ -8171,6 +8215,153 @@ export type RelayRemoveParams = {
 	 * The host's relay id.
 	 */
 	hostId: string,
+};
+
+/**
+ * Params of `relay/id`.
+ */
+export type RelayIdParams = Record<symbol, never>;
+
+/**
+ * Result of `relay/id` (0091): this host's relay id, the JWK thumbprint of its host key, which an
+ * `account:` connection pins.
+ */
+export type RelayIdResult = {
+	/**
+	 * Its relay id.
+	 */
+	hostId: string,
+};
+
+/**
+ * Params of `access/get`.
+ */
+export type AccessGetParams = {
+	/**
+	 * A `version` the caller already has: the answer waits until the state changes from it, or
+	 * the connection closes. Absent answers at once.
+	 */
+	after?: number,
+};
+
+/**
+ * Who may sign in to this host with its account (0091), and what waits for the user.
+ */
+export type AccessState = {
+	/**
+	 * Changes whenever anything below does, for `access/get`'s `after`.
+	 */
+	version: number,
+	/**
+	 * The Clerk user id this host registered with the relay under, if it has.
+	 */
+	account?: string,
+	/**
+	 * The `DPoP` key thumbprints of the approved clients.
+	 */
+	approvedClients: Array<string>,
+	/**
+	 * The thumbprints of removed clients, which are never approved again.
+	 */
+	removedClients: Array<string>,
+	/**
+	 * The relay ids of the account's approved hosts.
+	 */
+	approvedHosts: Array<string>,
+	/**
+	 * A new device's request, while it waits.
+	 */
+	pending?: AccessRequest,
+	/**
+	 * The name of the device the latest `access/setupCode` code approved, once one has.
+	 */
+	setupApproved?: string,
+};
+
+/**
+ * A new device's request to sign in, which one of the user's approved devices approves once
+ * both show the same code.
+ */
+export type AccessRequest = {
+	/**
+	 * Its id, which `access/approve` and `access/deny` take.
+	 */
+	id: string,
+	/**
+	 * The name the device gave.
+	 */
+	name: string,
+	/**
+	 * The device's `DPoP` key thumbprint.
+	 */
+	thumbprint: string,
+	/**
+	 * Its 6 digits, once the device sent its random value. Until then it can't be approved.
+	 */
+	code?: string,
+	/**
+	 * When it lapses, in RFC 3339.
+	 */
+	expiresAt: string,
+};
+
+/**
+ * Params of `access/merge`: lists another host keeps, merged into this one's. A removed key
+ * stays removed and leaves the approved list.
+ */
+export type AccessMergeParams = {
+	/**
+	 * Approved client thumbprints.
+	 */
+	approvedClients: Array<string>,
+	/**
+	 * Removed client thumbprints.
+	 */
+	removedClients: Array<string>,
+	/**
+	 * Approved host ids.
+	 */
+	approvedHosts: Array<string>,
+};
+
+/**
+ * Params of `access/approve` and `access/deny`.
+ */
+export type AccessRequestParams = {
+	/**
+	 * The request's id.
+	 */
+	request: string,
+};
+
+/**
+ * Params of `access/remove`.
+ */
+export type AccessRemoveParams = {
+	/**
+	 * The client's `DPoP` key thumbprint.
+	 */
+	thumbprint: string,
+};
+
+/**
+ * Params of `access/setupCode`.
+ */
+export type AccessSetupCodeParams = Record<symbol, never>;
+
+/**
+ * Result of `access/setupCode`: the code a new computer shows for a signed-in client to type
+ * (0091).
+ */
+export type AccessSetupCodeResult = {
+	/**
+	 * 6 digits. A client that types it runs SPAKE2 pairing with it once.
+	 */
+	code: string,
+	/**
+	 * When it stops working, in RFC 3339.
+	 */
+	expiresAt: string,
 };
 
 /**

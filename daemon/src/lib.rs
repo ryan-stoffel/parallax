@@ -56,6 +56,7 @@ mod board;
 mod browser;
 mod checkpoints;
 mod ci_logs;
+pub mod clerk;
 mod commands;
 mod computer;
 mod context;
