@@ -15,7 +15,7 @@ Parallax Connect (0056) works only when every computer is on one Tailscale tailn
 T3 Connect, read at T3 Code `a773dc38` (`docs/internals/t3-connect.md`, `remote.md`, `environment-auth.md`, `docs/user/remote-access.md`):
 
 - **Setup.** `npx t3 connect` on the host signs in with Clerk, offers the background service, and links the environment. A CLI with a browser uses loopback PKCE, started on the hosted `/connect` page so sign-in survives the redirect. Over SSH or headless it uses Clerk's OAuth device authorization grant: the CLI prints a link and a short code, the user approves on any device, and the CLI polls Clerk's token endpoint. `t3 connect unlink` stops exposure and keeps the sign-in. `t3 connect logout` clears it.
-- **Discovery.** Any device signed in to the same account lists the account's environments and picks one. No pairing.
+- **Discovery.** Any device signed in to the same account lists the account's environments and picks one. No pairing. The list has no timer: it refreshes when a screen that shows it opens, when the network comes back, and when the sign-in changes (`packages/client-runtime/src/relay/discovery.ts`).
 - **Transport.** The relay provisions a managed Cloudflare Tunnel per environment and the host runs a pinned `cloudflared`. After setup the relay is out of the data path, except webhooks. Cloudflare ends TLS at its edge, so it can read the traffic.
 - **Trust.** The relay is "a trusted broker": for a signed-in user with a linked environment, it asks the environment to mint a one-time bootstrap credential bound to the client's DPoP key, and the client trades it with the environment for a session. A compromised relay signing key is outside what DPoP protects.
 - **Routes.** A saved environment keeps an ordered route list. The server reports its LAN and tailnet addresses, the client saves them as learned routes, connects over the first route that answers, and while on a later route re-checks earlier ones every minute and on network changes, moving back when one works. Pairing once through T3 Connect is enough to use the LAN at home.
@@ -47,7 +47,7 @@ These change the result and wait on Ryan. The rest of this record assumes the re
 
 ### Discovery: the account lists the computers
 
-- While the app is signed in, it asks the local plxd for the account's hosts (`relay/hosts`) every 15 seconds and keeps a connection to each other host, with id `account:<hostId>`. This replaces `connect/devices` and `tailnet:<node ID>` ids. A host stays listed, retrying, while it is offline, as 0056's devices do. The per-host switch and Remove keep 0056's meaning.
+- While the app is signed in, it asks the local plxd for the account's hosts (`relay/hosts`) when the sign-in changes, when the network comes back, when the app is focused, and when Settings or Add computer opens, with no timer, as T3 does. It keeps a connection to each other host, with id `account:<hostId>`. This replaces `connect/devices` and `tailnet:<node ID>` ids. A computer added elsewhere shows up the next time one of those happens. A host stays listed, retrying, while it is offline, as 0056's devices do. The connection to a listed host keeps itself up, so nothing about it waits on the list. The per-host switch and Remove keep 0056's meaning.
 - Names and icons stay host settings (`deviceName`, `deviceIcon`), so they carry over.
 - The host id is the thumbprint of the host's key, so the list already says which key the app must reach. The relay's list needs no change.
 
