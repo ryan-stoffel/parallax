@@ -22,18 +22,9 @@ import type { AccessState } from "../../desktop/src/protocol/generated/protocol"
 import { onNetwork, privateFile } from "../modules/pinned-tls";
 import { lacks, merged, type Lists } from "./access";
 import { listHosts, type AccountHosts, type Gate, type Listed } from "./accountHosts";
-import { askSetupCode, confirmDevice, showWaiting } from "./accountPrompts";
+import { confirmDevice, setUpComputer } from "./accountPrompts";
 import { forget } from "./host";
-import {
-  accountId,
-  computers,
-  Fleet,
-  merge,
-  saveSetup,
-  withListed,
-  type Machine,
-  type Setup,
-} from "./machines";
+import { accountId, Fleet, saveSetup, withListed, type Machine, type Setup } from "./machines";
 import { Outbox, type Outgoing, type Sent } from "./outbox";
 
 /** One computer as the screens see it. */
@@ -51,8 +42,8 @@ interface FleetValue {
   computers: Computer[];
   defaultId?: string;
   setDefault: (id: string) => void;
-  /** Adds computers found with `probe`, or a LAN-paired one. */
-  add: (found: Machine[]) => void;
+  /** Adds a computer paired on the LAN. */
+  add: (paired: Machine) => void;
   remove: (id: string) => void;
   /** Lists the account's computers again. */
   discover: () => void;
@@ -164,8 +155,6 @@ export function FleetProvider({
   const [drafts] = useState(() => new Map<string, string>());
   /** Requests already shown, so each asks once. */
   const [asked] = useState(() => new Set<string>());
-  /** The `tailnet:` computer each account computer replaces once it connects. */
-  const [tailnetOf] = useState(() => new Map<string, string>());
   const fleetRef = useRef<Fleet>(null);
   const latest = useRef(setup);
   latest.current = setup;
@@ -288,72 +277,16 @@ export function FleetProvider({
     })();
   }
 
-  /**
-   * Moves a computer reached over Tailscale (`tailnet:`) to its account connection (0091): it
-   * names its host id, and approves this phone's key over the connection Tailscale vouches for,
-   * so the move asks for no code. The Tailscale connection goes once the account one connects.
-   */
-  async function migrate(id: string) {
-    const host = fleet.hosts.get(id);
-    if (!accounts || !host) return;
-    const answer = await host.request("relay/id", {});
-    if ("error" in answer) return;
-    const { hostId } = answer.result as { hostId: string };
-    const approved = await host.request("access/merge", {
-      approvedClients: [accounts.thumbprint],
-      removedClients: [],
-      approvedHosts: [],
-    });
-    if ("error" in approved) return;
-    await accounts.trust([hostId]);
-    const replacement = accountId(hostId);
-    tailnetOf.set(replacement, id);
-    const m = latest.current.machines.find((x) => x.id === replacement);
-    if (!m) return;
-    if (fleet.hosts.get(replacement)?.state.status === "connected") return retire(replacement);
-    if (!fleet.hosts.has(m.id)) {
-      gate(m.id, undefined);
-      fleet.add(m);
-    }
-  }
-
-  /** Drops the `tailnet:` computer that account computer `id`, now connected, replaces. */
-  function retire(id: string) {
-    const old = tailnetOf.get(id);
-    if (!old) return;
-    tailnetOf.delete(id);
-    fleet.remove(old);
-    update((s) => ({
-      ...s,
-      machines: s.machines.filter((m) => m.id !== old),
-      defaultId: s.defaultId === old ? id : s.defaultId,
-    }));
-  }
-
   useEffect(() => {
     const listener = window.parallax.onConnectionState((id, state) => {
       setStates((s) => ({ ...s, [id]: state }));
       if (state.status !== "connected") return;
       void outboxes.get(id)?.drain();
-      if (id.startsWith("account:")) {
-        gate(id, undefined);
-        retire(id);
-      } else if (!id.startsWith("paired-") && "accountAccess" in state.capabilities) void migrate(id);
+      if (id.startsWith("account:")) gate(id, undefined);
       if ("accountAccess" in state.capabilities) {
         watchAccess(id);
         void share();
       }
-      // A connected computer lists the tailnet's others, so one added elsewhere shows up here.
-      if ("connect" in state.capabilities)
-        void window.parallax.request(id, "connect/devices", {}).then((answer) => {
-          if ("error" in answer) return;
-          const { devices, self } = answer.result;
-          const found = computers(self ? [self, ...devices] : devices);
-          update((s) => {
-            const machines = merge(s.machines, found);
-            return JSON.stringify(machines) === JSON.stringify(s.machines) ? s : { ...s, machines };
-          });
-        });
     });
     // A phone that slept may have lost its sockets: check them, or try again now. Coming to the
     // front, or a network that changed, also lists the account's computers again.
@@ -407,37 +340,21 @@ export function FleetProvider({
     const { hostId, routes } = m.account;
     // A refusal may have passed, such as a clock set right: a computer this phone uses tries again.
     if (accounts.trusts(hostId)) return connect(m);
-    const failed = (e: unknown) => Alert.alert(`Couldn't set up ${m.name}`, (e as Error).message);
-    askSetupCode(
-      m.name,
-      (code) => {
-        if (code.length !== 6) return failed(new Error("The code has 6 digits."));
-        accounts.setup(hostId, routes, code).then(() => connect(m), failed);
-      },
-      () =>
-        void accounts
-          .ask(hostId, routes, (code) => {
-            gate(id, { kind: "waiting", code });
-            showWaiting(m.name, code);
-          })
-          .then(
-            () => connect(m),
-            (e: unknown) => {
-              gate(id, { kind: "setup" });
-              failed(e);
-            },
-          ),
-    );
+    setUpComputer(accounts, { hostId, name: m.name, routes }, {
+      onWaiting: (code) => gate(id, { kind: "waiting", code }),
+      done: () => connect(m),
+      failed: () => gate(id, { kind: "setup" }),
+    });
   }
 
   const value: FleetValue = {
     computers: list,
     defaultId: defaultOf(setup.machines, setup.defaultId),
     setDefault: (id) => update((s) => ({ ...s, defaultId: id })),
-    // A computer added with none set as the default becomes it.
-    add: (found) =>
+    // A computer added with none set as the default becomes it. Pairing again replaces it.
+    add: (paired) =>
       update((s) => {
-        const machines = merge(s.machines, found);
+        const machines = [...s.machines.filter((m) => m.id !== paired.id), paired];
         return { ...s, machines, defaultId: defaultOf(machines, s.defaultId) };
       }),
     remove: (id) => {

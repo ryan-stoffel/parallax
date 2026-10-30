@@ -2,10 +2,10 @@
 // row, which opens Account (AccountScreen.tsx), then the desktop's sections with its plain icons,
 // each a page pushed inside the sheet. General and Appearance are this phone's own: its
 // notifications, by kind with a test, and its theme. The others are a computer's, with a picker
-// for another (SettingsComputer.tsx), and Connections also has this phone's computers and
-// Tailscale. About, from the sheet's info button, has the version and links. What the desktop's
-// Settings keeps on the desktop itself, such as its browser, keybinds, window, fonts, editors,
-// terminal, and updates, stays there.
+// for another (SettingsComputer.tsx), and Connections also has this phone's computers. About,
+// from the sheet's info button, has the version and links. What the desktop's Settings keeps on
+// the desktop itself, such as its browser, keybinds, window, fonts, editors, terminal, and
+// updates, stays there.
 import type { NativeStackScreenProps } from "@react-navigation/native-stack";
 import {
   Bot,
@@ -36,12 +36,14 @@ import {
 import { useEffect, useState } from "react";
 import { Alert, AppState, Linking, Pressable, ScrollView, StyleSheet, View } from "react-native";
 
-import { appVersion, tailnetAddress } from "../modules/pinned-tls";
+import { appVersion } from "../modules/pinned-tls";
 import { Avatar, nameOf, useAccount } from "./Account";
 import { formatCode } from "./accountPrompts";
 import { useComputer, useFleet, type Computer } from "./fleet";
 import { useNav, type PhonePage, type SettingsScreens } from "./nav";
-import { FindComputers } from "./Onboarding";
+import { pairedId } from "./machines";
+import { AddInstructions } from "./Onboarding";
+import { Pairing } from "./PairScreen";
 import { accessLevels } from "../../desktop/src/renderer/catalog";
 import { allAccess } from "./offers";
 import { setPrefs, usePrefs, type Prefs } from "./prefs";
@@ -303,19 +305,14 @@ export function NewThreadsSection() {
 
 /**
  * Connections' settings of this phone's own: its computers, each with its page, the account's
- * computers removed from this phone, Add computer, and Tailscale. Opening it lists the account's
- * computers again.
+ * computers removed from this phone, and Add computer. Opening it lists the account's computers
+ * again.
  */
 export function PhoneConnections() {
   const c = useColors();
   const nav = useNav();
   const { computers, defaultId, discover, removed, restore } = useFleet();
-  const [address, setAddress] = useState(() => tailnetAddress());
-  useEffect(() => {
-    discover();
-    const sub = AppState.addEventListener("change", (s) => s === "active" && setAddress(tailnetAddress()));
-    return () => sub.remove();
-  }, []);
+  useEffect(discover, []);
   return (
     <>
       <Section
@@ -348,26 +345,6 @@ export function PhoneConnections() {
           />
         ))}
         <Row icon={Plus} iconColor={c.accent} title="Add computer" last onPress={() => nav.navigate("AddComputer")} />
-      </Section>
-      <Section title="This phone">
-        <Row
-          title="Tailscale"
-          detail={
-            address
-              ? `This phone is ${address} on your tailnet.`
-              : "Optional: a direct route to your computers away from home."
-          }
-          last
-          onPress={address ? undefined : () => void Linking.openURL("tailscale://").catch(() => {})}
-          right={
-            <View style={styles.line}>
-              <T muted style={{ fontSize: 14 }}>
-                {address ? "Connected" : "Not connected"}
-              </T>
-              <Dot color={address ? c.added : c.faintForeground} />
-            </View>
-          }
-        />
       </Section>
     </>
   );
@@ -453,11 +430,10 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
       <Section>
         {m.state.status === "connected" && <Row title="Parallax" detail={m.state.plxd} />}
         {m.state.status === "failed" && <Row title="Last error" detail={m.state.error.message} />}
-        <Row title="System" detail={m.machine.os || "Unknown"} />
         {m.machine.account ? (
           <Row title="Routes" detail={routesOf(m)} last />
         ) : (
-          <Row title={m.machine.paired ? "Paired on this Wi‑Fi" : "Tailscale address"} detail={m.machine.address} last />
+          <Row title="Paired on this Wi‑Fi" detail={m.machine.paired?.routes[0] ?? ""} last />
         )}
       </Section>
       {m.connected && (
@@ -509,15 +485,40 @@ export function ComputerScreen({ route, navigation }: NativeStackScreenProps<Set
   );
 }
 
+/**
+ * Add computer: the command that adds one to the account, after which it joins the list on its
+ * own, or pairing one on this Wi‑Fi that isn't on the account.
+ */
 export function AddComputerScreen({ navigation }: NativeStackScreenProps<SettingsScreens, "AddComputer">) {
-  const { add } = useFleet();
+  const c = useColors();
+  const { add, discover } = useFleet();
+  const [pairing, setPairing] = useState(false);
+  // Back from the computer that ran it, the account lists it.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (s) => s === "active" && discover());
+    return () => sub.remove();
+  }, []);
+  if (pairing)
+    return (
+      <Pairing
+        onPaired={(saved) => {
+          add({ id: pairedId(saved), name: saved.name, paired: saved });
+          navigation.goBack();
+        }}
+        onCancel={() => setPairing(false)}
+      />
+    );
   return (
-    <FindComputers
-      onFound={(found) => {
-        add(found);
-        navigation.goBack();
-      }}
-    />
+    <ScrollView
+      style={{ backgroundColor: c.background }}
+      contentInsetAdjustmentBehavior="automatic"
+      contentContainerStyle={{ padding: 16, gap: 16, paddingBottom: 40 }}
+    >
+      <AddInstructions />
+      <Pressable accessibilityRole="button" onPress={() => setPairing(true)} style={{ alignSelf: "center", padding: 10 }}>
+        <T style={{ fontSize: 14, color: c.accent }}>Pair a computer on this Wi‑Fi instead</T>
+      </Pressable>
+    </ScrollView>
   );
 }
 

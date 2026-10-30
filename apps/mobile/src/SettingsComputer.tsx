@@ -874,7 +874,7 @@ function ConnectionsPage({ m }: { m: Computer }) {
               title="Open in a browser"
               detail={`Serves Parallax at ${(showing?.addresses ?? ["this computer's address"])
                 .map((a) => `https://${a.includes(":") ? a : `${a}:7341`}`)
-                .join(", ")} for a browser, which pairs with a code from Pair a device. Use the tailnet address where you can: Tailscale vouches for this computer. On this network the browser warns about this computer's certificate. Continue only if the SHA-256 fingerprint it shows is the one below.${status?.fingerprint ? `\n${fingerprint(status.fingerprint)}` : ""}`}
+                .join(", ")} for a browser, which pairs with a code from Pair a device. On this network the browser warns about this computer's certificate. Continue only if the SHA-256 fingerprint it shows is the one below.${status?.fingerprint ? `\n${fingerprint(status.fingerprint)}` : ""}`}
               value={settings.remoteWeb}
               onChange={(remoteWeb) => void set({ remoteWeb }, `Couldn't turn Open in a browser ${remoteWeb ? "on" : "off"}`)}
             />
@@ -1003,7 +1003,7 @@ const bodies: Record<SettingsPage, ComponentType<{ m: Computer }>> = {
 /**
  * One of a computer's settings pages, with the computer it applies to at the top, under this
  * phone's own settings of that section: Threads' computer for new threads, and Connections'
- * computers and Tailscale.
+ * computers.
  */
 export function ComputerSettingsScreen({ route, navigation }: NativeStackScreenProps<SettingsScreens, "ComputerSettings">) {
   const { id, page } = route.params;

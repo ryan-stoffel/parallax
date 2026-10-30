@@ -1,6 +1,6 @@
-// The account's computers (0091): listed by Parallax Relay, reached over their LAN, Tailscale, or
-// relay routes (routes.ts), each pinned to its host id, and signed in to with the account. A
-// signed-in phone whose key a computer approved gets a session there; a new phone is approved
+// The account's computers (0091): listed by Parallax Relay, reached over their LAN or relay routes
+// (routes.ts), each pinned to its host id, and signed in to with the account. A signed-in phone
+// whose key a computer approved gets a session there; a new phone is approved
 // once, by typing a new computer's setup code or by matching a code on another device (access.ts).
 //
 // What the phone keeps, in the Keychain on this phone only: one DPoP key for every account host,
@@ -131,7 +131,7 @@ export class AccountHosts {
     return this.stored.trusted.includes(hostId);
   }
 
-  /** Trusts `hostIds` too, as a host this phone uses listed them, or a tailnet host vouched. */
+  /** Trusts `hostIds` too, as a host this phone uses listed them. */
   async trust(hostIds: string[]) {
     const added = hostIds.filter((id) => !this.stored.trusted.includes(id));
     if (!added.length) return;
