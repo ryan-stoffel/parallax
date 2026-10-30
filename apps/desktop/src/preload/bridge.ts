@@ -423,6 +423,25 @@ export interface ParallaxBridge {
    * the device changes, and other computers still reach it.
    */
   removeDevice(hostId: string): Promise<void>;
+  /**
+   * Asks the account for its computers now (0091), as Settings > Connections and Add computer do
+   * when they open, and starts again any connection to one that stopped retrying.
+   */
+  discoverAccount(): Promise<void>;
+  /**
+   * Pairs with new account computer `hostId` with the 6-digit code `plx connect` shows there
+   * (0091). Each code is good for one try. Resolves to an error for people, or undefined.
+   */
+  enterSetupCode(hostId: string, code: string): Promise<string | undefined>;
+  /** Asks account computer `hostId` again to approve this device, after a denial or a lapse. */
+  askAgain(hostId: string): Promise<void>;
+  /**
+   * New devices asking to sign in to the user's computers, each with the code it shows (0091).
+   * Calls `listener` now and on every change. Returns the unsubscribe function.
+   */
+  onAccessRequests(listener: (requests: AccessPrompt[]) => void): () => void;
+  /** Allows or denies a new device's request. Resolves to an error for people, or undefined. */
+  answerAccess(id: string, allow: boolean): Promise<string | undefined>;
 
   /**
    * The agents in the ACP Registry, fetched once while the app runs. Resolves to an error for
@@ -661,23 +680,51 @@ export function iconFor(hostName: string): DeviceIcon {
 }
 
 /**
- * A computer Parallax Connect reaches over Tailscale with `plxd dial <ip>` (0056), by host id
- * `tailnet:<node id>`. Its name and icon are its plxd's, else what its host name suggests.
+ * A computer Parallax Connect reaches: one on the signed-in account (0091), by host id
+ * `account:<relay id>`, or one on the tailnet with `plxd dial <ip>` (0056), by `tailnet:<node id>`.
+ * Its name and icon are its plxd's, else what its host name suggests.
  */
 export type DeviceHost = {
   id: string;
   name: string;
   icon: DeviceIcon;
-  /** Its Tailscale host name, such as "mac-mini". */
+  /** Its Tailscale host name, such as "mac-mini"; an account computer's name. */
   hostName: string;
-  /** Its Tailscale IPv4. */
-  ip: string;
-  /** Its OS as Tailscale names it: "macOS", "windows", or "linux". */
-  os: string;
+  /** Its Tailscale IPv4. An account computer has none. */
+  ip?: string;
+  /** Its OS as Tailscale names it: "macOS", "windows", or "linux". An account computer has none. */
+  os?: string;
   /** The icon its host name suggests, which a chosen one replaces. */
   detected: DeviceIcon;
   /** Whether this app uses it. Off, it's still listed here, with no connection or threads. */
   enabled: boolean;
+  /** An account computer's sign-in, while it needs the user or is under way. */
+  access?: AccountAccess;
+};
+
+/**
+ * Where this device's access to an account computer stands (0091), while it has no session there:
+ * a new computer needs the code `plx connect` shows; a known one signs in, and may wait for one of
+ * the user's devices to allow this one, showing the same code; a denied or lapsed request waits
+ * for the user to ask again.
+ */
+export type AccountAccess =
+  | { step: "needsCode"; error?: string }
+  | { step: "pairing" }
+  | { step: "signingIn" }
+  | { step: "pending"; code: string }
+  | { step: "ask"; why: string };
+
+/** A new device asking to sign in to the user's computers (0091), as "Allow <name>?" shows it. */
+export type AccessPrompt = {
+  /** The request's id. */
+  id: string;
+  /** The device's name. */
+  name: string;
+  /** The 6 digits it shows. */
+  code: string;
+  /** The computer it asked, by name. */
+  host: string;
 };
 
 /** Parallax Connect on this computer (0056). */
@@ -726,6 +773,15 @@ export const withheldMethods = [
   "relay/sign",
   "relay/hosts",
   "relay/remove",
+  // Who may sign in to the user's computers (0091): only main approves, merges, and pairs, from
+  // the prompts it shows, so a renderer can't let a device in.
+  "relay/id",
+  "access/get",
+  "access/merge",
+  "access/approve",
+  "access/deny",
+  "access/remove",
+  "access/setupCode",
   "terminal/open",
   "terminal/close",
   // A window's device streams go through `openDeviceStream`, which routes what plxd relays.

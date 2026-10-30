@@ -19,6 +19,11 @@ export type SavedDevice = {
   off?: true;
   /** Removed from this app's list. Kept, so finding it again doesn't add it back. */
   removed?: true;
+  /**
+   * Reached as the account computer with this relay id now (0091), so its `tailnet:` connection
+   * is gone for good.
+   */
+  migrated?: string;
 };
 
 /** A device's host id, by its Tailscale node ID. */

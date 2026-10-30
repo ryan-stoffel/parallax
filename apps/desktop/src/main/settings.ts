@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { HostInput, SshHost } from "../preload/bridge";
+import { checkAccounts, type SavedAccount } from "./accountHosts";
 import { isDeviceIcon, type SavedDevice } from "./connect";
 
 /** `settings.json` in the app's userData folder. Only the main process reads or writes it (0022). */
@@ -18,6 +19,8 @@ export type Settings = {
   devices?: SavedDevice[];
   /** The computers paired on the LAN (PLX-641), oldest first. */
   lan?: SavedLan[];
+  /** The other computers on the signed-in account (0091), as Parallax Relay last listed them. */
+  accounts?: SavedAccount[];
 };
 
 /**
@@ -47,7 +50,14 @@ export function readSettings(file: string): Settings {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new Error("it isn't a JSON object");
   }
-  const { hosts = [], ssh, localName, devices = [], lan = [] } = raw as Record<string, unknown>;
+  const {
+    hosts = [],
+    ssh,
+    localName,
+    devices = [],
+    lan = [],
+    accounts = [],
+  } = raw as Record<string, unknown>;
   if (!Array.isArray(hosts)) throw new Error("`hosts` isn't a list");
   if (ssh !== undefined && typeof ssh !== "string") throw new Error("`ssh` isn't a string");
   if (localName !== undefined && typeof localName !== "string")
@@ -100,6 +110,7 @@ export function readSettings(file: string): Settings {
     )
       throw new Error(`LAN computer ${JSON.stringify(entry)} needs a name and routes`);
   }
+  checkAccounts(accounts, ids);
   return { ...raw, hosts } as Settings;
 }
 

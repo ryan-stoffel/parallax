@@ -3,6 +3,7 @@
 // events plxd would, so a sent message or an answered question shows up as it does in the app.
 import {
   iconFor,
+  type AccessPrompt,
   type ConnectionState,
   type ConnectState,
   type DeviceHost,
@@ -1642,8 +1643,37 @@ function hostOf(runId: string): string {
   return device ? deviceId(device) : LOCAL;
 }
 
+// `#accounts` (0091): two computers on the account, one connected and one new that asks for its
+// code (482913 works), and a phone asking to sign in.
+const accountsShown = location.hash.includes("accounts");
+const accounts: DeviceHost[] = accountsShown
+  ? [
+      {
+        id: "account:alfEbFC1hWlmHpbBo55sMKZ0PQ_RqGqTzdoMYJy-m6o",
+        name: "studio",
+        icon: "desktop",
+        detected: "laptop",
+        hostName: "studio",
+        enabled: true,
+      },
+      {
+        id: "account:Q2s9vX1k7d0b8Lr4mT6pWc3eYh5uNz2aFgJ_iK-oPqR",
+        name: "build-box",
+        icon: "server",
+        detected: "server",
+        hostName: "build-box",
+        enabled: true,
+        access: { step: "needsCode" },
+      },
+    ]
+  : [];
+let accessRequests: AccessPrompt[] = accountsShown
+  ? [{ id: "req-1", name: "Ryan's iPhone", code: "731905", host: "studio" }]
+  : [];
+const accessListeners = new Set<(requests: AccessPrompt[]) => void>();
+
 function deviceHosts(): DeviceHost[] {
-  if (!connect.on) return [];
+  if (!connect.on) return [...accounts];
   return tailnet
     .filter((d) => d.parallax && !d.removed)
     .map((d) => ({
@@ -2202,6 +2232,28 @@ export const mockBridge: ParallaxBridge = {
     if (device) device.removed = true;
     connectChanged();
     return delay(undefined);
+  },
+  discoverAccount: () => delay(undefined),
+  enterSetupCode: async (hostId, code) => {
+    await delay(undefined, 600);
+    const computer = accounts.find((a) => a.id === hostId);
+    if (code !== "482913" || !computer)
+      return "That code is wrong, used, or expired. Check it, then type it again.";
+    delete computer.access;
+    connectChanged();
+    return undefined;
+  },
+  askAgain: () => delay(undefined),
+  onAccessRequests: (listener) => {
+    listener([...accessRequests]);
+    accessListeners.add(listener);
+    return () => accessListeners.delete(listener);
+  },
+  answerAccess: async (id) => {
+    await delay(undefined, 400);
+    accessRequests = accessRequests.filter((r) => r.id !== id);
+    for (const l of accessListeners) l([...accessRequests]);
+    return undefined;
   },
 
   acpRegistry: () => delay([]),

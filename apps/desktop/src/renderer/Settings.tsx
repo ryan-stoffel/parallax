@@ -1057,8 +1057,10 @@ function InstancePane({
   const npmLine = npmPackage && npmInstallLine(npmPackage, window.parallax.platform === "win32");
   const install = async () => {
     const cursor = instance.kind === "cursor";
-    // A computer paired on the LAN installs in a terminal on its own plxd (PLX-641).
-    if ((!npmPackage && !cursor) || (!cursor && hostId.startsWith("lan:"))) {
+    // Another computer, paired on the LAN or reached through the account or the tailnet, installs
+    // in a terminal on its own plxd (PLX-641, 0091).
+    const elsewhere = /^(lan|account|tailnet):/.test(hostId);
+    if ((!npmPackage && !cursor) || (!cursor && elsewhere)) {
       setInstalling(true);
       return onSignIn(true);
     }
