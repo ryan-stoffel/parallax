@@ -88,8 +88,9 @@ let nextBridge = 0;
 
 /**
  * Opens a bridge to the relay's `url` (`wss://…/v1/hosts/<hostId>/connect`), whose streams open
- * with the Clerk `token`. Requests to `https://127.0.0.1:<port>` then reach the host with TLS
- * inside the stream, and the relay sees only TLS records (RelayBridge.swift).
+ * with the Clerk `token` in a header, or with a ticket from a relay from before 0091 that refuses
+ * the header. Requests to `https://127.0.0.1:<port>` then reach the host with TLS inside the
+ * stream, and the relay sees only TLS records (RelayBridge.swift).
  */
 export async function openRelay(url: string, token: string): Promise<RelayBridge> {
   const id = String(++nextBridge);

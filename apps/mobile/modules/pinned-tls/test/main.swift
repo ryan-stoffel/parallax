@@ -71,4 +71,21 @@ check(
   "\(String(describing: refused.refused))")
 refused.close()
 
+// A relay from before 0091 refuses the header token with 401: each stream then opens with a
+// ticket of its own.
+let (ticketed, ticketedPort) = bridge("/old\(connect)", token: token)
+for attempt in 1...2 {
+  let answer = get(ticketedPort, pin: "key:\(hostId)")
+  check("pinned GET \(attempt) through a relay that takes only tickets", answer.status == 200, answer.body)
+}
+ticketed.close()
+
+// 503 isn't a relay that takes only tickets: the refusal stands, and no ticket is asked for.
+let (offline, offlinePort) = bridge("/v1/hosts/offline/connect", token: token)
+let asleep = get(offlinePort, pin: "key:\(hostId)")
+check(
+  "an offline host is reported, not retried with a ticket", asleep.status == nil && offline.refused == 503,
+  "\(String(describing: offline.refused))")
+offline.close()
+
 exit(failed ? 1 : 0)
