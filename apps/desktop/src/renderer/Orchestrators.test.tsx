@@ -879,11 +879,12 @@ test("a card's menu shows a hidden sidebar before it opens a dialog the sidebar 
   capabilities = { projects: {} };
   answers["thread/list"] = () => ({ result: { repos: [essays], threads: [], seq: 7 } });
   await renderApp();
-  const card = projectCard("Essays").closest("li")!;
+  const open = projectCard("Essays");
+  const card = open.closest("li")!;
   await click(document.querySelector('button[aria-label="Hide sidebar"]'));
   const hidden = () => !!document.getElementById("sidebar")!.closest("[hidden]");
   expect(hidden()).toBe(true);
-  act(() => void card.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
+  act(() => void open.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true })));
   await click(
     [...card.querySelectorAll('[role="menu"] [role="menuitem"]')].find(
       (b) => b.textContent === "Rename…",
@@ -919,10 +920,17 @@ test("without orchestratorDelete there's no Delete…, and another client's orch
 /** A Project's card on the Projects page, which this opens, by its name (0090, 0093). */
 const projectCard = (name: string) => {
   openProjectsPage();
-  return [...document.querySelectorAll<HTMLButtonElement>("main li[data-project] > button")].find(
-    (b) => b.querySelector("[data-title]")?.textContent === name,
-  )!;
+  return [
+    ...document.querySelectorAll<HTMLButtonElement>(
+      'main li[data-kind="project"] button[data-row]',
+    ),
+  ].find((b) => b.querySelector("[data-title]")?.textContent === name)!;
 };
+/** The Projects page's cards' names, in the order they show. */
+const projectNames = () =>
+  [...document.querySelectorAll('main li[data-kind="project"] [data-title]')].map(
+    (t) => t.textContent,
+  );
 
 /** A sidebar button, by its text. */
 const sidebarButton = (text: string) =>
@@ -953,18 +961,23 @@ test("Usage waits under More until Settings shows it in the head, and pinned Pro
   await act(async () => sidebarNav.set({ ...sidebarNav.get(), usage: true }));
   expect(sidebarButton("Usage")!.closest("[inert]")).toBeNull();
 
-  // Pinning a Project from its card lists it under Pinned in the head, and its row opens it. A
-  // pinned orchestrator lists as a card with the pinned threads, out of its folder.
+  // Pinning a Project from its card lists it under Pinned as a card: its icon and "Project", then
+  // its name, with no status. It opens the Project.
   openProjectsPage();
   await click(document.querySelector('main button[aria-label="Pin Essays"]'));
   expect(pinnedProjects.get()).toEqual(["local/s-essays"]);
-  const pinned = document.querySelector('#sidebar section[aria-label="Pinned"]')!;
-  expect([...pinned.querySelectorAll("li > button")].map((b) => b.textContent)).toEqual(["Essays"]);
-  await click(pinned.querySelector("li > button"));
+  const pinned = () => document.querySelector('#sidebar section[aria-label="Pinned"]')!;
+  const project = pinned().querySelector('li[data-kind="project"]')!;
+  expect(project.querySelector("button[data-row]")!.textContent).toBe("ProjectEssays");
+  expect(project.querySelector("[data-status]")!.textContent).toBe("");
+  await click(project.querySelector("button[data-row]"));
   expect(crumbs()).toEqual(["This Mac", "Essays"]);
+
+  // A pinned orchestrator thread lists after the pinned Projects, out of its folder.
   await act(async () => pinnedProjects.set([...pinnedProjects.get(), "local/p-ember"]));
-  const cards = document.querySelector('#sidebar ul[aria-label="Pinned orchestrator threads"]')!;
-  expect([...cards.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual(["ember"]);
+  expect(
+    [...pinned().querySelectorAll("li[data-kind] [data-title]")].map((t) => t.textContent),
+  ).toEqual(["Essays", "ember"]);
   expect(
     [
       ...document.querySelectorAll(
@@ -972,8 +985,104 @@ test("Usage waits under More until Settings shows it in the head, and pinned Pro
       ),
     ].map((t) => t.textContent),
   ).not.toContain("ember");
-  await click(cards.querySelector("button[data-row]"));
+  await click(pinned().querySelector('li[data-kind="orchestrator"] button[data-row]'));
   expect(crumbs()).toEqual(["This Mac", "ember"]);
+
+  // The heading folds the section, and a card's pin unpins it.
+  await click(pinned().querySelector("button[aria-expanded]"));
+  expect(project.closest("[inert]")).not.toBeNull();
+  await click(pinned().querySelector("button[aria-expanded]"));
+  expect(project.closest("[inert]")).toBeNull();
+  await click(pinned().querySelector('button[aria-label="Unpin Essays"]'));
+  expect(pinnedProjects.get()).toEqual(["local/p-ember"]);
+});
+
+test("the Projects page filters, sorts, and searches its cards, and says when nothing matches", async () => {
+  const project = (
+    id: string,
+    name: string,
+    createdAt: string,
+    extra: Partial<Repo> = {},
+  ): Repo => ({
+    id,
+    name,
+    path: `/data/spaces/${id}`,
+    project: true,
+    createdAt,
+    ...extra,
+  });
+  const repos = [
+    project("s-essays", "Essays", "2026-09-27T10:00:00Z", { files: ["/data/uploads/a/brief.pdf"] }),
+    project("s-apartment", "Apartment", "2026-09-29T10:00:00Z", { instructions: "Be brief." }),
+    project("s-recipes", "Recipes", "2026-09-28T10:00:00Z"),
+  ];
+  const thread = (id: string, project: string, createdAt: string): Thread => ({
+    id,
+    repo: project,
+    createdAt,
+    title: id,
+  });
+  const threads = [
+    thread("t-1", "s-recipes", "2026-09-30T09:00:00Z"),
+    thread("t-2", "s-recipes", "2026-09-29T09:00:00Z"),
+    thread("t-3", "s-essays", "2026-09-28T09:00:00Z"),
+  ];
+  capabilities = { projects: {} };
+  answers["thread/list"] = () => ({ result: { repos, threads, seq: 7 } });
+  pinnedProjects.set(["local/s-apartment"]);
+  await renderApp();
+  openProjectsPage();
+  await settle();
+  // Its own heading names it; the top bar doesn't repeat it.
+  expect(crumbs()).toEqual([]);
+  // Most recently active first, then each sort the menu offers.
+  expect(projectNames()).toEqual(["Recipes", "Apartment", "Essays"]);
+  const sortBy = async (label: string) =>
+    click(
+      [...document.querySelectorAll('main [role="menuitemradio"]')].find(
+        (b) => b.textContent === label,
+      ),
+    );
+  await sortBy("Name");
+  expect(projectNames()).toEqual(["Apartment", "Essays", "Recipes"]);
+  await sortBy("Created");
+  expect(projectNames()).toEqual(["Apartment", "Recipes", "Essays"]);
+  await sortBy("Most threads");
+  expect(projectNames()).toEqual(["Recipes", "Essays", "Apartment"]);
+
+  // A card's details: its threads, files, and instructions.
+  const details = (name: string) =>
+    projectCard(name).querySelector("[data-title]")!.nextElementSibling!.textContent;
+  expect(details("Essays")).toBe("1 thread1 file");
+  expect(details("Apartment")).toBe("0 threadsInstructions");
+
+  // Each filter, then a search, which nothing matches.
+  const show = async (name: string) =>
+    click(
+      [...document.querySelectorAll('main fieldset[aria-label="Show"] label')].find(
+        (l) => l.textContent === name,
+      ),
+    );
+  await show("Pinned");
+  expect(projectNames()).toEqual(["Apartment"]);
+  await show("With files");
+  expect(projectNames()).toEqual(["Essays"]);
+  await show("With instructions");
+  expect(projectNames()).toEqual(["Apartment"]);
+  await show("All");
+  typeInto(
+    document.querySelector<HTMLInputElement>('main input[aria-label="Search projects"]')!,
+    "zzz",
+  );
+  await settle();
+  expect(projectNames()).toEqual([]);
+  expect(document.querySelector("main")!.textContent).toContain("Nothing matches “zzz”.");
+  await click(
+    [...document.querySelectorAll("main button")].find(
+      (b) => b.textContent === "Show all projects",
+    ),
+  );
+  expect(projectNames()).toEqual(["Recipes", "Essays", "Apartment"]);
 });
 
 test("a Project is made from the Projects page, opens to New thread in it, and keeps its icon, instructions, and files", async () => {
@@ -1234,6 +1343,16 @@ test("a row counts unpushed commits for a repo's thread, and none for a thread w
 
 test("Inbox has a Projects button beside its search and Pull requests in the footer but no Projects drawer, and Traditional lists each orchestrator as a row in its folder with Projects in its head", async () => {
   sidebarMode.set("inbox");
+  // photon works in parallax; ember's repo isn't listed.
+  answers["orchestrator/list"] = () => ({
+    result: {
+      orchestrators: [
+        orchestrator("ember", "2026-09-26T12:00:00Z"),
+        { ...orchestrator("photon", "2026-09-29T09:00:00Z"), repoPath: parallax.path },
+      ],
+      seq: 7,
+    },
+  });
   await renderApp();
   const sidebar = document.getElementById("sidebar")!;
   expect(
@@ -1241,10 +1360,14 @@ test("Inbox has a Projects button beside its search and Pull requests in the foo
       s.textContent?.startsWith("Projects"),
     ),
   ).toBe(false);
-  expect(sidebar.querySelector('li[data-kind="orchestrator"]')).toBeNull();
-  expect(
-    sidebar.querySelector('button[aria-label="New orchestrator or repository"]'),
-  ).not.toBeNull();
+  // An orchestrator thread lists by activity as a thread does, on a thread's card: its repo, then
+  // its name, then its branch, with no count of its threads (0093).
+  const rows = () =>
+    [...sidebar.querySelectorAll('ul[aria-label="Threads"] li[data-kind="orchestrator"]')].map(
+      (li) => li.querySelector("button[data-row]")!.textContent,
+    );
+  expect(rows()).toEqual(["parallax3hphotonmain", "No repo3dembermain"]);
+  expect(sidebar.querySelector('button[aria-label="New project or repository"]')).not.toBeNull();
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).not.toBeNull();
   const projectsButton = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Projects"]')!;
   await click(projectsButton);
@@ -1252,12 +1375,8 @@ test("Inbox has a Projects button beside its search and Pull requests in the foo
 
   await act(async () => sidebarMode.set("traditional"));
   expect(sidebar.querySelector('button[aria-label="Pull requests"]')).toBeNull();
-  const list = sidebar.querySelector('ul[aria-label="Threads"]')!;
-  expect(
-    [...list.querySelectorAll('li[data-kind="orchestrator"] [data-title]')].map(
-      (t) => t.textContent,
-    ),
-  ).toEqual(["photon", "ember"]);
+  // Under its repo's folder, it's the folder's thread row: no first line.
+  expect(rows()).toEqual(["photon3hmain", "ember3dmain"]);
   expect(sidebarButton("Projects")).toBeDefined();
 });
 

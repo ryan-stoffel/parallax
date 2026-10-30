@@ -77,13 +77,10 @@ function Working({ since }: { since: string }) {
 export function AttentionBadge({
   attention,
   since,
-  count,
 }: {
   attention: Attention;
   /** When the user last sent the thread a message, for Working's clock (PLX-1012). */
   since?: string;
-  /** For an orchestrator: how many of its runs work. */
-  count?: number;
 }) {
   // Done animates only on a change from another state, never on the first render.
   const [shown, setShown] = useState(attention);
@@ -101,7 +98,7 @@ export function AttentionBadge({
       return (
         <span key={attention} className={`${look} text-working`}>
           <WorkingMark />
-          {since ? <Working since={since} /> : count && count > 1 ? `${count} working` : "Working"}
+          {since ? <Working since={since} /> : "Working"}
         </span>
       );
     case "monitoring":

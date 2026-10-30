@@ -1,4 +1,5 @@
-// The sidebar's row card (0094): one shell for thread, orchestrator, and draft rows.
+// The sidebar's row card (0094): one shell for thread, orchestrator, draft, and Project rows, and
+// for the Projects page's cards.
 import type { HTMLAttributes, ReactNode } from "react";
 
 // One observer for every row: it keeps each row's `--row-tools` at its tools' width, so the line
@@ -27,12 +28,14 @@ function watchTools(el: HTMLElement | null) {
  * `editing` (an input can't sit in a button); `li` on the row itself. `children` follow the button,
  * as its menus. A `dense` row, as every row in the Traditional sidebar is, is a card with less padding.
  * `aside` (marks such as a provider's logo) sits at the title's end, for a row with no details line.
+ * A `framed` card, as the Projects page's are, has a border and more room.
  */
 export function RowCard({
   rowKey,
   kind,
   compact = false,
   dense = false,
+  framed = false,
   place,
   status,
   title,
@@ -53,10 +56,12 @@ export function RowCard({
   children,
 }: {
   rowKey: string;
-  kind: "thread" | "orchestrator" | "draft";
+  kind: "thread" | "orchestrator" | "draft" | "project";
   compact?: boolean;
   /** Less padding, for a card in the Traditional sidebar (0094). */
   dense?: boolean;
+  /** A border and more padding, for a card on a page rather than in the sidebar. */
+  framed?: boolean;
   place?: ReactNode;
   status?: ReactNode;
   title: ReactNode;
@@ -116,7 +121,7 @@ export function RowCard({
       data-kind={kind}
       data-flip={rowKey}
       {...li}
-      className={`group/row relative rounded-lg transition-[background-color,opacity] duration-100 ${look} ${flash ? "row-flash" : ""} ${faded ? "opacity-40" : ""}`}
+      className={`group/row relative rounded-lg transition-[background-color,opacity] duration-100 ${look} ${framed ? "ring-1 ring-border ring-inset" : ""} ${flash ? "row-flash" : ""} ${faded ? "opacity-40" : ""}`}
     >
       {before}
       <Main
@@ -125,7 +130,7 @@ export function RowCard({
         data-row={rowKey}
         data-kind={kind}
         {...main}
-        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${compact ? "py-[5px]" : dense ? "py-1.5" : "py-2"}`}
+        className={`flex w-full cursor-pointer flex-col gap-0.5 rounded-lg px-2 text-left -outline-offset-2 transition-transform duration-100 active:scale-[0.985] ${compact ? "py-[5px]" : framed ? "px-3 py-2.5" : dense ? "py-1.5" : "py-2"}`}
       >
         {oneLine ? (
           <span className={`flex w-full items-center gap-2 ${clear}`}>
@@ -163,7 +168,7 @@ export function RowCard({
       {(actions || trailing) && (
         <div
           ref={watchTools}
-          className={`absolute top-1 right-1 flex items-center gap-0.5 [&_button]:cursor-pointer ${editing ? "hidden" : ""}`}
+          className={`absolute ${framed ? "top-2 right-2" : "top-1 right-1"} flex items-center gap-0.5 [&_button]:cursor-pointer ${editing ? "hidden" : ""}`}
         >
           {actions && (
             <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-has-[:focus-visible]/row:opacity-100 group-hover/row:opacity-100">

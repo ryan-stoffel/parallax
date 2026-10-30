@@ -22,6 +22,8 @@
 
 Its children fold under its row with a count ("3 agents · 1 working") and add no rows. There is no permanent shelf and no separate section, since an idle orchestrator would still take space at the top.
 
+**Its row is a thread's** (PLX-1177). In every sidebar mode, pinned or not, an orchestrator's row is a thread's card: its repo's icon and name with its status or age, its name, then its branch, computer, provider, and pull requests, with no "Orchestrator" label, thread count, or icon of its own. Inbox lists every one by activity, and under a Traditional folder it's the folder's thread row. Traditional's **Pinned** is one section that folds: pinned Projects first, each a card the size of a pinned thread's with its icon and "Project" over its name, then pinned orchestrator threads and threads.
+
 **Order.** Four steps, each its own pull request:
 
 1. Rename Project and coordinator to orchestrator (PLX-1174).
@@ -42,7 +44,7 @@ Its children fold under its row with a count ("3 agents · 1 working") and add n
 - Migration 57 renames `repos.space` to `project` and `threads.space_id` to `project_id`, with a backup before it.
 - plxd's `spaces` module and its threads' `<space_instructions>`, the app's Space components and copy, and the docs.
 - The Projects page lists Projects only, with no kind filter, and its New button makes a Project; orchestrators show in the sidebar and ⌘K until step 4. Pins, the `projects` nav row, and the icon palette now mean Projects.
-- With 0094's Traditional sidebar, the head's **New project** and the add palette's first option, **New Project**, make a Project; an orchestrator thread starts from New thread's picker, whose **Orchestrator threads** section ends with **New orchestrator thread**. Pinned Projects list in the head, and pinned orchestrators as cards under **Pinned orchestrator threads**.
+- With 0094's Traditional sidebar, the head's **New project** and the add palette's first option, **New Project**, make a Project; an orchestrator thread starts from New thread's picker, whose **Orchestrator threads** section ends with **New orchestrator thread**. Pinned Projects and orchestrators list in Traditional's Pinned section, as above.
 
 **What steps 1 and 2 keep.** A run's scope, which holds a repo entry's id (a repository's or a Project's) or an orchestrator's, keeps its wire name `project` on runs, events, `events/subscribe`, `agent/*`, and `context/*`; its type is `ScopeId`. Step 3 reworks scopes. Words for a code project stay, as do whitespace, the Space key, and CSS spacing. So do the on-disk `coordinators/` and `spaces/` folders and the stored `project.cleanup` and `project.delete` effect kinds, which rows already name.
 
