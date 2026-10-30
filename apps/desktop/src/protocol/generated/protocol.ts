@@ -7343,6 +7343,10 @@ export type PullRequest = {
 	 * Its review threads, resolved ones included, oldest first.
 	 */
 	reviewThreads?: Array<PrReviewThread>,
+	/**
+	 * It has older review threads than `review_threads` holds (the newest 100).
+	 */
+	reviewThreadsTruncated?: boolean,
 };
 
 /**
@@ -7573,6 +7577,10 @@ export type PrReviewThread = {
 	 * Its comments, oldest first.
 	 */
 	comments: Array<PrThreadComment>,
+	/**
+	 * GitHub has more comments on it than `comments` holds (the first 50).
+	 */
+	truncated?: boolean,
 };
 
 /**
@@ -7638,8 +7646,8 @@ export type PrActParams = {
 	 */
 	deleteBranch?: boolean,
 	/**
-	 * The head commit the user saw: `merge`, `squash`, and `rebase` merge only while the head is
-	 * still this commit.
+	 * The head commit the user saw: `merge`, `squash`, `rebase`, and `autoMerge` merge only while
+	 * the head is still this commit.
 	 */
 	headSha?: string,
 	/**

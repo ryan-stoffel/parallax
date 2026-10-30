@@ -84,8 +84,8 @@ pub struct PrActParams {
     /// Whether `merge`, `squash`, or `rebase` also deletes the head branch.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub delete_branch: bool,
-    /// The head commit the user saw: `merge`, `squash`, and `rebase` merge only while the head is
-    /// still this commit.
+    /// The head commit the user saw: `merge`, `squash`, `rebase`, and `autoMerge` merge only while
+    /// the head is still this commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub head_sha: Option<String>,
@@ -320,6 +320,10 @@ pub struct PrReviewThread {
     pub is_resolved: bool,
     /// Its comments, oldest first.
     pub comments: Vec<PrThreadComment>,
+    /// GitHub has more comments on it than `comments` holds (the first 50).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub truncated: bool,
 }
 
 /// A comment in a [`PrReviewThread`].
@@ -525,6 +529,10 @@ pub struct PullRequest {
     /// Its review threads, resolved ones included, oldest first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub review_threads: Vec<PrReviewThread>,
+    /// It has older review threads than `review_threads` holds (the newest 100).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[ts(as = "Option<bool>", optional)]
+    pub review_threads_truncated: bool,
 }
 
 /// Params of `pr/write` (PLX-1022): one write to a GitHub pull request, sent through plxd's

@@ -140,15 +140,14 @@ fn act_args(params: &PrActParams, head: Option<(String, String)>) -> Result<Vec<
         PrMergeMethod::Rebase => Ok("--rebase"),
         PrMergeMethod::Unknown => Err("method must be merge, squash, or rebase".to_owned()),
     };
+    let pinned = params
+        .head_sha
+        .as_ref()
+        .map(|head| format!("--match-head-commit={head}"));
     let merge = |method| -> Result<Vec<String>, String> {
         let mut args = vec!["pr".to_owned(), "merge".to_owned(), url.to_owned()];
         args.push(flag(method)?.to_owned());
-        args.extend(
-            params
-                .head_sha
-                .as_ref()
-                .map(|head| format!("--match-head-commit={head}")),
-        );
+        args.extend(pinned.clone());
         if params.delete_branch {
             args.push("--delete-branch".to_owned());
         }
@@ -167,7 +166,9 @@ fn act_args(params: &PrActParams, head: Option<(String, String)>) -> Result<Vec<
         PrAction::Rebase => merge(PrMergeMethod::Rebase)?,
         PrAction::AutoMerge => {
             let method = flag(params.method.unwrap_or(PrMergeMethod::Merge))?;
-            gh(&["pr", "merge", url, "--auto", method])
+            let mut args: Vec<String> = gh(&["pr", "merge", url, "--auto", method]);
+            args.extend(pinned);
+            args
         }
         PrAction::DisableAutoMerge => gh(&["pr", "merge", url, "--disable-auto"]),
         PrAction::Draft => gh(&["pr", "ready", url, "--undo"]),

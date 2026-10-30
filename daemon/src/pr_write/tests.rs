@@ -247,7 +247,25 @@ fn deleting_a_branch_names_it_in_its_own_repository() {
     let unknown = parallax_protocol::PrActParams {
         action: PrAction::AutoMerge,
         method: Some(PrMergeMethod::Unknown),
-        ..params
+        ..params.clone()
     };
     assert!(act_args(&unknown, None).is_err());
+    let auto = parallax_protocol::PrActParams {
+        action: PrAction::AutoMerge,
+        method: Some(PrMergeMethod::Squash),
+        head_sha: Some("abc1234".to_owned()),
+        ..params
+    };
+    assert_eq!(
+        act_args(&auto, None).unwrap(),
+        [
+            "pr",
+            "merge",
+            "https://github.com/me/app/pull/7",
+            "--auto",
+            "--squash",
+            "--match-head-commit=abc1234"
+        ],
+        "auto-merge is pinned to the head the user saw"
+    );
 }

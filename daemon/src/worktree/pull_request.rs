@@ -549,6 +549,7 @@ fn parse_view(json: &str) -> Result<PullRequest, PrError> {
         merge_methods: Vec::new(),
         label_colors: Vec::new(),
         review_threads: Vec::new(),
+        review_threads_truncated: false,
     })
 }
 

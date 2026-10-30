@@ -340,10 +340,10 @@ fn a_read_serves_every_read_of_its_pull_request_for_thirty_seconds() {
     assert!(watches.shared(url, at + Duration::from_secs(30)).is_none());
 
     // A status's comparison sticks to the read it compared, and not to a newer head's.
-    watches.compared(url, "abc1234def", 2);
-    assert_eq!(watches.shared(url, later).unwrap().behind_by, Some(2));
-    watches.compared(url, "pushed", 5);
-    assert_eq!(watches.shared(url, later).unwrap().behind_by, Some(2));
+    watches.compared(url, "abc1234def", Ok(2));
+    assert_eq!(watches.shared(url, later).unwrap().compared, Some(Ok(2)));
+    watches.compared(url, "pushed", Ok(5));
+    assert_eq!(watches.shared(url, later).unwrap().compared, Some(Ok(2)));
 
     // A read that started earlier but finished later doesn't replace a newer one.
     let mut older = open(Vec::new(), Vec::new(), "MERGEABLE");
@@ -468,7 +468,7 @@ async fn merge_when_ready_waits_for_green() {
         ["it conflicts with develop"]
     );
     // Behind its base holds a merge only where the base requires an up-to-date branch.
-    assert!(held(|d| d.behind_by = Some(3)).is_empty());
+    assert!(held(|d| d.compared = Some(Ok(3))).is_empty());
     assert_eq!(
         held(|d| d.merge_state = "BEHIND".to_owned()),
         ["develop requires it to be up to date"]
@@ -776,9 +776,10 @@ const FULL: &str = r#"{"data": {
             {"id": "PRR_2", "author": {"login": "rev"}, "body": "draft", "state": "PENDING",
              "submittedAt": null, "lastEditedAt": null, "url": null}
           ]},
-          "reviewThreads": {"nodes": [
+          "reviewThreads": {"pageInfo": {"hasPreviousPage": true}, "nodes": [
             {"id": "PRRT_1", "path": "src/main.rs", "line": 12, "originalLine": 10,
-             "isOutdated": false, "isResolved": false, "comments": {"nodes": [
+             "isOutdated": false, "isResolved": false, "comments": {
+              "pageInfo": {"hasNextPage": true}, "nodes": [
               {"id": "PRRC_1", "author": {"login": "rev", "avatarUrl": "https://avatars/rev"},
                "body": "nit", "createdAt": "2026-10-09T10:04:00Z", "lastEditedAt": null,
                "url": "https://github.com/me/app/pull/7#discussion_r1",
@@ -931,6 +932,37 @@ fn pr_view_s_comments_and_review_threads_carry_their_ids() {
         (resolved.line, resolved.is_resolved, resolved.is_outdated),
         (Some(4), true, true),
         "an outdated thread keeps the line it was written on"
+    );
+    assert!(pr.review_threads_truncated, "older threads are on GitHub");
+    assert_eq!(
+        (open.truncated, resolved.truncated),
+        (true, false),
+        "only the thread GitHub has more comments on says so"
+    );
+}
+
+#[test]
+fn a_failed_compare_isn_t_ready_and_is_kept_for_the_read() {
+    let url = "https://github.com/me/app/pull/7";
+    let pr = viewed(url, parse(FULL).unwrap(), None).unwrap();
+    assert_eq!(pr.behind_by, None);
+    assert_eq!(pr.ready, Some(false));
+    assert!(
+        pr.reasons
+            .iter()
+            .any(|reason| reason.starts_with("couldn't tell how far it is behind")),
+        "{:?}",
+        pr.reasons
+    );
+
+    let watches = Watches::default();
+    let at = Instant::now();
+    watches.share(url, at, &parse(FULL).unwrap());
+    watches.compared(url, "abc1234def", Err("ref: null".to_owned()));
+    assert_eq!(
+        watches.shared(url, at).unwrap().compared,
+        Some(Err("ref: null".to_owned())),
+        "the next caller within the read's 30 s doesn't compare again"
     );
 }
 

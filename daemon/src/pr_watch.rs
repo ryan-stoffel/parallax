@@ -138,10 +138,12 @@ const QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) {
       reviews(last: 100) { nodes {
         id author { login avatarUrl } body state submittedAt lastEditedAt url
       } }
-      reviewThreads(last: 100) { nodes {
-        id path line originalLine isOutdated isResolved comments(first: 50) { nodes {
-          id author { login avatarUrl } body createdAt lastEditedAt url diffHunk
-        } }
+      reviewThreads(last: 100) { pageInfo { hasPreviousPage } nodes {
+        id path line originalLine isOutdated isResolved comments(first: 50) {
+          pageInfo { hasNextPage } nodes {
+            id author { login avatarUrl } body createdAt lastEditedAt url diffHunk
+          }
+        }
       } }
     }
   }
@@ -192,13 +194,14 @@ impl Watches {
         reads.insert(url.to_owned(), (at, detail.clone()));
     }
 
-    /// Adds `behind_by` to `url`'s last read while it is still of `head`, so a status served from
-    /// it needs no second call.
-    fn compared(&self, url: &str, head: &str, behind_by: u64) {
+    /// Adds `compared`, how far `head` is behind the base or why GitHub couldn't say, to `url`'s
+    /// last read while it is still of `head`, so a call served from it needs no second compare,
+    /// even one that failed.
+    fn compared(&self, url: &str, head: &str, compared: Result<u64, String>) {
         if let Some((_, detail)) = self.reads().get_mut(url)
             && detail.head_sha.as_deref() == Some(head)
         {
-            detail.behind_by = Some(behind_by);
+            detail.compared = Some(compared);
         }
     }
 }
@@ -249,8 +252,9 @@ struct Detail {
     head_sha: Option<String>,
     head_branch: String,
     base_branch: String,
-    /// How far the head is behind the base, once [`status`] has asked.
-    behind_by: Option<u64>,
+    /// How far the head is behind the base, or why GitHub couldn't compare them, once
+    /// [`behind_of`] has asked.
+    compared: Option<Result<u64, String>>,
     files: Vec<PrStatusFile>,
     checks: Vec<Check>,
     /// `MERGEABLE`, `CONFLICTING`, or `UNKNOWN` while GitHub works it out.
@@ -547,14 +551,16 @@ pub(crate) async fn status(
 }
 
 /// How far `detail`'s head is behind its base: 0 unless it is open, else from the read, or from
-/// one compare kept on the shared read for every later caller of the same head.
+/// one compare kept on the shared read, failed or not, for every later caller of the same head.
 async fn behind_of(daemon: &Daemon, url: &str, detail: &Detail) -> Result<u64, PrError> {
-    match (detail.state.as_str(), &detail.head_sha, detail.behind_by) {
-        ("OPEN", Some(_), Some(behind_by)) => Ok(behind_by),
+    match (detail.state.as_str(), &detail.head_sha, &detail.compared) {
+        ("OPEN", Some(_), Some(compared)) => compared.clone().map_err(PrError::Gh),
         ("OPEN", Some(head), None) => {
-            let behind_by = behind(daemon, url, &detail.base_branch, head).await?;
-            daemon.pr_watches.compared(url, head, behind_by);
-            Ok(behind_by)
+            let compared = behind(daemon, url, &detail.base_branch, head)
+                .await
+                .map_err(|error| error.to_string());
+            daemon.pr_watches.compared(url, head, compared.clone());
+            compared.map_err(PrError::Gh)
         }
         _ => Ok(0),
     }
@@ -577,16 +583,22 @@ pub(crate) async fn view(daemon: &Daemon, url: &str, fresh: bool) -> Result<PrVi
     viewed(url, detail, behind_by)
 }
 
-/// `detail`'s pull request with `behind_by` and [`verdict`]'s readiness added.
+/// `detail`'s pull request with `behind_by` and [`verdict`]'s readiness added. An open one whose
+/// compare failed (`behind_by` absent) isn't ready, with that as a reason.
 fn viewed(url: &str, detail: Detail, behind_by: Option<u64>) -> Result<PrView, PrError> {
     let open = detail.state == "OPEN";
     let mut pr = detail.view.clone().ok_or_else(|| {
         PrError::Gh("GitHub's answer left out the pull request's details".to_owned())
     })?;
-    let judged = verdict(url.to_owned(), detail, behind_by.unwrap_or(0), false);
+    let uncompared = open && behind_by.is_none();
+    let base = detail.base_branch.clone();
+    let mut reasons = verdict(url.to_owned(), detail, behind_by.unwrap_or(0), false).reasons;
+    if uncompared {
+        reasons.push(format!("couldn't tell how far it is behind {base}"));
+    }
     pr.behind_by = behind_by.filter(|_| open);
-    pr.ready = Some(judged.ready);
-    pr.reasons = judged.reasons;
+    pr.ready = Some(reasons.is_empty());
+    pr.reasons = reasons;
     Ok(pr)
 }
 
@@ -1544,7 +1556,7 @@ fn parse(answer: &str) -> Result<Detail, PrError> {
         head_sha: pr.head_ref_oid,
         head_branch: pr.head_ref_name,
         base_branch: pr.base_ref_name,
-        behind_by: None,
+        compared: None,
         files: pr
             .files
             .map(|files| files.nodes.into_iter().flatten().collect())
@@ -1667,6 +1679,7 @@ fn pr_view(
         merge_methods,
         label_colors: labels,
         review_threads: pr.review_threads.iter().map(review_thread).collect(),
+        review_threads_truncated: pr.review_threads.cut(),
     })
 }
 
@@ -1789,6 +1802,7 @@ fn review_thread(thread: &Thread) -> PrReviewThread {
                 })
             })
             .collect(),
+        truncated: thread.comments.cut(),
     }
 }
 
@@ -1989,13 +2003,24 @@ struct GitActor {
     user: Option<Login>,
 }
 
-/// A connection's `nodes`, any of which GitHub may answer as null.
+/// A connection's `nodes`, any of which GitHub may answer as null, and its `pageInfo` where
+/// [`QUERY`] asks for it.
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Nodes<T> {
     nodes: Vec<Option<T>>,
+    #[serde(default)]
+    page_info: Option<PageInfo>,
 }
 
 impl<T> Nodes<T> {
+    /// GitHub has more of them than this page holds, before or after it.
+    fn cut(&self) -> bool {
+        self.page_info
+            .as_ref()
+            .is_some_and(|page| page.has_next_page || page.has_previous_page)
+    }
+
     /// Its nodes that aren't null.
     fn iter(&self) -> impl Iterator<Item = &T> {
         self.nodes.iter().flatten()
@@ -2124,7 +2149,10 @@ struct Suites {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PageInfo {
+    #[serde(default)]
     has_next_page: bool,
+    #[serde(default)]
+    has_previous_page: bool,
 }
 
 /// A check suite on the head: one per app, and one per GitHub Actions workflow run.
