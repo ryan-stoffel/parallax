@@ -1,4 +1,4 @@
-// The sidebar's head (0090): New thread, New project or Space, and Search as rows, then the
+// The sidebar's head (0090): New thread, New project, and Search as rows, then the
 // pages Settings shows there, More, and the projects pinned under them.
 import {
   ChartNoAxesColumn,
@@ -13,7 +13,6 @@ import { useId, useRef, type ReactNode } from "react";
 
 import { useShortcutLabel } from "./keybindings";
 import type { ProjectEntry } from "./projectList";
-import { AttentionBadge } from "./AttentionMark";
 import type { FavoriteAction } from "./Favorites";
 import { ProjectMenu, ProjectTile } from "./ProjectsPage";
 import { navDefaults, sidebarNav, togglePinnedProject, type NavRow } from "./sidebarPrefs";
@@ -112,7 +111,7 @@ export function SidebarNav({
       </button>
       <button type="button" onClick={onAdd} className={navRow}>
         <FolderPlus />
-        New project or Space
+        New project
       </button>
       {search}
       {navChoices.filter((c) => shown[c.id]).map(page)}
@@ -172,7 +171,7 @@ export function SidebarNav({
   );
 }
 
-/** A pinned project's row: its glyph and name, its status (Needs you, Working, Done), and its menu. */
+/** A pinned Space's row: its glyph and name, and its menu on hover. It opens the Space's page. */
 function PinnedRow({
   entry,
   open,
@@ -195,12 +194,6 @@ function PinnedRow({
       >
         <ProjectTile entry={entry} size="glyph" />
         <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-        {/* Its status as the sidebar's cards show it, giving way to its menu on hover. */}
-        {entry.attention !== "settled" && (
-          <span className="shrink-0 group-focus-within/pin:hidden group-hover/pin:hidden">
-            <AttentionBadge attention={entry.attention} count={entry.working} />
-          </span>
-        )}
       </button>
       <div className="absolute top-1/2 right-1 -translate-y-1/2 opacity-0 group-focus-within/pin:opacity-100 group-hover/pin:opacity-100 has-[[aria-expanded=true]]:opacity-100">
         <ProjectMenu

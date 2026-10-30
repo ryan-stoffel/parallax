@@ -204,9 +204,13 @@ test("creates a project on a repository it adds, and opens it (PLX-166)", async 
   execFileSync("git", ["-C", repo, ...identity, "commit", "-q", "--allow-empty", "-m", "Start"]);
   // The sign-in test left Settings open.
   await page.getByRole("button", { name: "Close settings" }).click();
-  await page.getByRole("button", { name: "New project or repository" }).click();
-  const dialog = page.getByRole("dialog", { name: "New project or Space" });
-  await dialog.getByRole("option", { name: /^New Project/ }).click();
+  // A Project, an orchestrator thread from 0093 on, starts from New thread's picker.
+  await page.locator("#sidebar").getByRole("button", { name: "New thread", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "New thread in" })
+    .getByRole("option", { name: /^New orchestrator thread/ })
+    .click();
+  const dialog = page.getByRole("dialog", { name: "New project" });
   await dialog.getByRole("button", { name: /^Workspace/ }).click();
   await page.getByRole("menuitem", { name: "Choose folder…" }).click();
   // The palette's folder step, opened on the repository itself, adds it.

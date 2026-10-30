@@ -720,6 +720,11 @@ export function ThreadList({
   const projects = inbox
     ? allProjects.filter((p) => p.attention === "needsYou" || words.length > 0)
     : [];
+  // Traditional's pinned Projects (orchestrator threads from 0093), as cards with its pinned threads,
+  // in the order pinned, and so out of their folders. Its pinned Spaces stay in its head.
+  const pinnedOrchestrators = folders
+    ? pins.flatMap((key) => allProjects.filter((p) => p.key === key))
+    : [];
   // The favorite threads stay in the order they're moved into (pins.ts).
   const favOrder = favoriteOrder.use();
   const favRank = (key: string) => {
@@ -783,7 +788,9 @@ export function ThreadList({
   const isFolded = (key: string) => !words.length && foldedGroups.includes(key);
   const groups: Group[] | undefined = folders
     ? folderGroups(
-        [...allProjects, ...topThreads].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)),
+        [...allProjects.filter((p) => !pinnedOrchestrators.includes(p)), ...topThreads].sort(
+          (a, b) => Date.parse(b.at) - Date.parse(a.at),
+        ),
         many,
       )
     : todayBy === "none"
@@ -794,6 +801,7 @@ export function ThreadList({
   // Mod+1 to Mod+9 open the first nine rows shown, which show their badges while Mod is held: the
   // pinned threads' rows, Inbox's Projects' rows, then Today's, then Working's, while it's open.
   const listed = [
+    ...pinnedOrchestrators,
     ...pinnedRows,
     ...projects,
     ...todayRows,
@@ -1135,7 +1143,7 @@ export function ThreadList({
     return (
       <ThreadRow
         key={item.key}
-        look={compact ? "compact" : folders && nested ? "dense" : undefined}
+        look={compact ? "compact" : folders ? "dense" : undefined}
         at={item.at}
         {...(pinDrag && { pinDrag })}
         rowKey={item.key}
@@ -1701,14 +1709,16 @@ export function ThreadList({
     })
     .sort((a, b) => favRank(a.key) - favRank(b.key));
   // A Project's card in the Inbox sidebar (PLX-1043).
-  // A Project's card. `nested`, under a Traditional folder, it's dense: its icon and name on one line.
+  // A Project's card, dense in Traditional, as its threads' are. `nested`, under a folder, it's its
+  // icon and name on one line, then its details; pinned, it keeps its first line, as a thread does.
   const projectCard = (p: Item & { kind: "project" }, nested = false) => {
     const n = modHeld ? listed.indexOf(p) : -1;
     return (
       <ProjectRow
         key={p.key}
         rowKey={p.key}
-        look={compact ? "compact" : folders && nested ? "dense" : undefined}
+        look={compact ? "compact" : folders ? "dense" : undefined}
+        nested={nested}
         project={p.project}
         runs={p.runs}
         device={many && p.host.icon ? p.host : undefined}
@@ -1763,8 +1773,15 @@ export function ThreadList({
         }}
         onRemove={unfavorite}
       />
+      {pinnedOrchestrators.length > 0 && (
+        <ul aria-label="Pinned orchestrator threads" className={`mb-1 ${cardGap}`}>
+          {pinnedOrchestrators.map((p) => projectCard(p))}
+        </ul>
+      )}
       {pinList}
-      {(favorites.length > 0 || pinnedRows.length > 0) && <Rule />}
+      {(favorites.length > 0 || pinnedRows.length > 0 || pinnedOrchestrators.length > 0) && (
+        <Rule />
+      )}
       {projectList}
       {threadList()}
     </>
@@ -1859,7 +1876,7 @@ export function ThreadList({
       ) : (
         <SidebarNav
           current={page}
-          pinned={pinnedEntries}
+          pinned={pinnedEntries.filter((e) => e.kind === "space")}
           openKey={openSpace ?? (selection.kind === "project" ? openKey : undefined)}
           onNewThread={onNewThread}
           onOpen={onOpenPage}
@@ -2719,6 +2736,7 @@ export const backendLogo = (backend: string) => backendLogos[backend] ?? instanc
 function ProjectRow({
   rowKey,
   look,
+  nested = false,
   project,
   runs,
   device,
@@ -2733,9 +2751,11 @@ function ProjectRow({
 }: {
   /** Its key in the list, for keyboard moves and sliding when the list moves. */
   rowKey: string;
-  /** Today's one-line look (pins.ts): its icon, name, and status. Dense, under a Traditional folder,
-   *  is that line with its details under it. */
+  /** Today's one-line look (pins.ts): its icon, name, and status. Dense is a card with less padding,
+   *  as every row in the Traditional sidebar is. */
   look?: "compact" | "dense";
+  /** Under its repo's folder, which names the repo: its icon and name lead, with no first line. */
+  nested?: boolean;
   project: Project;
   /** Its coordinator's and children's runs (0042). */
   runs: readonly AgentRun[];
@@ -2774,7 +2794,7 @@ function ProjectRow({
       compact={oneLine}
       dense={look === "dense"}
       place={
-        oneLine || look === "dense" ? (
+        nested && !oneLine ? undefined : oneLine ? (
           icon
         ) : (
           <span className="flex min-w-0 items-center gap-1.5">
@@ -2787,7 +2807,16 @@ function ProjectRow({
         )
       }
       status={status}
-      title={<Marked text={project.name} words={words} />}
+      title={
+        nested && !oneLine ? (
+          <>
+            <ProjectIcon icon={project.icon} className="mr-1.5 inline-block size-4 align-[-3px]" />
+            <Marked text={project.name} words={words} />
+          </>
+        ) : (
+          <Marked text={project.name} words={words} />
+        )
+      }
       dim={attention === "settled"}
       selected={selected}
       main={{
@@ -3061,7 +3090,7 @@ function ThreadRow({
   pinDrag,
 }: {
   /** Today's one-line look (pins.ts): where it is, its title, and its status. Dense is a card with
-   *  less padding, under a Traditional folder's heading. */
+   *  less padding, as every row in the Traditional sidebar is. */
   look?: "compact" | "dense";
   /** A pinned row's move among the pins (PinList.tsx). */
   pinDrag?: PinDrag;
@@ -3196,6 +3225,22 @@ function ThreadRow({
   const branch = repo && !repo.scratch && !repo.space ? run?.branch : undefined;
   // Its pin isn't a detail: it sits in the row's top-right, so pinning doesn't change its height.
   const hasDetails = !!((git && (git.ahead || git.changes)) || prs.urls.length || Logo || device);
+  // With no branch, git, pull request, or Remote Control to show, its computer and provider marks
+  // go at its title's end, so they never take a line of their own.
+  const marksOnly =
+    !branch && !(git && (git.ahead || git.changes)) && !prs.urls.length && !isRemoteControl(run);
+  // Its computer, then its provider's logo: in gray, so a list isn't striped with providers' colors,
+  // but in color while open.
+  const marks = (
+    <>
+      {device?.icon && (
+        <span title={device.name} role="img" aria-label={device.name} className="flex shrink-0">
+          <DeviceIcon icon={device.icon} className="size-3.5" />
+        </span>
+      )}
+      {Logo && <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />}
+    </>
+  );
   const snoozedNow = !!thread.snoozedUntil && Date.parse(thread.snoozedUntil) > Date.now();
   const mainLabel = (
     <>
@@ -3299,6 +3344,7 @@ function ThreadRow({
       }
       status={status}
       title={titleText}
+      aside={!compact && marksOnly && hasDetails && marks}
       dim={attention === "settled"}
       selected={selected}
       picked={picked}
@@ -3335,7 +3381,7 @@ function ThreadRow({
       }}
       details={
         <>
-          {!compact && (branch || hasDetails) && (
+          {!compact && (branch || hasDetails) && !marksOnly && (
             <span className="flex w-full items-center gap-2 text-meta text-faint-foreground">
               <span className="flex min-w-0 flex-1 items-center gap-1">
                 {branch && (
@@ -3370,22 +3416,9 @@ function ThreadRow({
                   {checksState && <ChecksMark state={checksState} />}
                 </span>
               )}
-              {device?.icon && (
-                <span
-                  title={device.name}
-                  role="img"
-                  aria-label={device.name}
-                  className="flex shrink-0"
-                >
-                  <DeviceIcon icon={device.icon} className="size-3.5" />
-                </span>
-              )}
               {/* A Claude Remote Control thread (PLX-1140): its session runs on another computer. */}
               {isRemoteControl(run) && <RemoteControlBadge />}
-              {/* In gray, so a list isn't striped with providers' colors, but in color while open. */}
-              {Logo && (
-                <Logo className={`size-3.5 shrink-0 ${selected ? "" : "opacity-80 grayscale"}`} />
-              )}
+              {marks}
             </span>
           )}
           {snippet && (

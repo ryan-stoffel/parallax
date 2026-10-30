@@ -210,8 +210,7 @@ const projectRows = () => {
 };
 const crumbs = () =>
   [...document.querySelectorAll('[aria-label="Breadcrumb"] li')].map((li) => li.textContent);
-const dialog = () =>
-  document.querySelector<HTMLDialogElement>('dialog[aria-label="New project or Space"]')!;
+const dialog = () => document.querySelector<HTMLDialogElement>('dialog[aria-label="New project"]')!;
 const inDialog = (name: string) =>
   [...dialog().querySelectorAll("button")].find(
     (b) => b.textContent === name || b.getAttribute("aria-label") === name,
@@ -250,14 +249,22 @@ const paletteOption = (name: string) =>
 // The sidebar's row under New thread (0090).
 const openPalette = async () => {
   await click(
-    [...document.querySelectorAll("#sidebar button")].find(
-      (b) => b.textContent === "New project or Space",
-    ),
+    [...document.querySelectorAll("#sidebar button")].find((b) => b.textContent === "New project"),
   );
 };
+// A Project, an orchestrator thread from 0093 on, starts from New thread's picker.
 const openNewProject = async () => {
-  await openPalette();
-  await click(paletteOption("New Project"));
+  await click(
+    [...document.querySelectorAll("#sidebar button")].find((b) =>
+      b.textContent?.startsWith("New thread"),
+    ),
+  );
+  const picker = document.querySelector('dialog[aria-label="New thread in"]')!;
+  await click(
+    [...picker.querySelectorAll('[role="option"]')].find((o) =>
+      o.textContent?.startsWith("New orchestrator thread"),
+    ),
+  );
 };
 const workspaceButton = () =>
   dialog().querySelector('button[aria-haspopup="menu"]')!.getAttribute("aria-label");
@@ -899,13 +906,22 @@ test("Usage waits under More until Settings shows it in the head, and pinned pro
   await act(async () => sidebarNav.set({ ...sidebarNav.get(), usage: true }));
   expect(sidebarButton("Usage")!.closest("[inert]")).toBeNull();
 
-  // Pinning from a card lists the Project under Pinned, and its row opens it.
+  // Pinning a Project from its card lists it as a card with the pinned threads, out of its folder,
+  // and its row opens it. Under Pinned in the head are only Spaces.
   openProjectsPage();
   await click(document.querySelector('main button[aria-label="Pin ember"]'));
   expect(pinnedProjects.get()).toEqual(["local/p-ember"]);
-  const pinned = document.querySelector('#sidebar section[aria-label="Pinned"]')!;
-  expect([...pinned.querySelectorAll("li > button")].map((b) => b.textContent)).toEqual(["ember"]);
-  await click(pinned.querySelector("li > button"));
+  expect(document.querySelector('#sidebar section[aria-label="Pinned"]')).toBeNull();
+  const pinned = document.querySelector('#sidebar ul[aria-label="Pinned orchestrator threads"]')!;
+  expect([...pinned.querySelectorAll("[data-title]")].map((t) => t.textContent)).toEqual(["ember"]);
+  expect(
+    [
+      ...document.querySelectorAll(
+        '#sidebar ul[aria-label="Threads"] li[data-kind="project"] [data-title]',
+      ),
+    ].map((t) => t.textContent),
+  ).not.toContain("ember");
+  await click(pinned.querySelector("button[data-row]"));
   expect(crumbs()).toEqual(["This Mac", "ember"]);
 });
 
@@ -1190,7 +1206,7 @@ test("Inbox has a Projects button beside its search and Pull requests in the foo
   expect(sidebarButton("Projects")).toBeDefined();
 });
 
-test("the add palette offers New Space after New Project where the host makes Spaces, and it opens Create Space", async () => {
+test("the add palette offers New Space first where the host makes Spaces, and it opens Create Space; New orchestrator thread is in New thread's picker", async () => {
   await renderApp();
   await openPalette();
   expect(paletteOption("New Space")).toBeUndefined();
@@ -1200,7 +1216,8 @@ test("the add palette offers New Space after New Project where the host makes Sp
   unmount();
   await renderApp();
   await openPalette();
-  expect(paletteOptions().indexOf(paletteOption("New Space")!)).toBe(1);
+  expect(paletteOptions().indexOf(paletteOption("New Space")!)).toBe(0);
+  expect(paletteOption("New Project")).toBeUndefined();
   await click(paletteOption("New Space"));
   expect(dialog().open).toBe(false);
   const create = [...document.querySelectorAll("dialog")].find(

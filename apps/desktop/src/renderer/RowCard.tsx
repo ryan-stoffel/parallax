@@ -25,8 +25,8 @@ function watchTools(el: HTMLElement | null) {
  * slides and fades as the list changes (flip.ts), and its `data-row`, which the arrow keys and
  * focus after a change move through. `main` goes on the button that opens it, a plain box while
  * `editing` (an input can't sit in a button); `li` on the row itself. `children` follow the button,
- * as its menus. A `dense` row, as under a Traditional folder, is a card with less padding whose
- * first line is `place` (an icon, or nothing), the title, and the status.
+ * as its menus. A `dense` row, as every row in the Traditional sidebar is, is a card with less padding.
+ * `aside` (marks such as a provider's logo) sits at the title's end, for a row with no details line.
  */
 export function RowCard({
   rowKey,
@@ -36,6 +36,7 @@ export function RowCard({
   place,
   status,
   title,
+  aside,
   dim = false,
   details,
   actions,
@@ -54,11 +55,13 @@ export function RowCard({
   rowKey: string;
   kind: "thread" | "project" | "draft";
   compact?: boolean;
-  /** Less padding, for a card under a Traditional folder's heading (0091). */
+  /** Less padding, for a card in the Traditional sidebar (0091). */
   dense?: boolean;
   place?: ReactNode;
   status?: ReactNode;
   title: ReactNode;
+  /** Marks at the title's end, as a provider's logo when the row has no details line for it. */
+  aside?: ReactNode;
   /** Whether the title is quieter, as a finished thread's is until hovered or open. */
   dim?: boolean;
   details?: ReactNode;
@@ -93,8 +96,8 @@ export function RowCard({
   const statusLook = `shrink-0 ${actions ? "group-has-[:focus-visible]/row:hidden group-hover/row:hidden" : ""}`;
   const titleColor =
     selected || !dim ? "text-foreground" : "text-foreground/70 group-hover/row:text-foreground";
-  // A compact or dense row, or a card with no place (under its repo's heading), leads with its title.
-  const oneLine = compact || dense || !place;
+  // A compact row, or a card with no place (under its repo's heading), leads with its title.
+  const oneLine = compact || !place;
   const titleText = (
     <span
       data-title
@@ -128,6 +131,11 @@ export function RowCard({
           <span className={`flex w-full items-center gap-2 ${clear}`}>
             {place}
             {titleText}
+            {aside && (
+              <span className="flex shrink-0 items-center gap-2 text-faint-foreground">
+                {aside}
+              </span>
+            )}
             {statusText}
           </span>
         ) : (
@@ -138,7 +146,16 @@ export function RowCard({
               <span className="flex min-w-0 flex-1 items-center">{place}</span>
               {statusText}
             </span>
-            {titleText}
+            {aside ? (
+              <span className="flex w-full items-center gap-2">
+                {titleText}
+                <span className="flex shrink-0 items-center gap-2 text-faint-foreground">
+                  {aside}
+                </span>
+              </span>
+            ) : (
+              titleText
+            )}
           </>
         )}
         {details}

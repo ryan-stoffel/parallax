@@ -43,7 +43,7 @@ import type { DocRef } from "./documents";
 import { freshDraftId } from "./drafts";
 import { OpenDocumentContext } from "./FileCards";
 import { panelWidths, SIDEBAR_MIN } from "./PanelResize";
-import { NewThreadPicker } from "./NewThreadPicker";
+import { NewThreadPicker, type PickerOrchestrator } from "./NewThreadPicker";
 import { Notifications } from "./notifications";
 import { Onboarding } from "./Onboarding";
 import { Splash } from "./Splash";
@@ -870,6 +870,18 @@ export function App() {
     setSettings(null);
     setMainPage(next);
   };
+  // The orchestrator threads New thread's picker offers to continue, on every computer listed, most
+  // recently active first (0093): orchestrators start and continue from New thread.
+  const pickerOrchestrators: PickerOrchestrator[] = projectEntries(listed)
+    .filter((e) => e.kind === "project")
+    .sort((a, b) => Date.parse(b.activeAt) - Date.parse(a.activeAt))
+    .map((e) => ({
+      key: e.key,
+      name: e.name,
+      icon: <ProjectIcon icon={e.icon} className="size-4 shrink-0" />,
+      hint: [listed.length > 1 ? e.host.name : undefined, e.branch].filter(Boolean).join(" · "),
+      open: () => openProject(e.host.id, e.id),
+    }));
   // The repositories a new thread can start in, the computer new threads start on's first.
   const menuRepos: MenuItem[] = [
     ...startGroups
@@ -1368,6 +1380,8 @@ export function App() {
           start.id === host.id ? newThread(groupId) : pickRepoOn(start.id, groupId)
         }
         onPickElsewhere={pickRepoOn}
+        orchestrators={pickerOrchestrators}
+        onNewOrchestrator={() => openAdd("project")}
       />
       {settings && (
         <SettingsDialog
