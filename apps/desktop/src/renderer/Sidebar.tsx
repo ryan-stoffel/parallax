@@ -2189,15 +2189,17 @@ function Drawer<T>({
         })
       }
       data-flip-scroll
-      className={`group/drawer max-h-[40%] min-h-0 shrink-0 overflow-y-auto rounded-lg px-2 pb-1 transition-colors ${over ? dropLook : ""}`}
+      className={`group/drawer mx-2 max-h-[40%] min-h-0 shrink-0 overflow-y-auto border-t border-border pb-1 transition-colors ${over ? `rounded-lg ${dropLook}` : ""}`}
     >
+      {/* A line above each drawer sets its rows apart from the list's and the next drawer's; an
+          open drawer's heading reads brighter, so it's clear which rows are under it. */}
       <summary
         onClick={(e) => {
           e.preventDefault();
           setOpened(!open);
           onOpenChange(!open);
         }}
-        className="group/summary sticky top-0 z-10 flex cursor-default list-none items-center gap-1.5 bg-sidebar px-2 py-1.5 text-meta font-medium text-muted-foreground select-none hover:text-foreground [&::-webkit-details-marker]:hidden"
+        className="group/summary sticky top-0 z-10 flex cursor-default list-none items-center gap-1.5 bg-sidebar px-2 pt-2 pb-1.5 text-meta font-medium text-muted-foreground select-none group-open/drawer:text-foreground hover:text-foreground [&::-webkit-details-marker]:hidden"
       >
         {label}
         <span className="ml-auto text-faint-foreground tabular-nums group-hover/summary:text-muted-foreground">
