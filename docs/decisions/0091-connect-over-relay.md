@@ -73,7 +73,7 @@ Ryan answered these on 2026-10-30.
 ### Routes: the LAN first, the relay always
 
 - An `account:` host's routes are its learned LAN addresses first, then its Tailscale address when plxd reports one, then `relay:<hostId>`. A Tailscale route is a direct TLS connection to plxd's port 7341 at its 100.x address, which 0065's listener already admits as a CGNAT address, with the same pin. It answers only for a client on the same tailnet, and it keeps that client's traffic away from home off the relay and its daily budget. The LAN and Tailscale addresses come from its descriptor, as 0065 has it, and are dropped when the host stops reporting them. Each route is checked against the pinned id before any credential is sent.
-- The app tries the routes as "Speed" below has it and keeps the first that connects. While on the relay, it re-checks the LAN routes every minute, on a network change, and when the app is focused, and moves the connection over when one answers with the pinned key. A route that fails after answering waits 5 minutes before the next try, as T3's supervisor does, so a flaky network can't bounce the connection.
+- The app tries the routes as "Speed" below has it and keeps the first that connects. While on the relay, it re-checks the LAN and Tailscale routes every minute, on a network change, and when the app is focused, and moves the connection over when one answers with the pinned key. A route that fails after answering waits 5 minutes before the next try, as T3's supervisor does, so a flaky network can't bounce the connection.
 - This is what makes Connect faster than ssh at home: a direct TLS connection on the LAN, the relay only when away, no sshd, no keys to copy, and no ports to open.
 - Direct connections across the internet (UDP hole punching) are not in this record. The relay's traffic budget (0068: 2 GiB a host a day) is the reason to add them later.
 
@@ -81,7 +81,7 @@ Ryan answered these on 2026-10-30.
 
 Once connected, a message makes one trip either way, so the relay matches T3's tunnel. Opening a connection is where the relay costs extra round trips, so:
 
-- **Both routes at once.** The app starts the relay route 200 ms after the first LAN attempt if no LAN route has answered, and keeps whichever connects first. Away from home a LAN address can take seconds to time out, and this stops the app waiting for it.
+- **Direct and relay routes at once.** The app starts the LAN and Tailscale routes together, starts the relay route 200 ms later if neither has answered, and keeps whichever connects first. Away from home a LAN address can take seconds to time out, and this stops the app waiting for it. A connection that lands on the relay moves to a direct route at the next re-check that answers.
 - **No separate ticket request.** The client opens `/v1/hosts/<hostId>/connect` with its Clerk token in the `Authorization` header, never the URL, as 0065 and 0068 keep tokens, and the relay checks it there instead of issuing a ticket first. 0068's 30 tickets a host a minute become 30 stream opens a host a minute.
 - **A spare stream.** plxd keeps one idle stream open to the relay, so the relay joins a new client to it without first asking plxd to open one. It counts against the 16-stream limit.
 - **The proof opens the channel.** A client with a session sends its DPoP proof with the WebSocket upgrade to `/ws`, instead of first trading it for a 30-second ticket. The ticket stays for clients that can't set upgrade headers, such as a browser. This saves a round trip on the LAN too.
@@ -111,7 +111,7 @@ Each is one Linear issue. All seven land in one pull request, built in this orde
 2. `plx connect`: rename `packages/plx-connect` to `packages/plx`, then sign-in with PKCE (loopback, or a code pasted from the relay's new `/connect/code` page), the code that ends setup, `approve`, `unlink`, `remove`, `status`, and `add` over ssh.
 3. Desktop: account discovery, `account:` connections, LAN and relay routes started 200 ms apart with re-checks, approving devices and computers, and the Add computer wizard.
 4. Desktop: installs and sign-ins on `account:` hosts through plxd terminals.
-5. Phone: TLS inside a relay stream in `apps/mobile/modules/pinned-tls`, which today does only pinned HTTPS and WebSockets over URLSession and raw TCP over the tailnet. 0068 lists this as the phone's prerequisite for the relay. Then account routes in place of the tailnet, and approving devices.
+5. Phone: TLS inside a relay stream in `apps/mobile/modules/pinned-tls`, which today does only pinned HTTPS and WebSockets over URLSession and raw TCP over the tailnet. 0068 lists this as the phone's prerequisite for the relay. Then account routes in place of `tailnet:` connections, and approving devices.
 6. Tailscale as a route: plxd reports its Tailscale address, and the desktop and the phone try it after the LAN and before the relay. Deleting the Tailscale-only path waits one release for migration, as its own issue then.
 7. Speed, after 1: `/v1/hosts/<hostId>/connect` with a Clerk token in a header, the spare stream, a Durable Object per stream, and the proof on the `/ws` upgrade. Connect time and time to the first streamed event over the relay go into `scripts/bench/budgets.json`, and the issue records one comparison with T3 Connect from the same network.
 
