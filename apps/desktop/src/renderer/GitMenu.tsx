@@ -20,6 +20,7 @@ import { describeError, githubProblem } from "./errors";
 import { titleOf } from "./threads";
 import { isRunning } from "./transcript";
 import { notify, type Notice } from "./notifications";
+import { DiffStat } from "./pr/parts";
 import { Menu, menuItem } from "./ui";
 
 type GitAction = "commit" | "push" | "pr";
@@ -306,10 +307,7 @@ export function GitMenu({
         <span className="text-meta text-muted-foreground">
           {status
             ? lines > 0 && (
-                <span className="font-mono">
-                  <span className="text-added">+{status.insertions ?? 0}</span>{" "}
-                  <span className="text-danger">−{status.deletions ?? 0}</span>
-                </span>
+                <DiffStat added={status.insertions ?? 0} removed={status.deletions ?? 0} />
               )
             : error
               ? "Unavailable"
