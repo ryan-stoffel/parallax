@@ -34,7 +34,7 @@ Non-goals:
 | Orchestrator thread | A chat for work that outlives one chat: a feature, a migration, or ongoing upkeep. It plans and delegates but never writes code, so it is never blocked. Once a Project and its coordinator ([0093](decisions/0093-orchestrator-threads-and-projects.md)). | Coordinator Agent |
 | Subagent | A worker that runs one task in its own git worktree on the orchestrator's host | Subagent |
 | Thread | A single agent chat in a repository, or in none, with no orchestrator ([0017](decisions/0017-normal-threads.md)) | Agent chat |
-| Space | A group of threads with shared instructions and files, which step 2 of [0093](decisions/0093-orchestrator-threads-and-projects.md) renames Project ([0069](decisions/0069-spaces.md), [0090](decisions/0090-projects-page-and-spaces.md)) | Project |
+| Project | A group of threads with shared instructions and files, once a Space ([0093](decisions/0093-orchestrator-threads-and-projects.md), [0069](decisions/0069-spaces.md), [0090](decisions/0090-projects-page-and-spaces.md)) | Project |
 | Shared context | A folder of Markdown files that `plxd` owns and mirrors to other machines. Agents add research, test instructions, and your preferences ([0005](decisions/0005-shared-context-folder.md)). | Shared context |
 | Host | A machine running `plxd`: this computer, or one reached over SSH, Tailscale, the LAN, or the relay, such as a Mac mini | Cloud computer |
 | Local agent | A subagent on your laptop, started by an orchestrator on another host when something must run there | Local agent |

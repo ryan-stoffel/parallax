@@ -2,7 +2,7 @@
 
 - Status: accepted; amends [0042](0042-project-children-are-threads.md), [0043](0043-project-inbox-and-autonomy.md), [0069](0069-spaces.md), [0087](0087-sidebar-rows-no-areas-or-folders.md), [0090](0090-projects-page-and-spaces.md), and [0094](0094-sidebar-modes-drafts-pins.md)
 - Date: 2026-10-30
-- Issue: PLX-1173, PLX-1174
+- Issue: PLX-1173, PLX-1174, PLX-1175
 
 ## Context
 
@@ -36,9 +36,26 @@ Its children fold under its row with a count ("3 agents · 1 working") and add n
 - Migration 56 renames `projects` to `orchestrators`, `coordinator_sessions` to `orchestrator_sessions`, `runs.coordinator_thread` to `orchestrator_thread`, and `project_id` to `orchestrator_id` on the inbox, questions, landings, placements, and board items, and moves the `coordinator` accounts default to `orchestrator`. plxd backs the store up before it.
 - plxd's modules, the `plxd mcp` tools' descriptions and memory scope, the desktop and phone apps' components, stores, and copy ("New orchestrator thread", "orchestrator" for short labels), and the docs. 0059's command dispatcher, which plxd called its orchestrator, is now its dispatcher.
 
-**What step 1 keeps.** A run's scope, which holds a repo entry's id or an orchestrator's, keeps its wire name `project` on runs, events, `events/subscribe`, `agent/*`, and `context/*`; its type is `ScopeId`. Step 3 reworks scopes, and after step 2 the name fits. The Projects page, its pins, its nav row, and the icon palette keep their names, since they cover orchestrators and Spaces until step 4 makes the page Projects-only. Words for a code project stay. So do the on-disk `coordinators/` worktree folder and the stored `project.cleanup` and `project.delete` effect kinds, which rows already name.
+**What step 2 renames.** Where the word meant a Space, landed with step 1 in one pull request:
 
-**One release of the old names.** plxd answers the old method names, and every renamed field and value has a serde alias, so old params and stored JSON decode. `initialize` advertises both capability names. A client declares the `orchestrators` capability to get the new names; plxd rewrites what it sends any other client to the old ones (`parallax_protocol::legacy`). The app reads a plxd that advertises `coordinator` but not `orchestrator` through `legacyNames.ts`, in both directions, and renames an old event plxd replays. Memory proposals and writers keep reading `project` and `coordinator`. The protocol's old samples moved to `samples/v1/legacy/`, which only decode. All of it goes once the window ends.
+- Methods `space/create|delete` are `project/create|delete`, and `thread/setSpace` is `thread/setProject`. Capabilities `spaces`, `spaceContext`, and `spaceThreads` are `projects`, `projectContext`, and `projectThreads`. A repo entry's `space` and a thread's `space` are `project`, and so is the id on `project/delete` and `thread/setProject`. `Space*Params` and `MAX_SPACE_*` are `Project*` and `MAX_PROJECT_*`.
+- Migration 57 renames `repos.space` to `project` and `threads.space_id` to `project_id`, with a backup before it.
+- plxd's `spaces` module and its threads' `<space_instructions>`, the app's Space components and copy, and the docs.
+- The Projects page lists Projects only, with no kind filter, and its New button makes a Project; orchestrators show in the sidebar and ⌘K until step 4. Pins, the `projects` nav row, and the icon palette now mean Projects.
+- With 0091's Traditional sidebar, the head's **New project** and the add palette's first option, **New Project**, make a Project; an orchestrator thread starts from New thread's picker, whose **Orchestrator threads** section ends with **New orchestrator thread**. Pinned Projects list in the head, and pinned orchestrators as cards under **Pinned orchestrator threads**.
+
+**What steps 1 and 2 keep.** A run's scope, which holds a repo entry's id (a repository's or a Project's) or an orchestrator's, keeps its wire name `project` on runs, events, `events/subscribe`, `agent/*`, and `context/*`; its type is `ScopeId`. Step 3 reworks scopes. Words for a code project stay, as do whitespace, the Space key, and CSS spacing. So do the on-disk `coordinators/` and `spaces/` folders and the stored `project.cleanup` and `project.delete` effect kinds, which rows already name.
+
+**One release of the old names.** plxd answers the old method names, and every renamed field and value has a serde alias, so old params and stored JSON decode. `initialize` advertises both capability names. The app reads a plxd that advertises `coordinator` but not `orchestrator` through `legacyNames.ts`, in both directions, and renames an old event plxd replays. Memory proposals and writers keep reading `project` and `coordinator`. The protocol's old samples moved to `samples/v1/legacy/`, which only decode. All of it goes once the window ends.
+
+**Routing `project/*`.** After both steps `project/*` names an orchestrator to an app from before 0093 and a Project to a newer one, so the client's declared capability decides, never the method name alone:
+
+| Client | Declares | `project/create`, `project/delete` | `project/list`, `/update`, `/start`, `/fromThreads` | `space/*`, `thread/setSpace` | What plxd sends |
+| --- | --- | --- | --- | --- | --- |
+| Before 0093 | neither | `orchestrator/*` | `orchestrator/*` | a Project's | old names (`parallax_protocol::legacy`): orchestrators as `project`, Projects as `space` |
+| From 0093 | `projects` | a Project's | unknown method | a Project's | new names |
+
+The `projects` client capability asks for both steps' names: step 1's `orchestrators` never shipped, so it folded in. Against a plxd from before 0093 the app sends `orchestrator/*` as `project/*` and a Project's `project/*` as `space/*`.
 
 ## Rejected
 
@@ -48,10 +65,11 @@ Its children fold under its row with a count ("3 agents · 1 working") and add n
 | Keeping it a container tied to a repo and kept apart from threads | It behaves like a long-running thread, and any thread should be able to sit in a Project. T3 Code's Orchestrator V2 has no separate type either: any thread delegates, and children show under their parent. |
 | Renaming Space to Project first | The two names would collide for a release. |
 | Keeping the wire field names and renaming only methods | The app's own code would still say `project` and `coordinator` for an orchestrator. |
-| Renaming the run scope's `project` now | It holds repo entries too, step 3 reworks it, and after step 2 the name is right. |
+| Renaming the run scope's `project` now | It holds repositories' entries and orchestrators' ids too, and step 3 reworks it. |
+| Routing `project/*` by its params | The same params fit both meanings in places; a capability a client declares once is exact. |
 
 ## Consequences
 
 - An app or phone from before 0093 works against a newer plxd, and a newer app against an older plxd, for one release. Ending the window removes `legacy.rs`, `legacyNames.ts`, the aliases, and the legacy samples.
-- A store migrated to 56 doesn't open in an older plxd; the `.pre-56` backup is the way back.
+- A store migrated to 56 or 57 doesn't open in an older plxd; the `.pre-56` backup is the way back.
 - `orchestration/*` (0059's thread graph) and `orchestrator/*` now read alike.
