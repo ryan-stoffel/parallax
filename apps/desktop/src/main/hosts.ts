@@ -45,6 +45,7 @@ import {
   parseSignIn,
   relayIdOf,
   Routes,
+  tokenSubject,
   unionLists,
   type SavedAccount,
 } from "./accountHosts";
@@ -1099,8 +1100,9 @@ async function registerRelay(): Promise<string | undefined> {
  * Registers computer `hostId` with Parallax Relay under the signed-in account, so its threads
  * notify the phone with no switch to turn on (PLX-1146): this computer's plxd and each Parallax
  * Connect computer's. Another computer's plxd signs the registration over the token's hash and
- * this one's posts it, so the token never leaves this computer. Quiet when signed out, for any
- * other kind of host, and for a plxd too old to sign.
+ * this one's posts it, so the token never leaves this computer. With it goes the token's Clerk
+ * user id, which that plxd records as its account (0091): without one, it refuses every account
+ * sign-in. Quiet when signed out, for any other kind of host, and for a plxd too old to sign.
  */
 async function joinRelay(hostId: string): Promise<void> {
   if (hostId !== "local" && !hostId.startsWith("tailnet:")) return;
@@ -1112,7 +1114,10 @@ async function joinRelay(hostId: string): Promise<void> {
     return;
   }
   const tokenHash = createHash("sha256").update(token).digest("base64url");
-  const signed = await connections.get(hostId)?.request("relay/sign", { tokenHash });
+  const userId = tokenSubject(token);
+  const signed = await connections
+    .get(hostId)
+    ?.request("relay/sign", { tokenHash, ...(userId && { userId }) });
   if (signed && "result" in signed)
     await local.request("relay/register", { token, signed: signed.result });
 }

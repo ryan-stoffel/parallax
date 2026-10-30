@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -132,14 +133,24 @@ vi.mock("node:child_process", async (actual) => {
   return { ...(await actual<typeof import("node:child_process")>()), spawn, execFile };
 });
 
+/** A Clerk token as the account hands it out: a JWT for user `user_1`, unsigned here. */
+const clerkToken = (use: string) =>
+  [{ alg: "RS256" }, { sub: "user_1", use }, "sig"]
+    .map((part) => Buffer.from(JSON.stringify(part)).toString("base64url"))
+    .join(".");
+const relayToken = clerkToken("relay");
+const freshToken = clerkToken("fresh");
+/** `token`'s SHA-256, as `relay/sign` takes it. */
+const hashOf = (token: string) => createHash("sha256").update(token).digest("base64url");
+
 /** A fake signed-in account, whose sign-ins the test calls. */
 function signedIn() {
   const listeners: (() => void)[] = [];
   return {
     account: {
-      accessToken: async () => "relay-token",
-      currentToken: () => "relay-token",
-      freshToken: async () => "fresh-token",
+      accessToken: async () => relayToken,
+      currentToken: () => relayToken,
+      freshToken: async () => freshToken,
       onSignIn: (listener: () => void) => void listeners.push(listener),
     },
     signIn: () => listeners.forEach((listener) => listener()),
@@ -380,7 +391,7 @@ test("the account's computers are asked for on sign-in, focus, the network, and 
       "--",
       `relay:${studio}`,
     ]);
-    expect(connection.options.env?.()).toEqual({ PLXD_RELAY_TOKEN: "relay-token" });
+    expect(connection.options.env?.()).toEqual({ PLXD_RELAY_TOKEN: relayToken });
     expect(accountConnection(buildBox)).toBeUndefined();
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
@@ -545,7 +556,7 @@ test("a new computer takes its code, one run each and 5 an hour; a vouched one s
         "192.168.1.20:7341",
         `relay:${studio}`,
       ],
-      stdin: "fresh-token\n",
+      stdin: `${freshToken}\n`,
     });
     expect(listed(studio)?.access).toEqual({ step: "pending", code: "731905" });
     await vi.advanceTimersByTimeAsync(20);
@@ -720,10 +731,27 @@ test("a tailnet device matched to its account computer by relay/id is approved o
       approved.push([c, params]);
       return { result: {} };
     });
+    const registered: [string, unknown, unknown][] = [];
+    for (const method of ["relay/sign", "relay/register"])
+      fake.answers.set(method, (params: unknown, c: unknown) => {
+        registered.push([method, c, params]);
+        return { result: method === "relay/sign" ? { signature: "s" } : {} };
+      });
     local.set(connected({ accountAccess: {} }));
     await vi.advanceTimersByTimeAsync(0);
     tailnet()!.set(connected());
     await vi.advanceTimersByTimeAsync(0);
+
+    // The tailnet device is registered under the account with the token's user id, which its plxd
+    // records as its account, so the account sign-in below isn't refused for want of one (0091).
+    expect(registered.filter(([, c]) => c === tailnet())).toEqual([
+      ["relay/sign", tailnet(), { tokenHash: hashOf(relayToken), userId: "user_1" }],
+    ]);
+    // This computer posts it, beside its own registration.
+    expect(registered.filter(([method]) => method === "relay/register")).toEqual([
+      ["relay/register", local, { token: relayToken }],
+      ["relay/register", local, { token: relayToken, signed: { signature: "s" } }],
+    ]);
 
     // studio has no session yet: it signs in, and the tailnet connection allows the request.
     fake.dialOutput = {
@@ -789,6 +817,7 @@ test("Reach from anywhere on a tailnet device registers it under the account and
       ["relay/register", "local"],
       ["host/settings/set", "thinkpad"],
     ]);
+    expect(calls[0]?.[2]).toEqual({ tokenHash: hashOf(relayToken), userId: "user_1" });
     expect(calls.at(-1)?.[2]).toEqual({ relay: true, remote: true });
   } finally {
     vi.useRealTimers();

@@ -9,6 +9,7 @@ import {
   parseSignIn,
   RECHECK_MS,
   Routes,
+  tokenSubject,
   unionLists,
   type SavedAccount,
 } from "./accountHosts";
@@ -193,4 +194,14 @@ test("a run asked for while one runs runs once more after, not once per ask", as
   release();
   await first;
   expect(runs).toBe(2);
+});
+
+test("a Clerk token's user id is its JWT's sub, and anything else has none", () => {
+  const jwt = (payload: object) =>
+    ["{}", JSON.stringify(payload), "sig"]
+      .map((part) => Buffer.from(part).toString("base64url"))
+      .join(".");
+  expect(tokenSubject(jwt({ sub: "user_2abc", sid: "sess_1" }))).toBe("user_2abc");
+  expect(tokenSubject(jwt({ sid: "sess_1" }))).toBeUndefined();
+  expect(tokenSubject("not-a-jwt")).toBeUndefined();
 });
